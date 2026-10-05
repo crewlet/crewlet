@@ -228,6 +228,14 @@ export interface RoundNarration {
   round?: number;
   reasoning?: string;
   content?: string;
+  /**
+   * The model answered this round in prose and called no tool, in a phase
+   * that had to end in a tool call (a submission tool, or a required call).
+   * Absent means false. A later round means the engine asked again; a
+   * declined last round of a settled phase means it ended without its
+   * submission.
+   */
+  declined?: boolean;
 }
 
 /** One round of a phase's tool loop, as the engine timed it (`types.PhaseRound`). */

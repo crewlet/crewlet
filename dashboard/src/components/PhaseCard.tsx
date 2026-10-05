@@ -310,8 +310,67 @@ function useTail(active: boolean) {
   return setScroller;
 }
 
+/**
+ * What became of a round that answered in prose where the phase had to end in
+ * a tool call — derived from the ledger rather than carried on the wire,
+ * because the ledger already says it: a later round means the engine asked
+ * again, and a settled phase whose LAST round declined spent its bound there.
+ * `open` is the one case nothing can say yet: the newest round of a phase still
+ * running, which may be asked again or may have been the last.
+ */
+type Declined = "asked" | "spent" | "open";
+
+/**
+ * The sentence under a declined round's words.
+ *
+ * IN WORDS, NOT ONLY A COLOUR, and it names the mechanism, because what a
+ * reader sees without it is a model printing its own submission — a fenced
+ * `{"outcome": "delivered", …}` block — as though that were the answer, and
+ * nothing saying why the engine did not take it: prose is not a call, and
+ * this phase finishes only by one.
+ */
+function DeclinedNote({ fate, rescued }: { fate: Declined; rescued: boolean }) {
+  const said = "It answered in prose and called no tool";
+  if (fate === "asked") {
+    return (
+      <p className="round-note">
+        {said}. This phase finishes only by calling a tool — its submission — so the engine asked it
+        again; the next round is the answer to that.
+      </p>
+    );
+  }
+  if (fate === "open") {
+    return (
+      <p className="round-note">
+        {said}. This phase finishes only by calling a tool — its submission.
+      </p>
+    );
+  }
+  // CAUTION, NOT CRITICAL: the turn goes on — a rescued executor is still
+  // judged by the reviewer, a rescued reviewer sends the turn round again. The
+  // glyph carries the hue's meaning to a reader who cannot see the hue.
+  return (
+    <p className="round-note caution">
+      <TriangleAlertGlyph size="xs" /> {said}, and this was its last round: the phase ended without
+      its submission
+      {rescued ? ", so the engine wrote its outcome in its place (“rescued”, above)." : "."}
+    </p>
+  );
+}
+
 /** One round: thinking, speech, then the calls that round asked for. */
-function RoundBlock({ round, live }: { round: Round; live: boolean }) {
+function RoundBlock({
+  round,
+  live,
+  declined,
+  rescued,
+}: {
+  round: Round;
+  live: boolean;
+  /** What became of this round when it declined to call a tool; absent otherwise. */
+  declined?: Declined;
+  rescued: boolean;
+}) {
   const said = round.content.trim();
   const thinking = round.reasoning.trim();
   // Marked on the ROUND, not just on the row inside it: "which round went
@@ -376,6 +435,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
             </Disclosure>
           ))}
         {said && <p className={cx("prose", round.streaming && "stream")}>{said}</p>}
+        {declined && <DeclinedNote fate={declined} rescued={rescued} />}
         {round.tools.length > 0 && (
           <div className="round-tools">
             {round.tools.map((t, i) => (
@@ -430,6 +490,15 @@ export function PhaseCard({
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
   const tailRef = useTail(open && record.live);
+  // Rounds that answered in prose where a call was owed. Counted on the
+  // ledger, live and settled alike, so the chip and the per-round notes are
+  // one reading of one list.
+  const declined = ledger.filter((r) => r.declined).length;
+  const fateOf = (i: number): Declined | undefined => {
+    if (!ledger[i]?.declined) return undefined;
+    if (i < ledger.length - 1) return "asked";
+    return record.live ? "open" : "spent";
+  };
 
   return (
     <article
@@ -487,8 +556,8 @@ export function PhaseCard({
             in lib/phases.ts beside the words, because a decision's sentence and
             its hue are one fact. */}
         {record.decision && (
-          <Tag variant={uiletTone(decisionTone(record.phase, record.decision))}>
-            {decisionLabel(record.phase, record.decision)}
+          <Tag variant={uiletTone(decisionTone(record.phase, record.decision, record.rescueFired))}>
+            {decisionLabel(record.phase, record.decision, record.rescueFired)}
           </Tag>
         )}
         {record.exhaustedRounds && (
@@ -504,8 +573,37 @@ export function PhaseCard({
             {record.emptyAnswerRounds} empty
           </Tag>
         )}
+        {/* "ANSWERED IN PROSE", not the wire's `declined`: the word a reader
+            needs is what the model DID — wrote its answer as text, often the
+            submission itself as a JSON block — rather than a verb that reads
+            as the model refusing the work. Beside `empty`, its sibling: both
+            are rounds that ended without the call the phase needed, one with
+            words and one without. */}
+        {declined > 0 && (
+          <Tag
+            variant="warning"
+            title={
+              "rounds where the model wrote its answer as text and called no tool, in a phase " +
+              "that finishes only by a tool call — each says below its words what happened next"
+            }
+          >
+            {declined} answered in prose
+          </Tag>
+        )}
+        {/* THE TITLE SAYS WHAT RESCUED MEANS. It said "did not submit on its
+            first run and was re-asked", and both halves were wrong: nothing
+            re-asks a phase as a whole, and the flag is set when the phase has
+            ENDED without its submission succeeding — the engine then writes
+            the decision itself, which is what the decision chip beside this
+            one is reporting. */}
         {record.rescueFired && (
-          <Tag variant="warning" title="the phase did not submit on its first run and was re-asked">
+          <Tag
+            variant="warning"
+            title={
+              "the phase ended without its submission, so the engine wrote its decision in its " +
+              "place — incomplete for an executor, another round for a reviewer"
+            }
+          >
             rescued
           </Tag>
         )}
@@ -683,6 +781,8 @@ export function PhaseCard({
                       key={r.round}
                       round={r}
                       live={record.live && i === ledger.length - 1}
+                      declined={fateOf(i)}
+                      rescued={record.rescueFired}
                     />
                   ))}
                 </ol>

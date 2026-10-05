@@ -488,6 +488,57 @@ describe("narration is kept beside the round that produced it", () => {
   });
 });
 
+describe("a round that answered in prose where a call was owed", () => {
+  // `round_narration[].declined`: the model wrote words and called no tool in
+  // a phase that finishes only by one — the executor printing its own
+  // `submit_work` payload as a fenced JSON block is the case that prompted it.
+  test("is read off the narration and kept on its round", () => {
+    const ledger = rounds(
+      toolCalls([{ name: "comment_on_work_item", round: 1 }]),
+      narrations([
+        { round: 1, content: "Commenting." },
+        { round: 2, content: '```json\n{"outcome":"delivered"}\n```', declined: true },
+      ]),
+    );
+    expect(ledger.map((r) => r.declined)).toEqual([false, true]);
+  });
+
+  test("an engine that does not flag it, or flags it oddly, has said nothing", () => {
+    const [plain, odd] = narrations([
+      { round: 1, content: "words" },
+      { round: 2, content: "words", declined: "yes" },
+    ]);
+    expect(plain!.declined).toBe(false);
+    expect(odd!.declined).toBe(false);
+  });
+
+  test("a round still being written has declined nothing yet", () => {
+    // The fragment replaces the round's text, and arriving text has not ended
+    // its round — so a flag from a stale narration of the same round must not
+    // ride along with it.
+    const ledger = rounds([], narrations([{ round: 1, content: "x", declined: true }]), {
+      round: 1,
+      content: "still writing",
+    });
+    expect(ledger[0]!.declined).toBe(false);
+  });
+
+  test("a rescued review says the engine decided, not the reviewer", () => {
+    // `self_iterate` is a word a reviewer chooses — and the word the engine
+    // writes when the reviewer never submitted. "Sent the turn back" claimed
+    // a judgement nobody made.
+    expect(decisionLabel("review", "self_iterate", true)).toContain("never decided");
+    expect(decisionLabel("review", "self_iterate", false)).toBe(
+      "sent the turn back for another round",
+    );
+    expect(decisionTone("review", "self_iterate", true)).toBe("caution");
+    // The executor's rescue word already says the engine wrote it.
+    expect(decisionLabel("execute", "incomplete", true)).toBe(
+      decisionLabel("execute", "incomplete"),
+    );
+  });
+});
+
 describe("a phase recorded before narration existed still renders", () => {
   // Those events are already in the store, and an applied write is history
   // rather than source: they have to keep rendering.

@@ -84,6 +84,14 @@ export interface Narration {
   round: number;
   reasoning: string;
   content: string;
+  /**
+   * The round ANSWERED IN PROSE where the phase had to end in a tool call —
+   * `round_narration[].declined`, set by the engine when a phase that finishes
+   * only by its submission (`submit_work`, `submit_review`, a worker's
+   * `submit_result`) or that required a call got words and no call. False on
+   * every other round, and on a record an engine that did not flag it wrote.
+   */
+  declined: boolean;
 }
 
 export interface Round {
@@ -97,6 +105,14 @@ export interface Round {
   streaming: boolean;
   /** Attempts a provider gave up on partway through, oldest first. */
   abandoned: Narration[];
+  /**
+   * The model wrote this round's answer as prose and called no tool, in a
+   * phase that finishes only by a call — see [Narration.declined]. WHAT
+   * HAPPENED NEXT is not on the wire and needs no field: a later round means
+   * the engine asked again, and a declined LAST round of a settled phase
+   * means the bound was spent and the phase ended without its submission.
+   */
+  declined: boolean;
 }
 
 export interface PhaseRecord {
@@ -165,6 +181,12 @@ export interface PhaseRecord {
    * only when the phase publishes its record.
    */
   emptyAnswerRounds: number;
+  /**
+   * The phase ENDED without its submission succeeding, so the engine wrote its
+   * decision in its place — `incomplete` for an executor, `self_iterate` for a
+   * reviewer. Not "it was re-asked": asking again happens inside the phase, a
+   * round at a time, and shows as a declined round followed by another one.
+   */
   rescueFired: boolean;
   decision: string;
   notes: string;
@@ -357,6 +379,9 @@ export function narrations(raw: unknown): Narration[] {
       round: typeof rec.round === "number" ? rec.round : i + 1,
       reasoning: typeof rec.reasoning === "string" ? rec.reasoning : "",
       content: typeof rec.content === "string" ? rec.content : "",
+      // `=== true`, never truthiness: an older engine omits the key, and a
+      // producer that wrote anything else has said nothing this build reads.
+      declined: rec.declined === true,
     }))
     .filter((n) => n.reasoning.trim() !== "" || n.content.trim() !== "");
 }
@@ -377,7 +402,15 @@ export function rounds(
   const at = (round: number): Round => {
     let r = byRound.get(round);
     if (!r) {
-      r = { round, reasoning: "", content: "", tools: [], streaming: false, abandoned: [] };
+      r = {
+        round,
+        reasoning: "",
+        content: "",
+        tools: [],
+        streaming: false,
+        abandoned: [],
+        declined: false,
+      };
       byRound.set(round, r);
     }
     return r;
@@ -389,6 +422,7 @@ export function rounds(
     const r = at(n.round);
     r.reasoning = n.reasoning;
     r.content = n.content;
+    r.declined = n.declined;
   }
   for (const call of calls) at(call.round).tools.push(call);
   // The round in flight. The engine clears it the instant that round's real
@@ -396,6 +430,8 @@ export function rounds(
   if (partial && typeof partial.round === "number") {
     const r = at(partial.round);
     r.streaming = true;
+    // Arriving text has not ended its round, so it has declined nothing yet.
+    r.declined = false;
     r.reasoning = partial.reasoning ?? "";
     r.content = partial.content ?? "";
     r.abandoned = narrations(partial.abandoned);
@@ -1042,7 +1078,9 @@ export function splitThinking(response: string): { thinking: string; answer: str
  * such, because a reader who cannot tell an engine-written outcome from a
  * model's own is reading a claim as a commitment.
  */
-const DECISIONS: Record<string, Record<string, { label: string; tone: Tone }>> = {
+type Meaning = { label: string; tone: Tone };
+
+const DECISIONS: Record<string, Record<string, Meaning>> = {
   execute: {
     delivered: { label: "delivered the work", tone: "positive" },
     no_action: { label: "nothing to do — ended silently", tone: "neutral" },
@@ -1065,19 +1103,43 @@ const DECISIONS: Record<string, Record<string, { label: string; tone: Tone }>> =
 };
 
 /**
+ * What a decision means when the ENGINE wrote it — `rescue_fired`: the phase
+ * ended without its submission succeeding, so the engine decided in its place.
+ *
+ * Only the reviewer needs a row of its own. The executor's rescue always writes
+ * `incomplete`, whose sentence already says the engine wrote it; the reviewer's
+ * writes `self_iterate`, the same word a reviewer chooses on purpose, and
+ * "sent the turn back" said the REVIEWER judged the round when nothing judged
+ * it at all. Same tone: the turn does go round again either way.
+ */
+const RESCUED: Record<string, Record<string, Meaning>> = {
+  review: {
+    self_iterate: {
+      label: "never decided — the engine sent the turn back for another round",
+      tone: "caution",
+    },
+  },
+};
+
+/**
  * The row for one decision, or nothing for a decision this build has never heard
  * of.
  *
  * The THIRD value matters to one caller: the turn header says "the executor said
  * <word>" for a word it cannot gloss, which a label falling through verbatim
  * could not tell it.
+ *
+ * `rescued` is the record's `rescue_fired`. A caller that has no record (an
+ * episode's stored review outcome) leaves it off and gets the model's reading.
  */
 export function decisionMeaning(
   phase: string,
   decision: string,
-): { label: string; tone: Tone } | undefined {
+  rescued = false,
+): Meaning | undefined {
   if (!decision) return undefined;
-  return DECISIONS[(phase || "").toLowerCase()]?.[decision];
+  const key = (phase || "").toLowerCase();
+  return (rescued ? RESCUED[key]?.[decision] : undefined) ?? DECISIONS[key]?.[decision];
 }
 
 /**
@@ -1087,9 +1149,9 @@ export function decisionMeaning(
  * what keeps a row written by a build this bundle predates readable: the retired
  * `plan` phase's `plan` / `direct` / `skip` still render as themselves.
  */
-export function decisionLabel(phase: string, decision: string): string {
+export function decisionLabel(phase: string, decision: string, rescued = false): string {
   if (!decision) return "";
-  return decisionMeaning(phase, decision)?.label ?? decision;
+  return decisionMeaning(phase, decision, rescued)?.label ?? decision;
 }
 
 /**
@@ -1103,6 +1165,6 @@ export function decisionLabel(phase: string, decision: string): string {
  * their own off the record's `failed` flag, so toning their decision too would
  * report one stop twice, side by side.
  */
-export function decisionTone(phase: string, decision: string): Tone {
-  return decisionMeaning(phase, decision)?.tone ?? "neutral";
+export function decisionTone(phase: string, decision: string, rescued = false): Tone {
+  return decisionMeaning(phase, decision, rescued)?.tone ?? "neutral";
 }

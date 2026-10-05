@@ -21,9 +21,10 @@
   box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 /* A HEAD WRAPS, which is rule 15 of the design doc and the one place in this
-   file that was not keeping it. A phase's head is up to fifteen items — the
+   file that was not keeping it. A phase's head is up to sixteen items — the
    phase tag, the iteration, a delegated task id, a worker template, a role,
-   then the decision, the round cap, the empty-answer count, the rescue, the
+   then the decision, the round cap, the empty-answer count, the count of
+   rounds answered in prose, the rescue, the
    sandbox, the failure, the live dot, the model, the rounds, the tokens, the
    duration and the time — and every one of them is a tag or a `nowrap` figure
    that cannot break its own label.
@@ -205,8 +206,26 @@
    other half of "these do not belong together". */
 .round-body > .prose,
 .round-body > .abandoned,
-.round-body > .round-thinking {
+.round-body > .round-thinking,
+.round-body > .round-note {
   margin-inline: var(--spacing-2);
+}
+/* WHAT BECAME OF A ROUND THAT ANSWERED IN PROSE where the phase had to end in
+   a call (`DeclinedNote` in PhaseCard.tsx). Under the words it explains, at
+   caption size, NEUTRAL while the phase carried on — the engine asked again and
+   the next round is right below, which is the loop working — and CAUTION only
+   on the round that spent the bound, where the phase ended without its
+   submission. Never the danger hue: the turn goes on either way. The words say
+   it; the hue and, on the caution line, the glyph repeat it. */
+.round-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-secondary);
+  max-width: 78ch;
+}
+.round-note.caution {
+  color: var(--color-feedback-warning-ink);
 }
 .round-tools {
   display: flex;

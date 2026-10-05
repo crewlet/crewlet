@@ -211,8 +211,8 @@ export function RecentPhases({
             // and the gloss inside one would set this column's width for
             // every other row.
             <Tag
-              variant={uiletTone(decisionTone(r.phase, r.decision))}
-              title={decisionLabel(r.phase, r.decision)}
+              variant={uiletTone(decisionTone(r.phase, r.decision, r.rescueFired))}
+              title={decisionLabel(r.phase, r.decision, r.rescueFired)}
             >
               {r.decision}
             </Tag>

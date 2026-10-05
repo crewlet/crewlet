@@ -86,8 +86,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
 const TWO_ROUNDS = phase({
   roundsUsed: 2,
   narration: [
-    { round: 1, reasoning: "the file first", content: "Reading the file." },
-    { round: 2, reasoning: "that is enough", content: "Posted it." },
+    { round: 1, reasoning: "the file first", content: "Reading the file.", declined: false },
+    { round: 2, reasoning: "that is enough", content: "Posted it.", declined: false },
   ],
   tools: [
     {
@@ -209,7 +209,7 @@ describe("a round is one block", () => {
       <PhaseCard
         record={phase({
           roundsUsed: 2,
-          narration: [{ round: 2, reasoning: "", content: "Done." }],
+          narration: [{ round: 2, reasoning: "", content: "Done.", declined: false }],
           tools: [
             {
               name: "read_file",
@@ -251,7 +251,7 @@ describe("a round is one block", () => {
 describe("a failed tool call", () => {
   const withFailure = phase({
     roundsUsed: 1,
-    narration: [{ round: 1, reasoning: "", content: "Trying." }],
+    narration: [{ round: 1, reasoning: "", content: "Trying.", declined: false }],
     tools: [
       {
         name: "read_file",
@@ -430,7 +430,7 @@ describe("a tool call's arguments", () => {
   function withArgs(args: string): PhaseRecord {
     return phase({
       roundsUsed: 1,
-      narration: [{ round: 1, reasoning: "", content: "Working." }],
+      narration: [{ round: 1, reasoning: "", content: "Working.", declined: false }],
       tools: [
         {
           name: "read_file",
@@ -550,6 +550,98 @@ describe("a live call's staleness", () => {
     // Drawn as the work in progress it is — never the stalled danger, nor the
     // amber that is kept for a seat that needs a person.
     expect(tag?.className).toContain("crewlet-tag--info");
+  });
+});
+
+/**
+ * A ROUND THAT ANSWERED IN PROSE SAYS WHAT BECAME OF IT.
+ *
+ * The screenshot that prompted it: an executor's second round was a fenced
+ * ```json block — `{"summary":…,"outcome":"delivered",…}` — the `submit_work`
+ * payload written as TEXT, followed by "never said what it did" and "rescued"
+ * on the header and nothing connecting the two. Prose is not a call, and the
+ * phase finishes only by one.
+ */
+describe("a round that answered in prose", () => {
+  const call = (name: string, round: number) => ({
+    name,
+    round,
+    args: "{}",
+    result: "ok",
+    failed: false,
+    durationMs: 0,
+    origin: "builtin",
+    server: "",
+    startedAt: "",
+  });
+  const SUBMISSION = '```json\n{"outcome": "delivered"}\n```';
+
+  test("before a later round, says the engine asked again", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 2,
+          narration: [
+            { round: 1, reasoning: "", content: SUBMISSION, declined: true },
+            { round: 2, reasoning: "", content: "", declined: false },
+          ],
+          tools: [call("submit_work", 2)],
+        })}
+        defaultOpen
+      />,
+    );
+    const [first, second] = [...container.querySelectorAll(".round")];
+    expect(first!.querySelector(".round-note")?.textContent).toMatch(/asked it again/);
+    // Neutral: the loop working is not a caution.
+    expect(first!.querySelector(".round-note.caution")).toBeNull();
+    // THE CONTROL: a round that called its tool carries no note.
+    expect(second!.querySelector(".round-note")).toBeNull();
+    expect(screen.getByText("1 answered in prose")).toBeDefined();
+  });
+
+  test("as the last round of a settled phase, says the phase ended without its submission", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 2,
+          decision: "incomplete",
+          rescueFired: true,
+          narration: [
+            { round: 1, reasoning: "", content: "Commenting.", declined: false },
+            { round: 2, reasoning: "", content: SUBMISSION, declined: true },
+          ],
+          tools: [call("comment_on_work_item", 1)],
+        })}
+        defaultOpen
+      />,
+    );
+    const note = container.querySelectorAll(".round")[1]!.querySelector(".round-note.caution");
+    expect(note?.textContent).toMatch(/last round/);
+    expect(note?.textContent).toMatch(/without its submission/);
+    expect(note?.textContent).toMatch(/rescued/);
+  });
+
+  test("as the newest round of a running phase, claims neither outcome", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          live: true,
+          roundsUsed: 1,
+          narration: [{ round: 1, reasoning: "", content: SUBMISSION, declined: true }],
+        })}
+        defaultOpen
+      />,
+    );
+    const note = container.querySelector(".round-note")?.textContent ?? "";
+    expect(note).toMatch(/finishes only by calling a tool/);
+    expect(note).not.toMatch(/asked it again|last round/);
+  });
+
+  test("the rescue chip says the phase ended without its submission, not that it was re-asked", () => {
+    render(<PhaseCard record={phase({ rescueFired: true, decision: "incomplete" })} />);
+    const title = screen.getByText("rescued").closest("[title]")?.getAttribute("title") ?? "";
+    expect(title).toMatch(/ended without its submission/);
+    expect(title).not.toMatch(/re-asked/);
   });
 });
 

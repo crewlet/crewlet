@@ -2991,6 +2991,30 @@ rules fix it, and each one names a specific mechanism:
    and all. The engine now sends the split it already knows, at the point
    the round's assistant message is appended. A phase recorded before that
    has only the joined string and is shown whole rather than guessed apart.
+
+   **A round that answered in prose where a call was owed says what became of
+   it.** A phase that finishes only by a tool call — the executor's
+   `submit_work`, the reviewer's `submit_review`, a worker's `submit_result` —
+   can still get words and no call, and the commonest form is the model
+   printing its own submission as a fenced JSON block. Without a word about it
+   the reader saw that block, then "never said what it did" and "rescued" on
+   the header, and nothing connecting the two. The engine flags such a round
+   (`round_narration[].declined`), and the round says beneath its words what
+   happened next, which the ledger already knows: a later round means the
+   engine asked again (said neutrally — that is the loop working); the last
+   round of a settled phase means the bound was spent and the phase ended
+   without its submission (said in the caution tone, with its glyph); and the
+   newest round of a running phase claims neither. The header counts them as
+   "N answered in prose", beside its sibling "N empty" — both are rounds that
+   ended without the call the phase needed, one with words and one without.
+
+   **"Rescued" means the phase ENDED without its submission succeeding**, so
+   the engine wrote the decision in its place — `incomplete` for an executor,
+   `self_iterate` for a reviewer. Its title used to say the phase "was
+   re-asked", which nothing does to a phase as a whole. And a rescued review's
+   decision reads "never decided — the engine sent the turn back", because
+   `self_iterate` is also the word a reviewer chooses on purpose, and "sent the
+   turn back" claimed a judgement nobody made.
 3. **The model's words are prose; JSON is monospace, and INDENTED.**
    Reasoning and speech get a proportional face, real leading and a bounded
    measure. Monospace stays where it carries meaning — tool arguments and tool
