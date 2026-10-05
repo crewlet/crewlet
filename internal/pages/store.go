@@ -407,10 +407,16 @@ func (a Actor) validate() error {
 	return nil
 }
 
-// excerpt is what a card shows, cut at [MaxExcerpt] bytes without breaking a
-// rune.
+// excerpt is what a card shows: at most [MaxExcerpt] bytes INCLUDING its
+// marker, cut on a rune boundary.
+//
+// A PREVIEW FOR A LIST, never what a seat acts on: the wake prompt is given a
+// comment whole from the record ([wakeBody]). [textcut.Within] rather than
+// Ellipsis, because the record and the history row both promise "at most
+// MaxExcerpt bytes", and Ellipsis puts its marker outside the budget — so a
+// long comment's excerpt was three bytes past the cap it was documented at.
 func excerpt(text string) string {
-	return textcut.Ellipsis(strings.Join(strings.Fields(text), " "), MaxExcerpt)
+	return textcut.Within(strings.Join(strings.Fields(text), " "), MaxExcerpt)
 }
 
 // cleanList trims, drops empties and de-duplicates, keeping the caller's
