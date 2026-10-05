@@ -31,7 +31,7 @@ import {
 import { useLayoutEffect, useRef } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { reveal } from "~/lib/scroller.ts";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
 import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdown.ts";
@@ -430,7 +430,6 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
       {entry.tool_calls && (
         <CodeBlock
           plain
-          maxHeight={RECORD_MAX_HEIGHT}
           focusWhenScrollable
           label="Tool calls in this turn"
           code={entry.tool_calls}

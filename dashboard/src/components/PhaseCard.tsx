@@ -106,25 +106,7 @@ import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
-
-/**
- * How tall a tool's record grows before it scrolls itself: the record ceiling
- * every block of machine text has, or the box that scrolls it, whichever is
- * smaller.
- *
- * A RECORD IS A SCROLLER INSIDE A SCROLLER. Inside a running phase it sits in
- * the tailing ledger, whose bound is the scroller's view; on a short window
- * that box is shorter than 460px, and a record taller than the box scrolling
- * it is the transcript's own trap one level down — the wheel inside the record
- * while the record's bottom is below the box's. So the ceiling is the lesser
- * of the two, and `--record-bound` (screens.css, on `.tail-scroll.tailing` and
- * on `.phase-card` for a settled phase, where the page is the box) says what
- * the box allows. On any window taller than the record, that is the 460px it
- * always was.
- */
-const RECORD_CEILING = `min(${RECORD_MAX_HEIGHT}px, var(--record-bound, ${RECORD_MAX_HEIGHT}px))`;
 
 /**
  * A call's two records, formatted.
@@ -186,21 +168,17 @@ function ToolRecords({
           which is exactly uilet's own case for wrapping, a line nobody finds
           the end of.
 
-          `maxHeight` is our own `RECORD_MAX_HEIGHT`, and it has to be stated:
-          without one a 900-line record pushes the rest of the round off the
-          screen — but never more than `RECORD_CEILING` lets it be, which is
-          the box that scrolls it. */}
-      <CodeBlock
-        plain
-        maxHeight={RECORD_CEILING}
-        selectable
-        label={`${name} — arguments`}
-        code={prettyArgs || "{}"}
-      />
+          NO `maxHeight` HERE, and that is the ceiling working: the record
+          ceiling is declared once in the cascade (`--record-ceiling`,
+          frame.css) as what the view allows, and a running ledger narrows it
+          to what its box allows (`.tail-scroll.tailing`), because a record
+          taller than the box that scrolls it is the transcript's own trap one
+          level down — the wheel inside the record while its bottom is below
+          the box's. */}
+      <CodeBlock plain selectable label={`${name} — arguments`} code={prettyArgs || "{}"} />
       <div className="t-label">{failed ? "Error" : "Result"}</div>
       <CodeBlock
         plain
-        maxHeight={RECORD_CEILING}
         selectable
         label={`${name} — ${failed ? "error" : "result"}`}
         code={prettyResult || "(empty)"}

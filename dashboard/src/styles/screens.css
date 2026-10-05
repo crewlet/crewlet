@@ -634,47 +634,45 @@
    THE BOUND IS DERIVED FROM ONE REQUIREMENT: once the page is scrolled to it,
    the WHOLE box fits in the view. So it is the view (`100cqb`, the scroller
    — see `.app .crewlet-app-shell__main` in frame.css) less what covers its
-   top (`--sticky-top`), less the box's caption above it ("Rounds · …", one
-   `t-label` line at the normal leading, and the section's `--spacing-1`
-   gap), less the phase body's own inset below it (`--spacing-3`), so the
-   box's bottom border clears the view's edge by the same margin the card
-   gives it. The FLOOR is for a window too short for that to leave a
-   transcript at all: four rows (`--size-row-md` each) — a round's line of
-   speech and three tool rows — is the least that reads as a transcript
-   rather than as a slot; below it the box is taller than the view, and since
-   nothing contains the wheel, the page simply carries on past it.
+   top (`--sticky-top`), less the phase body's own inset below it
+   (`--spacing-3`), so the box's bottom border clears the view's edge by the
+   same margin the card gives it. THE BOX ALONE: its caption above it
+   ("Rounds · what the model thought, said and called, in order") is not
+   counted, because it is an uppercase label in a column a sidebar and a peek
+   narrow, and it wraps — a bound that subtracted one line of it promised a
+   fit that held only while the caption did. Scrolled until the box's top
+   meets the band, the box fits whatever the caption does. The FLOOR is for a
+   window too short for that to leave a transcript at all: four rows
+   (`--size-row-md` each) — a round's line of speech and three tool rows — is
+   the least that reads as a transcript rather than as a slot; below it the
+   box is taller than the view, and since nothing contains the wheel, the
+   page simply carries on past it.
 
-   `--record-bound` is the same requirement one level down: a tool's record
-   (`ToolRecords` in PhaseCard.tsx) is itself a scroller, and one taller than
-   the box that scrolls it is this trap again — so inside a tailing box a
-   record is at most the box less its padding and border (`--spacing-1` and
-   1px, top and bottom) and less its own "Arguments" label line and gap. */
+   A RECORD INSIDE IT is the same requirement one level down: a tool's
+   arguments and result are scrollers of their own, and one taller than the
+   box that scrolls it is this trap again. So inside a tailing box the record
+   ceiling (`--record-ceiling`, declared once in frame.css) narrows to the box
+   less its padding and border (`--spacing-1` and 1px, top and bottom) and
+   the record's own label line and gap — "Arguments", "Result", "Error", one
+   word each, so that line cannot wrap — and never past `--record-max`. It is
+   re-declared for the kit as well as named, because a custom property's
+   `var()` resolves where it is declared: the shell's value was settled on
+   `main`. */
 .tail-scroll.tailing {
   --tail-bound: max(
     calc(var(--size-row-md) * 4),
+    calc(100cqb - var(--sticky-top) - var(--spacing-3))
+  );
+  --record-ceiling: min(
+    var(--record-max),
     calc(
-      100cqb - var(--sticky-top) - var(--font-size-2xs) * var(--font-line-height-normal) -
-        var(--spacing-1) - var(--spacing-3)
+      var(--tail-bound) - 2 * var(--spacing-1) - 2px - var(--font-size-2xs) *
+        var(--font-line-height-normal) - var(--spacing-1)
     )
   );
-  --record-bound: calc(
-    var(--tail-bound) - 2 * var(--spacing-1) - 2px - var(--font-size-2xs) *
-      var(--font-line-height-normal) - var(--spacing-1)
-  );
+  --crewlet-codeblock-max-height: var(--record-ceiling);
   max-height: var(--tail-bound);
   overflow-y: auto;
-}
-/* OUTSIDE A TAILING BOX the box that scrolls a record is the page itself, and
-   the same requirement reads: once scrolled to, the whole record fits in the
-   view — the view less the sticky band and less its label line and gap above
-   it. A record taller than that has its bottom below the fold while the wheel
-   is inside it. `PhaseCard`'s records take `min(RECORD_MAX_HEIGHT, this)`, so
-   on any window taller than the record they keep the ceiling they always had. */
-.phase-card {
-  --record-bound: calc(
-    100cqb - var(--sticky-top) - var(--font-size-2xs) * var(--font-line-height-normal) -
-      var(--spacing-1)
-  );
 }
 
 /* PROSE. The model's reasoning and its speech are natural language, and were
@@ -5272,7 +5270,9 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-  height: 28px;
+  /* The row token rather than a literal, because `.work-col-body`'s bound
+     subtracts this height and the two must be one value. */
+  height: var(--size-row-sm);
   padding: 0 var(--spacing-1);
   font-size: var(--font-size-compact);
   color: var(--color-text-primary);
@@ -5289,10 +5289,23 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  /* THE COLUMN SCROLLS, NOT THE PAGE — see the section head. The ceiling is
-     what keeps every lane's head, where the counts are, on one screen. */
+  /* A LANE'S BODY SCROLLS INSIDE THE PAGE, so it is bounded by the scroller's
+     view (see "The document does not scroll" in the design doc): once the page
+     is scrolled to it, the lane's head and its whole body fit under the sticky
+     band, so the lane's counts and its last card are on one screen. That is
+     the view (`100cqb`) less the band (`--sticky-top`), the head
+     (`--size-row-sm`, its height above) and its gap to the body, and the
+     board's own bottom inset — with a floor of four rows for a window too
+     short for that, where the page carries on past it. It was
+     `min(70dvh, 760px)`: a guess at the view that counted neither the page
+     bar nor the toolbar, so on a short window the lane's bottom sat below the
+     fold, and on a tall one the cap stopped it short for no reason the view
+     gave. */
   overflow-y: auto;
-  max-height: min(70dvh, 760px);
+  max-height: max(
+    calc(var(--size-row-md) * 4),
+    calc(100cqb - var(--sticky-top) - var(--size-row-sm) - var(--spacing-2) - var(--spacing-2))
+  );
   /* Room for a card's shadow and focus ring, which the scroll box would clip. */
   padding: 2px;
   margin: -2px;

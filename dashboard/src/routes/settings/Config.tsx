@@ -40,7 +40,7 @@ import {
   ClockGlyph,
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 // OURS, DELIBERATELY. uilet's `SegmentedControl` has no manual-activation
 // mode: with `semantics="radio"` its arrow keys COMMIT the option they land
 // on, and every group on this screen drives a `useParam` — the lens pushes a
@@ -738,14 +738,14 @@ export function ConfigScreen({
                     (`gap-2`): at `gap-1` it sat almost flush on the code
                     block's edge and read as part of the record. */}
                 <div className="col gap-2">
-                  {/* BOUNDED, like every other record block. A whole company
-                      configuration runs to hundreds of lines, and it is one of
-                      the two records `RECORD_MAX_HEIGHT` is written down for
-                      by name — unbounded, it pushes the caption under it and
-                      the entity lens below that off the screen. */}
+                  {/* BOUNDED, like every other record block, by the ceiling the
+                      shell declares once (`--record-ceiling`, frame.css). A
+                      whole company configuration runs to hundreds of lines,
+                      and it is one of the records that ceiling is written
+                      down for by name — unbounded, it pushes the caption
+                      under it and the entity lens below that off the screen. */}
                   <CodeBlock
                     plain
-                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="The active company configuration, as JSON"
                     code={pretty}
@@ -859,7 +859,6 @@ export function ConfigScreen({
                     {one.data ? (
                       <CodeBlock
                         plain
-                        maxHeight={RECORD_MAX_HEIGHT}
                         selectable
                         label={`${entity}, as JSON`}
                         code={JSON.stringify(one.data.entity, null, 2)}

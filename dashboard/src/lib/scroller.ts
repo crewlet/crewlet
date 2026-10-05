@@ -3,14 +3,22 @@
  * to find the same one.
  *
  * The shell owns the scroller: one element between the page bar and the
- * viewport edge, with every screen rendered inside it. It is the only thing
- * that moves a SCREEN — a box inside one may scroll its own content (a running
- * phase's transcript, a seat's thread list, a long record), but none of those
- * is the page, and each is bounded to this element's view and hands the wheel
- * back to it at either end (see "The document does not scroll" in
- * docs/reference/dashboard-design.md). So "scroll to the top" and "is the
- * reader at the top" are questions about the SHELL's element rather than about
- * whatever is currently on it.
+ * viewport edge, with every screen rendered inside it, and on every screen
+ * that scrolls as a page it is what moves the screen. So "scroll to the top"
+ * and "is the reader at the top" are questions about the SHELL's element
+ * rather than about whatever is currently on it — which is everything this
+ * module answers.
+ *
+ * IT IS NOT THE ONLY SCROLLER, and two others are worth knowing about before
+ * reasoning about where a wheel goes or what `reveal` moves. A FULL-HEIGHT
+ * screen (`useFillScreen`: a task, the Inbox, a knowledge page) holds this
+ * element still and lets its own columns scroll — each exactly this element's
+ * height, so `100cqb` is their view too, and on those screens THEY are the
+ * page's scrollers. And a box inside the page may scroll its own content (a
+ * running phase's transcript, a seat's thread list, a board lane, a long
+ * record): none of those is the page, and each is bounded by the view and
+ * hands the wheel back, at either end, to whichever of the two scrolls it
+ * (see "The document does not scroll" in docs/reference/dashboard-design.md).
  *
  * It had two spellings. The router restored a remembered position through
  * `getElementById("screen-scroll")` and the settled-list hook asked whether

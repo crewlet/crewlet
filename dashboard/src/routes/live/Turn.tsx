@@ -61,7 +61,7 @@ import type { Coverage } from "~/contract/coverage.ts";
 import { ToolsTab } from "./trace/Tools.tsx";
 import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
 import { steerMarks, Waterfall } from "./trace/Waterfall.tsx";
-import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
+import { QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
   Button,
@@ -1967,7 +1967,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                         <CodeBlock
                           plain
                           copyable={false}
-                          maxHeight={RECORD_MAX_HEIGHT}
                           selectable
                           label="agent_turn_completed, as JSON"
                           code={summaryJSON}
@@ -1988,7 +1987,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                         <CodeBlock
                           plain
                           copyable={false}
-                          maxHeight={RECORD_MAX_HEIGHT}
                           selectable
                           label="turn_completed, as JSON"
                           code={learningJSON}

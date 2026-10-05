@@ -61,7 +61,6 @@ import { ClockGlyph, CircleAlertGlyph, SquareTerminalGlyph, XGlyph } from "@crew
 import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { fmtCount, fmtDuration, fmtElapsed, fmtTime, plural, relTime } from "~/lib/format.ts";
 import { rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
@@ -574,12 +573,15 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
         )}
       </div>
       {(call?.args || running?.arguments) && <span className="t-label">Input</span>}
+      {/* HALF THE RECORD CEILING EACH, derived from the one the shell declares
+          (`--record-ceiling`, frame.css) rather than restated: Input and
+          Output are read as a pair, so both fit on one screen together. */}
       {(call?.args || running?.arguments) && (
         <CodeBlock
           plain
           selectable
           copyable={false}
-          maxHeight={RECORD_MAX_HEIGHT / 2}
+          maxHeight="calc(var(--record-ceiling) / 2)"
           label="Input"
           code={call?.args || running?.arguments || ""}
         />
@@ -592,7 +594,7 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
               plain
               selectable
               copyable={false}
-              maxHeight={RECORD_MAX_HEIGHT / 2}
+              maxHeight="calc(var(--record-ceiling) / 2)"
               label="Output"
               code={call.result}
             />
@@ -659,14 +661,7 @@ function RunDetail({
           arrives on the run&rsquo;s record when the run is collected.
         </span>
       ) : record?.transcript ? (
-        <CodeBlock
-          plain
-          selectable
-          copyable
-          maxHeight={RECORD_MAX_HEIGHT}
-          label="What the run did"
-          code={record.transcript}
-        />
+        <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
       ) : (
         <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
       )}
@@ -747,7 +742,6 @@ export function LiveOutput({
           plain
           selectable
           copyable
-          maxHeight={RECORD_MAX_HEIGHT}
           label={out.source === "stderr" ? "Live output (its error stream)" : "Live output"}
           code={out.text}
         />

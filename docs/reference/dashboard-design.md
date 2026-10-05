@@ -3212,15 +3212,21 @@ rules fix it, and each one names a specific mechanism:
    at its end, and containment swallowed every wheel-down there. The bound is
    now derived from one requirement — *once scrolled to, the whole box fits in
    the view* — as `100cqb` (the shell's scroller, a size container on every
-   screen) less the sticky band, the box's caption and the card's inset below
-   it, with a floor of four rows for a window too short for that; and nothing
-   contains the wheel, so at the box's top or bottom the page carries on.
+   screen) less the sticky band and the card's inset below it, with a floor of
+   four rows for a window too short for that; and nothing contains the wheel,
+   so at the box's top or bottom the page carries on. The box ALONE: its
+   caption is an uppercase label in a column the sidebar and a peek narrow,
+   and it wraps, so a bound that subtracted one line of it promised a fit that
+   held only while the caption did.
 
    The same requirement applies one level down. A tool's record is a scroller
    of its own, and one taller than the box that scrolls it is the same trap:
-   inside a running ledger a record is at most the box less its label, and in
-   a settled card at most the view less its label, so on any window with room
-   for 460px of record it keeps the ceiling it always had. And the tail
+   inside a running ledger a record is at most the box less its one-word label,
+   and anywhere else at most the view less its label — the record ceiling every
+   block of machine text shares, declared once (see
+   [The document does not scroll](#the-document-does-not-scroll)) — so on any
+   window with room for 460px of record it keeps the ceiling it always had.
+   And the tail
    re-sticks when the BOX changes height (a resized window) as well as when
    its content grows, and opening a running phase always starts at its tail:
    the "still following?" flag used to outlive the box, so a reader who
@@ -4237,14 +4243,24 @@ way on a narrow card: the message truncates, the source stays whole.
 
 ### The document does not scroll
 
-`#screen-scroll`, the shell's own main region, scrolls, and it is the only
-thing that may. The sidebar is a fixed column beside a scrolling sheet, so a
-page that can *also* scroll as a whole carries the sidebar off the top of the
-window and leaves the reader looking at background below the application, with
-two scrollbars and neither obviously the one they want. The frame is the design
-system's `AppShell`, which is exactly one viewport tall, and `base.css` gives
-`body` a fixed `100dvh` with its overflow hidden: the document is not allowed to
-grow, so the invariant is unreachable rather than merely unused.
+`#screen-scroll`, the shell's own main region, is what scrolls a page, and the
+document as a whole never does. The sidebar is a fixed column beside a
+scrolling sheet, so a page that can *also* scroll as a whole carries the
+sidebar off the top of the window and leaves the reader looking at background
+below the application, with two scrollbars and neither obviously the one they
+want. The frame is the design system's `AppShell`, which is exactly one
+viewport tall, and `base.css` gives `body` a fixed `100dvh` with its overflow
+hidden: the document is not allowed to grow, so the invariant is unreachable
+rather than merely unused.
+
+Two other kinds of scroller sit inside it, and both are covered below. A
+**full-height screen** (`useFillScreen`: a task, the Inbox, a knowledge page)
+holds `#screen-scroll` still and lets its own columns scroll — `.task-main` and
+`.task-rail`, `.inbox-list` and `.inbox-pane-scroll`, `.kpage-main` and
+`.kpage-rail`. Each is exactly the main region's height, so `100cqb` is its view
+too, and on that screen those columns are the page's scrollers: a box inside
+one hands the wheel to the column, not to `#screen-scroll`. And a **box inside
+the page** may scroll its own content, on the two conditions below.
 
 The shell hands the kit that id as its `mainId`, and everything that needs the
 scroller finds it through ONE accessor, `screenScroller()` in `lib/scroller.ts`:
@@ -4264,30 +4280,63 @@ document that cannot scroll there is no other ancestor for it to move.
 
 **A box inside the page may scroll its own content, on two conditions.** A
 running phase's transcript, a seat's thread list beside its open thread, the
-Settings column and a long record each scroll inside themselves, and each is a
-second thing under the reader's wheel — so each has to keep the page within
-reach:
+Settings column, a board lane's body and a long record each scroll inside
+themselves, and each is a second thing under the reader's wheel — so each has
+to keep the page within reach:
 
 - **It is bounded by the scroller's view, never by a literal.** The shell's
   `main` is a size container on every screen (`container: scroller / size`), so
   a box asks for `100cqb` — the window less the page bar, which wraps, the
   sheet's inset and any banner, none of which a descendant can count — and
-  subtracts what covers or must accompany it (`--sticky-top`, its caption). A
-  `px` height or a `100dvh` sum is a guess at that number: too tall on a short
-  window, where the box's own bottom then sits below the fold, and too short on
-  a tall one for nothing. Whether such a box sits beside what it serves is a
-  container query on the screen's width (`@container page`), never a window
-  media query, because the sidebar and a peek take width the window does not
-  report.
+  subtracts what covers or must accompany it (`--sticky-top`, a board lane's
+  head), with a floor of four rows for a window too short for that. The
+  requirement is that the BOX fits once scrolled to, not its caption: the
+  transcript's bound used to subtract one line of its caption, which wraps in
+  a narrowed column, so the fit held only while the caption did. A `px`
+  height or a `100dvh` sum is a guess at that number: too tall on a short
+  window, where the box's own bottom then sits below the fold, and too short
+  on a tall one for nothing — the board's lanes were `min(70dvh, 760px)`
+  until the gate below learned to see every scroller rather than the two it
+  named. Whether such a box sits beside what it serves is a container query on
+  the screen's width (`@container page`), never a window media query, because
+  the sidebar and a peek take width the window does not report.
 - **At either end the wheel is the page's.** No in-page scroller sets
   `overscroll-behavior` to `contain` or `none` on the block axis: a box whose
   end is reached while the page has more to show must let the page move, and
   containment there is the wheel doing nothing. The one exception is a box
   that is always wholly in view and so cannot hide anything — the sticky
   Settings column, exactly the view's height, where chaining would move the
-  section beside it instead. `styles/scrollers.test.ts` holds both rules, with
-  that column as its roster's one entry and its reason; a sideways strip is
-  not its subject, since it never holds the page's own wheel.
+  section beside it instead.
+
+**A long record is bounded once, in the cascade.** Every block of machine
+text the kit's `CodeBlock` draws — a tool's arguments and result, a phase's
+verbatim prompt, an event's payload, a configuration, a run's transcript —
+reads its ceiling from `--crewlet-codeblock-max-height`, and the shell declares
+it once on the two scrollers a record can sit in, the main region and the
+peek's body (itself a size container for this): `--record-ceiling`, the view
+less the sticky band and a label's line, floored at four rows and capped at
+`--record-max` (460px, the height these records have always had). A running
+ledger narrows it to its own box less the record's label. It used to be a
+number each call passed, and nineteen of twenty-one blocks passed the bare
+460 — so on a window whose view was shorter, a record's bottom sat below the
+fold while the wheel was inside it, and a sheet gate could not see a ceiling
+that arrived as an inline style. A block states its own only where it
+genuinely differs: the YAML dialog, which is portaled outside both scrollers
+and takes the root's cap, and the trace's paired Input and Output, half the
+ceiling each, derived from it.
+
+`styles/scrollers.test.ts` holds all of it. It scans EVERY rule in the sheets
+that scrolls its block axis with a declared bound, and passes one with a
+literal bound only from a roster that says why it cannot hide anything — an
+overlay or a dialog the page's fold does not reach (the secret completion
+list, the filter menu's list, the composer's and the setup dialog's
+scrollers), or a box shorter than any view (a finding's 9rem of chips); a
+roster entry that stopped being true fails too. Its containment half keeps
+the Settings column as its one entry and its reason. It reads the record
+ceiling on both scrollers and in the running ledger, and the source for any
+`CodeBlock` handed a `maxHeight` outside its two named exceptions, or a number
+inside them. A sideways strip is not its subject, since it never holds the
+page's own wheel.
 
 ### A card has one left edge
 

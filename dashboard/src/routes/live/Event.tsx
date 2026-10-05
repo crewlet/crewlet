@@ -6,7 +6,7 @@
  */
 
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
@@ -317,7 +317,6 @@ export function EventScreen({ eventId }: { eventId: string }) {
                     plain
                     wrap={false}
                     copyable={false}
-                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="The event payload, as JSON"
                     code={JSON.stringify(data.payload, null, 2)}
@@ -463,7 +462,6 @@ export function EventPeek({ eventId }: { eventId: string }) {
                     plain
                     wrap={false}
                     copyable={false}
-                    maxHeight={RECORD_MAX_HEIGHT}
                     selectable
                     label="The event payload, as JSON"
                     code={JSON.stringify(payload, null, 2)}

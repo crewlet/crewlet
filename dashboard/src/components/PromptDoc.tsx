@@ -99,7 +99,6 @@ import {
 } from "~/lib/promptmap.ts";
 import { fmtBytes, plural } from "~/lib/format.ts";
 import type { PromptSection } from "~/protocol/index.ts";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 type View = "read" | "source";
 
@@ -240,7 +239,6 @@ export function PromptRecord({
                 about, which is exactly what that flag is for. */}
             <CodeBlock
               plain
-              maxHeight={RECORD_MAX_HEIGHT}
               selectable
               label={`The ${phase} phase's ${HALF[h.half].name.toLowerCase()}`}
               code={h.text}

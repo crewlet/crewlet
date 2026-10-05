@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import {
   Button,
   Callout,
@@ -985,14 +985,7 @@ function CollectedRun({
           </div>
         )}
         {record.transcript ? (
-          <CodeBlock
-            plain
-            selectable
-            copyable
-            maxHeight={RECORD_MAX_HEIGHT}
-            label="What the run did"
-            code={record.transcript}
-          />
+          <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
         ) : (
           <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
         )}
@@ -1104,7 +1097,6 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
             about this call. */}
         <CodeBlock
           plain
-          maxHeight={RECORD_MAX_HEIGHT}
           focusWhenScrollable
           label={`${call.name} arguments`}
           code={args || "(none)"}
@@ -1114,7 +1106,6 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
         <div className="t-label">{call.failed ? "Error" : "Result"}</div>
         <CodeBlock
           plain
-          maxHeight={RECORD_MAX_HEIGHT}
           focusWhenScrollable
           label={`${call.name} ${call.failed ? "error" : "result"}`}
           code={output || "(nothing returned)"}

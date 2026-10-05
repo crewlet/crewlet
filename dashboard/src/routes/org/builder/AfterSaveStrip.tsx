@@ -51,7 +51,6 @@ import {
   Modal,
   Skeleton,
 } from "@crewlethq/ui";
-import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /**
  * How often the fleet is read while the apply is still moving. This node's own
@@ -356,13 +355,17 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
             as <InlineCode>__redacted__</InlineCode>, and a reference keeps its{" "}
             <InlineCode>${"{NAME}"}</InlineCode> form.
           </p>
+          {/* ITS OWN CEILING, the one block that states one: a dialog is
+              portaled to the document, outside the shell's scrollers, so the
+              view-derived ceiling they declare (`--record-ceiling`,
+              frame.css) never reaches it. The root's cap does. */}
           <CodeBlock
             plain
             wrap
             selectable
             label="The company as YAML"
             code={state.text}
-            maxHeight={RECORD_MAX_HEIGHT}
+            maxHeight="var(--record-max)"
           />
         </>
       )}
