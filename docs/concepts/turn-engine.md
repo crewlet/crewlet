@@ -240,9 +240,13 @@ A turn can also end `failed` without the reviewer choosing it. Every failed turn
 |---|---|---|
 | A turn guard fired: `stall`, `max_iter`, `depth_cap`, or a scheduled turn's `scheduled_timeout` | `turn.guard_breach` with that `kind` | the guard's kind |
 | A panic, in a phase or around one | `turn.guard_breach` with `unhandled_exception` | `unhandled_exception` |
-| The token budget refused a charge | `budget_exhausted` | `error` |
-| Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | `error` |
-| Any other broken phase | none | `error` |
+| The token budget refused a charge | `budget_exhausted` | `budget_exhausted` |
+| Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | the last member's kind (`rate_limit`, `server`, …) |
+| The model **declined** the request on policy grounds | `turn_trigger_skipped` per trigger — the turn is abandoned, not redelivered | `refusal` |
+| A round [did not finish](#a-round-that-did-not-finish): cut off at the output cap, out of context window, or paused | none | `max_tokens`, `context_exceeded` or `paused` |
+| Any other broken phase | none | the provider's classified kind where there is one, else `error` |
+
+The `error_kind` on the turn's summary is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so the two records of one failure name it alike. It used to read `error` for every cause but a guard, while the phase record beside it said `refusal` or `auth`.
 
 Those dedicated events are what the seat's `last_error` is taken from, and `llm_unavailable` is also what reads the seat as `stopped` with the reason `provider` (see [Agent States](agent-runtime.md#agent-states)). A reviewer's own `failed` fired no guard, so it publishes none of them.
 
@@ -637,6 +641,19 @@ The judge covers **the executor and onboarding**; each has its own base cap and 
 (Haiku-class). Resolution follows the standard phase chain:
 `role.llm_judge` → `role.llm` → `"default"` → first provider. If
 unset, the judge runs on whatever the role's primary model is.
+
+### A round that did not finish
+
+Every completion carries a **stop reason** — why the model stopped writing — normalised across vendors (`llm.StopReason`): `end`, `tool_use`, `max_tokens`, `refusal`, `context_exceeded`, `paused`. Each backend maps its own words onto these (Anthropic's `end_turn`/`stop_sequence` → `end`, `model_context_window_exceeded` → `context_exceeded`, `pause_turn` → `paused`; OpenAI's `length` → `max_tokens`, `content_filter` → `refusal`); a missing or unrecognised reason reads as an ordinary end, because a backend that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record).
+
+The loop reads it **before the correctives and before the round's tools**, because the last four are rounds that did not finish and nothing a corrective appends can fix them:
+
+- **`max_tokens`** — the response was cut off at the model's output cap. The phase **fails by name** (`error_kind: max_tokens`) and **the round's tool calls are not run**: a call the cap cut off is not the call the model meant, and on the Anthropic stream its half-written arguments arrive as `{}`, so it used to run with no arguments at all. An empty truncated round used to draw the empty-answer corrective, which re-asked with a longer conversation.
+- **`context_exceeded`** — the conversation filled the model's context window. A named failure; re-asking can only make the conversation longer.
+- **`paused`** — a vendor pausing a long server-tool turn for the caller to continue. The engine sends no server tools, so it is an unexpected protocol state, reported and never continued.
+- **`refusal`** — the model **declined** the request on policy grounds. A backend never returns it as an answer: it returns a classified error (`KindRefusal`) carrying the vendor's category and explanation (Anthropic's `stop_details`; OpenAI's refusal message) and the billed completion, so a caller that reads only the text cannot mistake a refusal for one. It is **not retryable** — the fallback chain does not hand it to the next model, because walking a refused request round the models until one answers is circumventing the decision — and it benches no credential. The loop records and charges the refused round (the prompt was billed), sends **no corrective**, and ends the phase. The record carries `error_kind: refusal` and a `refusal` object; the executor is **not** rescued as `incomplete` and the reviewer does **not** send the turn round again as `self_iterate`; and the turn is **abandoned rather than redelivered** (`turn.Abandon`), since a redelivery would put the same request in front of the same model up to its whole delivery budget. Server-side refusal fallbacks (routing a refused request to another model at the vendor) are not used.
+
+**A call whose arguments did not parse is answered, not run.** The per-call half of the same rule: a tool call on a complete round whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why — sent with `is_error` on Anthropic — instead of running the tool with `{}`. The model reads it and calls again. Every failed tool result now carries that flag, not only this one.
 
 ---
 
@@ -1341,7 +1358,7 @@ All fields are optional; defaults apply when absent.
 | `internal/agent/ledger/conversation.go` | The cross-turn ledger — what this seat already said in one thread |
 | `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
 | `internal/agent/extension/` | Round-cap extension judge |
-| `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through. Also the correctives that decide how a phase finishing by a call ends: the [finishing corrective](#round-cap-extension-judge) that re-asks a round ended without the submission the round offered (and hands one back when the budget has no round left), the empty-answer corrective for a loop whose prose is a finish, and the refusal of a forced call with no terminator |
+| `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through. Also the correctives that decide how a phase finishing by a call ends: the [finishing corrective](#round-cap-extension-judge) that re-asks a round ended without the submission the round offered (and hands one back when the budget has no round left), the empty-answer corrective for a loop whose prose is a finish — and, ahead of both, the [stop reasons](#a-round-that-did-not-finish) that end a phase instead (`StopError`, a refusal), and the failed result a call whose arguments did not parse is answered with |
 | `internal/agent/steer/` | A running turn's note box: what an offer is answered, the bounds on a note, and the wire a note crosses to reach the node running the turn |
 | `internal/engine/steer.go` | Each node's desk of its running turns' boxes: serving the scatter, answering only for its own turns, and recording the notes a turn never read |
 | `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |

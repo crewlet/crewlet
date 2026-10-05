@@ -579,10 +579,6 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 		Model:            p.model,
 		Content:          choice.Message.Content,
 		ReasoningContent: reasoningText(choice.Message.RawJSON()),
-		FinishReason:     choice.FinishReason,
-	}
-	if out.FinishReason == "" {
-		out.FinishReason = "stop"
 	}
 
 	for _, tc := range choice.Message.ToolCalls {
@@ -594,11 +590,19 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 			log.Warn("custom_tool_call_ignored", "model", p.model, "id", tc.ID)
 			continue
 		}
-		out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: httpapi.DecodeArgs([]byte(tc.Function.Arguments), tc.Function.Name),
-		})
+		args, argErr := httpapi.DecodeArgs([]byte(tc.Function.Arguments), tc.Function.Name)
+		call := llm.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: args}
+		if argErr != nil {
+			call.ArgumentsError = argErr.Error()
+		}
+		out.ToolCalls = append(out.ToolCalls, call)
+	}
+	out.StopReason = stopReason(choice.FinishReason, len(out.ToolCalls) > 0)
+	if choice.Message.Refusal != "" {
+		// The model's own refusal message, which the API puts beside the
+		// content rather than in it — a refusal whatever finish_reason
+		// says, and the one place OpenAI gives an account of it.
+		out.StopReason = llm.StopRefusal
 	}
 
 	// See the package doc: prompt_tokens is ALREADY the full prompt count
@@ -614,8 +618,50 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 		"output_tokens", out.OutputTokens,
 		"cache_read_tokens", out.CacheRead,
 		"tool_calls", len(out.ToolCalls),
-		"finish_reason", out.FinishReason)
+		"finish_reason", choice.FinishReason)
+	if out.StopReason == llm.StopRefusal {
+		// A refusal is an error, not an answer — see [llm.StopRefusal] —
+		// and it is returned here, after the credential rotation, because
+		// the call succeeded on a healthy key. OpenAI names no policy
+		// category; the refusal message, where there is one, is its
+		// account of why.
+		log.Warn("llm_refused", "model", p.model,
+			"input_tokens", out.InputTokens, "output_tokens", out.OutputTokens)
+		return nil, llm.Refused(p.name, p.model, &llm.Refusal{
+			Explanation: choice.Message.Refusal,
+			Completion:  out,
+		})
+	}
 	return out, nil
+}
+
+// stopReason maps a finish_reason onto the contract's.
+//
+// `length` is the output cap and `content_filter` the host's policy filter,
+// which is a refusal whatever produced it. A MISSING one is read from the
+// response — a tool call means it stopped for its tools — because a compatible
+// host that omits the field has not said the response was cut short; an
+// UNKNOWN one is logged and read the same way, since a value newer than this
+// build is the host's and failing every round over a word fails a working seat.
+// `function_call` is the deprecated spelling of `tool_calls`.
+func stopReason(raw string, calls bool) llm.StopReason {
+	switch raw {
+	case "stop":
+		return llm.StopEnd
+	case "tool_calls", "function_call":
+		return llm.StopToolUse
+	case "length":
+		return llm.StopMaxTokens
+	case "content_filter":
+		return llm.StopRefusal
+	case "":
+	default:
+		log.Warn("finish_reason_unknown", "finish_reason", raw)
+	}
+	if calls {
+		return llm.StopToolUse
+	}
+	return llm.StopEnd
 }
 
 // reasoningText pulls a reasoning trace off the raw message JSON.

@@ -305,3 +305,35 @@ func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 		t.Errorf("breach = %+v, want unhandled_exception for run t-1", breach)
 	}
 }
+
+// A FAILED TURN NAMES ITS CLASS, the one its failed phase names. The field's
+// doc always promised the classified provider error and the code wrote
+// `error` for every failure, so a turn whose model refused and one whose key
+// was revoked read the same on the Turn screen while their phase records said
+// `refusal` and `auth`.
+func TestAFailedTurnNamesTheClassItsPhaseNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{"a refusal", fmt.Errorf("turn: execute round 1: %w",
+			llm.Refused("anthropic", "m", &llm.Refusal{Category: "cyber"})), "refusal"},
+		{"a revoked key", fmt.Errorf("turn: review round 1: %w",
+			&llm.Error{Kind: llm.KindAuth, Err: errors.New("401")}), "auth"},
+		{"an unclassified failure", errors.New("runner could not be built"), "error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, p, tel := failing(t)
+			tel.startedAt = time.Now().UTC().Add(-time.Second)
+			e.publishTurnCompleted(context.Background(), tel, runner.Spend{},
+				turn.Result{Decision: phase.Failed}, tc.cause)
+			summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
+			if !summary.Failed || summary.ErrorKind != tc.want {
+				t.Errorf("summary = failed:%v kind:%q, want %q", summary.Failed, summary.ErrorKind, tc.want)
+			}
+		})
+	}
+}

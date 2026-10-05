@@ -48,6 +48,7 @@ function settledTurn() {
         outputTokens: 0,
         cacheReadTokens: 0,
         toolCalls: 2,
+        stopReason: "",
       },
       {
         round: 2,
@@ -58,6 +59,7 @@ function settledTurn() {
         outputTokens: 0,
         cacheReadTokens: 0,
         toolCalls: 0,
+        stopReason: "",
       },
     ],
     tools: [
@@ -125,6 +127,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 2,
+          stopReason: "",
         },
       ],
       tools: [toolCall({ name: "a", durationMs: 200 }), toolCall({ name: "b", durationMs: 300 })],
@@ -194,6 +197,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 1,
+          stopReason: "",
         },
       ],
       roundStartedAt: iso(15_000),
@@ -229,6 +233,7 @@ describe("buildWaterfall", () => {
       outputTokens: 0,
       cacheReadTokens: 0,
       toolCalls: 1,
+      stopReason: "",
     });
     const now = T0 + 237_000;
     const tools = phaseRecord({
@@ -315,6 +320,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 1,
+          stopReason: "",
         },
         {
           round: 2,
@@ -325,6 +331,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 0,
+          stopReason: "",
         },
       ],
     });

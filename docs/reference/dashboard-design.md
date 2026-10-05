@@ -3128,6 +3128,25 @@ rules fix it, and each one names a specific mechanism:
    decision reads "never decided — the engine sent the turn back", because
    `self_iterate` is also the word a reviewer chooses on purpose, and "sent the
    turn back" claimed a judgement nobody made.
+
+   **A round that did not finish says why, and a refusal is named as one.**
+   The engine ends a phase on a round its output cap cut off, one that filled
+   the context window, one the provider paused, and one whose model declined
+   the request — and none of them looks different on the round itself: the
+   words read like any round's, and a call the cap cut off was never run, so
+   there is no failed row to catch the eye. Each round's `rounds[].stop_reason`
+   is what says which, and a round whose reason ended the phase carries a
+   sentence under its words in the danger tone, with its glyph, and a danger
+   node (rule 4) — keyed on `contract/stops.ts`, the engine's own set, so a
+   reason the engine starts recording is a type error until it has its
+   sentence. Such a round keeps its place on the rail even when it said
+   nothing and ran nothing: a refusal with no text is exactly that round, and
+   it is the one that explains why the phase ended. The header names a refused
+   phase **"declined by model"** rather than its `error_kind` — `refusal` reads
+   as the engine refusing — and the error banner says what the vendor said
+   (`refusal.category`, `refusal.explanation`) and what the engine did about
+   it: nothing rescued, nothing re-asked, the trigger not redelivered. Still
+   danger, because the phase and its turn ended there.
 3. **The model's words are prose; JSON is monospace, and INDENTED.**
    Reasoning and speech get a proportional face, real leading and a bounded
    measure, and are rendered as the markdown they are, read by a model's
@@ -3203,8 +3222,8 @@ rules fix it, and each one names a specific mechanism:
    apiece: a colour per round would read as meaning something and mean
    nothing, which is the same objection as a colour per agent and worse at
    nine rounds. A round's node takes colour for exactly four states —
-   normal, contains a failed call (danger), answered in prose where the phase
-   needed a call (caution), in flight (the accent) — because "which round went
+   normal, contains a failed call or did not finish (danger), answered in
+   prose where the phase needed a call (caution), in flight (the accent) — because "which round went
    wrong" and "where is it now" are the two questions a reader brings to a
    running turn, and a round that printed its submission instead of calling
    it is the first question's other answer. That round's note says what
@@ -3908,7 +3927,7 @@ not, which is the class of defect that never shows up in a screenshot:
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
 change shape when it completes. `decision`, `exhausted_rounds`,
-`empty_answer_rounds`, `rescue_fired`, `notes`, `tools_available` and
+`empty_answer_rounds`, `rescue_fired`, `refusal`, `notes`, `tools_available` and
 `conversation_key` are all rendered; every one of them was on the wire and shown
 nowhere. `empty_answer_rounds` is the newest and the one with the least warning
 attached elsewhere: a model that answers with nothing used to fail its provider

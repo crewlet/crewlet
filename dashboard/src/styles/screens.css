@@ -236,6 +236,12 @@
 .round-note.caution {
   color: var(--color-feedback-warning-ink);
 }
+/* A ROUND THAT DID NOT FINISH — cut off at the output cap, refused, out of
+   context, paused. DANGER, unlike a declined round: this round ended the phase
+   and its turn, and nothing follows it. */
+.round-note.critical {
+  color: var(--color-feedback-danger-ink);
+}
 
 /* ---- A phase's prompt: a map, an outline and one section -----------------
    `PromptDoc.tsx`. The view measures ITSELF (`container: prompt`) rather than
@@ -527,7 +533,8 @@
   min-width: 0;
 }
 
-/* A round that CALLED SOMETHING THAT FAILED. A colour a round carries only
+/* A round that CALLED SOMETHING THAT FAILED, or that DID NOT FINISH (its stop
+   reason ended the phase — the note under its words says which). A colour a round carries only
    when it is earned: scanning nine rounds for where it went wrong is the
    actual question a reader brings to a stuck turn, and the answer was
    previously a small icon inside a collapsed row. Four node states in total

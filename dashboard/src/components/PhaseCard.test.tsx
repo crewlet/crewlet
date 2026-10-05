@@ -36,6 +36,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     failed: false,
     error: "",
     errorKind: "",
+    refusal: null,
     systemPrompt: "",
     userPrompt: "",
     systemSections: null,
@@ -864,5 +865,87 @@ describe("a running phase's transcript", () => {
     geometry(scroller);
     resize();
     expect(scroller.scrollTop).toBe(800);
+  });
+});
+
+/**
+ * A ROUND THAT DID NOT FINISH, AND A MODEL THAT DECLINED, ARE SAID IN WORDS.
+ *
+ * The engine ends a phase on a round its output cap cut off, one that filled
+ * the context window, and one its model refused — and none of them looks
+ * different on the round itself: the words read like any round's, and a call
+ * the cap cut off was never run, so there is no failed row to catch the eye.
+ * The round's stop reason is what says which, and a refusal is a decision the
+ * header names as one rather than an error kind that reads as the engine
+ * refusing.
+ */
+describe("a phase a round did not finish", () => {
+  const timed = (round: number, stopReason: string) => ({
+    round,
+    startedAt: "",
+    durationMs: 0,
+    model: "m",
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    toolCalls: 0,
+    stopReason,
+  });
+
+  test("a round the cap cut off says so, and the round that finished does not", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          failed: true,
+          errorKind: "max_tokens",
+          error: "cut off",
+          roundsUsed: 2,
+          narration: [
+            { round: 1, reasoning: "", content: "Reading.", declined: false },
+            { round: 2, reasoning: "", content: "Posting the summ", declined: false },
+          ],
+          timedRounds: [timed(1, "tool_use"), timed(2, "max_tokens")],
+        })}
+        defaultOpen
+      />,
+    );
+    const [first, second] = [...container.querySelectorAll(".round")];
+    expect(second!.querySelector(".round-note.critical")?.textContent).toMatch(/output cap/);
+    expect(second!.classList.contains("errored")).toBe(true);
+    // THE CONTROL: a round that finished carries no note and no mark.
+    expect(first!.querySelector(".round-note")).toBeNull();
+    expect(first!.classList.contains("errored")).toBe(false);
+    expect(screen.getByText("max_tokens")).toBeDefined();
+  });
+
+  test("a refused phase is named as declined, with what the vendor said, even with no words", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          failed: true,
+          errorKind: "refusal",
+          error: "llm anthropic/m: refusal: the model declined the request (cyber)",
+          refusal: { category: "cyber", explanation: "exploit development" },
+          roundsUsed: 1,
+          narration: [],
+          tools: [],
+          timedRounds: [timed(1, "refusal")],
+        })}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("declined by model")).toBeDefined();
+    // Not the error kind's word, which reads as the engine refusing.
+    expect(screen.queryByText("refusal")).toBeNull();
+    const body = container.querySelector(".phase-body")!.textContent ?? "";
+    expect(body).toMatch(/declined this request/);
+    expect(body).toMatch(/cyber/);
+    expect(body).toMatch(/exploit development/);
+    expect(body).toMatch(/not ask it again|does not ask it again/);
+    // The refused round said nothing and ran nothing, and it still has its
+    // place on the rail — it is the round that explains why the phase ended.
+    const rounds = container.querySelectorAll(".round");
+    expect(rounds.length).toBe(1);
+    expect(rounds[0]!.querySelector(".round-note.critical")?.textContent).toMatch(/declined/);
   });
 });

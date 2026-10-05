@@ -319,7 +319,11 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	if err != nil {
 		return nil, err
 	}
-	return p.completion(msg), nil
+	out := p.completion(msg)
+	if err := p.refused(msg, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // errNoStream reports an endpoint that accepted a streaming request and
@@ -606,7 +610,11 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 				// different message entirely.
 				content = emptyToolResultContent
 			}
-			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, false))
+			// is_error from the message's own flag: the content says why
+			// the call failed, and the flag is the API's structured way of
+			// saying THAT it did, which the model reads differently from a
+			// tool that ran and returned the same words.
+			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, m.Failed))
 
 		case len(m.ToolCalls) > 0 || len(m.ThinkingBlocks) > 0:
 			blocks := make([]sdk.ContentBlockParamUnion, 0,
@@ -790,10 +798,7 @@ func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
 	// alias resolving to a dated snapshot would otherwise re-key the
 	// per-model breakdown the day the alias moves, splitting one model's
 	// spend across two names that nothing in the config mentions.
-	out := &llm.Completion{Model: p.model, FinishReason: string(msg.StopReason)}
-	if out.FinishReason == "" {
-		out.FinishReason = "end_turn"
-	}
+	out := &llm.Completion{Model: p.model}
 
 	var content, reasoning strings.Builder
 	for _, block := range msg.Content {
@@ -815,15 +820,17 @@ func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
 		case "text":
 			content.WriteString(block.Text)
 		case "tool_use":
-			out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
-				ID:        block.ID,
-				Name:      block.Name,
-				Arguments: httpapi.DecodeArgs(block.Input, block.Name),
-			})
+			args, argErr := httpapi.DecodeArgs(block.Input, block.Name)
+			call := llm.ToolCall{ID: block.ID, Name: block.Name, Arguments: args}
+			if argErr != nil {
+				call.ArgumentsError = argErr.Error()
+			}
+			out.ToolCalls = append(out.ToolCalls, call)
 		}
 	}
 	out.Content = content.String()
 	out.ReasoningContent = reasoning.String()
+	out.StopReason = stopReason(msg.StopReason, len(out.ToolCalls) > 0)
 
 	// See the package doc: input_tokens is the uncached remainder, so the
 	// full prompt count — the figure a budget is charged — is the sum.
@@ -839,8 +846,61 @@ func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
 		"cache_read_tokens", out.CacheRead,
 		"cache_write_tokens", out.CacheWrite,
 		"tool_calls", len(out.ToolCalls),
-		"stop_reason", out.FinishReason)
+		"stop_reason", string(msg.StopReason))
 	return out
+}
+
+// stopReason maps the API's stop_reason onto the contract's.
+//
+// A MISSING ONE is read from the response itself — a tool call means the
+// round stopped for its tools, anything else that it ended — because an
+// Anthropic-compatible gateway that omits the field has not said the response
+// was cut short. An UNKNOWN one is logged and read the same way: a value newer
+// than this build is the vendor's, and refusing every round that carries it
+// would fail a working seat over a word.
+//
+// `stop_sequence` is an ordinary end: the engine sets no stop sequences, and a
+// caller that did would have asked for exactly that stop.
+func stopReason(raw sdk.StopReason, calls bool) llm.StopReason {
+	switch raw {
+	case sdk.StopReasonEndTurn, sdk.StopReasonStopSequence:
+		return llm.StopEnd
+	case sdk.StopReasonToolUse:
+		return llm.StopToolUse
+	case sdk.StopReasonMaxTokens:
+		return llm.StopMaxTokens
+	case sdk.StopReasonRefusal:
+		return llm.StopRefusal
+	case sdk.StopReasonModelContextWindowExceeded:
+		return llm.StopContextExceeded
+	case sdk.StopReasonPauseTurn:
+		return llm.StopPaused
+	case "":
+	default:
+		log.Warn("stop_reason_unknown", "stop_reason", string(raw))
+	}
+	if calls {
+		return llm.StopToolUse
+	}
+	return llm.StopEnd
+}
+
+// refused reports a refusal as the classified error the contract asks for,
+// or nil when the response was not one. Outside the credential rotation on
+// purpose: the call succeeded, the key is healthy, and a refusal benches
+// nothing.
+func (p *Provider) refused(msg *sdk.Message, out *llm.Completion) error {
+	if out.StopReason != llm.StopRefusal {
+		return nil
+	}
+	refusal := &llm.Refusal{
+		Category:    string(msg.StopDetails.Category),
+		Explanation: msg.StopDetails.Explanation,
+		Completion:  out,
+	}
+	log.Warn("llm_refused", "model", p.model, "category", refusal.Category,
+		"input_tokens", out.InputTokens, "output_tokens", out.OutputTokens)
+	return llm.Refused(providerName, p.model, refusal)
 }
 
 // String is the provider's identity in a log line.

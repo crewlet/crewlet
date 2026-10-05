@@ -215,44 +215,56 @@ func parseReset(raw string, now time.Time) (time.Duration, bool) {
 	return 0, false
 }
 
-// DecodeArgs turns a tool call's raw JSON arguments into the contract's map.
+// DecodeArgs turns a tool call's raw JSON arguments into the contract's map,
+// or reports why it cannot.
 //
-// Unparseable arguments produce an EMPTY map rather than an error, because the
-// alternative kills a phase over something the model can fix: the tool sees no
-// arguments, fails, and its failure goes back to the model as an ordinary tool
-// result — which is exactly the loop's design.
+// Unparseable arguments are an ERROR, never an empty map. An empty map runs
+// the tool with no arguments at all — a search over everything, a post with no
+// body — which is a call the model never made; and the commonest source of
+// them is a round the output cap cut off mid-object, whose call was not
+// finished. The caller puts the reason on [llm.ToolCall.ArgumentsError] and the
+// tool loop answers the call with it as a failed result the model can read and
+// fix, rather than running it.
 //
-// The partially-decoded map is discarded, and that is the whole point of not
-// writing this inline twice. encoding/json populates what it managed before it
-// failed, so `{"n": 1e1000}` yields both an error AND a map holding +Inf — a
-// value that marshals back out as nothing at all. Keeping it would put a
-// round-trip landmine in the conversation: the call looks fine this round, and
-// the NEXT request fails to serialise the history, on a round that has nothing
-// to do with the tool that caused it.
-func DecodeArgs(raw []byte, tool string) map[string]any {
-	if len(raw) == 0 {
-		return map[string]any{}
+// No input at all — empty, whitespace or a literal `null` — is a call with no
+// arguments rather than a broken one: a vendor sends an empty string for a
+// tool that takes none.
+//
+// The map is never nil, and on an error it is EMPTY: the partially-decoded
+// map is discarded, because encoding/json populates what it managed before it
+// failed — `{"n": [1, 1e1000` leaves values behind — and a call's arguments are
+// replayed onto the wire with the conversation, where a value from a failed
+// decode is not something any round should carry.
+func DecodeArgs(raw []byte, tool string) (map[string]any, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return map[string]any{}, nil
 	}
-	args := map[string]any{}
+	var args map[string]any
 	// UseNumber, so an integer stays exact. Plain unmarshalling gives
 	// float64 and a 19-digit id — a Jira issue id, a Slack timestamp, a
 	// GitHub node id — comes back as 1.2345678901234568e+18 and re-encodes
 	// as 1234567890123456800. The tool call then reaches the server naming a
 	// DIFFERENT entity, and nothing anywhere reports an error: the call
 	// succeeds against the wrong row. Measured on
-	// {"issue_id": 1234567890123456789}.
+	// {"issue_id": 1234567890123456789}. It also accepts 1e1000 as an exact
+	// json.Number, which a float64 decode turns into +Inf and refuses.
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := dec.Decode(&args); err != nil {
 		log.Warn("tool_arguments_unparseable",
 			"tool", tool, "bytes", len(raw), "error", err.Error())
-		return map[string]any{}
+		return map[string]any{}, fmt.Errorf("the arguments are not a JSON object: %w", err)
+	}
+	if dec.More() {
+		// Two values back to back is not one object with a stray tail; it
+		// is a call nobody can say which half of to run.
+		return map[string]any{}, errors.New("the arguments are not a single JSON object")
 	}
 	if args == nil {
 		// A literal `null` unmarshals into a nil map without error.
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
-	return args
+	return args, nil
 }
 
 // EncodeArgs renders arguments for a wire format that carries them as a JSON

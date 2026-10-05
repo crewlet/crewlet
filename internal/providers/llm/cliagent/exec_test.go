@@ -282,8 +282,8 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 	if comp.ToolCalls[0].ID == "" {
 		t.Error("a tool call with no id cannot be paired with its result")
 	}
-	if comp.FinishReason != "tool_calls" {
-		t.Errorf("FinishReason = %q, want tool_calls", comp.FinishReason)
+	if comp.StopReason != llm.StopToolUse {
+		t.Errorf("StopReason = %q, want tool_use", comp.StopReason)
 	}
 	if comp.Content != "reading" {
 		t.Errorf("Content = %q", comp.Content)

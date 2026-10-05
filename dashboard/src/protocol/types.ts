@@ -35,6 +35,7 @@ import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { EngineHealth } from "../contract/health.ts";
+import type { StopReason } from "../contract/stops.ts";
 import type {
   IntegrationsAnswer,
   ReconcileFinding,
@@ -277,6 +278,13 @@ export interface PhaseRound {
   cache_read_tokens: number;
   cache_write_tokens: number;
   tool_calls: number;
+  /**
+   * Why the model stopped writing this round's response. Absent where its
+   * backend reported none and on an older engine's record — "not reported",
+   * never "ended normally". `max_tokens`, `refusal`, `context_exceeded` and
+   * `paused` each END the phase; see `contract/stops.ts`.
+   */
+  stop_reason?: StopReason;
 }
 
 /** The tool call a phase is running right now (`types.RunningCall`). */

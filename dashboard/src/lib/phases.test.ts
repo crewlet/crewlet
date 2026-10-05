@@ -23,7 +23,9 @@ import {
   phaseStart,
   rounds,
   splitThinking,
+  stopNote,
   streamedPhases,
+  timedRounds,
   toolCalls,
   type PhaseRecord,
 } from "./phases.ts";
@@ -986,5 +988,52 @@ describe("a pre-split phase record's unit of work", () => {
   test("falls back to the payload for a frame nothing has stored", () => {
     const done = fromPhaseEvent(phaseEvent({ work_key: "wk-live" }))!;
     expect(done.workKey).toBe("wk-live");
+  });
+});
+
+describe("stop reasons and refusals", () => {
+  test("a round's stop reason is read off the record, and absent is unreported", () => {
+    const [a, b] = timedRounds([{ round: 1, stop_reason: "max_tokens" }, { round: 2 }]);
+    expect(a!.stopReason).toBe("max_tokens");
+    expect(b!.stopReason).toBe("");
+  });
+
+  test("only a round that did not finish has a note", () => {
+    for (const reason of ["max_tokens", "refusal", "context_exceeded", "paused"]) {
+      expect(stopNote(reason)).not.toBeNull();
+    }
+    for (const reason of ["end", "tool_use", "", "from_the_future", "toString"]) {
+      expect(stopNote(reason)).toBeNull();
+    }
+  });
+
+  test("a round that did not finish keeps its slot with nothing in it; one that finished does not", () => {
+    const ledger = rounds(
+      [],
+      [],
+      null,
+      timedRounds([
+        { round: 1, stop_reason: "tool_use" },
+        { round: 2, stop_reason: "refusal" },
+      ]),
+    );
+    expect(ledger.map((r) => [r.round, r.stopReason])).toEqual([[2, "refusal"]]);
+  });
+
+  test("the record's refusal is read, and its absence is null", () => {
+    const refused = fromPhaseEvent({
+      id: "e",
+      type: "agent_phase_completed",
+      timestamp: "2026-10-05T00:00:00Z",
+      payload: { phase: "execute", failed: true, refusal: { category: "bio" } },
+    } as unknown as EventRecord);
+    expect(refused!.refusal).toEqual({ category: "bio", explanation: "" });
+    const plain = fromPhaseEvent({
+      id: "e",
+      type: "agent_phase_completed",
+      timestamp: "2026-10-05T00:00:00Z",
+      payload: { phase: "execute", failed: true },
+    } as unknown as EventRecord);
+    expect(plain!.refusal).toBeNull();
   });
 });

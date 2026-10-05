@@ -421,8 +421,15 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// logged and dropped, so an unbounded failure text costs the
 		// operator the whole record rather than its tail.
 		summary.Error = events.ClipDiagnostic(err.Error())
-		summary.ErrorKind = "error"
+		// The phase's own classifier, which is what the field's doc has
+		// always promised (the classified provider error) and what it
+		// never carried: every failed turn read `error`, so a turn whose
+		// model refused and one whose key was revoked were the same word
+		// on the Turn screen while their phase records said otherwise.
+		summary.ErrorKind = runner.ErrorKind(err)
 		if stopped {
+			// Whatever the error wraps, a turn a person ended is
+			// `stopped` — the one kind that is not a failure.
 			summary.ErrorKind = runner.StoppedKind
 		}
 	}

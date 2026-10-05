@@ -130,6 +130,15 @@ func TestSummaries(t *testing.T) {
 		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseReview, Decision: "self_iterate", Model: "gpt-4o", TotalTokens: 12},
 		want:    "Dev review → self_iterate (gpt-4o, 12 tokens)",
 	}, {
+		name: "a refused phase says the model declined, not that it broke",
+		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Failed: true,
+			ErrorKind: "refusal", Refusal: &PhaseRefusal{Category: "cyber"}},
+		want: "Dev execute ✗ refused by the model (cyber)",
+	}, {
+		name:    "a phase a stop reason ended names it",
+		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Failed: true, ErrorKind: "max_tokens"},
+		want:    "Dev execute ✗ failed (max_tokens)",
+	}, {
 		name:    "a guard breach names the invariant",
 		payload: TurnGuardBreach{RoleName: "Dev", Kind: GuardStall, Detail: "unchanged artifact"},
 		want:    "Dev guard stall: unchanged artifact",

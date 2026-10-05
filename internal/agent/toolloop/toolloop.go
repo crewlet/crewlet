@@ -6,7 +6,7 @@
 // and a different prompt: the executor, the reviewer, the extension judge, a
 // worker.
 //
-// Six things here are load-bearing and each replaced an incident:
+// Seven things here are load-bearing and each replaced an incident:
 //
 //   - THE BUDGET CHECK AND THE INCREMENT ARE ONE OPERATION, and the refusal
 //     names its own scope. Re-reading the caps afterwards to work out which
@@ -52,6 +52,16 @@
 //     corrective re-prompt
 //     naming what finishes the phase is the difference between "the model
 //     declined" and "the phase produced nothing and said it was fine".
+//   - A ROUND THAT DID NOT FINISH IS NEVER READ AS ONE THAT DID. Its stop
+//     reason is checked BEFORE the correctives and before its tools: a round
+//     the output cap or the context window cut off, or a turn the provider
+//     paused, ends the phase as a named [StopError] with its calls unrun,
+//     and a refusal ends it as the provider's own classified error with no
+//     re-prompt. All four used to reach the loop as ordinary rounds — a
+//     cut-off tool call ran with `{}`, and an empty truncated round drew a
+//     corrective that made the conversation longer. A call whose arguments
+//     did not parse is the per-call half of the same rule: answered with
+//     why, as a failed result, and never run with no arguments.
 package toolloop
 
 import (
@@ -260,8 +270,16 @@ type Round struct {
 
 	// ToolCalls is how many calls the model asked for this round — the
 	// count of [Execution] rows on this round, unless the loop stopped
-	// before running them all (a suspend, a closed fence).
+	// before running them all (a suspend, a closed fence, a stop reason
+	// that ended the phase).
 	ToolCalls int
+
+	// StopReason is why the model stopped writing this round's response
+	// ([llm.StopReason]), empty where its backend reported none. The one
+	// field that tells a round the model finished from one the output cap,
+	// the context window or a refusal cut short — every other field reads
+	// the same for both.
+	StopReason llm.StopReason
 }
 
 // RunningCall is the tool call in flight: named on the live view BEFORE the
@@ -459,6 +477,62 @@ func (e *BudgetError) Error() string {
 // Is makes every budget breach match [ErrBudget], so a caller can test the
 // class without naming which ceiling was hit.
 func (e *BudgetError) Is(target error) bool { return target == ErrBudgetExhausted }
+
+// StopError is a round whose STOP REASON ends the phase: the response was cut
+// off at the output cap, the conversation filled the model's context window,
+// or the provider paused a turn this engine never asked it to run.
+//
+// A NAMED FAILURE, never a corrective. Each of these used to reach the loop as
+// an ordinary round, so a cut-off tool call RAN with whatever arguments
+// survived the cut (an empty object, on the Anthropic stream), and an empty
+// truncated round drew the empty-answer corrective — which re-asks the same
+// model with a LONGER conversation, the opposite of what a full context window
+// needs. Nothing the loop can append fixes any of them; the phase ends and
+// says which, so the operator reads "max_tokens on claude-…", not a rescue.
+//
+// A refusal is not one of these: it arrives as the provider's own classified
+// error ([llm.KindRefusal]) and leaves the loop as that.
+type StopError struct {
+	Phase  string
+	Round  int
+	Model  string
+	Reason llm.StopReason
+	// Calls is how many tool calls the round asked for — none of which
+	// ran.
+	Calls int
+}
+
+func (e *StopError) Error() string {
+	var why string
+	switch e.Reason {
+	case llm.StopMaxTokens:
+		why = "the response was cut off at the model's output cap"
+	case llm.StopContextExceeded:
+		why = "the conversation filled the model's context window"
+	case llm.StopPaused:
+		why = "the provider paused the turn for the caller to continue, which only " +
+			"server tools do and this engine sends none"
+	default:
+		why = "the round stopped before it finished"
+	}
+	msg := fmt.Sprintf("toolloop: %s round %d: %s (%s on %s)", e.Phase, e.Round, why, e.Reason, e.Model)
+	if e.Calls > 0 {
+		msg += fmt.Sprintf("; its %d tool call(s) were not run", e.Calls)
+	}
+	return msg
+}
+
+// ends reports whether a round's stop reason ends the phase. The zero value
+// and the two ordinary reasons do not — see [llm.StopReason] for why an
+// unreported reason reads as an ordinary end — and [llm.StopRefusal] never
+// reaches here: the loop turns it into the provider's refusal error first.
+func ends(reason llm.StopReason) bool {
+	switch reason {
+	case llm.StopMaxTokens, llm.StopContextExceeded, llm.StopPaused:
+		return true
+	}
+	return false
+}
 
 // Progress is the in-flight view of a running loop.
 //
@@ -924,6 +998,62 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	roundsUsed := 0
+	// account books one provider call that came back — an answer or a
+	// refusal, both billed — onto the phase's totals and its rounds. ONE
+	// function for both, so a refused round cannot reach the record with a
+	// field the answered one carries missing, or the reverse.
+	account := func(completion *llm.Completion, took time.Duration, stop llm.StopReason) {
+		if !served && completion.Model != "" {
+			// The completion names the model that actually served this
+			// round, which is what the per-model token breakdown is built
+			// from; the provider's own name is its CONFIGURED identity and
+			// only stands in for a backend that filled nothing in.
+			//
+			// It OVERRIDES the placeholder set before the call, and latches
+			// on the first completion that names one — so a streamed round
+			// has something to show while it writes, and the billable fact
+			// still wins the moment it exists.
+			model, served = completion.Model, true
+		}
+		if !keyServed && completion.ProviderKey != "" {
+			// The ENTRY that served, by the model's own precedence and
+			// latched on its own flag: a completion can name a model
+			// with no key (a bare backend) and the configured head then
+			// stays the answer, exactly as the model's placeholder did
+			// before it.
+			providerKey, keyServed = completion.ProviderKey, true
+		}
+		if model == "" {
+			model = cfg.Provider.Model()
+		}
+		inTokens += completion.InputTokens
+		outTokens += completion.OutputTokens
+		cacheRead += completion.CacheRead
+		cacheWrite += completion.CacheWrite
+		// Recorded BEFORE the charge, because the round happened and was
+		// billed by the provider whether or not the company's meter then
+		// admits it — and a refused charge ends the loop, so a round
+		// recorded after it would be the one round missing from the
+		// failure record that explains why it failed.
+		//
+		// The completion's model where it names one, the configured
+		// identity where the backend filled nothing in — the same
+		// precedence the phase's own model follows, per round.
+		roundModel := completion.Model
+		if roundModel == "" {
+			roundModel = cfg.Provider.Model()
+		}
+		rounds = append(rounds, Round{
+			Round: roundsUsed, StartedAt: roundStarted, Duration: took,
+			Model:        roundModel,
+			InputTokens:  completion.InputTokens,
+			OutputTokens: completion.OutputTokens,
+			CacheRead:    completion.CacheRead,
+			CacheWrite:   completion.CacheWrite,
+			ToolCalls:    len(completion.ToolCalls),
+			StopReason:   stop,
+		})
+	}
 	for round := range cfg.MaxRounds {
 		roundsUsed = round + 1
 
@@ -1057,10 +1187,38 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			OnDelta:  onDelta,
 		})
 		took := time.Since(began)
+		if err == nil && completion.StopReason == llm.StopRefusal {
+			// A refusal handed back as an ANSWER, which the contract
+			// forbids ([llm.StopRefusal]) and a third-party provider may
+			// still do. Read as the refusal it is rather than as a round
+			// of prose, which is the one reading it must not get.
+			err = llm.Refused("", completion.Model, &llm.Refusal{Completion: completion})
+			completion = nil
+		}
 		if err != nil {
 			tracing.Fail(roundSpan, err)
 			roundSpan.End()
-			return nil, fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
+			err = fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
+			// A REFUSAL ENDS THE PHASE, AND IS ON ITS RECORD AS A ROUND.
+			// No corrective and no re-prompt: asking the model that
+			// declined to reconsider the same request is the one retry
+			// that is never right. But the refused call was BILLED — the
+			// prompt was read — so it is recorded and charged like any
+			// round, or every refusal would be the one call the budget
+			// never saw and the phase record would end a round early.
+			var refusal *llm.Refusal
+			if errors.As(err, &refusal) && refusal.Completion != nil {
+				account(refusal.Completion, took, llm.StopRefusal)
+				if chargeErr := charge(ctx, cfg.Budget, refusal.Completion.TotalTokens()); chargeErr != nil {
+					// BOTH facts, the refusal first: it is why the phase
+					// ended, and a reader classifying the error finds it
+					// before the budget, while the charge's own outcome
+					// is still there for whoever asks for it.
+					err = errors.Join(err, chargeErr)
+				}
+				publish(roundsUsed, nil)
+			}
+			return nil, err
 		}
 		roundSpan.SetAttributes(
 			attribute.String("crewlet.model", completion.Model),
@@ -1068,57 +1226,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			attribute.Int("crewlet.output_tokens", completion.OutputTokens),
 			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
 			attribute.Int("crewlet.cache_write_tokens", completion.CacheWrite),
-			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)))
+			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)),
+			attribute.String("crewlet.stop_reason", string(completion.StopReason)))
 		roundSpan.End()
-		if !served && completion.Model != "" {
-			// The completion names the model that actually served this
-			// round, which is what the per-model token breakdown is built
-			// from; the provider's own name is its CONFIGURED identity and
-			// only stands in for a backend that filled nothing in.
-			//
-			// It OVERRIDES the placeholder set before the call, and latches
-			// on the first completion that names one — so a streamed round
-			// has something to show while it writes, and the billable fact
-			// still wins the moment it exists.
-			model, served = completion.Model, true
-		}
-		if !keyServed && completion.ProviderKey != "" {
-			// The ENTRY that served, by the model's own precedence and
-			// latched on its own flag: a completion can name a model
-			// with no key (a bare backend) and the configured head then
-			// stays the answer, exactly as the model's placeholder did
-			// before it.
-			providerKey, keyServed = completion.ProviderKey, true
-		}
-		if model == "" {
-			model = cfg.Provider.Model()
-		}
-		inTokens += completion.InputTokens
-		outTokens += completion.OutputTokens
-		cacheRead += completion.CacheRead
-		cacheWrite += completion.CacheWrite
-		// Recorded BEFORE the charge below, because the round happened
-		// and was billed by the provider whether or not the company's
-		// meter then admits it — and a refused charge ends the loop, so a
-		// round recorded after it would be the one round missing from the
-		// failure record that explains why it failed.
-		//
-		// The completion's model where it names one, the configured
-		// identity where the backend filled nothing in — the same
-		// precedence the phase's own model follows, per round.
-		roundModel := completion.Model
-		if roundModel == "" {
-			roundModel = cfg.Provider.Model()
-		}
-		rounds = append(rounds, Round{
-			Round: roundsUsed, StartedAt: roundStarted, Duration: took,
-			Model:        roundModel,
-			InputTokens:  completion.InputTokens,
-			OutputTokens: completion.OutputTokens,
-			CacheRead:    completion.CacheRead,
-			CacheWrite:   completion.CacheWrite,
-			ToolCalls:    len(completion.ToolCalls),
-		})
+		account(completion, took, completion.StopReason)
 
 		// Charge BEFORE running the tools this round asked for. A round
 		// whose spend is refused must not also have fired its side
@@ -1152,6 +1263,30 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// the publish below so the live view never shows a finished round
 		// and a fragment of the same round at once.
 		partial = nil
+
+		// A ROUND THAT DID NOT FINISH ENDS THE PHASE, before anything
+		// below reads it as one that did — see [StopError]. Ahead of the
+		// correctives, because a cut-off round with no prose is otherwise
+		// an "empty answer" the loop re-asks with a LONGER conversation;
+		// and ahead of the tools, because a call the cap cut off is not
+		// the call the model meant. The message and its narration stay on
+		// the record: what the model wrote before the cut says how far it
+		// got.
+		if ends(completion.StopReason) {
+			if narrated(completion.ReasoningContent, completion.Content) {
+				narration = append(narration, Narration{
+					Round:     roundsUsed,
+					Reasoning: strings.TrimSpace(completion.ReasoningContent),
+					Content:   strings.TrimSpace(completion.Content),
+				})
+			}
+			publish(roundsUsed, nil)
+			return nil, &StopError{
+				Phase: cfg.Surface.Phase(), Round: roundsUsed, Model: rounds[len(rounds)-1].Model,
+				Reason: completion.StopReason, Calls: len(completion.ToolCalls),
+			}
+		}
+
 		// What this round was, decided once and read twice below: on the
 		// record and by the correctives. See [Narration.Declined].
 		answeredNothing := strings.TrimSpace(completion.Content) == ""
@@ -1346,6 +1481,24 @@ func runCalls(
 				return false, "", "", nil, err
 			}
 		}
+		if call.ArgumentsError != "" {
+			// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN. The
+			// call reaches the surface with no arguments otherwise — a
+			// search over everything, a post with no body — which is a
+			// call the model never made; the model reads why instead,
+			// as a failed result, and calls again. Not announced as
+			// running and not timed, because nothing ran: the row says
+			// so with a zero duration, which means "not measured".
+			out := unparsedArguments(call)
+			*execs = append(*execs, Execution{
+				Round: round, Name: call.Name, Args: call.Arguments,
+				Output: out, Failed: true,
+			})
+			*msgs = append(*msgs, llm.Message{
+				Role: llm.RoleTool, Content: out, ToolCallID: call.ID, Name: call.Name, Failed: true,
+			})
+			continue
+		}
 		// Timed on the monotonic clock and stamped in UTC, and ANNOUNCED
 		// first — after the fence, so a call the fence stops is never
 		// shown as running — because an Execution exists only once the
@@ -1388,9 +1541,20 @@ func runCalls(
 			Content:    res.Output,
 			ToolCallID: call.ID,
 			Name:       call.Name,
+			// The flag beside the sentence, for a vendor that has one:
+			// see [llm.Message.Failed].
+			Failed: res.Failed,
 		})
 	}
 	return false, "", "", nil, nil
+}
+
+// unparsedArguments is the result a call whose arguments did not parse is
+// answered with: what went wrong, and what to do about it, in words a model
+// acts on.
+func unparsedArguments(call llm.ToolCall) string {
+	return fmt.Sprintf("%s was NOT run: its arguments could not be read (%s). "+
+		"Call it again with its arguments as one complete JSON object.", call.Name, call.ArgumentsError)
 }
 
 func charge(ctx context.Context, meter BudgetMeter, tokens int) error {

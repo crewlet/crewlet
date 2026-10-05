@@ -95,7 +95,10 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
          round of it, so a delivery an earlier round made is citable.
          A round that ends in prose instead is not an end: the loop
          asks again, naming submit_work, at most twice in a row, before
-         the phase is rescued as incomplete
+         the phase is rescued as incomplete. A round that did not FINISH
+         never gets that far: a refusal, a response cut off at the output
+         cap, a full context window or a paused turn ends the phase by
+         name, with nothing rescued and nothing re-asked
 
 3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends
@@ -147,7 +150,10 @@ flowchart TD
     S2 --> LLM
     LLM --> S3
     S6 -->|"LLM responds without tool_calls"| DONE["phase ends"]
+    S3 -->|"stop reason: refusal, max_tokens,<br/>context_exceeded or paused"| FAIL["phase fails by name<br/>(its calls are not run)"]
 ```
+
+Step 3 reads **why the model stopped** before anything else reads the response. Every backend normalises its own stop reason (`end_turn`, `length`, `content_filter`, …) onto one vocabulary, and a round the output cap cut off, one that filled the context window, a turn the provider paused, or a model that **declined** the request ends the phase with that reason as its `error_kind` — the tools that round asked for are not run, and no corrective is sent. A refusal is never handed to the next model in the fallback chain and its turn is not redelivered. A tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [A round that did not finish](turn-engine.md#a-round-that-did-not-finish).
 
 Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: a function it can ask the engine to call.
 

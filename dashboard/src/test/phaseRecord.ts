@@ -20,6 +20,7 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     failed: false,
     error: "",
     errorKind: "",
+    refusal: null,
     systemPrompt: "",
     userPrompt: "",
     systemSections: null,

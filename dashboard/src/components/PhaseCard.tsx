@@ -98,7 +98,9 @@ import {
   ledgerOf,
   phaseDuration,
   type PhaseRecord,
+  type Refusal,
   type Round,
+  stopNote,
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
@@ -375,6 +377,28 @@ function Words({ text, muted, streaming }: { text: string; muted?: boolean; stre
   return <div className={cx("prose md", muted && "muted", streaming && "stream")}>{nodes}</div>;
 }
 
+/**
+ * What a refused phase's body says in place of its error: that the model
+ * DECLINED, under which policy category, in the vendor's own words where it
+ * gave any — and what the engine did about it, which is the half a reader
+ * would otherwise go looking for (no rescue, no second ask, no redelivery).
+ */
+function RefusalNote({ refusal }: { refusal: Refusal }) {
+  return (
+    <span>
+      The model declined this request
+      {refusal.category && (
+        <>
+          {" "}
+          (<span className="mono">{refusal.category}</span>)
+        </>
+      )}
+      {refusal.explanation ? `: ${refusal.explanation}` : "."} The phase ended here; the engine does
+      not ask it again, and the turn&apos;s trigger is recorded rather than redelivered.
+    </span>
+  );
+}
+
 /** One round: thinking, speech, then the calls that round asked for. */
 function RoundBlock({
   round,
@@ -390,10 +414,15 @@ function RoundBlock({
 }) {
   const said = round.content.trim();
   const thinking = round.reasoning.trim();
+  // A round that DID NOT FINISH — cut off at the output cap, refused, out of
+  // context, paused — says so under its words: it is the round that ended the
+  // phase, and nothing else on it does (its words read like any round's, and
+  // a call the cap cut off was never run, so it has no failed row).
+  const stopped = stopNote(round.stopReason);
   // Marked on the ROUND, not just on the row inside it: "which round went
   // wrong" is the question a reader brings to a stuck turn, and the answer
   // used to be an icon inside a collapsed row they had to open to find.
-  const errored = round.tools.some((t) => t.failed);
+  const errored = round.tools.some((t) => t.failed) || stopped !== null;
   return (
     <li className={cx("round", errored && "errored", declined && "declined", live && "live")}>
       <div className="round-rail">
@@ -461,6 +490,14 @@ function RoundBlock({
           ))}
         {said && <Words text={said} streaming={round.streaming} />}
         {declined && <DeclinedNote fate={declined} rescued={rescued} />}
+        {/* CRITICAL, unlike a declined round's caution: this round ended the
+            phase, and the turn with it. The glyph carries the hue's meaning to
+            a reader who cannot see it. */}
+        {stopped && (
+          <p className="round-note critical">
+            <TriangleAlertGlyph size="xs" /> {stopped}
+          </p>
+        )}
         {round.tools.length > 0 && (
           <div className="round-tools">
             {round.tools.map((t, i) => (
@@ -647,7 +684,24 @@ export function PhaseCard({
             {record.codingAgent || "sandbox"}
           </Tag>
         )}
-        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
+        {/* A REFUSAL IS NAMED AS ONE: the model declined, which is a decision
+            rather than a fault, and the word a reader needs is what it did —
+            not the error kind's `refusal`, which reads as the engine refusing.
+            Still danger: the phase, and its turn, ended there. */}
+        {record.failed && record.refusal ? (
+          <Tag
+            variant="danger"
+            title={
+              "the model declined this request" +
+              (record.refusal.category ? ` (${record.refusal.category})` : "") +
+              " — the phase ended there, without a rescue, and the turn is not run again"
+            }
+          >
+            declined by model
+          </Tag>
+        ) : (
+          record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>
+        )}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {parked
@@ -729,7 +783,13 @@ export function PhaseCard({
 
       {open && (
         <div className="phase-body">
-          {record.failed && record.error && <Callout variant="danger">{record.error}</Callout>}
+          {record.failed && record.refusal ? (
+            <Callout variant="danger">
+              <RefusalNote refusal={record.refusal} />
+            </Callout>
+          ) : (
+            record.failed && record.error && <Callout variant="danger">{record.error}</Callout>
+          )}
           {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
 
           {(record.systemPrompt || record.userPrompt) && (

@@ -518,9 +518,9 @@ func (p *Provider) completion(
 	// them without ever reaching a budget.
 	env := ParseEnvelope(out.text)
 	comp := &llm.Completion{
-		Model:        p.model,
-		Content:      env.Message,
-		FinishReason: "stop",
+		Model:      p.model,
+		Content:    env.Message,
+		StopReason: llm.StopEnd,
 	}
 	if !env.Parsed {
 		comp.Content = out.text
@@ -536,7 +536,12 @@ func (p *Provider) completion(
 		})
 	}
 	if len(comp.ToolCalls) > 0 {
-		comp.FinishReason = "tool_calls"
+		// The CLI reports no stop reason of its own in text mode: the
+		// envelope it was asked for is either an answer or a set of
+		// calls, so those are the only two this backend can honestly
+		// name. A CLI that hit its own cap or refused returns that as
+		// prose or a failure the exit path classifies.
+		comp.StopReason = llm.StopToolUse
 	}
 
 	if out.reported {

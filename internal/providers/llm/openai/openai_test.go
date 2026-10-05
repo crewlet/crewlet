@@ -960,7 +960,9 @@ func TestToolCallsAreTranslated(t *testing.T) {
 					{"id":"call_2","type":"function",
 					 "function":{"name":"broken","arguments":"{\"n\":1e1000}"}},
 					{"id":"call_3","type":"function",
-					 "function":{"name":"empty","arguments":""}}
+					 "function":{"name":"empty","arguments":""}},
+					{"id":"call_4","type":"function",
+					 "function":{"name":"cut","arguments":"{\"body\":\"Refunds are"}}
 				]}}],
 			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
 		}`)
@@ -970,7 +972,7 @@ func TestToolCallsAreTranslated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if len(out.ToolCalls) != 3 {
+	if len(out.ToolCalls) != 4 {
 		t.Fatalf("ToolCalls = %+v", out.ToolCalls)
 	}
 	if out.ToolCalls[0].Arguments["path"] != "/tmp" {
@@ -985,8 +987,16 @@ func TestToolCallsAreTranslated(t *testing.T) {
 			t.Fatalf("call %d arguments cannot be re-serialised: %v", i, err)
 		}
 	}
-	if out.FinishReason != "tool_calls" {
-		t.Fatalf("FinishReason = %q", out.FinishReason)
+	// Arguments that are not a JSON object are REPORTED on the call, never
+	// decoded to {} and run: the tool loop answers the call with the reason.
+	// The other three parsed, the empty string as a call with no arguments.
+	for i, call := range out.ToolCalls {
+		if bad := call.ArgumentsError != ""; bad != (i == 3) {
+			t.Errorf("call %d (%s): ArgumentsError = %q", i, call.Name, call.ArgumentsError)
+		}
+	}
+	if out.StopReason != llm.StopToolUse {
+		t.Fatalf("StopReason = %q, want tool_use", out.StopReason)
 	}
 	// The per-model token breakdown is built from completions, so every
 	// answer has to name the model that produced it.
@@ -1065,7 +1075,9 @@ func TestNoChoicesIsAServerFailureNotAnEmptyAnswer(t *testing.T) {
 	}
 }
 
-func TestAMissingFinishReasonGetsADefault(t *testing.T) {
+// A MISSING FINISH REASON IS READ FROM THE RESPONSE: a compatible host that
+// omits it has not said the answer was cut short.
+func TestAMissingFinishReasonIsReadFromTheResponse(t *testing.T) {
 	t.Parallel()
 	_, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeJSON(w, 200, `{"id":"c","object":"chat.completion","created":1,"model":"gpt-test",
@@ -1077,8 +1089,79 @@ func TestAMissingFinishReasonGetsADefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if out.FinishReason != "stop" {
-		t.Fatalf("FinishReason = %q, want the default", out.FinishReason)
+	if out.StopReason != llm.StopEnd {
+		t.Fatalf("StopReason = %q, want end", out.StopReason)
+	}
+}
+
+// EVERY FINISH REASON IS MAPPED onto the one vocabulary the tool loop decides
+// on: `length` is the output cap and `content_filter` a refusal.
+func TestEveryFinishReasonIsMapped(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]llm.StopReason{
+		"stop":            llm.StopEnd,
+		"tool_calls":      llm.StopToolUse,
+		"function_call":   llm.StopToolUse,
+		"length":          llm.StopMaxTokens,
+		"content_filter":  llm.StopRefusal,
+		"from_the_future": llm.StopEnd,
+	} {
+		if got := stopReason(raw, false); got != want {
+			t.Errorf("stopReason(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// A REFUSAL IS AN ERROR, NOT AN ANSWER, by either of the two ways the API
+// says it: the content filter's finish_reason, and the model's own refusal
+// message beside an ordinary stop. Neither benches the key or is rotated
+// onto the next one, and the refused completion rides the error so its cost
+// is still metered.
+func TestARefusalIsAClassifiedErrorThatBenchesNoKey(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, choice, explanation string
+	}{
+		{"content filter", `{"index":0,"finish_reason":"content_filter",
+			"message":{"role":"assistant","content":""}}`, ""},
+		{"refusal message", `{"index":0,"finish_reason":"stop",
+			"message":{"role":"assistant","content":null,"refusal":"I can't help with that."}}`,
+			"I can't help with that."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, 200, `{"id":"c","object":"chat.completion","created":1,
+					"model":"gpt-test","choices":[`+tc.choice+`],
+					"usage":{"prompt_tokens":30,"completion_tokens":2,"total_tokens":32}}`)
+			})
+			p := newProvider(t, url, func(c *Config) { c.APIKeys = []string{"k1", "k2"} })
+			out, err := p.Complete(context.Background(), userTurn("hi"))
+			if err == nil {
+				t.Fatalf("Complete answered %+v — a refusal must not read as an answer", out)
+			}
+			if llm.KindOf(err) != llm.KindRefusal {
+				t.Fatalf("kind = %s, want refusal", llm.KindOf(err))
+			}
+			var refusal *llm.Refusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("no *llm.Refusal under %v", err)
+			}
+			if refusal.Explanation != tc.explanation {
+				t.Errorf("explanation = %q, want %q", refusal.Explanation, tc.explanation)
+			}
+			if c := refusal.Completion; c == nil || c.InputTokens != 30 || c.StopReason != llm.StopRefusal {
+				t.Fatalf("refused completion = %+v, want its usage and stop reason", refusal.Completion)
+			}
+			if n := api.count(); n != 1 {
+				t.Fatalf("%d attempts, want 1 — a refusal is not rotated onto the next key", n)
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatalf("key %+v is cooling — a refusal benched a healthy key", s)
+				}
+			}
+		})
 	}
 }
 

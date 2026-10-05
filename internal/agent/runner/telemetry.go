@@ -1199,7 +1199,8 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// logs and moves on, so an unbounded error would reach the
 		// operator not shortened but ABSENT. See events.MaxDiagnosticBytes.
 		ev.Error = events.ClipDiagnostic(rec.Err.Error())
-		ev.ErrorKind = classifyError(rec.Err)
+		ev.ErrorKind = ErrorKind(rec.Err)
+		ev.Refusal = phaseRefusal(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
@@ -1209,8 +1210,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 // no failure.
 const StoppedKind = "stopped"
 
-// classifyError names a failure's CLASS, for the one-word reason a dashboard
-// prints beside a failed phase.
+// ErrorKind names a failure's CLASS, for the one-word reason a dashboard
+// prints beside a failed phase or turn — ONE classifier for both records, so a
+// turn that died of its phase's refusal says `refusal` on both rather than the
+// turn's record falling back to a generic word the phase's never uses.
 //
 // The classified kinds are the ones an operator can act on: rotate a key,
 // raise a cap, wait out a provider. Everything else is "error", deliberately.
@@ -1219,11 +1222,17 @@ const StoppedKind = "stopped"
 // underneath, so the field would carry the same meaningless token for every
 // unclassified failure while looking specific. One honest generic beats a
 // specific-looking constant.
-func classifyError(err error) string {
+func ErrorKind(err error) string {
 	var provider *llm.Error
+	var stop *toolloop.StopError
 	switch {
 	case errors.As(err, &provider):
 		return provider.Kind.String()
+	case errors.As(err, &stop):
+		// The stop reason itself — `max_tokens`, `context_exceeded`,
+		// `paused` — because each sends an operator somewhere different,
+		// and none of them is the provider failing.
+		return string(stop.Reason)
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		return "budget_exhausted"
 	case turn.Stopped(err):
@@ -1236,6 +1245,17 @@ func classifyError(err error) string {
 		return "canceled"
 	}
 	return "error"
+}
+
+// phaseRefusal is the refusal a phase ended on, in its wire shape, or nil for
+// every other failure. Read off the error rather than carried beside it, so a
+// refusal that reached the record by any path says so the same way.
+func phaseRefusal(err error) *types.PhaseRefusal {
+	var refusal *llm.Refusal
+	if !errors.As(err, &refusal) {
+		return nil
+	}
+	return &types.PhaseRefusal{Category: refusal.Category, Explanation: refusal.Explanation}
 }
 
 // publish sends one event, or logs why it could not.
@@ -1327,6 +1347,7 @@ func phaseRounds(rounds []toolloop.Round) []types.PhaseRound {
 			CacheReadTokens:  r.CacheRead,
 			CacheWriteTokens: r.CacheWrite,
 			ToolCalls:        r.ToolCalls,
+			StopReason:       string(r.StopReason),
 		})
 	}
 	return out

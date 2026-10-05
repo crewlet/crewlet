@@ -1299,8 +1299,8 @@ func TestResponseTranslation(t *testing.T) {
 		out.ToolCalls[0].Arguments["path"] != "/tmp" {
 		t.Fatalf("ToolCalls = %+v", out.ToolCalls)
 	}
-	if out.FinishReason != "tool_use" {
-		t.Fatalf("FinishReason = %q", out.FinishReason)
+	if out.StopReason != llm.StopToolUse {
+		t.Fatalf("StopReason = %q, want tool_use", out.StopReason)
 	}
 	// The per-model token breakdown is built from completions, so every
 	// answer has to name the model that produced it. An empty one files the
@@ -1382,19 +1382,166 @@ func TestInputTokensSumTheCacheComponents(t *testing.T) {
 	}
 }
 
-func TestAMissingStopReasonGetsADefault(t *testing.T) {
+// A MISSING STOP REASON IS READ FROM THE RESPONSE, never invented as a
+// truncation: a gateway that omits the field has not said the response was cut
+// short, so a round with calls stopped for them and one without ended.
+func TestAMissingStopReasonIsReadFromTheResponse(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    llm.StopReason
+	}{
+		{"no calls", `[]`, llm.StopEnd},
+		{"a call", `[{"type":"tool_use","id":"c","name":"run","input":{}}]`, llm.StopToolUse},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, 200, `{"id":"m","type":"message","role":"assistant",
+					"model":"claude-test","content":`+tc.content+`,
+					"usage":{"input_tokens":1,"output_tokens":1}}`)
+			})
+			out, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if out.StopReason != tc.want {
+				t.Fatalf("StopReason = %q, want %q", out.StopReason, tc.want)
+			}
+		})
+	}
+}
+
+// EVERY STOP REASON THE API DOCUMENTS IS MAPPED, onto the one vocabulary the
+// tool loop decides on — and an unknown one is an ordinary end, because a word
+// newer than this build is not a truncation this build can name.
+func TestEveryStopReasonIsMapped(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[sdk.StopReason]llm.StopReason{
+		sdk.StopReasonEndTurn:                    llm.StopEnd,
+		sdk.StopReasonStopSequence:               llm.StopEnd,
+		sdk.StopReasonToolUse:                    llm.StopToolUse,
+		sdk.StopReasonMaxTokens:                  llm.StopMaxTokens,
+		sdk.StopReasonRefusal:                    llm.StopRefusal,
+		sdk.StopReasonModelContextWindowExceeded: llm.StopContextExceeded,
+		sdk.StopReasonPauseTurn:                  llm.StopPaused,
+		"a_reason_from_the_future":               llm.StopEnd,
+	} {
+		if got := stopReason(raw, false); got != want {
+			t.Errorf("stopReason(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// A REFUSAL IS AN ERROR, NOT AN ANSWER — and it is the API's answer, not a
+// failure of the key. It arrives with 200, so the call succeeded: the key is
+// not benched, the chain is not asked to try another model (KindRefusal is not
+// retryable), and the refused completion rides the error so the frame that
+// meters spend still sees what the call cost.
+func TestARefusalIsAClassifiedErrorThatBenchesNoKey(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, 200, `{"id":"m","type":"message","role":"assistant",
+			"model":"claude-test","content":[{"type":"text","text":"I can"}],
+			"stop_reason":"refusal",
+			"stop_details":{"type":"refusal","category":"cyber","explanation":"exploit development"},
+			"usage":{"input_tokens":40,"output_tokens":3}}`)
+	})
+	p := newProvider(t, url, func(c *Config) { c.APIKeys = []string{"k1", "k2"} })
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err == nil {
+		t.Fatalf("Complete answered %+v — a refusal must not read as an answer", out)
+	}
+	if llm.KindOf(err) != llm.KindRefusal {
+		t.Fatalf("kind = %s, want refusal", llm.KindOf(err))
+	}
+	var refusal *llm.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("no *llm.Refusal under %v", err)
+	}
+	if refusal.Category != "cyber" || refusal.Explanation != "exploit development" {
+		t.Fatalf("refusal = %+v, want the stop_details", refusal)
+	}
+	if c := refusal.Completion; c == nil || c.InputTokens != 40 || c.OutputTokens != 3 ||
+		c.StopReason != llm.StopRefusal || c.Model != "claude-test" {
+		t.Fatalf("refused completion = %+v, want its usage, model and stop reason", refusal.Completion)
+	}
+	if n := api.count(); n != 1 {
+		t.Fatalf("%d attempts, want 1 — a refusal is not rotated onto the next key", n)
+	}
+	for _, s := range p.Pool().Stats() {
+		if s.Cooling != 0 {
+			t.Fatalf("key %+v is cooling — a refusal benched a healthy key", s)
+		}
+	}
+}
+
+// A TOOL CALL THE OUTPUT CAP CUT OFF ARRIVES LOOKING WHOLE, and only the stop
+// reason says otherwise. Streamed, the arguments arrive in fragments and a
+// max_tokens stop leaves half an object behind — which the SDK's accumulator
+// REPLACES with `{}` so the block marshals, so nothing in the call itself is
+// left to notice. That is why the round's stop reason has to reach the tool
+// loop: it is the one signal that this call was never finished, and running
+// it is a write with no arguments the model never asked for.
+func TestAToolCallCutByTheCapIsReportedByItsStopReason(t *testing.T) {
 	t.Parallel()
 	_, url := serve(t, func(w http.ResponseWriter, _ int) {
-		writeJSON(w, 200, `{"id":"m","type":"message","role":"assistant",
-			"model":"claude-test","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+		writeStream(w, streamOf(
+			streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"tool_use","id":"tu_1","name":"post","input":{}}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"input_json_delta","partial_json":"{\"body\":\"Refunds are"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			streamEnd("max_tokens"),
+		)...)
 	})
-	p := newProvider(t, url, nil)
-	out, err := p.Complete(context.Background(), userTurn("hi"))
+	var got []llm.Delta
+	out, err := newProvider(t, url, nil).Complete(context.Background(), streamingTurn("hi", &got))
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if out.FinishReason != "end_turn" {
-		t.Fatalf("FinishReason = %q, want the default", out.FinishReason)
+	if out.StopReason != llm.StopMaxTokens {
+		t.Fatalf("StopReason = %q, want max_tokens", out.StopReason)
+	}
+	// The premise the stop reason is load-bearing for: the call itself
+	// looks complete. If the SDK ever starts handing the fragment through,
+	// DecodeArgs will name it instead and this premise check says so.
+	if len(out.ToolCalls) != 1 || len(out.ToolCalls[0].Arguments) != 0 ||
+		out.ToolCalls[0].ArgumentsError != "" {
+		t.Fatalf("tool calls = %+v, want the cut call emptied to {} by the accumulator", out.ToolCalls)
+	}
+}
+
+// A FAILED TOOL RESULT SAYS SO IN THE API'S OWN FIELD. The content carries the
+// sentence; is_error is the structured flag beside it, and a result that did
+// not fail must not carry it.
+func TestAFailedToolResultIsSentAsAnError(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	req := llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "go"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "a", Name: "run", Arguments: map[string]any{}},
+			{ID: "b", Name: "run", Arguments: map[string]any{}},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "a", Name: "run", Content: "refused", Failed: true},
+		{Role: llm.RoleTool, ToolCallID: "b", Name: "run", Content: "fine"},
+	}}
+	if _, err := newProvider(t, url, nil).Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	msgs := dig(t, api.seen()[0].body, "messages").([]any)
+	results := msgs[len(msgs)-1].(map[string]any)["content"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results = %v, want both answers in one user turn", results)
+	}
+	if got := results[0].(map[string]any)["is_error"]; got != true {
+		t.Errorf("failed result is_error = %v, want true", got)
+	}
+	if got := results[1].(map[string]any)["is_error"]; got == true {
+		t.Errorf("successful result is_error = %v, want it absent or false", got)
 	}
 }
 
@@ -1633,8 +1780,8 @@ func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
 	if len(out.ToolCalls) != 1 || out.ToolCalls[0].Arguments["q"] != "x" {
 		t.Fatalf("tool calls = %+v, want the argument assembled from its fragments", out.ToolCalls)
 	}
-	if out.InputTokens != 10 || out.OutputTokens != 5 || out.FinishReason != "tool_use" {
-		t.Fatalf("tokens %d/%d, stop %q", out.InputTokens, out.OutputTokens, out.FinishReason)
+	if out.InputTokens != 10 || out.OutputTokens != 5 || out.StopReason != llm.StopToolUse {
+		t.Fatalf("tokens %d/%d, stop %q", out.InputTokens, out.OutputTokens, out.StopReason)
 	}
 }
 

@@ -43,6 +43,7 @@ function record() {
     failed: false,
     error: "",
     errorKind: "",
+    refusal: null,
     systemPrompt: "",
     userPrompt: "",
     systemSections: null,

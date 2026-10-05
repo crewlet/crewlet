@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,14 @@ type Message struct {
 	ToolCalls        []ToolCall      `json:"ToolCalls,omitempty"`
 	ToolCallID       string          `json:"ToolCallID,omitempty"`
 	Name             string          `json:"Name,omitempty"`
+
+	// Failed marks a tool message whose call FAILED — the tool refused,
+	// errored, or never ran because its arguments did not parse. The
+	// Content still says why; this is the vendor's structured flag beside
+	// it (Anthropic's `is_error`), for a backend whose wire format has one.
+	// A backend without one sends the content alone, which already reads
+	// as the failure it is. Meaningless on any other role.
+	Failed bool `json:"Failed,omitempty"`
 }
 
 // ThinkingBlock is a provider's structured reasoning block, carried opaquely.
@@ -78,6 +87,114 @@ type ToolCall struct {
 	ID        string         `json:"ID,omitempty"`
 	Name      string         `json:"Name,omitempty"`
 	Arguments map[string]any `json:"Arguments,omitempty"`
+
+	// ArgumentsError is why the arguments the model wrote could not be
+	// decoded, and empty when they could. Arguments is then EMPTY, and the
+	// call must not run: running it with no arguments is a write the model
+	// never asked for (a search over everything, a post with no body), and
+	// it is what a round the output cap cut mid-call used to do. The tool
+	// loop answers such a call with this reason as a failed result instead,
+	// which the model can read and fix.
+	ArgumentsError string `json:"ArgumentsError,omitempty"`
+}
+
+// StopReason is why a model stopped writing one response, normalised across
+// vendors so the tool loop decides on ONE vocabulary — each backend maps its
+// own (`end_turn`, `length`, `content_filter`, …) onto these.
+//
+// THE ZERO VALUE IS "NOT REPORTED", and it reads as an ordinary end: a backend
+// that names no reason has not said the response was cut short, and treating
+// silence as a truncation would fail every round of a provider that simply
+// omits the field. Every backend in this tree reports one; the zero value is
+// for a third-party [Provider] and a test double.
+type StopReason string
+
+const (
+	// StopEnd is a response the model finished: it wrote what it meant
+	// to and stopped (or reached a stop sequence the caller set).
+	StopEnd StopReason = "end"
+
+	// StopToolUse is a response that ended to let its tool calls run.
+	StopToolUse StopReason = "tool_use"
+
+	// StopMaxTokens is a response the output cap cut off. Whatever it
+	// was writing is incomplete — prose mid-sentence, a tool call's
+	// arguments mid-object — so nothing in it may be acted on as though
+	// the model had finished.
+	StopMaxTokens StopReason = "max_tokens"
+
+	// StopRefusal is a model declining the request on policy grounds. A
+	// backend never hands one back as a Completion: it returns a
+	// [KindRefusal] error carrying a [Refusal], so a caller that reads
+	// only Content cannot mistake a refusal for an answer. The value
+	// exists for the record of the round it ended.
+	StopRefusal StopReason = "refusal"
+
+	// StopContextExceeded is a response cut off because the conversation
+	// filled the model's context window — the prompt plus what it wrote
+	// reached the limit, which no re-prompt can fix by being longer.
+	StopContextExceeded StopReason = "context_exceeded"
+
+	// StopPaused is a vendor pausing a long-running SERVER tool turn for
+	// the caller to continue (Anthropic's `pause_turn`). The engine sends
+	// no server tools, so it is a protocol state this engine never asked
+	// for — reported, never continued.
+	StopPaused StopReason = "paused"
+)
+
+// stopReasons is the closed set, written once: [StopReason.Valid] reads it,
+// and so does the gate holding the dashboard's copy of it.
+var stopReasons = []StopReason{
+	StopEnd, StopToolUse, StopMaxTokens, StopRefusal, StopContextExceeded, StopPaused,
+}
+
+// StopReasons is every named stop reason — a copy, so no caller can edit the
+// set [StopReason.Valid] answers from.
+func StopReasons() []StopReason { return slices.Clone(stopReasons) }
+
+// Valid reports whether r is one of the named reasons. The zero value is not
+// one: it is the absence of a reason (see [StopReason]).
+func (r StopReason) Valid() bool { return slices.Contains(stopReasons, r) }
+
+// Refusal is a model declining a request on policy grounds — the cause a
+// [KindRefusal] error carries.
+//
+// It carries the Completion the refusal arrived on because that response was
+// BILLED: the prompt was read and the vendor charges for it, so the frame that
+// meters spend has to see its usage even though nobody may act on its content.
+// Without it every refused round would be the one call the budget never
+// counted.
+type Refusal struct {
+	// Category is the vendor's policy category (Anthropic's
+	// `stop_details.category`: cyber, bio, …), and empty when the vendor
+	// named none — OpenAI's content filter names none.
+	Category string
+
+	// Explanation is the vendor's human-readable account, and empty when
+	// it gave none. Not guaranteed stable, so nothing may match on it.
+	Explanation string
+
+	// Completion is the refused response: its usage, the model that
+	// served it, and StopReason [StopRefusal]. Whatever partial text it
+	// carries is NOT an answer.
+	Completion *Completion
+}
+
+func (r *Refusal) Error() string {
+	msg := "the model declined the request"
+	if r.Category != "" {
+		msg += " (" + r.Category + ")"
+	}
+	if r.Explanation != "" {
+		msg += ": " + r.Explanation
+	}
+	return msg
+}
+
+// Refused builds the classified error a backend returns for a refusal, so
+// every backend says it in one shape.
+func Refused(provider, model string, refusal *Refusal) *Error {
+	return &Error{Kind: KindRefusal, Provider: provider, Model: model, Err: refusal}
 }
 
 // Completion is one model response.
@@ -114,7 +231,11 @@ type Completion struct {
 	ReasoningContent string
 	ThinkingBlocks   []ThinkingBlock
 	ToolCalls        []ToolCall
-	FinishReason     string
+
+	// StopReason is why the model stopped writing this response — see
+	// [StopReason]. Never [StopRefusal] on a Completion a backend returns
+	// successfully: a refusal is an error.
+	StopReason StopReason
 
 	InputTokens  int
 	OutputTokens int
@@ -349,10 +470,10 @@ type Provider interface {
 type ErrorKind int
 
 const (
-	// KindFatal is any non-retryable failure: a malformed request, a
-	// content-policy refusal, a 404. The chain does NOT try another
-	// provider — the next one will refuse it identically, and trying is
-	// two more seconds and another log line saying the same thing.
+	// KindFatal is any non-retryable failure: a malformed request, a 404.
+	// The chain does NOT try another provider — the next one will refuse
+	// it identically, and trying is two more seconds and another log line
+	// saying the same thing.
 	KindFatal ErrorKind = iota
 
 	// KindRateLimit is 429 or 402 — quota exhausted or a billing problem.
@@ -372,6 +493,17 @@ const (
 
 	// KindServer is 5xx. Same treatment as a timeout.
 	KindServer
+
+	// KindRefusal is a model declining the request on policy grounds —
+	// an answer the vendor returned with 200, not a failure of the call.
+	// Its cause is a [*Refusal]. Never retryable and never a credential's
+	// fault, and NOT a fatal either, because what the frames above do with
+	// it differs: a fatal is a request nobody can serve, a refusal is a
+	// decision one model made about this content. The chain does not hand
+	// it to the next member — routing a refused request round the models
+	// until one answers is circumventing the decision, not recovering from
+	// a fault — and the turn that met it is not run again from its trigger.
+	KindRefusal
 )
 
 func (k ErrorKind) String() string {
@@ -384,14 +516,17 @@ func (k ErrorKind) String() string {
 		return "timeout"
 	case KindServer:
 		return "server"
+	case KindRefusal:
+		return "refusal"
 	default:
 		return "fatal"
 	}
 }
 
 // Retryable reports whether another member of a fallback chain is worth
-// trying. Fatal is the only kind that is not.
-func (k ErrorKind) Retryable() bool { return k != KindFatal }
+// trying. A fatal is not — the next member refuses it identically — and
+// neither is a refusal, for the reason [KindRefusal] gives.
+func (k ErrorKind) Retryable() bool { return k != KindFatal && k != KindRefusal }
 
 // ExhaustsCredential reports whether this kind should cool the credential
 // down. Transport failures must not: cooling a healthy key on a network blip

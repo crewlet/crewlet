@@ -34,6 +34,7 @@ import type {
   ToolExecution,
   TurnStage,
 } from "~/protocol/index.ts";
+import type { StopReason } from "~/contract/stops.ts";
 import { tsKey } from "./format.ts";
 import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
@@ -79,6 +80,39 @@ export interface TimedRound {
   outputTokens: number;
   cacheReadTokens: number;
   toolCalls: number;
+  /** Why the model stopped writing this round — `rounds[].stop_reason` — or
+   *  "" where its backend reported none. See [stopNote]. */
+  stopReason: string;
+}
+
+/**
+ * What a round that did NOT finish is drawn with: the sentence under its words,
+ * keyed on the engine's stop reason. `end` and `tool_use` are a round that
+ * finished and have none; each of the others ENDED the phase, and the phase's
+ * own error says the rest.
+ *
+ * Typed over the contract's union, so a stop reason the engine starts
+ * recording is a type error here until it has its sentence — the gate behind
+ * `contract/stops.ts` is what makes the union the engine's.
+ */
+const STOP_NOTES: Record<Exclude<StopReason, "end" | "tool_use">, string> = {
+  max_tokens:
+    "The response was cut off at the model's output cap, so the phase ended here — " +
+    "any tool call it was writing was not run.",
+  refusal:
+    "The model declined this request, so the phase ended here. A refusal is not " +
+    "asked again, and the turn's trigger is not redelivered.",
+  context_exceeded: "The conversation filled the model's context window, so the phase ended here.",
+  paused:
+    "The provider paused this turn for the engine to continue, which it never asks " +
+    "for, so the phase ended here.",
+};
+
+/** The sentence for a round that stopped without finishing, or null for a
+ *  round that finished, one whose backend said nothing, and a reason this
+ *  build does not know. */
+export function stopNote(reason: string): string | null {
+  return Object.hasOwn(STOP_NOTES, reason) ? STOP_NOTES[reason as keyof typeof STOP_NOTES] : null;
 }
 
 /** One round's model turn: what it reasoned, and what it said out loud. */
@@ -115,6 +149,22 @@ export interface Round {
    * means the bound was spent and the phase ended without its submission.
    */
   declined: boolean;
+  /** Why the model stopped writing this round ([TimedRound.stopReason]), ""
+   *  where nothing said — read with [stopNote]. */
+  stopReason: string;
+}
+
+/**
+ * A model DECLINING the phase's request on policy grounds — the record's
+ * `refusal`. A named outcome rather than a breakage: the phase failed, but
+ * nothing went wrong that an operator can fix by rotating a key, and the
+ * engine neither rescued it nor will run the turn again.
+ */
+export interface Refusal {
+  /** The vendor's policy category (`cyber`, `bio`, …), "" where it named none. */
+  category: string;
+  /** The vendor's own account, "" where it gave none. Not stable wording. */
+  explanation: string;
 }
 
 export interface PhaseRecord {
@@ -146,6 +196,10 @@ export interface PhaseRecord {
   failed: boolean;
   error: string;
   errorKind: string;
+  /** Set when the phase ended because its model declined — see [Refusal].
+   *  Null on every other phase, and always on a live one: a refusal ends the
+   *  phase, so it arrives on the settled record. */
+  refusal: Refusal | null;
   systemPrompt: string;
   userPrompt: string;
   /**
@@ -377,6 +431,7 @@ export function timedRounds(raw: unknown): TimedRound[] {
       outputTokens: num(rec.output_tokens),
       cacheReadTokens: num(rec.cache_read_tokens),
       toolCalls: num(rec.tool_calls),
+      stopReason: typeof rec.stop_reason === "string" ? rec.stop_reason : "",
     }))
     .filter((r) => r.round > 0)
     .sort((a, b) => a.round - b.round);
@@ -408,6 +463,7 @@ export function rounds(
   calls: ToolCall[],
   narration: Narration[] = [],
   partial?: PartialRound | null,
+  timed: TimedRound[] = [],
 ): Round[] {
   const byRound = new Map<number, Round>();
   const at = (round: number): Round => {
@@ -421,6 +477,7 @@ export function rounds(
         streaming: false,
         abandoned: [],
         declined: false,
+        stopReason: "",
       };
       byRound.set(round, r);
     }
@@ -436,6 +493,15 @@ export function rounds(
     r.declined = n.declined;
   }
   for (const call of calls) at(call.round).tools.push(call);
+  // Each round's stop reason, off the loop's own timing of it. A round that
+  // did NOT finish gets a slot even when it said nothing and ran nothing — a
+  // refusal with no text is exactly that round, and it is the one that
+  // explains why the phase ended; a round that finished and left no trace
+  // stays out, as it always has.
+  for (const t of timed) {
+    if (byRound.has(t.round) || stopNote(t.stopReason) !== null)
+      at(t.round).stopReason = t.stopReason;
+  }
   // The round in flight. The engine clears it the instant that round's real
   // narration exists, so the two can never describe one round at once.
   if (partial && typeof partial.round === "number") {
@@ -465,12 +531,13 @@ export function ledgerOf(record: {
   tools: ToolCall[];
   narration: Narration[];
   partial?: PartialRound | null;
+  timedRounds?: TimedRound[];
   response: string;
 }): {
   ledger: Round[];
   legacy: { thinking: string; answer: string } | null;
 } {
-  const ledger = rounds(record.tools, record.narration, record.partial);
+  const ledger = rounds(record.tools, record.narration, record.partial, record.timedRounds);
   if (record.narration.length > 0 || record.partial) return { ledger, legacy: null };
   const legacy = splitThinking(record.response);
   if (!legacy.thinking && !legacy.answer.trim()) return { ledger, legacy: null };
@@ -547,6 +614,9 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     failed: !!call.failed,
     error: call.error?.message ?? "",
     errorKind: call.error?.kind ?? "",
+    // A refusal ends the phase, so it is on the settled record and never a
+    // running one's.
+    refusal: null,
     // Read off `prompt_messages`, which the engine has always sent and
     // nothing read. Hardcoding "" here meant a RUNNING phase could never
     // show the system prompt it was given — the one moment an operator
@@ -613,6 +683,17 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
   };
 }
 
+/** The record's `refusal`, or null where it carries none (or something this
+ *  build cannot read as one). */
+function refusalOf(raw: unknown): Refusal | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  return {
+    category: typeof r.category === "string" ? r.category : "",
+    explanation: typeof r.explanation === "string" ? r.explanation : "",
+  };
+}
+
 /** A finished phase, from its durable `agent_phase_completed` event. */
 export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   const p = ev.payload as Record<string, unknown> | undefined;
@@ -640,6 +721,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     failed: p.failed === true,
     error: String(p.error ?? ""),
     errorKind: String(p.error_kind ?? ""),
+    refusal: refusalOf(p.refusal),
     systemPrompt: String(p.system_prompt ?? ""),
     userPrompt: String(p.user_prompt ?? ""),
     systemSections: decodeSections(p.system_sections),

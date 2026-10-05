@@ -276,7 +276,11 @@ notification_skipped       # dropped notification with reason (traceability)
 notifications_coalesced    # N same-conversation inbox events merged into one
                            # digest trigger (see Inbox Batching above)
 turn_trigger_skipped       # a redelivery the completion ledger had already
-                           # worked, emitted precisely so it is not invisible
+                           # worked, emitted precisely so it is not invisible —
+                           # or a trigger whose turn was ABANDONED rather than
+                           # redelivered (it panicked, wrote outside the engine
+                           # before breaking, or its model declined), with the
+                           # reason
 
 # learning: the reflection subsystem and the skill lifecycle, grouped so a
 #           dashboard can include or exclude all of it with one toggle
@@ -338,7 +342,17 @@ agent_turn_steered         # what became of a person's note to this running
                            # steered_by_seat and sent_at: the note itself
                            # crossed an ephemeral scatter, so this row is its
                            # only durable record
-agent_phase_started, agent_phase_completed
+agent_phase_started
+agent_phase_completed      # one phase's durable record: prompts, response,
+                           # tool calls, and `rounds[]` — each provider call's
+                           # timing, tokens and `stop_reason` (end, tool_use,
+                           # max_tokens, refusal, context_exceeded, paused;
+                           # absent where the backend reported none). A
+                           # failed phase carries `error_kind` — a provider
+                           # kind, the stop reason that ended it, or
+                           # budget_exhausted — and a phase whose model
+                           # DECLINED carries `refusal` {category,
+                           # explanation} beside `error_kind: refusal`
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its

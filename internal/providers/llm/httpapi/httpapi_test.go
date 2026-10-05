@@ -312,29 +312,39 @@ func TestNewHTTPClientRaisesTheIdleConnectionCeiling(t *testing.T) {
 
 // --- tool arguments ----------------------------------------------------
 
+// A CALL WHOSE ARGUMENTS DID NOT PARSE IS REPORTED, NEVER RUN EMPTY. The
+// error is what keeps the tool loop from running a call the model never
+// finished — the round the output cap cut mid-object — with no arguments at
+// all; and no input at all is a tool that takes none, not a broken call.
 func TestDecodeArgs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		raw  string
-		want map[string]any
+		name    string
+		raw     string
+		want    map[string]any
+		invalid bool
 	}{
-		{"object", `{"a":1,"b":"x"}`, map[string]any{"a": float64(1), "b": "x"}},
-		{"empty object", `{}`, map[string]any{}},
-		{"empty input", ``, map[string]any{}},
-		{"whitespace", `   `, map[string]any{}},
-		{"null", `null`, map[string]any{}},
-		{"array", `[1,2]`, map[string]any{}},
-		{"bare string", `"hello"`, map[string]any{}},
-		{"truncated", `{"a":`, map[string]any{}},
+		{"object", `{"a":1,"b":"x"}`, map[string]any{"a": float64(1), "b": "x"}, false},
+		{"empty object", `{}`, map[string]any{}, false},
+		{"empty input", ``, map[string]any{}, false},
+		{"whitespace", `   `, map[string]any{}, false},
+		{"null", `null`, map[string]any{}, false},
+		{"array", `[1,2]`, map[string]any{}, true},
+		{"bare string", `"hello"`, map[string]any{}, true},
+		{"truncated", `{"a":`, map[string]any{}, true},
+		{"cut mid-value", `{"query":"refund polic`, map[string]any{}, true},
+		{"two objects", `{"a":1}{"b":2}`, map[string]any{}, true},
 		{"nested", `{"a":{"b":[1,null,true]}}`,
-			map[string]any{"a": map[string]any{"b": []any{float64(1), nil, true}}}},
+			map[string]any{"a": map[string]any{"b": []any{float64(1), nil, true}}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := DecodeArgs([]byte(tc.raw), "some_tool")
+			got, err := DecodeArgs([]byte(tc.raw), "some_tool")
 			if got == nil {
 				t.Fatal("DecodeArgs returned a nil map; the contract's map is never nil")
+			}
+			if (err != nil) != tc.invalid {
+				t.Fatalf("DecodeArgs error = %v, want invalid=%v", err, tc.invalid)
 			}
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Fatalf("DecodeArgs = %v, want %v", got, tc.want)
@@ -371,7 +381,10 @@ func TestDecodeArgsAlwaysProducesAReSerialisableMap(t *testing.T) {
 		t.Fatal("premise broken: the partial decode marshalled back out")
 	}
 
-	got := DecodeArgs([]byte(`{"n":1e1000}`), "some_tool")
+	got, err := DecodeArgs([]byte(`{"n":1e1000}`), "some_tool")
+	if err != nil {
+		t.Fatalf("DecodeArgs refused an exact number: %v", err)
+	}
 	blob, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("DecodeArgs produced a map that cannot be re-serialised: %v", err)
@@ -389,7 +402,10 @@ func TestLargeIntegerArgumentsStayExact(t *testing.T) {
 	// re-encodes as 1234567890123456800. The tool call then reaches the
 	// server naming a DIFFERENT entity and succeeds against the wrong row,
 	// with nothing anywhere reporting an error.
-	got := DecodeArgs([]byte(`{"issue_id":1234567890123456789,"amount":100.50}`), "jira_get")
+	got, err := DecodeArgs([]byte(`{"issue_id":1234567890123456789,"amount":100.50}`), "jira_get")
+	if err != nil {
+		t.Fatalf("DecodeArgs: %v", err)
+	}
 	blob, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
