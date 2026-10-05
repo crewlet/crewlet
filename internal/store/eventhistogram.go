@@ -249,29 +249,9 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// would put events in no bar at all.
 	filters := q.ListQuery
 	filters.Since, filters.Until = since, until
-	from, where, args, col := filters.predicate(at)
+	query, args := filters.barsSQL(step, at)
 
-	// Integer arithmetic on the stored microseconds — the column is a
-	// UnixMicro (see [EncodeTime]) — so the bucket is a division rather
-	// than a date function, and every engine agrees about what it means.
-	// The step is a compile-time-formatted constant rather than a bound
-	// parameter, because a GROUP BY expression carrying a parameter is one
-	// the planner cannot reuse a plan for.
-	micros := strconv.FormatInt(step.Microseconds(), 10)
-	bucketExpr := "(" + col("event_time") + " / " + micros + ") * " + micros
-	// THE FAILED SPLIT IS [failedRow], the turn list's own predicate, so a
-	// bar's failed share and a turn's failed mark are one rule rather than
-	// two that agree — and the `failed` FILTER is the same rule again
-	// ([ListQuery.Failed]), so an axis narrowed to failures has a failed
-	// share equal to its height. Qualified through `col` like every other
-	// column here, although this read never joins (a related-agent axis is
-	// refused above).
-	failedExpr, failedArgs := failedRow(col)
-	query := "SELECT " + bucketExpr + " AS bucket, COUNT(*), " +
-		"SUM(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END) FROM " + from +
-		" WHERE " + strings.Join(where, " AND ") + " GROUP BY bucket ORDER BY bucket"
-
-	rows, err := l.db.sql.QueryContext(ctx, query, append(failedArgs, args...)...)
+	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 	}
@@ -333,6 +313,39 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	return out, nil
 }
 
+// barsSQL is the statement [EventLog.Histogram] counts its bars with, over the
+// window already snapped into q's Since and Until, and its arguments — a
+// function of its own so its plan can be read back for exactly the statement
+// that runs (TestEveryGroupedReadSeeksItsFiltersIndex).
+//
+// It groups over the table itself, unlike [ListQuery.facetSQL], and still
+// seeks a filter's index: the window bounds `event_time` on both sides, and
+// with both edges the planner takes the filter's index range rather than the
+// primary key's. The gate holds it to that.
+func (q ListQuery) barsSQL(step time.Duration, at time.Time) (string, []any) {
+	from, where, args, col := q.predicate(at)
+	// Integer arithmetic on the stored microseconds — the column is a
+	// UnixMicro (see [EncodeTime]) — so the bucket is a division rather
+	// than a date function, and every engine agrees about what it means.
+	// The step is a compile-time-formatted constant rather than a bound
+	// parameter, because a GROUP BY expression carrying a parameter is one
+	// the planner cannot reuse a plan for.
+	micros := strconv.FormatInt(step.Microseconds(), 10)
+	bucketExpr := "(" + col("event_time") + " / " + micros + ") * " + micros
+	// THE FAILED SPLIT IS [failedRow], the turn list's own predicate, so a
+	// bar's failed share and a turn's failed mark are one rule rather than
+	// two that agree — and the `failed` FILTER is the same rule again
+	// ([ListQuery.Failed]), so an axis narrowed to failures has a failed
+	// share equal to its height. Qualified through `col` like every other
+	// column here, although this read never joins (a related-agent axis is
+	// refused by [EventLog.Histogram]).
+	failedExpr, failedArgs := failedRow(col)
+	query := "SELECT " + bucketExpr + " AS bucket, COUNT(*), " +
+		"SUM(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END) FROM " + from +
+		" WHERE " + strings.Join(where, " AND ") + " GROUP BY bucket ORDER BY bucket"
+	return query, append(failedArgs, args...)
+}
+
 // countBy counts the window's rows per value of one column, with that column's
 // own filter LIFTED.
 //
@@ -351,9 +364,7 @@ func (l *EventLog) countBy(ctx context.Context, filters ListQuery, column string
 	default:
 		return nil, fmt.Errorf("store: no facet count for %q", column)
 	}
-	from, where, args, col := filters.predicate(at)
-	query := "SELECT " + col(column) + ", COUNT(*) FROM " + from +
-		" WHERE " + strings.Join(where, " AND ") + " GROUP BY " + col(column)
+	query, args := filters.facetSQL(column, at)
 
 	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -374,4 +385,21 @@ func (l *EventLog) countBy(ctx context.Context, filters ListQuery, column string
 		return nil, fmt.Errorf("store: event facet %s: %w", column, err)
 	}
 	return out, nil
+}
+
+// facetSQL is the statement [EventLog.countBy] runs for one column over these
+// filters, and its arguments — a function of its own so its plan can be read
+// back for exactly the statement that runs
+// (TestEveryGroupedReadSeeksItsFiltersIndex). `column` is one of countBy's own
+// constants, never a caller's text.
+//
+// THE ROWS ARE SELECTED IN A DERIVED TABLE and counted outside it — see
+// [EventLog]. Grouped over the table itself, a chip count narrowed to a seat,
+// a trace, a turn, a unit of work, an item or a channel intersected that
+// filter's index with every row id of the thirty-day floor's range, on every
+// axis a screen draws.
+func (q ListQuery) facetSQL(column string, at time.Time) (string, []any) {
+	from, where, args, col := q.predicate(at)
+	return "SELECT " + column + ", COUNT(*) FROM (SELECT " + col(column) + " AS " + column +
+		" FROM " + from + " WHERE " + strings.Join(where, " AND ") + ") GROUP BY " + column, args
 }

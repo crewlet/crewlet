@@ -605,107 +605,8 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 		limit, probe = len(q.IDs), len(q.IDs)
 	}
 
-	// A SHARE IS NOT A WINDOW: the turns were selected where they were
-	// listed, and applying the window again here would drop the half of a
-	// resumed turn that ran before it — which is the half that says when the
-	// turn began. Only the history horizon bounds it.
-	at := q.at()
-	history := at.Add(-EventHistory)
-	floor, until := q.Window(at)
-	if shares {
-		floor, until = history, time.Time{}
-	}
-
-	where, args := q.turnWhere(floor, shares)
-
-	having := []string{}
-	if !shares {
-		// A TURN IS IN THE WINDOW WHEN IT STARTED THERE, and the row floor
-		// alone cannot say so: a turn that began a minute before the floor
-		// and ran on into the window has rows on both sides, and folding
-		// only the later ones listed it as starting where the window did,
-		// with the tokens of its second half. So a turn holding ANY row
-		// below the floor — within the history this log still answers for —
-		// is not in the window at all: one probe per GROUP on schema/0018's
-		// (turn_id, event_time) index, never a second scan of the window.
-		having = append(having, `NOT EXISTS (SELECT 1 FROM crewlet_events AS earlier
-		        WHERE earlier.turn_id = crewlet_events.turn_id
-		          AND earlier.event_time < ? AND earlier.event_time >= ?)`)
-		args = append(args, EncodeTime(floor), EncodeTime(history))
-		if !until.IsZero() {
-			// THE UPPER EDGE IS ON THE START TOO, and only here: a row
-			// predicate would cut a turn that started inside the window
-			// off at its edge, and fold half of it.
-			having = append(having, "MIN(event_time) < ?")
-			args = append(args, EncodeTime(until))
-		}
-	}
-	if !q.Before.IsZero() && !shares && q.Sort != TurnSortTokens {
-		having = append(having, "MIN(event_time) < ?")
-		args = append(args, EncodeTime(q.Before))
-	}
-	// ONE EXPRESSION FOR THE COLUMN AND THE FILTER. Spelled twice, a turn
-	// could be selected by `failed=true` and then render without the mark,
-	// which is the same defect one layer down from the one [failedRow]
-	// describes.
-	failedExpr, failedArgs := failedRow(nil)
-	failedAgg := "MAX(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END)"
-	if q.Failed != nil && !shares {
-		want := "0"
-		if *q.Failed {
-			want = "1"
-		}
-		having = append(having, failedAgg+" = "+want)
-		args = append(args, failedArgs...)
-	}
-	havingSQL := ""
-	if len(having) > 0 {
-		havingSQL = " HAVING " + strings.Join(having, " AND ")
-	}
-	args = append(args, probe)
-
-	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
-	// and only a phase record carries one. Every turn's group also holds
-	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
-	// not empty strings — joined one model as ",claude-opus-5" and handed
-	// every consumer splitting on the comma a nameless band in its legend
-	// and a nameless row in its breakdown.
-	rows, err := l.db.sql.QueryContext(ctx, `
-		SELECT turn_id,
-		       MAX(work_key),
-		       MAX(agent_id), MAX(agent_role),
-		       MIN(event_time), MAX(event_time),
-		       SUM(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
-		       MAX(iteration),
-		       `+failedAgg+`,
-		       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens),
-		       SUM(cache_read_tokens), SUM(cache_write_tokens),
-		       GROUP_CONCAT(DISTINCT NULLIF(model, '')),
-		       MAX(CASE WHEN (event_type = ? AND `+suspendedExpr+` = 0)
-		                  OR event_type = ?
-		                THEN event_time END),
-		       MAX(CASE WHEN event_type = ? AND `+suspendedExpr+` = 1
-		                THEN event_time END),
-		       SUM(CASE WHEN event_type = ?
-		                THEN COALESCE(json_extract(payload, '$.duration_ms'), 0) END),
-		       MAX(CASE WHEN event_type = ?
-		                THEN COALESCE(json_extract(payload, '$.plan_summary'), '') END),
-		       MAX(CASE WHEN event_type = ?
-		                THEN json_extract(payload, '$.work_item') END),
-		       MAX(COALESCE(json_extract(tags, '$.trigger'), ''))
-		  FROM crewlet_events
-		 WHERE `+strings.Join(where, " AND ")+`
-		 GROUP BY turn_id`+havingSQL+`
-		 ORDER BY `+q.Sort.orderSQL()+`
-		 LIMIT ?`,
-		// The SELECT list's own placeholders, in the order they appear
-		// in it: the phase count, then the failure predicate, then the
-		// five reads off the completion rows — the first of them, the
-		// newest end, also reading a lost run as one.
-		slices.Concat([]any{phaseCompleted}, failedArgs,
-			[]any{turnCompleted, runLost, turnCompleted, turnCompleted, turnCompleted,
-				turnCompleted},
-			args)...)
+	query, args := q.partialsSQL(q.at(), shares, probe)
+	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("store: list turns: %w", err)
 	}
@@ -755,6 +656,127 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 	}
 	out, more = pastPage(out, limit)
 	return out, more, nil
+}
+
+// turnColumns is every column [TurnQuery.partialsSQL] folds a turn from — what
+// its derived table selects, so each aggregate, the HAVING and the ORDER BY
+// read a column it carries.
+const turnColumns = `turn_id, work_key, agent_id, agent_role, event_time, event_type,
+	iteration, tags, payload, input_tokens, output_tokens, total_tokens,
+	cache_read_tokens, cache_write_tokens, model`
+
+// partialsSQL is the statement [EventLog.TurnPartials] runs and its arguments,
+// asked at `at`, for a page (`probe` turns, one past it) or a share — a
+// function of its own so its plan can be read back for exactly the statement
+// that runs (TestEveryGroupedReadSeeksItsFiltersIndex,
+// TestEveryTurnFilterSeeksItsIndex).
+//
+// THE ROWS ARE SELECTED IN A DERIVED TABLE and folded outside it — see
+// [EventLog]. Grouped over the table itself, the turn list narrowed to a unit
+// of work — the turn page's attempts, on every node — intersected
+// schema/0029's index with every row id of the thirty-day floor's range.
+func (q TurnQuery) partialsSQL(at time.Time, shares bool, probe int) (string, []any) {
+	// A SHARE IS NOT A WINDOW: the turns were selected where they were
+	// listed, and applying the window again here would drop the half of a
+	// resumed turn that ran before it — which is the half that says when the
+	// turn began. Only the history horizon bounds it.
+	history := at.Add(-EventHistory)
+	floor, until := q.Window(at)
+	if shares {
+		floor, until = history, time.Time{}
+	}
+
+	where, args := q.turnWhere(floor, shares)
+
+	having := []string{}
+	if !shares {
+		// A TURN IS IN THE WINDOW WHEN IT STARTED THERE, and the row floor
+		// alone cannot say so: a turn that began a minute before the floor
+		// and ran on into the window has rows on both sides, and folding
+		// only the later ones listed it as starting where the window did,
+		// with the tokens of its second half. So a turn holding ANY row
+		// below the floor — within the history this log still answers for —
+		// is not in the window at all: one probe per GROUP on schema/0018's
+		// (turn_id, event_time) index, never a second scan of the window.
+		having = append(having, `NOT EXISTS (SELECT 1 FROM crewlet_events AS earlier
+		        WHERE earlier.turn_id = turn_rows.turn_id
+		          AND earlier.event_time < ? AND earlier.event_time >= ?)`)
+		args = append(args, EncodeTime(floor), EncodeTime(history))
+		if !until.IsZero() {
+			// THE UPPER EDGE IS ON THE START TOO, and only here: a row
+			// predicate would cut a turn that started inside the window
+			// off at its edge, and fold half of it.
+			having = append(having, "MIN(event_time) < ?")
+			args = append(args, EncodeTime(until))
+		}
+	}
+	if !q.Before.IsZero() && !shares && q.Sort != TurnSortTokens {
+		having = append(having, "MIN(event_time) < ?")
+		args = append(args, EncodeTime(q.Before))
+	}
+	// ONE EXPRESSION FOR THE COLUMN AND THE FILTER. Spelled twice, a turn
+	// could be selected by `failed=true` and then render without the mark,
+	// which is the same defect one layer down from the one [failedRow]
+	// describes.
+	failedExpr, failedArgs := failedRow(nil)
+	failedAgg := "MAX(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END)"
+	if q.Failed != nil && !shares {
+		want := "0"
+		if *q.Failed {
+			want = "1"
+		}
+		having = append(having, failedAgg+" = "+want)
+		args = append(args, failedArgs...)
+	}
+	havingSQL := ""
+	if len(having) > 0 {
+		havingSQL = " HAVING " + strings.Join(having, " AND ")
+	}
+	args = append(args, probe)
+
+	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
+	// and only a phase record carries one. Every turn's group also holds
+	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
+	// not empty strings — joined one model as ",claude-opus-5" and handed
+	// every consumer splitting on the comma a nameless band in its legend
+	// and a nameless row in its breakdown.
+	query := `
+		SELECT turn_id,
+		       MAX(work_key),
+		       MAX(agent_id), MAX(agent_role),
+		       MIN(event_time), MAX(event_time),
+		       SUM(CASE WHEN event_type = ? THEN 1 ELSE 0 END),
+		       MAX(iteration),
+		       ` + failedAgg + `,
+		       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens),
+		       SUM(cache_read_tokens), SUM(cache_write_tokens),
+		       GROUP_CONCAT(DISTINCT NULLIF(model, '')),
+		       MAX(CASE WHEN (event_type = ? AND ` + suspendedExpr + ` = 0)
+		                  OR event_type = ?
+		                THEN event_time END),
+		       MAX(CASE WHEN event_type = ? AND ` + suspendedExpr + ` = 1
+		                THEN event_time END),
+		       SUM(CASE WHEN event_type = ?
+		                THEN COALESCE(json_extract(payload, '$.duration_ms'), 0) END),
+		       MAX(CASE WHEN event_type = ?
+		                THEN COALESCE(json_extract(payload, '$.plan_summary'), '') END),
+		       MAX(CASE WHEN event_type = ?
+		                THEN json_extract(payload, '$.work_item') END),
+		       MAX(COALESCE(json_extract(tags, '$.trigger'), ''))
+		  FROM (SELECT ` + turnColumns + `
+		          FROM crewlet_events
+		         WHERE ` + strings.Join(where, " AND ") + `) AS turn_rows
+		 GROUP BY turn_id` + havingSQL + `
+		 ORDER BY ` + q.Sort.orderSQL() + `
+		 LIMIT ?`
+	// The SELECT list's own placeholders, in the order they appear in it:
+	// the phase count, then the failure predicate, then the five reads off
+	// the completion rows — the first of them, the newest end, also reading
+	// a lost run as one.
+	return query, slices.Concat([]any{phaseCompleted}, failedArgs,
+		[]any{turnCompleted, runLost, turnCompleted, turnCompleted, turnCompleted,
+			turnCompleted},
+		args)
 }
 
 // instantOf decodes a nullable stored instant.

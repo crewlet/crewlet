@@ -368,6 +368,19 @@ func (q ListQuery) at() time.Time { return askedAt(q.At) }
 // back short of the rows beside it; and a fleet asks every node one
 // question, so every node must floor it at the ASKER'S instant or the merged
 // answer is a union of different windows, each node's as of its own clock.
+//
+// A GROUPED READ SELECTS ITS ROWS IN A DERIVED TABLE — `SELECT … FROM (SELECT
+// … FROM crewlet_events WHERE …) GROUP BY …` — because only there does the
+// planner seek the index a filter has. Over the table itself, a GROUP BY under
+// the history floor was planned on the primary key `event_time` leads: the
+// floor taken as a range of it and read whole (a turn's traces), or that range
+// intersected with the filter's own index (`MULTI-INDEX AND`: a facet count
+// narrowed to a seat, a trace, a turn, a unit of work, an item or a channel,
+// and the turn list narrowed to a unit of work). Either way the read cost the
+// thirty-day window rather than the rows it was about — on 60,000 rows, 15 ms
+// against 0.2 ms for one turn's traces and 10 ms against 0.2 ms for a facet
+// count of one unit of work, on every node a fleet asks. The plans are read
+// back for the exact statements in TestEveryGroupedReadSeeksItsFiltersIndex.
 type EventLog struct{ db *DB }
 
 // Events returns the audit log backed by this database.
@@ -934,15 +947,13 @@ func (l *EventLog) TurnEventCount(ctx context.Context, turnID string, at time.Ti
 //
 // A DISTINCT walk of the same (turn_id, event_time, event_id) index the read
 // walked, bounded by the same history window, so it is a seek over one turn's
-// range rather than a scan. Ordered by first appearance, because that is the
-// order a reader follows them in: the trace the turn started under comes
-// first.
+// range rather than a scan — through a derived table, which is what makes the
+// planner seek it (see [EventLog] and [turnTracesSQL]). Ordered by first
+// appearance, because that is the order a reader follows them in: the trace
+// the turn started under comes first.
 func (l *EventLog) TurnTraces(ctx context.Context, turnID string, at time.Time) ([]TurnTrace, error) {
-	rows, err := l.db.sql.QueryContext(ctx,
-		"SELECT trace_id, MIN(event_time) AS first_at FROM crewlet_events "+
-			"WHERE turn_id = ? AND event_time >= ? AND trace_id != '' "+
-			"GROUP BY trace_id ORDER BY first_at ASC, trace_id ASC",
-		turnID, EncodeTime(askedAt(at).Add(-EventHistory)))
+	query, args := turnTracesSQL(turnID, at)
+	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
 	}
@@ -961,6 +972,22 @@ func (l *EventLog) TurnTraces(ctx context.Context, turnID string, at time.Time) 
 		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
 	}
 	return out, nil
+}
+
+// turnTracesSQL is the statement [EventLog.TurnTraces] runs and its arguments,
+// a function of its own so its plan can be read back for exactly the statement
+// that runs (TestEveryGroupedReadSeeksItsFiltersIndex).
+//
+// THE TURN'S ROWS ARE SELECTED IN A DERIVED TABLE and grouped outside it. Over
+// the table itself this GROUP BY was planned as a range of the primary key from
+// the history floor up — every row of the thirty-day log, on every turn page,
+// on every node — under a doc comment promising a seek.
+func turnTracesSQL(turnID string, at time.Time) (string, []any) {
+	return "SELECT trace_id, MIN(event_time) AS first_at FROM (" +
+			"SELECT trace_id, event_time FROM crewlet_events " +
+			"WHERE turn_id = ? AND event_time >= ?) " +
+			"WHERE trace_id != '' GROUP BY trace_id ORDER BY first_at ASC, trace_id ASC",
+		[]any{turnID, EncodeTime(askedAt(at).Add(-EventHistory))}
 }
 
 // TurnTrace is one trace a turn touched and when it first did.
