@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // EVERY FILTER WITH AN INDEX OF ITS OWN SEEKS IT, rather than walking the whole
@@ -93,10 +94,17 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 // facet counts — the ones with an index of their own seek it, and none of
 // them, whatever it filters on, intersects the key.
 //
+// A read that names a WINDOW seeks it too, on the filter's index: the count of
+// notification outcomes is two types over `[since, at)`, and the planner seeks
+// the type alone for `event_type IN (…)` and reads every row of it the log
+// holds — so each of its seeks must carry the time range as well.
+//
 // Mutation: select [turnTracesSQL]'s, [ListQuery.facetSQL]'s or
 // [TurnQuery.partialsSQL]'s rows from the table rather than from a derived
 // table, and its cases read the key — a range of it for the traces, `MULTI-
-// INDEX AND` for a filtered facet count or a unit of work's turns.
+// INDEX AND` for a filtered facet count or a unit of work's turns. Spell
+// [OutcomeQuery.countSQL]'s types as one `IN` and its seeks lose the window;
+// as an `OR`, and it intersects two reads of the index.
 func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 	t.Parallel()
 	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
@@ -114,10 +122,15 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		// filter has none, which is held only to stay off the key's
 		// intersection.
 		index string
+		// window says the read names both edges of a time window, which
+		// every seek of the index must carry beside the filter.
+		window bool
 	}
 	var reads []read
 	q, a := turnTracesSQL("tn-1", at)
-	reads = append(reads, read{"a turn's traces", q, a, "crewlet_events_turn_idx"})
+	reads = append(reads, read{"a turn's traces", q, a, "crewlet_events_turn_idx", false})
+	q, a = OutcomeQuery{Since: at.Add(-time.Hour), At: at}.countSQL(at)
+	reads = append(reads, read{"the notification outcomes", q, a, "crewlet_events_type_time_idx", true})
 	for _, c := range []struct {
 		name  string
 		q     TurnQuery
@@ -129,7 +142,7 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		{"a share of named turns", TurnQuery{IDs: []string{"tn-1", "tn-2"}}, "crewlet_events_turn_idx"},
 	} {
 		q, a := c.q.partialsSQL(at, len(c.q.IDs) > 0, DefaultTurnPage+1)
-		reads = append(reads, read{c.name, q, a, c.index})
+		reads = append(reads, read{c.name, q, a, c.index, false})
 	}
 	for _, c := range []struct {
 		name  string
@@ -149,15 +162,15 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		{"failed", ListQuery{Failed: new(bool)}, ""},
 	} {
 		q, a := c.q.facetSQL("category", at)
-		reads = append(reads, read{"the facet count by " + c.name, q, a, c.index})
+		reads = append(reads, read{"the facet count by " + c.name, q, a, c.index, false})
 		bars := c.q
 		bars.Since, bars.Until = HistogramQuery{ListQuery: c.q, Bucket: BucketHour}.Window(at)
 		q, a = bars.barsSQL(BucketHour.Step(), at)
-		reads = append(reads, read{"the bars by " + c.name, q, a, c.index})
+		reads = append(reads, read{"the bars by " + c.name, q, a, c.index, false})
 	}
 	// The category's own facet is lifted, so its index is the bars' alone.
 	q, a = ListQuery{Category: "task"}.barsSQL(BucketHour.Step(), at)
-	reads = append(reads, read{"the bars by category", q, a, "crewlet_events_category_time_idx"})
+	reads = append(reads, read{"the bars by category", q, a, "crewlet_events_category_time_idx", false})
 
 	for _, r := range reads {
 		plan := planOf(t, db, r.query, r.args)
@@ -171,6 +184,22 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		if r.index != "" && strings.Contains(plan, "sqlite_autoindex_crewlet_events_1") {
 			t.Errorf("%s: the plan is %q — it reads the primary key although the filter "+
 				"has an index of its own", r.name, plan)
+		}
+		if r.window {
+			searches := 0
+			for _, step := range strings.Split(plan, "\n") {
+				if !strings.HasPrefix(step, "SEARCH crewlet_events ") {
+					continue
+				}
+				searches++
+				if !strings.Contains(step, "event_time") {
+					t.Errorf("%s: the step %q seeks the filter without the window, so it "+
+						"reads every row the filter matches in the log", r.name, step)
+				}
+			}
+			if searches == 0 {
+				t.Errorf("%s: the plan is %q — it seeks nothing", r.name, plan)
+			}
 		}
 	}
 }
