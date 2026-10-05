@@ -48,7 +48,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	// classified by omission.
 	guarded := []string{
 		"/auth/session", "/auth/token", "/auth/step-up",
-		"/auth/totp", "/auth/totp/recovery",
+		"/auth/totp", "/auth/totp/recovery", "/auth/password",
 		"/auth/logout/all", "/auth/logout/{lineage}",
 	}
 

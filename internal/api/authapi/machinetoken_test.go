@@ -29,8 +29,9 @@ import (
 // (a person, and a fresh step-up) both pass for it. Without a refusal, whoever
 // holds a pipeline's environment could enrol their own second factor on the
 // owner's account or regenerate the recovery codes and read them back. The
-// two proof routes are refused by the AUTHORITY TABLE (`token_refused`, the
-// proof verb's row needing a person present) and the step-up by its own
+// two proof routes and the password change are refused by the AUTHORITY TABLE
+// (`token_refused`, the proof verb's row needing a person present) and the
+// step-up by its own
 // check, since confirming who you are is no verb in the table. The request
 // goes through the REAL guard so the credential shape is the guard's own
 // answer.
@@ -75,7 +76,10 @@ func TestAMachineTokenManagesNoProof(t *testing.T) {
 	for path, reason := range map[string]authz.Reason{
 		"/auth/totp/recovery": authz.ReasonTokenRefused,
 		"/auth/totp":          authz.ReasonTokenRefused,
-		"/auth/step-up":       authz.ReasonStepUp,
+		// AND THE PASSWORD ITSELF, decided by the same row: a token that
+		// could change its owner's password would take the account.
+		"/auth/password": authz.ReasonTokenRefused,
+		"/auth/step-up":  authz.ReasonStepUp,
 	} {
 		req := httptest.NewRequest(http.MethodPost, path,
 			strings.NewReader(`{"password":"a-password-long-enough","code":"123456"}`))
@@ -124,6 +128,15 @@ type credentialCounter struct {
 }
 
 func (c *credentialCounter) SetCredentials(context.Context, iamdomain.CredentialSet) (
+	statelog.Result, error) {
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return applied(statelog.Position{}), nil
+}
+
+func (c *credentialCounter) SetPassword(context.Context, iamdomain.PasswordSet) (
 	statelog.Result, error) {
 
 	c.mu.Lock()

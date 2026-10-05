@@ -164,6 +164,10 @@ func (stubWriter) SetCredentials(context.Context, iamdomain.CredentialSet) (stat
 	return applied(statelog.Position{}), nil
 }
 
+func (stubWriter) SetPassword(context.Context, iamdomain.PasswordSet) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
+}
+
 // fixtureBlinder is a real blinder over a fixture key: the surface resolves one
 // per request, and a blinder already in hand is its own source.
 func fixtureBlinder(t *testing.T) *iamdomain.Blinder {

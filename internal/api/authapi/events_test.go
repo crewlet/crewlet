@@ -114,6 +114,11 @@ type estate struct {
 	// estate opened: its position is below every bearer's start, and it
 	// holds no session row — see [estate.Resolve].
 	unapplied bool
+
+	// passwordSets are every SetPassword asked of this estate, and pending
+	// the writes that land durable and not yet applied here.
+	passwordSets []iamdomain.PasswordSet
+	pending      map[string]bool
 }
 
 // outcome is what one of this estate's writes answers: applied at a position,
@@ -230,6 +235,48 @@ func (e *estate) SetCredentials(ctx context.Context, in iamdomain.CredentialSet)
 		return result, nil
 	}
 	e.person.Credentials = formed
+	return result, nil
+}
+
+// SetPassword runs the caller's Check against the person this estate holds,
+// as the domain's decide does in its snapshot, and lands what the domain's
+// record would: the new password in place of the old, every reset link
+// revoked, the revocation epoch moved.
+func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
+	statelog.Result, error) {
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.passwordSets = append(e.passwordSets, in)
+	if err := e.refuse["SetPassword"]; err != nil {
+		return statelog.Result{}, err
+	}
+	if in.Check != nil {
+		if err := in.Check(iamdomain.Person{Kind: e.person.Kind,
+			Stage: e.person.Stage, Credentials: slices.Clone(e.person.Credentials)}); err != nil {
+			return statelog.Result{}, err
+		}
+	}
+	result := e.outcome("SetPassword", in.OpID, 12)
+	if e.pending["SetPassword"] {
+		result.Outcome = statelog.OutcomePending
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return result, nil
+	}
+	kept := make([]iamdomain.Credential, 0, len(e.person.Credentials)+1)
+	for _, c := range e.person.Credentials {
+		switch {
+		case c.Method == iamdomain.MethodPassword:
+			continue
+		case c.Method == iamdomain.MethodReset && c.RevokedAt.IsZero():
+			c.RevokedAt = clock
+		}
+		kept = append(kept, c)
+	}
+	e.person.Credentials = append(kept, iamdomain.Credential{
+		ID: "pw-new", Method: iamdomain.MethodPassword, Verifier: in.Verifier})
+	e.counters.Epoch++
 	return result, nil
 }
 

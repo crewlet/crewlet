@@ -749,6 +749,38 @@ derived from the person and the verifier it replaces. A node shutting down
 waits for a rewrite in flight within the listener's shutdown grace and cuts it
 after.
 
+### Changing your own password ends everything else
+
+A signed-in person changes their own password with `POST /auth/password`,
+presenting the current one beside the new. **The current password is the
+proof**, verified exactly as a step-up's is: on
+the throttle's curve for the login they are signed in as, under the verify
+cap, and a wrong one is the one refusal every sign-in arm gives and a counted
+failure. That verification is the recent proof the change needs, so the route
+asks for no step-up first. The new password is held to the same floor and
+blocklist as every other.
+
+It is how somebody proves who they are, so it needs **a person present**: a
+request that presented a machine token is refused (`reason: token_refused`), as a second
+factor's enrolment is, and a session exchanged from a Tier A token — which is
+no person's — has no password to change and is told so.
+
+**The new password and a moved revocation epoch are one record.** Somebody
+changes a password when they think somebody else has it, so the change ends
+every session and machine token the person held, and every outstanding reset
+link, in the same record that sets it — there is no instant at which the new
+password works and a thief's session still does. **This browser stays signed
+in**: it is handed a new session exactly as a step-up hands one, the session
+it presented ended first and the new one keeping its absolute deadline. Its
+proof is the change itself for somebody who holds no second factor, for whom a
+password *is* the whole of a step-up; for somebody who holds one it stays the
+replaced session's, because the change proved the password and not the code.
+
+A change this node has not applied yet answers `202` with `status:
+password_changed` and **no session**: the epoch a new session is opened at is
+read from rows that do not hold the move yet, so the person signs in again with
+the new password. Each change is an `iam_password_changed` event.
+
 ### A required second factor is enrolled before anything else
 
 `api.auth.local.totp: required` means **nobody acts on a password alone**. A
@@ -1815,7 +1847,7 @@ verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
+| none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
 | `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — and every identity-directory write: enrolling, inviting, editing or removing somebody, resetting their second factor, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window

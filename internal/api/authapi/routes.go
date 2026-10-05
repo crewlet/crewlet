@@ -74,6 +74,7 @@ func (s *Service) Routes(mux auth.Mux) {
 	mux.HandleFunc("POST "+auth.PathAuthStepUp, s.StepUp)
 	mux.HandleFunc("POST "+auth.PathAuthTOTP, s.EnrolTOTP)
 	mux.HandleFunc("POST /auth/totp/recovery", s.RegenerateRecovery)
+	mux.HandleFunc("POST /auth/password", s.ChangePassword)
 	mux.HandleFunc("POST /auth/logout/all", s.LogoutEverywhere)
 	// THE THIRD LOGOUT: one NAMED session, which is what a person uses to
 	// end the one they left open somewhere else without ending the one

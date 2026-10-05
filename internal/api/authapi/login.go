@@ -880,7 +880,10 @@ type signIn struct {
 	// that was NOT here and now — and nil for every way in that was: a
 	// password, a second factor, an invitation.
 	//
-	// ONE WAY IN SETS IT: an ENROLMENT's replacement session inherits the
+	// TWO WAYS IN SET IT. A PASSWORD CHANGE by somebody holding a second
+	// factor keeps the proof of the session it replaces: it proved the
+	// password and not the code, and a step-up from them asks for both.
+	// And an ENROLMENT's replacement session inherits the
 	// proof of the enrolment-only session it replaces, because the code
 	// the enrolment checked proves possession of a seed that same session
 	// was handed moments earlier — which says nothing about who is
@@ -909,7 +912,16 @@ type signIn struct {
 //
 // A Tier A exchange never reaches this: presenting the token was its whole
 // proof, and it holds no second factor to enrol.
+//
+// A REPLACEMENT THAT KEEPS ITS SESSION'S PROOF ([signIn.provedAt]) keeps its
+// standing too and is never restricted: it proves nothing the session it
+// replaces had not — a password change by somebody holding a second factor,
+// whose session proved both — or it is the enrolment that lifts the
+// restriction itself.
 func (s *Service) enrolmentOnly(how signIn) bool {
+	if how.provedAt != nil {
+		return false
+	}
 	switch how.method {
 	case types.SignInPassword, types.SignInInvite:
 		return how.factor == "" && s.secondFactorRequired()

@@ -217,6 +217,11 @@ type Writer interface {
 	// a two-request enrolment from pairing an old decision with a new
 	// expectation.
 	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Result, error)
+
+	// SetPassword replaces a person's password and moves their revocation
+	// epoch in ONE record, judged by the caller's own proof in its snapshot:
+	// the person's current password.
+	SetPassword(ctx context.Context, in iamdomain.PasswordSet) (statelog.Result, error)
 }
 
 // landed reports whether a write's record is durable: applied here, or
