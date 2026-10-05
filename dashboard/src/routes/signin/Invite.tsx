@@ -32,8 +32,9 @@
  * login outside the grammar `400` naming the rule; both are shown in the
  * engine's words above a form that keeps everything typed, because a person
  * told to choose another login should not have to type their password again.
- * The redemption can be retried until it lands — the engine derives the
- * person from the invitation, so a second attempt names the same person.
+ * The redemption can be retried until it lands: it is one record, so an
+ * attempt the engine refused wrote nothing and the next has nothing in its
+ * way — what keeps the link single-use is the record that spends it.
  */
 
 import { useCallback, useEffect, useState } from "react";
