@@ -3,10 +3,14 @@
  * to find the same one.
  *
  * The shell owns the scroller: one element between the page bar and the
- * viewport edge, with every screen rendered inside it. Nothing a screen
- * renders scrolls on its own, so "scroll to the top" and "is the reader at the
- * top" are questions about the SHELL's element rather than about whatever is
- * currently on it.
+ * viewport edge, with every screen rendered inside it. It is the only thing
+ * that moves a SCREEN — a box inside one may scroll its own content (a running
+ * phase's transcript, a seat's thread list, a long record), but none of those
+ * is the page, and each is bounded to this element's view and hands the wheel
+ * back to it at either end (see "The document does not scroll" in
+ * docs/reference/dashboard-design.md). So "scroll to the top" and "is the
+ * reader at the top" are questions about the SHELL's element rather than about
+ * whatever is currently on it.
  *
  * It had two spellings. The router restored a remembered position through
  * `getElementById("screen-scroll")` and the settled-list hook asked whether

@@ -37,13 +37,40 @@
 }
 
 /* ---- The page column's own furniture -------------------------------------
-   The ONE scroll container is the kit's `main`; the toolbar a screen puts its
-   own controls in and the command palette are ours. */
+   The PAGE'S scroll container is the kit's `main` — the one element that moves
+   a screen; the toolbar a screen puts its own controls in and the command
+   palette are ours. A box INSIDE the page may still scroll its own content (a
+   running phase's transcript, a seat's thread list, the Settings column, a
+   long record), and each of those is held to the rules under "The document
+   does not scroll" in docs/reference/dashboard-design.md: bounded to the
+   scroller's view, and handing the wheel back to the page at either end. */
 
 /* THE SCROLLER IS THE KIT'S, and the router restores a position on it per
    history entry. Smooth scrolling would animate every restore. */
 .crewlet-app-shell__main {
   scroll-behavior: auto;
+}
+
+/* AND IT IS EVERY SCREEN'S BLOCK MEASURE. A box that scrolls inside the page
+   has to be bounded by what the reader can SEE — the scroller's view: the
+   window less the page bar (which wraps, so it is not one number), the
+   sheet's inset and border, and whatever banner is showing, none of which a
+   descendant can count. A size container is the one thing CSS lets a
+   descendant ask that of, as `100cqb`.
+
+   It was scoped to Settings, the one frame that asked, and every other inner
+   scroller fell back to a literal: the running transcript to `620px`, the
+   thread list to a `100dvh` sum that counted the bar once and the inset not
+   at all. A literal is unrelated to the view in both directions — taller than
+   a short window, so the box's own bottom sat below the fold, and shorter
+   than a tall one for nothing. Every screen is asked now, because any screen
+   can hold such a box, and the containment costs nothing: size containment
+   takes the scroller's height from the shell's flex column rather than from
+   what it holds, which is already how the kit sizes it (`flex: 1 1 auto;
+   min-height: 0`), and the page container on the content column is
+   `inline-size`, so `cqb` reaches past it to this one. */
+.app .crewlet-app-shell__main {
+  container: scroller / size;
 }
 
 /* THE TOOLBAR OWNS THE TOP OF THE SCROLLER, so everything else that sticks
@@ -1115,18 +1142,6 @@ a.user-block-who:focus-visible {
   padding: 0;
 }
 
-/* THE SCROLLER IS THE COLUMN'S MEASURE, so it is made one. What the column
-   has to be as tall as is the scroller's VIEW — the window less the page bar,
-   the sheet's inset and whatever banner is showing, none of which the column
-   can count — and a size container is the one thing CSS lets a descendant ask
-   that of. Scoped to the frame that needs it: size containment reads the
-   scroller's height from the shell's flex column rather than from what it
-   holds, which is already how the kit sizes it (`flex: 1 1 auto;
-   min-height: 0`), but no other screen has a reason to be asked. */
-.app .crewlet-app-shell__main:has(> .crewlet-app-shell__content > .section-frame) {
-  container: scroller / size;
-}
-
 .section-frame {
   display: grid;
   flex: 1 1 auto;
@@ -1144,7 +1159,17 @@ a.user-block-who:focus-visible {
    to stick to and a wheel over Nodes carried Company and Connect off the top.
    At the view's height it sticks for the whole scroll, its hairline runs the
    height of the window at every scroll position, and a list longer than a
-   short window scrolls inside itself rather than below the fold. */
+   short window scrolls inside itself rather than below the fold.
+
+   THE ONE IN-PAGE SCROLLER THAT KEEPS THE WHEEL AT ITS ENDS
+   (`overscroll-behavior: contain`), and it is the exception the rule against
+   containment names (`styles/scrollers.test.ts`). The trap containment sets
+   elsewhere is a box whose own bottom is below the fold: pinned at its end,
+   it swallows the wheel while half of it is out of sight. This box cannot be
+   in that state — it sticks, and it is exactly the view, so all of it is on
+   screen at every scroll position. What chaining would do here is the
+   opposite surprise: a wheel over the section list, at its end, would move
+   the SECTION beside it, which is not what the pointer is over. */
 .section-column {
   position: sticky;
   top: 0;

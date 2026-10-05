@@ -11,7 +11,7 @@
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
 import { Router } from "~/app/router.tsx";
@@ -550,5 +550,129 @@ describe("a live call's staleness", () => {
     // Drawn as the work in progress it is — never the stalled danger, nor the
     // amber that is kept for a seat that needs a person.
     expect(tag?.className).toContain("crewlet-tag--info");
+  });
+});
+
+/**
+ * A RUNNING PHASE'S TRANSCRIPT FOLLOWS ITS NEWEST ROUND — and keeps following
+ * through everything that changes the box rather than what is in it.
+ *
+ * jsdom lays nothing out and has no ResizeObserver, so the observer is a stub
+ * this suite fires by hand and the box's geometry is defined on the element.
+ * What is asserted is the wiring the layout depends on: WHICH elements are
+ * observed, and where the box is left after an observation.
+ */
+describe("a running phase's transcript", () => {
+  class Watching {
+    static live: Watching[] = [];
+    observed: Element[] = [];
+    constructor(readonly report: ResizeObserverCallback) {
+      Watching.live.push(this);
+    }
+    observe(el: Element) {
+      this.observed.push(el);
+    }
+    unobserve() {}
+    disconnect() {
+      Watching.live = Watching.live.filter((w) => w !== this);
+    }
+  }
+  const real = globalThis.ResizeObserver;
+  beforeEach(() => {
+    Watching.live = [];
+    globalThis.ResizeObserver = Watching as unknown as typeof ResizeObserver;
+  });
+  afterEach(() => {
+    globalThis.ResizeObserver = real;
+  });
+
+  /** Whatever is observing right now reports a change of size. */
+  const resize = () => {
+    for (const w of [...Watching.live]) w.report([], w as unknown as ResizeObserver);
+  };
+
+  /** A box holding 1000px of transcript in a 200px view, so its end is 800. */
+  function geometry(box: HTMLElement): HTMLElement {
+    let top = 0;
+    Object.defineProperty(box, "scrollHeight", { configurable: true, get: () => 1000 });
+    Object.defineProperty(box, "clientHeight", { configurable: true, get: () => 200 });
+    Object.defineProperty(box, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.min(v, 800);
+      },
+    });
+    return box;
+  }
+
+  const LIVE = phase({ ...TWO_ROUNDS, live: true });
+  const box = (container: HTMLElement) => container.querySelector<HTMLElement>(".tail-scroll");
+
+  test("is bounded only while it runs; a finished one flows", () => {
+    const live = render(<PhaseCard record={LIVE} defaultOpen />);
+    expect(box(live.container)?.classList.contains("tailing")).toBe(true);
+    cleanup();
+    const settled = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
+    // THE CONTROL: the box is there, with the same frame, and is not bounded.
+    expect(box(settled.container)).not.toBeNull();
+    expect(box(settled.container)?.classList.contains("tailing")).toBe(false);
+  });
+
+  test("observes the box itself, so a window that changes its height re-sticks the tail", () => {
+    // The box's bound is the scroller's view, so a resized window resizes the
+    // BOX while its content stays put — and a tail measured only on the
+    // content came unstuck by the difference.
+    const { container } = render(<PhaseCard record={LIVE} defaultOpen />);
+    const scroller = box(container)!;
+    const observed = Watching.live.flatMap((w) => w.observed);
+    expect(observed).toContain(scroller);
+    expect(observed).toContain(scroller.querySelector(".round-ledger"));
+    geometry(scroller);
+    resize();
+    expect(scroller.scrollTop).toBe(800);
+  });
+
+  test("a reader who scrolled up is left where they are", () => {
+    const { container } = render(<PhaseCard record={LIVE} defaultOpen />);
+    const scroller = geometry(box(container)!);
+    resize();
+    scroller.scrollTop = 100;
+    fireEvent.scroll(scroller);
+    resize();
+    expect(scroller.scrollTop).toBe(100);
+  });
+
+  test("and is following again once they close the card and open it", () => {
+    // The flag outlived the element: the reopened card's NEW box inherited
+    // "not following" from the one the reader had scrolled, and never stuck.
+    const { container } = render(<PhaseCard record={LIVE} defaultOpen />);
+    const first = geometry(box(container)!);
+    resize();
+    first.scrollTop = 100;
+    fireEvent.scroll(first);
+    const head = container.querySelector(".phase-head")!;
+    fireEvent.click(head);
+    expect(box(container)).toBeNull();
+    fireEvent.click(head);
+    const second = geometry(box(container)!);
+    expect(second).not.toBe(first);
+    resize();
+    expect(second.scrollTop).toBe(800);
+  });
+
+  test("follows from its first round when it was opened before there was one", () => {
+    // The rounds section exists only once a round does, so the box is mounted
+    // AFTER the phase went live — and an effect keyed on liveness alone had
+    // already run against nothing, and never attached to it.
+    const opening = phase({ live: true, roundsUsed: 0 });
+    const { container, rerender } = render(<PhaseCard record={opening} defaultOpen />);
+    expect(box(container)).toBeNull();
+    rerender(<PhaseCard record={LIVE} defaultOpen />);
+    const scroller = box(container)!;
+    expect(Watching.live.flatMap((w) => w.observed)).toContain(scroller);
+    geometry(scroller);
+    resize();
+    expect(scroller.scrollTop).toBe(800);
   });
 });

@@ -92,6 +92,23 @@ import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 
 /**
+ * How tall a tool's record grows before it scrolls itself: the record ceiling
+ * every block of machine text has, or the box that scrolls it, whichever is
+ * smaller.
+ *
+ * A RECORD IS A SCROLLER INSIDE A SCROLLER. Inside a running phase it sits in
+ * the tailing ledger, whose bound is the scroller's view; on a short window
+ * that box is shorter than 460px, and a record taller than the box scrolling
+ * it is the transcript's own trap one level down — the wheel inside the record
+ * while the record's bottom is below the box's. So the ceiling is the lesser
+ * of the two, and `--record-bound` (screens.css, on `.tail-scroll.tailing` and
+ * on `.phase-card` for a settled phase, where the page is the box) says what
+ * the box allows. On any window taller than the record, that is the 460px it
+ * always was.
+ */
+const RECORD_CEILING = `min(${RECORD_MAX_HEIGHT}px, var(--record-bound, ${RECORD_MAX_HEIGHT}px))`;
+
+/**
  * A call's two records, formatted.
  *
  * ITS OWN COMPONENT, mounted INSIDE the lazy disclosure, and that placement is
@@ -153,10 +170,11 @@ function ToolRecords({
 
           `maxHeight` is our own `RECORD_MAX_HEIGHT`, and it has to be stated:
           without one a 900-line record pushes the rest of the round off the
-          screen. */}
+          screen — but never more than `RECORD_CEILING` lets it be, which is
+          the box that scrolls it. */}
       <CodeBlock
         plain
-        maxHeight={RECORD_MAX_HEIGHT}
+        maxHeight={RECORD_CEILING}
         selectable
         label={`${name} — arguments`}
         code={prettyArgs || "{}"}
@@ -164,7 +182,7 @@ function ToolRecords({
       <div className="t-label">{failed ? "Error" : "Result"}</div>
       <CodeBlock
         plain
-        maxHeight={RECORD_MAX_HEIGHT}
+        maxHeight={RECORD_CEILING}
         selectable
         label={`${name} — ${failed ? "error" : "result"}`}
         code={prettyResult || "(empty)"}
@@ -228,18 +246,24 @@ function ToolRow({
  * worse than not following at all; one that never follows makes a running
  * phase look frozen. So "am I still tailing?" is a piece of reader state, set
  * by where they last left the scroll.
+ *
+ * Returned as a CALLBACK REF, and the element is state. A ref object only says
+ * where the box is once something re-runs the effect, and the box is mounted
+ * conditionally — the rounds section exists only once a round does — so a live
+ * phase opened before its first round came back mounted the box AFTER the
+ * effect had run against nothing and never followed at all.
  */
 function useTail(active: boolean) {
-  // A ref to the SCROLLER itself, not to a marker inside it. The scroller is
-  // conditionally a scroller — it only bounds its height while the phase is
-  // live — so resolving it by `closest()` at mount found whatever happened to
-  // exist then, and the listener outlived the element it was attached to.
-  const box = useRef<HTMLDivElement | null>(null);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const following = useRef(true);
 
   useEffect(() => {
-    const scroller = box.current;
     if (!scroller || !active) return;
+    // EVERY ACTIVATION STARTS AT THE TAIL. The flag outlives the element — a
+    // reader who scrolled up, closed the card and opened it again got a NEW
+    // box that inherited "not following" from the old one and never stuck
+    // again. Opening a live phase is asking to watch it.
+    following.current = true;
 
     const onScroll = () => {
       const slack = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
@@ -262,20 +286,28 @@ function useTail(active: boolean) {
     // THINKING block grew for a minute without the effect ever re-running,
     // and the box sat still while text poured into it. A size observer fires
     // for every reason the content can get taller: a fragment landing, a new
-    // round, a disclosure opening, the window narrowing and text rewrapping.
+    // round, a disclosure opening, text rewrapping.
+    //
+    // THE BOX ITSELF AS WELL AS WHAT IT HOLDS. Its bound is the scroller's
+    // view (`.tail-scroll.tailing` in screens.css), so a window made shorter
+    // or taller resizes the BOX while its content stays the size it was —
+    // and a tail measured only on the children came unstuck by the
+    // difference, leaving the newest round below the box's new bottom.
+    //
     // Guarded because jsdom has no ResizeObserver: the box then simply does
     // not follow, which is the same as a phase that is not live.
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(stick);
     if (observer) {
+      observer.observe(scroller);
       for (const child of Array.from(scroller.children)) observer.observe(child);
     }
     return () => {
       scroller.removeEventListener("scroll", onScroll);
       observer?.disconnect();
     };
-  }, [active]);
+  }, [scroller, active]);
 
-  return box;
+  return setScroller;
 }
 
 /** One round: thinking, speech, then the calls that round asked for. */

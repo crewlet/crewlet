@@ -144,9 +144,10 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
  * The list is a seat's every thread — twenty-odd rows, 1,700px drawn whole —
  * and choosing one is the section's only interaction, so what it opens has to
  * be on screen when it opens. Beside the list (a wide column) the list is
- * BOUNDED to the viewport and scrolls inside itself, and the detail is STICKY
- * under the page's top, so a thread chosen near the list's end opens beside
- * the row that was pressed rather than a screen above it. Stacked (a phone),
+ * BOUNDED to the scroller's view — the band the detail sticks in — and scrolls
+ * inside itself, handing the wheel back to the page at either end, and the
+ * detail is STICKY under the page's top, so a thread chosen near the list's
+ * end opens beside the row that was pressed rather than a screen above it. Stacked (a phone),
  * the detail is below the whole list, so choosing a thread SCROLLS the detail
  * into view and moves focus to its heading ([reveal]) — the row's
  * highlight was the only feedback, 1,900px above what it had opened. The rule

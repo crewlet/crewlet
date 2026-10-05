@@ -2320,8 +2320,9 @@ the holder's total ("Latest 50 of 142" where the list is a page of it), and the
 thread's KEY on a line of its own, since it is the thread's only identity, with
 its turns and when it last moved under it, and a native task's uuid cut to its
 head (`work:task:4d631f6d`) with the whole key on the row's title. Choosing a
-thread shows it: beside the list (a wide column) the list scrolls inside a
-viewport-high box and the thread's turns stick under the page's top; stacked
+thread shows it: beside the list (a wide screen column) the list scrolls
+inside a box bounded by the scroller's view, handing the wheel back to the page
+at either end, and the thread's turns stick under the page's top; stacked
 on a phone, the turns are scrolled to and their heading takes focus. Each
 turn's trigger reads as plain words, its markdown stripped. A seat no
 node holds says why it shows nothing. **Settings** is the company document's
@@ -3082,6 +3083,32 @@ rules fix it, and each one names a specific mechanism:
    scroll come and go. The frame used to be part of the tailing rule, so the
    transcript grew a box the moment a phase went live and lost it again the
    moment it completed — rule 9's defect, one level down.
+
+   **The bound is the scroller's view, and at either end the wheel is the
+   page's.** It was `620px` with `overscroll-behavior: contain`, and the pair
+   was a trap a reader described exactly: scrolling the turn, reaching its
+   end, and getting half the content until they moved the pointer out of the
+   box. 620px is unrelated to the view — the page bar wraps, and the object
+   header, the tabs and two card heads sit above the box — so on most windows
+   the box's own bottom was below the fold; following keeps a live box pinned
+   at its end, and containment swallowed every wheel-down there. The bound is
+   now derived from one requirement — *once scrolled to, the whole box fits in
+   the view* — as `100cqb` (the shell's scroller, a size container on every
+   screen) less the sticky band, the box's caption and the card's inset below
+   it, with a floor of four rows for a window too short for that; and nothing
+   contains the wheel, so at the box's top or bottom the page carries on.
+
+   The same requirement applies one level down. A tool's record is a scroller
+   of its own, and one taller than the box that scrolls it is the same trap:
+   inside a running ledger a record is at most the box less its label, and in
+   a settled card at most the view less its label, so on any window with room
+   for 460px of record it keeps the ceiling it always had. And the tail
+   re-sticks when the BOX changes height (a resized window) as well as when
+   its content grows, and opening a running phase always starts at its tail:
+   the "still following?" flag used to outlive the box, so a reader who
+   scrolled up, closed the card and opened it again got a box that never
+   followed — and a phase opened before its first round came back never
+   attached at all.
 
    The engine STREAMS: a round's text arrives while the model is writing
    it, coalesced to five frames a second, and the round in flight rides
@@ -3987,6 +4014,33 @@ calling `scrollIntoView`, which scrolls every scrollable ancestor it can find.
 The one `scrollIntoView` (the Memory tab bringing a stacked detail's heading
 into view) runs only when the heading is outside the scroller's box, and with a
 document that cannot scroll there is no other ancestor for it to move.
+
+**A box inside the page may scroll its own content, on two conditions.** A
+running phase's transcript, a seat's thread list beside its open thread, the
+Settings column and a long record each scroll inside themselves, and each is a
+second thing under the reader's wheel — so each has to keep the page within
+reach:
+
+- **It is bounded by the scroller's view, never by a literal.** The shell's
+  `main` is a size container on every screen (`container: scroller / size`), so
+  a box asks for `100cqb` — the window less the page bar, which wraps, the
+  sheet's inset and any banner, none of which a descendant can count — and
+  subtracts what covers or must accompany it (`--sticky-top`, its caption). A
+  `px` height or a `100dvh` sum is a guess at that number: too tall on a short
+  window, where the box's own bottom then sits below the fold, and too short on
+  a tall one for nothing. Whether such a box sits beside what it serves is a
+  container query on the screen's width (`@container page`), never a window
+  media query, because the sidebar and a peek take width the window does not
+  report.
+- **At either end the wheel is the page's.** No in-page scroller sets
+  `overscroll-behavior` to `contain` or `none` on the block axis: a box whose
+  end is reached while the page has more to show must let the page move, and
+  containment there is the wheel doing nothing. The one exception is a box
+  that is always wholly in view and so cannot hide anything — the sticky
+  Settings column, exactly the view's height, where chaining would move the
+  section beside it instead. `styles/scrollers.test.ts` holds both rules, with
+  that column as its roster's one entry and its reason; a sideways strip is
+  not its subject, since it never holds the page's own wheel.
 
 ### A card has one left edge
 
