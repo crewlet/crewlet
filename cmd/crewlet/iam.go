@@ -43,7 +43,8 @@ import (
 const iamUsage = `crewlet iam — the company's people, credentials and sessions
 
 Usage:
-  crewlet iam people [-q TERM] [-stage S] [-limit N]   The directory
+  crewlet iam people [-q TERM] [-stage S] [-limit N] [-after ID]
+                                                       The directory
   crewlet iam show ID                                  One person, in full
   crewlet iam invite EMAIL [-grants G,...] [-seat SEAT]
                                                        Issue a link, shown ONCE
@@ -67,7 +68,7 @@ Usage:
   crewlet iam invalidate-all                           Invalidate EVERY session and machine token
   crewlet iam check                                    What is wrong with this company's access
   crewlet iam audit [-person ID] [-event OP] [-since POSITION] [-at TIME]
-                                                       The identity estate's own trail
+                    [-before POSITION]                 The identity estate's own trail
 
 Flags:
   -config PATH   Tier A config naming the node to reach (default %q)
@@ -147,6 +148,11 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	days := fs.Int("days", 0, "how long a minted token lasts")
 	event := fs.String("event", "", "narrow the trail to one operation")
 	since := fs.Uint64("since", 0, "the oldest log POSITION to include")
+	// THE TWO CURSORS A LISTING'S LAST LINE NAMES, which it named while
+	// neither was a flag here: following "more: crewlet iam people -after
+	// <id>" answered "flag provided but not defined".
+	after := fs.String("after", "", "a listing's next page starts after this id")
+	before := fs.Uint64("before", 0, "the trail's next page ends before this POSITION")
 	at := fs.String("at", "", "an RFC 3339 instant, resolved to a position once")
 	key := fs.String("idempotency-key", "",
 		"retry a write whose outcome was unknown: the op id its answer named")
@@ -239,6 +245,7 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		query := url.Values{}
 		setIf(query, "q", *term)
 		setIf(query, "stage", *stage)
+		setIf(query, "after", *after)
 		if *limit > 0 {
 			query.Set("limit", strconv.Itoa(*limit))
 		}
@@ -315,6 +322,9 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		setIf(query, "at", *at)
 		if *since > 0 {
 			query.Set("since", strconv.FormatUint(*since, 10))
+		}
+		if *before > 0 {
+			query.Set("before", strconv.FormatUint(*before, 10))
 		}
 		if *limit > 0 {
 			query.Set("limit", strconv.Itoa(*limit))

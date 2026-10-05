@@ -408,7 +408,7 @@ variable at all.
 
 | Command | What it does |
 |---|---|
-| `people` | The directory, paged. `-q` narrows on the login and the seat; `-stage` on the enrolment stage; `-limit` on the page |
+| `people` | The directory, paged. `-q` narrows on the login and the seat; `-stage` on the enrolment stage; `-limit` on the page; `-after ID` starts the next page, as the listing's last line spells it |
 | `show ID` | One person, in full, with their name and address opened |
 | `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back. The link is the dashboard's invitation screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`. `-seat SEAT` binds the person it creates to a chart seat when they redeem it: a **human** seat nobody holds, by any handle it answers to — see [An invitation may bind a seat](../concepts/identity-and-access.md#everybody-arrives-by-invitation). Run under a Tier A token on an empty estate, it is how the company's **first person** arrives: give them `people:manage` — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
 | `create` | Create somebody directly, with `-login` (required), `-email`, `-name` and `-kind` (`person` or `machine`). **Every principal enrols with a login** — it is the name their changes are recorded under while they hold no seat — and it follows the kind: a person's is dotted (`jane.doe`) and a machine's coloned (`ci:release`, or `token:<id>` to bind a Tier A token), at most 64 characters either way, and anything else is refused. A person also needs `-email`, which is how they sign in; a machine needs none. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
@@ -425,7 +425,7 @@ variable at all.
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
 | `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step — it ends bearers and nothing else, so a removal, a suspension, a withdrawn credential or a reduced grant the restore rolled back is re-applied by hand before it ([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)) — and the token takes `fleet:operate` **and** `people:manage`; the Tier A tokens in the config file are untouched |
 | `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat the running company no longer holds as a human seat), grants this node's ceiling clamps. A binding a node that runs no company yet cannot judge is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
-| `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
+| `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-before POSITION` (the next page, as the listing's last line spells it), `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
 
 ### Flags
 
@@ -444,6 +444,7 @@ variable at all.
 | `-stage S` | every stage | `invited`, `enrolling`, `active`, `suspended` or `retired` |
 | `-since POSITION` / `-at TIME` | — | Where the trail starts. `-since` is a log position; `-at` is an RFC 3339 instant the route resolves to one |
 | `-limit N` | 50 (100 for the trail) | How many rows |
+| `-after ID` / `-before POSITION` | the first page | Where the next page starts: `-after` on `people`, `-before` on `audit` — each listing ends with the command for its next page |
 | `-seat SEAT` | — | On `invite` only: the chart seat redeeming the link binds the person to. Refused on every other command rather than ignored — somebody who already exists is bound with `bind` |
 | `-idempotency-key OP` | a new operation | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named. Refused on a read and on `token` (a mint's retry would hand back a record whose value was shown to nobody, so an unknown mint is minted again) |
 

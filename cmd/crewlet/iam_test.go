@@ -555,3 +555,58 @@ func TestAnIamInviteBindsTheSeatTheOperatorNamed(t *testing.T) {
 		t.Errorf("the refused create was sent anyway: %v", paths)
 	}
 }
+
+// A LISTING'S "MORE" LINE IS A COMMAND THAT RUNS.
+//
+// `iam people` and `iam audit` end a page by printing the command for the next
+// one — `-after <id>` and `-before <position>` — and neither flag was defined,
+// so following the line answered "flag provided but not defined". The node here
+// answers a page with a cursor; the printed line is run as written, and the
+// node must see the cursor it named. Mutation: drop either flag and its row
+// fails to parse.
+func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
+	for _, tc := range []struct {
+		command, answer, param, cursor string
+	}{
+		{"people", `{"people":[],"next":"0192f00d-0000-7000-8000-0000000000aa",` +
+			`"position":"CREWLET_IAM_LOG@0:9"}`, "after",
+			"0192f00d-0000-7000-8000-0000000000aa"},
+		{"audit", `{"events":[],"next":"4096"}`, "before", "4096"},
+	} {
+		var asked []string
+		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			asked = append(asked, r.URL.Query().Get(tc.param))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tc.answer))
+		}))
+		t.Setenv(apiTokenEnv, "a-tier-a-token")
+		cfg := bootstrapWithKeyring(t, "k1")
+		var out, errs bytes.Buffer
+		if err := run([]string{"iam", tc.command, "-config", cfg, "-api",
+			node.URL}, &out, &errs); err != nil {
+			node.Close()
+			t.Fatalf("iam %s: %v", tc.command, err)
+		}
+		var more string
+		for _, line := range strings.Split(out.String(), "\n") {
+			if rest, ok := strings.CutPrefix(line, "more: crewlet "); ok {
+				more = rest
+			}
+		}
+		if more == "" {
+			node.Close()
+			t.Fatalf("iam %s printed no next page:\n%s", tc.command, out.String())
+		}
+		args := append(strings.Fields(more), "-config", cfg, "-api", node.URL)
+		err := run(args, &out, &errs)
+		node.Close()
+		if err != nil {
+			t.Errorf("the printed line %q does not run: %v", more, err)
+			continue
+		}
+		if len(asked) != 2 || asked[1] != tc.cursor {
+			t.Errorf("following %q asked the node for %s=%v, want %s", more,
+				tc.param, asked, tc.cursor)
+		}
+	}
+}
