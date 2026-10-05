@@ -343,13 +343,19 @@ const excerptLimit = 600
 // excerptOf keeps the opening of a body for snippet rendering.
 //
 // Whitespace is collapsed first, so a markdown body's blank lines do not
-// spend the budget, and the cut goes through [textcut.Bytes] — a plain slice
+// spend the budget, and the cut goes through [textcut.Within] — a plain slice
 // splits a multi-byte rune, and the invalid UTF-8 that produces is
 // substituted by the JSON encoder and read by a model as a replacement
-// character. No marker: this value is snippet INPUT, and an ellipsis inside
-// it would be cut again by the snippet.
+// character.
+//
+// MARKED WHERE IT WAS CUT, inside the budget. It used to carry no marker, on
+// the reasoning that a snippet cut from it adds its own — but a snippet only
+// marks the end IT cut, and a window that reached the end of this excerpt
+// marked nothing, so the snippet of a long document ended as though the
+// document did. The marker is part of the snippet's input now, and a window
+// that reaches it carries it.
 func excerptOf(body string) string {
-	return textcut.Bytes(strings.Join(strings.Fields(body), " "), excerptLimit)
+	return textcut.Within(strings.Join(strings.Fields(body), " "), excerptLimit)
 }
 
 // Remove drops a document from the index.
