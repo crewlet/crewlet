@@ -1046,8 +1046,9 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int, at
 // ByID returns one event WITH its payload, or ErrNotFound.
 //
 // The identity is (event_time, event_id) and a caller holding only an id — a
-// link, a line pasted from a log — has no time to seek with, so this reads the
-// id index and takes the newest match.
+// link, a line pasted from a log — has no time to seek with, so this seeks the
+// id index and takes the newest match: see [byIDSQL] for what it takes to make
+// the planner do that.
 //
 // THROUGH THE SHARED SCANNER although it wants one row, which is what
 // QueryRow would give it more directly. A second hand-written Scan is a second
@@ -1070,10 +1071,8 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int, at
 // floored — read as empty. Floored at the asker's instant, a link answers the
 // same on every node whatever its sweep has done.
 func (l *EventLog) ByID(ctx context.Context, id string, at time.Time) (EventRecord, error) {
-	recs, err := l.scanPayloads(ctx,
-		"SELECT "+listColumns+", payload FROM crewlet_events "+
-			"WHERE event_id = ? AND event_time >= ? ORDER BY event_time DESC LIMIT 1",
-		id, EncodeTime(askedAt(at).Add(-EventHistory)))
+	query, args := byIDSQL(id, at)
+	recs, err := l.scanPayloads(ctx, query, args...)
 	if err != nil {
 		return EventRecord{}, fmt.Errorf("store: read event %s: %w", id, err)
 	}
@@ -1081,6 +1080,38 @@ func (l *EventLog) ByID(ctx context.Context, id string, at time.Time) (EventReco
 		return EventRecord{}, fmt.Errorf("%w: event %s", ErrNotFound, id)
 	}
 	return recs[0], nil
+}
+
+// byIDSQL is the statement [EventLog.ByID] runs and its arguments — a function
+// of its own so the plan it gets can be read back for exactly the statement
+// that runs (see TestALookupByIDSeeksTheIDIndex).
+//
+// BOTH `event_time` TERMS CARRY A UNARY PLUS, which changes no value and hides
+// the column from the planner, so the only term it can seek on is the id — the
+// id index (`crewlet_events_id_idx`, schema/0001) — and what is left is to
+// sort the few rows that share the id. Unadorned, `event_time` leads the
+// primary key, and the planner reached for that key instead, two ways
+// (EXPLAIN QUERY PLAN, measured on 60,000 rows):
+//
+//   - to satisfy the ORDER BY, by walking the whole key newest first and
+//     stopping at the first match — quick for an event from the last few
+//     minutes, and the entire thirty-day log for an old id or a dead link,
+//     which is the lookup a pasted link makes. That was this read's plan
+//     before it had a floor, and is its plan with only the floor's plus;
+//   - with the floor as a term, by reading it as a RANGE of that key and
+//     intersecting every row id in it with the id index's (`MULTI-INDEX
+//     AND`): the same cost for every id, linear in the window — about 4 ms a
+//     lookup on those rows against 0.2 ms for the seek, paid by every node a
+//     fleet asks, inside its read budget.
+//
+// On this build the ORDER BY's plus alone already seeks the index. The floor's
+// is what leaves the id as the ONLY term an index could serve, so no plan —
+// this build's or a later one's — can make a range of the key out of it; the
+// floor still applies, to the rows the seek returns, which is where it belongs.
+func byIDSQL(id string, at time.Time) (string, []any) {
+	return "SELECT " + listColumns + ", payload FROM crewlet_events " +
+			"WHERE event_id = ? AND +event_time >= ? ORDER BY +event_time DESC LIMIT 1",
+		[]any{id, EncodeTime(askedAt(at).Add(-EventHistory))}
 }
 
 // Purge deletes events past EventRetention and reports how many went.

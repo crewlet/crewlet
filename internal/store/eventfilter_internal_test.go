@@ -80,6 +80,41 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 	}
 }
 
+// A LOOKUP BY ID SEEKS THE ID INDEX, and only the id index.
+//
+// A link carries an id and no time, so [EventLog.ByID] has the id index to
+// seek and nothing else — and the planner kept reaching for the primary key
+// that `event_time` leads: walking it newest first to satisfy the ORDER BY (the
+// whole log for an old id or a dead link), or, once the history floor was a
+// term, intersecting the id index with that key's entire thirty-day range
+// (`MULTI-INDEX AND`), which costs every lookup the size of the window. Read
+// back for the EXACT statement ByID runs, on an empty log as on a full one:
+// without statistics, which no node gathers, the plan is the same either way.
+//
+// Mutation: drop the ORDER BY's unary plus from [byIDSQL] and the plan walks
+// the primary key's autoindex; drop both and it intersects that key's floor
+// range with the id index (`MULTI-INDEX AND`).
+func TestALookupByIDSeeksTheIDIndex(t *testing.T) {
+	t.Parallel()
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	query, args := byIDSQL("ev-1", now())
+	plan := planOf(t, db, query, args)
+	if !strings.Contains(plan, "crewlet_events_id_idx") {
+		t.Errorf("ByID's plan is %q — it does not seek crewlet_events_id_idx", plan)
+	}
+	for _, refused := range []string{"MULTI-INDEX", "sqlite_autoindex_crewlet_events_1"} {
+		if strings.Contains(plan, refused) {
+			t.Errorf("ByID's plan is %q — it reads %s, so every lookup costs the "+
+				"thirty-day window rather than the rows that share the id", plan, refused)
+		}
+	}
+}
+
 // planOf is the planner's account of one statement, one line per step.
 func planOf(t *testing.T, db *DB, query string, args []any) string {
 	t.Helper()
