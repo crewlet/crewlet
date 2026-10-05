@@ -2046,10 +2046,12 @@ func TestAWorkerThatNeverSubmittedIsNotGivenAnAnswer(t *testing.T) {
 		t.Errorf("an answer was synthesised: %+v", res.Output)
 	}
 	// The prose is still handed back: rounds the parent paid for are worth
-	// reading even when the last step was skipped. All three of them — the
-	// first answer and the two the finishing correctives drew out.
-	if strings.Count(res.Text, "here is my thinking, at length") != 3 {
-		t.Errorf("the worker's prose was discarded: %q", res.Text)
+	// reading even when the last step was skipped. ONCE — the answer the
+	// worker gave its task, and not the two copies the finishing
+	// correctives drew out, which answered "call the tool" instead and
+	// would hand the parent the same report three times.
+	if n := strings.Count(res.Text, "here is my thinking, at length"); n != 1 {
+		t.Errorf("the worker's prose appears %d times, want once: %q", n, res.Text)
 	}
 	if res.Rounds != 3 {
 		t.Errorf("rounds = %d, want 3 — one answer plus the two correctives' bound", res.Rounds)

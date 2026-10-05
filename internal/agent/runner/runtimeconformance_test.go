@@ -119,15 +119,16 @@ func conformanceCases() []scenario {
 			},
 			bridged: []ledger.Call{{Name: "slack_history", Result: "read"}},
 			text:    "I looked around and ran out of road",
-			// NO TEXT TO COMPARE. The native loop asks a phase that ended
-			// in prose to finish twice more before the rescue, so its
-			// text is every round's answer joined; an agent run's rounds
-			// are the CLI's and its text is the one closing reply. That
-			// is the one place the runtimes legitimately differ here, and
-			// it is asserted in phases_test.go — what both still owe the
-			// turn engine is the same rescued outcome.
+			// THE SAME TEXT FROM BOTH. The native loop asks a phase that
+			// ended in prose to finish twice more before the rescue, and
+			// the model answers each corrective with its report again;
+			// those answers are to the corrective, not the task, so the
+			// text keeps the first — which is what an agent run's one
+			// closing reply is. A reviewer reads the same thing whichever
+			// runtime the executor ran on.
 			want: turn.Work{
 				Outcome: turn.OutcomeIncomplete,
+				Text:    "I looked around and ran out of road",
 				Rescued: true,
 			},
 		},

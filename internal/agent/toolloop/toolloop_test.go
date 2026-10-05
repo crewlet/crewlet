@@ -815,6 +815,39 @@ func TestATerminatorOnTheLastRoundIsNotExhaustion(t *testing.T) {
 	}
 }
 
+// THE TEXT IS THE MODEL'S ANSWER TO ITS TASK, not to the correctives. A run of
+// rounds that called nothing keeps its first answer and drops the rest, which
+// re-wrote the same report for a corrective; a round that called a tool ends
+// the run, so a later answer is a new one; and a thinking-only round before
+// the answer is part of it.
+func TestTheTextKeepsTheAnswerNotItsRepeats(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "first report"},
+		{Content: "first report, again"},
+		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{ReasoningContent: "thinking it over"},
+		{Content: "second report"},
+		{Content: "second report, again"},
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read"), def("submit_work")}},
+		MaxRounds: 6, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := "first report\n\nworking\n\n<think>thinking it over</think>\n\nsecond report"
+	if res.Text != want {
+		t.Errorf("text = %q, want %q", res.Text, want)
+	}
+	// Every round is still on the record, the repeats included.
+	if res.RoundsUsed != 6 || len(res.Narration) != 6 {
+		t.Errorf("rounds = %d narrated = %d, want all 6 on the record",
+			res.RoundsUsed, len(res.Narration))
+	}
+}
+
 // ONLY A TERMINATOR THE ROUND OFFERS COUNTS. One the surface does not carry
 // cannot be called, so a corrective naming it is a round spent on nothing, and
 // the loop reads the prose as its answer — exactly as a loop that declared no

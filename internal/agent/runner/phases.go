@@ -1612,8 +1612,9 @@ func missingTools(s *tools.Surface) []string {
 // reviewArtifact is what the executor produced, handed to the reviewer.
 //
 // WHOLE, and that is a bug fix rather than a preference. [turn.Work.Text] is
-// every assistant message of the executor's tool loop concatenated, thinking
-// blocks included — so the draft is at its END. The 2000-rune cut this used to
+// the assistant messages of the executor's tool loop concatenated, thinking
+// blocks included (a corrective's repeats excepted — see toolloop's
+// assistantText) — so the draft is at its END. The 2000-rune cut this used to
 // carry kept the HEAD, which on any multi-round execution is the opening of
 // round one's reasoning and not the draft at all. The reviewer's verdict
 // decides whether the turn ships or loops, and it was being asked for that

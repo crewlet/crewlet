@@ -154,10 +154,11 @@ type ToolExecution = map[string]any
 // (a worker has no such flag: its status is `no_result`, and onboarding simply
 // ends unmarked).
 //
-// It exists because `response` is the JOIN of every round's turn, and a join
-// cannot be undone: the parts are separated by a blank line and prose contains
-// blank lines, so a consumer handed only the blob cannot say which round said
-// what. A dashboard splitting it on the leading `<think>` tag showed the first
+// It exists because `response` is the JOIN of the rounds' turns — every round
+// but a corrective's repeats, which this list keeps and `response` leaves out
+// (see toolloop's assistantText) — and a join cannot be undone: the parts are
+// separated by a blank line and prose contains blank lines, so a consumer
+// handed only the blob cannot say which round said what. A dashboard splitting it on the leading `<think>` tag showed the first
 // round's thinking as "the reasoning" and every later round's thinking as
 // "the answer", tags and all.
 //

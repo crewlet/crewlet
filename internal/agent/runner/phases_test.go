@@ -422,8 +422,10 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	if w.Outcome != turn.OutcomeIncomplete {
 		t.Errorf("outcome = %s, want incomplete", w.Outcome)
 	}
-	if !strings.Contains(w.Text, "posted something") {
-		t.Errorf("the phase's own text was discarded: %q", w.Text)
+	// Its answer to the task, once: the two the correctives drew out
+	// repeat it, and the reviewer would read the report three times.
+	if n := strings.Count(w.Text, "posted something"); n != 1 {
+		t.Errorf("the phase's text carries its answer %d times, want once: %q", n, w.Text)
 	}
 	// AS TEXT, NOT AS INTENT. The executor gave no account of itself, and
 	// Summary is the intent line — rendered whole to every later round and

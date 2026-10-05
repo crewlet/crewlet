@@ -532,6 +532,9 @@ func (p *Progress) record(res Result) {
 
 // Result is one loop invocation's outcome.
 type Result struct {
+	// Text is the conversation's assistant turns as one displayable
+	// string — reasoning included, a corrective's repeats excluded. See
+	// [assistantText] for which turns it carries and why.
 	Text         string
 	InputTokens  int
 	OutputTokens int
@@ -1542,11 +1545,45 @@ func narrated(reasoning, content string) bool {
 // the same text — they were assembled separately once, so a reasoning model
 // streamed its tool calls against an empty response and its thinking appeared
 // only when the phase ended.
+//
+// A CORRECTIVE'S ANSWER IS NOT THE PHASE'S. In a run of rounds that called no
+// tool, the first one that said something is the model's answer to its task;
+// every round of that run after it answers a corrective instead — "you have
+// not finished, call the tool" — and a model that still does not call writes
+// its report out again, near-verbatim. Joined whole, a phase that kept
+// declining through both finishing correctives handed three copies of one
+// report to whoever reads the text: a rescued executor's to the reviewer as
+// "what the agent produced", a worker's `no_result` prose to its parent. So
+// those later rounds are left out, reasoning and all, and the text is what the
+// model answered the task with — the same one closing reply an agent-mode
+// run's text is, so the two runtimes hand a reviewer the same thing. A round
+// that called a tool ends the run, so a model that worked and then stopped
+// again is a new answer, and kept.
+//
+// THE FIRST, NOT THE LAST. Every later one is a reply to the corrective rather
+// than to the task — whatever it says, it was written to a different question —
+// while the first is the report as the model meant it, and the one the phase
+// would have ended on had nobody asked again. Nothing is lost by the cut: every round stays in [Result.Narration] and in
+// the conversation itself, each marked [Narration.Declined].
+//
+// Read off the message list rather than a flag kept beside it, so a phase
+// that runs the loop more than once — a continuation, an extension, a resume
+// — gets the same answer from every invocation over the conversation as it
+// stands.
 func assistantText(msgs []llm.Message) string {
 	var parts []string
+	answered := false
 	for _, m := range msgs {
 		if m.Role != llm.RoleAssistant {
 			continue
+		}
+		switch {
+		case len(m.ToolCalls) > 0:
+			answered = false
+		case answered:
+			continue
+		case strings.TrimSpace(m.Content) != "":
+			answered = true
 		}
 		if part := FormatReasoningAndContent(m.ReasoningContent, m.Content); part != "" {
 			parts = append(parts, part)

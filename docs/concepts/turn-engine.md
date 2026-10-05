@@ -1093,7 +1093,13 @@ request and answers without streaming is negotiated down to the unary call,
 once per process.
 
 **`response` is a join, so the split travels beside it.** That string is
-every round's assistant turn joined with a blank line, and the join cannot
+the rounds' assistant turns joined with a blank line — every round's but a
+corrective's repeats: in a run of rounds that called nothing, the first
+answer is kept and the later ones, which re-wrote the same report in reply
+to a finishing corrective rather than to the task, are not, so a rescued
+executor hands its reviewer its report once rather than three times, and a
+worker's `no_result` hands its parent the same. Every one of those rounds is
+still in `round_narration`, marked `declined`. And the join cannot
 be undone — its parts are separated by a blank line and prose contains
 blank lines. A reader that split it on the leading `<think>` tag therefore
 showed the FIRST round's thinking as "the reasoning" and every later
