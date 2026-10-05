@@ -131,7 +131,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	r.emitter().started(ctx, phase.Execute, round, system, user, nil, surface, roundCaps{})
 
 	if err := r.cfg.AgentRun.LaunchExecutor(ctx, AgentRunRequest{
-		Brief:   system + "\n\n" + user,
+		Brief:   system.Text + "\n\n" + user.Text,
 		Surface: surface,
 		Round:   round,
 	}); err != nil {

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -339,27 +340,30 @@ const dependencyBudget = 16 << 10
 // and injecting per-task data there would give two tasks of one template two
 // different prefixes — costing the provider's prompt cache the whole prefix
 // on the second.
-func withDependencies(prompt string, deps []Result) string {
-	if len(deps) == 0 {
-		return prompt
-	}
-	var b strings.Builder
-	b.WriteString("## Results you were given\n\n")
-	b.WriteString("These are the answers from the tasks this one waited for. " +
-		"They are the input to your work.\n")
-	for _, d := range deps {
-		b.WriteString("\n### ")
-		b.WriteString(d.ID)
-		if d.Worker != "" {
-			b.WriteString(" (worker: " + d.Worker + ")")
+//
+// It returns the message's outline beside it (see [prompts.Prompt]): the
+// preamble, each dependency's answer as a section of its own — keyed by
+// position, because a task id is whatever the parent's model typed — and the
+// task. An answer is a worker's prose or its JSON, so whatever headings it
+// carries stay inside its own section.
+func withDependencies(prompt string, deps []Result) prompts.Prompt {
+	b := prompts.NewBuilder("")
+	if len(deps) > 0 {
+		b.Heading("dependencies", "## Results you were given\n\n"+
+			"These are the answers from the tasks this one waited for. "+
+			"They are the input to your work.\n")
+		for i, d := range deps {
+			heading := "\n### " + d.ID
+			if d.Worker != "" {
+				heading += " (worker: " + d.Worker + ")"
+			}
+			b.Heading(fmt.Sprintf("dependency_%d", i+1),
+				heading+"\n"+ledger.Elide(d.Answer(), dependencyBudget)+"\n")
 		}
-		b.WriteString("\n")
-		b.WriteString(ledger.Elide(d.Answer(), dependencyBudget))
-		b.WriteString("\n")
+		b.Add("\n---\n\n")
 	}
-	b.WriteString("\n---\n\n")
-	b.WriteString(prompt)
-	return b.String()
+	b.Lead("task", "Task", prompt)
+	return b.Build()
 }
 
 // runner is what the wave executor calls to run one task. A field rather

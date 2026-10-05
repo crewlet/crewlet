@@ -1085,6 +1085,49 @@ hand-written assemblies, and the live one omitted reasoning entirely: a
 thinking model's live row streamed tool calls against an empty response
 and only grew its reasoning once the phase was over.
 
+**A prompt carries its outline.** `agent_phase_completed` publishes
+`system_sections` and `user_sections` beside `system_prompt` and
+`user_prompt`, and every message of the live opening frame's
+`prompt_messages` carries its own `sections` — one `{key, title, bytes}`
+per part of the prompt, in order, recorded by the builder in
+`internal/agent/prompts` as it appends each part. The text alone cannot
+say where a part ends: a chat trigger's body carries the engine's own
+`## Triage — decide BEFORE replying` and `## Thread context`, a pull
+request's description opens on its own `# Title`, a reviewer's evidence
+quotes a model's `## Summary`, and a reader splitting on `##` lines files
+each of those beside the task, review evidence or ledger that holds it.
+The builder knows, so the builder says: the whole trigger is the `task`
+section of the user message, each ledger and each piece of review
+evidence is one section, and a part with no heading of its own (the
+identity line, a worker's mandated rules) gets a title the builder chose.
+
+| Prompt | Section keys, in the order they can appear |
+|---|---|
+| Executor system | `identity`, `company_context`, `background`, `responsibilities`, `behavioral_guidelines`, `unit`, `policies`, `team`, `human_colleagues`, `your_turn`, `escalation`, `sandbox`, `thread_context`, `onboarding_hint`, `personal_memory`, `synthesized_skills`, `relevant_knowledge`, `episode_recall`, `counterparty`, `workers`, `tool_skills`, `available_tools` |
+| Executor user | `conversation_history`, `task`, `prior_work` |
+| Review system | `identity`, `review_phase`, `tool_skills`, `earlier_rounds`, `intent`, `outcome`, `blocked_by`, `tool_log`, `open_questions`, `produced` |
+| Review user | `reference`, `task` |
+| Onboarding system / user | `identity`, `onboarding_phase`, `what_to_do`, `available_tools` / `instruction` |
+| Worker system / user | `task`, `tool_skills`, `available_tools`, `worker_rules` / `dependencies`, `dependency_1` … `dependency_N`, `task` |
+
+The prefetched blocks are keyed on the [`prefetch_summary`](agent-runtime.md#system-prompts-per-phase)
+field that measured each one (`thread_context_hit`, `thread_context_bytes`,
+…), so a reader can put a block beside what the prefetch recorded about it.
+A key is a stable identifier; a title may carry the seat's own words (a
+unit's name). The map never changes a byte of the prompt — it is carried
+beside it, and the prompt's bytes are its cache key.
+
+**The sections tile the prompt exactly**: their `bytes` sum to its length
+in UTF-8 bytes, every boundary falls on a rune boundary, every section is
+at least one byte, and no key repeats. A separator between two parts
+belongs to the section before it, so a headed section starts with its own
+heading line. A prompt with no map — a resumed executor's, which re-entered
+a conversation rather than opening one, or an older peer's — omits the
+field, and a reader derives the outline from the prompt's own headings; a
+reader that finds a map breaking any of the rules above must do the same
+rather than slice by it. The engine never publishes one: a map that fails
+the check is withheld.
+
 **Every phase, workers included.** A [delegated worker](#workers) publishes
 the same `subagent` phase event with the same pair, because its card is the
 same round ledger and reads it the same way. Publishing its executions alone

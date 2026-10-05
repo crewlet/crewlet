@@ -242,7 +242,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		Hint:          learning.Hint(r.cfg.Seat.Org, r.cfg.Seat.Role),
 		ToolCatalogue: r.cfg.Registry.Catalogue(),
 	})
-	const user = "Complete your onboarding now."
+	user := prompts.BuildOnboardingUserMessage()
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Onboarding, surface: surface, system: system, user: user,

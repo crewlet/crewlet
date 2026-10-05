@@ -1926,6 +1926,8 @@ cache_read_tokens, cache_write_tokens, work_item, node, in_progress }` while an
 LLM call is under
 way. The fields are these:
 
+- `prompt_messages` is `[{role, content, sections}]`, the conversation the phase opened with. `sections` is that message's outline as the prompt's builder recorded it — `[{key, title, bytes}]`, tiling `content` exactly — and is absent on a message no builder outlined; a finished phase record carries the same maps as `system_sections` and `user_sections`. See [a prompt carries its outline](../concepts/turn-engine.md#what-streams-during-a-turn) for the keys and the rules a reader checks before slicing by one.
+- `round_narration` is `[{round, reasoning, content, declined}]`, what the model said in each round so far; `declined: true` marks a round that answered in prose where the phase had to end in a call, and is absent otherwise.
 - `rounds_used` is the round the phase is on, counted from one: the rounds that have come back, and the one in flight from the frame the engine publishes as that round's provider call is made. A finished phase record carries the same count under the same name.
 - `rounds` is each round's own timing and tokens, `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. This used to be the count, under the name the phase record uses for the list.
 - `max_rounds` is the round cap currently granted, which an extension can raise mid-phase.

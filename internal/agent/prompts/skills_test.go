@@ -42,11 +42,11 @@ func TestNoPhaseInlinesSkillBodies(t *testing.T) {
 	for name, p := range map[string]string{
 		"executor": BuildExecutor(s, ExecutorInput{
 			AvailableTools: []string{"refresh_memory"}, Skills: cat,
-		}),
-		"review": BuildReview(s, ReviewInput{Skills: cat}),
+		}).Text,
+		"review": BuildReview(s, ReviewInput{Skills: cat}).Text,
 		"subagent": BuildSubagent(s, SubagentInput{
 			ParentSystemPrompt: "P", Skills: cat,
-		}),
+		}).Text,
 	} {
 		t.Run(name, func(t *testing.T) {
 			excludes(t, p, "MENTIONS-BODY", "GITHUB-BODY", "MEMORY-BODY")
@@ -73,12 +73,12 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 	cat := allSkills()
 
 	// A tool-keyed skill needs its tool in the surface.
-	without := BuildExecutor(engineer(), ExecutorInput{Skills: cat})
+	without := BuildExecutor(engineer(), ExecutorInput{Skills: cat}).Text
 	excludes(t, without, "tool:refresh_memory")
 
 	with := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"refresh_memory"}, Skills: cat,
-	})
+	}).Text
 	contains(t, with, "## Tool skills", "tool:refresh_memory",
 		"Re-filter personal memory after recon")
 
@@ -87,7 +87,7 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 	contains(t, without, "mcp:github", "skill:platform_mentions")
 
 	// The Engineering Lead carries neither server.
-	excludes(t, BuildExecutor(lead(), ExecutorInput{Skills: cat}),
+	excludes(t, BuildExecutor(lead(), ExecutorInput{Skills: cat}).Text,
 		"mcp:github", "skill:platform_mentions")
 }
 
@@ -99,7 +99,7 @@ func TestCatalogueOrdersEntriesByKey(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"refresh_memory"}, Skills: allSkills(),
-	})
+	}).Text
 	order(t, p, "- `mcp:github`", "- `skill:platform_mentions`", "- `tool:refresh_memory`")
 }
 
@@ -113,7 +113,7 @@ func TestCatalogueCollapsesAMultilineSummary(t *testing.T) {
 	}}}
 	p := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"anything"}, Skills: cat,
-	})
+	}).Text
 	contains(t, p, "- `skill:multiline` — First sentence here. Second sentence here.")
 	excludes(t, p, "\nSecond sentence here.")
 }
@@ -127,7 +127,7 @@ func TestCatalogueSubstitutesSkillVariables(t *testing.T) {
 		skills: []fakeSkill{{key: "tool:x", tool: "x", summary: "base is ${wiki_base_url}"}},
 		vars:   map[string]string{"wiki_base_url": "https://acme.example.com/wiki"},
 	}
-	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{"x"}, Skills: cat})
+	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{"x"}, Skills: cat}).Text
 	contains(t, p, "base is https://acme.example.com/wiki")
 	excludes(t, p, "${wiki_base_url}")
 }
@@ -139,7 +139,7 @@ func TestSkillCatalogueLandsImmediatelyBeforeTheToolCatalogue(t *testing.T) {
 	cat := &fakeCatalogue{skills: []fakeSkill{{key: "tool:x", tool: "x", summary: "Tight summary of X."}}}
 	p := BuildExecutor(engineer(), ExecutorInput{
 		ToolCatalogue: "- x: does x", AvailableTools: []string{"x"}, Skills: cat,
-	})
+	}).Text
 	order(t, p, "## Tool skills", "## Available tools")
 	between := p[strings.Index(p, "## Tool skills"):strings.Index(p, "## Available tools")]
 	if n := strings.Count(between, "##"); n != 1 {
@@ -166,8 +166,8 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	}}
 	s := engineer()
 	for name, p := range map[string]string{
-		"executor": BuildExecutor(s, ExecutorInput{Skills: cat}),
-		"subagent": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: cat}),
+		"executor": BuildExecutor(s, ExecutorInput{Skills: cat}).Text,
+		"subagent": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: cat}).Text,
 	} {
 		t.Run(name, func(t *testing.T) {
 			contains(t, p, "- `mcp:github` (required — load before use) — GITHUB-SUMMARY")
@@ -180,7 +180,7 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	// Review is the exception: it has no domain tools and no
 	// load_tool_skill, so nothing is enforced there and the marker would
 	// point at a tool the reviewer does not have.
-	rv := BuildReview(s, ReviewInput{Skills: cat})
+	rv := BuildReview(s, ReviewInput{Skills: cat}).Text
 	contains(t, rv, "- `mcp:github` — GITHUB-SUMMARY")
 	excludes(t, rv, "(required — load before use)", "engine rejects calls")
 	// Nor is the reviewer told to LOAD anything: its only tool is its
@@ -192,7 +192,7 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	// No enforcement note when nothing catalogued is required.
 	advisory := BuildExecutor(s, ExecutorInput{Skills: &fakeCatalogue{skills: []fakeSkill{
 		{key: "mcp:github", mcpServer: "github", summary: "GITHUB-SUMMARY"},
-	}}})
+	}}}).Text
 	contains(t, advisory, "## Tool skills")
 	excludes(t, advisory, "(required — load before use)", "engine rejects calls")
 }
@@ -207,10 +207,10 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 	for name, p := range map[string]string{
 		"executor/nil": BuildExecutor(s, ExecutorInput{AvailableTools: []string{
 			"reflect_and_persist", "refine_skill", "query_knowledge", "refresh_memory",
-		}}),
-		"executor/empty": BuildExecutor(s, ExecutorInput{Skills: empty}),
-		"review/empty":   BuildReview(s, ReviewInput{Skills: empty}),
-		"subagent/empty": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: empty}),
+		}}).Text,
+		"executor/empty": BuildExecutor(s, ExecutorInput{Skills: empty}).Text,
+		"review/empty":   BuildReview(s, ReviewInput{Skills: empty}).Text,
+		"subagent/empty": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: empty}).Text,
 	} {
 		t.Run(name, func(t *testing.T) {
 			excludes(t, p, "## Tool skills",
@@ -225,7 +225,7 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 func TestExecuteCatalogueIsScopedToTheExecutorsSurface(t *testing.T) {
 	t.Parallel()
 	cat := allSkills()
-	p := BuildExecutor(engineer(), ExecutorInput{Skills: cat})
+	p := BuildExecutor(engineer(), ExecutorInput{Skills: cat}).Text
 	excludes(t, p, "tool:refresh_memory")
 	// Server-keyed skills still fire: they key on the role's MCP servers,
 	// not on the tool list.

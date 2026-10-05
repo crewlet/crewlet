@@ -424,7 +424,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // matched a second time against a live registry rather than the one sent.
 func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 	history []ledger.Iteration, snapshot tools.Snapshot,
-) (system, user string) {
+) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
@@ -459,8 +459,8 @@ type work struct {
 	res      phaseResult
 	surface  *tools.Surface
 	snapshot tools.Snapshot
-	system   string
-	user     string
+	system   prompts.Prompt
+	user     prompts.Prompt
 
 	// run names the box this pass ran in, where it was not this process.
 	run RunRecord
@@ -560,9 +560,10 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		Skills: offer.Catalogue(),
 	})
 	r.emitter().skillsInjected(ctx, phase.Review, offer.Drain())
+	user := reviewTask(r.cfg.Task)
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
-		phase: phase.Review, surface: surface, system: system, user: reviewTask(r.cfg.Task),
+		phase: phase.Review, surface: surface, system: system, user: user,
 		rounds: reviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
 		steerable: true,
@@ -595,11 +596,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 				"executor set out to do against what the tool log says it did, " +
 				"and call " + SubmitReviewTool + ".",
 		}
-		r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
+		r.emitter().completed(phaseCtx, reviewRecord(round, system, user, res,
 			string(rescue.Decision), rescue.Notes, true, surface))
 		return rescue, nil
 	}
-	r.emitter().completed(phaseCtx, reviewRecord(round, system, reviewTask(r.cfg.Task), res,
+	r.emitter().completed(phaseCtx, reviewRecord(round, system, user, res,
 		payload.Decision.String(), payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      payload.Decision,
@@ -628,10 +629,17 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 // The label is CONSTANT, unlike [Runner.taskFor]'s correction: the review
 // phase re-sends this every round, and a per-round frame would move bytes the
 // provider's prefix cache is keyed on.
-func reviewTask(task string) string {
-	return "The trigger this turn is answering, for reference. It is the message " +
-		"the agent was ALREADY working on when the rounds below ran — not a new " +
-		"one that arrived during the turn, and not a repeat of it:\n\n" + task
+//
+// Two sections in its outline: the label, and the trigger whole — whatever
+// headings a vendor's body carries are the trigger's, not the reviewer's.
+func reviewTask(task string) prompts.Prompt {
+	b := prompts.NewBuilder("")
+	b.Lead("reference", "For reference", "The trigger this turn is answering, for "+
+		"reference. It is the message the agent was ALREADY working on when the "+
+		"rounds below ran — not a new one that arrived during the turn, and not a "+
+		"repeat of it:\n\n")
+	b.Lead("task", "Task", task)
+	return b.Build()
 }
 
 // reviewRecord builds Review's completed record.
@@ -639,7 +647,7 @@ func reviewTask(task string) string {
 // A function because Review reports from TWO places — its decoded payload and
 // its rescue — and the two must describe the same phase. Written out twice,
 // the rescue path is the one that quietly loses a field.
-func reviewRecord(round int, system, user string, res phaseResult,
+func reviewRecord(round int, system, user prompts.Prompt, res phaseResult,
 	decision, notes string, rescued bool, surface *tools.Surface,
 ) phaseRecord {
 	return phaseRecord{
@@ -683,8 +691,8 @@ type phaseRun struct {
 
 	// system and user open the conversation. Both are ignored when Seed is
 	// set: a resumed loop already has its opening in the saved messages.
-	system string
-	user   string
+	system prompts.Prompt
+	user   prompts.Prompt
 
 	rounds    int
 	ceiling   int
@@ -908,8 +916,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	messages := in.seed
 	if messages == nil {
 		messages = []llm.Message{
-			{Role: llm.RoleSystem, Content: system},
-			{Role: llm.RoleUser, Content: user},
+			{Role: llm.RoleSystem, Content: system.Text},
+			{Role: llm.RoleUser, Content: user.Text},
 		}
 		// EVERY NOTE THE TURN HAS ALREADY READ, after the opening and in
 		// the order it was read, so a new phase starts from the turn as

@@ -165,6 +165,8 @@ Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own nar
 
 Why the split: the executor is the frame making every ownership / delegation / policy-sensitive decision AND acting on it, so it gets the whole picture — the two-prompt engine's real cost was never the tokens saved by splitting them, it was sending the identity scaffold twice and throwing away everything the planner had read. The reviewer's question is narrower: is this round's work right, given what the record says it did. Standing memory, the team's docs and the requester's traits are what the executor needed to DO the work; in front of a reviewer they compete with the evidence it is meant to judge.
 
+Every builder returns its prompt with an **outline** beside it — the parts it appended, each with a stable key, a title and its length — and the phase record publishes both, so a screen shows a prompt as the parts the engine assembled rather than guessing them from `##` lines that embedded content brings with it. The outline never changes a byte of the prompt. See [a prompt carries its outline](turn-engine.md#what-streams-during-a-turn).
+
 ### Built-in engine scaffolding
 
 Engine guardrails (event triage, tool usage, knowledge-system usage) are carried by tool descriptions (`search_knowledge`, colleague-surface tools) and by the executor and review contracts themselves, not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected.

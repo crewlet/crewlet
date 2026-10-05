@@ -96,6 +96,33 @@ const PlanDecisionSkip PlanDecision = "skip"
 type PromptMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Sections is Content's outline, as the builder that wrote it recorded
+	// it — see [PromptSection]. Absent on a message no builder outlined (a
+	// resumed phase's, an older peer's).
+	Sections []PromptSection `json:"sections,omitempty"`
+}
+
+// PromptSection is one part of a prompt, as the frame that assembled the
+// prompt recorded it: a stable snake_case `key`, the `title` a reader shows it
+// under (its heading text without the #'s, or a name the builder chose for a
+// part with no heading), and its length in `bytes` of UTF-8.
+//
+// It exists because the only outline a reader can otherwise derive is the
+// prompt's own `##` lines, and a heading INSIDE embedded content — a chat
+// trigger's "## Triage", a pull request's "# Title", a model's "## Summary"
+// quoted back as evidence — escapes its section or swallows the rest of the
+// prompt. Only the builder knows where its parts begin and end.
+//
+// A prompt's sections TILE it exactly and in order: their bytes sum to the
+// prompt's length, every boundary falls on a rune boundary, every section is
+// at least one byte, and no key repeats. A reader that finds a map breaking
+// any of that must fall back to the prompt's own headings rather than slice by
+// it — the map is an older or a broken producer's, and the text is still the
+// text.
+type PromptSection struct {
+	Key   string `json:"key"`
+	Title string `json:"title"`
+	Bytes int    `json:"bytes"`
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON
@@ -597,8 +624,14 @@ type AgentPhaseCompleted struct {
 	Trigger     Trigger `json:"trigger"`
 	// The prompt and response are VERBATIM, not truncated: this telemetry is
 	// what shows the operator what the model actually saw. Only Error is capped.
-	SystemPrompt   string          `json:"system_prompt"`
-	UserPrompt     string          `json:"user_prompt"`
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+	// SystemSections and UserSections are the outlines of SystemPrompt and
+	// UserPrompt — see [PromptSection]. Absent where the phase opened no
+	// conversation of its own (a resumed executor re-enters one, and its
+	// prompts are empty) and on an older peer's record.
+	SystemSections []PromptSection `json:"system_sections,omitempty"`
+	UserSections   []PromptSection `json:"user_sections,omitempty"`
 	Response       string          `json:"response"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
 	// RoundNarration is Response split back into the rounds that produced

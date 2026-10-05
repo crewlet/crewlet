@@ -588,7 +588,7 @@ func TestAChildWithNoDiscoveryStaysFrozen(t *testing.T) {
 	// A catalogue is rendered only for a child that can act on it: listing
 	// tools to a worker with no activate is an invitation to call a name it
 	// was never offered.
-	if strings.Contains(res.SystemPrompt, "## Available tools") {
+	if strings.Contains(res.SystemPrompt.Text, "## Available tools") {
 		t.Error("a frozen child was shown a catalogue it cannot use")
 	}
 }
@@ -601,10 +601,10 @@ func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	cfg.Discovery = discovery
 
 	res := one(t, cfg, request("read_file"))
-	if !strings.Contains(res.SystemPrompt, "## Available tools") {
-		t.Fatalf("no catalogue in a discovery-capable child's prompt:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "## Available tools") {
+		t.Fatalf("no catalogue in a discovery-capable child's prompt:\n%s", res.SystemPrompt.Text)
 	}
-	if !strings.Contains(res.SystemPrompt, "research") {
+	if !strings.Contains(res.SystemPrompt.Text, "research") {
 		t.Error("the catalogue does not name the MCP server the child may discover")
 	}
 	// The CATALOGUE section only: the preamble legitimately says "do not
@@ -613,7 +613,7 @@ func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	// The CATALOGUE SECTION ONLY: it is followed by the preamble, which
 	// legitimately says "do not delegate further", and matching to the end
 	// of the prompt would read that prohibition as an advertisement.
-	catalogue := res.SystemPrompt[strings.Index(res.SystemPrompt, "## Available tools"):]
+	catalogue := res.SystemPrompt.Text[strings.Index(res.SystemPrompt.Text, "## Available tools"):]
 	catalogue, _, _ = strings.Cut(catalogue, "You are a short-lived worker")
 	for _, denied := range []string{"slack_post", subagent.ToolName} {
 		if strings.Contains(catalogue, denied) {
@@ -638,16 +638,16 @@ func TestSkillsCoverWhatTheChildMayLaterActivate(t *testing.T) {
 	cfg.Skills = skillFor{tool: "web_search", key: "research-etiquette"}
 
 	res := one(t, cfg, request("read_file"))
-	if !strings.Contains(res.SystemPrompt, "research-etiquette") {
-		t.Errorf("a skill for a discoverable tool was left out:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "research-etiquette") {
+		t.Errorf("a skill for a discoverable tool was left out:\n%s", res.SystemPrompt.Text)
 	}
 
 	// The counterfactual: a skill for a tool the grant refuses stays out,
 	// so this is scope and not "every skill in the registry".
 	cfg.Skills = skillFor{tool: "slack_post", key: "posting-etiquette"}
 	res = one(t, cfg, request("read_file"))
-	if strings.Contains(res.SystemPrompt, "posting-etiquette") {
-		t.Errorf("a skill for a denied tool reached the prompt:\n%s", res.SystemPrompt)
+	if strings.Contains(res.SystemPrompt.Text, "posting-etiquette") {
+		t.Errorf("a skill for a denied tool reached the prompt:\n%s", res.SystemPrompt.Text)
 	}
 }
 
@@ -782,7 +782,7 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	if len(res.Executions) != 1 {
 		t.Errorf("the tool the child ran is missing: %+v", res.Executions)
 	}
-	if res.SystemPrompt == "" || res.UserPrompt == "" {
+	if res.SystemPrompt.Text == "" || res.UserPrompt.Text == "" {
 		t.Error("a cut-off child left no prompt record for the phase event")
 	}
 }
@@ -1288,7 +1288,7 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 			if r.Status != subagent.StatusNeverStarted || !r.Failed() || r.TimedOut() {
 				t.Errorf("a queued worker was not reported as never started: %+v", r)
 			}
-			if r.Rounds != 0 || r.SystemPrompt != "" {
+			if r.Rounds != 0 || r.SystemPrompt.Text != "" {
 				t.Errorf("a child that never started left a record of running: %+v", r)
 			}
 		}
@@ -1708,8 +1708,8 @@ func TestATemplateSuppliesThePersonaAndTheAnswerShape(t *testing.T) {
 	res := one(t, cfg, subagent.Request{Tasks: []subagent.Task{
 		{ID: "a", Worker: "auditor", Prompt: "check the deploy"},
 	}})
-	if !strings.Contains(res.SystemPrompt, "meticulous auditor") {
-		t.Errorf("the template's persona is not in the prompt:\n%s", res.SystemPrompt)
+	if !strings.Contains(res.SystemPrompt.Text, "meticulous auditor") {
+		t.Errorf("the template's persona is not in the prompt:\n%s", res.SystemPrompt.Text)
 	}
 	if res.Status != subagent.StatusOK {
 		t.Fatalf("status = %q: %+v", res.Status, res)
@@ -1880,6 +1880,64 @@ func TestADependentTaskWaitsAndIsGivenTheAnswer(t *testing.T) {
 		if !strings.Contains(synthesisPrompt, want) {
 			t.Errorf("the dependency answers are not in the prompt:\n%s", synthesisPrompt)
 		}
+	}
+}
+
+// A DEPENDENT'S USER MESSAGE CARRIES ITS OUTLINE: the preamble, one section per
+// answer it was given, and its own task — tiling the text exactly, which is
+// pinned byte for byte here because the outline must never change what the
+// worker is sent.
+func TestADependentsPromptIsOutlinedAroundTheAnswersItWasGiven(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+		switch body := userText(req); {
+		case strings.Contains(body, "gather A"):
+			return answer("A says yes — ✅", 1, 1), nil
+		case strings.Contains(body, "gather B"):
+			return answer("B says no", 1, 1), nil
+		}
+		return answer("they disagree", 1, 1), nil
+	}}
+	results := run(t, baseConfig(t, w, p), subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", SystemPrompt: "s", Prompt: "gather A"},
+		{ID: "b", SystemPrompt: "s", Prompt: "gather B"},
+		{ID: "synth", SystemPrompt: "s", Prompt: "reconcile them\n\n## Output\none line", After: []string{"a", "b"}},
+	}})
+	user := results[2].UserPrompt
+	const want = "## Results you were given\n\n" +
+		"These are the answers from the tasks this one waited for. They are the input to your work.\n" +
+		"\n### a\n{\"result\":\"A says yes — ✅\"}\n" +
+		"\n### b\n{\"result\":\"B says no\"}\n" +
+		"\n---\n\n" +
+		"reconcile them\n\n## Output\none line"
+	if user.Text != want {
+		t.Fatalf("user message =\n%q\nwant\n%q", user.Text, want)
+	}
+	if !user.Valid() {
+		t.Fatalf("the outline does not tile the message: %+v", user.Sections)
+	}
+	var keys, titles []string
+	for _, s := range user.Sections {
+		keys, titles = append(keys, s.Key), append(titles, s.Title)
+	}
+	if !slices.Equal(keys, []string{"dependencies", "dependency_1", "dependency_2", "task"}) ||
+		!slices.Equal(titles, []string{"Results you were given", "a", "b", "Task"}) {
+		t.Errorf("sections = %v %v", keys, titles)
+	}
+	// The task's own "## Output" stays inside the task.
+	if last := user.Sections[len(user.Sections)-1]; !strings.Contains(
+		user.Text[len(user.Text)-last.Bytes:], "## Output") {
+		t.Errorf("the task's own heading escaped its section: %+v", user.Sections)
+	}
+	// A task with nothing to wait for is all task.
+	if first := results[0].UserPrompt; first.Text != "gather A" || len(first.Sections) != 1 ||
+		first.Sections[0].Key != "task" {
+		t.Errorf("an independent task's message = %+v", first)
+	}
+	// And the system prompt's outline travels with it.
+	if !results[2].SystemPrompt.Valid() || len(results[2].SystemPrompt.Sections) == 0 {
+		t.Errorf("the worker's system prompt has no outline: %+v", results[2].SystemPrompt.Sections)
 	}
 }
 
@@ -2454,7 +2512,7 @@ func TestEveryChildIsReportedOnce(t *testing.T) {
 	if len(seen) != 1 {
 		t.Fatalf("one worker produced %d telemetry calls", len(seen))
 	}
-	if seen[0].SystemPrompt == "" || seen[0].UserPrompt == "" {
+	if seen[0].SystemPrompt.Text == "" || seen[0].UserPrompt.Text == "" {
 		t.Error("the reported result carries no prompts, so a dashboard shows an empty phase")
 	}
 }

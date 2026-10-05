@@ -541,7 +541,9 @@ func TestThePromptSurvivesRoundsThatDoNotCarryIt(t *testing.T) {
 		"round_num": -1,
 		"prompt":    "post the weekly summary",
 		"prompt_messages": []any{
-			map[string]any{"role": "system", "content": "you are the Lead"},
+			map[string]any{"role": "system", "content": "you are the Lead", "sections": []any{
+				map[string]any{"key": "identity", "title": "Identity", "bytes": 16},
+			}},
 			map[string]any{"role": "user", "content": "post the weekly summary"},
 		},
 	}), streamOnly, at("2026-06-14T12:00:01+00:00")))
@@ -554,8 +556,15 @@ func TestThePromptSurvivesRoundsThatDoNotCarryIt(t *testing.T) {
 		t.Errorf("prompt = %q — a round that did not carry it blanked it", call.Prompt)
 	}
 	if len(call.PromptMessages) != 2 {
-		t.Errorf("prompt_messages = %v, want the system message the phase was given",
+		t.Fatalf("prompt_messages = %v, want the system message the phase was given",
 			call.PromptMessages)
+	}
+	// AND EACH MESSAGE'S OUTLINE WITH IT, verbatim: the dashboard draws the
+	// prompt's parts from the map its builder recorded, and a live view that
+	// dropped it would fall back to guessing them from the text's headings.
+	system, _ := call.PromptMessages[0].(map[string]any)
+	if sections, _ := system["sections"].([]any); len(sections) != 1 {
+		t.Errorf("the system message's sections did not reach live_call: %v", system)
 	}
 }
 
