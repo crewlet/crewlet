@@ -1664,8 +1664,8 @@ set of eight values, and which event type lands under which is in
 
 Every node's event store holds what that node published and nothing else, so
 the history questions — `events`, `event`, `event_series`, `trace`, `turn`,
-`turns`, `phases`, a seat's `llm_history` on `agent`, the delivery counts
-on `integrations`, and the live projection's boot seed — are answered by **every live node at query time**: the
+`turns`, `phases`, a seat's `llm_history` on `agent`, the delivery and
+outcome counts on `integrations`, and the live projection's boot seed — are answered by **every live node at query time**: the
 node you asked reads its own store and scatters the same question to its
 peers, merges the answers, and says which nodes it heard from. Each of those
 answers carries one shape:
@@ -1697,7 +1697,11 @@ answers carries one shape:
   only the role name that question used to carry, and would answer every
   seat's), and `event_series` always is at least the version that added its
   `failed` split, a field an older node never sends: its bars would be summed
-  in as though none of its events failed.
+  in as though none of its events failed. A question an older build does not
+  know at all — the outcome counts on `integrations` — is asked in the version
+  that added it, and a node on the older build refuses it and is named: its
+  share of the drops and merges is missing from that answer, and the coverage
+  says so, while its deliveries are still counted.
 - It sits at the top of each answer — beside the record's own fields on
   `event` and on `event_series` — and is `null` on `agent` and `integrations`
   when the history could not be read at all.
@@ -1727,7 +1731,9 @@ answers carries one shape:
   second pass folds — can still carry the strip by which its clock runs
   behind the serving node's;
   the axis's bars, the spend window and a page of turns are bounded by edges
-  the serving node names, which every build honours.
+  the serving node names, which every build honours. The outcome counts on
+  `integrations` are a count too, and carry no such strip: every build that
+  answers that question reads the instant, since it arrived with it.
 
 `turns` merges in two passes — every node's page, then every node's share of
 exactly the turns any page listed — so a turn resumed on another node after a
@@ -4434,10 +4440,30 @@ Two records, because they answer two questions:
 Backs the dashboard's **Integrations** screen: how each external surface is
 wired, and what has come through it.
 
-The counts are **page-capped, not time-bounded** — the most recent page of the
-delivery log, however long that spans — which is why each response carries the
-timestamp of the oldest delivery it counted. "42 inbound" alone could be an
-hour or a year; "42 since Tuesday" is a measurement.
+Every count is over **one window**, from `traffic_since` (inclusive) up to the
+instant the answer was read (exclusive), and `traffic_since` is what makes the
+counts a measurement: "42 inbound" alone could be an hour or a year; "42 since
+Tuesday" is not. The window is the deliveries', which are **page-capped, not
+time-bounded** — the most recent page of the delivery log, at most 400
+deliveries across the fleet, however long that spans:
+
+- when the page comes back **short of 400**, it holds every delivery the
+  30-day history keeps, and `traffic_since` is the **oldest delivery** on it;
+- when the page comes back **full**, older deliveries exist that it does not
+  hold, so the window can reach no further back than the page does:
+  `traffic_since` is **one microsecond after the oldest delivery the page
+  reached**. Every later delivery is on the page, but one sharing that
+  instant may not be, so the deliveries at that instant are left out of the
+  window rather than counted short.
+
+`traffic_since` is `null` when no delivery was counted. No window is named
+then, and `inbound`, `skipped` and `coalesced` are all `0` — the counts of an
+empty window, never of the whole history, since drops counted over a month
+beside a delivery count of zero would describe a different stretch of time
+from it. It is also `null` when no event log could be read, which
+`traffic_known: false` says. It is written to the store's own resolution
+(RFC 3339 with fractional seconds), because an edge cut to the second would
+name a window up to a second wider than the one counted.
 
 Integrations had close to no surface at all before this. The dashboard
 branded an event once it had already been accepted and routed, so every
@@ -4451,7 +4477,7 @@ trace anywhere except the provider's own delivery UI.
 ```json
 {
   "traffic_known": true,
-  "traffic_since": "2026-06-07T09:12:00Z",
+  "traffic_since": "2026-06-07T09:12:00.418207Z",
   "integrations": [
     {
       "key": "gitlab", "configured": true, "enabled": true,
@@ -4463,7 +4489,7 @@ trace anywhere except the provider's own delivery UI.
       "inbound": 128,
       "skipped": 30,
       "coalesced": 2,
-      "last_at": "2026-06-08T07:31:10+00:00"
+      "last_at": "2026-06-08T07:31:10Z"
     }
   ],
   "tools": [
@@ -4498,18 +4524,26 @@ counts merges, where N same-conversation notifications became one turn. "128
 arrived" on its own cannot tell a working integration from one whose every
 delivery reaches nobody — "128 arrived, 30 dropped, 2 merges" can, and a seat
 draining a thread's backlog as one turn stops looking like a seat that ignored
-twelve messages.
+twelve messages. All three cover the window above, and so does `last_at`, the
+newest delivery in it (`null` when it holds none).
 
 The two outcome counts are **three-valued** like the secret fields: `null`
 means this node could not read its event log, and reporting that as `0` would
 claim every delivery woke a seat on a node that cannot tell. They come from
 the engine's own `notification_skipped` and `notifications_coalesced` events
-rather than from the inbound rows: the newest page of the log's
-`notification` events (400 rows across the fleet), read at the same instant
-as the inbound rows and so floored at the same 30-day horizon. That page's
-span is its own — `traffic_since` names the inbound rows' — so on a company
-whose notification events outnumber its deliveries the two counts can cover
-different stretches of time.
+rather than from the inbound rows, and they are bounded by the same event-log
+window `traffic_since` names: every node counts its own outcome events from
+`traffic_since` up to the instant the inbound rows were read — the same
+instant every node floors the 30-day history at — and the node you asked sums
+them. They are counted, not paged, so every outcome in the window is in the
+count however many more of them there are than deliveries, and one before
+`traffic_since` or written after the answer was read is not. A row counts
+under the third-party app its `notification_source` tag names; one written
+before the tag existed names none and is not counted. The window is one for
+the whole answer, so a surface whose deliveries leave no inbound row —
+Mattermost, which the engine reads over a websocket rather than receiving at a
+route — has its outcomes counted over the window the other surfaces'
+deliveries name, and none counted when no delivery names one.
 
 `secret_present` and `secret_usable` are **two different facts**, and the gap
 between them is a silent outage.
@@ -4602,9 +4636,8 @@ the finer answer is on those two rows, immediately below it.
 **Health is deliberately not inferred.** An idle Slack and a 401-ing Slack
 are indistinguishable in the event store, so silence is reported as "no
 traffic seen" — never as healthy, never as down. `traffic_known` is
-`false` on a deployment whose event store cannot group by source, so the
-zeros below it are absence of measurement rather than measurement of
-absence.
+`false` when this node could not read the event log at all, so the zeros
+below it are absence of measurement rather than measurement of absence.
 
 ### `GET /schedules`
 

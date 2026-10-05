@@ -1601,14 +1601,14 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 }
 
 // AND THEY ARE COUNTED AT ONE INSTANT. The deliveries and what became of them
-// are two fleet listings, and each read the fleet's clock for itself, so the
+// are two fleet reads, and each read the fleet's clock for itself, so the
 // outcomes were floored a whole scatter later than the deliveries beside them:
 // a delivery and its outcome at the edge of the history were one counted and
 // one not, in one row. The fleet's clock here steps two seconds on every
 // reading, and both rows sit a second above the horizon under the first.
 //
-// Mutation: drop `At` from the outcome listing in countOutcomes and the
-// skipped delivery is counted as arriving and not as skipped.
+// Mutation: drop `At` from the outcome count in countOutcomes and the skipped
+// delivery is counted as arriving and not as skipped.
 func TestIntegrationOutcomesAreCountedAtTheDeliveriesInstant(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -1650,6 +1650,193 @@ func TestIntegrationOutcomesAreCountedAtTheDeliveriesInstant(t *testing.T) {
 	t.Fatalf("no gitlab row in %v", rows)
 }
 
+// surfacesOf reads an integrations answer's rows, keyed by surface — beside the
+// body they came in, which carries the window they were counted over.
+func surfacesOf(t *testing.T, body map[string]any) map[string]map[string]any {
+	t.Helper()
+	rows, _ := body["integrations"].([]any)
+	out := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		key, _ := entry["key"].(string)
+		out[key] = entry
+	}
+	return out
+}
+
+// appendOutcome writes one notification outcome for a third-party app.
+func appendOutcome(t *testing.T, log *store.EventLog, id, kind, app string, at time.Time) {
+	t.Helper()
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: id, Type: kind, Source: "engine", Category: "notification", Time: at,
+		Summary: kind, Tags: map[string]string{"notification_source": app},
+	}); err != nil {
+		t.Fatalf("append %s: %v", id, err)
+	}
+}
+
+// THE OUTCOMES ARE COUNTED OVER THE INBOUND WINDOW, EXACTLY, however many more
+// outcome events there are than deliveries.
+//
+// They used to be the newest 400 `notification` events, whose span is their
+// own: a company whose seats merge and drop busily fills that page in an hour
+// while its deliveries go back weeks, so the counts beside `inbound` covered a
+// different — usually much shorter — stretch of time. Here two deliveries,
+// the oldest three weeks back, sit beside 400 merges and four drops. The
+// window is the deliveries': from the oldest of them, inclusive, to the
+// instant the answer was read. So the drop AT the oldest delivery counts, the
+// one a second before it does not — though it is well inside the history —
+// nor does the one at the instant itself, and every one of the 400 merges does,
+// though they outnumber the deliveries two hundred to one.
+//
+// Mutation: count the outcomes from a page of `notification` events again, and
+// a merge falls off it while the drop at the instant comes on; count them over
+// the whole history, and the drop before the first delivery is counted; ask the
+// count without its top edge, and the drop at the instant is; count deliveries
+// past the window's top, and the one written at the instant is.
+func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	fleet := eventfan.Solo("node-a", log)
+	fleet.Clock = func() time.Time { return at }
+	oldest := at.Add(-21 * 24 * time.Hour)
+
+	// The third is written at the instant the answer is read, which is past
+	// the window's top: it is no more an arrival than the drop beside it.
+	for i, when := range []time.Time{oldest, at.Add(-2 * time.Hour), at} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: fmt.Sprintf("w%d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook",
+			Summary: "push", Time: when,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	appendOutcome(t, log, "at-oldest", "notification_skipped", "gitlab", oldest)
+	appendOutcome(t, log, "before-oldest", "notification_skipped", "gitlab", oldest.Add(-time.Second))
+	appendOutcome(t, log, "inside", "notification_skipped", "gitlab", at.Add(-3*time.Hour))
+	appendOutcome(t, log, "at-instant", "notification_skipped", "gitlab", at)
+	for i := range queries.MaxEventPage {
+		appendOutcome(t, log, fmt.Sprintf("merge-%03d", i), "notifications_coalesced", "mattermost",
+			at.Add(-time.Hour).Add(time.Duration(i)*time.Millisecond))
+	}
+
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	if got, want := body["traffic_since"], oldest.Format(time.RFC3339Nano); got != want {
+		t.Errorf("traffic_since = %v, want the oldest delivery, %s — the page held every one", got, want)
+	}
+	rows := surfacesOf(t, body)
+	if got := rows["gitlab"]["inbound"]; got != float64(2) {
+		t.Errorf("gitlab inbound = %v, want the two deliveries before the instant read", got)
+	}
+	if got, want := rows["gitlab"]["last_at"], at.Add(-2*time.Hour).Format(time.RFC3339); got != want {
+		t.Errorf("gitlab last_at = %v, want the newest delivery in the window, %s", got, want)
+	}
+	if got := rows["gitlab"]["skipped"]; got != float64(2) {
+		t.Errorf("gitlab skipped = %v, want 2 — the drops at the oldest delivery and inside "+
+			"the window, and neither the one before it nor the one at the instant", got)
+	}
+	if got := rows["mattermost"]["coalesced"]; got != float64(queries.MaxEventPage) {
+		t.Errorf("mattermost coalesced = %v, want all %d merges in the window", got, queries.MaxEventPage)
+	}
+}
+
+// NO DELIVERY NAMES NO WINDOW, and the outcome counts are those of an empty
+// one: zero, never the whole history's. Counted over the month a delivery
+// count of zero does not cover, a row would read "nothing arrived, 3 dropped" —
+// the two numbers describing different stretches of time, which is what the
+// shared window exists to end. `traffic_since` is null, and the measurement is
+// still a measurement: `traffic_known` stays true and the counts are 0, not
+// null, which means the log could not be read.
+//
+// Mutation: ask the count with no bottom edge when no delivery was counted, and
+// the drops are.
+func TestNoDeliveryNamesNoWindowAndCountsNoOutcomes(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	fleet := eventfan.Solo("node-a", log)
+	fleet.Clock = func() time.Time { return at }
+	appendOutcome(t, log, "drop-1", "notification_skipped", "gitlab", at.Add(-24*time.Hour))
+	appendOutcome(t, log, "drop-2", "notification_skipped", "gitlab", at.Add(-time.Hour))
+	appendOutcome(t, log, "merge", "notifications_coalesced", "mattermost", at.Add(-time.Hour))
+
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	if body["traffic_known"] != true || body["traffic_since"] != nil {
+		t.Errorf("traffic_known %v, traffic_since %v — want a measurement naming no window",
+			body["traffic_known"], body["traffic_since"])
+	}
+	for kind, row := range surfacesOf(t, body) {
+		for _, field := range []string{"inbound", "skipped", "coalesced"} {
+			if got := row[field]; got != float64(0) {
+				t.Errorf("%s %s = %v, want 0 — nothing is counted over a window nobody named",
+					kind, field, got)
+			}
+		}
+	}
+}
+
+// A CAPPED PAGE OF DELIVERIES NAMES THE WINDOW IT HOLDS EVERY DELIVERY OF, and
+// the outcomes are counted over exactly that window.
+//
+// One delivery more than the page holds, a second apart: the page's oldest
+// delivery may share its instant with one past the cut, so the window starts a
+// microsecond after it, the delivery there is not counted, and nor is a drop
+// at that instant — while a drop a microsecond later is. `traffic_since` names
+// the edge to the store's own resolution, since a second-truncated one would
+// name a wider window than was counted.
+//
+// Mutation: count the outcomes from the history floor rather than from the
+// named edge, and the drops at and under the page's oldest delivery are
+// counted; start the window AT that delivery, and its drop is.
+func TestACappedDeliveryPageNamesTheWindowItsOutcomesAreCountedOver(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	fleet := eventfan.Solo("node-a", log)
+	fleet.Clock = func() time.Time { return at }
+
+	newest := at.Add(-time.Minute)
+	for i := range queries.MaxEventPage + 1 {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook",
+			Summary: "push", Time: newest.Add(-time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	// The oldest delivery the page holds is the 400th newest.
+	edge := newest.Add(-time.Duration(queries.MaxEventPage-1) * time.Second)
+	appendOutcome(t, log, "at-edge", "notification_skipped", "gitlab", edge)
+	appendOutcome(t, log, "under-edge", "notification_skipped", "gitlab", edge.Add(-time.Second))
+	appendOutcome(t, log, "past-edge", "notification_skipped", "gitlab", edge.Add(time.Microsecond))
+
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	if got, want := body["traffic_since"], edge.Add(time.Microsecond).Format(time.RFC3339Nano); got != want {
+		t.Errorf("traffic_since = %v, want a microsecond past the page's oldest delivery, %s", got, want)
+	}
+	rows := surfacesOf(t, body)
+	if got := rows["gitlab"]["inbound"]; got != float64(queries.MaxEventPage-1) {
+		t.Errorf("gitlab inbound = %v, want %d — the page's deliveries after its oldest instant",
+			got, queries.MaxEventPage-1)
+	}
+	if got := rows["gitlab"]["skipped"]; got != float64(1) {
+		t.Errorf("gitlab skipped = %v, want 1 — the drop inside the window, and neither "+
+			"the one at the page's oldest instant nor the one under it", got)
+	}
+}
+
 // NULL, NOT ZERO, when nothing was counted. An answer with no event log to
 // read cannot say how many deliveries were dropped, and reporting 0 would tell
 // an operator every one of them woke a seat.
@@ -1675,11 +1862,9 @@ func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 // with no log to read at all, and for the same reason. A zero that means
 // "could not tell" is the number an operator would act on.
 //
-// A closed store fails the FIRST listing, so this covers the outer guard. The
-// narrower one inside countOutcomes applies the identical rule to a second
-// listing that fails on its own, which needs a transient store error this
-// suite has no way to stage — it is defence in depth rather than a separate
-// contract.
+// A closed store fails the FIRST read, the deliveries' listing, so this covers
+// the outer guard; [TestAnUncountableOutcomeIsNullBesideItsDeliveries] covers
+// the outcome count failing on its own.
 func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -1703,6 +1888,52 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 				t.Errorf("%s %s = %v, want null when the listing failed",
 					entry["key"], field, entry[field])
 			}
+		}
+	}
+}
+
+// uncountableOutcomes is the fleet's history whose outcome count fails while
+// its listings answer — a peer's broker gone between the two reads, a store
+// error on the second statement.
+type uncountableOutcomes struct{ *eventfan.Fleet }
+
+func (uncountableOutcomes) NotificationOutcomes(context.Context, store.OutcomeQuery) (
+	store.NotificationOutcomes, eventfan.Coverage, error,
+) {
+	return store.NotificationOutcomes{}, eventfan.Coverage{}, errors.New("the count failed")
+}
+
+// AN OUTCOME COUNT THAT FAILS ON ITS OWN IS NULL, beside deliveries that were
+// counted: the deliveries are a measurement and are reported as one, and the
+// outcomes are not, so a row says "12 arrived, and this node cannot say what
+// became of them" rather than "12 arrived and every one woke a seat".
+//
+// Mutation: leave the outcome maps as they were initialised when the count
+// fails, and both read 0.
+func TestAnUncountableOutcomeIsNullBesideItsDeliveries(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "w0", Type: "webhook:push", Source: "gitlab", Category: "webhook",
+		Summary: "push", Time: time.Now().UTC().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Events:  uncountableOutcomes{fleetOf(log)},
+	}, "integrations", nil))
+	if body["traffic_known"] != true {
+		t.Fatalf("traffic_known = %v, want the deliveries reported as measured", body["traffic_known"])
+	}
+	gitlab := surfacesOf(t, body)["gitlab"]
+	if gitlab["inbound"] != float64(1) {
+		t.Errorf("gitlab inbound = %v, want the delivery counted", gitlab["inbound"])
+	}
+	for _, field := range []string{"skipped", "coalesced"} {
+		if got, present := gitlab[field]; !present || got != nil {
+			t.Errorf("gitlab %s = %v, want null when the count failed", field, got)
 		}
 	}
 }

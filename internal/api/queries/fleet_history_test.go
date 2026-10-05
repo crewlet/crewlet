@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -116,6 +117,48 @@ func TestEventReadsGoThroughTheFleet(t *testing.T) {
 	rows, _ := turns.(map[string]any)["turns"].([]store.Turn)
 	if len(rows) != 1 || rows[0].Phases != 2 || !rows[0].Complete {
 		t.Errorf("turns = %+v, want ONE row holding both halves, complete", rows)
+	}
+}
+
+// THE INTEGRATIONS' COUNTS ARE THE FLEET'S, deliveries and outcomes alike. A
+// delivery is stored on the node the load balancer handed it to, and the drop
+// it became on the node that routed it — here node-a and node-b — so a row
+// read from one store said a delivery arrived and nothing became of it.
+//
+// Mutation: count the outcomes from the asker's store alone, and gitlab's drop
+// is missing.
+func TestIntegrationCountsAreTheFleets(t *testing.T) {
+	t.Parallel()
+	fleet, a, b := twoNodes(t)
+	at := time.Now().UTC().Add(-time.Hour)
+	if err := a.Append(t.Context(), store.EventRecord{ID: "delivered", Type: "webhook:push",
+		Source: "gitlab", Category: "webhook", Summary: "push", Time: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Append(t.Context(), store.EventRecord{ID: "dropped", Type: "notification_skipped",
+		Source: "engine", Category: "notification", Summary: "skipped", Time: at.Add(time.Second),
+		Tags: map[string]string{"notification_source": "gitlab"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	gitlab := surfacesOf(t, body)["gitlab"]
+	if gitlab["inbound"] != float64(1) || gitlab["skipped"] != float64(1) {
+		t.Errorf("gitlab inbound %v, skipped %v — want node-a's delivery and node-b's drop",
+			gitlab["inbound"], gitlab["skipped"])
+	}
+	raw, err := json.Marshal(body["coverage"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var coverage eventfan.Coverage
+	if err := json.Unmarshal(raw, &coverage); err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete || len(coverage.Nodes) != 2 {
+		t.Errorf("coverage %+v, want both nodes, complete", coverage)
 	}
 }
 

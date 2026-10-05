@@ -23,6 +23,7 @@ type FleetEvents interface {
 	Turns(ctx context.Context, q store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error)
 	Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (eventfan.Listing, eventfan.Coverage, error)
 	SeatPhases(ctx context.Context, agentID, role string, before *store.Cursor) (eventfan.Listing, eventfan.Coverage, error)
+	NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, eventfan.Coverage, error)
 }
 
 var _ FleetEvents = (*eventfan.Fleet)(nil)

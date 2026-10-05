@@ -435,16 +435,23 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// inbound, which reads as "nothing is arriving" — the alarming
 		// answer — when the truth is "nobody looked".
 		"traffic_known": seen.known,
-		// The oldest delivery counted, so a count means something. The
-		// page is capped rather than time-bounded, so there is no fixed
-		// window to name; null when nothing was counted.
+		// WHERE THE WINDOW EVERY COUNT COVERS STARTS — inbound, skipped and
+		// coalesced alike — which ends at the instant the answer was read.
+		// The deliveries are a capped page, so a count means something only
+		// beside the window it covers; see [deliveryWindow]. Null when no
+		// delivery was counted, so no window is named and every count is
+		// zero, or when no store could be read (`traffic_known` false).
 		"traffic_since": nil,
 		// WHICH NODES THE COUNTS WERE READ FROM, or null when no store
 		// could be read — the same case `traffic_known` false reports.
 		"coverage": seen.coverage,
 	}
 	if !seen.since.IsZero() {
-		body["traffic_since"] = seen.since.UTC().Format(time.RFC3339)
+		// TO THE STORE'S OWN RESOLUTION, not the second: the window
+		// starts at a delivery's own microsecond, or one past a full
+		// page's oldest, and a second-truncated edge would name a window
+		// up to a second wider than the one counted.
+		body["traffic_since"] = seen.since.UTC().Format(time.RFC3339Nano)
 	}
 	return body, nil
 }
@@ -504,7 +511,8 @@ func inboundPath(kind string) string {
 	}
 }
 
-// traffic is what the event store can say about inbound deliveries.
+// traffic is what the event store can say about inbound deliveries, and about
+// what became of them, over ONE window.
 //
 // Grouped BY THE STORE rather than by a live counter: a live counter resets
 // with the process, and the question an operator asks — "is anything arriving
@@ -526,14 +534,15 @@ type traffic struct {
 	// working integration; "128 arrived" alone cannot tell that from an
 	// integration whose every delivery reaches nobody. Both are counted
 	// per INTEGRATION, from the notification_source the events carry, so
-	// they line up with the inbound count beside them.
+	// they line up with the inbound count beside them — and over the SAME
+	// WINDOW, `[since, at)`, so they line up in time as well.
 	skipped   map[string]int
 	coalesced map[string]int
 
-	// since is the timestamp of the OLDEST delivery counted, which is what
-	// makes the counts mean something. The page is capped rather than time
-	// bounded, so "42 inbound" alone could span an hour or a year; "42
-	// since Tuesday" is a measurement. Zero when nothing was counted.
+	// since is where the window every count covers starts; it ends at the
+	// instant the deliveries were read at. See [deliveryWindow] for where,
+	// and why. Zero when no delivery was counted — there is then no window,
+	// and every count is zero — or when nothing was measured.
 	since time.Time
 
 	// coverage is which nodes the counts were read from. A delivery is
@@ -554,40 +563,95 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 		log.WarnContext(ctx, "integration_counts_unreadable", "error", err)
 		return traffic{}
 	}
-	rows := listing.Rows
+	at := listing.At
 	out := traffic{
 		known: true, count: map[string]int{}, last: map[string]time.Time{},
 		skipped: map[string]int{}, coalesced: map[string]int{},
-		coverage: &coverage,
+		since: deliveryWindow(listing), coverage: &coverage,
 	}
-	for _, row := range rows {
+	if out.since.IsZero() {
+		// NO DELIVERY, SO NO WINDOW, and the outcome counts are those of
+		// an empty one. Not the whole history: the counts beside a
+		// delivery count of zero would then cover a month the deliveries
+		// do not, which is the disagreement this window exists to end.
+		return out
+	}
+	for _, row := range listing.Rows {
+		// ONLY THE WINDOW'S: a delivery at the oldest instant a capped
+		// page reached may have siblings past the page, and one written
+		// after the read was asked is past the window's top — which the
+		// outcome counts beside it stop at.
+		if row.Time.Before(out.since) || !row.Time.Before(at) {
+			continue
+		}
 		out.count[row.Source]++
 		if row.Time.After(out.last[row.Source]) {
 			out.last[row.Source] = row.Time
 		}
-		if out.since.IsZero() || row.Time.Before(out.since) {
-			out.since = row.Time
-		}
 	}
-	s.countOutcomes(ctx, &out, listing.At)
+	s.countOutcomes(ctx, &out, at)
 	return out
 }
 
-// countOutcomes adds the two per-integration outcome counts.
+// deliveryWindow is where the window a page of deliveries covers starts, or
+// the zero instant when the page counted no delivery and so names no window.
+// Its top is the instant the page was read at, [eventfan.Listing.At].
 //
-// A SECOND QUERY, on the notification category, because the outcomes are
-// engine events and the deliveries are edge rows: they live under different
-// categories and no single listing holds both. Its failure leaves the
-// outcome counts absent rather than zero — see [traffic] — because a zero
-// that means "unreadable" is the number an operator would act on.
+// THE PAGE IS CAPPED, NOT TIME-BOUNDED — the newest [MaxEventPage] across the
+// fleet — so "42 inbound" alone could span an hour or a year, and naming the
+// window is what makes it a measurement. Two cases, each the window whose
+// EVERY delivery the page holds:
 //
-// ASKED AT THE DELIVERIES' OWN INSTANT, `at` ([eventfan.Listing.At]), so the
-// two listings beside each other in one row are floored at one horizon
-// rather than at two readings of the fleet's clock a scatter apart.
+//   - a page that did not fill holds every delivery the history keeps, and
+//     the window starts at the OLDEST of them, inclusive — the first instant
+//     anything arrived. Rows written after the read are past the window's
+//     top and do not count as its oldest;
+//   - a page that came back full covers what lies AFTER the oldest instant it
+//     reached. Every delivery newer than its last row is on it — the merge
+//     stops at the newest point any node's page stopped at
+//     ([eventfan.MergeListing]) — but a delivery sharing that last row's
+//     instant may lie past the cut, so the window starts one tick of the
+//     store's clock (a microsecond) after it, and the rows at that instant
+//     are not counted rather than counted short.
+//
+// The outcome counts are then ASKED over exactly this window rather than
+// taken from a page of their own, which is the point of naming it.
+func deliveryWindow(listing eventfan.Listing) time.Time {
+	var oldest time.Time
+	for _, row := range listing.Rows {
+		if !listing.More && !row.Time.Before(listing.At) {
+			continue
+		}
+		if oldest.IsZero() || row.Time.Before(oldest) {
+			oldest = row.Time
+		}
+	}
+	if oldest.IsZero() || !listing.More {
+		return oldest
+	}
+	return oldest.Add(time.Microsecond)
+}
+
+// countOutcomes adds the two per-integration outcome counts, over the window
+// the deliveries named: `[out.since, at)`.
+//
+// A QUESTION OF THE FLEET'S OWN ([eventfan.Fleet.NotificationOutcomes]): every
+// node counts its outcome events in that window, grouped in its own store, and
+// the counts are summed. The outcomes are engine events and the deliveries
+// edge rows, so no one listing holds both — and they used to be the newest
+// page of notification events instead, whose span was its own: on a company
+// whose notification events outnumbered its deliveries, the counts in a row
+// described a different stretch of time from the deliveries beside them, with
+// nothing to say so. Its failure leaves the outcome counts absent rather than
+// zero — see [traffic] — because a zero that means "unreadable" is the number
+// an operator would act on.
+//
+// AT THE DELIVERIES' OWN INSTANT, `at` ([eventfan.Listing.At]), which is the
+// window's top edge and the instant every node floors the history at — one
+// reading of the fleet's clock for the whole row, not two a scatter apart.
 func (s Sources) countOutcomes(ctx context.Context, out *traffic, at time.Time) {
-	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
-		Category: "notification", Limit: MaxEventPage, At: at,
-	})
+	counted, coverage, err := s.Events.NotificationOutcomes(ctx,
+		store.OutcomeQuery{Since: out.since, At: at})
 	if err != nil {
 		log.WarnContext(ctx, "integration_outcomes_unreadable", "error", err)
 		out.skipped, out.coalesced = nil, nil
@@ -595,32 +659,7 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic, at time.Time) 
 	}
 	merged := out.coverage.And(coverage)
 	out.coverage = &merged
-	for _, row := range listing.Rows {
-		// THE INTEGRATION, not the event's Source: the source of an
-		// engine-published event names the engine, and what the row has
-		// to line up with is the inbound count for one third-party app.
-		source := integrationOf(row)
-		if source == "" {
-			continue
-		}
-		switch row.Type {
-		case "notification_skipped":
-			out.skipped[source]++
-		case "notifications_coalesced":
-			out.coalesced[source]++
-		}
-	}
-}
-
-// integrationOf reads the third-party app an outcome event concerns.
-//
-// FROM THE TAG, not the payload: a listing deliberately never selects the
-// payload column, so the tag is all a historical row carries — see
-// [store.ExtractTags], which the publish listener that writes the rows calls.
-// A row written before that tag existed carries none and is skipped rather
-// than guessed at.
-func integrationOf(row store.EventRecord) string {
-	return strings.TrimSpace(row.Tags["notification_source"])
+	out.skipped, out.coalesced = counted.Skipped, counted.Coalesced
 }
 
 // seatsFor lists the handles that carry this surface in their own config.
