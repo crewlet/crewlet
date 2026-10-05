@@ -508,7 +508,8 @@ func TestTheReportRendersEveryLine(t *testing.T) {
 		"profile       : claude-opus-5-5\n",
 		"endpoint      : " + url + "\n",
 		"keys          : 1 (",
-		"request       : thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature\n",
+		"request       : thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature, " +
+			"reasoning before a tool change shed\n",
 		"models api    : served — Claude Test (claude-opus-5-5), max_tokens 200000, input 1000000\n",
 		"drift         : note: the Models API allows max_tokens 200000",
 		"smoke test    : failed — the model answered in prose",
@@ -544,6 +545,9 @@ func TestTheRequestLineFollowsTheProfile(t *testing.T) {
 		{"claude-haiku-4-5", 0, "no thinking (no reasoning_budget_tokens), no effort (the model takes none), max_tokens 64000"},
 		{"claude-haiku-4-5", 2048, "thinking budget 2048, no effort (the model takes none), max_tokens 64000"},
 		{"claude-opus-4-6", 0, "thinking adaptive (summarized), effort high, max_tokens 128000"},
+		{"claude-mythos-5-1", 0, "thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature"},
+		{"claude-sonnet-5-5", 0, "thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature, " +
+			"reasoning before a tool change shed"},
 	} {
 		p := doctorProvider(t, "http://127.0.0.1:1", tc.model, func(c *Config) { c.ThinkingBudget = tc.budget })
 		if got := p.shapeLine(); got != tc.want {

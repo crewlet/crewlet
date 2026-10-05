@@ -8,7 +8,7 @@
 // the status only where it names none ([kindOf] says why); which credential to
 // use next is the pool's, and which model to try next is the chain's.
 //
-// Four details here are the ones worth checking against the vendor rather
+// Five details here are the ones worth checking against the vendor rather
 // than against intuition:
 //
 //   - THE REQUEST SHAPE IS THE MODEL'S, read from [claudemodel] once at
@@ -26,9 +26,17 @@
 //     it, and a turn rebuilt from the neutral view — reordered, its texts
 //     joined, its call's input re-encoded — is an edit they refuse. Which
 //     model may read which block is the vendor's call, made by dropping what
-//     it cannot read; this backend never strips a Claude turn's thinking
-//     itself. Only a turn some other backend wrote is rebuilt, without
+//     it cannot read; this backend never strips a block for the MODEL in
+//     front of it. Only a turn some other backend wrote is rebuilt, without
 //     thinking ([formatMessages]).
+//   - EXCEPT THE REASONING A CHANGED TOOL SET INVALIDATED. Those models bind
+//     a thinking block to the system prompt and the tools of the request
+//     that wrote it too, and an executor's tools change mid-conversation —
+//     `activate_tool` adds one, a resumed run renders them again. On a model
+//     that checks, every turn up to the last one written under another tool
+//     set is replayed WITHOUT its thinking: a run shed from the front, which
+//     is the one removal the check accepts, and what remains was written
+//     under exactly this request's tools (binding.go has the proof).
 //   - MAX RETRIES IS ZERO. The SDK retries twice by default, and its retry
 //     predicate (internal/requestconfig: shouldRetry) fires on exactly what
 //     the layers above need to see first — 408, 409, 429, every 5xx and every
@@ -286,7 +294,7 @@ func (p *Provider) Pool() *credential.Pool { return p.pool }
 
 // Complete calls the Messages API once per live credential until one answers.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	params, err := p.params(req)
+	params, bound, err := p.params(req)
 	if err != nil {
 		return nil, &llm.Error{
 			Kind: llm.KindFatal, Provider: providerName, Model: p.model, Err: err,
@@ -334,7 +342,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	if err != nil {
 		return nil, err
 	}
-	out := p.completion(msg)
+	out := p.completion(msg, bound)
 	if err := p.refused(msg, out); err != nil {
 		return nil, err
 	}
@@ -453,22 +461,53 @@ func kindOf(apiErr *sdk.Error) llm.ErrorKind {
 	return llm.KindForStatus(apiErr.StatusCode)
 }
 
-// params renders the neutral request into Anthropic's wire shape.
-func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
+// params renders the neutral request into Anthropic's wire shape, and says
+// what the turn it answers with is bound to: the request's [binding], or ""
+// when the request replays reasoning a model that checks would have shed (see
+// binding.go, whose premise such a turn breaks).
+func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, string, error) {
 	system, rest := splitSystem(req.Messages)
-	messages, err := formatMessages(rest)
+	var tools []sdk.ToolUnionParam
+	if len(req.Tools) > 0 {
+		tools = formatTools(req.Tools)
+	}
+	bound, err := binding(system, tools)
 	if err != nil {
-		return sdk.MessageNewParams{}, err
+		return sdk.MessageNewParams{}, "", err
+	}
+	// The reasoning a changed system prompt or tool set invalidated, oldest
+	// first. Shed only where the model checks: elsewhere every block is
+	// still valid, and a turn written there while such a block was replayed
+	// records no binding, so a checking model sheds it later (binding.go).
+	cut, err := shedThrough(rest, bound)
+	if err != nil {
+		return sdk.MessageNewParams{}, "", err
+	}
+	shed, writes := 0, bound
+	switch {
+	case p.profile.PrefixBinding:
+		shed = cut
+	case cut > 0:
+		writes = ""
+	}
+	if shed > 0 {
+		log.Debug("thinking_shed", "model", p.model, "messages", shed,
+			"hint", "the tool set or system prompt changed since this reasoning was written, "+
+				"and the model refuses reasoning replayed under another")
+	}
+	messages, err := formatMessages(rest, shed)
+	if err != nil {
+		return sdk.MessageNewParams{}, "", err
 	}
 	if len(messages) == 0 {
 		// Anthropic requires a non-empty messages array. Refusing here
 		// names the actual problem; the API's 400 names a field.
-		return sdk.MessageNewParams{}, errors.New(
+		return sdk.MessageNewParams{}, "", errors.New(
 			"anthropic: request carries no non-system message with content")
 	}
 
 	if !req.Effort.Valid() {
-		return sdk.MessageNewParams{}, fmt.Errorf(
+		return sdk.MessageNewParams{}, "", fmt.Errorf(
 			"anthropic: request effort %q is not a level (want low, medium, high, xhigh, max, or empty)",
 			req.Effort)
 	}
@@ -536,8 +575,8 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 	// is the only choice the contract has (see [llm.Request.Tools]). A
 	// forced `any` is a 400 on Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos
 	// 5.1, and on every Claude model while it is thinking.
-	if len(req.Tools) > 0 {
-		params.Tools = formatTools(req.Tools)
+	if len(tools) > 0 {
+		params.Tools = tools
 		// THE CONVERSATION IS CACHED TOO, on a call that will be continued.
 		// The breakpoints on the system block and the last tool cache the
 		// static prefix and nothing after it, so every round of a tool loop
@@ -559,7 +598,7 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 		// never comes.
 		params.CacheControl = cacheBreakpoint()
 	}
-	return params, nil
+	return params, writes, nil
 }
 
 // fit is effort at or below the highest level the model takes: effort itself
@@ -612,19 +651,21 @@ func splitSystem(messages []llm.Message) (string, []llm.Message) {
 }
 
 // formatMessages renders the conversation. An assistant turn this backend
-// wrote is REPLAYED from its own blocks ([replay]); every other turn is built
-// from the neutral view.
-func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
+// wrote is REPLAYED from its own blocks ([replay]) — without its thinking when
+// it is one of the first shed messages ([shedThrough]); every other turn is
+// built from the neutral view.
+func formatMessages(messages []llm.Message, shed int) ([]sdk.MessageParam, error) {
 	out := make([]sdk.MessageParam, 0, len(messages))
 	for i, m := range messages {
 		switch {
-		case m.Role == llm.RoleAssistant && m.Origin.Provider == providerName && len(m.Raw) > 0:
-			blocks, err := replay(m.Raw)
+		case replayed(m):
+			blocks, err := replay(m.Raw, i < shed)
 			if err != nil {
 				return nil, fmt.Errorf("anthropic: message %d: %w", i, err)
 			}
 			if len(blocks) == 0 {
-				// Nothing but whitespace text: see [replay].
+				// Nothing but whitespace text, or nothing but shed
+				// thinking: see [replay].
 				continue
 			}
 			out = append(out, sdk.NewAssistantMessage(blocks...))
@@ -724,20 +765,26 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 // such blocks comes back empty, and the caller drops it as it drops any turn
 // with nothing in it.
 //
+// With shed set, the turn's THINKING is left out too — every thinking and
+// redacted_thinking block, and nothing else: the text and the calls are the
+// conversation, and only the reasoning is bound to the tools it was written
+// under (see binding.go). A turn that was nothing but reasoning comes back
+// empty and is dropped the same way.
+//
 // A block that is not JSON at all is refused, naming its place: it can only be
 // a parked conversation corrupted in storage, and sent as it is the SDK would
 // fail to encode the request with an error naming nothing.
-func replay(raw []json.RawMessage) ([]sdk.ContentBlockParamUnion, error) {
+func replay(raw []json.RawMessage, shed bool) ([]sdk.ContentBlockParamUnion, error) {
 	blocks := make([]sdk.ContentBlockParamUnion, 0, len(raw))
 	for i, block := range raw {
-		var head struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(block, &head); err != nil {
-			return nil, fmt.Errorf("replayed content block %d is not a JSON object: %w", i, err)
+		head, err := headOf(block)
+		if err != nil {
+			return nil, fmt.Errorf("replayed content block %d: %w", i, err)
 		}
 		if head.Type == "text" && strings.TrimSpace(head.Text) == "" {
+			continue
+		}
+		if shed && isThinking(head.Type) {
 			continue
 		}
 		blocks = append(blocks, param.Override[sdk.ContentBlockParamUnion](block))
@@ -856,13 +903,14 @@ func stringList(value any) []string {
 	}
 }
 
-// completion translates the response.
-func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
+// completion translates the response, written under the request binding
+// bound ([Provider.params]).
+func (p *Provider) completion(msg *sdk.Message, bound string) *llm.Completion {
 	// The CONFIGURED model id, not the one the response echoes. A vendor
 	// alias resolving to a dated snapshot would otherwise re-key the
 	// per-model breakdown the day the alias moves, splitting one model's
 	// spend across two names that nothing in the config mentions.
-	out := &llm.Completion{Model: p.model, Provider: providerName}
+	out := &llm.Completion{Model: p.model, Provider: providerName, Binding: bound}
 
 	var content, reasoning strings.Builder
 	for _, block := range msg.Content {

@@ -91,6 +91,22 @@ type Message struct {
 	// afterwards — the conversation is append-only.
 	Raw []json.RawMessage `json:"Raw,omitempty"`
 
+	// Binding is what the request that wrote this assistant turn carried
+	// BESIDE its messages, as a digest in the writing backend's own terms
+	// — set with Raw, by the backend whose vendor binds a turn's reasoning
+	// to it, and compared by that backend on every later call. Anthropic's
+	// is the top-level system prompt and the set of tool definitions, as
+	// sent: Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 refuse a thinking
+	// block replayed into a request whose system prompt or tools differ
+	// from the ones it was written under, so a turn whose Binding is not
+	// the current request's has its thinking SHED rather than replayed —
+	// oldest first, which is the one removal the vendor accepts (see
+	// internal/providers/llm/anthropic).
+	//
+	// Empty on a turn written before it existed, which is a binding nobody
+	// can show matches: such a turn's thinking is shed too.
+	Binding string `json:"Binding,omitempty"`
+
 	// Failed marks a tool message whose call FAILED — the tool refused,
 	// errored, or never ran because its arguments did not parse. The
 	// Content still says why; this is the vendor's structured flag beside
@@ -304,6 +320,11 @@ type Completion struct {
 	// backend that has none to keep.
 	Raw []json.RawMessage
 
+	// Binding is the digest of what this call's request carried beside its
+	// messages — see [Message.Binding]. Empty from a backend whose vendor
+	// binds nothing to it.
+	Binding string
+
 	// StopReason is why the model stopped writing this response — see
 	// [StopReason]. Never [StopRefusal] on a Completion a backend returns
 	// successfully: a refusal is an error.
@@ -334,6 +355,7 @@ func (c Completion) Message() Message {
 		ToolCalls:        c.ToolCalls,
 		Origin:           Origin{Provider: c.Provider, Model: c.Model},
 		Raw:              c.Raw,
+		Binding:          c.Binding,
 	}
 }
 

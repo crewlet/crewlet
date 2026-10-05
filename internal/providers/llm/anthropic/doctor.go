@@ -393,6 +393,12 @@ func (p *Provider) shapeLine() string {
 	if !p.profile.Sampling {
 		parts = append(parts, "never a temperature")
 	}
+	if p.profile.PrefixBinding {
+		// Not a field, but what the conversation the request carries
+		// looks like after an activate_tool: said here so an operator
+		// reading a phase that reasoned less after one has the reason.
+		parts = append(parts, "reasoning before a tool change shed")
+	}
 	return strings.Join(parts, ", ")
 }
 

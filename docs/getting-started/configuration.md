@@ -548,6 +548,16 @@ front of it would refuse:
 - **No forced tool choice and no prefill** are ever sent: a phase that must
   end in a call names it and is asked again when a round ends without it,
   and a conversation always ends on a user turn or a tool result.
+- **Reasoning written under an earlier tool set is shed** on
+  `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5` and any id the
+  table does not know. Those models bind each thinking block to the system
+  prompt and the tools of the request that wrote it, and refuse it with a 400
+  once either has changed. A phase's tools do change: `activate_tool` adds
+  one, and a resumed run renders them again. So the rounds before a change
+  are replayed without their thinking, while their text and calls are
+  replayed whole. Every other model is replayed every block, because it runs
+  no such check. See
+  [the conversation only grows](../concepts/turn-engine.md#the-conversation-only-grows).
 
 A Bedrock or Vertex spelling of a model (`anthropic.claude-opus-5-5`,
 `us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `claude-opus-4-5@20251101`)

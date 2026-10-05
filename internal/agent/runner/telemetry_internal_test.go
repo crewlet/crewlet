@@ -167,8 +167,9 @@ func TestAnUnencodableSchemaNamesTheToolItBelongsTo(t *testing.T) {
 // comes back on every round; the tool loop stores what comes back on every
 // assistant message it appends, and execstate serialises all of it into the
 // parked row — so on a resumed executor this is routinely the largest term the
-// prompt carries. The Anthropic backend puts every thinking block straight back
-// into the request's content blocks and is billed for them, and it ALSO renders
+// prompt carries. The Anthropic backend puts the thinking blocks straight back
+// into the request's content blocks and is billed for them (all of them unless
+// a re-rendered tool definition shed the older ones), and it ALSO renders
 // the same thinking text into ReasoningContent as prose, so a meter that summed
 // both fields would double exactly that term on exactly that backend.
 func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) {

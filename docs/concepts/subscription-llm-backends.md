@@ -1504,14 +1504,16 @@ model         : claude-sonnet-5-5
 profile       : claude-sonnet-5-5
 endpoint      : https://api.anthropic.com
 keys          : 1 (3f9a0c1b2d4e)
-request       : thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature
+request       : thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature, reasoning before a tool change shed
 models api    : served — Claude Sonnet 5.5 (claude-sonnet-5-5), max_tokens 128000, input …
 smoke test    : ok — called crewlet_smoke (streamed), 1204 in / 61 out
 problems      : none
 ```
 
 The **request** line is what a phase sends, read from the [Claude model
-table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling);
+table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
+— on a model that binds its thinking to the tools it was written under, that
+includes [shedding the reasoning from before a tool change](turn-engine.md#the-conversation-only-grows);
 the **models api** line is the vendor's own record of the model, and any
 disagreement between the two is listed under **drift** — a *problem* when
 it puts a field the model refuses on every call, a *note* when the table is

@@ -172,7 +172,9 @@ func TestNumbersAndSignaturesSurviveASuspensionExactly(t *testing.T) {
 // Held to the TOKENS: the row's encoder drops the whitespace between them and
 // escapes <, > and & inside strings, exactly as the request encoder does on
 // the way out, and neither changes a key, its order, a number's digits or a
-// string. The tags are held too — they are a wire format another build reads.
+// string. The tags are held too — they are a wire format another build reads
+// — and so is the turn's binding, which says which tools its reasoning was
+// written under.
 func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
 	t.Parallel()
 	written := []string{
@@ -182,6 +184,7 @@ func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
 	}
 	state := suspended()
 	state.Messages[2].Origin = llm.Origin{Provider: "anthropic", Model: "claude-opus-5-5"}
+	state.Messages[2].Binding = "9f2c"
 	for _, b := range written {
 		state.Messages[2].Raw = append(state.Messages[2].Raw, json.RawMessage(b))
 	}
@@ -190,7 +193,9 @@ func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	for _, tag := range []string{`"Origin":{"Provider":"anthropic","Model":"claude-opus-5-5"}`, `"Raw":[`} {
+	for _, tag := range []string{
+		`"Origin":{"Provider":"anthropic","Model":"claude-opus-5-5"}`, `"Raw":[`, `"Binding":"9f2c"`,
+	} {
 		if !strings.Contains(string(blob), tag) {
 			t.Errorf("the row does not carry %s — a renamed tag is a turn an older build cannot read:\n%s", tag, blob)
 		}
@@ -208,6 +213,15 @@ func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
 	turn := got.Messages[2]
 	if turn.Origin != state.Messages[2].Origin {
 		t.Errorf("origin = %+v, want %+v", turn.Origin, state.Messages[2].Origin)
+	}
+	// The binding comes back too: without it the resumed loop cannot tell
+	// reasoning written under the tools it resumes with from reasoning a
+	// re-rendered definition invalidated, and sheds all of it.
+	if turn.Binding != state.Messages[2].Binding {
+		t.Errorf("binding = %q, want %q", turn.Binding, state.Messages[2].Binding)
+	}
+	if strings.Count(string(blob), `"Binding"`) != 1 {
+		t.Errorf("the row carries a binding on a message that has none:\n%s", blob)
 	}
 	if len(turn.Raw) != len(written) {
 		t.Fatalf("raw = %d blocks, want the %d written", len(turn.Raw), len(written))

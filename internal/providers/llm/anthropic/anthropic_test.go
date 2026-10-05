@@ -1031,25 +1031,32 @@ func TestAStreamedTurnIsReplayedAsTheModelWroteIt(t *testing.T) {
 // once the conversation is back on the model that wrote them.
 func TestAnotherClaudeModelsTurnIsReplayedWithItsThinking(t *testing.T) {
 	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-	p := newProvider(t, url, func(c *Config) { c.Model = "claude-sonnet-5-5" })
-	raw := make([]json.RawMessage, len(interleaved))
-	for i, b := range interleaved {
-		raw[i] = json.RawMessage(b)
-	}
-	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeJSON(w, 200, messageOf(interleaved, "tool_use"))
+			return
+		}
+		writeJSON(w, 200, okMessage("ok"))
+	})
+	// The turn is the primary's; the next round is the fallback's, over
+	// the same tools and the same system prompt.
+	primary := newProvider(t, url, func(c *Config) { c.Model = "claude-opus-5-5" })
+	fallback := newProvider(t, url, func(c *Config) { c.Model = "claude-sonnet-5-5" })
+	tools := []llm.ToolDef{{Name: "lookup", Description: "Look a thing up."}}
+	out, err := primary.Complete(context.Background(), llm.Request{Tools: tools, Messages: []llm.Message{
 		{Role: llm.RoleUser, Content: "look it up"},
-		{
-			Role: llm.RoleAssistant, Content: "  First, <this>.  ",
-			ToolCalls: []llm.ToolCall{{ID: "toolu_1", Name: "lookup"}},
-			Origin:    llm.Origin{Provider: "anthropic", Model: "claude-opus-5-5"},
-			Raw:       raw,
-		},
+	}})
+	if err != nil {
+		t.Fatalf("primary Complete: %v", err)
+	}
+	if _, err := fallback.Complete(context.Background(), llm.Request{Tools: tools, Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "look it up"},
+		out.Message(),
 		{Role: llm.RoleTool, ToolCallID: "toolu_1", Content: "found"},
 	}}); err != nil {
-		t.Fatalf("Complete: %v", err)
+		t.Fatalf("fallback Complete: %v", err)
 	}
-	replayedAsWritten(t, api.seen()[0].raw, 1, interleaved)
+	replayedAsWritten(t, api.seen()[1].raw, 1, interleaved)
 }
 
 // RAW IS REPLAYED ONLY BY THE BACKEND WHOSE FORMAT IT IS. A turn some other
@@ -1141,12 +1148,15 @@ func TestWhitespaceTextIsLeftOutOfAReplayedTurn(t *testing.T) {
 	thinking := `{"type":"thinking","thinking":"t","signature":"s"}`
 	call := `{"type":"tool_use","id":"c","name":"t","input":{}}`
 	origin := llm.Origin{Provider: "anthropic", Model: "claude-test"}
+	// Written under this request's own (empty) system prompt and tools, so
+	// the thinking is the request's to replay.
+	bound := boundTo(t, "", nil)
 	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
 		{Role: llm.RoleUser, Content: "hi"},
-		{Role: llm.RoleAssistant, Origin: origin, Raw: blocks(`{"type":"text","text":" \n\t"}`)},
+		{Role: llm.RoleAssistant, Origin: origin, Binding: bound, Raw: blocks(`{"type":"text","text":" \n\t"}`)},
 		{Role: llm.RoleUser, Content: "go on"},
 		{
-			Role: llm.RoleAssistant, Origin: origin, ToolCalls: []llm.ToolCall{{ID: "c", Name: "t"}},
+			Role: llm.RoleAssistant, Origin: origin, Binding: bound, ToolCalls: []llm.ToolCall{{ID: "c", Name: "t"}},
 			Raw: blocks(thinking, `{"type":"text","text":"\n\n"}`, call),
 		},
 		{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},

@@ -72,6 +72,14 @@ type State struct {
 	// neutral view without their thinking — the blocks such a row lacks all
 	// sit before any the resumed rounds write, and dropping a run from the
 	// front is the one removal the vendor accepts.
+	//
+	// Each such turn also carries what its request's thinking was bound to
+	// ([llm.Message.Binding]), because a resume renders the tools again
+	// from the registry it wakes up against and the backend sheds the
+	// reasoning written under any other set. Additive within v2 for the
+	// same reason: a row written before it decodes to none, and the turns
+	// that lack it — all of them ahead of every turn the resumed rounds
+	// write — have their thinking shed, a run from the front again.
 	Messages []llm.Message `json:"messages"`
 
 	// PendingCallID and PendingCallName identify the dangling call the

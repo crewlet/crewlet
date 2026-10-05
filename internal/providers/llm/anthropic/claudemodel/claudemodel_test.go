@@ -10,25 +10,34 @@ import (
 // facts is every current id the API reference names, with what it says each
 // accepts. The table is held to THIS, row by row, so a row edited away from
 // the reference goes red here rather than as a 400 in somebody's company.
+//
+// bound is whether the model runs the conversation check on replayed
+// thinking: the vendor names Fable 5.1, Opus 5.5 and Sonnet 5.5, and says in
+// as many words that Mythos 5.1 does not. A row that says false for a model
+// that runs it replays reasoning a tool change invalidated — a 400 on an
+// enforced account — and one that says true for a model that does not sheds
+// reasoning that was still valid.
 var facts = []struct {
 	id       string
 	thinking claudemodel.Thinking
 	efforts  []claudemodel.Effort
 	sampling bool
+	bound    bool
 }{
-	{"claude-fable-5-1", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-mythos-5-1", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-fable-5", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-opus-5-5", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-opus-5", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-opus-4-8", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-opus-4-7", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-opus-4-6", claudemodel.ThinkingAdaptive, noXHigh, true},
-	{"claude-sonnet-5-5", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-sonnet-5", claudemodel.ThinkingAdaptive, all, false},
-	{"claude-sonnet-4-6", claudemodel.ThinkingAdaptive, noXHigh, true},
-	{"claude-haiku-4-5", claudemodel.ThinkingBudget, nil, true},
-	{"claude-haiku-4-5-20251001", claudemodel.ThinkingBudget, nil, true},
+	{"claude-fable-5-1", claudemodel.ThinkingAdaptive, all, false, true},
+	{"claude-mythos-5-1", claudemodel.ThinkingAdaptive, all, false, false},
+	{"claude-fable-5", claudemodel.ThinkingAdaptive, all, false, false},
+	{"claude-opus-5-5", claudemodel.ThinkingAdaptive, all, false, true},
+	{"claude-opus-5", claudemodel.ThinkingAdaptive, all, false, false},
+	{"claude-opus-4-8", claudemodel.ThinkingAdaptive, all, false, false},
+	{"claude-opus-4-7", claudemodel.ThinkingAdaptive, all, false, false},
+	{"claude-opus-4-6", claudemodel.ThinkingAdaptive, noXHigh, true, false},
+	{"claude-sonnet-5-5", claudemodel.ThinkingAdaptive, all, false, true},
+	{"us.anthropic.claude-sonnet-5-5-v1:0", claudemodel.ThinkingAdaptive, all, false, true},
+	{"claude-sonnet-5", claudemodel.ThinkingAdaptive, all, false, false},
+	{"claude-sonnet-4-6", claudemodel.ThinkingAdaptive, noXHigh, true, false},
+	{"claude-haiku-4-5", claudemodel.ThinkingBudget, nil, true, false},
+	{"claude-haiku-4-5-20251001", claudemodel.ThinkingBudget, nil, true, false},
 }
 
 var (
@@ -52,6 +61,9 @@ func TestEveryReferenceIDResolvesToWhatTheReferenceSays(t *testing.T) {
 		}
 		if got.Sampling != fact.sampling {
 			t.Errorf("%s: sampling = %v, want %v", fact.id, got.Sampling, fact.sampling)
+		}
+		if got.PrefixBinding != fact.bound {
+			t.Errorf("%s: prefix binding = %v, want %v", fact.id, got.PrefixBinding, fact.bound)
 		}
 	}
 }
@@ -90,7 +102,7 @@ func TestTheBudgetGenerationIsShapedAsOne(t *testing.T) {
 	} {
 		got, ok := claudemodel.Lookup(id)
 		if !ok || got.Thinking != claudemodel.ThinkingBudget || !got.Sampling ||
-			!slices.Equal(got.Efforts, efforts) || got.MaxOutput <= 0 {
+			!slices.Equal(got.Efforts, efforts) || got.MaxOutput <= 0 || got.PrefixBinding {
 			t.Errorf("%s: %+v (known %v), want the budget shape with efforts %v", id, got, ok, efforts)
 		}
 	}
@@ -173,6 +185,7 @@ func TestAnUnknownIDIsModernNeverTheNearestRow(t *testing.T) {
 		}
 		if got.ID != "" || got.Thinking != claudemodel.Modern.Thinking ||
 			got.Sampling != claudemodel.Modern.Sampling || got.MaxOutput != claudemodel.Modern.MaxOutput ||
+			got.PrefixBinding != claudemodel.Modern.PrefixBinding ||
 			!slices.Equal(got.Efforts, claudemodel.Modern.Efforts) {
 			t.Errorf("Lookup(%q) = %+v, want Modern", id, got)
 		}
@@ -193,6 +206,13 @@ func TestModernIsSafeOnEveryCurrentModel(t *testing.T) {
 	}
 	if !slices.Equal(claudemodel.Modern.Efforts, all) {
 		t.Errorf("Modern efforts = %v, want every level", claudemodel.Modern.Efforts)
+	}
+	// A model released after the table most likely binds its thinking, as
+	// the three newest do, and the two errors are not alike: replaying
+	// reasoning a tool change invalidated is a 400 the chain does not
+	// retry, while shedding reasoning that was still valid only loses it.
+	if !claudemodel.Modern.PrefixBinding {
+		t.Error("Modern replays reasoning a tool change invalidated, a 400 on the newest models")
 	}
 	for _, fact := range facts {
 		row, _ := claudemodel.Lookup(fact.id)

@@ -33,6 +33,21 @@
 //     unable to judge a config offline. The doctor cross-checks this table
 //     against that API instead, which is where drift is worth reporting.
 //
+// The table also says WHICH MODELS BIND THEIR THINKING ([Profile.PrefixBinding]),
+// though that shapes no field of a request. Claude Fable 5.1, Opus 5.5 and
+// Sonnet 5.5 bind every thinking block to the request that produced it — the
+// system prompt, the SET of tools (each one's name, description and schema)
+// and every message before it — and refuse a block replayed into a request
+// where any of that changed; on an account the vendor enforces (every one
+// created on or after 2026-08-31) the refusal is a 400. The engine's tool set
+// does change mid-conversation — `activate_tool` adds a definition, and a
+// resumed run renders its definitions again from a registry that may have
+// moved — so the backend SHEDS the reasoning a change invalidated, oldest
+// first, which is the one removal the check accepts. A property of the MODEL
+// rather than of the backend, because on a model without the check (Mythos
+// 5.1, and everything before these three) the same blocks are still valid and
+// shedding them would lose reasoning for nothing.
+//
 // Standard library only, because the config tier validates an entry against
 // this table and must not import a vendor SDK to do it.
 package claudemodel
@@ -123,6 +138,20 @@ type Profile struct {
 	// max_tokens, and on a thinking model the room the thinking and the
 	// answer share.
 	MaxOutput int
+
+	// PrefixBinding is whether the model runs the vendor's conversation
+	// check on the thinking it is handed back: each thinking block is
+	// bound to the top-level system prompt, the set of tools and every
+	// message before it in the request that produced it, and a block
+	// replayed into a request where any of those changed is refused — a
+	// 400 on an account the vendor enforces. The backend reads it to shed
+	// the reasoning a changed tool set invalidated rather than replay it.
+	//
+	// False is a model that runs no such check, where every block stays
+	// valid however the tools moved and shedding one would only lose the
+	// reasoning it carried. Fable 5.1, Opus 5.5 and Sonnet 5.5 run it;
+	// Mythos 5.1 does not, and no model before them has it.
+	PrefixBinding bool
 }
 
 // Modern is the profile of any id the table does not know. Its ID is empty,
@@ -131,12 +160,19 @@ type Profile struct {
 // 64000 is the smallest output cap among the current models (Haiku 4.5), so it
 // is allowed on any model released since and on an alias that turns out to be
 // Haiku; every other field is what the newest models require.
+//
+// PrefixBinding is TRUE for the same reason, and because the two ways of being
+// wrong cost different things: on a model that binds its thinking, a block
+// replayed after the tools changed is a 400 the fallback chain does not retry,
+// while on one that does not, shedding it costs the reasoning it carried and
+// nothing else. The three newest models all bind theirs.
 var Modern = Profile{
-	ID:        "",
-	Thinking:  ThinkingAdaptive,
-	Efforts:   Efforts,
-	Sampling:  false,
-	MaxOutput: 64000,
+	ID:            "",
+	Thinking:      ThinkingAdaptive,
+	Efforts:       Efforts,
+	Sampling:      false,
+	MaxOutput:     64000,
+	PrefixBinding: true,
 }
 
 // The rows. The MaxOutput values marked UNVERIFIED are not in the API
@@ -149,15 +185,17 @@ var rows = []struct {
 	profile Profile
 }{
 	// The current generation: adaptive thinking, every effort level, no
-	// sampling parameter.
-	{[]string{"claude-fable-5-1"}, current()},
+	// sampling parameter — and on the three that run the conversation
+	// check, thinking bound to the request that produced it. Mythos 5.1 is
+	// the one model of their generation the vendor says does not run it.
+	{[]string{"claude-fable-5-1"}, prefixBound()},
 	{[]string{"claude-mythos-5-1"}, current()}, // MaxOutput UNVERIFIED; sampling refusal inferred from its generation.
 	{[]string{"claude-fable-5"}, current()},
-	{[]string{"claude-opus-5-5"}, current()},
+	{[]string{"claude-opus-5-5"}, prefixBound()},
 	{[]string{"claude-opus-5"}, current()},
 	{[]string{"claude-opus-4-8"}, current()},
 	{[]string{"claude-opus-4-7"}, current()},
-	{[]string{"claude-sonnet-5-5"}, current()},
+	{[]string{"claude-sonnet-5-5"}, prefixBound()},
 	{[]string{"claude-sonnet-5"}, current()},
 
 	// 4.6: adaptive (the budget form is deprecated there but still works),
@@ -190,6 +228,13 @@ var rows = []struct {
 // on — so the cap is the generation's rather than a per-row argument.
 func current() Profile {
 	return Profile{Thinking: ThinkingAdaptive, Efforts: Efforts, MaxOutput: 128000}
+}
+
+// prefixBound is a current-generation row that runs the conversation check.
+func prefixBound() Profile {
+	profile := current()
+	profile.PrefixBinding = true
+	return profile
 }
 
 // legacy is a budget-generation row that takes no effort.
