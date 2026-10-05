@@ -45,7 +45,11 @@ func (e *Engine) judgeFor(c *Company, handle string) extension.Judge {
 	}
 	// NewLLMJudge returns nil for a nil provider, which is what makes the
 	// nil-judge path above and this one the same path.
-	judge := extension.NewLLMJudge(member.Provider, member.Key)
+	// WITH THE SEAT'S COMPACTOR, so evidence past its budget — a pasted
+	// document in a call, an error page, a long task — is rewritten for
+	// the judge rather than cut or carried whole.
+	judge := extension.NewLLMJudge(member.Provider, member.Key).
+		WithCompactor(e.seatCompactor(c, handle))
 	if judge == nil {
 		return nil
 	}

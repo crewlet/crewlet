@@ -423,6 +423,20 @@ flowchart TD
     linkStyle 2 stroke:#f59e0b,color:#f59e0b
 ```
 
+**Nothing the judge is shown is cut.** The last 12 calls are a window,
+and the line says how many it shows of how many — the question is whether
+the phase is repeating itself *now*. Within it, every call renders exactly
+as the [prior-work ledger](#what-the-ledger-budgets-and-why) renders it: its
+arguments as sorted JSON, a payload past the ledger's budget rewritten by
+the seat's auxiliary model (from the same cache, so a payload the ledger
+already condensed costs nothing here) or, with no rewrite, shown by its
+size and digest — which is what still tells two identical calls from two
+different ones. The turn's ask past 8 KiB and the phase's last words past
+4 KiB are rewritten the same way, and shown whole if no rewrite can be had.
+They used to be cut — the arguments at 200 bytes, so two posts sharing an
+opening read as one call repeated, and "what it last said" at its first 800
+bytes, so the judge read what the phase said *first*.
+
 The judge is best-effort: any failure (timeout, provider error, parse
 error) maps to a conservative `rescue` decision so a flaky judge can
 never block the host phase. The judge's own LLM call is published as

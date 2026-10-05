@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/compact"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -160,7 +161,7 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 	user := model.seen.Messages[1].Content
 	for _, want := range []string{
 		"github_get_pull_request", // the tool log
-		"number=7",                // and its arguments
+		`"number":7`,              // and its arguments
 		"reply to the review comment",
 		"read the thread, then post",
 		"Most you may grant now: 8",
@@ -327,5 +328,84 @@ func TestTheJudgeReportsItsCacheShare(t *testing.T) {
 		if d.CacheRead != 700 || d.CacheWrite != 150 || d.InputTokens != 900 || d.Model != "cheap-model" {
 			t.Errorf("answer %q: the decision carries %+v, want the call's spend with its cache share", answer, d)
 		}
+	}
+}
+
+type judgeFitter struct{ asked []compact.Kind }
+
+func (f *judgeFitter) Fit(_ context.Context, kind compact.Kind, text string, _ int) (compact.Result, error) {
+	f.asked = append(f.asked, kind)
+	return compact.Result{Text: "rewrite of " + string(kind), Compacted: true, From: len(text)}, nil
+}
+
+// WHAT IT LAST SAID IS WHAT IT SAID LAST. The evidence used to be cut to its
+// first eight hundred bytes under a heading promising the last — so a phase
+// that ended by announcing it was done was judged on its opening thoughts.
+// With no compactor it is shown whole; nothing of it is cut away.
+func TestTheJudgeSeesTheEndOfWhatThePhaseSaid(t *testing.T) {
+	t.Parallel()
+	req := judgeReq()
+	req.LastText = strings.Repeat("thinking about the approach. ", 200) + "DONE: posted the reply in the thread."
+	model := &answering{answer: "RESCUE\nx"}
+	if _, err := extension.NewLLMJudge(model, "k").Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(model.seen.Messages[1].Content, "DONE: posted the reply in the thread.") {
+		t.Fatal("the judge was not shown how the phase ended")
+	}
+}
+
+// TWO CALLS THAT DIFFER PAST TWO HUNDRED BYTES STILL READ AS TWO CALLS. The
+// arguments were cut there, so two posts of different bodies sharing an
+// opening rendered identically and a phase making progress read as a loop.
+func TestTwoCallsThatDifferLateStillRenderDifferently(t *testing.T) {
+	t.Parallel()
+	opening := strings.Repeat("Hello team, here is the update. ", 10)
+	req := judgeReq()
+	req.Calls = []ledger.Call{
+		{Name: "post", Args: map[string]any{"text": opening + "first version"}},
+		{Name: "post", Args: map[string]any{"text": opening + "second version"}},
+	}
+	model := &answering{answer: "RESCUE\nx"}
+	if _, err := extension.NewLLMJudge(model, "k").Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	user := model.seen.Messages[1].Content
+	lines := []string{}
+	for _, line := range strings.Split(user, "\n") {
+		if strings.HasPrefix(line, "- post(") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 2 || lines[0] == lines[1] {
+		t.Fatalf("two different calls rendered as one:\n%s", strings.Join(lines, "\n"))
+	}
+	if strings.Contains(user, "…") {
+		t.Error("the judge's evidence was cut")
+	}
+}
+
+// WITH A COMPACTOR, EVIDENCE PAST ITS BUDGET IS REWRITTEN — the task, the
+// last words and an argument — and each rewrite is announced as one.
+func TestTheJudgeCondensesEvidencePastItsBudget(t *testing.T) {
+	t.Parallel()
+	req := judgeReq()
+	req.Task = strings.Repeat("the quoted thread goes on. ", 400) + "THE ASK"
+	req.LastText = strings.Repeat("x", extension.JudgeTextBudget+1)
+	req.Calls = []ledger.Call{{Name: "post", Args: map[string]any{"text": strings.Repeat("body ", 100)}}}
+	fit := &judgeFitter{}
+	model := &answering{answer: "RESCUE\nx"}
+	if _, err := extension.NewLLMJudge(model, "k").WithCompactor(fit).Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	user := model.seen.Messages[1].Content
+	for _, want := range []string{"rewrite of task", "rewrite of produced", "(condensed) rewrite of argument",
+		"condensed by a model"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("missing %q:\n%s", want, user)
+		}
+	}
+	if len(fit.asked) != 3 {
+		t.Errorf("asked for %d rewrites, want 3", len(fit.asked))
 	}
 }
