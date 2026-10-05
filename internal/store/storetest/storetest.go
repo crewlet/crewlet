@@ -686,6 +686,13 @@ func testReadFloor(t *testing.T, db *store.DB) {
 	}
 }
 
+// testRetention: the sweep deletes a row past retention and keeps one inside
+// it — and the row is GONE, which only a read the history floor cannot hide
+// can say. Asked at now, the floor sits thirty days back and a row past
+// retention is unreadable whether or not the sweep removed it, so this asks at
+// an instant a retention back, whose floor lies below the row: it finds the
+// row before the purge, which is what makes its absence after the purge the
+// purge's doing.
 func testRetention(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
@@ -698,6 +705,11 @@ func testRetention(t *testing.T, db *store.DB) {
 		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
 	})
+	beneath := time.Now().UTC().Add(-store.EventRetention)
+	if _, err := log.ByID(ctx, "stale", beneath); err != nil {
+		t.Fatalf("before the purge, a read whose floor is below the stale row "+
+			"does not find it: %v", err)
+	}
 
 	n, err := log.Purge(ctx)
 	if err != nil {
@@ -706,7 +718,7 @@ func testRetention(t *testing.T, db *store.DB) {
 	if n != 1 {
 		t.Fatalf("purged %d rows, want 1", n)
 	}
-	if _, err := log.ByID(ctx, "stale", time.Now()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := log.ByID(ctx, "stale", beneath); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("swept row still present: %v", err)
 	}
 	if _, err := log.ByID(ctx, "keep", time.Now()); err != nil {
@@ -724,7 +736,9 @@ func testRetention(t *testing.T, db *store.DB) {
 // it completely and keeps what is inside retention. The batch bound exists
 // so no single statement holds the writer for a whole overhang — but a loop
 // that stopped after one batch would leave the tail in place and report a
-// sweep that had not finished.
+// sweep that had not finished. Drained is counted on the TABLE rather than
+// read through the log, because every read of the log is floored thirty days
+// back and the backlog is a day below that: unreadable whether or not it went.
 func testRetentionBacklog(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
@@ -740,6 +754,19 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 		ID: "keep", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
 	})
+	backlog := func() int {
+		t.Helper()
+		var left int
+		if err := db.SQL().QueryRowContext(ctx,
+			`SELECT count(*) FROM crewlet_events WHERE event_id LIKE 'stale-%'`,
+		).Scan(&left); err != nil {
+			t.Fatalf("count the backlog: %v", err)
+		}
+		return left
+	}
+	if left := backlog(); left != stale {
+		t.Fatalf("the table holds %d of the %d stale rows before the purge", left, stale)
+	}
 
 	n, err := log.Purge(ctx)
 	if err != nil {
@@ -747,6 +774,10 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	}
 	if n != int64(stale) {
 		t.Fatalf("purged %d rows, want the whole %d-row backlog", n, stale)
+	}
+	if left := backlog(); left != 0 {
+		t.Fatalf("the purge reported %d rows gone and %d of the backlog are still "+
+			"in the table", n, left)
 	}
 	if _, err := log.ByID(ctx, "keep", time.Now()); err != nil {
 		t.Fatalf("sweep took a row inside retention: %v", err)
