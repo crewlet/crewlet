@@ -355,11 +355,12 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	// the tool cannot exist before the surface and the surface cannot
 	// resolve the tool before it exists. The closure breaks that the same
 	// way the discovery pair's does, and is read only at call time — by
-	// which point both exist.
+	// which point both exist. The record is the TURN's: the closed rounds'
+	// calls first, so a delivery one of them made is citable here.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return calls(surface) },
+			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
 	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit, r.executorActive(snapshot))
@@ -1525,6 +1526,10 @@ func describe(s *tools.Surface) turn.Surface {
 		Deliveries:     u.Deliveries(),
 		KnownReads:     u.KnownReads(),
 		KnownOpenWorld: u.KnownOpenWorld(),
+		// Every MCP-served tool, which a phase reaches only by discovering
+		// it — so a refusal can tell the tools a seat already holds from
+		// the ones it has to go and find. See [turn.Surface.Discoverable].
+		Discoverable: u.MCPNames(),
 	}
 }
 

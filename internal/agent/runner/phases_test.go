@@ -406,6 +406,50 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	}
 }
 
+// A DELIVERY AN EARLIER ROUND MADE IS CITABLE. The prior-work ledger tells a
+// round sent back for a re-read not to comment again, so a check reading only
+// the round refused the one citation that was true — eleven times, in the
+// measured turn, until the round cap ended it.
+func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
+	t.Parallel()
+	tracker := func(t *testing.T, reg *tools.Registry) {
+		t.Helper()
+		if err := reg.RegisterWith(stubTool{name: "comment_on_work_item", out: "commented"},
+			tools.OriginBuiltin, tools.Annotations{}, tools.DeliversTo("work")); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	cite := submitCall(t, runner.SubmitWorkTool,
+		`{"outcome":"delivered","summary":"re-read the item","deliveries":["comment_on_work_item"]}`)
+	earlier := []ledger.Iteration{{Iteration: 1,
+		Calls: []ledger.Call{{Name: "comment_on_work_item", Result: "commented"}}}}
+
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+		execute: []llm.Completion{cite},
+	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
+	w, _, err := r.Execute(context.Background(), 2, "read the item first", earlier)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if w.Rescued || w.Outcome != turn.OutcomeDelivered {
+		t.Errorf("outcome = %s (rescued %v), want the citation of round one's comment "+
+			"accepted", w.Outcome, w.Rescued)
+	}
+
+	// The counterfactual: with no such round behind it, the same citation
+	// is refused every time it is made, and the phase ends in the rescue.
+	r, _ = buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+		execute: []llm.Completion{cite},
+	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
+	w, _, err = r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !w.Rescued {
+		t.Errorf("outcome = %s, want a citation of a comment nobody made refused", w.Outcome)
+	}
+}
+
 func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *testing.T) {
 	t.Parallel()
 	// The task text also feeds knowledge search, the sandbox brief and the

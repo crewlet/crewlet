@@ -199,7 +199,7 @@ func TestATrackerWriteDoesNotAnswerSomebodyWaitingInChat(t *testing.T) {
 	// And the correction has to NAME the surface, because "no tool was
 	// called" reads as false to a model looking at its own successful write.
 	w := turn.Work{Outcome: turn.OutcomeDelivered, Calls: filedATask}
-	override, correction := turn.OverrideDone(w, asked, s)
+	override, correction := turn.OverrideDone(w, nil, asked, s)
 	if !override {
 		t.Fatal("the reviewer's done stood over a turn that answered nobody waiting")
 	}
@@ -305,5 +305,174 @@ func TestAnsweredOnlyConsultsTheRecordWhenAToolOwesTheAnswer(t *testing.T) {
 	}
 	if !turn.Answered([]ledger.Call{{Name: "slack_post"}}, s, turn.ToolReply("slack")) {
 		t.Error("a post on the awaited surface did not count as answered")
+	}
+}
+
+// trackerSurface is a seat woken on the engine's own tracker: first-party
+// tools that deliver on `work`, which the executor holds from its first round,
+// beside an MCP chat server it would have to discover.
+func trackerSurface() turn.Surface {
+	return turn.Surface{
+		Catalogue: []string{"get_work_item", "comment_on_work_item", "update_work_item",
+			"mattermost_post_message"},
+		Deliveries: map[string]string{
+			"comment_on_work_item":    "work",
+			"update_work_item":        "work",
+			"mattermost_post_message": "mattermost",
+		},
+		KnownReads:   []string{"get_work_item"},
+		Discoverable: []string{"mattermost_post_message"},
+	}
+}
+
+// commented is a closed round whose one write was the comment that answered
+// the person waiting on the item.
+func commented() []ledger.Iteration {
+	return []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{{Name: "comment_on_work_item"}}}}
+}
+
+// THE OBLIGATION IS THE TURN'S, AS A TEST.
+//
+// A founder answered a seat's question on a work item. The seat's first round
+// commented on the item — which IS the delivery — and its reviewer sent the
+// round back to re-read the item first. The second round re-read it and cited
+// the comment; every check read only that round's calls, so the citation was
+// refused eleven times and the reviewer's `done` was overturned, and the third
+// round posted the same acknowledgement in a chat channel instead. The
+// prior-work ledger had told the round, all along, not to comment again.
+func TestAnEarlierRoundsDeliveryStillAnswersTheTurn(t *testing.T) {
+	t.Parallel()
+	s := trackerSurface()
+	asked := turn.ToolReply("work")
+	reread := turn.Work{
+		Outcome: turn.OutcomeDelivered, Summary: "re-read the item",
+		Deliveries: []string{"comment_on_work_item"},
+		Calls:      []ledger.Call{{Name: "get_work_item"}},
+	}
+
+	if v := turn.Check(reread, commented(), asked, s); v.Correction != "" || v.Skip {
+		t.Errorf("Check = %+v, want the round passed to the reviewer: an earlier round "+
+			"of this turn already answered on `work`", v)
+	}
+	if override, correction := turn.OverrideDone(reread, commented(), asked, s); override {
+		t.Errorf("the reviewer's done was overturned on a turn that answered in its "+
+			"first round: %q", correction)
+	}
+
+	// The counterfactuals that keep this from passing on a check that
+	// stopped checking: the same round with nothing before it delivered
+	// nothing, and a FAILED earlier comment did not deliver either.
+	if v := turn.Check(reread, nil, asked, s); v.Correction == "" {
+		t.Error("a turn that never delivered passed the check")
+	}
+	if override, _ := turn.OverrideDone(reread, nil, asked, s); !override {
+		t.Error("a done stood over a turn that never delivered")
+	}
+	failed := []ledger.Iteration{{Iteration: 1,
+		Calls: []ledger.Call{{Name: "comment_on_work_item", Failed: true}}}}
+	if v := turn.Check(reread, failed, asked, s); v.Correction == "" {
+		t.Error("an earlier round's FAILED comment counted as the delivery")
+	}
+	// And the surface still matters across rounds: an earlier chat post does
+	// not answer somebody waiting on the item.
+	chat := []ledger.Iteration{{Iteration: 1,
+		Calls: []ledger.Call{{Name: "mattermost_post_message"}}}}
+	if override, _ := turn.OverrideDone(reread, chat, asked, s); !override {
+		t.Error("an earlier round's chat post answered somebody waiting on the tracker")
+	}
+}
+
+// "NOTHING EXTERNAL HAPPENED" IS A FACT ABOUT THE TURN. A round that reports
+// no_action after an earlier one posted would otherwise end the turn as a skip,
+// recorded as one that touched nothing.
+func TestNoActionIsNotASkipOnceAnEarlierRoundActed(t *testing.T) {
+	t.Parallel()
+	s := trackerSurface()
+	quiet := turn.Work{Outcome: turn.OutcomeNoAction, Summary: "nothing to do"}
+
+	if v := turn.Check(quiet, commented(), turn.NoReply(), s); v.Skip || v.Correction == "" {
+		t.Errorf("Check = %+v, want a correction: an earlier round of this turn "+
+			"already wrote on the tracker", v)
+	}
+	if v := turn.Check(quiet, nil, turn.NoReply(), s); !v.Skip {
+		t.Errorf("Check = %+v, want a skip for a turn that touched nothing", v)
+	}
+}
+
+// THE REMEDY NAMES THE TOOLS. It used to name a mechanism — "list_mcp_server_
+// tools and activate_tool will find it" — which is right for a vendor's
+// surface and wrong for the tracker's, whose tools no discovery call lists: a
+// seat sent to discovery for `work` found the one MCP server it held and posted
+// in chat, where nothing could count it.
+func TestTheRemedyNamesTheToolsThatDeliverWhereTheAskerIs(t *testing.T) {
+	t.Parallel()
+	s := trackerSurface()
+
+	onTracker := turn.Remedy(s, turn.ToolReply("work"))
+	for _, want := range []string{"`work`", "comment_on_work_item", "update_work_item"} {
+		if !strings.Contains(onTracker, want) {
+			t.Errorf("tracker remedy = %q, want it to name %q", onTracker, want)
+		}
+	}
+	for _, wrong := range []string{"list_mcp_server_tools", "activate_tool", "mattermost"} {
+		if strings.Contains(onTracker, wrong) {
+			t.Errorf("tracker remedy = %q, sends the seat to %q", onTracker, wrong)
+		}
+	}
+
+	inChat := turn.Remedy(s, turn.ToolReply("mattermost"))
+	for _, want := range []string{"`mattermost` MCP server", "list_mcp_server_tools", "activate_tool"} {
+		if !strings.Contains(inChat, want) {
+			t.Errorf("chat remedy = %q, want it to name %q", inChat, want)
+		}
+	}
+	if strings.Contains(inChat, "comment_on_work_item") {
+		t.Errorf("chat remedy = %q, offers a tool that does not reach the asker", inChat)
+	}
+
+	// Both kinds on one surface: name what is held, and say where the rest is.
+	mixed := trackerSurface()
+	mixed.Deliveries["vendor_comment"] = "work"
+	mixed.Discoverable = append(mixed.Discoverable, "vendor_comment")
+	both := turn.Remedy(mixed, turn.ToolReply("work"))
+	if !strings.Contains(both, "comment_on_work_item") || !strings.Contains(both, "list_mcp_server_tools") {
+		t.Errorf("mixed remedy = %q, want the held tools named and discovery pointed at", both)
+	}
+	if strings.Contains(both, "vendor_comment") {
+		t.Errorf("mixed remedy = %q, names a tool the seat does not hold yet", both)
+	}
+
+	// Where the asker's surface cannot be named, any delivery counts, and the
+	// general instruction is the honest one.
+	for _, r := range []turn.Reply{turn.ToolReply(""), turn.ToolReply("slack")} {
+		if got := turn.Remedy(s, r); !strings.Contains(got, "list_mcp_server_tools") {
+			t.Errorf("Remedy(%s) = %q, want the general instruction", r, got)
+		}
+	}
+}
+
+// THE CORRECTION SAYS THE TURN REACHED SOMEBODY ONLY WHEN IT DID. It said so
+// to every turn waiting on a named surface — including one whose only calls
+// were reads — and a model told it has written somewhere goes looking for the
+// write.
+func TestOverrideDoneClaimsAWriteElsewhereOnlyWhenThereWasOne(t *testing.T) {
+	t.Parallel()
+	s := trackerSurface()
+	asked := turn.ToolReply("work")
+
+	_, read := turn.OverrideDone(turn.Work{Outcome: turn.OutcomeDelivered,
+		Calls: []ledger.Call{{Name: "get_work_item"}}}, nil, asked, s)
+	if strings.Contains(read, "reached somebody") {
+		t.Errorf("correction = %q, claims a write a read-only turn never made", read)
+	}
+	_, chat := turn.OverrideDone(turn.Work{Outcome: turn.OutcomeDelivered,
+		Calls: []ledger.Call{{Name: "mattermost_post_message"}}}, nil, asked, s)
+	if !strings.Contains(chat, "reached somebody") {
+		t.Errorf("correction = %q, want it to say the turn wrote somewhere else", chat)
+	}
+	for _, c := range []string{read, chat} {
+		if !strings.Contains(c, "comment_on_work_item") {
+			t.Errorf("correction = %q, want it to name the tool that delivers on `work`", c)
+		}
 	}
 }

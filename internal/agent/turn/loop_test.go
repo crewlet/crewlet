@@ -1274,3 +1274,49 @@ func TestAnOwedChatPostIsNotDischargedByATrackerComment(t *testing.T) {
 		t.Errorf("the turn ended %s with %q, want done on the post", res.Decision, res.Artifact)
 	}
 }
+
+// THE INCIDENT THROUGH THE LOOP. Round one comments on the item and stops
+// without submitting; the reviewer sends it back to re-read the item first;
+// round two re-reads and cites the comment. That round must reach the
+// reviewer — whose `done` must stand — rather than be corrected for not
+// delivering a second time, which the prior-work ledger forbids it to do.
+func TestARoundSentBackAfterDeliveringIsNotMadeToDeliverAgain(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{
+			{
+				Outcome: turn.OutcomeIncomplete, Rescued: true, Text: "acknowledged it",
+				Calls: []ledger.Call{{Name: "comment_on_work_item"}},
+			},
+			{
+				Outcome: turn.OutcomeDelivered, Summary: "re-read the item",
+				Deliveries: []string{"comment_on_work_item"},
+				Calls:      []ledger.Call{{Name: "get_work_item"}},
+			},
+		},
+		surfaces: []turn.Surface{trackerSurface()},
+		reviews: []turn.Review{
+			{Decision: phase.SelfIterate, Notes: "read the item before answering"},
+			{Decision: phase.Done},
+		},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 3},
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("work")})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Decision != phase.Done || res.Breach != nil {
+		t.Fatalf("decision = %s, breach = %+v, want done: the turn answered in round one",
+			res.Decision, res.Breach)
+	}
+	if f.workRounds != 2 || f.revRounds != 2 {
+		t.Errorf("executor %d, review %d, want 2 of each — round two was corrected "+
+			"before review, or the reviewer's done was overturned", f.workRounds, f.revRounds)
+	}
+	// THE LAST ROUND'S, deliberately — see Result.Delivered. Round two
+	// delivered nothing of its own, and what the gates ask is a different
+	// question from what the conversation ledger asks.
+	if res.Delivered {
+		t.Error("Result.Delivered reports the last round as having delivered")
+	}
+}

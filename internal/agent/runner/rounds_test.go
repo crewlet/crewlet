@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -709,4 +710,78 @@ func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 				"bridged call's 1", got)
 		}
 	})
+}
+
+// A RESUMED RUN MAY CITE A DELIVERY A CLOSED ROUND MADE, on both runtimes.
+//
+// The citation check reads the TURN's record ([turn.Record]): the rounds
+// that closed before the suspend, then the phase's own calls. A resume that
+// read only the phase refused the one citation that was true, because the
+// prior-work ledger had told the round not to make that delivery again.
+func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
+	t.Parallel()
+	tracker := func(t *testing.T, reg *tools.Registry) {
+		t.Helper()
+		if err := reg.RegisterWith(stubTool{name: "comment_on_work_item", out: "commented"},
+			tools.OriginBuiltin, tools.Annotations{}, tools.DeliversTo("work")); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	const citation = `{"outcome":"delivered","summary":"collected the run",` +
+		`"deliveries":["comment_on_work_item"]}`
+	closed := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{
+		{Name: "comment_on_work_item", Result: "commented"},
+	}}}
+
+	native := func(t *testing.T, history []ledger.Iteration) turn.Work {
+		t.Helper()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+			execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool, citation)},
+		}}}, buildOpts{
+			reply: turn.ToolReply("work"), register: tracker,
+			resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+		})
+		w, _, err := r.Resume(context.Background(), history)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		return w
+	}
+	agent := func(t *testing.T, history []ledger.Iteration) turn.Work {
+		t.Helper()
+		var args map[string]any
+		if err := json.Unmarshal([]byte(citation), &args); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+			buildOpts{reply: turn.ToolReply("work"), register: tracker,
+				agentRun: &recordingLauncher{}, resume: &runner.Resume{
+					State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 2},
+					Answer:  "done",
+					Bridged: []ledger.Call{{Name: runner.SubmitWorkTool, Args: args}},
+				}})
+		w, _, err := r.Resume(context.Background(), history)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		return w
+	}
+
+	for name, resume := range map[string]func(*testing.T, []ledger.Iteration) turn.Work{
+		"a native run": native, "an agent-mode run": agent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if w := resume(t, closed); w.Rescued || w.Outcome != turn.OutcomeDelivered {
+				t.Errorf("outcome = %s (rescued %v), want the citation of the closed "+
+					"round's comment accepted", w.Outcome, w.Rescued)
+			}
+			// The counterfactual: with no closed round behind it the same
+			// citation names a comment nobody made, and is refused.
+			if w := resume(t, nil); !w.Rescued {
+				t.Errorf("outcome = %s, want a citation of a comment nobody made refused",
+					w.Outcome)
+			}
+		})
+	}
 }

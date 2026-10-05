@@ -40,6 +40,13 @@ import "strings"
 // inside the loop where the model can still fix it, and overturns a `done`
 // that delivered nothing. Asking a model to re-derive a fact the engine holds
 // is how a real delivery got read as no delivery and posted twice.
+//
+// THE RECORD IS THE TURN'S, and the note says so because the evidence log
+// below it is only this round's: a reviewer looking at a round that re-read
+// an item after an earlier one answered sees no write here, and must not take
+// that for a turn that reached nobody. Whether this round still owed a
+// further delivery — a correction the first answer needs — is a question about
+// the work's merits, which is the reviewer's.
 const ReviewHeader = "\n## REVIEW phase" +
 	"\nJudge the work below. Submit exactly one `submit_review` call with " +
 	"one decision:" +
@@ -55,10 +62,10 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"agent produced`, which is the agent's own account of itself. Calls " +
 	"marked `→ success` happened; `→ error` calls did not take effect." +
 	"\n**Whether anything was DELIVERED is already settled** — the engine " +
-	"checked the agent's delivery claims against that log before you saw " +
-	"either, and will overturn a `done` on a turn that answered in text " +
-	"and never called a tool. Judge the work on its merits instead: is it " +
-	"right, is it complete, is it what was asked for." +
+	"checked the agent's delivery claims against this turn's whole log, " +
+	"earlier rounds included, and will overturn a `done` when no round " +
+	"reached the person waiting. Judge the work on its merits instead: is " +
+	"it right, is it complete, is it what was asked for." +
 	"\n**Incomplete rule:** an outcome of `incomplete` was written by the " +
 	"engine, not by the agent — the pass ended without reporting at all. " +
 	"Nobody stands behind it. Judge the tool log and the produced text on " +

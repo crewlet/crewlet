@@ -91,11 +91,13 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    │     so its schema arrives on the next round. Nothing is named in
    │     advance, so nothing has to be reconciled afterwards.
    └── Ends by calling submit_work: outcome, summary, deliveries,
-         checked against the engine's own record of the turn
+         checked against the engine's own record of the turn — every
+         round of it, so a delivery an earlier round made is citable
 
-3. Engine check (no model call)
+3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends
    └── a claim the record refutes -> loop back with a correction
+         naming the tools that deliver where the asker is waiting
 
 4. Reviewer phase
    ├── submit_review emits a decision
