@@ -47,6 +47,9 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 		// kept paying for its turn-start context and the window an
 		// operator reads understated it. See learningbudget.go.
 		Models: e.meteredModelsFor(company),
+		// The same seam, as a compactor: the middle of a long chat thread
+		// is condensed rather than dropped, on the seat's own aux chain.
+		Compact: e.compactorFor(company),
 		// The chat surfaces' READ half, which is how a seat woken in a
 		// thread is handed the thread. Empty on a node running no chat
 		// transport, which renders the unreadable hint rather than

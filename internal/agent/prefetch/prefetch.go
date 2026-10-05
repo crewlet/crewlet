@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -302,6 +303,11 @@ type Sources struct {
 	// which for the first two means an empty block — see the package
 	// comment on why there is no unfiltered fallback.
 	Models Models
+
+	// Compact rewrites the middle of a chat thread too long to carry
+	// whole — see [splitThread]. Nil rewrites nothing, and those messages
+	// are then left out and counted, which is what the block always did.
+	Compact *compact.Compactor
 
 	// Embed turns text into a vector for the similarity searches. Nil
 	// falls back to recency alone, which is a real degradation rather
