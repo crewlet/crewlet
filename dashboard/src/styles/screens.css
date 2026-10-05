@@ -227,6 +227,229 @@
 .round-note.caution {
   color: var(--color-feedback-warning-ink);
 }
+
+/* ---- A phase's prompt: a map, an outline and one section -----------------
+   `PromptDoc.tsx`. The view measures ITSELF (`container: prompt`) rather than
+   the window: the card it sits in is as wide as the turn page's column, which
+   the sidebar and a peek narrow without the window changing at all.
+
+   NOTHING HERE SCROLLS OR STICKS. The card hides its overflow and a box that
+   scrolls inside the page is a second thing under the wheel; showing one
+   section at a time is what keeps the page short instead. */
+.prompt-doc {
+  container: prompt / inline-size;
+  min-width: 0;
+}
+.prompt-reading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+/* THE MAP: one bar for the request, a section per segment, each as wide as its
+   bytes, the two halves apart by a visible gap. NEUTRAL in two alternating
+   steps so neighbours stay apart, and the accent on the section being read —
+   the one thing the accent marks in this product. A segment is never narrower
+   than a hairline it can be pointed at; `flex-basis: 0` so the grow factor
+   (the bytes) is the whole of its width. */
+.prompt-map {
+  display: flex;
+  gap: var(--spacing-2);
+  height: var(--spacing-2);
+}
+.prompt-map-half {
+  display: flex;
+  gap: 1px;
+  flex-basis: 0;
+  min-width: 0;
+}
+.prompt-map-seg {
+  flex-basis: 0;
+  min-width: 3px;
+  border-radius: 1px;
+  background: var(--color-border-strong);
+  cursor: pointer;
+}
+.prompt-map-seg:nth-child(even) {
+  background: var(--color-border-hover);
+}
+.prompt-map-seg:hover {
+  background: var(--color-text-tertiary);
+}
+.prompt-map-seg.is-dim {
+  opacity: 0.35;
+}
+.prompt-map-seg.is-selected {
+  background: var(--color-brand-accent);
+  opacity: 1;
+}
+
+.prompt-find {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* NARROW BY DEFAULT: the picker above the reader, the outline not drawn. At
+   720px of the view's own width the outline has room for a title beside a
+   reader at a readable measure, and takes the first track. */
+.prompt-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-3) var(--spacing-4);
+  align-items: start;
+}
+.prompt-toc {
+  display: none;
+}
+@container prompt (width >= 720px) {
+  .prompt-layout {
+    grid-template-columns: minmax(200px, 30%) minmax(0, 1fr);
+  }
+  .prompt-toc {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+  }
+  .prompt-picker {
+    display: none;
+  }
+}
+
+.prompt-toc-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.prompt-toc-head {
+  padding: 0 var(--spacing-2) var(--spacing-1);
+}
+/* A ROW IS ITS TITLE, ITS SIZE AND ITS WEIGHT: the title wraps rather than
+   truncating (it is prose, and the words cut would be the ones that tell two
+   sections apart), the size sits on its first line, and the weight bar runs
+   under both — the same share the map draws, at the row it belongs to. */
+.prompt-toc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title meta"
+    "weight weight";
+  gap: 2px var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-snug);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.prompt-toc-row:hover {
+  background: var(--color-surface-hover);
+}
+.prompt-toc-row.is-selected {
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
+}
+/* INSIDE ITS OWN BOX, because the outline's rows sit edge to edge and an outset
+   ring would be cut by its neighbour's ground. */
+.prompt-toc-row:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+/* A ROW WITH NO MATCH DIMS rather than leaving: a find annotates the outline,
+   it does not filter it, so the sections around a match stay where they were. */
+.prompt-toc-row.is-dim {
+  color: var(--color-text-tertiary);
+}
+.prompt-toc-title {
+  grid-area: title;
+  overflow-wrap: anywhere;
+}
+.prompt-toc-meta {
+  grid-area: meta;
+  display: inline-flex;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.prompt-toc-hits {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.prompt-toc-weight {
+  grid-area: weight;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-border-default);
+  overflow: hidden;
+}
+.prompt-toc-weight > span {
+  display: block;
+  height: 100%;
+  background: var(--color-border-strong);
+}
+.prompt-toc-row.is-selected .prompt-toc-weight > span {
+  background: var(--color-brand-accent);
+}
+
+.prompt-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.prompt-reader-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* SET LIKE A HEADING AND NOT ONE: a quoted prompt's headings are not this
+   page's, so the title is a styled line and the region takes its name from it. */
+.prompt-reader-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: var(--font-line-height-tight);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.prompt-reader-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--spacing-1) var(--spacing-2);
+}
+.prompt-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+/* A HEADING INSIDE THE SECTION — a ledger's entry, a quoted thread's own
+   section — drawn in place under its parent, indented by its depth with a rule
+   down its edge so where it ends is visible, and titled with a styled line. */
+.prompt-sub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-inline-start: var(--spacing-3);
+  border-inline-start: 2px solid var(--color-border-default);
+}
+.prompt-sub-title {
+  font-size: var(--font-size-compact);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* WHAT A FIND MATCHED, in the section being read: the CSS Custom Highlight API
+   (`Marked` in PromptDoc.tsx), so no element is added around a match. The
+   accent's soft ground, because a match is where the reader asked to be. */
+::highlight(prompt-find) {
+  background-color: var(--color-brand-accent-soft-strong);
+  color: var(--color-text-primary);
+}
 .round-tools {
   display: flex;
   flex-direction: column;

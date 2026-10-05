@@ -99,6 +99,57 @@ describe("a live call carries its turn's stage", () => {
   });
 });
 
+// A PROMPT'S SECTION MAP RIDES WITH THE TEXT IT DESCRIBES: the settled record's
+// `system_sections` / `user_sections`, and on a live call each prompt
+// message's own `sections` — read off the SAME message as the text, or a map
+// would be sizing bytes taken from somewhere else.
+describe("a prompt's section map", () => {
+  const MAP = [{ key: "task", title: "Task", bytes: 9 }];
+
+  test("is read off a settled record, beside the prompts it maps", () => {
+    const rec = fromPhaseEvent(
+      phaseEvent({ user_prompt: "## Task\nx", user_sections: MAP, system_sections: "junk" }),
+    )!;
+    expect(rec.userSections).toEqual(MAP);
+    // A map this build cannot read is no map, never a partial one.
+    expect(rec.systemSections).toBeNull();
+  });
+
+  test("is read off a live call's prompt messages, with the text from the same message", () => {
+    const rec = fromLiveCall(
+      liveCall({
+        prompt: "## Task\nx",
+        prompt_messages: [
+          {
+            role: "system",
+            content: "## Who\nyou",
+            sections: [{ key: "who", title: "Who", bytes: 10 }],
+          },
+          { role: "user", content: "## Task\nx", sections: MAP },
+        ],
+      }),
+      "PM",
+    );
+    expect(rec.systemPrompt).toBe("## Who\nyou");
+    expect(rec.systemSections).toEqual([{ key: "who", title: "Who", bytes: 10 }]);
+    expect(rec.userPrompt).toBe("## Task\nx");
+    expect(rec.userSections).toEqual(MAP);
+  });
+
+  test("a live call with no user message falls back to its prompt, unmapped", () => {
+    // `prompt` is "" rather than absent on the wire, so the old `prompt ??
+    // message` never reached the message at all.
+    const rec = fromLiveCall(liveCall({ prompt: "the ask", prompt_messages: null }), "PM");
+    expect(rec.userPrompt).toBe("the ask");
+    expect(rec.userSections).toBeNull();
+    const fromMessage = fromLiveCall(
+      liveCall({ prompt: "", prompt_messages: [{ role: "user", content: "from the message" }] }),
+      "PM",
+    );
+    expect(fromMessage.userPrompt).toBe("from the message");
+  });
+});
+
 describe("identity", () => {
   test("a live phase and its finished record share ONE key", () => {
     // THE fix for the row that jumped. They used to differ — the live row was

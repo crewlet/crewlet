@@ -2458,15 +2458,16 @@ now, and both directions of the gate fail on the old name.
 
 The same file also **splits a document into its sections without rendering
 anything** — `splitSections` for the flat run, `nestSections` for the outline
-its heading levels describe — for the one surface that needs a document's
-outline and its source both: a phase prompt, which the transcript folds on its
-own headings, renders one section at a time, and hands back byte for byte on
-the other view (see rule 11 below). A walk that rendered as it split could give
-neither back. It lives beside the renderer because what a heading is and where
-a fenced block suspends the grammar are decisions the renderer has already
-made — written again next to its caller, the two would drift exactly as
-`textcut`'s four copies and `whsec`'s two did, and the clause that would go
-first is the fence.
+its heading levels describe, and `headingLines` for where each heading's line
+starts in the source — for the one surface that needs a document's outline and
+its source both: a phase prompt, which the transcript outlines, renders one
+section at a time, and hands back byte for byte on the other view (see rule 11
+below). A walk that rendered as it split could give neither back. All three
+read the document through ONE fence-aware walk, beside the renderer, because
+what a heading is and where a fenced block suspends the grammar are decisions
+the renderer has already made — written again next to its caller, the copies
+would drift exactly as `textcut`'s four copies and `whsec`'s two did, and the
+clause that would go first is the fence.
 
 A page's history shows **what a save changed**, not only what one version
 said. `lib/diff.ts` is a line diff over the two revisions — Myers, by line,
@@ -3208,43 +3209,109 @@ rules fix it, and each one names a specific mechanism:
    compares `'Z'` (0x5A) against `'.'` (0x2E). Every list sorts through
    `tsKey`, and every comparator is three-way: one returning −1 for equal
    operands makes equal rows trade places on each render.
-11. **A prompt is a document, not a wall of text.** Both halves of a phase's
-   prompt were one code block each, and a seat's system prompt runs to tens
-   of kilobytes: identity, mission, policies, the roster, the turn contract,
-   whatever the turn prefetched, the workers, the skills and the tool
-   catalogue. An operator asking the question this screen exists for — *what
-   was the reviewer actually told about self-iterating?* — scrolled 30 kB
-   looking for a heading. Every prompt the engine builds is markdown, so the
-   fold now shows one section per `##` the builders wrote, sized and closed:
-   the outline is DERIVED from the document, never a list this app keeps, so
-   a prompt that grows a section grows a fold and no rename can leave a stale
-   name on screen.
+11. **A prompt is a document, not a wall of text — and it is read through a
+   map, an outline and one section.** Both halves of a phase's prompt were one
+   code block each, and a seat's system prompt runs to tens of kilobytes:
+   identity, mission, policies, the roster, the turn contract, whatever the
+   turn prefetched, the workers, the skills and the tool catalogue. An
+   operator asking the question this screen exists for — *what was the
+   reviewer actually told about self-iterating?* — scrolled 30 kB looking for
+   a heading. The first answer was a stack of closed folds, one per `##`, and
+   a reader said that was hard to follow too: a column of look-alike rows,
+   titled with raw inline markdown, sized in a unit that never added up, whose
+   bodies collapsed one-fact-per-line text into run-on paragraphs. The
+   *Rendered* view is now a designed reader (`components/PromptDoc.tsx`):
+
+   - **The map** — one slim bar for the whole request, the system prompt's
+     sections, a gap, then the user message's, each as wide as its share of
+     the bytes, so where a prompt's weight went is a glance. Neutral fills in
+     two alternating steps, and the accent only on the section being read.
+     Pointing at a segment says "Your turn · 2.8 KB · 23% of the system
+     prompt", and pressing it reads that section. It is a picture of the
+     outline, so it is `aria-hidden` and takes no focus; the outline is the
+     keyboard's way to the same sections.
+   - **The outline** — both halves under their names and sizes ("System prompt
+     · 11 KB", "User message · 1.2 KB"), one row per top-level section with
+     its title rendered as the inline markdown it is, its size and a weight
+     bar. A listbox with one tab stop: the arrows, Home and End move through
+     both halves and the reader follows, with focus moving to the row it
+     selects. Beside the reader when the prompt view itself is at least 720px
+     wide — a container query on the view, never the window, which the sidebar
+     and a peek narrow without changing — and a picker above the reader below
+     that, with the map kept.
+   - **The reader** — only the selected section is mounted, so an unselected
+     section's text is not in the card. Its title is a styled line, never an
+     `h` element (a quoted prompt's headings are not this page's — a turn with
+     six phases would put eighty of them into one screen's outline), and the
+     region takes its name from it; then its size and share ("2.8 KB · 23% of
+     the system prompt"); then Previous and Next, each naming the section it
+     goes to — the user message's first section from the system prompt's
+     last, which the label says — and staying put at the ends with the reason
+     they cannot move, because a control that vanishes under the press takes
+     the reader's focus with it; then the body, with the headings inside the
+     section drawn in place beneath it under styled sub-titles, nested on
+     their levels.
+   - **Find** — a box that annotates rather than filters: every row says how
+     many matches it holds and a row with none dims, a polite status says
+     "12 matches in 3 sections", Enter and Shift+Enter jump to the next and
+     previous section that matches, and Escape clears. Matches are counted on
+     the SOURCE, case-insensitively — what the model was told, markup
+     included — and marked in the reader with the CSS Custom Highlight API
+     where the browser has it, which marks text without adding an element
+     around it; where it does not, the counts still say where the matches are.
+
+   **The outline is the builder's, and the headings only where there is no
+   builder's.** It was derived by cutting the prompt at every `##`, and a
+   prompt carries other people's markdown verbatim: a chat trigger's "##
+   Triage" and "## Thread context", a pull request's "# Title", a model's own
+   "## Summary" inside review evidence or a ledger reply. Each of those either
+   escaped the section it was quoted in or swallowed the rest of the prompt
+   under a title nobody wrote. Only the builder knows where its parts begin and
+   end, so the engine sends a section map with each prompt (`system_sections`
+   and `user_sections` on the settled record, `prompt_messages[].sections`
+   live — a key, a title and a byte count per part), and the top level of the
+   outline IS that map, sliced by UTF-8 byte offsets; a heading inside a span
+   still structures it, nested under it, but cannot leave it. A record without
+   a map — an older engine's, a resumed phase's — is outlined by its headings
+   as before, and so is one whose map does not tile its prompt (the bytes do
+   not add up, a boundary falls inside a character, a span is empty, a key
+   repeats): a map that would mis-slice is not trusted at all
+   (`lib/promptmap.ts`). Either way the outline is DERIVED — from the document
+   or from its builder — never a list this app keeps, so a prompt that grows a
+   section grows a row and no rename leaves a stale name on screen.
+
+   **Sizes are UTF-8 bytes, heading lines included.** They were UTF-16
+   characters of each body with its heading line left out, so a half's
+   sections never added up and disagreed with the Turn screen's Context tab,
+   which counts bytes. Now each section is a slice of the source from its
+   heading line to the next, separators included, so the sections of a half
+   tile it exactly; the Prompt fold's own count is the two halves' sizes
+   ("11 KB system · 1.2 KB user") rather than the phase's name, which the
+   card's tag already says.
+
+   **The prompt's line breaks are its own.** A builder writes a prompt line by
+   line for a model, and an identity block of one fact per line, read as
+   markdown's soft wraps, became one run-on sentence. Bodies render with every
+   newline a break — the same reading a model's own words get (see
+   [Markdown is rendered, not printed](#markdown-is-rendered-not-printed)).
 
    Three properties travel with it. **Each view does its whole job.**
-   *Rendered* is for reading — the outline, with every section set as the
-   markdown it is; *Source* is the record — the whole document, one block,
-   byte for byte, one selection, which is what an operator reproduces a turn
-   from and what they diff when a model starts behaving differently. The
-   bodies used to be source slices in code blocks on the rule that a prompt is
-   a record, but that view was never the record: building the outline consumes
-   the heading lines, so a fold showed the bytes with their structure taken
-   out, and the one thing the screen had no other route to was the reading. A
-   seat's identity arrived as `You are **Engineer** at **Acme**` and every
-   `` `submit_work` `` kept its backticks — a reader decoding markdown the
-   model was handed already decoded. What is genuinely record-sensitive
-   survives rendering anyway: a fence comes out as its own block holding the
-   exact text, so a tool schema, a JSON example and a contract template are
-   byte-identical either way, and what the reading view spends is emphasis
-   markers and list bullets.
-
-   **The switch is offered on every document**, headings or none. It used to be
-   gated on having an outline, because without one the two views were the same
-   picture under two names; they are not any more, since one decodes the
-   markdown and one is the bytes. And **the outline is the document's own
-   shape**, which mostly means flat and sometimes does not: an executor's
-   thirteen sections are thirteen peers, but a ledger writes one `###` per
-   prior turn *inside* its block, and hoisting those would put a turn of
-   somebody's conversation between "Earlier in this conversation" and the ask.
+   *Rendered* is for reading; *Source* is the record — each half whole, one
+   block, byte for byte, one selection, which is what an operator reproduces a
+   turn from and what they diff when a model starts behaving differently. What
+   is genuinely record-sensitive survives rendering anyway: a fence comes out
+   as its own block holding the exact text, so a tool schema, a JSON example
+   and a contract template are byte-identical either way, and what the reading
+   view spends is emphasis markers and list bullets. **The switch is offered on
+   every document**, headings or none, since one decodes the markdown and one
+   is the bytes; a prompt with no headings is one section. And **the outline is
+   the document's own shape**, which mostly means flat and sometimes does not:
+   an executor's sections are peers, but a ledger writes one `###` per prior
+   turn *inside* its block, and hoisting those would put a turn of somebody's
+   conversation between "Earlier in this conversation" and the ask — so a
+   heading nests under the nearest heading above it of a lower level, and the
+   lead run before the first heading is a section of its own, the first one
+   read, never hidden.
 
    Nesting is only correct because **the levels are**, and two of them were
    not. `internal/agent/prompts` carried a single `#` over a run of `##`,
@@ -3256,6 +3323,11 @@ rules fix it, and each one names a specific mechanism:
    document rather than about this screen, so both are asserted there: every
    heading a prompt builder emits is a sibling, and every block of the user
    message is a peer.
+
+   **Nothing in it scrolls or sticks.** The card hides its overflow and a box
+   that scrolls inside the page is a second thing under the wheel (see
+   [The document does not scroll](#the-document-does-not-scroll)); showing one
+   section at a time is what keeps the page short instead.
 
    The splitter is `lib/markdown.ts`'s, beside the renderer's own heading and
    fence constants rather than next to the screen that wanted sections: what a

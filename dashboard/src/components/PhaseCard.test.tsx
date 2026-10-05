@@ -10,7 +10,7 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
@@ -38,6 +38,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     errorKind: "",
     systemPrompt: "",
     userPrompt: "",
+    systemSections: null,
+    userSections: null,
     response: "",
     tools: [],
     narration: [],
@@ -398,6 +400,30 @@ describe("the phase body reads in the order the phase happened", () => {
     expect(tools).toBeLessThan(ledger);
     // Then what the rounds spawned.
     expect(ledger).toBeLessThan(delegated);
+  });
+
+  // THE FOLD SAYS HOW BIG THE REQUEST WAS, in the bytes the Context tab counts.
+  // It said the phase's name, which the tag at the head of the card already
+  // says — and opened, it reads by the builder's map where the record has one.
+  test("the Prompt fold counts the request's size and reads it by the builder's map", () => {
+    const system = "Lead.\n\n## Quoted\nfrom a thread";
+    render(
+      <PhaseCard
+        record={phase({
+          ...FULL,
+          systemPrompt: system,
+          systemSections: [{ key: "whole", title: "The whole turn", bytes: system.length }],
+        })}
+        defaultOpen
+      />,
+    );
+    const fold = screen.getByRole("button", { name: /^Prompt/ });
+    expect(fold.textContent).toContain(`${system.length} B system`);
+    expect(fold.textContent).toContain("24 B user");
+    expect(fold.textContent).not.toContain("execute phase");
+    fireEvent.click(fold);
+    const toc = screen.getByRole("listbox", { name: /Sections of/ });
+    expect(within(toc).getAllByRole("option")[0]!.textContent).toMatch(/^The whole turn/);
   });
 
   // AND THE FAILURE STAYS AT THE TOP, above the inputs. It is a banner rather

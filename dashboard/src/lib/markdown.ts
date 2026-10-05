@@ -30,13 +30,18 @@
  * in one is untrusted input, and an allowlist is the only form of this check
  * that is safe by construction rather than by exhaustive denial.
  *
- * IT ALSO SPLITS A DOCUMENT INTO ITS SECTIONS ([splitSections]) without
- * rendering anything, for a surface that needs the document's OUTLINE and its
- * source both — a phase prompt, tens of kilobytes with no structure but its
- * headings, which its screen folds on those headings and then renders one
- * section at a time. A walk that rendered as it split could hand back neither.
- * It shares this file's [HEADING] and [FENCE] rather than restating them; see
- * its own note.
+ * IT ALSO SPLITS A DOCUMENT INTO ITS SECTIONS ([splitSections],
+ * [headingLines]) without rendering anything, for a surface that needs the
+ * document's OUTLINE and its source both — a phase prompt, tens of kilobytes,
+ * which its screen outlines (by its builder's section map where it has one,
+ * see `promptmap.ts`) and then renders one section at a time. A walk that
+ * rendered as it split could hand back neither. Both share this file's
+ * [HEADING] and [FENCE] through one walk rather than restating them; see its
+ * own note.
+ *
+ * AND IT READS TWO KINDS OF AUTHOR ([RenderOptions]): a document's — soft line
+ * wraps, headings that are sections — and a model's, whose every newline is a
+ * break and whose headings are lines of one transcript item.
  */
 
 import { createElement, type ReactNode } from "react";
@@ -393,13 +398,10 @@ export interface Section {
  * than normalising them the way [parseBlocks] does.
  */
 export function splitSections(source: string): Section[] {
-  const lines = readLines(source ?? "");
   const out: Section[] = [];
   let level = 0;
   let title = "";
   let body: Line[] = [];
-  // The fence marker currently open, or "" outside one.
-  let fence = "";
 
   const close = () => {
     const text = joinLines(trimBlankLines(body));
@@ -411,34 +413,91 @@ export function splitSections(source: string): Section[] {
     out.push({ level, title, body: text });
   };
 
-  for (const line of lines) {
-    // A FENCE SUSPENDS THE GRAMMAR, which is the whole reason this is not a
-    // `split(/^#/m)`: `# install deps` inside a shell sample is a comment,
-    // and a tool catalogue is full of them.
-    if (fence !== "") {
-      if (closesFence(line.text, fence)) fence = "";
-      body.push(line);
-      continue;
-    }
-    const opened = FENCE.exec(line.text);
-    if (opened) {
-      fence = opened[1] ?? "```";
-      body.push(line);
-      continue;
-    }
-    const heading = HEADING.exec(line.text);
+  for (const { line, heading } of walkLines(source ?? "")) {
     if (!heading) {
       body.push(line);
       continue;
     }
     close();
-    level = (heading[1] ?? "#").length;
-    // Closing hashes are decoration, not content — the same rule
-    // [parseBlocks] applies to the same line.
-    title = (heading[2] ?? "").replace(/\s+#+\s*$/, "").trim();
+    level = heading.level;
+    title = heading.title;
   }
   close();
   return out;
+}
+
+/** One ATX heading line, and where its line starts in the document. */
+export interface HeadingLine {
+  /** The index of the line's first character in the source (UTF-16). */
+  at: number;
+  /** 1–6. */
+  level: number;
+  /** The heading's own text, inline markup and all. */
+  title: string;
+}
+
+/**
+ * Every heading line of a document, in order, with the offset its line starts
+ * at — what [splitSections] splits on, for a caller that has to cut the SOURCE
+ * at those lines rather than receive it regrouped. A phase prompt's reader is
+ * the one: its outline sizes every section in bytes that must add up to the
+ * document, so a section is a slice running from its heading line to the next,
+ * blank lines and all — which [splitSections], trimming them, cannot hand back.
+ *
+ * THE SAME WALK as [splitSections] ([walkLines]), so the two can never
+ * disagree about which lines are headings — the fence above all.
+ */
+export function headingLines(source: string): HeadingLine[] {
+  const out: HeadingLine[] = [];
+  for (const { at, heading } of walkLines(source ?? "")) {
+    if (heading) out.push({ at, ...heading });
+  }
+  return out;
+}
+
+/**
+ * A document's lines, each with its offset and — outside a fenced block — the
+ * heading it is, if it is one.
+ *
+ * A FENCE SUSPENDS THE GRAMMAR, which is the whole reason this is not a
+ * `split(/^#/m)`: `# install deps` inside a shell sample is a comment, and a
+ * tool catalogue is full of them. ONE walk for both readers of a document's
+ * headings, so the fence rule is written once.
+ */
+function* walkLines(
+  source: string,
+): Generator<{ line: Line; at: number; heading: { level: number; title: string } | null }> {
+  // The fence marker currently open, or "" outside one.
+  let fence = "";
+  let at = 0;
+  for (const line of readLines(source)) {
+    const start = at;
+    at += line.text.length + line.eol.length;
+    if (fence !== "") {
+      if (closesFence(line.text, fence)) fence = "";
+      yield { line, at: start, heading: null };
+      continue;
+    }
+    const opened = FENCE.exec(line.text);
+    if (opened) {
+      fence = opened[1] ?? "```";
+      yield { line, at: start, heading: null };
+      continue;
+    }
+    const heading = HEADING.exec(line.text);
+    yield {
+      line,
+      at: start,
+      heading: heading
+        ? {
+            level: (heading[1] ?? "#").length,
+            // Closing hashes are decoration, not content — the same rule
+            // [parseBlocks] applies to the same line.
+            title: (heading[2] ?? "").replace(/\s+#+\s*$/, "").trim(),
+          }
+        : null,
+    };
+  }
 }
 
 /** One section, and the sections nested under it. */

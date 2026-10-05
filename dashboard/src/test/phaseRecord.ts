@@ -22,6 +22,8 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     errorKind: "",
     systemPrompt: "",
     userPrompt: "",
+    systemSections: null,
+    userSections: null,
     response: "",
     tools: [],
     narration: [],

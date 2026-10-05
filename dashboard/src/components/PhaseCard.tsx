@@ -44,11 +44,15 @@
  *     model, rounds, tokens, decision — so a live phase and a finished one are
  *     the same shape and the row does not change height when it completes.
  *  6. **The prompt is a document, not a wall of text.** Every prompt this
- *     engine builds is markdown, so the Prompt fold folds each half on the
- *     headings the builders wrote, renders each section as the markdown it is,
- *     and keeps the verbatim record as its other view — see `PromptDoc.tsx`.
- *     It was one 30 kB scroller, which is where a reader went to answer "what
- *     was this phase told about X" and scrolled looking for a heading.
+ *     engine builds is markdown with parts its builder can name, so the Prompt
+ *     fold reads it through a map of the whole request, an outline of its
+ *     sections (the builder's own map where the record carries one, the
+ *     headings otherwise) and ONE section at a time rendered as the markdown it
+ *     is, with a find over all of it — and keeps the verbatim record as its
+ *     other view. See `PromptDoc.tsx`. It was one 30 kB scroller, which is
+ *     where a reader went to answer "what was this phase told about X" and
+ *     scrolled looking for a heading; then a stack of folds cut at every `##`,
+ *     including the ones inside the content a prompt quotes.
  *  7. **The body reads in the order the phase happened**: what it was given
  *     (Prompt, Tool surface), then what it did (the rounds), then what it
  *     delegated. The transcript used to come first and its two inputs sat
@@ -78,7 +82,16 @@ import {
 // porting it THERE moves this card, the turn card and the seat screen in one
 // change rather than leaving three inlined copies of one variant table behind.
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
+import {
+  fmtBytes,
+  fmtCount,
+  fmtDateTime,
+  fmtDuration,
+  fmtElapsed,
+  relTime,
+  tsKey,
+  utf8Bytes,
+} from "~/lib/format.ts";
 import {
   decisionLabel,
   decisionTone,
@@ -524,6 +537,16 @@ export function PhaseCard({
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
   const tailRef = useTail(open && record.live);
+  const promptSize = useMemo(
+    () =>
+      [
+        record.systemPrompt && `${fmtBytes(utf8Bytes(record.systemPrompt))} system`,
+        record.userPrompt && `${fmtBytes(utf8Bytes(record.userPrompt))} user`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    [record.systemPrompt, record.userPrompt],
+  );
   // Rounds that answered in prose where a call was owed. Counted on the
   // ledger, live and settled alike, so the chip and the per-round notes are
   // one reading of one list.
@@ -737,17 +760,23 @@ export function PhaseCard({
             // what ours did: a closed fold mounted nothing, and a seat's system
             // prompt is tens of kilobytes nobody asked for.
             //
-            // What is INSIDE it is a document rather than a wall of text now:
-            // `PromptRecord` folds each half on its own markdown headings and
-            // renders each one, so "what was this phase told about X" is one
+            // What is INSIDE it is a document rather than a wall of text:
+            // `PromptRecord` draws the request as a map and an outline and
+            // shows one section, so "what was this phase told about X" is one
             // click rather than a scroll through 30 kB. It keeps the verbatim
             // record as its other view — the tallest block on the page by a
             // wide margin, and the one that most needed to stay one selection.
-            <Disclosure title="Prompt" count={`${record.phase} phase`} lazy>
+            //
+            // THE COUNT IS ITS SIZE, in the bytes the Turn screen's Context tab
+            // counts. It was the phase's name, which the tag at the head of
+            // this same card already says.
+            <Disclosure title="Prompt" count={promptSize} lazy>
               <PromptRecord
                 phase={record.phase}
                 system={record.systemPrompt}
                 user={record.userPrompt}
+                systemSections={record.systemSections}
+                userSections={record.userSections}
               />
             </Disclosure>
           )}

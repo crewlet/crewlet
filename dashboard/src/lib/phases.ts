@@ -30,10 +30,12 @@ import type {
   LiveTurn,
   PartialRound,
   PromptMessage,
+  PromptSection,
   ToolExecution,
   TurnStage,
 } from "~/protocol/index.ts";
 import { tsKey } from "./format.ts";
+import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
 
 export interface ToolCall {
@@ -146,6 +148,15 @@ export interface PhaseRecord {
   errorKind: string;
   systemPrompt: string;
   userPrompt: string;
+  /**
+   * Where each prompt's parts begin and end, as the builder that wrote it said
+   * (`system_sections` / `user_sections` on the record, a prompt message's
+   * `sections` on a live call) — null where the engine sent no map. Read
+   * through `lib/promptmap.ts`, which trusts a map only when it tiles its
+   * prompt and otherwise derives the outline from the prompt's headings.
+   */
+  systemSections: PromptSection[] | null;
+  userSections: PromptSection[] | null;
   response: string;
   tools: ToolCall[];
   /** Per-round model turns. Empty on a phase recorded before the engine
@@ -466,13 +477,18 @@ export function ledgerOf(record: {
   return { ledger, legacy };
 }
 
-/** The content of the first message with this role, or "". */
-function promptRole(messages: PromptMessage[] | null | undefined, role: string): string {
-  if (!Array.isArray(messages)) return "";
+/** The first message with this role that carries text, or null. */
+function promptRole(
+  messages: PromptMessage[] | null | undefined,
+  role: string,
+): { content: string; sections: PromptSection[] | null } | null {
+  if (!Array.isArray(messages)) return null;
   for (const m of messages) {
-    if (m && m.role === role && typeof m.content === "string") return m.content;
+    if (m && m.role === role && typeof m.content === "string") {
+      return { content: m.content, sections: decodeSections(m.sections) };
+    }
   }
-  return "";
+  return null;
 }
 
 /**
@@ -510,6 +526,13 @@ export function phaseKey(
  * which is where the stage is kept.
  */
 export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | null): PhaseRecord {
+  const system = promptRole(call.prompt_messages, "system");
+  // THE TEXT AND ITS MAP FROM ONE MESSAGE. This read `call.prompt` first and
+  // the message only when `prompt` was null — which it never is on the wire
+  // (an absent one decodes as ""), so the user message was never read, and a
+  // map read off the message would have described text taken from somewhere
+  // else. `prompt` is the same text, carried for a frame that has no message.
+  const user = promptRole(call.prompt_messages, "user");
   return {
     key: phaseKey(call.turn_id, call.phase, call.iteration),
     turnId: call.turn_id,
@@ -528,8 +551,10 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     // nothing read. Hardcoding "" here meant a RUNNING phase could never
     // show the system prompt it was given — the one moment an operator
     // most wants to know what the model was actually told.
-    systemPrompt: promptRole(call.prompt_messages, "system"),
-    userPrompt: call.prompt ?? promptRole(call.prompt_messages, "user"),
+    systemPrompt: system?.content ?? "",
+    userPrompt: user ? user.content : (call.prompt ?? ""),
+    systemSections: system?.sections ?? null,
+    userSections: user?.sections ?? null,
     response: call.response ?? "",
     tools: toolCalls(call.tool_executions),
     narration: narrations(call.round_narration),
@@ -617,6 +642,8 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     errorKind: String(p.error_kind ?? ""),
     systemPrompt: String(p.system_prompt ?? ""),
     userPrompt: String(p.user_prompt ?? ""),
+    systemSections: decodeSections(p.system_sections),
+    userSections: decodeSections(p.user_sections),
     response: String(p.response ?? ""),
     tools: toolCalls(p.tool_executions),
     narration: narrations(p.round_narration),

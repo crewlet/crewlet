@@ -45,6 +45,8 @@ function record() {
     errorKind: "",
     systemPrompt: "",
     userPrompt: "",
+    systemSections: null,
+    userSections: null,
     response: "",
     tools: [
       {
@@ -59,7 +61,7 @@ function record() {
         startedAt: "",
       },
     ],
-    narration: [{ round: 1, reasoning: "", content: "Working." }],
+    narration: [{ round: 1, reasoning: "", content: "Working.", declined: false }],
     partial: null,
     inputTokens: 0,
     outputTokens: 0,

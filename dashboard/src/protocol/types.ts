@@ -204,10 +204,29 @@ export interface ToolExecution {
   server?: string;
 }
 
+/**
+ * One part of a prompt as the builder that wrote it marked it out
+ * (`types.PromptSection`): a stable snake_case key, the title a reader sees,
+ * and how many UTF-8 BYTES of the prompt it spans.
+ *
+ * A prompt's sections TILE it exactly, in order: their bytes add up to the
+ * prompt's length in UTF-8, every boundary falls between two characters, and a
+ * headed span starts with its own heading line. A reader that finds a map
+ * breaking any of that derives the outline from the headings instead
+ * (`lib/promptmap.ts`), because a map that does not tile would mis-slice.
+ */
+export interface PromptSection {
+  key: string;
+  title: string;
+  bytes: number;
+}
+
 /** One message of the prompt a phase was given. */
 export interface PromptMessage {
   role?: string;
   content?: string;
+  /** This message's own section map; absent from an engine that wrote none. */
+  sections?: PromptSection[] | null;
 }
 
 /**
