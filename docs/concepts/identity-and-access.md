@@ -555,6 +555,24 @@ a convenience: the link is a bearer credential sitting in somebody's mailbox,
 so the window is how long a compromised mailbox yields an account. A week
 survives somebody being away without making the link a standing way in.
 
+**An invitation is listed and withdrawn, never read back.** `GET
+/iam/invitations` (`crewlet iam invitations`) lists the invitations nobody has
+redeemed and that are still good — `?all=true` (`-all`) adds the redeemed and
+the expired, each with its `state` — and every row says for whom (the address,
+opened on the listing node's own keyring), which seat it binds, what it
+confers, who issued it and until when. It is read like the directory, by
+whoever holds `people:manage` or `audit:read`, and no row carries the link,
+its secret or what the estate keeps of it: the link is shown once, and an
+inviter who lost it cancels and issues another. `DELETE /iam/invitations/{id}`
+(`crewlet iam cancel-invite`) withdraws one nobody has redeemed, and takes
+`people:manage` like every directory write. It is one directory record, and
+its apply deletes the invitation's row, so the link answers exactly as one
+nobody issued and the address it held is free for a new invitation at once. A
+redeemed invitation is refused `409` naming the person it created: what to
+undo then is that person, and that is a removal. Each cancellation is an
+`iam_invitation_cancelled` event, naming the invitation by its id and never
+the address.
+
 ## The binding has two ends, and only one of them arbitrates
 
 A person is bound to a seat, and the two facts live in two places: the

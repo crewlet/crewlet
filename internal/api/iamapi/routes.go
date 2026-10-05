@@ -25,7 +25,7 @@ import (
 // guards its listing.
 const Prefix = "/iam/"
 
-// Routes registers the seventeen on a mux.
+// Routes registers the nineteen on a mux.
 //
 // EVERY ROUTE CARRIES ITS OWN POLICY, stated where it is mounted, through
 // [authz.Router] — which is the only reader of the matched pattern, because a
@@ -90,6 +90,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// somebody. A route named after a person who does not exist yet would
 	// have had to invent an id for them.
 	mount("POST /iam/invitations", at(authz.ActionDirectoryWrite), s.PostInvite)
+	// READ LIKE THE DIRECTORY and withdrawn like any directory write: an
+	// outstanding invitation is a way into the company, and both halves of
+	// "who can reach us" are this surface's.
+	mount("GET /iam/invitations", at(authz.ActionDirectoryRead), s.GetInvitations)
+	mount("DELETE /iam/invitations/{id}", at(authz.ActionDirectoryWrite),
+		s.DeleteInvitation)
 	mount("GET /iam/people/{id}/sessions",
 		about(authz.ActionDirectoryRead), s.GetSessions)
 	mount("DELETE /iam/people/{id}/sessions",

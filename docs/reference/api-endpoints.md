@@ -537,7 +537,7 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
 | none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
@@ -679,6 +679,8 @@ list and nothing ever will be.
 | `PATCH /iam/people/{id}` | `people:manage` |
 | `DELETE /iam/people/{id}` | `people:manage` |
 | `POST /iam/invitations` | `people:manage` |
+| `GET /iam/invitations[?all=true]` | `people:manage` or `audit:read` |
+| `DELETE /iam/invitations/{id}` | `people:manage` |
 | `GET /iam/people/{id}/sessions` | the person themselves, `people:manage` or `audit:read` |
 | `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
@@ -860,7 +862,7 @@ record may hold the value, so another node decides it.
 answers the token. Neither is stored and neither can be read back: what the
 estate holds is the invitation's id and a SHA-256 of the secret its link
 carries, and a SHA-256 of the token. An invitation an administrator lost is
-re-issued rather than recovered.
+cancelled and issued again rather than recovered.
 
 The invitation URL is the **dashboard's invitation screen**:
 
@@ -884,6 +886,42 @@ company does not hold and an agent's seat are `400`, and one somebody holds is
 `POST /iam/invitations` on a node with no `api.external_url` is `500
 no_external_url`: there is no address a link could point at, and only the
 node's own configuration file can supply one.
+
+#### `GET /iam/invitations` lists them, and never a link
+
+```json
+{
+  "invitations": [
+    {"id": "0192f00d-…", "email": "sam@example.com", "seat": "qa-lead",
+     "grants": ["state:read", "work:write"], "invited_by": "ana.admin",
+     "created_at": "2026-06-08T09:12:00Z", "expires_at": "2026-06-15T09:12:00Z",
+     "state": "open"}
+  ],
+  "next": "",
+  "position": "CREWLET_IAM_LOG@0:1840"
+}
+```
+
+The invitations nobody has redeemed and that are still good, paged on their id
+as `GET /iam/people` pages (`?after=`, `?limit=`). `?all=true` adds the
+expired and the redeemed ones this estate still holds — until the sweep
+collects them — and `state` says which: `open`, `expired`, or `redeemed`, with
+`redeemed_at` and the `person` it created. The address is opened on this
+node's own keyring and a row it cannot open reads `sealed`, as a person's does.
+**No row carries the link**, its secret or what the estate keeps of it: the
+link is shown once, and an inviter who lost it cancels and issues another.
+
+#### `DELETE /iam/invitations/{id}` withdraws one nobody redeemed
+
+One directory record, `?reason=` recorded on it. Its apply deletes the
+invitation's row, so the link answers `410` exactly as one nobody issued, and
+the address it held is free for a new invitation or a create at once. It reads
+an `Idempotency-Key` like every keyed write here. An id this estate does not
+hold is `404` — never issued, cancelled already, or collected by the sweep —
+and a **redeemed** invitation is `409` naming the `person` it created: the
+link is spent, and what undoes it is removing that person. Each cancellation
+is an `iam_invitation_cancelled` event, by the invitation's id and never its
+address.
 
 #### `GET /iam/people` pages on a key the applier writes
 

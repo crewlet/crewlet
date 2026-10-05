@@ -197,6 +197,29 @@ type fakeDirectory struct {
 	// a directory this node could not read them from.
 	bindings    []iamdomain.SeatBinding
 	bindingsErr error
+
+	// invitations is every invitation the estate holds, and invited the
+	// last query `GET /iam/invitations` asked of it.
+	invitations []iamdomain.InvitationRow
+	invited     iamdomain.InvitationsQuery
+}
+
+// Invitations answers every invitation it holds, the open ones alone unless
+// the query asks for all — the reader's own predicate, [iamdomain.InvitationRow.Spent].
+func (d *fakeDirectory) Invitations(_ context.Context, q iamdomain.InvitationsQuery) (
+	iamdomain.InvitationPage, error) {
+
+	d.invited = q
+	if d.err != nil {
+		return iamdomain.InvitationPage{}, d.err
+	}
+	var out iamdomain.InvitationPage
+	for _, row := range d.invitations {
+		if q.All || !row.Spent(q.Now) {
+			out.Invitations = append(out.Invitations, row)
+		}
+	}
+	return out, nil
 }
 
 func (d *fakeDirectory) SeatBindings(context.Context) ([]iamdomain.SeatBinding, error) {
@@ -469,6 +492,13 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 		ExpiresAt: in.ExpiresAt}, err
 }
 
+func (w *fakeWriter) CancelInvitation(_ context.Context, _, opID, _ string) (
+	statelog.Result, error) {
+
+	w.op("cancel", opID)
+	return w.did("cancel")
+}
+
 // MayConfer is the record's own rule, over the grants the rig's authority
 // handed this writer: a case about a grant the caller may not confer is about
 // the surface asking it, and a fake that admitted everything would pass it.
@@ -514,6 +544,15 @@ func (fakeOpener) Open(_ string, field iamdomain.Field, sealed string) (string, 
 		return "Opened Name", nil
 	}
 	return "opened@example.com", nil
+}
+
+// OpenInvitation opens an invitation's address, and refuses one sealed under a
+// key this keyring does not hold — the fixture spells it `foreign`.
+func (fakeOpener) OpenInvitation(_ string, sealed string) (string, error) {
+	if sealed == "foreign" {
+		return "", errors.New("sealed under a key this keyring does not hold")
+	}
+	return "invited@example.com", nil
 }
 
 // --- what the surface guards -------------------------------------------- //
@@ -690,6 +729,10 @@ func (o failingOpener) Open(person string, field iamdomain.Field,
 	return fakeOpener{}.Open(person, field, sealed)
 }
 
+func (failingOpener) OpenInvitation(id, sealed string) (string, error) {
+	return fakeOpener{}.OpenInvitation(id, sealed)
+}
+
 // A READ THIS NODE COULD NOT PERFORM IS 503 AND NEVER AN EMPTY LIST.
 //
 // An identity estate that could not be read and a company with nobody in it
@@ -818,17 +861,34 @@ func TestTheInviteUrlIsReturnedExactlyOnce(t *testing.T) {
 		t.Errorf("the invitation expires at %s, want %s",
 			r.writer.invited.ExpiresAt, at.Add(iamapi.InviteWindow))
 	}
-	// AND NOTHING READS IT BACK. The surface holds no route that could:
-	// the one place the URL exists is the answer above.
-	for _, target := range []string{
-		"/iam/invitations", "/iam/invitations/" + id,
-	} {
-		if got := r.as(administrator(), http.MethodGet, target, nil); got.status == http.StatusOK {
-			t.Errorf("%s answered 200, so an invitation link is readable back",
-				target)
+	// AND NOTHING READS IT BACK. The listing names the invitation and never
+	// its link, and no route reads one invitation back: the one place the
+	// URL exists is the answer above.
+	r.directory.invitations = []iamdomain.InvitationRow{{
+		ID: id, Sealed: "sealed", ExpiresAt: at.Add(time.Hour),
+		Verifier: iamdomain.InvitationVerifier(secret),
+	}}
+	listed := r.as(administrator(), http.MethodGet, "/iam/invitations", nil)
+	if listed.status != http.StatusOK {
+		t.Fatalf("the listing answered %d (body %v)", listed.status, listed.body)
+	}
+	raw, _ := json.Marshal(listed.body)
+	for _, leak := range []string{secret, iamdomain.InvitationVerifier(secret),
+		inviteRoute} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("the listing carries %q, so an invitation link is "+
+				"readable back: %s", leak, raw)
 		}
 	}
+	if got := r.as(administrator(), http.MethodGet, "/iam/invitations/"+id,
+		nil); got.status == http.StatusOK {
+		t.Error("one invitation is readable back by its id")
+	}
 }
+
+// inviteRoute is the dashboard screen an invitation's link opens, which no
+// listing may name.
+const inviteRoute = "#/invite/"
 
 // --- the report ---------------------------------------------------------- //
 
