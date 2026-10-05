@@ -656,16 +656,27 @@ function RunDetail({
       {span.open && span.launchId ? (
         <LiveOutput turnId={turnId} launchId={span.launchId} now={now} />
       ) : span.open ? (
-        <span className="t-caption">
-          This run&rsquo;s announcement names no job, so its live output cannot be asked for — it
-          arrives on the run&rsquo;s record when the run is collected.
-        </span>
+        <NoJobCaption />
       ) : record?.transcript ? (
         <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
       ) : (
         <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
       )}
     </>
+  );
+}
+
+/**
+ * What stands where a running coding run's live output would, when its
+ * announcement names no job to ask for: the Timeline's span detail and a
+ * parked turn's Transcript say it in the same words.
+ */
+export function NoJobCaption() {
+  return (
+    <span className="t-caption">
+      This run&rsquo;s announcement names no job, so its live output cannot be asked for — it
+      arrives on the run&rsquo;s record when the run is collected.
+    </span>
   );
 }
 

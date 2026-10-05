@@ -2261,7 +2261,8 @@ seat's open work — the engine's `total_hint`, the same answer the Overview's
 card and the Work tab read.
 
 **While the seat is working, the page bar leads with Watch live** — the
-running turn's watch link (its Transcript, the phase it is on open) — and the
+running turn's watch link (its Transcript, the phase it is on open, or the
+coding run a parked turn waits on drawn live above its phases) — and the
 **Turns** tab carries the kit's pulsing info dot, the steady-state mark of a
 state still happening, with its words read after the tab's name ("Turns,
 running now"), because a dot is never the only carrier; folded into the
@@ -5089,6 +5090,30 @@ bar), the sidebar's **Running** group,
 phase the turn is on is drawn OPEN with its rounds arriving. Landing on the
 Timeline, a reader who pressed Watch saw one drifting bar and had to find the
 tab, then open the phase, to read a word of it.
+
+**A parked turn is watched on the same tab.** Its executor launched a detached
+coding run and suspended, so no phase is in flight while the engine still
+calls the seat working — for the whole of an agent-mode executor's turn, and
+for hours on a long native run. So while the turn is parked the Transcript
+leads with a **Coding run** card: the run's live output (the same
+`sandbox_tail` poll the Timeline's run span opens, read off the waterfall's
+own open run span), the coding agent, and **Open the run** to the run's page
+(`#/live/runs/{turn_id}`); the executor's card it parked in is drawn open
+beneath it. A turn that parks while a reader watches therefore keeps
+something live on the page, which sending a parked turn's watch link
+elsewhere could not have done.
+
+**The page moves once, on arrival, and only for a reader who has not moved
+it.** The live phase's ledger tails its newest round at the bottom of a box as
+tall as the view, and under the header and the cards above it that bottom
+landed below the fold — the one round a reader came to watch was the one
+they could not see. When the page is reached on the Transcript and the turn's
+answer has landed (the stored phases it carries are drawn above the live one,
+so deciding earlier would be deciding about a box that is about to move), the
+shell's scroller (`lib/scroller.ts`) is moved until that box's bottom is in
+view and never past its top — and only if it is still at the top. Never on a
+later push, and never by `scrollIntoView`, which would scroll every ancestor
+that can.
 
 - **The trail names the turn the way its task does.** On a work item it reads
   *Live › {agent} › Turn n · KEY* — the ordinal off the task's own turn list

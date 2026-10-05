@@ -56,11 +56,13 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { roundOf } from "~/lib/seats.ts";
-import { buildWaterfall, phaseLabel } from "~/lib/waterfall.ts";
+import { buildWaterfall, phaseLabel, type Span } from "~/lib/waterfall.ts";
+import { screenScroller } from "~/lib/scroller.ts";
+import { pathOf } from "~/app/frame/objects.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import { ToolsTab } from "./trace/Tools.tsx";
 import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
-import { steerMarks, Waterfall } from "./trace/Waterfall.tsx";
+import { LiveOutput, NoJobCaption, steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
@@ -96,6 +98,7 @@ import {
   CopyGlyph,
   PauseGlyph,
   SaveGlyph,
+  SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
 // STILL OURS, EACH FOR ITS OWN REASON. `CopyButton` is a bare ACTION over
 // text derived at press time — `Copyable` renders the value it copies and is
@@ -146,7 +149,7 @@ import {
 } from "~/lib/turnstory.ts";
 import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
-import { seatOnTurn, UNSETTLED } from "~/lib/turns.ts";
+import { seatOnTurn, UNSETTLED, WATCH_TAB } from "~/lib/turns.ts";
 import type { EventRecord, LiveCall, TurnRow, TurnStage, WorkItemRef } from "~/protocol/index.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -1503,6 +1506,71 @@ export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
   return turnName(view);
 }
 
+/**
+ * The coding run a PARKED turn is waiting on, live, at the head of its
+ * Transcript.
+ *
+ * A parked turn is the engine's "working" with no phase in flight: its
+ * executor launched a detached run and suspended, and the run is the work —
+ * often for the whole of an agent-mode executor's turn, and for hours on a
+ * long native one. Every watch link lands on this tab, and without this card
+ * a parked turn's Transcript held nothing live and no way to the thing that
+ * was: the run's output was a Timeline span and a click away. It is the SAME
+ * poll that span opens (`LiveOutput`, `sandbox_tail`), and the run's own page
+ * is one link away for its history.
+ */
+function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now: number }) {
+  return (
+    <Card padding="sm">
+      <Card.Header
+        icon={<SquareTerminalGlyph size="sm" />}
+        subtitle={
+          run?.sub
+            ? `${run.sub} — the turn is parked on it until it is collected`
+            : "the turn is parked on it until it is collected"
+        }
+        actions={
+          <a className="t-link" href={href(pathOf({ kind: "run", id: turnId }))}>
+            Open the run
+          </a>
+        }
+      >
+        <Card.Title>Coding run</Card.Title>
+      </Card.Header>
+      {run?.launchId ? (
+        <LiveOutput turnId={turnId} launchId={run.launchId} now={now} />
+      ) : run ? (
+        <NoJobCaption />
+      ) : (
+        // THE PARK IS PUSHED BEFORE THE ANNOUNCEMENT IS READ: the stage moves
+        // on the agents push and the page asks for the turn again on it, so
+        // for a moment the run is known to be out and not yet which one.
+        <span className="t-caption">
+          Reading which run it launched — its live output is drawn here once the announcement is in.
+        </span>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Move the shell's scroller until the live phase's tailing ledger — inside
+ * `panel` — has its bottom in view, never past its top, and only while the
+ * reader has not scrolled: see the arrival effect in [TurnScreen]. Through
+ * `screenScroller`, never `scrollIntoView`, which also scrolls every ancestor
+ * that can, the tailing box's own position included.
+ */
+function revealLiveLedger(panel: HTMLElement | null): void {
+  const scroller = screenScroller();
+  const box = panel?.querySelector<HTMLElement>(".phase-card.live .tail-scroll.tailing");
+  if (!scroller || !box || scroller.scrollTop !== 0) return;
+  const view = scroller.getBoundingClientRect();
+  const at = box.getBoundingClientRect();
+  const below = at.bottom - view.bottom;
+  if (below <= 0) return;
+  scroller.scrollTop += Math.max(0, Math.min(below, at.top - view.top));
+}
+
 export function TurnScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
   const now = useNow();
@@ -1535,6 +1603,43 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   );
   const marks = useMemo(() => steerMarks(events, turnId), [events, turnId]);
   const calls = phases.reduce((n, p) => n + p.tools.length, 0);
+
+  // A PARKED TURN'S LIVE WORK IS ITS CODING RUN, and the Transcript draws it.
+  // The run is the waterfall's own OPEN run span — the one derivation of
+  // "which run is still out", read off the announcement and the records
+  // rather than a second guess here — and the phase it parked in is the
+  // executor's newest record: only an executor launches a run, and a
+  // collected run's own `sandbox` record sorts after it within an iteration.
+  const parkedRun = view.parked
+    ? (model.spans.find((s) => s.kind === "run" && s.open) ?? null)
+    : null;
+  const parkedPhase = view.parked
+    ? ([...own].reverse().find((p) => p.phase === "execute")?.key ?? "")
+    : "";
+
+  // WHERE A WATCH LINK LANDS, BROUGHT INTO VIEW ONCE. The live phase's card
+  // is open, but its ledger tails its newest round at the BOTTOM of a box as
+  // tall as the view, which sat below the fold under the header and the cards
+  // above it — so the round a reader came to watch was the one thing on the
+  // page they could not see. On arrival, and only then, the shell's scroller
+  // is moved until that box's bottom is in view (never past its top). Never
+  // on a later push, and never once the reader has scrolled: the page moves
+  // only when the reader is not reading. Decided as the answer lands, because
+  // the stored phases it carries are drawn ABOVE the live one and move it.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const arrival = useRef(tab === WATCH_TAB);
+  useEffect(() => {
+    if (!arrival.current) return;
+    if (tab !== WATCH_TAB) {
+      arrival.current = false;
+      return;
+    }
+    if (loading) return;
+    arrival.current = false;
+    // A FRAME LATER, after the router's own effect — a parent's, so it runs
+    // after this one — has put a new entry's scroller at the top.
+    requestAnimationFrame(() => revealLiveLedger(panelRef.current));
+  }, [loading, tab]);
 
   // THE TRAIL: Live › {agent} › Turn n · KEY — see [turnCrumbLabel], and
   // `app/crumbs.ts` for the seat crumb, which leads back to what is running
@@ -1827,6 +1932,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         )}
 
         <div
+          ref={panelRef}
           className="tabpanel trace-panel"
           role="tabpanel"
           id={panelId}
@@ -1848,6 +1954,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
           {tab === "transcript" && (
             <div className="col gap-4">
+              {view.parked && running && (
+                <ParkedRun turnId={turnId} run={parkedRun} now={clock || Date.now()} />
+              )}
               <Card padding="sm">
                 <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
                   <Card.Title>Phases</Card.Title>
@@ -1858,16 +1967,18 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                       key={p.key}
                       record={p}
                       nested={nested.get(p.key)}
-                      // THE FIRST PHASE, AND THE ONE THAT IS RUNNING. A watch
-                      // link lands here (`lib/turns.ts`' `watchLink`) to see
-                      // what the turn is doing now, and with only the first
-                      // open that was the context pass that finished minutes
-                      // ago, the execute it is on a closed row under it. A
-                      // phase that goes live while the page is open is a new
-                      // key, so it mounts — and opens — then; one that
-                      // completes keeps its key and its card, and the card
-                      // latches, so finishing never closes it under a reader.
-                      defaultOpen={i === 0 || p.live}
+                      // THE FIRST PHASE, THE ONE THAT IS RUNNING, AND THE ONE
+                      // A PARKED TURN PARKED IN. A watch link lands here
+                      // (`lib/turns.ts`' `watchLink`) to see what the turn is
+                      // doing now, and with only the first open that was a
+                      // phase that finished minutes ago, the one it is on a
+                      // closed row under it. A phase that goes live while the
+                      // page is open is a new key, so it mounts — and opens —
+                      // then; one that completes keeps its key and its card,
+                      // and the card latches, so finishing never closes it
+                      // under a reader. A parked turn has no live phase: its
+                      // executor's card is opened instead, under the run.
+                      defaultOpen={i === 0 || p.live || p.key === parkedPhase}
                     />
                   ))}
                   {!own.length && (

@@ -12,7 +12,7 @@
  * the rows it holds do not support.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TURN_TABS, TurnPeek, TurnScreen } from "./Turn.tsx";
 import { WATCH_TAB, watchHref } from "~/lib/turns.ts";
@@ -963,12 +963,12 @@ test("a watch link's tab is one the page has", () => {
 });
 
 // A WATCH LINK LANDS ON THE PHASE THE TURN IS ON, OPEN. With the first card the
-// only open one, it opened on the context pass that ended minutes ago and the
-// execute the reader came to watch was a closed row under it.
+// only open one, it opened on the onboarding pass that ended minutes ago and
+// the review the reader came to watch was a closed row two cards under it.
 test("a watch link lands on the transcript with the running phase open", async () => {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([runningSeat("execute")] as never);
+  store.applyAgents([runningSeat("review")] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
@@ -976,7 +976,7 @@ test("a watch link lands on the transcript with the running phase open", async (
           turn_id: TURN,
           events: [
             phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
-            phase("2026-09-13T10:00:40Z", 20_000, { phase: "context" }),
+            phase("2026-09-13T10:00:40Z", 20_000, { phase: "execute" }),
           ],
           truncated: false,
         })
@@ -995,36 +995,296 @@ test("a watch link lands on the transcript with the running phase open", async (
   ).toEqual([true, false]);
 });
 
-// A PHASE THAT GOES LIVE WHILE THE PAGE IS OPEN is a new card, and it mounts
-// open; the settled phase a reader had closed stays closed, because a card's
-// open state is latched at mount and owned by the reader after it.
-test("a phase that starts while the transcript is open arrives open, and the settled ones keep theirs", async () => {
+/**
+ * Mount on a watch link over the seat's push and the turn's stored events,
+ * answering `sandbox_tail` with `tail` — the page a reader lands on.
+ */
+function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tail?: unknown) {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([{ ...runningSeat("context"), live_call: null }] as never);
+  store.applyAgents([seat] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({
-          turn_id: TURN,
-          events: [
-            phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
-            phase("2026-09-13T10:00:40Z", 20_000, { phase: "context" }),
-          ],
-          truncated: false,
-        })
-      : Promise.resolve({});
+      ? Promise.resolve({ turn_id: TURN, events, truncated: false })
+      : what === "sandbox_tail" && tail
+        ? Promise.resolve(tail)
+        : Promise.resolve({});
   frame(store, socket);
+  return store;
+}
+
+/** The phase cards' headers, in the order the Transcript draws them. */
+const heads = () => [...document.querySelectorAll<HTMLElement>(".phase-card .phase-head")];
+
+// A PHASE THAT GOES LIVE WHILE THE PAGE IS OPEN is a new card, and it mounts
+// open; a settled card the reader CLOSED stays closed through the push that
+// brought it, because a card's open state is latched at mount and is the
+// reader's after it.
+test("a phase that starts while the transcript is open arrives open, and a card the reader closed stays closed", async () => {
+  const store = mountWatching({ ...runningSeat("execute"), live_call: null }, [
+    phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
+    phase("2026-09-13T10:00:40Z", 20_000, { phase: "execute" }),
+  ]);
   await waitFor(() => expect(cards()).toHaveLength(2));
   expect(cards().map((c) => c.open)).toEqual([true, false]);
-  act(() => store.applyAgents([runningSeat("execute")] as never));
+  fireEvent.click(heads()[0]!);
+  expect(
+    cards().map((c) => c.open),
+    "the reader closed the first",
+  ).toEqual([false, false]);
+  act(() => store.applyAgents([runningSeat("review")] as never));
   await waitFor(() => expect(cards()).toHaveLength(3));
   expect(cards().find((c) => c.live)?.open, "the phase that started is open").toBe(true);
   expect(
     cards()
       .filter((c) => !c.live)
       .map((c) => c.open),
-  ).toEqual([true, false]);
+    "the card the reader closed is still closed",
+  ).toEqual([false, false]);
+});
+
+// THE LIVE CARD IS THE READER'S ONCE IT IS DRAWN. Two pushes land every tool
+// round, and a card re-seeded from "it is live" on each would reopen what the
+// reader had just closed, twice a round, for the rest of the phase.
+test("a live card the reader closed stays closed when the next round's push lands", async () => {
+  const store = mountWatching(runningSeat("execute"), [
+    phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
+  ]);
+  await waitFor(() => expect(cards()).toHaveLength(2));
+  const live = () => document.querySelector<HTMLElement>(".phase-card.live");
+  expect(live()?.querySelector(".phase-body"), "it lands open").not.toBeNull();
+  fireEvent.click(live()!.querySelector<HTMLElement>(".phase-head")!);
+  expect(live()?.querySelector(".phase-body")).toBeNull();
+  const next = runningSeat("execute");
+  act(() =>
+    store.applyAgents([
+      {
+        ...next,
+        live_call: { ...next.live_call, rounds_used: 2, updated_at: "2026-09-13T10:01:40Z" },
+      },
+    ] as never),
+  );
+  await waitFor(() => expect(document.body.textContent).toContain("round"));
+  expect(live(), "still the live phase").not.toBeNull();
+  expect(live()?.querySelector(".phase-body"), "and still closed").toBeNull();
+});
+
+// A LIVE PHASE THAT COMPLETES KEEPS ITS CARD, AND THE CARD STAYS OPEN. The
+// durable record replaces the live one under the same `turn|phase|iteration`
+// key, so the card is not remounted; and it latched open at mount, so the
+// transcript the reader was following does not shut the moment it ends.
+test("a live phase that completes keeps its card, open", async () => {
+  const store = mountWatching(runningSeat("execute"), [
+    phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
+  ]);
+  await waitFor(() => expect(cards()).toHaveLength(2));
+  const card = document.querySelector(".phase-card.live");
+  expect(card?.querySelector(".phase-body")).not.toBeNull();
+  // THE ORDER THE ENGINE SENDS THEM IN: the record first, then the push that
+  // clears the call while the turn is between phases.
+  act(() => {
+    store.applyEvent({
+      ...phase("2026-09-13T10:01:50Z", 50_000, { phase: "execute" }),
+      failed: false,
+    } as never);
+    store.applyAgents([{ ...runningSeat("review"), live_call: null }] as never);
+  });
+  await waitFor(() => expect(document.querySelector(".phase-card.live")).toBeNull());
+  expect(cards()).toHaveLength(2);
+  const after = document.querySelectorAll(".phase-card")[1];
+  expect(after, "the same card, not a remount").toBe(card);
+  expect(after?.querySelector(".phase-body"), "and still open").not.toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// A parked turn, watched
+// ---------------------------------------------------------------------------
+
+/** The seat's push while its turn is parked on a coding run: working, no call. */
+function parkedSeat() {
+  return {
+    role: "CEO",
+    handle: "ceo",
+    activity: "working",
+    turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage: "parked" },
+    live_call: null,
+  };
+}
+
+/** The run the executor launched before it parked, as the engine announces it. */
+function launched(at: string, launchId = "L1") {
+  return event({
+    type: "sandbox_run_started",
+    timestamp: at,
+    payload: {
+      turn_id: TURN,
+      launch_id: launchId,
+      started_at: at,
+      coding_agent: "claude-code",
+    },
+  });
+}
+
+const TAIL = {
+  outcome: "tail",
+  turn_id: TURN,
+  launch_id: "L1",
+  node: "node-b",
+  output: {
+    text: "running go test ./provisioner/...",
+    source: "transcript",
+    cut: false,
+    as_of: "2026-09-13T10:05:00Z",
+    finished: false,
+  },
+};
+
+// A PARKED TURN'S LIVE WORK IS ITS CODING RUN, and a watch link — every one of
+// them lands on this tab — finds it here: the run's live output, the way to
+// the run's own page, and the executor's card it parked in. The page had no
+// phase live, so it was a Transcript with nothing moving on it and no way to
+// the thing that was.
+test("a parked turn's transcript draws its coding run live, with a way to the run", async () => {
+  mountWatching(
+    parkedSeat(),
+    [phase("2026-09-13T10:01:30Z", 90_000), launched("2026-09-13T10:01:20Z")],
+    TAIL,
+  );
+  expect(await screen.findByText("running go test ./provisioner/...")).toBeTruthy();
+  const run = screen.getByText("Coding run").closest(".crewlet-card") as HTMLElement;
+  expect(run.textContent).toContain("claude-code");
+  expect(within(run).getByRole("link", { name: "Open the run" }).getAttribute("href")).toBe(
+    "#/live/runs/t-77",
+  );
+});
+
+// THE PHASE IT PARKED IN IS OPEN, which is not the first card on a later
+// iteration: the executor that launched the run is the newest execute.
+test("a parked turn on its second iteration opens the executor it parked in", async () => {
+  mountWatching(
+    parkedSeat(),
+    [
+      phase("2026-09-13T10:01:00Z", 60_000),
+      phase("2026-09-13T10:01:30Z", 30_000, { phase: "review", decision: "self_iterate" }),
+      phase("2026-09-13T10:03:00Z", 60_000, { iteration: 2 }),
+      launched("2026-09-13T10:02:50Z"),
+    ],
+    TAIL,
+  );
+  await waitFor(() => expect(cards()).toHaveLength(3));
+  expect(cards().map((c) => c.open)).toEqual([true, false, true]);
+});
+
+// A RUN WHOSE ANNOUNCEMENT HAS NOT BEEN READ YET is still said to be out: the
+// stage moves on the push, and the answer naming the run is a refetch behind.
+test("a parked turn whose run is not announced yet says it is reading it", async () => {
+  mountWatching(parkedSeat(), [phase("2026-09-13T10:01:30Z", 90_000)]);
+  expect(await screen.findByText(/Reading which run it launched/)).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// Where a watch link lands
+// ---------------------------------------------------------------------------
+
+/**
+ * The shell's scroller, standing in for the frame: `top`/`bottom` are its
+ * box, and its `scrollTop` is a plain value this test can read back.
+ */
+function scroller(scrollTop: number) {
+  const el = document.createElement("div");
+  el.id = "screen-scroll";
+  Object.defineProperty(el, "scrollTop", { value: scrollTop, writable: true });
+  document.body.appendChild(el);
+  return el;
+}
+
+/** Place every element: the scroller's box, and the tailing ledger's. */
+function layout(view: { top: number; bottom: number }, ledger: { top: number; bottom: number }) {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    const box = this.id === "screen-scroll" ? view : this.matches(".tail-scroll") ? ledger : null;
+    const { top, bottom } = box ?? { top: 0, bottom: 0 };
+    return {
+      top,
+      bottom,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON() {},
+    };
+  });
+}
+
+/** The seat running execute with one round written, so its ledger is drawn. */
+function oneRoundIn() {
+  const seat = runningSeat("execute");
+  return {
+    ...seat,
+    live_call: {
+      ...seat.live_call,
+      tool_executions: [
+        {
+          name: "knowledge.search",
+          round: 1,
+          arguments: { q: "retry backoff" },
+          started_at: "2026-09-13T10:01:10Z",
+          duration_ms: 300,
+        },
+      ],
+    },
+  };
+}
+
+const frameDone = () =>
+  act(async () => {
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+  });
+
+// THE ROUND A READER CAME TO WATCH IS ON SCREEN WHEN THEY ARRIVE. The live
+// ledger tails its newest round at the bottom of a box as tall as the view,
+// and under the header and the cards above it that bottom was below the fold.
+test("a watch link brings the live ledger's newest round into view once, as it lands", async () => {
+  const el = scroller(0);
+  layout({ top: 70, bottom: 900 }, { top: 465, bottom: 1262 });
+  const store = mountWatching(oneRoundIn(), [
+    phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
+  ]);
+  await waitFor(() => expect(cards()).toHaveLength(2));
+  expect(document.querySelector(".phase-card.live .tail-scroll.tailing")).not.toBeNull();
+  await frameDone();
+  expect(el.scrollTop, "the ledger's bottom is at the view's").toBe(362);
+  // ONCE: back at the top, a later push moves nothing.
+  el.scrollTop = 0;
+  const next = oneRoundIn();
+  act(() =>
+    store.applyAgents([
+      { ...next, live_call: { ...next.live_call, updated_at: "2026-09-13T10:01:45Z" } },
+    ] as never),
+  );
+  await frameDone();
+  expect(el.scrollTop, "a push is not an arrival").toBe(0);
+  el.remove();
+});
+
+// AND NEVER UNDER A READER WHO HAS ALREADY MOVED: the page moves only when the
+// reader is not reading.
+test("a watch link moves nothing once the reader has scrolled", async () => {
+  const el = scroller(0);
+  layout({ top: 70, bottom: 900 }, { top: 465, bottom: 1262 });
+  mountWatching(oneRoundIn(), [phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" })]);
+  // THE READER MOVES while the turn is still being read.
+  el.scrollTop = 40;
+  await waitFor(() => expect(cards()).toHaveLength(2));
+  expect(document.querySelector(".phase-card.live .tail-scroll.tailing")).not.toBeNull();
+  await frameDone();
+  expect(el.scrollTop).toBe(40);
+  el.remove();
 });
 
 /**

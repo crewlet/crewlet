@@ -378,8 +378,11 @@ The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
 its page header. `g` then a letter jumps between them, and `?` lists every key.
 While an agent is working, the Live row counts the seats at work and a
-**Running** group at the foot of the sidebar lists each running turn: press
-one, or `g r`, to watch it — its transcript, with the phase it is on open.
+**Running** group under the sidebar's shortcuts (after Projects, Pinned and
+Starred) lists up to four running turns. Press one to watch it — its
+transcript, with the phase it is on open, or the coding run it is parked on
+drawn live above its phases. `g r` does the same for the one running turn, and
+opens Live's *Now running* when several are running (or none).
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**

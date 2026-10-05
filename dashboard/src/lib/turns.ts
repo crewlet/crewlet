@@ -95,7 +95,17 @@ export function turnIdOf(row: AgentRow | null | undefined): string {
  * list or a record is asking what it did and how long each part took. A
  * reader who pressed "Watch live" is asking what it is doing NOW, and on the
  * Timeline that is one drifting bar, with its words a tab and a press away.
- * `Turn.test.tsx` holds this to a tab the page has.
+ *
+ * A PARKED TURN IS WATCHED HERE TOO. Its executor launched a detached coding
+ * run and suspended, so no phase is in flight — yet the engine still calls the
+ * seat working, because the run is the work. The Transcript draws that run's
+ * live output above the phases, links the run's own page, and opens the
+ * executor's card it parked in. Sending a parked turn's watch link to the
+ * run's page instead would have left the other half dead: a turn that parks
+ * while a reader is already watching this tab is the same page with nothing
+ * live on it, and no link is followed to fix that.
+ *
+ * `routes/live/TurnScreen.test.tsx` holds this to a tab the page has.
  */
 export const WATCH_TAB = "transcript";
 
