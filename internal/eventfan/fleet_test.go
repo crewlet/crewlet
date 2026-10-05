@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1119,6 +1120,89 @@ func TestOneNodesPartIsReadAtOneInstant(t *testing.T) {
 	if trace.Total != held {
 		t.Errorf("the trace counts %d, want %d — counted where its rows were read", trace.Total, held)
 	}
+}
+
+// outcomeOn writes one notification outcome for a third-party app to a node's
+// own store.
+func outcomeOn(t *testing.T, n node, id, kind, app string, at time.Time) {
+	t.Helper()
+	appendTo(t, n, store.EventRecord{ID: id, Type: kind, Source: "engine", Category: "notification",
+		Time: at, Summary: kind, Tags: map[string]string{"notification_source": app}})
+}
+
+// THE OUTCOME COUNTS ARE EVERY NODE'S, SUMMED, OVER THE ASKER'S WINDOW — and a
+// node that could not count is named rather than read as zero.
+//
+// An outcome event is written to the store of the node that decided it, so a
+// count from one store is that node's share; and every node counts the window
+// the ASKER names, both edges — the bottom one, and the asker's instant, which
+// is the top edge and where the history is floored. Node-b's rows sit on every
+// edge: at the bottom (in), a second under it (out), at the instant (out), and
+// a second above the asker's horizon, which is under node-b's own clock's (in
+// on the window that reaches it). A build before the question refuses it by
+// version, and a node that never answers is named for the budget.
+//
+// Mutation: answer from the asker's store alone, or keep one node's count where
+// two name the same app, and gitlab is short; leave either edge off the wire
+// parameters, and node-b counts a row outside the window or loses the one at
+// the horizon.
+func TestNotificationOutcomesAreSummedAcrossNodes(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	servesAs(t, broker, "node-old", 4, store.EventRecord{ID: "old", Type: "notification_skipped",
+		Category: "notification", Time: time.Now().UTC(),
+		Tags: map[string]string{"notification_source": "gitlab"}})
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	since := at.Add(-2 * time.Hour)
+	horizon := at.Add(-store.EventHistory)
+
+	outcomeOn(t, a, "a-skip", "notification_skipped", "gitlab", at.Add(-time.Minute))
+	outcomeOn(t, a, "a-merge", "notifications_coalesced", "slack", at.Add(-time.Hour))
+	outcomeOn(t, b, "b-skip", "notification_skipped", "gitlab", since)
+	outcomeOn(t, b, "b-merge", "notifications_coalesced", "slack", at.Add(-time.Minute))
+	outcomeOn(t, b, "b-early", "notification_skipped", "gitlab", since.Add(-time.Second))
+	outcomeOn(t, b, "b-late", "notification_skipped", "gitlab", at)
+	outcomeOn(t, b, "b-horizon", "notification_skipped", "jira", horizon.Add(time.Second))
+
+	fan := fanFrom(a, "node-a", "node-b", "node-old", "node-gone")
+	fan.Budget = 500 * time.Millisecond
+	fan.Clock = func() time.Time { return at }
+
+	t.Run("the window", func(t *testing.T) {
+		got, coverage, err := fan.NotificationOutcomes(t.Context(), store.OutcomeQuery{Since: since})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]int{"gitlab": 2}; !maps.Equal(got.Skipped, want) {
+			t.Errorf("skipped = %v, want %v — one inside the window on each node", got.Skipped, want)
+		}
+		if want := map[string]int{"slack": 2}; !maps.Equal(got.Coalesced, want) {
+			t.Errorf("coalesced = %v, want %v — one merge on each node", got.Coalesced, want)
+		}
+		if coverage.Complete {
+			t.Error("an answer two nodes short called itself complete")
+		}
+		if !missing(coverage, "node-gone", "budget") {
+			t.Errorf("coverage %+v does not name node-gone for the budget", coverage)
+		}
+		if !missing(coverage, "node-old", "v5") {
+			t.Errorf("coverage %+v does not name node-old for the version it was asked in", coverage)
+		}
+		if missing(coverage, "node-b", "") {
+			t.Errorf("coverage %+v names node-b, which answered", coverage)
+		}
+	})
+	t.Run("the whole history under the asker's instant", func(t *testing.T) {
+		got, _, err := fan.NotificationOutcomes(t.Context(), store.OutcomeQuery{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Skipped["jira"] != 1 || got.Skipped["gitlab"] != 3 {
+			t.Errorf("skipped = %v, want jira's row above the asker's horizon and gitlab's "+
+				"three before the asker's instant — never the one at it", got.Skipped)
+		}
+	})
 }
 
 // missing reports whether a node is named as not answering, for a reason

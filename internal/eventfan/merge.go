@@ -261,6 +261,33 @@ func aligned(a, b store.EventHistogram) bool {
 	return true
 }
 
+// MergeOutcomes sums several nodes' notification outcome counts into the
+// fleet's.
+//
+// EXACT AS A SUM, for two reasons that are both needed. An outcome event is
+// written ONCE, inline, to the store of the node that decided it — no two
+// nodes hold one row — so no outcome is counted twice. And every node counted
+// the SAME window: the asker sent both its edges, the bottom one and its own
+// instant, which is also where every node floored the history, so no node's
+// count reaches a second further than another's. A sum over disjoint stores of
+// one window is the count of that window, which is what neither a page of the
+// newest events nor a per-node clock could give.
+//
+// The maps are never nil, so an answer that counted nothing still marshals as
+// two empty objects.
+func MergeOutcomes(parts []store.NotificationOutcomes) store.NotificationOutcomes {
+	out := store.NotificationOutcomes{Skipped: map[string]int{}, Coalesced: map[string]int{}}
+	for _, p := range parts {
+		for app, n := range p.Skipped {
+			out.Skipped[app] += n
+		}
+		for app, n := range p.Coalesced {
+			out.Coalesced[app] += n
+		}
+	}
+	return out
+}
+
 // FirstFound is the one event several nodes were asked for: the NEWEST copy
 // any of them holds, which is what a single store's lookup by id answers too
 // — an id is indexed but not unique, and the newest match is the reading every

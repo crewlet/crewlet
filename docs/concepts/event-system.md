@@ -500,8 +500,11 @@ Each node's event store holds what **that node** published and nothing else
 (see [Publish Listeners](#publish-listeners)), so no one store is the
 company's history. A read of turn-level detail — `events`, `event`,
 `event_series`, `trace`, `turn`, `turns`, `phases`, a seat's `llm_history`,
-and the integrations' delivery counts — is answered by **every live node at
-query time** (`internal/eventfan`, ADR-0021). The same scatter seeds the live
+the integrations' delivery counts and what became of those deliveries (the
+`notification_outcomes` question: each node's dropped and merged
+notifications per third-party app, counted over the window the delivery
+counts name) — is answered by **every live node at query time**
+(`internal/eventfan`, ADR-0021). The same scatter seeds the live
 projection when a node starts: its feed, its 24-hour spend window (the
 `phase_tokens` question, cut to the asker's window and floored at the asker's
 instant, so every node answers the same one) and each seat's last turn, so a
@@ -547,7 +550,9 @@ sequenceDiagram
   company's `phases` narrowed to one seat, which an older build narrowed by a
   role name two unit seats can share, and the event axis, whose failed split
   an older build never sends — goes out in the version that introduced it,
-  and a node on the older build refuses by version and is named. Everything else is still answered by the whole fleet during a
+  and a node on the older build refuses by version and is named. So does a
+  question an older build does not know at all, `notification_outcomes`: it
+  is asked in the version that added it. Everything else is still answered by the whole fleet during a
   rolling upgrade. The asker's **instant** (below) is not a filter and
   raises no version, because refusing it would cost an older node's whole
   answer. A build that ignores it answers as of its own clock — and the
@@ -576,10 +581,16 @@ sequenceDiagram
   `by_category` and the turns a page's second scatter folds can carry that
   node's strip of clock skew, and nothing wider, since the axis's bars, the
   spend window and a page of turns are all bounded by edges the asker names.
+  The outcome counts are counts as well and carry no strip at all: every
+  build that answers `notification_outcomes` reads the instant, because the
+  question arrived with it.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
   visits every row once; a histogram's window is cut at the asker's instant,
-  so every node cuts the same bars before they are summed; and a list of
+  so every node cuts the same bars before they are summed; the outcome
+  counts are summed over a window whose both edges the asker names — a
+  count over a named window, never one taken from a page of the newest
+  events, whose span is its own; and a list of
   turns is two scatters — every node's page, then every node's share of
   exactly the turns listed — so a turn resumed on another node after a
   restart is one row folded from both halves, not two half-turns.

@@ -711,6 +711,38 @@ func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tok
 	return records, g.coverage, nil
 }
 
+// NotificationOutcomes answers how many notifications each third-party app had
+// dropped and merged over `[q.Since, q.At)`, summed across every node.
+//
+// A COUNT OVER A NAMED WINDOW, never a page of the events it counts: the
+// integrations answer states one window for the deliveries and what became of
+// them, and the newest page of outcome events spans whatever it spans.
+//
+// THE INSTANT IS THE ASKER'S, read once when the caller pinned none — and a
+// caller that names a window beside another read passes that read's instant
+// ([Listing.At]), so both halves of one answer share an edge. It is the
+// window's top and the floor's anchor on every node at once. Nothing that comes
+// back is held to the asker's horizon here, because there is nothing to hold:
+// a count carries no instants, and no build that answers this question ignores
+// `at` — the question arrived in the version that sent it (see [Protocol]), and
+// an older build refuses it and is named in the coverage instead.
+func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, Coverage, error) {
+	started := time.Now()
+	if q.At.IsZero() {
+		q.At = f.now()
+	}
+	g, err := gather(ctx, f, QuestionNotificationOutcomes, outcomeParamsOf(q), nil,
+		func(ctx context.Context) (store.NotificationOutcomes, error) {
+			return f.Local.NotificationOutcomes(ctx, q)
+		})
+	if err != nil {
+		return store.NotificationOutcomes{}, Coverage{}, err
+	}
+	merged := MergeOutcomes(g.parts())
+	f.report(QuestionNotificationOutcomes, g.coverage, started)
+	return merged, g.coverage, nil
+}
+
 // ErrRankedCursor refuses a cursor on a page ranked by tokens: a ranking has no
 // position to resume from, and paging one by start time would mix two orders
 // on one screen.

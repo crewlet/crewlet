@@ -116,6 +116,19 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{At: time.Now()}); got != 1 {
 		t.Errorf("the spend window with the asker's instant is asked in v%d, want v1", got)
 	}
+	// A QUESTION NO EARLIER BUILD KNOWS is asked in the version that added
+	// it, whatever it carries, because that is the lowest version that
+	// answers it — and an older peer then refuses by version, naming the one
+	// it speaks, which is the account of why it is missing that every other
+	// refusal in the coverage gives.
+	for name, p := range map[string]outcomeParams{
+		"a window":  {Since: time.Now().Add(-time.Hour), At: time.Now()},
+		"no bottom": {At: time.Now()},
+	} {
+		if got := versionOf(QuestionNotificationOutcomes, p); got != 5 {
+			t.Errorf("the outcome count over %s is asked in v%d, want v5", name, got)
+		}
+	}
 	for q, p := range map[Question]any{
 		QuestionEvent: idParams{ID: "e", At: time.Now()}, QuestionTrace: idParams{ID: "t", At: time.Now()},
 		QuestionTurn: idParams{ID: "t", At: time.Now()}, QuestionPhases: phasesParams{At: time.Now()},

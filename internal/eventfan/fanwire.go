@@ -51,6 +51,16 @@ import (
 //   - v4: `failed` on a listing's filters — the event log's "Failures only",
 //     which used to narrow the rows a tab had paged in rather than the rows
 //     it was sent.
+//   - v5: the `notification_outcomes` question — what became of the
+//     notifications each third-party app delivered, counted over a window
+//     the asker names — which the integrations answer used to take from the
+//     newest page of notification events, whose span was its own. A NEW
+//     QUESTION rather than a new field: a build before it does not know it,
+//     so asked in v5 it refuses by version and is named in the coverage,
+//     exactly as it names any question it cannot answer. Its parameters
+//     carry the asker's instant from the start, so every build that answers
+//     it floors the window there and nothing it counts needs holding (see
+//     [Fleet.NotificationOutcomes]).
 //
 // ONE ADDITION MOVES NO VERSION: the asker's instant, `at`, on every
 // question's parameters — the instant the question is asked at, which every
@@ -87,7 +97,7 @@ import (
 // the whole question for the length of an upgrade, costing every row it
 // holds to save that strip. The axis has carried its `at` since v1, for the
 // window it cuts.
-const Protocol = 4
+const Protocol = 5
 
 // versionOf is the lowest scatter version that answers one question with
 // these parameters.
@@ -99,9 +109,12 @@ const Protocol = 4
 // so one narrowing by nothing new is still answered by the whole fleet during
 // an upgrade. The company's phases narrowed to a seat are v3: an older peer
 // reads only the role name the question used to carry, and would answer every
-// seat's.
+// seat's. A QUESTION is asked in the version that added it, whatever it
+// carries: no earlier build can answer it at all.
 func versionOf(q Question, params any) int {
 	switch q {
+	case QuestionNotificationOutcomes:
+		return 5
 	case QuestionSeries:
 		if p, ok := params.(seriesParams); ok {
 			return max(2, p.List.version())
@@ -167,13 +180,19 @@ const (
 	// restarted node's rollup described only the phases it had published
 	// itself.
 	QuestionPhaseTokens Question = "phase_tokens"
+	// QuestionNotificationOutcomes is how many notifications each
+	// third-party app had dropped and merged over a window, the integrations
+	// answer's outcome counts: an outcome event is written to the store of
+	// the node that decided it, so one node's count is its share of the
+	// fleet's. v5 — see [Protocol].
+	QuestionNotificationOutcomes Question = "notification_outcomes"
 )
 
 // Questions is the closed set.
 var Questions = []Question{
 	QuestionEvents, QuestionEvent, QuestionSeries, QuestionTrace, QuestionTurn,
 	QuestionTurns, QuestionPhases, QuestionSeatPhases, QuestionTraceRows,
-	QuestionPhaseTokens,
+	QuestionPhaseTokens, QuestionNotificationOutcomes,
 }
 
 // Valid reports whether q is a question this build answers.
@@ -416,6 +435,26 @@ func (p phaseTokenParams) query() store.PhaseTokenQuery {
 		Limit: p.Limit, At: p.At}
 }
 
+// outcomeParams is the outcome count's window: its bottom edge and the
+// asker's instant, which is its top edge and the instant the history floor
+// sits under — so every node counts `[since, at)` floored at one horizon.
+//
+// `at` IS NOT OMITTED WHEN ZERO, unlike every other question's: this question
+// carried it from the version that added it, so it is part of the question
+// rather than an unversioned addition, and the asker always sets it.
+type outcomeParams struct {
+	Since time.Time `json:"since,omitzero"`
+	At    time.Time `json:"at"`
+}
+
+func outcomeParamsOf(q store.OutcomeQuery) outcomeParams {
+	return outcomeParams{Since: q.Since, At: q.At}
+}
+
+func (p outcomeParams) query() store.OutcomeQuery {
+	return store.OutcomeQuery{Since: p.Since, At: p.At}
+}
+
 // ---- serving --------------------------------------------------------- //
 
 // Serve makes this node an answerer for the fleet's history questions, from
@@ -540,6 +579,12 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 			return nil, err
 		}
 		return spendPartOf(ctx, log, p.query())
+	case QuestionNotificationOutcomes:
+		var p outcomeParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return log.NotificationOutcomes(ctx, p.query())
 	case QuestionTraceRows:
 		var p traceRowsParams
 		if err := decode(&p); err != nil {

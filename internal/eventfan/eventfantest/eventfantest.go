@@ -164,6 +164,36 @@ func Run(t *testing.T, factory Factory) {
 		}
 	})
 
+	t.Run("the_outcome_counts_are_every_nodes_summed", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		for i, n := range nodes {
+			for j := range i + 1 {
+				write(t, n, store.EventRecord{ID: fmt.Sprintf("o%d-%d", i, j),
+					Type: "notification_skipped", Category: "notification", Time: at.Add(-time.Minute),
+					Tags: map[string]string{"notification_source": "gitlab"}})
+			}
+		}
+		write(t, nodes[2], store.EventRecord{ID: "merged", Type: "notifications_coalesced",
+			Category: "notification", Time: at.Add(-time.Minute),
+			Tags: map[string]string{"notification_source": "slack"}})
+		// Past the window's top edge, on a peer: never counted.
+		write(t, nodes[1], store.EventRecord{ID: "late", Type: "notification_skipped",
+			Category: "notification", Time: at,
+			Tags: map[string]string{"notification_source": "gitlab"}})
+
+		got, coverage, err := asker(nodes).NotificationOutcomes(t.Context(),
+			store.OutcomeQuery{Since: at.Add(-time.Hour), At: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, coverage)
+		if got.Skipped["gitlab"] != 6 || got.Coalesced["slack"] != 1 {
+			t.Fatalf("the fleet counted %+v, want gitlab skipped 1+2+3 = 6 and slack merged once", got)
+		}
+	})
+
 	t.Run("a_node_that_stops_answering_is_named", func(t *testing.T) {
 		t.Parallel()
 		nodes := fleet(t, factory)

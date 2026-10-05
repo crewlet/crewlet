@@ -37,13 +37,25 @@
 //
 // Each node's store is disjoint from every other's, so the merges are pure
 // functions over values ([MergeListing], [MergeSeries], [MergeTurnPartials],
-// [FirstFound]) and each one is exact for a reason it states: a keyset page is
-// merged k-way on (time, id) and cut at the newest position any FULL page
-// stopped at, a histogram's bars are summed over one pinned window, a turn's
-// aggregate is re-folded from each node's partial with the SQL's own
-// aggregates, and a list of turns is TWO scatters — the candidates, then every
-// node's share of exactly those turns, because the node a turn was selected
-// on is not always the only node that holds it.
+// [MergeOutcomes], [FirstFound]) and each one is exact for a reason it states:
+// a keyset page is merged k-way on (time, id) and cut at the newest position
+// any FULL page stopped at, a histogram's bars are summed over one pinned
+// window, a turn's aggregate is re-folded from each node's partial with the
+// SQL's own aggregates, the integrations' outcome counts are summed over a
+// window whose both edges the asker named, and a list of turns is TWO
+// scatters — the candidates, then every node's share of exactly those turns,
+// because the node a turn was selected on is not always the only node that
+// holds it.
+//
+// # A count is asked over a window, never taken from a page
+//
+// A page of the newest rows spans whatever it spans, so a number derived from
+// one is a count over a stretch of time nobody named — and stated beside a
+// window the answer DOES name, it reads as that window's. The integrations
+// answer did exactly that with what became of its deliveries, until the
+// outcome counts became a question of their own ([Fleet.NotificationOutcomes]):
+// every node counts `[since, at)` from its own store, grouped in SQL, and the
+// asker sums.
 //
 // # Every question is asked at one instant
 //
