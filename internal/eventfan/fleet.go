@@ -395,6 +395,13 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 // THE WINDOW IS PINNED to this node's clock before anybody is asked, so every
 // node cuts the same bars and floors the rows it counts into them at the same
 // instant — see [store.ListQuery.At].
+//
+// THE PARTIAL BAR IS DROPPED HERE, after the sum and never before it. Every
+// node cuts a window the history clips down to the bucket the floor falls in
+// ([store.HistogramQuery.Window]) — the shape every build cuts, so a node on
+// any build is summed with the rest — and the axis a caller is shown begins at
+// the first whole bucket inside the history ([store.EventHistogram.InsideHistory]),
+// cut at the instant every node was asked at.
 func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.EventHistogram, Coverage, error) {
 	started := time.Now()
 	if q.At.IsZero() {
@@ -418,7 +425,7 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 		}}})
 	}
 	f.report(QuestionSeries, coverage, started)
-	return merged, coverage, nil
+	return merged.InsideHistory(q.At), coverage, nil
 }
 
 // ByID answers one event, from whichever node holds it.

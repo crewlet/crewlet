@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math/rand/v2"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -880,6 +881,277 @@ func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
 	}
 	if bar := got.Bars[i]; bar.Count != 3 || bar.Failed != 2 {
 		t.Errorf("the bar of %s is %d with %d failed, want 3 with 2", hour, bar.Count, bar.Failed)
+	}
+}
+
+// earlierWindow is the window a node on the build before this one cuts for the
+// axis: that build's [store.HistogramQuery.Window], FROZEN HERE as the peer
+// contract. A fleet mid-upgrade sums that build's bars with this one's index by
+// index, in both directions, so this build has to cut exactly this — and a test
+// reading this build's own function for the reference would agree with any
+// change made to it.
+func earlierWindow(since, until, at time.Time, step time.Duration) (time.Time, time.Time) {
+	floor := at.Add(-store.EventHistory)
+	if since.IsZero() || since.Before(floor) {
+		since = floor
+	}
+	top := until
+	if top.IsZero() {
+		top = at
+	}
+	if top.Before(since) {
+		since = top
+	}
+	since = since.UTC().Truncate(step)
+	end := top.UTC().Truncate(step)
+	if end.Before(top) || end.Equal(since) {
+		end = end.Add(step)
+	}
+	return since, end
+}
+
+// servesTheAxisAsTheEarlierBuild stands a peer on the broker that answers the
+// axis EXACTLY as a node on the build before this one does: it speaks the
+// history protocol up to v4, cuts the window [earlierWindow] cuts from the
+// asker's instant, floors what it counts at its OWN clock rather than at that
+// instant, and counts its chips over the caller's own edges.
+func servesTheAxisAsTheEarlierBuild(t *testing.T, b *memory.Broker, node string, clock time.Time,
+	rows []store.EventRecord,
+) {
+	t.Helper()
+	q := client(t, b)
+	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
+		var req struct {
+			Version  int             `json:"version"`
+			Question string          `json:"question"`
+			Params   json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		refuse := func(why string) ([]byte, error) {
+			return json.Marshal(map[string]any{"version": 4, "node": node, "error": why})
+		}
+		switch {
+		case req.Version > 4:
+			return refuse(fmt.Sprintf("this node speaks history protocol up to v4 and was "+
+				"asked in v%d; it is running a different build", req.Version))
+		case req.Question != "event_series":
+			return refuse("this peer answers the axis alone")
+		}
+		var p struct {
+			List struct {
+				Since time.Time `json:"since"`
+				Until time.Time `json:"until"`
+			} `json:"list"`
+			Bucket store.EventBucket `json:"bucket"`
+			At     time.Time         `json:"at"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return refuse(err.Error())
+		}
+		step := p.Bucket.Step()
+		since, until := earlierWindow(p.List.Since, p.List.Until, p.At, step)
+		floor := clock.Add(-store.EventHistory)
+		h := store.EventHistogram{Bucket: p.Bucket, Since: since.Format(time.RFC3339),
+			Until: until.Format(time.RFC3339), Bars: []store.EventBar{}, ByCategory: map[string]int{}}
+		counts := map[int64]int{}
+		for _, r := range rows {
+			if r.Time.Before(floor) {
+				continue
+			}
+			if !r.Time.Before(since) && r.Time.Before(until) {
+				counts[r.Time.UTC().Truncate(step).UnixMicro()]++
+				h.Total++
+			}
+			if (p.List.Since.IsZero() || !r.Time.Before(p.List.Since)) &&
+				(p.List.Until.IsZero() || r.Time.Before(p.List.Until)) {
+				h.ByCategory[r.Category]++
+			}
+		}
+		for bar := since; bar.Before(until); bar = bar.Add(step) {
+			h.Bars = append(h.Bars, store.EventBar{At: bar.Format(time.RFC3339), Count: counts[bar.UnixMicro()]})
+		}
+		body, err := json.Marshal(h)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(body)})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+}
+
+// EVERY NODE CUTS THE AXIS AS THE BUILD BEFORE IT DID, over every window.
+//
+// The window is the peer contract of the axis, though no version names it: a
+// fleet sums its nodes' parts bar for bar, so a node cutting any window
+// differently from an earlier build's — a window the history clips beginning at
+// the next bucket rather than at the one the floor cuts — is a part that build
+// cannot sum, and one this build cannot sum from it. Neither side refuses by
+// version, so each would name the other's nodes, in both directions, for the
+// whole of a rolling upgrade. Held over windows inside the history, clipped by
+// it, inverted, degenerate and wholly below it, at instants on and off every
+// bucket boundary.
+//
+// Mutation: begin a clipped window at the first whole bucket in
+// [store.HistogramQuery.Window], and the windows the history clips disagree.
+func TestEveryNodeCutsTheAxisAsTheBuildBeforeItDid(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	rng := rand.New(rand.NewPCG(7, 11))
+	offset := func() time.Duration {
+		return time.Duration(rng.Int64N(int64(40*24*time.Hour))) - 35*24*time.Hour
+	}
+	for i := range 2000 {
+		at := base.Add(time.Duration(rng.Int64N(int64(7 * 24 * time.Hour))))
+		if i%5 == 0 {
+			at = at.Truncate(time.Hour)
+		}
+		bucket := store.EventBuckets[rng.IntN(len(store.EventBuckets))]
+		var since, until time.Time
+		if rng.IntN(3) > 0 {
+			since = at.Add(offset())
+		}
+		if rng.IntN(3) == 0 {
+			until = at.Add(offset())
+		}
+		q := store.HistogramQuery{Bucket: bucket, ListQuery: store.ListQuery{Since: since, Until: until}}
+		gotSince, gotUntil := q.Window(at)
+		wantSince, wantUntil := earlierWindow(since, until, at, bucket.Step())
+		if !gotSince.Equal(wantSince) || !gotUntil.Equal(wantUntil) {
+			t.Fatalf("at %s by %s over [%s, %s): this build cuts %s .. %s and the build "+
+				"before it %s .. %s — a fleet could not sum the two", at, bucket, since, until,
+				gotSince, gotUntil, wantSince, wantUntil)
+		}
+	}
+}
+
+// AN EARLIER BUILD'S AXIS IS SUMMED, a window the history clips included — and
+// shown from its first whole bar.
+//
+// The default window, any ask that names no `since`, starts at the history
+// floor, which lies mid-bucket whenever the instant does. Every build cuts it
+// down to the bucket the floor falls in, partial first bar and all, so a node on
+// the build before this one answers the window this one's nodes do and is summed
+// with them; the asker drops the partial bar only after the sum. The peer here
+// answers exactly as that build does — its own clock a few seconds behind the
+// asker's, so it floors what it counts lower — and is counted, never named.
+//
+// Mutation: begin a clipped window at the first whole bucket on each node, and
+// the earlier build's part is refused and named; drop nothing after the sum, and
+// the axis begins with the partial bar.
+func TestAnEarlierBuildsAxisIsSummedAndShownFromItsFirstWholeBar(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	// HALF PAST AN HOUR, so the floor is half past too.
+	at := time.Now().UTC().Truncate(time.Hour).Add(-90 * time.Minute)
+	floor := at.Add(-store.EventHistory)
+	first := store.BucketHour.HistoryStart(at)
+	if first.Equal(floor) {
+		t.Fatalf("the floor %s is on an hour boundary; the case needs it inside one", floor)
+	}
+	appendTo(t, a, store.EventRecord{ID: "a-partial", Type: "x", Category: "task", Time: floor.Add(10 * time.Minute)})
+	appendTo(t, a, store.EventRecord{ID: "a-first", Type: "x", Category: "task", Time: first.Add(5 * time.Minute)})
+	servesTheAxisAsTheEarlierBuild(t, broker, "node-old", at.Add(-3*time.Second), []store.EventRecord{
+		{ID: "p-partial", Category: "task", Time: floor.Add(15 * time.Minute)},
+		{ID: "p-first", Category: "task", Time: first.Add(20 * time.Minute)},
+		{ID: "p-recent", Category: "system", Time: at.Add(-10 * time.Minute)},
+	})
+	fan := fanFrom(a, "node-a", "node-old")
+	fan.Clock = func() time.Time { return at }
+
+	got, coverage, err := fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete {
+		t.Fatalf("coverage %+v — the earlier build's part was not summed", coverage)
+	}
+	if got.Since != first.Format(time.RFC3339) {
+		t.Fatalf("since = %s, want the first whole hour inside the history, %s", got.Since, first)
+	}
+	if bar := got.Bars[0]; bar.At != got.Since || bar.Count != 2 {
+		t.Errorf("the first bar is %s counting %d, want both nodes' row in it", bar.At, bar.Count)
+	}
+	if got.Total != 3 {
+		t.Errorf("total = %d, want the three rows inside whole bars, from both nodes", got.Total)
+	}
+	if got.ByCategory["task"] != 4 || got.ByCategory["system"] != 1 {
+		t.Errorf("by_category = %v, want task 4 and system 1 — the chips reach the floor on "+
+			"both nodes", got.ByCategory)
+	}
+}
+
+// THIS BUILD'S AXIS IS SUMMED BY AN EARLIER BUILD'S ASKER, the other direction.
+//
+// A node on the build before this one asks in its own version, with the
+// caller's edges and its instant, and sums every reply against its own part —
+// cut by [earlierWindow] — through a window check this build's [MergeSeries]
+// shares with it word for word. This build's answer to that request has to be
+// the window that build cut, or every node on it is named by every node on the
+// earlier one for the length of the upgrade.
+//
+// Mutation: begin a clipped window at the first whole bucket in
+// [store.HistogramQuery.Window], and the earlier asker refuses this node's part.
+func TestThisBuildsAxisIsSummedByAnEarlierBuildsAsker(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	b := newNode(t, broker, "node-b")
+	at := time.Now().UTC().Truncate(time.Hour).Add(-90 * time.Minute)
+	floor := at.Add(-store.EventHistory)
+	appendTo(t, b, store.EventRecord{ID: "b-partial", Type: "x", Category: "task", Time: floor.Add(10 * time.Minute)})
+	appendTo(t, b, store.EventRecord{ID: "b-recent", Type: "x", Category: "task", Time: at.Add(-10 * time.Minute)})
+
+	// THE REQUEST AS THAT BUILD SENDS IT: v2, the listing's filters with no
+	// instant of their own, and the axis's `at`.
+	params, err := json.Marshal(map[string]any{
+		"list": map[string]any{"limit": 0}, "bucket": store.BucketHour, "at": at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := json.Marshal(map[string]any{"version": 2, "asker": "node-old",
+		"question": "event_series", "params": json.RawMessage(params)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asker := client(t, broker)
+	replies, err := asker.Ask(t.Context(), eventfan.Subject, req, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("asked node-b: %d replies, %v", len(replies), err)
+	}
+	var reply struct {
+		Version int                  `json:"version"`
+		Error   string               `json:"error"`
+		Answer  store.EventHistogram `json:"answer"`
+	}
+	if err := json.Unmarshal(replies[0], &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Error != "" || reply.Version != 2 {
+		t.Fatalf("node-b answered v%d with %q", reply.Version, reply.Error)
+	}
+
+	// THE EARLIER ASKER'S OWN PART: the window it cuts, over a store holding
+	// nothing.
+	since, until := earlierWindow(time.Time{}, time.Time{}, at, time.Hour)
+	own := store.EventHistogram{Bucket: store.BucketHour, Since: since.Format(time.RFC3339),
+		Until: until.Format(time.RFC3339), ByCategory: map[string]int{}}
+	for bar := since; bar.Before(until); bar = bar.Add(time.Hour) {
+		own.Bars = append(own.Bars, store.EventBar{At: bar.Format(time.RFC3339)})
+	}
+	merged, refused := eventfan.MergeSeries(own, []store.EventHistogram{reply.Answer})
+	if len(refused) != 0 {
+		t.Fatalf("the earlier asker refused node-b's part: it answered %s .. %s with %d bars, "+
+			"and that build cut %s .. %s with %d", reply.Answer.Since, reply.Answer.Until,
+			len(reply.Answer.Bars), own.Since, own.Until, len(own.Bars))
+	}
+	if merged.Total != 2 || merged.Bars[0].Count != 1 {
+		t.Errorf("the earlier asker summed total %d with %d in its first bar, want node-b's "+
+			"two rows, one of them in the bar the floor cuts", merged.Total, merged.Bars[0].Count)
 	}
 }
 

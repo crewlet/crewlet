@@ -86,11 +86,12 @@ import (
 // floored at the history, not at the window), and a trace's or a turn's total
 // beyond what it corrects by the rows it dropped. Those can carry the strip
 // and nothing wider. The rest is bounded by edges every build honours: the
-// axis's bars and totals lie inside the window cut from `at` — which starts
-// above the horizon, and which an older build that cut it differently fails
-// [MergeSeries]'s check on, to be named rather than summed — the spend window
-// and a page of turns name both edges as the asker's instants, and a turn's
-// merged start is held to its window here.
+// axis's bars and totals lie inside the window every build cuts from `at`
+// alike, whose first bar — the one the floor cuts, which is where an older
+// build behind the asker's clock counts its strip — the asker drops after
+// summing ([store.EventHistogram.InsideHistory]); the spend window and a page
+// of turns name both edges as the asker's instants, and a turn's merged start
+// is held to its window here.
 //
 // It is still not a filter that build would answer around, nor a summed
 // field it would leave at zero — and a version would make that build REFUSE

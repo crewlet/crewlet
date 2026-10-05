@@ -1697,8 +1697,13 @@ answers carries one shape:
   only the role name that question used to carry, and would answer every
   seat's), and `event_series` always is at least the version that added its
   `failed` split, a field an older node never sends: its bars would be summed
-  in as though none of its events failed. A question an older build does not
-  know at all — the outcome counts on `integrations` — is asked in the version
+  in as though none of its events failed. A node that does speak that version
+  is summed on every window, the default one included: every build cuts the
+  axis's window alike, a window the history clips down to the bucket the
+  horizon falls in, and the serving node drops that partial first bar only
+  after the sum (see [the time axis](#the-event-logs-time-axis)). A question
+  an older build does not know at all — the outcome counts on `integrations`
+  — is asked in the version
   that added it, and a node on the older build refuses it and is named: its
   share of the drops and merges is missing from that answer, and the coverage
   says so, while its deliveries are still counted.
@@ -1729,9 +1734,11 @@ answers carries one shape:
   earlier build reads no instant and answers as of its own clock. What such
   a node sends only as a count — the axis's `by_category`, the turns a page's
   second pass folds — can still carry the strip by which its clock runs
-  behind the serving node's;
-  the axis's bars, the spend window and a page of turns are bounded by edges
-  the serving node names, which every build honours. The outcome counts on
+  behind the serving node's. The axis's bars cannot: every build cuts them
+  from the serving node's instant alike, and the first bar, the one the
+  horizon cuts and the one such a node counts its strip in, is dropped after
+  the sum. The spend window and a page of turns are bounded by edges the
+  serving node names, which every build honours. The outcome counts on
   `integrations` are a count too, and carry no such strip: every build that
   answers that question reads the instant, since it arrived with it.
 
@@ -1832,11 +1839,18 @@ The whole answer is cut against **one instant** — the serving node's clock
 when the question arrived — and every count in it, `bars`, `total`, `failed`
 and `by_category` alike, keeps rows from 30 days before that same instant.
 Across a fleet that instant is sent with the question, so every node cuts the
-same bars and floors what it counts at the serving node's horizon rather than
-its own. Because no bar starts below that horizon (see `since` above), every
-bar lies wholly inside the history, and a row any node holds inside a bar —
-the first one included — is counted in it however long that node took to
-answer.
+same bars — whatever its build, because every build cuts the window alike: a
+window the history clips is cut down to the bucket the horizon falls in, its
+first bar counting only what lies above the horizon — and floors what it
+counts at the serving node's horizon rather than its own. The serving node
+sums every node's bars and only then drops that partial bar, so no bar in the
+answer starts below the horizon (see `since` above), every bar lies wholly
+inside the history, and a row any node holds inside a bar — the first one
+included — is counted in it however long that node took to answer. A node on
+an earlier build is therefore summed on the default window like any other,
+rather than named; it floors what it counts at its own clock (see
+[coverage](#reading-the-fleets-history-coverage)), and the strip by which
+that clock runs behind falls in the bar that is dropped.
 
 Each bar is `{at, count, failed}`. `failed` is how many of the bar's rows
 reported a failure — by the rule a turn's own `failed` mark uses: the event

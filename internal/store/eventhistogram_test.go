@@ -318,21 +318,30 @@ func TestEveryCountOnTheAxisIsFlooredAtTheInstantItIsCutAgainst(t *testing.T) {
 	}
 }
 
-// A WINDOW THE FLOOR CLIPS BEGINS AT ITS FIRST WHOLE BAR.
+// A WINDOW THE FLOOR CLIPS IS CUT AS EVERY BUILD CUTS IT, AND SHOWN FROM ITS
+// FIRST WHOLE BAR.
 //
 // Every count is floored at the instant minus the thirty-day history, and the
 // default window — any ask that names no `since` — starts at that floor, which
-// lies mid-bucket whenever the instant does. Snapped DOWN like any other bottom
-// edge, its first bar was labelled with the whole bucket and counted only the
-// part above the floor: a partial bar, which is what the outward snap exists to
-// prevent, while the rows of that bucket below the floor were still on disk and
-// in no bar. Here the instant is half past an hour, so the floor is half past
-// too, and the bucket it falls in holds a row on each side of it.
+// lies mid-bucket whenever the instant does. Here the instant is half past an
+// hour, so the floor is half past too, and the bucket it falls in holds a row
+// on each side of it.
 //
-// Mutation: drop the clamp to the first whole bucket from
-// [store.HistogramQuery.Window], and `since` is the bucket the floor cuts, its
-// bar a partial one counting one row of the two it covers.
-func TestAWindowTheFloorClipsBeginsAtItsFirstWholeBar(t *testing.T) {
+// TWO SHAPES OF ONE AXIS, and each is held. One node's part is cut DOWN to the
+// bucket the floor falls in, that bar counting only the row above the floor:
+// it is the window every build cuts, and a fleet sums its nodes' parts bar for
+// bar, so a node that began at the next bucket instead could not be summed
+// with a peer on an earlier build in either direction. What a caller is shown
+// drops that partial bar and begins at the first whole bucket inside the
+// history, since a bar labelled with the whole bucket and counting only its
+// upper part is what the outward snap exists to prevent.
+//
+// Mutation: start [store.HistogramQuery.Window] at the first whole bucket and
+// the part's `since` is a bar later than every earlier build's; drop nothing in
+// [store.EventHistogram.InsideHistory] and the axis shown begins with the
+// partial bar; leave its Total alone and it counts the row the dropped bar
+// held.
+func TestAWindowTheFloorClipsIsCutAsEveryBuildCutsItAndShownFromItsFirstWholeBar(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	at := time.Now().UTC().Truncate(time.Hour).Add(-90 * time.Minute)
@@ -341,7 +350,8 @@ func TestAWindowTheFloorClipsBeginsAtItsFirstWholeBar(t *testing.T) {
 	first := cut.Add(time.Hour)      // the first whole one inside the history
 	for _, r := range []store.EventRecord{
 		{ID: "under-the-floor", Category: "system", Time: floor.Add(-10 * time.Minute)},
-		{ID: "over-the-floor", Category: "task", Time: floor.Add(10 * time.Minute)},
+		{ID: "over-the-floor", Category: "task", Time: floor.Add(10 * time.Minute),
+			Tags: map[string]string{"failed": "true"}},
 		{ID: "first-bar", Category: "task", Time: first.Add(10 * time.Minute)},
 		{ID: "recent", Category: "system", Time: at.Add(-10 * time.Minute)},
 	} {
@@ -350,13 +360,29 @@ func TestAWindowTheFloorClipsBeginsAtItsFirstWholeBar(t *testing.T) {
 			t.Fatalf("append %s: %v", r.ID, err)
 		}
 	}
+	if got := store.BucketHour.HistoryStart(at); !got.Equal(first) {
+		t.Fatalf("the history starts at %s, want the first whole hour inside it, %s", got, first)
+	}
 
-	got, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
+	part, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
 		ListQuery: store.ListQuery{At: at}})
 	if err != nil {
 		t.Fatalf("histogram: %v", err)
 	}
 	until := at.Truncate(time.Hour).Add(time.Hour)
+	// THE NODE'S PART: from the hour the floor cuts, as every build cuts it.
+	if part.Since != cut.Format(time.RFC3339) || part.Until != until.Format(time.RFC3339) {
+		t.Fatalf("the part's window = %s .. %s, want %s .. %s — down to the hour the "+
+			"floor falls in, the window every build cuts", part.Since, part.Until,
+			cut.Format(time.RFC3339), until.Format(time.RFC3339))
+	}
+	if b := part.Bars[0]; b.Count != 1 || b.Failed != 1 || part.Total != 3 || part.Failed != 1 {
+		t.Errorf("the part's first bar counts %d (%d failed) of total %d (%d failed), want "+
+			"the one row above the floor, failed, of three", b.Count, b.Failed, part.Total, part.Failed)
+	}
+
+	// WHAT A CALLER IS SHOWN: from the first whole hour inside the history.
+	got := part.InsideHistory(at)
 	if got.Since != first.Format(time.RFC3339) || got.Until != until.Format(time.RFC3339) {
 		t.Fatalf("window = %s .. %s, want %s .. %s — from the first whole hour inside the "+
 			"history to the end of the one in progress", got.Since, got.Until,
@@ -371,8 +397,12 @@ func TestAWindowTheFloorClipsBeginsAtItsFirstWholeBar(t *testing.T) {
 		t.Errorf("the first bar is %s counting %d, want %s counting the one row in it",
 			b.At, b.Count, first.Format(time.RFC3339))
 	}
-	if got.Total != 2 {
-		t.Errorf("total = %d, want the two rows inside the bars", got.Total)
+	if got.Total != 2 || got.Failed != 0 {
+		t.Errorf("total = %d (%d failed), want the two rows inside the bars, none failed",
+			got.Total, got.Failed)
+	}
+	if len(part.Bars) != len(got.Bars)+1 || part.Total != 3 {
+		t.Errorf("the part was written through: %d bars, total %d", len(part.Bars), part.Total)
 	}
 	// THE CHIPS take the caller's own edges — the floor, here — so they hold
 	// the row above the floor in the bucket no bar draws, and need not sum to
@@ -381,30 +411,37 @@ func TestAWindowTheFloorClipsBeginsAtItsFirstWholeBar(t *testing.T) {
 		t.Errorf("by_category = %v, want task 2 and system 1", got.ByCategory)
 	}
 
-	// A WINDOW WHOLLY BELOW THE FIRST WHOLE BAR COVERS NOTHING, rather than
-	// a bar it cannot fill or the next one, which the caller did not ask for.
-	below, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
-		ListQuery: store.ListQuery{At: at, Until: floor.Add(20 * time.Minute)}})
-	if err != nil {
-		t.Fatalf("histogram: %v", err)
-	}
-	if below.Since != first.Format(time.RFC3339) || below.Until != below.Since ||
-		len(below.Bars) != 0 || below.Total != 0 {
-		t.Errorf("a window ending inside the floor's bucket is %s .. %s with %d bars and "+
-			"total %d, want an empty window at %s", below.Since, below.Until,
-			len(below.Bars), below.Total, first.Format(time.RFC3339))
+	// A WINDOW WHOLLY BELOW THE FIRST WHOLE BAR IS SHOWN EMPTY, rather than
+	// as a bar it cannot fill or the next one, which the caller did not ask
+	// for — whether it ends inside the floor's bucket or under the floor.
+	for name, top := range map[string]time.Time{
+		"inside the floor's bucket": floor.Add(20 * time.Minute),
+		"under the floor":           floor.Add(-2 * time.Hour),
+	} {
+		below, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
+			ListQuery: store.ListQuery{At: at, Until: top}})
+		if err != nil {
+			t.Fatalf("histogram: %v", err)
+		}
+		shown := below.InsideHistory(at)
+		if shown.Since != first.Format(time.RFC3339) || shown.Until != shown.Since ||
+			len(shown.Bars) != 0 || shown.Total != 0 || shown.Failed != 0 {
+			t.Errorf("a window ending %s is shown as %s .. %s with %d bars and total %d "+
+				"(%d failed), want an empty window at %s", name, shown.Since, shown.Until,
+				len(shown.Bars), shown.Total, shown.Failed, first.Format(time.RFC3339))
+		}
 	}
 	// AND A DEGENERATE WINDOW INSIDE THE HISTORY STILL WIDENS to the one
-	// bucket holding it.
+	// bucket holding it, with nothing to drop.
 	point := first.Add(2 * time.Hour)
 	one, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
 		ListQuery: store.ListQuery{At: at, Since: point, Until: point}})
 	if err != nil {
 		t.Fatalf("histogram: %v", err)
 	}
-	if one.Since != point.Format(time.RFC3339) || len(one.Bars) != 1 {
-		t.Errorf("a zero-width window at %s is %s .. %s with %d bars, want the one bucket",
-			point, one.Since, one.Until, len(one.Bars))
+	if shown := one.InsideHistory(at); shown.Since != point.Format(time.RFC3339) || len(shown.Bars) != 1 {
+		t.Errorf("a zero-width window at %s is shown as %s .. %s with %d bars, want the one bucket",
+			point, shown.Since, shown.Until, len(shown.Bars))
 	}
 }
 

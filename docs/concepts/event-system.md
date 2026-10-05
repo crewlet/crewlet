@@ -553,7 +553,9 @@ sequenceDiagram
   and a node on the older build refuses by version and is named. So does a
   question an older build does not know at all, `notification_outcomes`: it
   is asked in the version that added it. Everything else is still answered by the whole fleet during a
-  rolling upgrade. The asker's **instant** (below) is not a filter and
+  rolling upgrade — the axis included, over any window it is asked for, the
+  default one too, because every build cuts its window alike (below). The
+  asker's **instant** (below) is not a filter and
   raises no version, because refusing it would cost an older node's whole
   answer. A build that ignores it answers as of its own clock — and the
   builds before it did not all floor alike: every question but `event` was
@@ -579,15 +581,22 @@ sequenceDiagram
   trace's or a turn's count is corrected by the rows cut. What arrives only
   as a count aggregated at an older node's own clock cannot be cut: the axis's
   `by_category` and the turns a page's second scatter folds can carry that
-  node's strip of clock skew, and nothing wider, since the axis's bars, the
-  spend window and a page of turns are all bounded by edges the asker names.
+  node's strip of clock skew, and nothing wider. The axis's bars cannot: every
+  build cuts them from the asker's instant alike, and the one bar an older
+  node behind the asker's clock counts its strip in — the first, which the
+  horizon cuts — is dropped after the sum (below). The spend window and a page
+  of turns are bounded by edges the asker names.
   The outcome counts are counts as well and carry no strip at all: every
   build that answers `notification_outcomes` reads the instant, because the
   question arrived with it.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
-  visits every row once; a histogram's window is cut at the asker's instant,
-  so every node cuts the same bars before they are summed; the outcome
+  visits every row once; a histogram's window is cut at the asker's instant
+  by every build alike — a window the 30-day history clips down to the bucket
+  the horizon falls in, its first bar counting only what lies above the
+  horizon — so every node, whatever its build, cuts the same bars before they
+  are summed, and only then does the asker drop that partial first bar, so
+  the axis shown begins at the first whole bucket inside the history; the outcome
   counts are summed over a window whose both edges the asker names — a
   count over a named window, never one taken from a page of the newest
   events, whose span is its own; and a list of
