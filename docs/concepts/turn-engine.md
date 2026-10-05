@@ -607,7 +607,10 @@ sequenceDiagram
   into every later phase: the reviewer that judges the work opens with it, and
   so does every executor iteration after it, across a parked coding run
   included. Without that the reviewer would grade the work against the task the
-  person had corrected.
+  person had corrected. An executor **resumed** from a parked coding run reads
+  notes at its own rounds exactly as the pass it continues did, on the phase's
+  round scale: a note offered while the box's result was collected is read at
+  the re-entered loop's first round.
 - **Not every loop reads it.** A [worker](#workers) is a leaf its parent
   directs, so a note offered while a worker runs waits for the executor's next
   round. The onboarding pass and the extension judge do not read notes either.

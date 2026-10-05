@@ -118,7 +118,15 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// A resumed executor can suspend AGAIN: it may call run_sandbox a
 		// second time to continue in the same box.
 		allowSuspend: true,
-		prior:        priorRounds(state),
+		// A RESUMED EXECUTOR IS STEERABLE like the pass it continues. The
+		// engine hands this runner the turn's note box for exactly this
+		// segment (internal/engine's resume), and a phase that drains
+		// nothing leaves a note offered while it runs waiting in the box
+		// until the reviewer — which then grades work the executor never
+		// got the chance to correct — or until the turn ends and the note
+		// is reported `expired`, unread by the phase it was sent to.
+		steerable: true,
+		prior:     priorRounds(state),
 		// What the pre-suspend half already spent, so this phase's record
 		// reports the whole of it.
 		priorElapsed: time.Duration(state.ElapsedMS) * time.Millisecond,
