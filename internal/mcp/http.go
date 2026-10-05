@@ -14,6 +14,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // maxLoggedErrorBody bounds how much of a failing HTTP response is logged.
@@ -232,7 +233,9 @@ func boundedBody(body []byte) string {
 	case len(body) == 0:
 		return "(empty)"
 	case len(body) > maxLoggedErrorBody:
-		return string(body[:maxLoggedErrorBody]) + truncationMarker
+		// On a character boundary: a byte slice splits whatever rune
+		// straddles the cap, and the log's encoder writes U+FFFD for it.
+		return textcut.Bytes(string(body), maxLoggedErrorBody) + truncationMarker
 	default:
 		return string(body)
 	}

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func mustConnect(t *testing.T, spec Spec) *client {
@@ -495,4 +497,28 @@ func waitForTail(t *testing.T, c *client, want int) []string {
 	}
 	t.Fatalf("stderr tail reached %d lines, wanted %d", len(tail), want)
 	return nil
+}
+
+// AN OVER-LONG LINE IS CUT ON A CHARACTER. The cap is bytes, and a byte cut
+// splits whatever multi-byte character straddles it — so a server writing in
+// any script but ASCII left a line ending in a broken character, which the
+// log's encoder writes as U+FFFD. Both places the cut can fall are covered: a
+// bufio chunk that holds the bytes after the cap, and a cap that lands
+// exactly between two of the reader's chunks.
+func TestAnOverlongStderrLineIsCutOnACharacter(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int{16, 100} { // 8192 is a multiple of 16 and not of 100
+		line := strings.Repeat("日", maxStderrLine) + "\n" // three bytes a rune: the cap lands inside one
+		got, truncated, err := readBoundedLine(bufio.NewReaderSize(strings.NewReader(line), size))
+		if err != nil || !truncated {
+			t.Fatalf("reader of %d: truncated=%v err=%v", size, truncated, err)
+		}
+		if !utf8.ValidString(got) || len(got) > maxStderrLine {
+			t.Errorf("reader of %d: kept %d bytes, valid UTF-8 %v", size, len(got), utf8.ValidString(got))
+		}
+	}
+	got := boundedBody([]byte(strings.Repeat("日", maxLoggedErrorBody)))
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, truncationMarker) {
+		t.Errorf("a long error body was cut through a character: …%q", got[max(0, len(got)-40):])
+	}
 }
