@@ -1115,6 +1115,29 @@ export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
 }
 
 /**
+ * How many running turns a SHORT list of them names before it hands the rest
+ * to Live › Now running, which lists every one: Home's Live now card, and the
+ * sidebar's Running group.
+ *
+ * ONE NUMBER FOR BOTH, because they are one list in one order
+ * ([workingLongestFirst]) and two caps would name two different sets of seats
+ * on the same screen. Four is what Home's card holds level with the figures
+ * beside it, and four sidebar rows are about the height of the Pinned group a
+ * reader keeps there — a fifth working seat is the point where a shortcut
+ * becomes a second copy of Now running, so it is a "more" row instead.
+ */
+export const RUNNING_ROWS = 4;
+
+/**
+ * The key of the work item a seat's turn is CHARGED to — its call's, then its
+ * turn's — or "" for a turn on none. The item the engine charges the turn to,
+ * never a `work_key` a trigger happened to name (see [stateLine]).
+ */
+export function turnItemKey(row: AgentRow | null | undefined): string {
+  return row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
+}
+
+/**
  * Whether a detached coding run is waiting on a person.
  *
  * THE ENGINE'S OWN TWO WORDS: `awaiting_clarification`, and `reseed` — the box
@@ -1319,7 +1342,7 @@ export function stateLine(
     return seat.availability || "Human teammate — not run by the engine";
   }
   const state = activityOf(row);
-  const item = row?.live_call?.work_item?.key || row?.turn?.work_item?.key || "";
+  const item = turnItemKey(row);
   switch (state) {
     case "working": {
       // A DETACHED CODING RUN parks the turn while the box works: the seat is
@@ -1375,7 +1398,7 @@ export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
   const out = new Map<string, CardLive>();
   for (const row of rows) {
     if (row.activity !== "working") continue;
-    const key = row.live_call?.work_item?.key || row.turn?.work_item?.key || "";
+    const key = turnItemKey(row);
     const handle = row.handle ?? "";
     if (!key || !handle) continue;
     out.set(key, {

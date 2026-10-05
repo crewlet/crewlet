@@ -377,6 +377,9 @@ raised takes over the sentence under the greeting.
 The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
 its page header. `g` then a letter jumps between them, and `?` lists every key.
+While an agent is working, the Live row counts the seats at work and a
+**Running** group at the foot of the sidebar lists each running turn: press
+one, or `g r`, to watch it — its transcript, with the phase it is on open.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**

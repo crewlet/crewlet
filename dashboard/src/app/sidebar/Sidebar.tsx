@@ -5,12 +5,23 @@
  *
  * The WORKSPACES, from `nav.ts`'s one table — the three that are about you
  * (Home, Inbox, My work), then the company's five, and Settings at the foot.
- * Then three LIVE SHORTCUTS, each a real object with its own path: the
- * company's projects, the views this reader pinned, and the pages they
- * starred. Nothing else. A workspace's own sections are tabs in its page
- * header and its objects are rows on the section that lists them; a sidebar
- * that carried either becomes a tree with a different shape on every screen,
- * which is the two-column navigation this replaced.
+ * Then four LIVE SHORTCUTS, each a real object with its own path: the
+ * company's projects, the views this reader pinned, the pages they starred,
+ * and the turns running now. Nothing else. A workspace's own sections are tabs
+ * in its page header and its objects are rows on the section that lists them;
+ * a sidebar that carried either becomes a tree with a different shape on every
+ * screen, which is the two-column navigation this replaced.
+ *
+ * # Running is the way to a turn from anywhere
+ *
+ * Who is working was a figure on the Agents row, whose link is the org chart —
+ * so the reader who followed it to the running turn went chart, card, profile,
+ * tab, and found the turn there with nothing to say it was moving. The figure
+ * is on the LIVE row now, because Live › Now running is what holds the running
+ * turns, and under the shortcuts each one is a row of its own that WATCHES it
+ * (`lib/turns.ts`' `watchLink`). That group is LAST, so nothing above it moves
+ * when a turn starts or ends, and its rows are oldest first, so a turn that
+ * starts is appended and the rows a reader is aiming at never reorder.
  *
  * # Every figure says what it counts
  *
@@ -18,8 +29,8 @@
  * two kinds of figure are two props: a BADGE is how many things are waiting
  * on the reader (the Inbox's unread primary notices, the one accent fill in
  * the chrome), and a COUNT is how many of something a destination holds (the
- * agents working, a project's open tasks, a pinned view's total). A figure
- * the engine did not answer is absent, never a zero.
+ * turns Live is running, a project's open tasks, a pinned view's total). A
+ * figure the engine did not answer is absent, never a zero.
  *
  * # Settings is never hidden
  *
@@ -39,14 +50,24 @@ import {
   StatusDot,
   useAppShell,
 } from "@crewlethq/ui";
-import { KeyGlyph, PinGlyph, PlusGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, KeyGlyph, PinGlyph, PlusGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import { WORKSPACES, workspaceOf, type WorkspaceRow } from "~/app/nav.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import {
+  RUNNING_ROWS,
+  activityOf,
+  indexOrg,
+  ringOf,
+  turnItemKey,
+  workingLongestFirst,
+} from "~/lib/seats.ts";
+import { turnIdOf, watchLink } from "~/lib/turns.ts";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { AgentRow } from "~/protocol/index.ts";
 import { pageCount, unfinished, viewRun } from "~/lib/work.ts";
 import { routeProject } from "../palette/hits.ts";
 import { useOpenNewTask } from "../newTask.ts";
@@ -91,16 +112,19 @@ export function Sidebar({
   const at = route.path.join("/");
 
   // THE ENGINE'S WORD for working, off the agents push — never a projection's
-  // own reading of a seat's call state.
-  const working = agents.filter((a) => a.activity === "working").length;
+  // own reading of a seat's call state — in the order every list of running
+  // turns draws, read once for the Live row's figure and the Running group.
+  const working = useMemo(() => workingLongestFirst(agents), [agents]);
 
   // THE FIGURE THE QUEUE TAB CARRIES on the reader's own day, read once by
   // the frame for both: see `lib/useQueueCount.ts`.
   const queue = useOwnQueueCount();
 
-  const seatName = useMemo(
-    () => indexOrg(org).byHandle.get(viewer.handle)?.name ?? "",
-    [org, viewer.handle],
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seatName = index.byHandle.get(viewer.handle)?.name ?? "";
+  const names = useMemo(
+    () => (row: AgentRow) => index.byHandle.get(row.handle ?? "")?.name ?? row.role,
+    [index],
   );
 
   const figures: Partial<Record<WorkspaceRow["key"], Pick<NavRowProps, "badge" | "count">>> = {
@@ -123,15 +147,21 @@ export function Sidebar({
             },
           }
         : {},
-    agents:
-      working > 0
+    // ON LIVE, NOT AGENTS: a count says how many of something the DESTINATION
+    // holds, and Live › Now running holds the running turns, one row each. On
+    // the Agents row it pointed a reader looking for a running turn at the
+    // org chart.
+    live:
+      working.length > 0
         ? {
             count: {
-              value: working,
+              value: working.length,
               label: "working",
               // THE KIT'S STEADY-STATE PULSE, which holds still under reduced
               // motion — the one animated mark in the chrome, on the one state
-              // that is ongoing.
+              // that is ongoing. The Running group's rows carry none of their
+              // own: one pulse says "something is running", and a pulse per
+              // row would be a column of motion beside the reader's work.
               mark: <StatusDot tone="info" pulse />,
             },
           }
@@ -254,6 +284,10 @@ export function Sidebar({
         </RailBoundary>
         <RailBoundary label="Starred" resetKey={at}>
           <StarredSection path={route.path} />
+        </RailBoundary>
+        {/* LAST, so a turn starting or ending moves nothing above it. */}
+        <RailBoundary label="Running" resetKey={at}>
+          <RunningSection path={route.path} working={working} names={names} />
         </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
@@ -434,6 +468,77 @@ function StarredSection({ path }: { path: string[] }) {
           current={samePath(path, s.path)}
         />
       ))}
+    </SidebarNav.Group>
+  );
+}
+
+/**
+ * The turns running now, one row per seat the engine says is WORKING: the
+ * seat's badge with its ring, its name, the key of the item the turn is
+ * charged to, and a link that WATCHES the turn — its Transcript, with the
+ * phase it is on open.
+ *
+ * THE SAME SET AS THE FIGURE ON LIVE, in the same order every list of running
+ * turns draws (`workingLongestFirst`): oldest first, so a turn that starts is
+ * appended and never shuffles the row a reader is reaching for. A seat that
+ * NEEDS a person is not here — it is running nothing, and what it waits on is
+ * the Inbox's and Now running's "Waiting on a person" — and a working seat
+ * whose turn has published no id yet is skipped rather than linked to
+ * nothing, and counted in the "more" row, which is Now running, where it is
+ * listed. Capped at `RUNNING_ROWS`, Home's own number.
+ *
+ * NOTHING HERE TICKS. No elapsed clock and no per-row pulse: the chrome is
+ * read on every screen, and a column of moving marks beside a reader's work
+ * is motion on every data push. The Live row's one pulsing dot says that
+ * something runs; these rows say which, and where to watch it.
+ */
+function RunningSection({
+  path,
+  working,
+  names,
+}: {
+  path: string[];
+  working: readonly AgentRow[];
+  names: (row: AgentRow) => string;
+}) {
+  const shown = working.filter((row) => turnIdOf(row) !== "").slice(0, RUNNING_ROWS);
+  if (working.length === 0) return null;
+  const more = working.length - shown.length;
+  return (
+    <SidebarNav.Group label="Running">
+      {shown.map((row) => {
+        const name = names(row);
+        const watch = watchLink(turnIdOf(row));
+        const item = turnItemKey(row);
+        return (
+          <NavRow
+            key={row.id}
+            label={name}
+            glyph={
+              <SeatAvatar
+                name={name}
+                kind="agent"
+                size="xs"
+                ring={ringOf(activityOf(row))}
+                decorative
+              />
+            }
+            lead={item || undefined}
+            path={watch.path}
+            query={watch.query}
+            current={samePath(path, watch.path)}
+          />
+        );
+      })}
+      {more > 0 && (
+        <NavRow
+          key="more"
+          label={`${more} more running`}
+          glyph={<ActivityGlyph size="sm" />}
+          path={["live"]}
+          current={false}
+        />
+      )}
     </SidebarNav.Group>
   );
 }

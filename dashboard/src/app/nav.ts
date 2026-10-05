@@ -21,7 +21,7 @@
  * # The three nouns, stated once and asserted in router.test.ts
  *
  *   - A SIDEBAR ROW is a workspace, or a live shortcut to a project, a pinned
- *     view or a starred page.
+ *     view, a starred page or a running turn.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer —
  *     `tabs` in the page header, `column` for Settings, or `tree` for
  *     Knowledge, whose column also holds its spaces and pages.

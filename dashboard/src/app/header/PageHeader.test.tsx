@@ -229,7 +229,7 @@ describe("the breadcrumb", () => {
 });
 
 // WHO IS WORKING IS HOME'S, the way the Main artboard draws it: the sidebar's
-// Agents badge carries the count on every other page, and the chip drawn in
+// Live row carries the count on every other page, and the chip drawn in
 // every bar sat between a task's trail and its actions and pushed a profile's
 // controls past a phone's edge.
 describe("who is working", () => {

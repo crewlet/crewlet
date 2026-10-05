@@ -13,12 +13,9 @@ import { useMemo } from "react";
 import { Card, Tag } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, workingLongestFirst } from "~/lib/seats.ts";
+import { RUNNING_ROWS, indexOrg, workingLongestFirst } from "~/lib/seats.ts";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
-
-/** How many working seats the card lists before "Open live view". */
-export const LIVE_ROWS = 4;
 
 export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: number }) {
   const org = useOrg();
@@ -50,7 +47,8 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
         </div>
       ) : (
         <ul className="live-list">
-          {working.slice(0, LIVE_ROWS).map((row) => (
+          {/* THE SIDEBAR'S RUNNING GROUP'S OWN CAP, so the two name one set. */}
+          {working.slice(0, RUNNING_ROWS).map((row) => (
             <LiveTurnRow key={row.id} row={row} index={index} now={now} />
           ))}
         </ul>

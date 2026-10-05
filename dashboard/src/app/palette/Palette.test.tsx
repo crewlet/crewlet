@@ -256,6 +256,60 @@ describe("scopes and sigils", () => {
   });
 });
 
+// THE TURNS RUNNING NOW LEAD AN EMPTY PALETTE, each going to the turn's watch
+// link — its Transcript, the phase it is on open. Oldest first, as every list
+// of running turns is; a seat waiting on a person, or one whose turn has no id
+// yet, is not offered as a way to a running turn.
+describe("running now", () => {
+  const working = (role: string, handle: string, turn: string, minute: number, item = "") => ({
+    role,
+    handle,
+    activity: "working",
+    turn: {
+      turn_id: turn,
+      started_at: `2026-09-21T10:0${minute}:00Z`,
+      stage: "phase",
+      ...(item ? { work_item: { backend: "native", id: item, key: item, project: "ENG" } } : {}),
+    },
+    live_call: { turn_id: turn, phase: "execute", round_num: 0, rounds_used: 1, max_rounds: 25 },
+  });
+  const agents = [
+    working("SRE", "sre", "t-late", 9),
+    working("SWE", "swe", "t-early", 1, "ENG-412"),
+    { role: "Jane Founder", handle: "jane", activity: "needs" },
+    { ...working("SWE 2", "swe-2", "", 3), turn: null, live_call: null },
+  ];
+
+  test("leads the empty All scope, oldest first, saying what each is doing", () => {
+    mount({ agents });
+    // THE FIRST GROUP, ahead of Recent and Go to.
+    const options = screen.getAllByRole("option");
+    expect(options[0]?.textContent).toContain("SWE");
+    expect(options[0]?.textContent).toContain("Executing ENG-412");
+    expect(options[1]?.textContent).toContain("SRE");
+    expect(screen.getByText("Running now")).toBeTruthy();
+    const running = screen.getByText("Running now").closest('[role="group"]') as HTMLElement;
+    expect(within(running).getAllByRole("option")).toHaveLength(2);
+  });
+
+  test("a row goes to the turn's watch link", () => {
+    const p = mount({ agents });
+    const running = screen.getByText("Running now").closest('[role="group"]') as HTMLElement;
+    fireEvent.click(within(running).getAllByRole("option")[0]!);
+    expect(location.hash).toBe("#/live/turns/t-early?tab=transcript");
+    expect(p.closed).toHaveBeenCalled();
+  });
+
+  test("is not drawn once something is typed, or while nothing runs", async () => {
+    const p = mount({ agents });
+    await p.type("deploy");
+    expect(screen.queryByText("Running now")).toBeNull();
+    cleanup();
+    mount({ agents: [{ role: "SWE", activity: "idle" }] });
+    expect(screen.queryByText("Running now")).toBeNull();
+  });
+});
+
 // A SEAT'S STATE IN THE CHART'S WORDS: the pauser is a person, and a hint
 // reading "Paused by jane" names an address where a person is meant.
 test("an agent's state names its pauser by the chart's name", async () => {

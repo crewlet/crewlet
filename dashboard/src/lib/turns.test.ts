@@ -7,7 +7,14 @@
 import { expect, test } from "vitest";
 
 import { buildHash } from "~/app/router.tsx";
-import { runningNow, turnIdOf, watchHref, watchLink, workItemLabel } from "./turns.ts";
+import {
+  runningNow,
+  runningTarget,
+  turnIdOf,
+  watchHref,
+  watchLink,
+  workItemLabel,
+} from "./turns.ts";
 import type { AgentRow, TurnRow } from "~/protocol/index.ts";
 
 const ID = "4d631f6d-8a1b-4c2d-9e3f-0a1b2c3d4e5f";
@@ -97,4 +104,20 @@ test("the turn a seat is on is its turn record's, then its call's, else none", (
   ).toBe("t-8");
   expect(turnIdOf(seat({ turn: null, live_call: null }))).toBe("");
   expect(turnIdOf(undefined)).toBe("");
+});
+
+// `g r`: THE running turn when there is exactly one, and every running turn —
+// Now running — when there are several or none. A seat that is working but
+// names no turn yet has no page to watch, and a seat that is not working is no
+// running turn at all.
+test("the running target is the one turn's watch link, else Now running", () => {
+  const working = (over: Partial<AgentRow> = {}) => seat({ activity: "working", ...over });
+  expect(runningTarget([working()])).toEqual(watchLink("t-7"));
+  expect(runningTarget([working(), seat({ id: "b", activity: "needs" })])).toEqual(
+    watchLink("t-7"),
+  );
+  const live = { path: ["live"], query: {} };
+  expect(runningTarget([])).toEqual(live);
+  expect(runningTarget([working(), working({ id: "b" })])).toEqual(live);
+  expect(runningTarget([working({ turn: null, live_call: null })])).toEqual(live);
 });

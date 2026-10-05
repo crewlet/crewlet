@@ -36,6 +36,7 @@ import {
   stateLine,
   staleness,
   toneOf,
+  turnItemKey,
   STALE_MS,
   STALLED_MS,
   unitDirectLabel,
@@ -927,4 +928,21 @@ test("a call whose first round has not come back is on round one", () => {
     hint: "the first model round is in flight and has not come back",
   });
   expect(roundOf(null)).toBe(0);
+});
+
+// THE ITEM THE TURN IS CHARGED TO — the call's, then the turn's — and nothing
+// for a turn on none, never a work key a trigger happened to name.
+test("a turn's item key is its call's, then its turn's, else none", () => {
+  const item = (key: string) => ({ backend: "native", id: key, key, project: "ENG" });
+  const row = (call: string, turn: string) =>
+    ({
+      id: "a",
+      role: "SWE",
+      live_call: call ? { turn_id: "t", work_item: item(call), work_key: "slack:x" } : null,
+      turn: turn ? { turn_id: "t", work_item: item(turn) } : null,
+    }) as unknown as AgentRow;
+  expect(turnItemKey(row("ENG-2", "ENG-1"))).toBe("ENG-2");
+  expect(turnItemKey(row("", "ENG-1"))).toBe("ENG-1");
+  expect(turnItemKey(row("", ""))).toBe("");
+  expect(turnItemKey(undefined)).toBe("");
 });

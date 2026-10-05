@@ -297,7 +297,7 @@ list a section of Settings.
 ### The grammar, stated once and asserted
 
 - A **sidebar row** is a workspace, or a live shortcut to a project, a pinned
-  view or a starred page.
+  view, a starred page or a running turn.
 - A **section** is a **path segment** inside a workspace, drawn by one
   renderer — `tabs` in the page header, or `column` for Settings.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
@@ -533,8 +533,8 @@ what it knows and what it spent, and the machine last.
 | **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+") |
 | **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | **Work** | `#/work` | — |
-| **Agents** | `#/agents` | agents working now, beside the working mark |
-| **Live** | `#/live` | — |
+| **Agents** | `#/agents` | — |
+| **Live** | `#/live` | the agents working now, beside the working mark — the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on Agents it sent a reader looking for a running turn to the org chart |
 | **Knowledge** | `#/knowledge` | — |
 | **Spend** | `#/spend` | — (tokens only; nothing in this product renders money) |
 | **Settings** | `#/settings` | a key mark when no operator credential is presented |
@@ -551,8 +551,25 @@ pinned row RUNS the view, `#/work?view=<key>` or its project's list for a view
 saved on a project, rather than opening the inventory page about it — and the
 total beside it is that list's own: the engine counts a pinned view with every
 task filtered on its own, as every surface that runs a view asks for it, never
-in the grammar's tree mode, where an open epic's finished subtasks rode along), and
-**Starred** (drawn only when there is one). At the foot, Settings, the
+in the grammar's tree mode, where an open epic's finished subtasks rode along),
+**Starred** (drawn only when there is one), and **Running** — one row per seat
+the engine says is working, drawn while one is: the seat's badge with its
+state ring, its name, the key of the item its turn is charged to as the lead,
+and a link that WATCHES the turn (its Transcript, the phase it is on open; see
+[the turn trace](#the-turn-trace-four-tabs-one-clock)). It is the way to a
+running turn from every screen, where it was the Agents row, the chart, a
+card, the profile and a tab. It is the same set as the figure on Live and in
+the order every list of running turns draws — the turn that has run longest
+first — so a turn that starts is APPENDED and the rows a reader is reaching
+for never reorder, and it is LAST so nothing above it moves when a turn starts
+or ends. Four rows — Home's Live now holds four too, so the two name the same
+seats — then one **N more running** row to Live › Now running, which also
+counts a working seat whose turn has published no id yet rather than linking
+it to nothing. A seat that needs a person is not listed: it is running
+nothing, and what it waits on is the Inbox's and Now running's *Waiting on a
+person*. Nothing in it ticks — no elapsed clock and no pulse per row — because
+the chrome is on every screen; the Live row's one dot says something runs, and
+these rows say which. At the foot, Settings, the
 **health card** and the **user block**. The head carries the company's lockup
 and, at the end of the same line, the chrome's one create: `+` New task.
 
@@ -705,8 +722,11 @@ and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
 `g l`, `g k`, `g t`, `g s`). A chord rather than a modifier, because every
-single-modifier combination worth having is already the browser's. Every key
-the dashboard answers is in [one table](#the-keys), and `?` shows it.
+single-modifier combination worth having is already the browser's. `g r` is
+the one `g` sequence that is not a workspace: it watches the running turn when
+exactly one seat is working, and opens Live › Now running — every running
+turn — when several are, or none. Every key the dashboard answers is in [one
+table](#the-keys), and `?` shows it.
 
 ### The routes
 
@@ -1508,7 +1528,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `Mod+\` the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
@@ -1543,7 +1563,9 @@ them, and `useKeymap` refuses to bind one a second time. Nothing else binds a
 key: the suite fails a module that calls the mechanism under `useKeymap`, or
 listens for `keydown` itself, except the org builder's undo, which is scoped to
 presses inside the builder and reads its keys from the table with
-`matchesRow`.
+`matchesRow`. And a row nobody binds fails too: the frame's rows are bound by
+the frame alone, so the suite mounts it and refuses an "Anywhere" row it did
+not bind — a key the legend offered and nothing answered.
 
 **`/` searches what you are looking at.** A screen with a search box of its
 own — the seat filter, the event log, the tools catalogue, the audit log's
@@ -1565,7 +1587,7 @@ must not also open the grid row behind the field.
 ### The page bar wraps by what it holds
 
 The bar holds the trail, who is working now (on Home's bar only, as the Main
-artboard draws it — the sidebar's Agents badge carries the same count on every
+artboard draws it — the sidebar's Live row carries the same count on every
 other page, and a chip in every bar sat between a task's trail and its actions
 and pushed a profile's controls past a phone's edge), the star and Copy link — which is what the
 approved artboards label **Share**: sharing a page here IS its address, since
@@ -1785,7 +1807,8 @@ company did.** Top to bottom:
 - **Live now**: every seat the engine says is working — what it is on (the
   item the turn is charged to, never a work key), how long, where it is in
   context → execute → review ("Execute · round 7 of 25"), and the last call it
-  made — each a way into its turn.
+  made — each a way into its turn. Four, longest-running first, the four the
+  sidebar's Running group names, and **Open live view** for the rest.
 - **Tasks completed** per company day over the last fourteen (today in the
   accent), **Tokens by team** over the window (tokens, never money), and
   **Projects**: each project's done, active and to-do work as one bar, its
@@ -2498,7 +2521,7 @@ fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
 |---|---|---|
-| **All** | screens, a pasted event / trace / turn id, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, and the answer's remaining sources; recents when nothing is typed | |
+| **All** | screens, a pasted event / trace / turn id, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, and the answer's remaining sources; when nothing is typed, **Running now** — a row per working seat, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link — then recents | |
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's ring from the agents push, then people and teams | `@` |
@@ -3470,9 +3493,10 @@ honour them, and the window (`15m`, `1h`, `6h`) is the activity strip's.
 address carried from one Live screen to the other means the same thing on
 both. The seat menu offers every agent the chart holds, in every unit, and
 shows ten before it scrolls. The page carries no working count of its own:
-the shell's header chip says how many seats are working on every screen, and
-a second one beside it said the same number twice and pushed the chip off a
-phone's page bar. A seat is
+the sidebar's Live row says how many seats are working on every screen (and
+Home's page bar does, on Home), and a second figure here said the same number
+twice and pushed the bar's controls off a phone's page bar. It is also where
+the sidebar's **N more running** row lands. A seat is
 asked for by its handle and the phases finishing on the push are matched on
 the seat's own id, never on a role name two unit seats can share. The
 spend panels and the onboarding cards are gone: the spend is Spend's, and
@@ -4900,7 +4924,8 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
 row of a list, a settled turn's *Trace*, a monitor's row on Home's Live now and
 Live › Now running — opens the page on its Timeline, the default tab. A link
 whose job is to WATCH a running turn — every **Watch live** (a seat's current
-turn, a task's live row and its page bar) — opens it on the
+turn, a task's live row and its page bar), the sidebar's **Running** group,
+`g r` and ⌘K's **Running now** — opens it on the
 **Transcript** (`?tab=transcript`, `lib/turns.ts`' `watchLink`), where the
 phase the turn is on is drawn OPEN with its rounds arriving. Landing on the
 Timeline, a reader who pressed Watch saw one drifting bar and had to find the

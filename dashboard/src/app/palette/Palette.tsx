@@ -10,7 +10,7 @@
  *
  *  - ALL — screens, a pasted event / trace / turn id, the company's tasks and
  *    pages (three of each), seats and units, tools, and the three actions;
- *    recents when nothing is typed;
+ *    when nothing is typed, the turns running now and then the recents;
  *  - TASKS — `work_search`, hybrid, eight hits, with its four answers kept
  *    apart (too short, searching, refused, nothing matched) and a row to the
  *    full search screen;
@@ -87,8 +87,11 @@ import {
   labelOf,
   nameOfIn,
   ringOf,
+  stateLine,
+  workingLongestFirst,
   type Seat,
 } from "~/lib/seats.ts";
+import { turnIdOf, watchLink } from "~/lib/turns.ts";
 import { statusLabel } from "~/lib/work.ts";
 import { fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -496,6 +499,42 @@ export function CommandPalette({
       onSelect: h.go,
     }));
 
+  /**
+   * THE TURNS RUNNING NOW, leading an empty palette: one row per seat the
+   * engine says is working, oldest first as every list of them is, each going
+   * to the turn's watch link — its Transcript, the phase it is on open. The
+   * reader who opens ⌘K with nothing typed while a company is working is
+   * likeliest to want what it is doing; a seat whose turn has no id yet is
+   * left out rather than offered as a way to nowhere.
+   */
+  const runningRows = (): CommandPaletteItem[] =>
+    workingLongestFirst(agents).flatMap((row) => {
+      const turnId = turnIdOf(row);
+      if (!turnId) return [];
+      const seat = index.byHandle.get(row.handle ?? "") ?? null;
+      const name = seat?.name ?? row.role;
+      const watch = watchLink(turnId);
+      return [
+        {
+          id: `running-${row.id}`,
+          icon: (
+            <SeatAvatar
+              name={name}
+              kind="agent"
+              size="xs"
+              ring={ringOf(activityOf(row))}
+              decorative
+            />
+          ),
+          label: name,
+          // WHAT IT IS DOING AND ON WHAT, in the words every running-turn row
+          // says ("Executing ENG-412", "3 workers on ENG-405").
+          hint: stateLine(row, { now: Date.now(), seat }),
+          onSelect: () => nav.to(watch.path, watch.query),
+        },
+      ];
+    });
+
   const taskRows = (cap: number): CommandPaletteItem[] => {
     const hits = taskAnswer.data?.hits ?? [];
     return hits.slice(0, cap).map((item) => ({
@@ -725,6 +764,7 @@ export function CommandPalette({
     groups.push(...pickerGroups().filter((g) => g.items.length));
   } else if (scope === "all") {
     if (!term) {
+      push("running", "Running now", runningRows());
       push("recent", "Recent", asItems(recentHits(recents, nav)));
       push("go", "Go to", asItems(destinationHits("", nav, Infinity)));
     } else {

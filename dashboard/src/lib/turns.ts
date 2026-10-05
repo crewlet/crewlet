@@ -12,7 +12,7 @@
 
 import { pathOf } from "~/app/frame/objects.ts";
 import { href } from "~/app/router.tsx";
-import { doingWords } from "./seats.ts";
+import { doingWords, workingLongestFirst } from "./seats.ts";
 import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
 
 /**
@@ -120,6 +120,22 @@ export function watchLink(turnId: string): { path: string[]; query: Record<strin
 export function watchHref(turnId: string): string {
   const { path, query } = watchLink(turnId);
   return href(path, query);
+}
+
+/**
+ * Where "go to the running turn" goes (`g r`): the one running turn's watch
+ * link when exactly one seat is working and its turn has an id, and Live ›
+ * Now running — every running turn, one row each — otherwise. With two
+ * running there is no "the" turn to pick for the reader, and with none the
+ * screen that says so is the one that would list it.
+ */
+export function runningTarget(agents: readonly AgentRow[]): {
+  path: string[];
+  query: Record<string, string>;
+} {
+  const working = workingLongestFirst(agents);
+  const only = working.length === 1 ? turnIdOf(working[0]) : "";
+  return only ? watchLink(only) : { path: ["live"], query: {} };
 }
 
 /**

@@ -134,7 +134,7 @@ describe("routing", () => {
   // remembered to add to it — so a new destination that renders a blank ships
   // green, which is the one failure this test exists to catch.
   // WHO IS WORKING IS HOME'S, as the Main artboard draws it — the sidebar's
-  // Agents badge carries the count everywhere else. Drawn in every bar it sat
+  // Live row carries the count everywhere else. Drawn in every bar it sat
   // between a task's trail and its actions, and pushed a profile's controls
   // past a phone's edge.
   test("the working chip is in Home's page bar and in no other", () => {
