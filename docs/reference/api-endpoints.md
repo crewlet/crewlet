@@ -936,7 +936,7 @@ address.
 {
   "id": "018f3a9c-…",
   "credential": "0192f00d-…",
-  "url": "https://crewlet.example.com/dashboard#/reset/<credential>.<secret>",
+  "url": "https://crewlet.example.com/dashboard#/reset/<id>.<secret>",
   "expires_at": "2026-06-09T09:12:00Z",
   "outcome": "applied",
   "position": "CREWLET_IAM_LOG@0:1841"
