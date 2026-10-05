@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -633,20 +634,35 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 // through the directory listing to the ONE row holding it exactly — the
 // listing's `q` narrows on a substring, so an exact match is what is taken and
 // anything else is refused rather than guessed at.
+//
+// EVERY PAGE OF THE LISTING IS READ, following its own `next`: `q` matches a
+// login or a seat anywhere in it, so in a company where more people than a
+// page hold `sam` somewhere the one holding exactly `sam` can be on a later
+// page, and reading the first alone answered that nobody holds it.
 func (c *iamClient) personID(ctx context.Context, subject string) (string, error) {
 	if _, err := uuid.Parse(subject); err == nil {
 		return subject, nil
 	}
-	answer, err := c.get(ctx, "/iam/people", url.Values{"q": {subject}})
-	if err != nil {
-		return "", err
-	}
-	rows, _ := answer["people"].([]any)
 	var held []string
-	for _, raw := range rows {
-		row, _ := raw.(map[string]any)
-		if str(row["login"]) == subject {
-			held = append(held, str(row["id"]))
+	for after := ""; ; {
+		query := url.Values{"q": {subject},
+			"limit": {strconv.Itoa(iamdomain.MaxPageSize)}}
+		if after != "" {
+			query.Set("after", after)
+		}
+		answer, err := c.get(ctx, "/iam/people", query)
+		if err != nil {
+			return "", err
+		}
+		rows, _ := answer["people"].([]any)
+		for _, raw := range rows {
+			row, _ := raw.(map[string]any)
+			if str(row["login"]) == subject {
+				held = append(held, str(row["id"]))
+			}
+		}
+		if after = str(answer["next"]); after == "" {
+			break
 		}
 	}
 	switch len(held) {

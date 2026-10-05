@@ -29,12 +29,17 @@ func TestTheInvitationAndResetCommandsReachTheirRoutes(t *testing.T) {
 		case r.URL.Path == "/iam/invitations":
 			_, _ = w.Write([]byte(`{"invitations":[{"id":"inv-1","state":"expired",` +
 				`"email":"sam@example.com","grants":["state:read"]}],"position":"x"}`))
-		case r.URL.Path == "/iam/people":
+		case r.URL.Path == "/iam/people" && r.URL.Query().Get("after") == "":
 			// THE SUBSTRING SEARCH ANSWERS A NEAR MISS FIRST, which a
-			// resolution by the first row would take.
+			// resolution by the first row would take — and the exact
+			// holder only on the NEXT page, which a resolution by the
+			// first page would never read.
 			_, _ = w.Write([]byte(`{"people":[` +
-				`{"id":"0192f00d-0000-7000-8000-0000000000aa","login":"jane.doe2"},` +
-				`{"id":"` + person + `","login":"jane.doe"}]}`))
+				`{"id":"0192f00d-0000-7000-8000-0000000000aa","login":"jane.doe2"}],` +
+				`"next":"0192f00d-0000-7000-8000-0000000000aa"}`))
+		case r.URL.Path == "/iam/people":
+			_, _ = w.Write([]byte(`{"people":[` +
+				`{"id":"` + person + `","login":"jane.doe"}],"next":""}`))
 		case strings.HasSuffix(r.URL.Path, "/password-reset"):
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":"` + person + `","outcome":"applied",` +
