@@ -1892,6 +1892,9 @@ Two refusals, both **400** rather than a smaller answer:
   the span. Truncating would put a month's heading over a day of bars and
   coarsening would answer a different question from the one the axis is
   labelled with; the caller's fix is a coarser bucket or a shorter window.
+  The buckets counted are the ones every node cuts, so on a window the
+  history clips they include the one the horizon falls in, which the answer
+  then drops: the number every build refuses at is one count, not two.
 
 ### The live token meter
 
