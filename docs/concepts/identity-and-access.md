@@ -1919,6 +1919,10 @@ Identity has **two trails**, and they answer different questions.
 | `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | On the wrong code that takes the curve to its ceiling, per node — a run held there announces nothing more, and one that has aged back down announces its next climb — naming the address that code came from |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
+| `iam_invitation_cancelled` | The directory, when an administrator withdraws an invitation nobody redeemed — by its id, never the address | Once per cancellation |
+| `iam_password_reset_issued` | The directory, when an administrator issues somebody a one-time password reset link — for whom, by whom and until when, never the link | Once per link |
+| `iam_password_changed` | The sign-in surface, when a person changes their own password — which ended every other session and token they held | Once per change |
+| `iam_password_reset` | The sign-in surface, when a reset link is spent — the password set, every session and token the person held ended, and nobody signed in | Once per link |
 | `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
@@ -1930,11 +1934,13 @@ free, with no credential to revoke and no identity on the row. A row per
 attempt would hand the size of every node's event store — and of every backup
 and snapshot taken from it — to whoever is making the attempts. So a failed
 sign-in, a refused second factor, an
-invitation link that answers `410` (nobody
-issued it, it was redeemed or aged out, or its address is already enrolled —
-the id in the link is the credential, so a source walking ids is guessing at
-one) and a bearer credential refused by a route that needs one each do two
-things and publish nothing:
+invitation or password reset link that answers `410` without
+proving itself (nobody issued the id, or the secret is not that link's — the
+link is the credential, so a source walking ids is guessing at one; a link
+that proved itself and is spent, revoked or aged out is its holder or a mail
+scanner reading it again, and is the same `410` uncounted) and a bearer
+credential refused by a route that needs one each do two things and publish
+nothing:
 
 - add one to the `crewlet.auth.attempts.failed` counter, by `method` and
   whether the throttle turned it away — the per-attempt number, for a

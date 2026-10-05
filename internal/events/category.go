@@ -284,8 +284,15 @@ var categories = map[string]placement{
 	// run is held there — so at most CurveSteps a window per person on
 	// each node: the rate is bounded by whose passwords are known to
 	// somebody guessing, never by what a stranger can send.
-	"iam_second_factor_throttled":   {"auth", RateAuthenticated},
-	"iam_mfa_reset":                 {"auth", RateAuthenticated},
+	"iam_second_factor_throttled": {"auth", RateAuthenticated},
+	"iam_mfa_reset":               {"auth", RateAuthenticated},
+	"iam_invitation_cancelled":    {"auth", RateAuthenticated},
+	"iam_password_changed":        {"auth", RateAuthenticated},
+	"iam_password_reset_issued":   {"auth", RateAuthenticated},
+	// AUTHENTICATED by the link it spends: written only once a secret this
+	// engine minted proved itself and set a password, and a link sets one
+	// password — a spent one opens nothing again.
+	"iam_password_reset":            {"auth", RateAuthenticated},
 	"iam_session_generation_bumped": {"auth", RateAuthenticated},
 	"statelog_record_unverifiable":  {"auth", RateEngine},
 	"statelog_record_tampered":      {"auth", RateEngine},

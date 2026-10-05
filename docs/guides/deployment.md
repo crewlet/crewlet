@@ -1123,7 +1123,7 @@ from that map — a guard test fails if the two drift.
 | Category | Event types |
 |---|---|
 | `a2a` | `a2a_channel_closed`, `a2a_channel_opened`, `a2a_message_sent` |
-| `auth` | `iam_credential_minted`, `iam_credential_revoked`, `iam_grants_changed`, `iam_login_failures`, `iam_mfa_reset`, `iam_recovery_code_used`, `iam_second_factor_throttled`, `iam_session_ended`, `iam_session_generation_bumped`, `iam_session_started`, `iam_stepup_completed`, `statelog_record_tampered`, `statelog_record_unverifiable` |
+| `auth` | `iam_credential_minted`, `iam_credential_revoked`, `iam_grants_changed`, `iam_invitation_cancelled`, `iam_login_failures`, `iam_mfa_reset`, `iam_password_changed`, `iam_password_reset`, `iam_password_reset_issued`, `iam_recovery_code_used`, `iam_second_factor_throttled`, `iam_session_ended`, `iam_session_generation_bumped`, `iam_session_started`, `iam_stepup_completed`, `statelog_record_tampered`, `statelog_record_unverifiable` |
 | `decision` | `contribution_received`, `contribution_requested`, `decision_requested`, `decision_resolved` |
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
