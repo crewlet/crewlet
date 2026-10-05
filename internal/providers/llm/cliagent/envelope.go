@@ -197,9 +197,29 @@ func fromDocument(doc map[string]any) (Envelope, bool) {
 		if !ok {
 			continue
 		}
-		calls, isList := v.([]any)
-		if !isList {
-			continue
+		var calls []any
+		switch typed := v.(type) {
+		case []any:
+			calls = typed
+		case map[string]any:
+			// ONE CALL WRITTEN WITHOUT ITS LIST. A model asked for a
+			// list of one routinely drops the brackets, and the object
+			// is as runnable as the list holding it — so it is read as
+			// that list, and the rule below decides it exactly as it
+			// would have decided `[obj]`.
+			calls = []any{typed}
+		case nil:
+			// `null` is the model saying "no calls", the same answer as
+			// an empty list, as an argument list's `null` is no
+			// arguments in [readArguments].
+		default:
+			// A STRING, A NUMBER, A BOOLEAN: a call key the model
+			// filled with something no call can be read from. The same
+			// verdict as the unreadable list below, for the same reason
+			// — skipping it here left `found` to the message synonym, so
+			// the reply parsed as an envelope that asked for no tools
+			// and the call was dropped without a word.
+			return Envelope{}, false
 		}
 		for _, raw := range calls {
 			call, ok := readCall(raw)

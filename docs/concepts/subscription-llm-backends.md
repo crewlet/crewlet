@@ -621,8 +621,13 @@ rides in the prompt:
    `Completion.ToolCalls`.
 
 The parser is deliberately forgiving — it accepts the last fenced block,
-a bare object, `arguments` as a JSON string, and `message` / `content` /
-`text` / `response` as synonyms. When nothing parses, the whole reply
+a bare object, `arguments` as a JSON string, one call object written
+without its list, `null` for no calls, and `message` / `content` /
+`text` / `response` as synonyms. It is strict in the other direction: a
+call list it can read no call from — strings for entries, nameless
+objects, a string or a number where the list belongs — makes the reply
+not an envelope at all, because reading it as one would report a model
+that asked for no tools when it asked for some. When nothing parses, the whole reply
 becomes assistant content with no tool calls, and the tool loop's
 existing `tool_choice="required"` corrective re-prompt takes over. A
 malformed reply costs a round; it never crashes a turn.

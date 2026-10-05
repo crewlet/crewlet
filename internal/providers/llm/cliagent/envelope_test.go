@@ -181,6 +181,15 @@ func TestACallListNothingCouldBeReadFromIsNotAnEnvelope(t *testing.T) {
 			`{"message":"posting it now","tool_calls":["mattermost_post_message"]}`},
 		{"every entry is nameless",
 			`{"message":"posting it now","tool_calls":[{"arguments":{"channel":"c"}}]}`},
+		// A call key holding something that is neither a list nor an
+		// object. Skipped, it left the message to decide the verdict and
+		// the reply parsed as an envelope that asked for nothing.
+		{"the call key holds a string",
+			`{"message":"posting it now","tool_calls":"mattermost_post_message"}`},
+		{"the call key holds a number",
+			`{"message":"posting it now","tool_calls":1}`},
+		{"the call key holds one nameless object",
+			`{"message":"posting it now","tool_calls":{"arguments":{"channel":"c"}}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -206,6 +215,36 @@ func TestAnEmptyCallListIsStillAnEnvelope(t *testing.T) {
 	}
 	if env.Message != "nothing to do here" || len(env.ToolCalls) != 0 {
 		t.Errorf("message = %q calls = %d", env.Message, len(env.ToolCalls))
+	}
+}
+
+// ONE CALL WRITTEN WITHOUT ITS LIST IS THAT CALL. A model asked for a list of
+// one drops the brackets often enough, and the object names a runnable tool —
+// so dropping it would report a model that asked for nothing when it asked for
+// exactly one thing, the very shape the unreadable-list rule refuses.
+func TestASingleCallObjectIsReadAsAListOfOne(t *testing.T) {
+	t.Parallel()
+	env := ParseEnvelope(
+		`{"message":"posting it now","tool_calls":{"name":"slack_post","arguments":{"channel":"C1"}}}`)
+	if !env.Parsed {
+		t.Fatal("a single call object was refused")
+	}
+	if len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "slack_post" ||
+		env.ToolCalls[0].Arguments["channel"] != "C1" {
+		t.Errorf("calls = %+v, want the one slack_post call", env.ToolCalls)
+	}
+	if env.Message != "posting it now" {
+		t.Errorf("message = %q", env.Message)
+	}
+}
+
+// A NULL CALL LIST IS AN EMPTY ONE: the model saying "no calls", which is an
+// ordinary final answer exactly as `[]` is.
+func TestANullCallListIsAnEmptyOne(t *testing.T) {
+	t.Parallel()
+	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":null}`)
+	if !env.Parsed || env.Message != "nothing to do here" || len(env.ToolCalls) != 0 {
+		t.Errorf("env = %+v, want a parsed envelope with no calls", env)
 	}
 }
 
