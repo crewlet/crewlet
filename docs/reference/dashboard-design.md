@@ -3280,15 +3280,24 @@ rules fix it, and each one names a specific mechanism:
    - **The map** — one slim bar for the whole request, the system prompt's
      sections, a gap, then the user message's, each as wide as its share of
      the bytes, so where a prompt's weight went is a glance. Neutral fills in
-     two alternating steps, and the accent only on the section being read.
-     Pointing at a segment says "Your turn · 2.8 KB · 23% of the system
-     prompt", and pressing it reads that section. It is a picture of the
-     outline, so it is `aria-hidden` and takes no focus; the outline is the
-     keyboard's way to the same sections.
+     two alternating steps that are two different greys — they were two tokens
+     holding the same colour, so neighbours never alternated and the dark
+     palette's bar sat barely off the card — and the accent only on the
+     section being read. A half is never narrower than its segments, so a
+     small user message beside a large system prompt does not spill past the
+     bar's end on a phone. Pointing at a segment says "Your turn · 2.8 KB ·
+     23% of the system prompt", and pressing it reads that section. It is a
+     picture of the outline, so it is `aria-hidden` and takes no focus; the
+     outline is the keyboard's way to the same sections.
    - **The outline** — both halves under their names and sizes ("System prompt
      · 11 KB", "User message · 1.2 KB"), one row per top-level section with
      its title rendered as the inline markdown it is, its size and a weight
-     bar. A listbox with one tab stop: the arrows, Home and End move through
+     bar. The bars are neutral, the selected row's too: its ground already
+     says which row it is, and an accent bar a hundredth of a row wide was a
+     stray dot. A title's link is drawn as its words in a row and in the
+     picker — an option's children are presentational, and a click on a link
+     there navigates instead of choosing — and as a link only in the reader.
+     A listbox with one tab stop: the arrows, Home and End move through
      both halves and the reader follows, with focus moving to the row it
      selects. Beside the reader when the prompt view itself is at least 720px
      wide — a container query on the view, never the window, which the sidebar
@@ -3303,17 +3312,38 @@ rules fix it, and each one names a specific mechanism:
      goes to — the user message's first section from the system prompt's
      last, which the label says — and staying put at the ends with the reason
      they cannot move, because a control that vanishes under the press takes
-     the reader's focus with it; then the body, with the headings inside the
+     the reader's focus with it. Each owns half the row, Previous at its start
+     and Next at its end, and a long destination wraps inside its own half:
+     as a wrapping row, two long names on a phone put Next on a line of its
+     own under Previous. Then the body, with the headings inside the
      section drawn in place beneath it under styled sub-titles, nested on
      their levels.
    - **Find** — a box that annotates rather than filters: every row says how
-     many matches it holds and a row with none dims, a polite status says
-     "12 matches in 3 sections", Enter and Shift+Enter jump to the next and
-     previous section that matches, and Escape clears. Matches are counted on
-     the SOURCE, case-insensitively — what the model was told, markup
-     included — and marked in the reader with the CSS Custom Highlight API
-     where the browser has it, which marks text without adding an element
-     around it; where it does not, the counts still say where the matches are.
+     many matches it holds, a polite status says "12 matches in 3 sections",
+     and Escape clears. A row that matches lifts — its title to the primary
+     text step, its count on the ground the matches are marked with — and a
+     row with none recedes to the tertiary step with its weight bar faded. It
+     was one step of grey, and in the dark palette the secondary and tertiary
+     steps are the same grey to the eye; dimming further would take a row's
+     words under the contrast they owe, and a row with no match is still one
+     somebody may choose. **The selection follows the find until the reader
+     takes it**: typing a query the section on screen does not contain moves
+     the reader to the next section that does (the first, from the top), so
+     the first thing a find shows is a match rather than a count — but once
+     the reader chooses a section themselves during that query, the next
+     keystroke leaves them there, because they are reading it on purpose.
+     Enter and Shift+Enter jump to the next and previous section that
+     matches and bring its first match into view, at the nearest edge of
+     whatever scrolls it; typing never scrolls, which would move the page
+     under the box being typed in. Matches are counted on the SOURCE,
+     case-insensitively — what the model was told, markup included — and
+     marked in the reader with the CSS Custom Highlight API where the browser
+     has it, which marks text without adding an element around it; where it
+     does not, the counts still say where the matches are. **What is marked
+     is what was counted**: the title is marked only when it is the section's
+     own heading line, because a builder's "Task" or the untitled lead's
+     words are not in the source, and the reader's own words — the size, the
+     share, where Previous and Next go — never are.
 
    **The outline is the builder's, and the headings only where there is no
    builder's.** It was derived by cutting the prompt at every `##`, and a
@@ -3346,7 +3376,12 @@ rules fix it, and each one names a specific mechanism:
    repeats): a map that would mis-slice is not trusted at all
    (`lib/promptmap.ts`). Either way the outline is DERIVED — from the document
    or from its builder — never a list this app keeps, so a prompt that grows a
-   section grows a row and no rename leaves a stale name on screen.
+   section grows a row and no rename leaves a stale name on screen. It is
+   derived once per prompt and map VALUE: every push rebuilds a phase's record
+   from the wire — a streaming phase's five frames a second among them — so
+   the map arrives as a new array each time while saying the same thing, and
+   an open Prompt fold keyed on the array re-sliced both halves and re-counted
+   its find on every frame.
 
    **Sizes are UTF-8 bytes, heading lines included.** They were UTF-16
    characters of each body with its heading line left out, so a half's
@@ -3372,7 +3407,10 @@ rules fix it, and each one names a specific mechanism:
    and a contract template are byte-identical either way, and what the reading
    view spends is emphasis markers and list bullets. **The switch is offered on
    every document**, headings or none, since one decodes the markdown and one
-   is the bytes; a prompt with no headings is one section. And **the outline is
+   is the bytes; a prompt with no headings is one section, named for the
+   whole half it is — "The whole user message" — since "Before the first
+   heading", the lead run's name in a headed half, would claim a heading the
+   prompt does not have. And **the outline is
    the document's own shape**, which mostly means flat and sometimes does not:
    an executor's sections are peers, but a ledger writes one `###` per prior
    turn *inside* its block, and hoisting those would put a turn of somebody's

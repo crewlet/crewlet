@@ -754,8 +754,17 @@ export interface RenderOptions {
   anchors?: boolean;
 }
 
-/** What the inline walk needs of [RenderOptions]. */
-type InlineOptions = Pick<RenderOptions, "breaks">;
+/** What the inline walk needs of [RenderOptions], and one thing only it does. */
+export interface InlineOptions extends Pick<RenderOptions, "breaks"> {
+  /**
+   * `anchor` (the default): a link is a link. `text`: a link is its label and
+   * an autolink its address, as plain text — for a run drawn INSIDE a control,
+   * a listbox option or a picker's entry, whose children are presentational
+   * to assistive tech, so a link there is unreachable as itself, and whose
+   * click a link would steal to navigate instead of choosing the row.
+   */
+  links?: "anchor" | "text";
+}
 
 /** Render one run of inline markdown to React nodes. */
 export function renderInline(
@@ -799,15 +808,15 @@ export function renderInline(
           : createElement("span", { key }, g.alt ?? ""),
       );
     } else if (g.href !== undefined) {
-      const href = safeHref(g.href);
+      const href = options.links === "text" ? null : safeHref(g.href);
       const label = g.label ?? "";
       out.push(
         href
           ? anchor(key, href, renderInline(label, key, options))
-          : createElement("span", { key }, label),
+          : createElement("span", { key }, renderInline(label, key, options)),
       );
     } else if (g.auto !== undefined) {
-      const href = safeHref(g.auto);
+      const href = options.links === "text" ? null : safeHref(g.auto);
       out.push(href ? anchor(key, href, [g.auto]) : createElement("span", { key }, g.auto));
     } else if (g.strong !== undefined || g.strongUnder !== undefined) {
       const inner = g.strong ?? g.strongUnder ?? "";

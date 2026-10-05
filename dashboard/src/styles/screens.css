@@ -261,7 +261,21 @@
    steps so neighbours stay apart, and the accent on the section being read —
    the one thing the accent marks in this product. A segment is never narrower
    than a hairline it can be pointed at; `flex-basis: 0` so the grow factor
-   (the bytes) is the whole of its width. */
+   (the bytes) is the whole of its width.
+
+   THE TWO STEPS ARE TWO VALUES. They were `--color-border-strong` and
+   `--color-border-hover`, which hold the SAME colour in both palettes (#2d3448
+   dark, #c9cfdc light) — so the alternation was invisible, and in the dark
+   palette the whole bar sat about 1.2:1 off the card. `--color-text-muted`
+   (decoration, 2.4:1 dark and 3:1 light on the card) and
+   `--color-text-tertiary` beside it make each segment a shape on the card and
+   each neighbour a different one; hovering lifts a segment to the secondary
+   step, which is never either.
+
+   A HALF IS NEVER NARROWER THAN ITS SEGMENTS. `min-width: 0` let a small half
+   (a 600 B user message beside a 50 kB system prompt) take its byte share —
+   4px at a phone's width — while its three segments needed 11px, so they
+   spilled past the map's edge. Its automatic minimum is its content's. */
 .prompt-map {
   display: flex;
   gap: var(--spacing-2);
@@ -271,20 +285,19 @@
   display: flex;
   gap: 1px;
   flex-basis: 0;
-  min-width: 0;
 }
 .prompt-map-seg {
   flex-basis: 0;
   min-width: 3px;
   border-radius: 1px;
-  background: var(--color-border-strong);
+  background: var(--color-text-muted);
   cursor: pointer;
 }
 .prompt-map-seg:nth-child(even) {
-  background: var(--color-border-hover);
+  background: var(--color-text-tertiary);
 }
 .prompt-map-seg:hover {
-  background: var(--color-text-tertiary);
+  background: var(--color-text-secondary);
 }
 .prompt-map-seg.is-dim {
   opacity: 0.35;
@@ -366,10 +379,28 @@
   outline: 2px solid var(--color-focus);
   outline-offset: -2px;
 }
-/* A ROW WITH NO MATCH DIMS rather than leaving: a find annotates the outline,
-   it does not filter it, so the sections around a match stay where they were. */
+/* WHILE A FIND IS OPEN, A ROW THAT MATCHES LIFTS AND ONE THAT DOES NOT RECEDES,
+   rather than leaving: a find annotates the outline, it does not filter it, so
+   the sections around a match stay where they were.
+
+   It used to be one step of text colour, secondary to tertiary — and in the
+   dark palette those are #a9b0c3 and #9fa7bc, the same grey to anyone's eye.
+   Dimming further (opacity, the muted step) would take the title under the
+   4.5:1 a row's words owe, and a row with no match is still a row somebody
+   may choose. So both ends move instead: a matching row's title goes to the
+   primary step (12:1 dark, 16:1 light) and its count sits on the find's own
+   ground — the colour the matches are marked with in the reader — while the
+   rest take tertiary (still over 5.7:1) and their weight bars fade, which is
+   decoration and owes no contrast. A shape and a ground as well as a hue, so
+   it does not rest on telling two greys apart. */
+.prompt-toc-row.is-hit:not(.is-selected) {
+  color: var(--color-text-primary);
+}
 .prompt-toc-row.is-dim {
   color: var(--color-text-tertiary);
+}
+.prompt-toc-row.is-dim .prompt-toc-weight {
+  opacity: 0.4;
 }
 .prompt-toc-title {
   grid-area: title;
@@ -384,9 +415,19 @@
   white-space: nowrap;
 }
 .prompt-toc-hits {
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-brand-accent-soft-strong);
   font-weight: 600;
   color: var(--color-text-primary);
 }
+/* THE WEIGHT BARS ARE NEUTRAL, the selected row's included. The row's own
+   ground already says which one is selected, and an accent bar on a row whose
+   section is a hundredth of its half was a dot of the accent with nothing
+   around it — a stray mark rather than a weight. The map's own neutral step,
+   so a bar and its segment read as one quantity. (The count beside a matching
+   row is on the find's ground rather than the accent's meaning of "here": it
+   is the colour the matches it counts are marked with in the reader.) */
 .prompt-toc-weight {
   grid-area: weight;
   height: 2px;
@@ -397,10 +438,7 @@
 .prompt-toc-weight > span {
   display: block;
   height: 100%;
-  background: var(--color-border-strong);
-}
-.prompt-toc-row.is-selected .prompt-toc-weight > span {
-  background: var(--color-brand-accent);
+  background: var(--color-text-muted);
 }
 
 .prompt-reader {
@@ -423,11 +461,34 @@
   color: var(--color-text-primary);
   overflow-wrap: anywhere;
 }
+/* PREVIOUS AND NEXT EACH OWN HALF THE ROW. As a wrapping flex row, two long
+   destinations ("Previous: Human colleagues", "Next: When a decision is not
+   yours to make") did not fit side by side on a phone, so Next wrapped onto a
+   line of its own under Previous, both against the left edge — two stacked
+   buttons that no longer read as a pair. Two tracks keep Previous at the
+   start and Next at the end however long either is, and a destination that
+   does not fit wraps INSIDE its own half (the kit's button is `nowrap`; its
+   height is a minimum, so a second line is read rather than clipped). */
 .prompt-reader-nav {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--spacing-1) var(--spacing-2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--spacing-2);
+}
+.prompt-reader-nav .prompt-step {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}
+.prompt-reader-nav .prompt-step.is-next {
+  justify-self: end;
+  text-align: end;
+}
+/* A match the find takes the reader to lands clear of the sticky band, and of
+   the view's bottom edge, rather than flush against either. */
+.prompt-reader * {
+  scroll-margin-block: calc(var(--sticky-top) + var(--spacing-4)) var(--spacing-4);
 }
 .prompt-body {
   display: flex;

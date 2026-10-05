@@ -7,6 +7,7 @@ import {
   outline,
   parseBlocks,
   plainText,
+  renderInline,
   renderMarkdown,
   safeHref,
   splitSections,
@@ -678,6 +679,25 @@ describe("emphasis", () => {
       });
     });
   }
+
+  it("draws a link as its words where the run sits inside a control", () => {
+    // `links: "text"` is for an outline row or a picker's option: a link
+    // inside one is unreachable as itself and steals the row's click.
+    const { container } = render(
+      <p>
+        {renderInline("see [**the** guide](https://example.com) or <https://example.com/x>", "k", {
+          links: "text",
+        })}
+      </p>,
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toBe("see the guide or https://example.com/x");
+    // The label is still markdown.
+    expect(container.querySelector("strong")?.textContent).toBe("the");
+    // THE CONTROL: the default is a link.
+    const linked = render(<p>{renderInline("see [the guide](https://example.com)")}</p>);
+    expect(linked.container.querySelector("a")?.textContent).toBe("the guide");
+  });
 
   it("flattens to plain text by the same rules", () => {
     expect(plainText("call submit_work with result_summary")).toBe(

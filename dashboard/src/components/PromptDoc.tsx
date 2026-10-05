@@ -33,11 +33,15 @@
  *    Previous and Next naming where they go, then the body, with the headings
  *    inside the section drawn in place under it.
  *  - FIND annotates rather than filters: every row says how many matches it
- *    holds and a row with none dims, Enter and Shift+Enter jump between the
- *    sections that match, and the matches in the reader are marked where the
- *    browser can mark text without touching the DOM (the CSS Custom Highlight
- *    API). Counted on the SOURCE — what the model was told — not on the
- *    rendering.
+ *    holds, a row that has some lifts and a row with none recedes. Typing
+ *    takes the reader to a section that matches when the one shown has none,
+ *    until the reader chooses a section themselves; Enter and Shift+Enter
+ *    jump between the sections that match and bring the first match into
+ *    view; and the matches in the reader are marked where the browser can
+ *    mark text without touching the DOM (the CSS Custom Highlight API).
+ *    Counted on the SOURCE — what the model was told — not on the rendering,
+ *    and marked only where the source is: the title when it is the section's
+ *    own heading line, never the reader's own words.
  *
  * WHERE THE OUTLINE COMES FROM. The builder's own section map when the record
  * carries one that tiles its prompt, and the prompt's headings otherwise
@@ -73,7 +77,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type ReactNode,
+  type RefObject,
 } from "react";
 import { Button, CodeBlock, Input, Select, cx } from "@crewlethq/ui";
 import { ChevronLeftGlyph, ChevronRightGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
@@ -85,6 +89,7 @@ import {
   findPattern,
   neighbours,
   outlineHalf,
+  sectionsKey,
   sectionsOf,
   share,
   stepToMatch,
@@ -98,30 +103,57 @@ import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 type View = "read" | "source";
 
-/** What each half is called: a group's label, a picker's group, a share's "of the …". */
-const HALF: Record<Half, { name: string; of: string }> = {
-  system: { name: "System prompt", of: "the system prompt" },
-  user: { name: "User message", of: "the user message" },
+/**
+ * What each half is called: a group's label, a picker's group, a share's "of
+ * the …", and the name of a half that has no headings at all.
+ */
+const HALF: Record<Half, { name: string; of: string; whole: string }> = {
+  system: { name: "System prompt", of: "the system prompt", whole: "The whole system prompt" },
+  user: { name: "User message", of: "the user message", whole: "The whole user message" },
 };
 
 /**
  * The words for a section with no title: a lead run the headings gave, which
  * has neither a heading nor a builder to name it. Said, rather than left
  * blank, because a row with no words is a row nobody can choose by ear.
+ *
+ * WHICH WORDS DEPEND ON THE HALF. Before a heading, it is the run "before the
+ * first heading". In a half with no heading at all — an older engine's
+ * record, an onboarding message, a worker's task prose — it is the whole half,
+ * and "before the first heading" claimed a heading the prompt does not have.
+ * A map always names its spans, so neither label appears on a mapped prompt.
  */
-const UNTITLED = "Before the first heading";
-
-/** A section's title as the plain words it renders to — for a label, a tooltip, a button. */
-function plainTitle(s: OutlineSection): string {
-  return s.title ? plainText(s.title) : UNTITLED;
+function untitled(s: OutlineSection, halves: readonly OutlineHalf[]): string {
+  const half = halves.find((h) => h.half === s.half);
+  return half && half.sections.length > 1 ? "Before the first heading" : HALF[s.half].whole;
 }
 
-/** A section's title as the inline markdown it is, or the untitled lead's words. */
-function Title({ section }: { section: OutlineSection }) {
+/** A section's title as the plain words it renders to — for a label, a tooltip, a button. */
+function plainTitle(s: OutlineSection, halves: readonly OutlineHalf[]): string {
+  return s.title ? plainText(s.title) : untitled(s, halves);
+}
+
+/**
+ * A section's title as the inline markdown it is, or the untitled lead's words.
+ *
+ * `links: "text"` where the title is drawn INSIDE a control — an outline row,
+ * a picker's option — whose children are presentational to assistive tech and
+ * whose click a link would take for a navigation: a quoted heading can carry
+ * one. The reader's own title keeps its links; nothing there is a control.
+ */
+function Title({
+  section,
+  halves,
+  links = "anchor",
+}: {
+  section: OutlineSection;
+  halves: readonly OutlineHalf[];
+  links?: "anchor" | "text";
+}) {
   return section.title ? (
-    <>{renderInline(section.title, `t-${section.id}`)}</>
+    <>{renderInline(section.title, `t-${section.id}`, { links })}</>
   ) : (
-    <span className="muted">{UNTITLED}</span>
+    <span className="muted">{untitled(section, halves)}</span>
   );
 }
 
@@ -146,12 +178,25 @@ export function PromptRecord({
   systemSections?: PromptSection[] | null;
   userSections?: PromptSection[] | null;
 }) {
-  const halves = useMemo<OutlineHalf[]>(() => {
-    const out: OutlineHalf[] = [];
-    if (system !== "") out.push(outlineHalf("system", system, systemSections));
-    if (user !== "") out.push(outlineHalf("user", user, userSections));
-    return out;
-  }, [system, user, systemSections, userSections]);
+  // KEYED ON THE MAPS' VALUES, not on the arrays: a record is rebuilt from the
+  // wire on every push — a streaming phase's five frames a second, and every
+  // seat's push on the turn page — so the maps are new arrays each time while
+  // what they say is not, and keyed on identity this memo never hit: both
+  // halves were re-sliced and re-split, and the find re-counted, on every
+  // frame of an open Prompt fold.
+  const systemKey = sectionsKey(systemSections);
+  const userKey = sectionsKey(userSections);
+  const halves = useMemo<OutlineHalf[]>(
+    () => {
+      const out: OutlineHalf[] = [];
+      if (system !== "") out.push(outlineHalf("system", system, systemSections));
+      if (user !== "") out.push(outlineHalf("user", user, userSections));
+      return out;
+    },
+    // The keys ARE the maps' values; the arrays are what they were read from.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [system, user, systemKey, userKey],
+  );
   // READING IS THE DEFAULT, because the question this fold is opened with is
   // what the phase was told, and the bytes are one click away. The other way
   // round, every reader pays the decoding on every open to serve the rarer
@@ -218,6 +263,14 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
   const counts = useMemo(() => findCounts(all, query), [all, query]);
   const finding = findPattern(query) !== null;
   const matched = [...counts.values()].reduce((n, c) => n + c, 0);
+  // Whether the reader chose a section by hand during THIS query — from the
+  // first character typed until the box is cleared. See `onQuery`.
+  const [held, setHeld] = useState(false);
+  // Bumped by every Enter: the reader asked to be taken to a match, so the
+  // marks bring the first one into view (`useFindMarks`).
+  const [reveal, setReveal] = useState(0);
+  const reader = useRef<HTMLElement | null>(null);
+  useFindMarks(reader, query, current?.id ?? "", reveal);
   const ids = useId();
 
   if (!current) return null;
@@ -225,21 +278,61 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
   const { prev, next } = neighbours(all, current.id);
   const titleId = `${ids}-title`;
 
-  /** Where Previous and Next say they go: the section, and its half when it is the other one. */
-  const target = (s: OutlineSection) =>
-    s.half === current.half ? plainTitle(s) : `${plainTitle(s)} (${HALF[s.half].of})`;
+  /** A section the READER chose — the outline, the picker, the map, Previous and Next. */
+  const choose = (id: string) => {
+    setPicked(id);
+    if (finding) setHeld(true);
+  };
+
+  /**
+   * THE SELECTION FOLLOWS THE FIND until the reader takes it. Typing a query
+   * that the section on screen does not contain moves the reader to the next
+   * section that does — from where they are, wrapping, which is the first one
+   * when they have not moved, and what a browser's own find does — so the
+   * first thing a find shows is a match rather than a count and a section
+   * with none in it. Only while the reader has not chosen a section by hand
+   * during this query: once they have, they are reading something on purpose,
+   * and the next keystroke must not take it away. Enter is the find's own
+   * step, so it does not count as a choice; clearing the query ends it.
+   */
+  const onQuery = (value: string) => {
+    setQuery(value);
+    if (findPattern(value) === null) {
+      setHeld(false);
+      return;
+    }
+    if (held) return;
+    const ahead = findCounts(all, value);
+    if ((ahead.get(current.id) ?? 0) > 0) return;
+    const to = stepToMatch(all, ahead, current.id, 1);
+    if (to) setPicked(to.id);
+  };
+
+  /**
+   * Where Previous and Next say they go: the section, and its half when it is
+   * the other one — unless the section IS that whole half, whose name says so.
+   */
+  const target = (s: OutlineSection) => {
+    const name = plainTitle(s, halves);
+    return s.half === current.half || name === HALF[s.half].whole
+      ? name
+      : `${name} (${HALF[s.half].of})`;
+  };
 
   const onFindKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
       const to = stepToMatch(all, counts, current.id, e.shiftKey ? -1 : 1);
-      if (to) setPicked(to.id);
+      if (to) {
+        setPicked(to.id);
+        setReveal((n) => n + 1);
+      }
     } else if (e.key === "Escape" && query !== "") {
       // Only while there is something to clear: an Escape on an empty box is
       // the surface's own, and goes on to it.
       e.preventDefault();
       e.stopPropagation();
-      setQuery("");
+      onQuery("");
     }
   };
 
@@ -250,7 +343,7 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
         current={current.id}
         counts={counts}
         finding={finding}
-        onPick={setPicked}
+        onPick={choose}
       />
       <div className="prompt-find">
         <Input
@@ -261,7 +354,7 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
           placeholder="Find in this prompt"
           leading={<SearchGlyph size="xs" />}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQuery(e.target.value)}
           onKeyDown={onFindKey}
         />
         {/* POLITE: a count that changes per keystroke must not interrupt the
@@ -282,7 +375,7 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
           current={current.id}
           counts={counts}
           finding={finding}
-          onPick={setPicked}
+          onPick={choose}
           label={`Sections of the ${phase} phase's prompt`}
         />
         {/* THE NARROW FORM OF THE OUTLINE: one control naming the section the
@@ -293,11 +386,11 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
           <Select
             ariaLabel="Section"
             value={current.id}
-            onChange={(v) => setPicked(String(v))}
+            onChange={(v) => choose(String(v))}
             options={all.map((s) => ({
               value: s.id,
-              label: <Title section={s} />,
-              text: plainTitle(s),
+              label: <Title section={s} halves={halves} links="text" />,
+              text: plainTitle(s, halves),
               description: `${fmtBytes(s.bytes)}${
                 finding && counts.get(s.id)
                   ? ` · ${plural(counts.get(s.id)!, "match", "matches")}`
@@ -307,16 +400,26 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
             }))}
           />
         </div>
-        <section className="prompt-reader" aria-labelledby={titleId}>
+        {/* WHAT A FIND MARKS IS WHAT IT COUNTED: the section's source, so its
+            title only when the title is the section's own heading line (a
+            builder's "Task" or the untitled lead's words are not in the
+            source, and a mark there would be one the count never made), and
+            never this view's own words — the size, the share, where Previous
+            and Next go. `data-find-skip` is how a subtree says so. */}
+        <section className="prompt-reader" aria-labelledby={titleId} ref={reader}>
           {/* A STYLED LINE, NEVER AN h-ELEMENT. A prompt's headings are not this
               page's headings: a turn with six phases would put eighty of them
               from six quoted documents into one screen's outline. The region
               takes its name from it instead. */}
           <div className="prompt-reader-head">
-            <div id={titleId} className="prompt-reader-title">
-              <Title section={current} />
+            <div
+              id={titleId}
+              className="prompt-reader-title"
+              data-find-skip={current.headed ? undefined : ""}
+            >
+              <Title section={current} halves={halves} />
             </div>
-            <div className="t-caption muted t-num">
+            <div className="t-caption muted t-num" data-find-skip="">
               {fmtBytes(current.bytes)} · {share(current.bytes, half.bytes)} of{" "}
               {HALF[current.half].of}
               {finding && counts.get(current.id)
@@ -326,30 +429,32 @@ function Reading({ phase, halves }: { phase: string; halves: OutlineHalf[] }) {
           </div>
           {/* THEY SAY WHERE THEY GO, and they stay: at either end the control
               says why it cannot move rather than vanishing — a button that
-              disappears under the press takes the reader's focus with it. */}
-          <div className="prompt-reader-nav">
+              disappears under the press takes the reader's focus with it. One
+              column each, so on a phone a long destination wraps inside its
+              own half instead of pushing Next onto a line under Previous. */}
+          <div className="prompt-reader-nav" data-find-skip="">
             <Button
               variant="ghost"
               size="small"
+              className="prompt-step"
               leadingIcon={<ChevronLeftGlyph size="xs" />}
               disabledReason={prev ? undefined : "This is the first section"}
-              onClick={() => prev && setPicked(prev.id)}
+              onClick={() => prev && choose(prev.id)}
             >
               {prev ? `Previous: ${target(prev)}` : "Previous"}
             </Button>
             <Button
               variant="ghost"
               size="small"
+              className="prompt-step is-next"
               trailingIcon={<ChevronRightGlyph size="xs" />}
               disabledReason={next ? undefined : "This is the last section"}
-              onClick={() => next && setPicked(next.id)}
+              onClick={() => next && choose(next.id)}
             >
               {next ? `Next: ${target(next)}` : "Next"}
             </Button>
           </div>
-          <Marked query={query} on={current.id}>
-            <SectionBody key={current.id} body={current.body} nested={current.children} />
-          </Marked>
+          <SectionBody key={current.id} body={current.body} nested={current.children} />
         </section>
       </div>
     </div>
@@ -391,7 +496,7 @@ function PromptMap({
                 finding && !counts.get(s.id) && "is-dim",
               )}
               style={{ flexGrow: s.bytes }}
-              title={`${plainTitle(s)} · ${fmtBytes(s.bytes)} · ${share(s.bytes, h.bytes)} of ${HALF[h.half].of}`}
+              title={`${plainTitle(s, halves)} · ${fmtBytes(s.bytes)} · ${share(s.bytes, h.bytes)} of ${HALF[h.half].of}`}
               onClick={() => onPick(s.id)}
             />
           ))}
@@ -480,12 +585,12 @@ function Outline({
                 className={cx(
                   "prompt-toc-row",
                   selected && "is-selected",
-                  finding && hits === 0 && "is-dim",
+                  finding && (hits === 0 ? "is-dim" : "is-hit"),
                 )}
                 onClick={() => go(s)}
               >
                 <span className="prompt-toc-title">
-                  <Title section={s} />
+                  <Title section={s} halves={halves} links="text" />
                 </span>
                 <span className="prompt-toc-meta t-num">
                   {finding && hits > 0 && (
@@ -523,7 +628,11 @@ function SectionBody({ body, nested }: { body: string; nested: SectionNode[] }) 
     // A heading with NOTHING under it is a fact about the prompt, so it is
     // said rather than drawn as an empty block, which reads as one that
     // failed to load.
-    return <span className="t-caption muted">Nothing under this heading.</span>;
+    return (
+      <span className="t-caption muted" data-find-skip="">
+        Nothing under this heading.
+      </span>
+    );
   }
   return (
     <div className="prompt-body">
@@ -539,44 +648,47 @@ function SectionBody({ body, nested }: { body: string; nested: SectionNode[] }) 
 }
 
 /**
- * Marks the find's matches in what it wraps, where the browser can.
+ * Marks the find's matches in the reader, where the browser can, and brings
+ * the first one into view when the reader asked to be taken to it.
  *
  * THE CSS CUSTOM HIGHLIGHT API, because it marks ranges of text without
  * touching the DOM: wrapping each match in an element would re-render the
  * markdown on every keystroke and split text nodes the renderer owns. Where
- * it is absent (jsdom among them) nothing is marked and the counts still say
- * where the matches are.
+ * it is absent nothing is marked and the counts still say where the matches
+ * are.
  *
  * ONE NAMED HIGHLIGHT FOR THE PAGE, which `::highlight(prompt-find)` in
  * screens.css paints — so every open prompt contributes its ranges to one
  * shared set rather than overwriting the others'.
+ *
+ * WHAT IS MARKED IS WHAT WAS COUNTED: every text node under `root` except a
+ * subtree carrying `data-find-skip`, which is how the reader leaves out its
+ * own words (a size, a share, where Previous goes) and a title that is not
+ * the section's own heading line.
+ *
+ * `reveal` CHANGING is a request — Enter, or Shift+Enter — and the first
+ * match is scrolled to the NEAREST edge of whatever scrolls it: the page
+ * scroller on most screens, a full-height column on others, and nothing at
+ * all when it is already in view. Not on every keystroke: scrolling the page
+ * under a box somebody is typing into moves the box away from them.
  */
-function Marked({
-  query,
-  on,
-  children,
-}: {
-  query: string;
+function useFindMarks(
+  root: RefObject<HTMLElement | null>,
+  query: string,
   /** What is shown: the marks are re-taken whenever it changes. */
-  on: string;
-  children: ReactNode;
-}) {
-  const box = useRef<HTMLDivElement | null>(null);
+  on: string,
+  reveal: number,
+) {
+  const revealed = useRef(reveal);
   useEffect(() => {
+    const asked = revealed.current !== reveal;
+    revealed.current = reveal;
     const pattern = findPattern(query);
-    const root = box.current;
-    if (!pattern || !root || !highlights()) return;
-    const ranges: Range[] = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const text = node.nodeValue ?? "";
-      for (const m of text.matchAll(pattern)) {
-        const range = document.createRange();
-        range.setStart(node, m.index);
-        range.setEnd(node, m.index + m[0].length);
-        ranges.push(range);
-      }
-    }
+    const box = root.current;
+    if (!pattern || !box) return;
+    const ranges = matchRanges(box, pattern);
+    if (asked) ranges[0]?.startContainer.parentElement?.scrollIntoView({ block: "nearest" });
+    if (!highlights()) return;
     const me = Symbol("prompt");
     marks.set(me, ranges);
     paint();
@@ -584,8 +696,30 @@ function Marked({
       marks.delete(me);
       paint();
     };
-  }, [query, on]);
-  return <div ref={box}>{children}</div>;
+  }, [root, query, on, reveal]);
+}
+
+/** One range per match of `pattern` in the text under `root`, skipping `data-find-skip` subtrees. */
+function matchRanges(root: HTMLElement, pattern: RegExp): Range[] {
+  const ranges: Range[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.nodeType !== Node.ELEMENT_NODE
+        ? NodeFilter.FILTER_ACCEPT
+        : (node as Element).hasAttribute("data-find-skip")
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_SKIP,
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.nodeValue ?? "";
+    for (const m of text.matchAll(pattern)) {
+      const range = document.createRange();
+      range.setStart(node, m.index);
+      range.setEnd(node, m.index + m[0].length);
+      ranges.push(range);
+    }
+  }
+  return ranges;
 }
 
 /** The highlight registry, or null where the browser has none. */

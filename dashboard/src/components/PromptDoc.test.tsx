@@ -13,9 +13,18 @@
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PromptRecord } from "./PromptDoc.tsx";
+import { outlineHalf } from "~/lib/promptmap.ts";
 import type { PromptSection } from "~/protocol/index.ts";
+import { sheetRules } from "~/test/sheets.ts";
+
+// THE OUTLINE, WATCHED: a pass-through, so every case below reads the real
+// outline, and the memo case can count how often a record was re-outlined.
+vi.mock("~/lib/promptmap.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/promptmap.ts")>();
+  return { ...real, outlineHalf: vi.fn(real.outlineHalf) };
+});
 
 afterEach(cleanup);
 
@@ -192,6 +201,18 @@ describe("a prompt with headings", () => {
     expect(row.textContent).not.toContain("`");
   });
 
+  it("draws a title's link as its words inside a row, and as a link only in the reader", () => {
+    // An option's children are presentational to assistive tech, and a click
+    // on a link inside one navigates instead of choosing the row.
+    draw({ system: "## See [the guide](https://example.com/guide)\nread it" });
+    const row = within(outline()).getAllByRole("option")[0]!;
+    expect(row.querySelector("a")).toBeNull();
+    expect(row.textContent).toMatch(/^See the guide/);
+    fireEvent.click(row);
+    // THE CONTROL: the reader's own title is not a control, and keeps it.
+    expect(within(reader()).getByRole("link", { name: "the guide" })).toBeTruthy();
+  });
+
   it("keeps the prompt's own line breaks", () => {
     // An identity block is one fact per line; read as soft wraps it became a
     // single run-on sentence.
@@ -242,6 +263,43 @@ describe("a prompt whose builder sent a section map", () => {
     expect(reader().textContent).toContain("from the thread");
   });
 
+  it("keeps a heading a headless span quotes first, nested under the builder's title", () => {
+    // A worker's task the executor wrote, opening with its own "## Goal": as
+    // the span's own heading, those words were drawn nowhere.
+    const task = "## Goal\nDo X\n\n## Steps\n1. a\n\n";
+    const rules = "## Worker rules\nstay a leaf";
+    draw({
+      system: "",
+      user: task + rules,
+      userSections: [
+        { key: "task", title: "Task", bytes: bytes(task), headed: false },
+        { key: "worker_rules", title: "Worker rules", bytes: bytes(rules), headed: true },
+      ],
+    });
+    expect(screen.getByRole("region", { name: "Task" })).toBeTruthy();
+    const subs = [...reader().querySelectorAll(".prompt-sub-title")].map((t) => t.textContent);
+    expect(subs).toEqual(["Goal", "Steps"]);
+    expect(reader().textContent).toContain("Do X");
+  });
+
+  it("is not re-outlined when a push brings the same map again", () => {
+    // Every push rebuilds a record from the wire, so the map is a new array
+    // on each of a streaming phase's five frames a second.
+    const outlined = vi.mocked(outlineHalf);
+    const fresh = () => MAP.map((s) => ({ ...s }));
+    const view = render(
+      <PromptRecord phase="review" system={TEXT} user="" systemSections={fresh()} />,
+    );
+    const before = outlined.mock.calls.length;
+    view.rerender(<PromptRecord phase="review" system={TEXT} user="" systemSections={fresh()} />);
+    expect(outlined.mock.calls.length).toBe(before);
+    // THE CONTROL: a map that says something else is read again.
+    const renamed = fresh().map((s, i) => (i === 0 ? { ...s, title: "Who you are" } : s));
+    view.rerender(<PromptRecord phase="review" system={TEXT} user="" systemSections={renamed} />);
+    expect(outlined.mock.calls.length).toBe(before + 1);
+    expect(rows()[0]).toMatch(/^Who you are/);
+  });
+
   it("falls back to the headings when the map does not tile the prompt", () => {
     // One byte short: a map that would mis-slice is not trusted at all.
     const broken = MAP.map((s, i) => (i === 2 ? { ...s, bytes: s.bytes - 1 } : s));
@@ -257,6 +315,25 @@ describe("a prompt with no headings", () => {
     draw({ system: "a **handwritten** task prompt" });
     expect(rows()).toHaveLength(1);
     expect(screen.getByText("handwritten").closest("strong")).toBeTruthy();
+  });
+
+  it("names that section for the whole half, since no heading follows it", () => {
+    // "Before the first heading" claimed a heading the prompt does not have.
+    draw({ system: "a **handwritten** task prompt" });
+    expect(rows()[0]).toMatch(/^The whole system prompt/);
+    expect(screen.getByRole("region", { name: "The whole system prompt" })).toBeTruthy();
+  });
+
+  it("names each half by its own shape", () => {
+    // A headed system prompt keeps its lead "before the first heading"; the
+    // plain user message beside it is the whole of that half.
+    draw({ user: "plain trigger text" });
+    const all = rows();
+    expect(all[0]).toMatch(/^Before the first heading/);
+    expect(all.at(-1)).toMatch(/^The whole user message/);
+    fireEvent.click(within(outline()).getByRole("option", { name: /What the agent produced/ }));
+    // Named once: the whole half needs no "(the user message)" after it.
+    expect(screen.getByRole("button", { name: "Next: The whole user message" })).toBeTruthy();
   });
 
   it("still offers the record, because the two views differ on every document", () => {
@@ -286,6 +363,13 @@ describe("finding in a prompt", () => {
       .filter((o) => o.classList.contains("is-dim"))
       .map((o) => o.textContent?.replace(/\s*\d.*$/, ""));
     expect(dim).toEqual(["Delta", "Gamma"]);
+    // And the rows that match lift, so the two sets differ by more than a
+    // step of grey.
+    const hit = within(outline())
+      .getAllByRole("option")
+      .filter((o) => o.classList.contains("is-hit"))
+      .map((o) => o.textContent?.replace(/\s*\d.*$/, ""));
+    expect(hit).toEqual(["Alpha", "Beta notes"]);
   });
 
   it("jumps between the sections that match with Enter and Shift+Enter, and clears with Escape", () => {
@@ -312,6 +396,167 @@ describe("finding in a prompt", () => {
     draw();
     find("zzz");
     expect(screen.getByRole("status").textContent).toBe("No matches");
+  });
+
+  const selected = () =>
+    within(outline())
+      .getByRole("option", { selected: true })
+      .textContent?.replace(/\s*\d.*$/, "");
+
+  it("takes the reader to a section that matches when the one shown has none", () => {
+    draw({ system: "## Alpha\nalpha\n\n## Delta\ndelta", user: USER });
+    find("gam");
+    expect(selected()).toBe("Gamma");
+    // A section that still matches as the query grows is kept.
+    find("gamma");
+    expect(selected()).toBe("Gamma");
+    // THE CONTROL: a query the section on screen holds moves nothing.
+    find("");
+    choose(/^Delta/);
+    find("delta");
+    expect(selected()).toBe("Delta");
+  });
+
+  it("stops following once the reader chooses a section during the query", () => {
+    draw({ system: "## Alpha\nalpha\n\n## Delta\ndelta", user: USER });
+    find("e");
+    choose(/^Alpha/);
+    // Alpha holds no "eta" and "Beta notes" does, but the reader chose Alpha
+    // while this query was open.
+    find("eta");
+    expect(selected()).toBe("Alpha");
+    // Clearing ends the query, and the next one follows again.
+    fireEvent.keyDown(screen.getByRole("searchbox", { name: "Find in this prompt" }), {
+      key: "Escape",
+    });
+    find("nothing h");
+    expect(selected()).toBe("Gamma");
+  });
+});
+
+/**
+ * The marks in the reader. jsdom has no CSS Custom Highlight API, so the
+ * registry and `Highlight` are stood in for here, recording the ranges a
+ * highlight was built from: without them this path never runs under test.
+ */
+describe("marking what a find matched", () => {
+  class FakeHighlight {
+    ranges: Range[];
+    constructor(...ranges: Range[]) {
+      this.ranges = ranges;
+    }
+  }
+  let registry: Map<string, FakeHighlight>;
+  const g = globalThis as unknown as { CSS?: object; Highlight?: unknown };
+  const saved = { CSS: g.CSS, Highlight: g.Highlight };
+
+  beforeEach(() => {
+    registry = new Map();
+    // A CSS object carrying everything the real one has, plus the registry.
+    g.CSS = Object.assign(Object.create(saved.CSS ?? null) as object, { highlights: registry });
+    g.Highlight = FakeHighlight;
+  });
+  afterEach(() => {
+    // Unmount FIRST, while the stand-ins are still there to be cleared.
+    cleanup();
+    g.CSS = saved.CSS;
+    g.Highlight = saved.Highlight;
+  });
+
+  const marked = () => (registry.get("prompt-find")?.ranges ?? []).map((r) => r.toString());
+  const PROMPT = "## Alpha\nalpha beta beta\n\n## Delta\ndelta beta";
+  function find(text: string, at = 0) {
+    fireEvent.change(screen.getAllByRole("searchbox", { name: "Find in this prompt" })[at]!, {
+      target: { value: text },
+    });
+  }
+
+  it("marks every match in the section shown, and only there", () => {
+    draw({ system: PROMPT });
+    find("beta");
+    expect(marked()).toEqual(["beta", "beta"]);
+  });
+
+  it("re-takes the marks when the reader moves to another section", () => {
+    draw({ system: PROMPT });
+    find("beta");
+    choose(/^Delta/);
+    expect(marked()).toEqual(["beta"]);
+  });
+
+  it("clears the marks when the query is cleared, and when the view goes", () => {
+    draw({ system: PROMPT });
+    find("beta");
+    fireEvent.keyDown(screen.getByRole("searchbox", { name: "Find in this prompt" }), {
+      key: "Escape",
+    });
+    expect(registry.has("prompt-find")).toBe(false);
+    find("beta");
+    expect(registry.has("prompt-find")).toBe(true);
+    showSource();
+    expect(registry.has("prompt-find")).toBe(false);
+  });
+
+  it("pools two open prompts into the one highlight, and drops one's when it goes", () => {
+    const first = render(<PromptRecord phase="execute" system={PROMPT} user="" />);
+    render(<PromptRecord phase="review" system={"## Other\nalpha"} user="" />);
+    find("beta", 0);
+    find("alpha", 1);
+    expect(marked()).toEqual(["beta", "beta", "alpha"]);
+    first.unmount();
+    expect(marked()).toEqual(["alpha"]);
+  });
+
+  it("marks a title that is the section's own heading line, as the count does", () => {
+    draw({ system: "## Beta notes\nbeta once\n\n## Gamma\nnothing here" });
+    find("notes");
+    expect(screen.getByRole("status").textContent).toBe("1 match in 1 section");
+    expect(marked()).toEqual(["notes"]);
+    find("beta");
+    expect(marked()).toEqual(["Beta", "beta"]);
+  });
+
+  it("never marks words the source does not hold — a builder's title, the reader's own", () => {
+    const text = "You are **Engineer**.\n\n";
+    draw({
+      system: text,
+      systemSections: [{ key: "identity", title: "Identity", bytes: bytes(text) }],
+    });
+    find("identity");
+    expect(screen.getByRole("status").textContent).toBe("No matches");
+    expect(marked()).toEqual([]);
+    // Nor the size and share, nor where Previous and Next go.
+    find("system prompt");
+    expect(marked()).toEqual([]);
+  });
+});
+
+describe("taking the reader to a match", () => {
+  const LONG = "## Alpha\nfirst line\n\nalpha beta\n\n## Delta\ndelta\n\nthen beta here";
+
+  it("brings the first match of the section Enter lands on into view", () => {
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      draw({ system: LONG });
+      const box = screen.getByRole("searchbox", { name: "Find in this prompt" });
+      fireEvent.change(box, { target: { value: "beta" } });
+      // Typing marks; it does not move the page under the box being typed in.
+      expect(scrolled).not.toHaveBeenCalled();
+      fireEvent.keyDown(box, { key: "Enter" });
+      expect(screen.getByRole("region", { name: "Delta" })).toBeTruthy();
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.instances[0]).toBeInstanceOf(Element);
+      expect((scrolled.mock.instances[0] as unknown as Element).textContent).toContain(
+        "then beta here",
+      );
+      expect(scrolled.mock.calls[0]?.[0]).toEqual({ block: "nearest" });
+      // Enter on the only remaining match brings it back into view again.
+      fireEvent.change(box, { target: { value: "then beta" } });
+      fireEvent.keyDown(box, { key: "Enter" });
+      expect(scrolled).toHaveBeenCalledTimes(2);
+    } finally {
+      scrolled.mockRestore();
+    }
   });
 });
 
@@ -363,5 +608,19 @@ describe("moving through the outline", () => {
     fireEvent.click(segments[4]!);
     expect(screen.getByRole("region", { name: "Task" })).toBeTruthy();
     expect(segments[4]!.getAttribute("title")).toMatch(/^Task · \d+ B · 100% of the user message$/);
+  });
+
+  it("never draws a half narrower than its segments, which would spill past the map", () => {
+    // jsdom lays nothing out, so this is read in the sheet: a half's byte
+    // share of a phone's width can be 4px while its segments need 11, and a
+    // half allowed to shrink to nothing (`min-width: 0`) lets them overflow.
+    const rule = (selector: string) =>
+      sheetRules()
+        .filter((r) => r.file === "screens.css" && r.selector === selector)
+        .map((r) => r.body)
+        .join(";");
+    expect(rule(".prompt-map-seg")).toMatch(/min-width:\s*\d/);
+    expect(rule(".prompt-map-half")).toMatch(/flex-basis:\s*0/);
+    expect(rule(".prompt-map-half")).not.toMatch(/min-width/);
   });
 });
