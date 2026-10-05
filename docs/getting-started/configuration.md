@@ -362,6 +362,12 @@ providers:
                                         #   A CEILING for every call on this entry: a call may ask for less (the
                                         #   extension judge, the knowledge answer, the turn-start filters and every
                                         #   learning pass ask for `low`) and never for more
+                                        # There is NO temperature field, on any type: the phases of a turn
+                                        #   send none, so every round runs at the vendor's own default
+                                        #   (1.0 on OpenAI), and only a call that needs one names it — the
+                                        #   extension judge asks for 0, the knowledge answer and the auxiliary
+                                        #   passes for 0.2. openai sends it on a call that is not reasoning;
+                                        #   anthropic only where the model samples (see "Claude models" below)
     claude:
       type: anthropic
       model: claude-sonnet-5-5          # the request SHAPE follows the model — see "Claude models" below

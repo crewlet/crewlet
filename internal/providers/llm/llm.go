@@ -162,8 +162,11 @@ type Request struct {
 	// This is the rule the whole tree follows: a field whose zero value is
 	// a legitimate SETTING may not use the zero value to mean "unset". A
 	// plain float here would make omission mean 0.0 and run every phase in
-	// the engine deterministic without anyone choosing it. Read it through
-	// [Request.TemperatureOr], never by testing it against zero.
+	// the engine deterministic without anyone choosing it. A backend sends
+	// it exactly when it is non-nil and sends nothing otherwise — never a
+	// default of its own in its place, which would be a temperature nobody
+	// chose, and never after testing it against zero, which is how a
+	// judge's 0 gets lost.
 	Temperature *float64
 
 	// MaxTokens is a plain int, with 0 meaning unset — deliberately not a
@@ -315,20 +318,6 @@ func (r Request) Send(d Delta) {
 
 // Streaming reports whether this request asked to be streamed.
 func (r Request) Streaming() bool { return r.OnDelta != nil }
-
-// TemperatureOr is the request's temperature, or fallback when it named none.
-//
-// It is a method on the contract rather than a sentence in a doc comment
-// because the safe reading of a zero has to be something backends CALL: the
-// obvious hand-written test, `if req.Temperature != nil && *req.Temperature >
-// 0`, quietly restores the bug this field exists to remove. Same rule the
-// coordination contract settled on for AcquireOptions.EffectiveProtocol.
-func (r Request) TemperatureOr(fallback float64) float64 {
-	if r.Temperature == nil {
-		return fallback
-	}
-	return *r.Temperature
-}
 
 // Temp is a pointer to v, for building a [Request] literal — Go cannot take
 // the address of a constant, and `t := 0.0; req.Temperature = &t` at every

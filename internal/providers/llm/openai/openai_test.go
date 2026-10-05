@@ -788,43 +788,42 @@ func TestAnUnknownRequestEffortIsRefused(t *testing.T) {
 	}
 }
 
+// ONLY A TEMPERATURE THE CALL NAMED IS SENT. The phases of a turn name none,
+// so "unset" is what the whole engine runs on, and it must reach the wire as
+// no field at all — the endpoint's own default — rather than a number the
+// provider chose for everybody: that was a 0.7 nobody picked, sent on every
+// executor round. A named one is sent exactly, a 0 included, because a judge
+// asking for a reproducible answer must get it.
 func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		configure       func(*Config)
 		request         llm.Request
-		wantTemperature float64
+		wantTemperature any // nil means absent
 		wantMaxTokens   any // nil means absent
 	}{
 		{
-			// The tool loop sends neither field on any call it makes, so
-			// "unset" is what the whole engine runs on: a nil temperature
-			// must reach the provider's configured default, not 0.0.
 			name: "request says nothing", request: userTurn("hi"),
-			wantTemperature: DefaultTemperature, wantMaxTokens: nil,
+			wantTemperature: nil, wantMaxTokens: nil,
 		},
 		{
 			name:            "config supplies a cap",
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
+			configure:       func(c *Config) { c.MaxTokens = 512 },
 			request:         userTurn("hi"),
-			wantTemperature: 0.2, wantMaxTokens: float64(512),
+			wantTemperature: nil, wantMaxTokens: float64(512),
 		},
 		{
 			name:            "request overrides the config",
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
+			configure:       func(c *Config) { c.MaxTokens = 512 },
 			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0.9), MaxTokens: 77},
 			wantTemperature: 0.9, wantMaxTokens: float64(77),
 		},
 		{
-			// The whole reason Temperature is a pointer. A judge asking
-			// for a reproducible answer says 0.0 and MUST get it; a
-			// backend testing `> 0` silently substitutes its default and
-			// the judge is non-deterministic with nothing to show for it.
+			// The whole reason Temperature is a pointer.
 			name:            "an explicit zero reaches the wire",
-			configure:       func(c *Config) { c.Temperature = 0.2 },
 			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0)},
-			wantTemperature: 0, wantMaxTokens: nil,
+			wantTemperature: float64(0), wantMaxTokens: nil,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -835,18 +834,20 @@ func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 				t.Fatalf("Complete: %v", err)
 			}
 			body := api.seen()[0].body
-			if body["temperature"] != tc.wantTemperature {
-				t.Fatalf("temperature = %v, want %v", body["temperature"], tc.wantTemperature)
-			}
-			got, present := body["max_tokens"]
-			if tc.wantMaxTokens == nil {
-				if present {
-					t.Fatalf("max_tokens = %v, want the field absent", got)
+			for _, field := range []struct {
+				key  string
+				want any
+			}{{"temperature", tc.wantTemperature}, {"max_tokens", tc.wantMaxTokens}} {
+				got, present := body[field.key]
+				if field.want == nil {
+					if present {
+						t.Errorf("%s = %v, want the field absent", field.key, got)
+					}
+					continue
 				}
-				return
-			}
-			if got != tc.wantMaxTokens {
-				t.Fatalf("max_tokens = %v, want %v", got, tc.wantMaxTokens)
+				if got != field.want {
+					t.Errorf("%s = %v, want %v", field.key, got, field.want)
+				}
 			}
 		})
 	}

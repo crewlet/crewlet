@@ -54,10 +54,14 @@ import (
 var log = logging.Get("llm.openai")
 
 // Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
+//
+// There is deliberately NO default temperature. The engine's phases never
+// chose one, so a provider-side default was a number nobody picked, sent on
+// every round in place of the vendor's own; a call that wants one names it on
+// the request.
 const (
-	DefaultBaseURL     = "https://api.openai.com/v1"
-	DefaultTimeout     = 120 * time.Second
-	DefaultTemperature = 0.7
+	DefaultBaseURL = "https://api.openai.com/v1"
+	DefaultTimeout = 120 * time.Second
 )
 
 // Config builds a provider.
@@ -94,11 +98,6 @@ type Config struct {
 	// context window needs.
 	MaxTokens int
 
-	// Temperature is used for a request that names none (see llm.Request:
-	// its zero value cannot be told apart from an unset field). Ignored
-	// when Reasoning is set — the reasoning models reject it.
-	Temperature float64
-
 	// Reasoning turns on the reasoning-effort budget.
 	Reasoning bool
 
@@ -117,14 +116,13 @@ type Config struct {
 
 // Provider is an OpenAI-wire-format backend.
 type Provider struct {
-	name        string
-	model       string
-	client      sdk.Client
-	pool        *credential.Pool
-	maxTokens   int64
-	temperature float64
-	reasoning   bool
-	effort      shared.ReasoningEffort
+	name      string
+	model     string
+	client    sdk.Client
+	pool      *credential.Pool
+	maxTokens int64
+	reasoning bool
+	effort    shared.ReasoningEffort
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic: one Provider serves every seat
@@ -154,10 +152,6 @@ func New(cfg Config) (*Provider, error) {
 	if strings.TrimSpace(name) == "" {
 		name = "openai"
 	}
-	temperature := cfg.Temperature
-	if temperature <= 0 {
-		temperature = DefaultTemperature
-	}
 
 	// NOTHING FROM THE PROCESS ENVIRONMENT, first — see
 	// [WithoutAmbientEnvironment]. The key is set per request, after these.
@@ -177,14 +171,13 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	return &Provider{
-		name:        name,
-		model:       cfg.Model,
-		client:      sdk.NewClient(opts...),
-		pool:        credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
-		maxTokens:   int64(cfg.MaxTokens),
-		temperature: temperature,
-		reasoning:   cfg.Reasoning,
-		effort:      shared.ReasoningEffort(cfg.ReasoningEffort),
+		name:      name,
+		model:     cfg.Model,
+		client:    sdk.NewClient(opts...),
+		pool:      credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
+		maxTokens: int64(cfg.MaxTokens),
+		reasoning: cfg.Reasoning,
+		effort:    shared.ReasoningEffort(cfg.ReasoningEffort),
 	}, nil
 }
 
@@ -416,11 +409,14 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 			params.MaxCompletionTokens = param.NewOpt(p.maxTokens)
 		}
 	} else {
-		// TemperatureOr, not a zero test: an explicit 0.0 is a real request
-		// — a judge asking for a reproducible answer — and it must reach
-		// the wire, while a request that named nothing takes the
-		// provider's configured default.
-		params.Temperature = param.NewOpt(req.TemperatureOr(p.temperature))
+		// Only a temperature the CALL named, and then exactly — an explicit
+		// 0.0 is a real request, a judge asking for a reproducible answer.
+		// A call that named none sends none and runs at the endpoint's own
+		// default: a substitute chosen here would be a number nobody picked,
+		// and every compatible host has a default of its own to apply.
+		if req.Temperature != nil {
+			params.Temperature = param.NewOpt(*req.Temperature)
+		}
 		// max_tokens rather than max_completion_tokens: the compatible
 		// endpoints this backend also serves are years behind the rename.
 		if maxTokens > 0 {
