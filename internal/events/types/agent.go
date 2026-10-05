@@ -105,7 +105,18 @@ type PromptMessage struct {
 // PromptSection is one part of a prompt, as the frame that assembled the
 // prompt recorded it: a stable snake_case `key`, the `title` a reader shows it
 // under (its heading text without the #'s, or a name the builder chose for a
-// part with no heading), and its length in `bytes` of UTF-8.
+// part with no heading), its length in `bytes` of UTF-8, and `headed: true`
+// when the part begins with its own heading line, whose text is `title`.
+//
+// `headed` is absent, never `false`, on a part with no heading of its own —
+// and on every part of an older peer's map, which predates it. A part that is
+// not headed may still BEGIN with a heading: a worker's persona, a task prompt
+// the executor wrote and a trigger's body are somebody else's markdown, and
+// often open with one ("## Goal"). That heading is the content's, nested under
+// the part's title, not the part's own — a reader that took it for the part's
+// own drew the builder's title in its place and lost the heading's words. A
+// reader handed no `headed` falls back to comparing the part's first heading
+// with its `title`, which the contract above makes exact for a headed part.
 //
 // It exists because the only outline a reader can otherwise derive is the
 // prompt's own `##` lines, and a heading INSIDE embedded content — a chat
@@ -115,14 +126,17 @@ type PromptMessage struct {
 //
 // A prompt's sections TILE it exactly and in order: their bytes sum to the
 // prompt's length, every boundary falls on a rune boundary, every section is
-// at least one byte, and no key repeats. A reader that finds a map breaking
+// at least one byte, and no key repeats. A prompt whose text is not valid
+// UTF-8 carries no map at all, since JSON delivers such text with each bad
+// byte rewritten to three. A reader that finds a map breaking
 // any of that must fall back to the prompt's own headings rather than slice by
 // it — the map is an older or a broken producer's, and the text is still the
 // text.
 type PromptSection struct {
-	Key   string `json:"key"`
-	Title string `json:"title"`
-	Bytes int    `json:"bytes"`
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Bytes  int    `json:"bytes"`
+	Headed bool   `json:"headed,omitempty"`
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON

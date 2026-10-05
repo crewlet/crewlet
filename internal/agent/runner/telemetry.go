@@ -428,8 +428,8 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		// prompt's parts from the frame that assembled them rather than
 		// from the text's own headings — see [types.PromptSection].
 		PromptMessages: []types.PromptMessage{
-			{Role: string(llm.RoleSystem), Content: system.Text, Sections: promptSections(system)},
-			{Role: string(llm.RoleUser), Content: user.Text, Sections: promptSections(user)},
+			{Role: string(llm.RoleSystem), Content: system.Text, Sections: promptSections(ctx, ph, system)},
+			{Role: string(llm.RoleUser), Content: user.Text, Sections: promptSections(ctx, ph, user)},
 		},
 		RoundNum: openingRound,
 		// The cap from the first frame, so a live row can say "of 8"
@@ -1058,8 +1058,8 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Trigger:        e.turn.Trigger,
 		SystemPrompt:   res.SystemPrompt.Text,
 		UserPrompt:     res.UserPrompt.Text,
-		SystemSections: promptSections(res.SystemPrompt),
-		UserSections:   promptSections(res.UserPrompt),
+		SystemSections: promptSections(ctx, phase.Subagent, res.SystemPrompt),
+		UserSections:   promptSections(ctx, phase.Subagent, res.UserPrompt),
 		Response:       res.Text,
 		ToolExecutions: toolExecutions(res.Executions),
 		// Published beside the executions, on the round number they share.
@@ -1139,8 +1139,8 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Trigger:          e.turn.Trigger,
 		SystemPrompt:     rec.System.Text,
 		UserPrompt:       rec.User.Text,
-		SystemSections:   promptSections(rec.System),
-		UserSections:     promptSections(rec.User),
+		SystemSections:   promptSections(ctx, rec.Phase, rec.System),
+		UserSections:     promptSections(ctx, rec.Phase, rec.User),
 		Response:         rec.Result.Text,
 		ToolExecutions:   toolExecutions(rec.Result.Executions),
 		RoundNarration:   roundNarration(rec.Result.Narration),
@@ -1395,19 +1395,32 @@ func utcOrZero(t time.Time) time.Time {
 
 // promptSections renders a prompt's outline in its wire shape, or nil.
 //
-// NIL FOR A MAP THAT DOES NOT TILE ITS TEXT, which no builder in this tree
-// produces: the wire contract is that every map a reader receives can be
-// sliced by, and a reader that finds none falls back to the prompt's own
-// headings. Publishing a broken one would hand every reader the obligation
-// to check it — they must anyway, for an older peer's — and would publish a
-// map this node already knows is wrong.
-func promptSections(p prompts.Prompt) []types.PromptSection {
-	if len(p.Sections) == 0 || !p.Valid() {
+// NIL FOR A MAP THAT DOES NOT TILE ITS TEXT: the wire contract is that every
+// map a reader receives can be sliced by, and a reader that finds none falls
+// back to the prompt's own headings. Publishing a broken one would hand every
+// reader the obligation to check it — they must anyway, for an older peer's —
+// and would publish a map this node already knows is wrong.
+//
+// AND SAID SO, at warn. No builder in this tree produces a map that fails to
+// tile; the one way a valid build fails the check is text that is not UTF-8
+// (external content a vendor sent), and either way every screen silently drew
+// this prompt from its headings instead — a builder regression that degraded
+// them all would otherwise have no symptom anybody could find.
+func promptSections(ctx context.Context, ph phase.Phase, p prompts.Prompt) []types.PromptSection {
+	if len(p.Sections) == 0 {
+		return nil
+	}
+	if !p.Valid() {
+		log.WarnContext(ctx, "prompt_outline_withheld", "phase", ph,
+			"sections", len(p.Sections), "bytes", len(p.Text),
+			"valid_utf8", utf8.ValidString(p.Text))
 		return nil
 	}
 	out := make([]types.PromptSection, 0, len(p.Sections))
 	for _, s := range p.Sections {
-		out = append(out, types.PromptSection{Key: s.Key, Title: s.Title, Bytes: s.Bytes})
+		out = append(out, types.PromptSection{
+			Key: s.Key, Title: s.Title, Bytes: s.Bytes, Headed: s.Headed,
+		})
 	}
 	return out
 }

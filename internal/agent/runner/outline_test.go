@@ -25,7 +25,9 @@ const chatTask = "Ana in #eng — \"post the deploy summary? 🚀\"\n" +
 func outline(text string, sections []types.PromptSection) prompts.Prompt {
 	p := prompts.Prompt{Text: text}
 	for _, s := range sections {
-		p.Sections = append(p.Sections, prompts.Section{Key: s.Key, Title: s.Title, Bytes: s.Bytes})
+		p.Sections = append(p.Sections, prompts.Section{
+			Key: s.Key, Title: s.Title, Bytes: s.Bytes, Headed: s.Headed,
+		})
 	}
 	return p
 }
@@ -74,9 +76,13 @@ func TestThePhaseRecordsCarryTheirPromptsOutlines(t *testing.T) {
 	for _, tc := range []struct {
 		phase    string
 		userKeys []string
+		// Whether each user section opens on its own heading: the
+		// executor's task does ("## Task"), the reviewer's two are parts
+		// the builder named, whatever the trigger's body opens with.
+		userHeaded []bool
 	}{
-		{"execute", []string{"task"}},
-		{"review", []string{"reference", "task"}},
+		{"execute", []string{"task"}, []bool{true}},
+		{"review", []string{"reference", "task"}, []bool{false, false}},
 	} {
 		done := completedPhase(t, pub, tc.phase)
 		system := outline(done.SystemPrompt, done.SystemSections)
@@ -94,6 +100,17 @@ func TestThePhaseRecordsCarryTheirPromptsOutlines(t *testing.T) {
 				t.Errorf("%s: %q is not inside the task section:\n%s", tc.phase, embedded, task)
 			}
 		}
+		// HEADED TRAVELS, section by section, as the builder said it.
+		var headed []bool
+		for _, s := range done.UserSections {
+			headed = append(headed, s.Headed)
+		}
+		if !slices.Equal(headed, tc.userHeaded) {
+			t.Errorf("%s: user sections headed = %v, want %v", tc.phase, headed, tc.userHeaded)
+		}
+		if !slices.ContainsFunc(done.SystemSections, func(s types.PromptSection) bool { return s.Headed }) {
+			t.Errorf("%s: no system section is marked headed: %+v", tc.phase, done.SystemSections)
+		}
 
 		// The live opening frame carries the same maps, message by message.
 		open := openingFrame(t, pub, tc.phase)
@@ -104,6 +121,28 @@ func TestThePhaseRecordsCarryTheirPromptsOutlines(t *testing.T) {
 			!slices.Equal(open.PromptMessages[1].Sections, done.UserSections) {
 			t.Errorf("%s: the live frame's outlines differ from the record's", tc.phase)
 		}
+	}
+}
+
+// A PROMPT THAT IS NOT UTF-8 PUBLISHES NO MAP. Its text travels as JSON, which
+// rewrites each invalid byte to three, so a map measured over the bytes the
+// builder joined no longer tiles the text a reader receives. A vendor's body
+// is where such bytes come from, and the reader falls back to the headings.
+func TestAPromptThatIsNotUTF8PublishesNoOutline(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{pub: pub, task: "a vendor body with a bad byte: \xff — and more"})
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	done := completedPhase(t, pub, "execute")
+	if len(done.UserSections) != 0 {
+		t.Errorf("user_sections = %v over text JSON will rewrite", done.UserSections)
+	}
+	if len(done.SystemSections) == 0 {
+		t.Error("the system prompt, which is UTF-8, lost its outline too")
 	}
 }
 

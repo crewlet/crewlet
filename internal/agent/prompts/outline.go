@@ -23,11 +23,12 @@ import (
 //
 // # The invariants a reader may rely on
 //
-// The sections TILE Text exactly and in order: their byte lengths sum to
-// len(Text), every boundary falls on a UTF-8 rune boundary, every section is
-// at least one byte, and no key repeats within one prompt. A separator between
-// two parts belongs to the section BEFORE it, so a headed section starts with
-// its own heading line. A reader that finds a map breaking any of these must
+// The sections TILE Text exactly and in order: Text is valid UTF-8, their byte
+// lengths sum to len(Text), every boundary falls on a rune boundary, every
+// section is at least one byte, and no key repeats within one prompt. A
+// separator between two parts belongs to the section BEFORE it, so a headed
+// section starts with its own heading line — and [Section.Headed] says which
+// sections those are. A reader that finds a map breaking any of these must
 // fall back to the text's own headings rather than slice by it; [Valid] is
 // that check.
 type Prompt struct {
@@ -50,13 +51,36 @@ type Section struct {
 
 	// Bytes is the part's length in Text, in bytes of UTF-8.
 	Bytes int
+
+	// Headed is true when the part BEGINS WITH ITS OWN HEADING LINE, whose
+	// text is Title: a part opened by [Builder.Heading]. False for one
+	// opened by [Builder.Lead], whatever its text begins with.
+	//
+	// A reader cannot tell the two apart from the text, and that is the
+	// point. A lead part carrying somebody else's markdown — a worker's
+	// persona, a task prompt the executor wrote, a trigger's body — very
+	// often OPENS with a heading ("## Goal", "# Fix the login bug"), and a
+	// reader that took that line for the part's own heading drew the
+	// builder's title in its place and lost the quoted heading's words.
+	// Only the builder knows which kind of part it appended.
+	Headed bool
 }
 
 // Valid reports whether the outline tiles the text — see [Prompt]. A prompt
 // with no outline at all is valid: there is simply nothing to slice by.
+//
+// INVALID UTF-8 FAILS IT, though every byte count would still add up. A
+// prompt carries external content — a vendor's webhook body, a quoted reply —
+// and the text travels as JSON, whose encoder rewrites each invalid byte to
+// U+FFFD, three bytes for one: the text a reader receives is then longer than
+// the map that claims to tile it, and every section after the bad byte is cut
+// in the wrong place.
 func (p Prompt) Valid() bool {
 	if len(p.Sections) == 0 {
 		return true
+	}
+	if !utf8.ValidString(p.Text) {
+		return false
 	}
 	seen := make(map[string]bool, len(p.Sections))
 	at := 0
@@ -97,9 +121,10 @@ type Builder struct {
 
 // opening is a section a part opened.
 type opening struct {
-	part  int
-	key   string
-	title string
+	part   int
+	key    string
+	title  string
+	headed bool
 }
 
 // NewBuilder starts a prompt whose parts are joined by sep.
@@ -116,7 +141,7 @@ func (b *Builder) Heading(key string, parts ...string) {
 		b.parts = append(b.parts, parts...)
 		return
 	}
-	b.open(key, headingTitle(parts[0]), parts)
+	b.open(key, headingTitle(parts[0]), true, parts)
 }
 
 // Lead opens a section with no heading of its own, under the title given, and
@@ -127,7 +152,7 @@ func (b *Builder) Lead(key, title string, parts ...string) {
 		b.parts = append(b.parts, parts...)
 		return
 	}
-	b.open(key, title, parts)
+	b.open(key, title, false, parts)
 }
 
 // blank reports whether parts hold nothing but newlines. Such parts are
@@ -141,8 +166,8 @@ func blank(parts []string) bool {
 // Add appends parts to the section in progress.
 func (b *Builder) Add(parts ...string) { b.parts = append(b.parts, parts...) }
 
-func (b *Builder) open(key, title string, parts []string) {
-	b.opens = append(b.opens, opening{part: len(b.parts), key: key, title: title})
+func (b *Builder) open(key, title string, headed bool, parts []string) {
+	b.opens = append(b.opens, opening{part: len(b.parts), key: key, title: title, headed: headed})
 	b.parts = append(b.parts, parts...)
 }
 
@@ -185,7 +210,9 @@ func (b *Builder) Build() Prompt {
 		if end <= starts[i] {
 			continue
 		}
-		sections = append(sections, Section{Key: o.key, Title: o.title, Bytes: end - starts[i]})
+		sections = append(sections, Section{
+			Key: o.key, Title: o.title, Bytes: end - starts[i], Headed: o.headed,
+		})
 	}
 	return Prompt{Text: text, Sections: sections}
 }

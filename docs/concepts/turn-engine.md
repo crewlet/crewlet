@@ -1122,8 +1122,9 @@ and only grew its reasoning once the phase was over.
 **A prompt carries its outline.** `agent_phase_completed` publishes
 `system_sections` and `user_sections` beside `system_prompt` and
 `user_prompt`, and every message of the live opening frame's
-`prompt_messages` carries its own `sections` — one `{key, title, bytes}`
-per part of the prompt, in order, recorded by the builder in
+`prompt_messages` carries its own `sections` — one
+`{key, title, bytes, headed?}` per part of the prompt, in order, recorded
+by the builder in
 `internal/agent/prompts` as it appends each part. The text alone cannot
 say where a part ends: a chat trigger's body carries the engine's own
 `## Triage — decide BEFORE replying` and `## Thread context`, a pull
@@ -1134,6 +1135,19 @@ The builder knows, so the builder says: the whole trigger is the `task`
 section of the user message, each ledger and each piece of review
 evidence is one section, and a part with no heading of its own (the
 identity line, a worker's mandated rules) gets a title the builder chose.
+
+**`headed: true` marks a part that opens on its own heading line**, whose
+text is its `title`; it is absent on every other part. A reader cannot
+tell the two kinds apart from the text, because a part the builder named
+often *opens* with somebody else's heading: a worker's persona, a task
+prompt the executor wrote and a trigger's body are other people's
+markdown, and "## Goal" or "# Fix the login bug" as their first line is
+the content's heading, nested under the part's title — not the part's
+own. A reader that took it for the part's own drew the builder's title
+in its place and lost the heading's words. A map from an older peer
+carries no `headed` at all; a reader then treats a part as headed only
+when its first heading's text *is* its `title`, which the rule above
+makes exact for every headed part.
 
 | Prompt | Section keys, in the order they can appear |
 |---|---|
@@ -1151,16 +1165,23 @@ A key is a stable identifier; a title may carry the seat's own words (a
 unit's name). The map never changes a byte of the prompt — it is carried
 beside it, and the prompt's bytes are its cache key.
 
-**The sections tile the prompt exactly**: their `bytes` sum to its length
-in UTF-8 bytes, every boundary falls on a rune boundary, every section is
-at least one byte, and no key repeats. A separator between two parts
+**The sections tile the prompt exactly**: the prompt is valid UTF-8, the
+sections' `bytes` sum to its length in UTF-8 bytes, every boundary falls
+on a rune boundary, every section is at least one byte, and no key
+repeats. The first rule is the one external content can break — a
+vendor's body with a stray byte — and JSON delivers such text with each
+invalid byte rewritten to U+FFFD, three bytes for one, so a map measured
+over what the builder joined no longer tiles what a reader receives. A separator between two parts
 belongs to the section before it, so a headed section starts with its own
 heading line. A prompt with no map — a resumed executor's, which re-entered
 a conversation rather than opening one, or an older peer's — omits the
 field, and a reader derives the outline from the prompt's own headings; a
 reader that finds a map breaking any of the rules above must do the same
 rather than slice by it. The engine never publishes one: a map that fails
-the check is withheld.
+the check is withheld, and the node logs `prompt_outline_withheld` at
+warn naming the phase — a builder that started producing broken maps
+would otherwise degrade every screen with no symptom anybody could
+find.
 
 **Every phase, workers included.** A [delegated worker](#workers) publishes
 the same `subagent` phase event with the same pair, because its card is the

@@ -189,20 +189,27 @@ func TestEveryPromptsOutlineTilesItsText(t *testing.T) {
 
 // A HEADED SECTION STARTS WITH ITS OWN HEADING LINE, and its title is that
 // heading's text — so the blank line a builder writes before a heading stays
-// with the section before it, and a reader can render the slice as-is.
+// with the section before it, and a reader can render the slice as-is. And the
+// map SAYS which sections those are: every other one is a part the builder
+// named, which no reader can tell from one opening on somebody else's heading.
 func TestAHeadedSectionStartsWithItsHeading(t *testing.T) {
 	t.Parallel()
-	// The sections whose text carries no heading of their own: the builder
-	// named them.
+	// The sections that may carry no heading of their own, where the builder
+	// named them — `identity` and `task` are headed in some prompts and
+	// named in others.
 	headless := map[string]bool{
 		"identity": true, "task": true, "worker_rules": true, "instruction": true,
+		"reference": true,
 	}
 	for _, tc := range outlineCorpus() {
 		at := 0
 		for i, s := range tc.prompt.Sections {
 			text := tc.prompt.Text[at : at+s.Bytes]
 			at += s.Bytes
-			if headless[s.Key] && !strings.HasPrefix(text, "#") {
+			if !s.Headed && !headless[s.Key] {
+				t.Errorf("%s: section %q is not marked headed", tc.name, s.Key)
+			}
+			if !s.Headed {
 				continue
 			}
 			if i == 0 {
@@ -286,6 +293,29 @@ func TestABuilderTextIsExactlyTheJoinOfItsParts(t *testing.T) {
 	}
 }
 
+// HEADED IS THE BUILDER'S WORD, NEVER THE TEXT'S. A lead part carrying
+// somebody else's markdown — a worker persona, a task the executor wrote —
+// often opens with a heading of its own, and that heading is the content's,
+// under the title the builder gave the part: a reader that took it for the
+// part's own heading lost its words.
+func TestALeadIsNeverHeadedWhateverItsTextOpensWith(t *testing.T) {
+	t.Parallel()
+	b := NewBuilder("\n")
+	b.Lead("task", "Task", "## Goal\nDo X\n\n## Steps\n1. a")
+	b.Heading("rules", "## Rules", "be brief")
+	p := b.Build()
+	assertTiles(t, p)
+	if len(p.Sections) != 2 {
+		t.Fatalf("sections = %+v", p.Sections)
+	}
+	if task := p.Sections[0]; task.Headed || task.Title != "Task" {
+		t.Errorf("lead = %+v, want the builder's title and not headed", task)
+	}
+	if rules := p.Sections[1]; !rules.Headed || rules.Title != "Rules" {
+		t.Errorf("heading = %+v, want headed under its own heading's text", rules)
+	}
+}
+
 // Valid is what a reader of a map it did not build relies on before slicing by
 // it, so it refuses each way a map can be wrong.
 func TestValidRefusesAnOutlineThatDoesNotTile(t *testing.T) {
@@ -310,5 +340,12 @@ func TestValidRefusesAnOutlineThatDoesNotTile(t *testing.T) {
 		if (Prompt{Text: text, Sections: sections}).Valid() {
 			t.Errorf("%s: an outline that does not tile was accepted", name)
 		}
+	}
+	// Bytes that add up over text that is not UTF-8 do not tile what a
+	// reader receives: JSON rewrites each bad byte as U+FFFD, three bytes
+	// for one, and every boundary after it moves.
+	bad := "## A\nn\xffe\n## B\nx"
+	if (Prompt{Text: bad, Sections: []Section{{Key: "a", Bytes: 9}, {Key: "b", Bytes: 6}}}).Valid() {
+		t.Error("an outline over invalid UTF-8 was accepted")
 	}
 }
