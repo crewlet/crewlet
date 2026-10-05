@@ -111,14 +111,23 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// A pathological backlog is delivered as successive capped
 		// batches rather than one unbounded one.
+		//
+		// The backlog is a real one: it queues in the mailbox BEFORE the
+		// handler attaches. Published to an attached consumer instead,
+		// the five publishes race the 50 ms linger, and a loaded runner
+		// closed the window after the first ([0] [1 2] [3 4]) — a split
+		// the batcher is right to make and this case wrongly refused.
 		q := s.start(ctx, t)
-		batches := newBatchJournal()
-		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(lingerFor.Seconds(), 2))
-
+		if _, err := q.EnsureSubscription(ctx, "t", "g"); err != nil {
+			t.Fatalf("EnsureSubscription(t, g): %v", err)
+		}
 		for i := range 5 {
 			publish(ctx, t, q, "t", newConvEvent(string(rune('0'+i)), "c1"))
 		}
+
+		batches := newBatchJournal()
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
+			queue.NewBatchOptions(lingerFor.Seconds(), 2))
 		batches.awaitSizes(t, "the backlog to arrive as capped batches", 2, 2, 1)
 	})
 
