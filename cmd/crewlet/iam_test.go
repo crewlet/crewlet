@@ -583,6 +583,10 @@ func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
 		{[]string{"audit", "-person", "0192f00d-0000-7000-8000-0000000000bb",
 			"-event", "enrol", "-at", "2026-06-01T00:00:00Z", "-since", "12"},
 			`{"events":[],"next":"4096"}`, "before", "4096"},
+		{[]string{"invitations", "-all", "-limit", "2"},
+			`{"invitations":[],"next":"0192f00d-0000-7000-8000-0000000000cc",` +
+				`"position":"CREWLET_IAM_LOG@0:9"}`, "after",
+			"0192f00d-0000-7000-8000-0000000000cc"},
 	} {
 		var asked []url.Values
 		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

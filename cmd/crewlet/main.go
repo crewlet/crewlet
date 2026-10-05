@@ -216,7 +216,8 @@ Usage:
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           The company's people, credentials and sessions:
-                              invite, grant, bind, suspend, revoke, audit
+                              invite, grant, bind, suspend, revoke, reset a
+                              password, audit
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds

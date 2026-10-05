@@ -17,6 +17,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -50,6 +52,13 @@ Usage:
   crewlet iam show ID                                  One person, in full
   crewlet iam invite EMAIL [-grants G,...] [-seat SEAT]
                                                        Issue a link, shown ONCE
+  crewlet iam invitations [-all] [-limit N] [-after ID]
+                                                       The open invitations; -all
+                                                       adds the expired and redeemed
+  crewlet iam cancel-invite ID                         Withdraw an invitation: its link
+                                                       opens nothing, its address is free
+  crewlet iam reset-password ID|LOGIN                  Issue a one-time password reset
+                                                       link, shown ONCE, good for a day
   crewlet iam create -login L [-email E] [-kind K]     Create somebody directly
   crewlet iam bind ID SEAT                             Bind a person to a chart seat
   crewlet iam unbind ID                                Take the binding back
@@ -92,6 +101,13 @@ asked again, that node answers the same way until the change reaches it.
 
 Export CREWLET_API_TOKEN to authenticate. Every /iam route is guarded, reads
 included: a map of who can reach a company is worth as much as the grants.
+
+A reset link from "iam reset-password" sets the person a new password once, ends
+every session and token they hold, and signs nobody in: they sign in afterwards,
+where a second factor they hold still applies. A person changes their OWN
+password signed in, through POST /auth/password, which asks for the current one
+and needs a person present — which neither a Tier A token nor a machine token
+is, so this command has no flow for it.
 
 A token minted by "iam token" acts as the person or service account it names,
 carrying at most what they hold now, for at most a year (90 days unless -days
@@ -160,6 +176,8 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		"retry a write whose outcome was unknown: the op id its answer named")
 	seat := fs.String("seat", "",
 		"the chart seat an invitation binds the person it creates to (invite only)")
+	all := fs.Bool("all", false,
+		"list the expired and redeemed invitations too (invitations only)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -194,6 +212,12 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("-seat is invite's: it names the seat an "+
 			"invitation binds — bind somebody who already exists with "+
 			"`crewlet iam bind ID SEAT`, not with `iam %s -seat`", sub)
+	}
+	// -all IS invitations', refused elsewhere for -seat's reason: `iam
+	// people -all` read as accepted would say every stage was listed.
+	if *all && sub != "invitations" {
+		return fmt.Errorf("-all is invitations': it adds the expired and "+
+			"redeemed ones — `iam %s` takes no -all", sub)
 	}
 	// A CREATE NAMES ITS LOGIN, and is told so here rather than by the
 	// node: every principal enrols with one — it is the name their changes
@@ -261,6 +285,27 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		body["seat"] = strings.TrimSpace(*seat)
 		body["reason"] = *reason
 		return out.invite(client.post(ctx, "/iam/invitations", body))
+	case "invitations":
+		query := url.Values{}
+		setIf(query, "after", *after)
+		if *all {
+			query.Set("all", "true")
+		}
+		if *limit > 0 {
+			query.Set("limit", strconv.Itoa(*limit))
+		}
+		answer, err := client.get(ctx, "/iam/invitations", query)
+		return out.invitations(query, answer, err)
+	case "cancel-invite":
+		return out.written(client.delete(ctx, "/iam/invitations/"+subject,
+			withReason(*reason)))
+	case "reset-password":
+		person, err := client.personID(ctx, subject)
+		if err != nil {
+			return err
+		}
+		return out.reset(client.post(ctx,
+			"/iam/people/"+person+"/password-reset", nil))
 	case "create":
 		body := iamGrantsBody(*grants)
 		body["login"], body["email"] = *login, *email
@@ -362,6 +407,8 @@ var iamSubjects = subjectTable{
 	"sessions":          {"a person id"},
 	"reset-mfa":         {"a person id"},
 	"revoke-credential": {"a credential id"},
+	"cancel-invite":     {"an invitation id"},
+	"reset-password":    {"a person id or login"},
 }
 
 // iamKeyed is every subcommand whose route reads an Idempotency-Key: each a
@@ -369,25 +416,32 @@ var iamSubjects = subjectTable{
 // again — which a command that could not send the key could never perform, so
 // the retry an operator could actually run was a fresh operation.
 //
-// ONE WRITE IS MISSING, deliberately, and [iamUnkeyed] says why to whoever
-// asks: a mint answers a value only its first attempt could show.
+// TWO WRITES ARE MISSING, deliberately, and [iamUnkeyed] says why to whoever
+// asks: a mint and a reset link each answer a value only their first attempt
+// could show.
 var iamKeyed = map[string]bool{
 	"invite": true, "create": true, "bind": true, "unbind": true,
 	"grant": true, "suspend": true, "activate": true, "remove": true,
 	"revoke": true, "revoke-credential": true, "reset-mfa": true,
-	"invalidate-all": true,
+	"invalidate-all": true, "cancel-invite": true,
 }
 
 // iamUnkeyed refuses -idempotency-key on a subcommand whose route reads none,
 // saying what to do instead: sent anyway, the key would be ignored and the
 // operator told nothing, which is the one outcome worse than the refusal.
 func iamUnkeyed(sub string) error {
-	if sub == "token" {
+	switch sub {
+	case "token":
 		return errors.New("a mint takes no -idempotency-key: its retry would " +
 			"answer the first attempt's record beside a value that verifies " +
 			"against nothing, so a mint whose outcome was unknown is minted " +
 			"again, and the one that may have landed is a token nobody holds, " +
 			"which expires")
+	case "reset-password":
+		return errors.New("a reset link takes no -idempotency-key: its retry " +
+			"could not hand back the secret the first attempt was never shown, " +
+			"so a link whose issue was unknown is issued again — which revokes " +
+			"the one that may have landed")
 	}
 	return fmt.Errorf("-idempotency-key retries a write whose outcome was "+
 		"unknown, and `iam %s` writes nothing", sub)
@@ -573,6 +627,38 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 		return answer, iamRefusal(resp.StatusCode, answer, raw, c.keyed)
 	}
 	return answer, nil
+}
+
+// personID is the person a subject names: an id as it is, and a login resolved
+// through the directory listing to the ONE row holding it exactly — the
+// listing's `q` narrows on a substring, so an exact match is what is taken and
+// anything else is refused rather than guessed at.
+func (c *iamClient) personID(ctx context.Context, subject string) (string, error) {
+	if _, err := uuid.Parse(subject); err == nil {
+		return subject, nil
+	}
+	answer, err := c.get(ctx, "/iam/people", url.Values{"q": {subject}})
+	if err != nil {
+		return "", err
+	}
+	rows, _ := answer["people"].([]any)
+	var held []string
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if str(row["login"]) == subject {
+			held = append(held, str(row["id"]))
+		}
+	}
+	switch len(held) {
+	case 1:
+		return held[0], nil
+	case 0:
+		return "", fmt.Errorf("nobody in the directory holds the login %q — "+
+			"name the person by their id, which `crewlet iam people` lists", subject)
+	}
+	return "", fmt.Errorf("%d people hold the login %q, which the directory "+
+		"refuses to happen — name the one you mean by their id (%s)", len(held),
+		subject, strings.Join(held, ", "))
 }
 
 // iamMaxAnswer bounds one answer this command will read.
@@ -922,6 +1008,58 @@ func (p *iamPrinter) invite(answer map[string]any, err error) error {
 	fmt.Fprintln(p.w, "This link is shown once and cannot be read back: what "+
 		"the estate keeps is a hash of the secret after the id. Send it to "+
 		"them yourself — this engine never sends mail.")
+	return nil
+}
+
+// invitations prints the invitations a listing answered — never a link, which
+// the answer does not carry.
+func (p *iamPrinter) invitations(asked url.Values, answer map[string]any,
+	err error) error {
+	if err != nil {
+		return err
+	}
+	if p.raw {
+		return p.dump(answer)
+	}
+	rows, _ := answer["invitations"].([]any)
+	tw := tabwriter.NewWriter(p.w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tSTATE\tEMAIL\tSEAT\tGRANTS\tINVITED BY\tEXPIRES")
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		email := str(row["email"])
+		if truthy(row["sealed"]) {
+			email = "(sealed under a key this node's keyring does not hold)"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			str(row["id"]), str(row["state"]), dash(email),
+			dash(str(row["seat"])), dash(joinAny(row["grants"])),
+			dash(str(row["invited_by"])), dash(stamp(row["expires_at"])))
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if next := str(answer["next"]); next != "" {
+		p.more("invitations", asked, "after", next)
+	}
+	fmt.Fprintf(p.w, "as of %s\n", str(answer["position"]))
+	return nil
+}
+
+// reset prints a reset link ONCE, for the invitation's reason.
+func (p *iamPrinter) reset(answer map[string]any, err error) error {
+	if err != nil {
+		return err
+	}
+	if p.raw {
+		return p.dump(answer)
+	}
+	fmt.Fprintf(p.w, "password reset for %s\n%s\n\n", str(answer["id"]),
+		str(answer["url"]))
+	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
+	fmt.Fprintln(p.w, "This link is shown once and cannot be read back. It "+
+		"sets a new password once and ends every session and token the person "+
+		"holds; issuing another revokes it. Send it to them yourself — this "+
+		"engine never sends mail.")
 	return nil
 }
 
