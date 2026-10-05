@@ -2349,7 +2349,16 @@ following the engine's cursor, and a count of what is loaded — "50+" while an
 older page exists), with **Running now** leading the tab so a turn in flight is
 on screen as it opens, and the settled transcripts after the list under their
 own heading, **Transcripts · newest first**. A turn under Running now opens
-the phase it is on, as the trace's Transcript does. A phase that finishes while the
+the phase it is on, as the trace's Transcript does, and STAYS under Running now
+for as long as the seat's own turn record says it is on it — between phases
+and while parked too, the rule the turn's page reads — because decided on "has
+a phase in flight" the card left for the settled list in the gap between one
+phase's record and the next phase's start, came back remounted, and shut the
+transcript the reader was following, at every boundary. Its card then moves
+once, as the turn ends, and opens with the phases the reader watched live
+still open. A running card's header gives ONE duration, how long the turn has
+been running; the length across its phases is a settled card's, where it sat
+beside the running clock as a second unlabelled figure. A phase that finishes while the
 tab is open reaches its transcripts off the push, matched on the seat's own id
 as Live's recent phases are — never on its role name, which two unit seats
 stamped from one template share. A row for a turn still running says what the seat is doing

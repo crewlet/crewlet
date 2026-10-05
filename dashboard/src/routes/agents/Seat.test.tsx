@@ -1444,6 +1444,111 @@ test("the turns tab takes a streamed phase by the seat's id, not a sibling's by 
   expect(transcripts.querySelectorAll(".turn-card")).toHaveLength(1);
 });
 
+/** A phase of the running turn `t-7` completing, as the socket streams it. */
+const completed = (phase: string, at: string) => ({
+  id: `ev-${phase}`,
+  type: "agent_phase_completed",
+  source: "engine",
+  actor: "SWE",
+  summary: "",
+  category: "lifecycle",
+  trace_id: "",
+  span_id: "",
+  parent_span_id: "",
+  topic: "",
+  failed: false,
+  timestamp: at,
+  payload: {
+    turn_id: "t-7",
+    phase,
+    iteration: 1,
+    role: "SWE",
+    agent_id: "a-swe",
+    duration_ms: 30_000,
+  },
+});
+
+/** The turn card in a section of the tab, and each of its phases: name, open. */
+function turnCardIn(heading: string) {
+  const section = screen.getByRole("heading", { name: heading }).closest("section")!;
+  const card = section.querySelector<HTMLElement>(".turn-card");
+  const phases = card
+    ? [...card.querySelectorAll(".phase-card")].map((c) => ({
+        phase: c.querySelector(".phase-head")?.textContent ?? "",
+        open: c.querySelector(".phase-body") !== null,
+      }))
+    : [];
+  return { card, phases };
+}
+
+// A TURN BETWEEN PHASES IS STILL RUNNING. Its phase completes, the push clears
+// the call, and only then does the next phase start — and split on "has a live
+// phase", the card left Running now for the settled list in that gap and came
+// back, remounted, with the transcript the reader was following shut. The
+// seat's own turn record decides, as on the turn's page.
+test("a running turn's card stays put, its phases open, across a phase boundary", async () => {
+  const { store } = mount("#/agents/seats/swe?tab=turns", { agents: [WORKING] });
+  await screen.findByRole("heading", { name: "Running now" });
+  const before = turnCardIn("Running now");
+  expect(
+    before.phases.map((p) => p.open),
+    "the execute it is on is open",
+  ).toEqual([true]);
+  act(() => {
+    store.applyEvent(completed("execute", "2026-09-21T09:52:00Z") as never);
+    store.applyAgents([{ ...WORKING, live_call: null }] as never);
+  });
+  const between = turnCardIn("Running now");
+  expect(between.card, "the same card, in Running now, not remounted").toBe(before.card);
+  expect(
+    between.phases.map((p) => p.open),
+    "and its execute still open",
+  ).toEqual([true]);
+  act(() =>
+    store.applyAgents([
+      {
+        ...WORKING,
+        live_call: {
+          ...WORKING.live_call!,
+          phase: "review",
+          tool_executions: [],
+          running_call: null,
+          started_at: "2026-09-21T09:52:05Z",
+        },
+      },
+    ] as never),
+  );
+  const after = turnCardIn("Running now");
+  expect(after.card).toBe(before.card);
+  expect(
+    after.phases.map((p) => p.open),
+    "execute stays open, review opens",
+  ).toEqual([true, true]);
+});
+
+// AND WHEN THE TURN ENDS, the card moves to the settled transcripts — the one
+// remount left — with the phases the reader watched still open.
+test("a turn that ends keeps the phases its reader watched open in the transcripts", async () => {
+  const { store } = mount("#/agents/seats/swe?tab=turns", { agents: [WORKING] });
+  await screen.findByRole("heading", { name: "Running now" });
+  act(() => {
+    store.applyEvent(completed("execute", "2026-09-21T09:52:00Z") as never);
+    store.applyAgents([
+      {
+        ...WORKING,
+        live_call: { ...WORKING.live_call!, phase: "review", tool_executions: [] },
+      },
+    ] as never);
+  });
+  act(() => {
+    store.applyEvent(completed("review", "2026-09-21T09:53:00Z") as never);
+    store.applyAgents([{ ...WORKING, activity: "idle", turn: null, live_call: null }] as never);
+  });
+  expect(screen.queryByRole("heading", { name: "Running now" })).toBeNull();
+  const ended = turnCardIn("Transcripts · newest first");
+  expect(ended.phases.map((p) => p.open)).toEqual([true, true]);
+});
+
 // THE HEADER COUNTS WHAT IS LOADED, never the history: `.length` of the first
 // page read "50" under "the newest 50 this seat took" whether the seat had
 // fifty-one turns or four hundred, and nothing reached the fifty-first.

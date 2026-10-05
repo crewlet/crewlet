@@ -31,6 +31,7 @@ export function TurnCard({
   row,
   attempt,
   defaultOpen,
+  openPhases,
 }: {
   group: TurnGroup;
   /** Which attempt at this trigger the turn was, when the screen holds more
@@ -41,6 +42,10 @@ export function TurnCard({
    *  reporting different numbers for it. */
   row?: TurnRow;
   defaultOpen?: boolean;
+  /** Phase keys to open as the card mounts beside the one a running turn is
+   *  on — the phases a reader watched live, for a card remounted as its turn
+   *  ends (`routes/agents/seat/Turns.tsx`), whose own latch went with it. */
+  openPhases?: ReadonlySet<string>;
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
@@ -156,7 +161,13 @@ export function TurnCard({
             {fmtCount(group.totalTokens)}
           </span>
         )}
-        {took != null && (
+        {/* HOW LONG IT TOOK, ONCE IT IS OVER. A running turn has no length
+            yet — what this would print is the window across the phases that
+            have reported so far, which moves only when a frame lands — and
+            beside the running clock after it, the header read "1m 40s 1m 53s":
+            two unlabelled answers to one question, neither saying which. A
+            running turn's one figure is how long it has been running. */}
+        {took != null && !group.live && (
           <span
             className="phase-meta t-num"
             title={
@@ -178,7 +189,7 @@ export function TurnCard({
         <time
           className="phase-meta"
           dateTime={group.live ? startedAt : group.at}
-          title={fmtDateTime(group.live ? startedAt : group.at)}
+          title={group.live ? `running since ${fmtDateTime(startedAt)}` : fmtDateTime(group.at)}
         >
           {group.live ? (
             began > 0 ? (
@@ -203,8 +214,14 @@ export function TurnCard({
               // phase it is on — "Running now" on a seat's Turns tab is where
               // a reader comes to watch, and the phase that is moving is the
               // one they came for. Latched like the card: it opens as it
-              // mounts, and a phase that completes is never closed for it.
-              defaultOpen={(i === 0 && group.phases.length === 1) || p.live}
+              // mounts, and a phase that completes keeps its key and its
+              // card, so it is never closed for it while the card stays
+              // mounted. The one remount — the turn ending, when the card
+              // moves to the settled list — is what `openPhases` carries the
+              // phases the reader watched across.
+              defaultOpen={
+                (i === 0 && group.phases.length === 1) || p.live || !!openPhases?.has(p.key)
+              }
             />
           ))}
           {/* THE WAY OUT OF THIS CARD, drawn as a control rather than as a
