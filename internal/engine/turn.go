@@ -25,7 +25,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -978,8 +977,10 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 			AgentHandle: handle,
 			TriggerID:   ev.ID.String(),
 			TriggerType: ev.Type,
-			Reason: reason + ", so it was not redelivered: " +
-				textcut.Ellipsis(cause.Error(), 200),
+			// THE CAUSE WHOLE, held only to the event's delivery bound:
+			// it was cut at 200 bytes, which a wrapped error spends on
+			// its outer operations before it reaches what failed.
+			Reason: events.ClipDiagnostic(reason + ", so it was not redelivered: " + cause.Error()),
 		}, triggerTrace([]*events.Event{ev}))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
