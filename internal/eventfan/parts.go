@@ -44,9 +44,12 @@ func readAt(at time.Time) time.Time {
 // its lookup of one event by id was not floored at all (see [Protocol]). So
 // whatever a part carries with its instant is cut at the asker's horizon,
 // `at` − [store.EventHistory], before any merge sees it, and a row past the
-// horizon reaches no answer from any build: a dead link stays dead on a fleet
-// half way through an upgrade. The asker owns `at`, so it is the one place the
-// cut can be made whichever build replied.
+// horizon reaches no answer this node gives, whichever build the node holding
+// it runs: a dead link asked of this node stays dead on a fleet half way
+// through an upgrade. The asker owns `at`, so it is the one place the cut can
+// be made whichever build replied — which is also its limit: a request served
+// by a node still on an earlier build is answered by that build's merge, which
+// holds nothing to this horizon, until that node is upgraded.
 //
 // What a part holds only as a COUNT cannot be cut — see each part's `within`.
 

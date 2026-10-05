@@ -78,11 +78,14 @@ import (
 // So THE ASKER HOLDS WHAT COMES BACK TO ITS OWN HORIZON wherever an answer
 // carries rows with their instants ([heldTo]): one event, a listing and its
 // trace siblings, a trace, a turn and both phase histories are cut at `at` −
-// [store.EventHistory] before anything is merged, so no build can put a row
-// past the horizon into an answer, and a dead link answers not found however
-// far an upgrade has got. What the asker CANNOT re-check is what arrives as a
-// count, aggregated at the older build's own horizon: the axis's `by_category`,
-// the turns a share folds (a page of turns' second scatter is floored at the
+// [store.EventHistory] before anything is merged, so no peer, whatever build it
+// runs, can put a row past the horizon into an answer this build serves, and a
+// dead link asked of a node on this build answers not found whatever its peers
+// run. A link served by a node still on an earlier build is that build's
+// answer, which holds no copy by id to any horizon, until that node is
+// upgraded. What the asker CANNOT re-check is what arrives as a count,
+// aggregated at the older build's own horizon: the axis's `by_category`, the
+// turns a share folds (a page of turns' second scatter is floored at the
 // history, not at the window), and a trace's or a turn's total beyond what it
 // corrects by the rows it dropped. Those can carry the strip and nothing wider:
 // a turn whose share reaches into it is held to start at the horizon rather

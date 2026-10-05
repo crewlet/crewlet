@@ -575,11 +575,17 @@ sequenceDiagram
 - **The asker holds every row to its own horizon.** Because it owns the
   instant, the asker cuts every row a node returns at that instant minus 30
   days before it merges anything — one event, the events page and its trace
-  siblings, a trace, a turn and the phases — so no node, whatever build it
-  runs, can put a row past the horizon into an answer, and a link to an event
-  older than 30 days answers `not_found` however far an upgrade has got. A
-  trace's or a turn's count is corrected by the rows cut. What arrives only
-  as a count aggregated at an older node's own clock cannot be cut: the axis's
+  siblings, a trace, a turn and the phases — so no peer, whatever build it
+  runs, can put a row past the horizon into an answer this build serves, and
+  a link to an event older than 30 days asked of a node on this build or a
+  later one answers `not_found` whatever its peers run. The guarantee is the
+  serving node's: during an upgrade, a request the load balancer hands to a
+  node still on an earlier build is served by that build, which reads its own
+  copy and its peers' unfloored, so such a link can still resolve there to an
+  event inside the day retention keeps past the horizon until that node is
+  upgraded. A trace's or a turn's count is corrected by the rows cut. What
+  arrives only as a count aggregated at an older node's own clock cannot be
+  cut: the axis's
   `by_category` and the turns a page's second scatter folds can carry that
   node's strip of clock skew, and nothing wider. A turn whose share reaches
   into the strip is listed from the horizon — its start held there, its
