@@ -53,7 +53,8 @@ import (
 
 var log = logging.Get("llm.openai")
 
-// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
+// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds,
+// which is what the engine passes; this one serves a Config built without it.
 //
 // There is deliberately NO default temperature. The engine's phases never
 // chose one, so a provider-side default was a number nobody picked, sent on
@@ -61,7 +62,7 @@ var log = logging.Get("llm.openai")
 // the request.
 const (
 	DefaultBaseURL = "https://api.openai.com/v1"
-	DefaultTimeout = 120 * time.Second
+	DefaultTimeout = 600 * time.Second
 )
 
 // Config builds a provider.
@@ -87,7 +88,9 @@ type Config struct {
 	// company's traffic to somewhere its operator never configured.
 	BaseURL string
 
-	// Timeout caps one HTTP attempt. Zero takes DefaultTimeout.
+	// Timeout bounds one HTTP attempt. Zero takes DefaultTimeout. A unary
+	// call is bounded in total; a streamed one by its SILENCE, never its
+	// length — see [httpapi.IdleWatchdog] for why the two differ.
 	Timeout time.Duration
 
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
@@ -123,6 +126,8 @@ type Provider struct {
 	maxTokens int64
 	reasoning bool
 	effort    shared.ReasoningEffort
+	// timeout is a unary call's total bound and a streamed call's idle one.
+	timeout time.Duration
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic: one Provider serves every seat
@@ -157,6 +162,8 @@ func New(cfg Config) (*Provider, error) {
 	// [WithoutAmbientEnvironment]. The key is set per request, after these.
 	opts := append(WithoutAmbientEnvironment(),
 		option.WithBaseURL(baseURL),
+		// A unary call's total bound. A streamed attempt replaces it with
+		// none and bounds its silence instead (see [Provider.streamOnce]).
 		option.WithRequestTimeout(timeout),
 		// See the package doc. Not negotiable.
 		option.WithMaxRetries(0),
@@ -178,6 +185,7 @@ func New(cfg Config) (*Provider, error) {
 		maxTokens: int64(cfg.MaxTokens),
 		reasoning: cfg.Reasoning,
 		effort:    shared.ReasoningEffort(cfg.ReasoningEffort),
+		timeout:   timeout,
 	}, nil
 }
 
@@ -270,6 +278,11 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 // streamOnce runs one streamed attempt, forwarding fragments as they land and
 // returning the same accumulated shape the unary path returns.
 //
+// BOUNDED BY SILENCE, NOT LENGTH: the client's per-attempt timeout is lifted
+// for this request and an [httpapi.IdleWatchdog] of the same duration ends it
+// only when nothing has arrived for that long, because the per-attempt deadline
+// would cover the whole body and kill a long reasoning round half-way through.
+//
 // The SDK's accumulator rebuilds exactly the [sdk.ChatCompletion] that
 // [Provider.completion] already consumes, so the two paths converge on one
 // interpretation of a response rather than growing a second.
@@ -282,7 +295,10 @@ func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.ChatCompletionNewParams, opt option.RequestOption,
 ) (*sdk.ChatCompletion, string, error) {
-	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt)
+	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
+	defer watch.Stop()
+	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt,
+		option.WithRequestTimeout(0), option.WithMiddleware(watch.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var acc sdk.ChatCompletionAccumulator
@@ -305,8 +321,9 @@ func (p *Provider) streamOnce(
 		// Classified by the caller exactly as a unary failure is. A stream
 		// that dies MID-BODY is a failure of the call, not a short answer:
 		// returning what accumulated would hand the loop a truncated
-		// response as though the model had finished.
-		return nil, "", err
+		// response as though the model had finished. A stream the watchdog
+		// ended is reported as the stall it was.
+		return nil, "", watch.Err(err)
 	}
 	if events == 0 {
 		// Not a failure of the call — the endpoint simply does not do

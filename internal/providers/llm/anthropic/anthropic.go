@@ -59,7 +59,8 @@ var log = logging.Get("llm.anthropic")
 // providerName labels errors and log lines. It is the config's type name.
 const providerName = "anthropic"
 
-// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
+// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds,
+// which is what the engine passes; this one serves a Config built without it.
 //
 // There is deliberately NO default temperature, max_tokens or thinking budget.
 // A temperature is a 400 on every current model and the engine's own phases
@@ -68,7 +69,7 @@ const providerName = "anthropic"
 // rather than something every entry is given.
 const (
 	DefaultBaseURL         = "https://api.anthropic.com"
-	DefaultTimeout         = 120 * time.Second
+	DefaultTimeout         = 600 * time.Second
 	emptyToolResultContent = "(no output)"
 )
 
@@ -103,7 +104,14 @@ type Config struct {
 	// redirect a company's traffic.
 	BaseURL string
 
-	// Timeout caps one HTTP attempt. Zero takes DefaultTimeout.
+	// Timeout bounds one HTTP attempt. Zero takes DefaultTimeout.
+	//
+	// What it bounds depends on how the call is made. A unary call is
+	// bounded IN TOTAL, request to last byte. A streamed call is bounded by
+	// its SILENCE — the longest gap with nothing arriving, the wait for the
+	// first byte included — and never by its length, because a round that
+	// thinks at a high effort writes for many minutes and every one of them
+	// is the model working (see [httpapi.IdleWatchdog]).
 	Timeout time.Duration
 
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
@@ -154,6 +162,8 @@ type Provider struct {
 	effort llm.Effort
 	// budget is the thinking allowance on a budget-era model, 0 for none.
 	budget int64
+	// timeout is a unary call's total bound and a streamed call's idle one.
+	timeout time.Duration
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic because one Provider serves every seat
@@ -211,6 +221,11 @@ func New(cfg Config) (*Provider, error) {
 		// dutifully rotated keys nothing was using.
 		option.WithoutEnvironmentDefaults(),
 		option.WithBaseURL(baseURL),
+		// A unary call's total bound. A streamed attempt replaces it with
+		// none and bounds its silence instead (see [Provider.streamOnce]).
+		// Explicit, too, because the SDK otherwise REFUSES a unary call
+		// whose max_tokens it estimates at over ten minutes — every unary
+		// call here sends the model's own cap, 128K on the current models.
 		option.WithRequestTimeout(timeout),
 		// See the package doc. Not negotiable.
 		option.WithMaxRetries(0),
@@ -243,6 +258,7 @@ func New(cfg Config) (*Provider, error) {
 		profile: profile,
 		effort:  effort,
 		budget:  int64(cfg.ThinkingBudget),
+		timeout: timeout,
 	}, nil
 }
 
@@ -312,6 +328,13 @@ var errNoStream = errors.New("endpoint did not stream")
 
 // streamOnce runs one streamed attempt, forwarding fragments as they land.
 //
+// BOUNDED BY SILENCE, NOT LENGTH: the client's per-attempt timeout is lifted
+// for this request and an [httpapi.IdleWatchdog] of the same duration ends the
+// attempt only when nothing has arrived for that long. The per-attempt
+// deadline would otherwise cover the whole streamed body, and a round that
+// thinks for longer than it — a Fable round, anything at xhigh — would die
+// half-way through every time it did its best work.
+//
 // The SDK accumulates into exactly the [sdk.Message] the unary path returns —
 // signatures on thinking blocks included, which must survive verbatim or the
 // next round is rejected — so [Provider.completion] reads one shape however
@@ -320,7 +343,10 @@ func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.MessageNewParams, opt option.RequestOption,
 ) (*sdk.Message, error) {
-	stream := p.client.Messages.NewStreaming(ctx, params, opt)
+	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
+	defer watch.Stop()
+	stream := p.client.Messages.NewStreaming(ctx, params, opt,
+		option.WithRequestTimeout(0), option.WithMiddleware(watch.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var msg sdk.Message
@@ -344,8 +370,9 @@ func (p *Provider) streamOnce(
 	if err := stream.Err(); err != nil {
 		// A stream that dies MID-BODY is a failure of the call, not a
 		// short answer: handing back what accumulated would give the loop
-		// a truncated response as though the model had finished.
-		return nil, err
+		// a truncated response as though the model had finished. A stream
+		// the watchdog ended is reported as the stall it was.
+		return nil, watch.Err(err)
 	}
 	if events == 0 {
 		// Not an error of the call — the endpoint simply does not do this.

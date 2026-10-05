@@ -78,7 +78,10 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
 func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, error) {
-	timeout := time.Duration(spec.TimeoutSeconds * float64(time.Second))
+	// The CONFIG's default applies, through Timeout(): the backends keep a
+	// default of their own only for a Config built without one, and the
+	// value an operator reads in the docs must be the one that runs.
+	timeout := time.Duration(spec.Timeout() * float64(time.Second))
 	// RESOLVED HERE, at the moment the provider is built, which is the only
 	// place a key value ever exists in this process. Tier B stores its
 	// references verbatim — that is what keeps an exported revision free of

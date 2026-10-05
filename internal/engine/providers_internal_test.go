@@ -9,9 +9,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
+	"github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
 
 // storeSource stands in for the secret store: it answers by NAME, and nothing
@@ -399,5 +402,30 @@ func TestEveryConfigEffortIsAContractEffort(t *testing.T) {
 		if e := llm.Effort(level); e == "" || !e.Valid() {
 			t.Errorf("config admits reasoning_effort %q, which llm.Effort does not know", level)
 		}
+	}
+}
+
+// ONE TIMEOUT DEFAULT. The engine builds every HTTP backend with the config's
+// resolved timeout, and each backend keeps a default of its own for a Config
+// built without one; the two were "matched" by a comment, which is how one
+// moves and the other does not. The config's is the one that runs and the one
+// the docs state, so the backends' must equal it, and an entry naming its own
+// value must get exactly that.
+func TestTheLLMTimeoutDefaultIsOneNumber(t *testing.T) {
+	t.Parallel()
+	unset := (&config.LLMProvider{}).Timeout()
+	if unset != 600 {
+		t.Fatalf("an entry naming no timeout_seconds gets %v s, want 600", unset)
+	}
+	for name, d := range map[string]time.Duration{
+		"anthropic": anthropic.DefaultTimeout,
+		"openai":    openai.DefaultTimeout,
+	} {
+		if d != time.Duration(unset*float64(time.Second)) {
+			t.Errorf("%s.DefaultTimeout = %v, want the config's %v s", name, d, unset)
+		}
+	}
+	if got := (&config.LLMProvider{TimeoutSeconds: 45}).Timeout(); got != 45 {
+		t.Errorf("an entry naming 45 s gets %v", got)
 	}
 }

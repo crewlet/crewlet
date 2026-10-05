@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
+	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -1764,6 +1765,91 @@ func TestAnOverloadInsideAStreamIsAServerFailure(t *testing.T) {
 			for _, s := range p.Pool().Stats() {
 				if s.Cooling != 0 {
 					t.Fatal("a failure of the server benched the credential")
+				}
+			}
+		})
+	}
+}
+
+// writeSlowStream answers as a Messages stream, pausing before every event.
+func writeSlowStream(w http.ResponseWriter, gap time.Duration, events ...sseEvent) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	for _, e := range events {
+		time.Sleep(gap)
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, e.data)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+// A STREAMED ROUND IS BOUNDED BY SILENCE, NOT LENGTH. This one runs several
+// times the entry's timeout in total and is never silent for as long as it,
+// which is what a round thinking at a high effort looks like — the per-attempt
+// deadline used to cover the whole body and cut such a round off half-way.
+func TestALongStreamedRoundIsNotCutOffByTheTimeout(t *testing.T) {
+	t.Parallel()
+	const timeout = 200 * time.Millisecond
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeSlowStream(w, timeout/4, streamOf(
+			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+	})
+	p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+	var got []llm.Delta
+	start := time.Now()
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+	if err != nil {
+		t.Fatalf("Complete after %v: %v", time.Since(start), err)
+	}
+	if elapsed := time.Since(start); elapsed < 2*timeout {
+		t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
+	}
+	if out.Content != "abcdef" {
+		t.Fatalf("content = %q, want the whole round", out.Content)
+	}
+}
+
+// A STREAM THAT GOES SILENT IS ENDED AFTER THE TIMEOUT, as a TIMEOUT — before
+// its first byte or part-way through — so the chain may try its next model
+// and no key is benched. Lifting the total bound must not leave a dead
+// connection holding a seat for ever.
+func TestASilentStreamIsATimeout(t *testing.T) {
+	t.Parallel()
+	const timeout = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name   string
+		handle func(w http.ResponseWriter)
+	}{
+		{"before the first byte", func(w http.ResponseWriter) {
+			time.Sleep(10 * timeout)
+			writeStream(w, streamOf(streamStart(), textBlock(0, "late"), streamEnd("end_turn"))...)
+		}},
+		{"part-way through", func(w http.ResponseWriter) {
+			writeStream(w, streamStart())
+			time.Sleep(10 * timeout)
+			writeStream(w, streamOf(textBlock(0, "late"), streamEnd("end_turn"))...)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) { tc.handle(w) })
+			p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+			var got []llm.Delta
+			start := time.Now()
+			out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+			if out != nil {
+				t.Fatalf("a silent stream answered %q after %v", out.Content, time.Since(start))
+			}
+			if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
+				t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
+			}
+			if elapsed := time.Since(start); elapsed > 5*timeout {
+				t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatal("a silent stream benched the credential")
 				}
 			}
 		})

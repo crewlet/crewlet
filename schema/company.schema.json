@@ -1330,7 +1330,7 @@
           ]
         },
         "timeout_seconds": {
-          "description": "Per-request HTTP timeout in seconds.",
+          "description": "Seconds one HTTP attempt may take: the whole of a unary call, the longest silence in a streamed one (default 600).",
           "minimum": 0,
           "type": [
             "number",

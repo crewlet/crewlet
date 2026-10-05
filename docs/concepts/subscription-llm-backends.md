@@ -1152,7 +1152,8 @@ providers:
 
 **`timeout_seconds` is separate from the entry's own
 `timeout_seconds`** because the transports are not comparable: that one
-is an HTTP client timeout (default 120 s), while this covers a process
+bounds an HTTP attempt (default 600 s; a streamed call's silence rather
+than its length), while this covers a process
 launch — a Node runtime costs seconds before the first byte — plus the
 model call and the CLI's internal retries. On breach the process *group*
 is terminated (so the runtime's helpers go too) and the call is reported

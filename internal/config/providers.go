@@ -371,11 +371,14 @@ type LLMProvider struct {
 	// budget with a 400 or have deprecated it — and on every other type.
 	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"anthropic, budget-era models only (claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5 and older): the thinking budget in tokens, 1024 or more and below the model's output cap. Unset means no thinking."`
 
-	// TimeoutSeconds is the HTTP client timeout for one call. Raise it for
-	// slow or large-output models that otherwise time out mid-generation;
-	// lower it to fail fast. The cli-agent backend drives a subprocess
-	// rather than an HTTP client and has its own timeout.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Per-request HTTP timeout in seconds."`
+	// TimeoutSeconds bounds one HTTP attempt, and what it bounds depends on
+	// how the call is made: a unary call IN TOTAL, a streamed one by its
+	// SILENCE — the longest wait with nothing arriving, the first byte
+	// included — and never by its length, because a round that thinks at a
+	// high effort writes for many minutes and every one of them is the model
+	// working. The cli-agent backend drives a subprocess rather than an HTTP
+	// client and has its own timeout.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Seconds one HTTP attempt may take: the whole of a unary call, the longest silence in a streamed one (default 600)."`
 
 	// CLI is the cli-agent block: which coding CLI to drive, where its
 	// per-seat state lives, how it authenticates. Required when Type is
@@ -383,11 +386,16 @@ type LLMProvider struct {
 	CLI *CLIAgent `yaml:"cli,omitempty" json:"cli,omitempty" desc:"The cli-agent block. Required for type cli-agent, refused otherwise."`
 }
 
-// defaultLLMTimeoutSeconds is the HTTP client timeout an entry that names
-// none gets. Two minutes covers an ordinary completion with headroom; a
-// reasoning model or a very large output wants more, which is what the
-// field is for.
-const defaultLLMTimeoutSeconds = 120.0
+// defaultLLMTimeoutSeconds is the bound an entry that names none gets: ten
+// minutes, the vendors' own SDK default and Anthropic's documented ceiling for
+// a non-streaming call. It is the TOTAL of a unary call, which now asks for the
+// model's whole output cap (128K tokens on the current Claude models) at a
+// thinking effort, so the two minutes it replaced cut off exactly the calls
+// that were doing the most; and it is the longest SILENCE a streamed call may
+// keep, where a live vendor stream sends a keep-alive long before ten minutes
+// pass, so the generous figure costs nothing on a healthy connection and only
+// bounds how long a dead one holds a seat.
+const defaultLLMTimeoutSeconds = 600.0
 
 // Timeout is the per-request timeout, applying the default.
 func (l *LLMProvider) Timeout() float64 {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -1200,6 +1202,74 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	if extra := api.count() - before; extra != 1 {
 		t.Errorf("the second call cost %d requests, want 1 — the probe repeats", extra)
 	}
+}
+
+// writeChunks answers as a chat-completions stream, pausing before every chunk
+// — and, when done, before the closing [DONE] too.
+func writeChunks(w http.ResponseWriter, gap time.Duration, done bool, parts ...string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	if done {
+		parts = append(parts, "")
+	}
+	for _, part := range parts {
+		time.Sleep(gap)
+		data := "[DONE]"
+		if part != "" {
+			data = `{"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+				`"choices":[{"index":0,"delta":{"content":` + strconv.Quote(part) + `}}]}`
+		}
+		_, _ = io.WriteString(w, "data: "+data+"\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+// A STREAMED CALL IS BOUNDED BY SILENCE, NOT LENGTH: a reasoning round that
+// writes for longer than the entry's timeout, never pausing for as long, runs
+// to the end. A stream that does go silent is ended at about the timeout as a
+// timeout, so lifting the total bound leaves no dead connection holding a seat.
+func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
+	t.Parallel()
+	const timeout = 200 * time.Millisecond
+	t.Run("long but talking", func(t *testing.T) {
+		t.Parallel()
+		_, url := serve(t, func(w http.ResponseWriter, _ int) {
+			writeChunks(w, timeout/4, true, strings.Split("abcdefghijkl", "")...)
+		})
+		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+		start := time.Now()
+		out, err := p.Complete(t.Context(), llm.Request{
+			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			OnDelta:  func(llm.Delta) {},
+		})
+		if err != nil {
+			t.Fatalf("Complete after %v: %v", time.Since(start), err)
+		}
+		if elapsed := time.Since(start); elapsed < 2*timeout || out.Content != "abcdefghijkl" {
+			t.Fatalf("took %v and answered %q; want past the %v bound, whole", elapsed, out.Content, timeout)
+		}
+	})
+	t.Run("silent", func(t *testing.T) {
+		t.Parallel()
+		_, url := serve(t, func(w http.ResponseWriter, _ int) {
+			writeChunks(w, 0, false, "a")
+			time.Sleep(5 * timeout)
+		})
+		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+		start := time.Now()
+		_, err := p.Complete(t.Context(), llm.Request{
+			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			OnDelta:  func(llm.Delta) {},
+		})
+		if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
+			t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
+		}
+		if elapsed := time.Since(start); elapsed > 4*timeout {
+			t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
+		}
+	})
 }
 
 // AN ERROR INSIDE A STREAM IS THE SERVER'S. The response opened with 200, so

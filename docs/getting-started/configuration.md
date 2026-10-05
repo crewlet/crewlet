@@ -346,7 +346,10 @@ providers:
                                         #   On `openai` / `anthropic` it is genuinely optional and
                                         #   points the vendor's own wire format at a gateway or
                                         #   proxy instead of the vendor host
-      timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
+      timeout_seconds: 600              # optional — bounds one HTTP attempt (default: 600). A unary call IN TOTAL;
+                                        #   a streamed call (an executor's rounds) by its SILENCE — the longest
+                                        #   wait with nothing arriving, first byte included — never its length,
+                                        #   so a round thinking for many minutes is not cut off half-way
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional, openai only — send reasoning_effort to a reasoning
                                         #   model (default: false). REFUSED on anthropic, where thinking is
