@@ -1026,3 +1026,36 @@ test("a phase that starts while the transcript is open arrives open, and the set
       .map((c) => c.open),
   ).toEqual([true, false]);
 });
+
+/**
+ * THE RAIL'S PHASE STRIP READS THE RESCUE TOO. A reviewer the engine decided
+ * for writes `self_iterate`, the same word a reviewer chooses on purpose — so
+ * a strip that glossed the word alone said the reviewer sent the turn back,
+ * about a round nothing judged.
+ */
+test("the rail's phase strip says when the engine decided for the reviewer", async () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const review = phase("2026-09-13T10:02:00Z", 900, {
+    phase: "review",
+    decision: "self_iterate",
+    rescue_fired: true,
+  });
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({ turn_id: TURN, events: [review], truncated: false })
+      : Promise.resolve({});
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <TurnPeek turnId={TURN} />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  expect(
+    await screen.findByText("never decided — the engine sent the turn back for another round"),
+  ).toBeTruthy();
+  expect(screen.queryByText("sent the turn back for another round")).toBeNull();
+});

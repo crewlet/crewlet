@@ -2054,7 +2054,10 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
       <div className="col gap-2">
         {phases.map((p) => {
           const ms = phaseDuration(p);
-          const decided = decisionLabel(p.phase, p.decision);
+          // THE RECORD'S OWN `rescue_fired`, as the phase card reads it: a
+          // reviewer the engine decided for wrote `self_iterate` too, and the
+          // strip must not say the reviewer judged a round nothing judged.
+          const decided = decisionLabel(p.phase, p.decision, p.rescueFired);
           return (
             <div key={p.key} className="col gap-1">
               <div className="row gap-2">
