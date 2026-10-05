@@ -204,6 +204,12 @@ func (p *Provider) String() string {
 }
 
 // Complete runs one CLI invocation and reads its answer.
+//
+// [llm.Request.Effort] is NOT applied, deliberately: a CLI reads its effort
+// from its own configuration in the seat's state directory, and no profile has
+// a per-invocation flag to carry a ceiling on. A ceiling it cannot carry is
+// not one it may fake — rewriting the CLI's settings per call would race every
+// concurrent call sharing the directory — so the call runs at the CLI's own level.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)

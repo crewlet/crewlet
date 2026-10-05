@@ -66,6 +66,18 @@ func (p *auxProvider) request(t *testing.T, i int) llm.Request {
 	return p.seen[i]
 }
 
+// wantLowEffort fails unless req caps its effort at low. EVERY LEARNING PASS
+// is extraction — a short classification or a draft the next pass refines —
+// and on a thinking model the thinking is spent out of the same cap as the
+// answer, so a pass at its entry's level comes back empty and reads as
+// "nothing to learn".
+func wantLowEffort(t *testing.T, req llm.Request) {
+	t.Helper()
+	if req.Effort != llm.EffortLow {
+		t.Errorf("effort = %q, want a ceiling of low", req.Effort)
+	}
+}
+
 // prompt returns the user prompt of the i-th request.
 func (p *auxProvider) prompt(t *testing.T, i int) string {
 	t.Helper()
@@ -695,6 +707,7 @@ func TestTheClassifierCallIsToollessBoundedAndNearlyDeterministic(t *testing.T) 
 	if got := *req.Temperature; got != 0.2 {
 		t.Errorf("temperature = %v, want 0.2", got)
 	}
+	wantLowEffort(t, req)
 	if req.MaxTokens != learning.DefaultAuxTokens {
 		t.Errorf("max tokens = %d, want %d — a tighter cap is spent thinking and returns empty content",
 			req.MaxTokens, learning.DefaultAuxTokens)

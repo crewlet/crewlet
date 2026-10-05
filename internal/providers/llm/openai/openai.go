@@ -102,7 +102,8 @@ type Config struct {
 	Reasoning bool
 
 	// ReasoningEffort is the budget selector: low, medium, high, max.
-	// Empty takes the endpoint's own default.
+	// Empty takes the endpoint's own default. A request's
+	// [llm.Request.Effort] lowers it for that call, and never raises it.
 	ReasoningEffort string
 
 	// HTTPClient overrides the transport. Nil builds one through
@@ -341,6 +342,10 @@ func (p *Provider) classify(err error) *llm.Error {
 }
 
 func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) {
+	if !req.Effort.Valid() {
+		return sdk.ChatCompletionNewParams{}, fmt.Errorf("request effort %q is not a level (want one of low, "+
+			"medium, high, xhigh, max, or empty)", req.Effort)
+	}
 	messages, err := formatMessages(req.Messages)
 	if err != nil {
 		return sdk.ChatCompletionNewParams{}, err
@@ -356,8 +361,13 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 	}
 
 	if p.reasoning {
-		if p.effort != "" {
-			params.ReasoningEffort = p.effort
+		// THE LOWER of the entry's level and the call's ceiling. An entry
+		// with no level sends none, ceiling or not: the endpoint's default
+		// is not a level this can compare, and some models default BELOW
+		// low (`none` on GPT-5.1), so sending the ceiling could raise the
+		// effort it exists to bound.
+		if effort := llm.Effort(p.effort).AtMost(req.Effort); effort != "" {
+			params.ReasoningEffort = shared.ReasoningEffort(effort)
 		}
 		// The reasoning models reject max_tokens outright and reject any
 		// temperature but their own default. Sending max_tokens here too

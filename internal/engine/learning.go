@@ -674,6 +674,7 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 				{Role: llm.RoleUser, Content: user},
 			},
 			Temperature: llm.Temp(compactionTemperature),
+			Effort:      compactionEffort,
 			MaxTokens:   e.compactionTokens(c),
 		})
 		if err != nil {
@@ -693,6 +694,11 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 // for sampling to explore — but zero makes some providers degenerate into
 // repeating the input.
 const compactionTemperature = 0.2
+
+// compactionEffort is the most thinking a cluster summary is worth: it
+// describes rows that already exist, which is extraction, and on a thinking
+// model the thinking comes out of the same cap as the summary.
+const compactionEffort = llm.EffortLow
 
 // compactionTokens caps one cluster summary.
 func (e *Engine) compactionTokens(c *Company) int {

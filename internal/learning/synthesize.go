@@ -281,6 +281,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 			{Role: llm.RoleUser, Content: buildSynthesisPrompt(t)},
 		},
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   s.maxTokens,
 	})
 	if err != nil {

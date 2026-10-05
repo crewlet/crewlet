@@ -297,6 +297,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 			{Role: llm.RoleUser, Content: buildPromotionPrompt(unit, best)},
 		},
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   p.maxTokens,
 	})
 	if err != nil {

@@ -164,6 +164,25 @@ type Request struct {
 	// nil check at every call site for nothing.
 	MaxTokens int
 
+	// Effort is the MOST effort this call is worth: a CEILING on how hard
+	// the model thinks, never a floor. Empty is no ceiling, and the entry's
+	// own level applies. A backend sends the lower of this and the level
+	// its entry is configured for ([Effort.AtMost]), and sends nothing on a
+	// model that takes no effort at all.
+	//
+	// A ceiling rather than a level because the CALLER knows what the call
+	// is for and the OPERATOR knows what the entry costs, and neither may
+	// overrule the other upward: a classifier asking for `low` must not
+	// run at the `high` an executor's entry is set to, and nothing a call
+	// says may spend more than the operator configured. A thinking model
+	// spends its thinking out of the same output budget as its answer, so
+	// a short classifier answer at a high effort is the empty-answer
+	// failure the judge and the knowledge passes describe.
+	//
+	// The cli-agent backend ignores it: a CLI takes its effort from its own
+	// configuration and has no per-call flag to carry this on.
+	Effort Effort
+
 	// OnDelta, when set, asks the backend to stream and calls this as text
 	// arrives. Nil — the common case — takes the ordinary unary path.
 	//
@@ -181,6 +200,58 @@ type Request struct {
 	// and returns the same Completion it always would; nothing above here
 	// may treat the absence of deltas as an error.
 	OnDelta func(Delta)
+}
+
+// Effort is a level of how hard a model thinks: the vocabulary both vendors'
+// effort parameters share (Anthropic's `output_config.effort`, OpenAI's
+// `reasoning_effort`).
+//
+// A NAMED TYPE over a closed, ORDERED set, because the one thing a backend
+// does with two of them is take the lower ([Effort.AtMost]), and a level it
+// cannot place in the order is a level it cannot compare.
+type Effort string
+
+// The levels, lowest first.
+const (
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
+	EffortXHigh  Effort = "xhigh"
+	EffortMax    Effort = "max"
+)
+
+// efforts is every level in ascending order — the order [Effort.AtMost]
+// compares by.
+var efforts = []Effort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+
+// Valid reports whether e is a level, or empty.
+//
+// EMPTY IS VALID and means no level was named: a request that does not care
+// how hard the model thinks must not have to say so.
+func (e Effort) Valid() bool {
+	return e == "" || e.rank() >= 0
+}
+
+// rank is e's place in the order, -1 for anything that is not a level.
+func (e Effort) rank() int {
+	for i, level := range efforts {
+		if e == level {
+			return i
+		}
+	}
+	return -1
+}
+
+// AtMost is e lowered to ceiling: the lower of the two, or e when the ceiling
+// is empty. An empty e stays empty — a level nobody configured is not one this
+// can compare, and inventing one could RAISE the effort above whatever the
+// vendor's own default is. Both must be [Effort.Valid]; an invalid ceiling is
+// no ceiling, so a backend checks before it calls this.
+func (e Effort) AtMost(ceiling Effort) Effort {
+	if e == "" || ceiling.rank() < 0 || ceiling.rank() >= e.rank() {
+		return e
+	}
+	return ceiling
 }
 
 // Delta is a fragment of a completion as it is being written.

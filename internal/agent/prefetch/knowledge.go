@@ -41,6 +41,14 @@ const (
 	// otherwise reconsider.
 	auxTemperature = 0.2
 
+	// auxEffort is the most thinking an auxiliary pass is worth: each one
+	// filters, summarises or rewrites what it is handed, which is
+	// extraction, and the prefetch is latency a person waits through. On a
+	// thinking model the thinking comes out of the same cap as the answer,
+	// so a pass at its entry's level is the empty answer the summary and
+	// the query rewrite already log.
+	auxEffort = llm.EffortLow
+
 	// knowledgeHits is how many pages are rendered.
 	//
 	// Six, against a block that is a pointer rather than the content: each
@@ -249,6 +257,7 @@ func auxRequest(system, user string, maxTokens int) llm.Request {
 		// the surface invites a model to call it and answer nothing —
 		// there is no tool any of them could usefully use.
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   maxTokens,
 	}
 }

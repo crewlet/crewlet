@@ -155,6 +155,7 @@ func TestOneSenderSpeakingTwiceIsOneObservation(t *testing.T) {
 	if got := p.count(); got != 1 {
 		t.Fatalf("made %d model calls for one person, want 1", got)
 	}
+	wantLowEffort(t, p.request(t, 0))
 	if body := p.prompt(t, 0); !strings.Contains(body, "first") || !strings.Contains(body, "second") {
 		t.Errorf("the prompt dropped a message: %q", body)
 	}

@@ -253,6 +253,7 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 			{Role: llm.RoleUser, Content: p.prompt(s, existing)},
 		},
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   p.maxTokens,
 	})
 	if err != nil {

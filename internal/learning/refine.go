@@ -201,6 +201,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 			{Role: llm.RoleUser, Content: buildRefinementPrompt(t, candidates)},
 		},
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   r.maxTokens,
 	})
 	if err != nil {

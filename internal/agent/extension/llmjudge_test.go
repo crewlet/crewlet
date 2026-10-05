@@ -173,6 +173,11 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 	if model.seen.Temperature == nil || *model.seen.Temperature != 0 {
 		t.Errorf("temperature = %v, want a deterministic 0", model.seen.Temperature)
 	}
+	// And bounded in how hard it thinks: a thinking model at the entry's
+	// level spends JudgeMaxTokens reasoning and returns no verdict.
+	if model.seen.Effort != llm.EffortLow {
+		t.Errorf("effort = %q, want a ceiling of low", model.seen.Effort)
+	}
 	// No tools: a tool on the surface invites a model to call it and
 	// answer nothing, and there is none this pass could use.
 	if len(model.seen.Tools) != 0 {

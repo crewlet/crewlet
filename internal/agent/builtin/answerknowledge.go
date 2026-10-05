@@ -131,6 +131,12 @@ const (
 // passes give: greedy decoding on a small model loops.
 const answerTemperature = 0.2
 
+// answerEffort is the most thinking an answer is worth. It restates what the
+// excerpts it is handed already say, which is extraction rather than
+// reasoning, a person is waiting for it, and on a thinking model the thinking
+// is spent out of AnswerMaxTokens — the empty answer this tool already logs.
+const answerEffort = llm.EffortLow
+
 // The source kinds an answer lists.
 const (
 	AnswerSourcePage = "page"
@@ -364,6 +370,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// No tools: the answer is the content, and a tool on the surface
 		// invites a model to call it and write nothing.
 		Temperature: llm.Temp(answerTemperature),
+		Effort:      answerEffort,
 		MaxTokens:   AnswerMaxTokens,
 	})
 	if completion != nil {

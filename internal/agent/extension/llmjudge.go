@@ -54,6 +54,12 @@ const (
 	// anything.
 	judgeTemperature = 0.0
 
+	// judgeEffort is the most thinking a verdict is worth. The judge
+	// classifies a round log into one of two words, and a thinking model
+	// at its entry's level spends JudgeMaxTokens reasoning and returns no
+	// verdict at all — which the policy reads as a refusal.
+	judgeEffort = llm.EffortLow
+
 	// judgeCallsShown bounds the tool log in the prompt.
 	//
 	// The judge's question is "is this phase repeating itself?", which is
@@ -129,6 +135,7 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 		// NO TOOLS: the answer is two lines of text, and a tool on the
 		// surface invites a model to call it and answer nothing.
 		Temperature: llm.Temp(judgeTemperature),
+		Effort:      judgeEffort,
 		MaxTokens:   JudgeMaxTokens,
 	})
 	if err != nil {

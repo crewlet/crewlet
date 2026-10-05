@@ -303,6 +303,12 @@ func TestTheAnswerNamesItsSources(t *testing.T) {
 	if rig.model.asked[0].Messages[0].Content != prompts.KnowledgeAnswerSystem {
 		t.Error("the answer ran without its contract")
 	}
+	// Extraction from the excerpts, with a person waiting: a thinking model
+	// at the entry's level spends AnswerMaxTokens reasoning and answers
+	// nothing.
+	if got := rig.model.asked[0].Effort; got != llm.EffortLow {
+		t.Errorf("effort = %q, want a ceiling of low", got)
+	}
 	if got := rig.search.asked[0]; got.Mode != knowledge.ModeHybrid ||
 		got.Limit != builtin.AnswerPageSources {
 		t.Errorf("searched pages with %+v, want hybrid for %d", got, builtin.AnswerPageSources)

@@ -696,6 +696,69 @@ func TestReasoningChangesTheTokenCapAndDropsTemperature(t *testing.T) {
 	}
 }
 
+// A CALL'S EFFORT IS A CEILING ON THE ENTRY'S, never a level of its own: the
+// lower of the two is sent, an entry with no level sends none whatever the
+// call asks (the endpoint's default may be below `low`), and an entry that is
+// not reasoning sends none at all.
+func TestARequestEffortOnlyEverLowersTheEntrys(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		reasoning bool
+		entry     string
+		request   llm.Effort
+		want      any // nil: the field must be absent
+	}{
+		{"a low call on a high entry", true, "high", llm.EffortLow, "low"},
+		{"a max call on a medium entry", true, "medium", llm.EffortMax, "medium"},
+		{"no ceiling", true, "high", "", "high"},
+		{"an entry with no level", true, "", llm.EffortLow, nil},
+		{"an entry that is not reasoning", false, "high", llm.EffortLow, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+			p := newProvider(t, url, func(c *Config) {
+				c.Reasoning = tc.reasoning
+				c.ReasoningEffort = tc.entry
+			})
+			req := userTurn("hi")
+			req.Effort = tc.request
+			if _, err := p.Complete(context.Background(), req); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			got, present := api.seen()[0].body["reasoning_effort"]
+			if tc.want == nil {
+				if present {
+					t.Fatalf("reasoning_effort = %v, want the field absent", got)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Fatalf("reasoning_effort = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A level the contract does not define is the caller's bug, refused before it
+// reaches the network rather than sent for the endpoint to guess at.
+func TestAnUnknownRequestEffortIsRefused(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, func(c *Config) { c.Reasoning, c.ReasoningEffort = true, "high" })
+	req := userTurn("hi")
+	req.Effort = "x-high"
+	_, err := p.Complete(context.Background(), req)
+	var llmErr *llm.Error
+	if !errors.As(err, &llmErr) || llmErr.Kind != llm.KindFatal || !strings.Contains(err.Error(), "x-high") {
+		t.Fatalf("err = %v, want a fatal refusal naming the level", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("a request with an unknown effort still reached the network")
+	}
+}
+
 func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

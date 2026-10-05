@@ -129,6 +129,14 @@ const (
 	// model commit hard to a first token it would otherwise reconsider.
 	// Every learning classifier runs at this value.
 	auxTemperature = 0.2
+
+	// auxEffort is the most thinking a learning pass is worth. Every one of
+	// them reads a finished turn or a handful of drafts and writes a short
+	// classification or a page the next pass refines — extraction, not
+	// open-ended work — and on a thinking model the thinking is spent out
+	// of the same output cap as the answer, so a pass running at its
+	// entry's level comes back empty and reads as "nothing to persist".
+	auxEffort = llm.EffortLow
 )
 
 // PersistOptions configure a decider. The zero value is the shipped one.
@@ -294,6 +302,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// content; a tool on the surface invites a model to call it and
 		// answer nothing, and there is no tool this pass could use.
 		Temperature: llm.Temp(auxTemperature),
+		Effort:      auxEffort,
 		MaxTokens:   d.maxTokens,
 	})
 	if err != nil {
