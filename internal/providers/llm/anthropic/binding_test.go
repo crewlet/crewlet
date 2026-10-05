@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
 )
@@ -255,13 +256,14 @@ func TestTheEmulatedCheckRefusesWhatTheVendorRefuses(t *testing.T) {
 	}
 	// send posts one request and answers its number and what the check
 	// said about it.
+	client := httpxtest.Pool(t)
 	send := func(tools []string, opening string, turns ...string) (int, []string) {
 		t.Helper()
 		messages := append([]string{`{"role":"user","content":[{"type":"text","text":` +
 			strconv.Quote(opening) + `}]}`}, turns...)
 		body := `{"model":"claude-sonnet-5-5","max_tokens":1,"tools":[` + strings.Join(tools, ",") +
 			`],"messages":[` + strings.Join(messages, ",") + `]}`
-		resp, err := http.Post(v.url, "application/json", strings.NewReader(body))
+		resp, err := client.Post(v.url, "application/json", strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("post: %v", err)
 		}
