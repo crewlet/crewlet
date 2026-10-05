@@ -327,9 +327,18 @@ func (b *Broker) restoreLocked(
 // invoke runs one delivery and applies the handler's outcome.
 //
 // Ack drops the events — they were removed from the mailbox before the call.
-// Nak returns them to the FRONT (order is what a conversation depends on) with
-// their redelivery counters bumped, and a message past the budget moves to the
-// dead-letter subject instead of being destroyed.
+// Nak returns them to the FRONT with their redelivery counters bumped, and a
+// message past the budget moves to the dead-letter subject instead of being
+// destroyed.
+//
+// THE FRONT IS ONE OF THE TWO ANSWERS THE CONTRACT ALLOWS, not what a
+// conversation depends on — this comment used to say it was. The shipped
+// broker withholds a failure for its backoff and hands the conversation's
+// newer events over first, in calls of their own, so nothing above the queue
+// may rely on a failed event coming back ahead of them: event timestamps order
+// one handler call and nothing orders two (queue.OrderForDispatch). The twin
+// keeps the head because queuetest's HeadReplayOnNak asks a backend that does
+// it to keep doing it.
 //
 // DEFER COSTS EXACTLY WHAT A NAK COSTS, and quiesces the attachment as well.
 // This twin used to return a deferred batch untouched, which modelled a broker

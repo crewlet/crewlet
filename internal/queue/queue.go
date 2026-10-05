@@ -143,6 +143,11 @@ const (
 	// OutcomeNak negatively acknowledges: the handler failed and the
 	// message should be redelivered, spending one unit of its
 	// dead-letter budget.
+	//
+	// A backend may SPACE that redelivery — the shipped broker backs a
+	// failure off — and nothing waits for it: newer mail on the same
+	// partition key is dispatched meanwhile, ahead of it. See
+	// OrderForDispatch for why the contract stops there.
 	OutcomeNak
 
 	// OutcomeDefer leaves the delivery unacked AND quiesces the
@@ -367,8 +372,11 @@ type EventQueue interface {
 	// A message that goes back may return BEHIND events that were never
 	// delivered rather than at the head. The backends genuinely differ
 	// there (queuetest.Caps.HeadReplayOnNak), so nothing above this
-	// package may depend on either answer — within-conversation order
-	// comes from event timestamps, which is what OrderForDispatch is for.
+	// package may depend on either answer. Event timestamps restore the
+	// order of what ONE handler call carries, which is what
+	// OrderForDispatch is for — and only that: a message returned behind
+	// its conversation's newer mail is handled after it whenever the two
+	// are not drained together, and no backend owes that they are.
 	//
 	// Releases this attachment's pause holds — a hold that outlived a
 	// detach would leave a re-attaching node silently deaf.
@@ -721,12 +729,31 @@ func eventType(ev *events.Event) string {
 //
 // Within a partition: event timestamp, not delivery order. This is what
 // makes a partition read correctly regardless of how a broker interleaves
-// redeliveries with fresh arrivals — measured, JetStream returns a
-// redelivered message BEHIND never-delivered ones, where the in-memory twin
-// replays it from the head. Relying
-// on the timestamps the engine already trusts, rather than on one broker's
-// replay semantics, removes a correctness dependency that would otherwise
-// have to be re-verified for every backend.
+// redeliveries with fresh arrivals — measured, the in-memory twin returns
+// every message that goes back to the head of the mailbox at once, while
+// JetStream returns a hand-back (a deferral, a hold, a stop) at the head and
+// withholds a FAILED delivery for its redelivery backoff, serving
+// never-delivered mail meanwhile. Relying on the timestamps the engine
+// already trusts, rather than on one broker's replay semantics, removes a
+// correctness dependency that would otherwise have to be re-verified for
+// every backend.
+//
+// IT ORDERS ONE HANDLER CALL, AND NOTHING ACROSS TWO. A drain is what was
+// available when it opened plus what arrived inside its linger window, so a
+// failed delivery still waiting out its backoff is not in the drain that
+// carries its conversation's newer events: on the shipped broker the backoff
+// is a second, doubling to thirty, against a default window of zero, so a
+// newer event of the same conversation that arrives meanwhile is dispatched
+// FIRST, in a call of its own, and the failed one follows in a later one.
+// No sort reaches a call that has already returned, and the contract
+// deliberately does not hold a conversation's newer mail back behind a
+// failure instead. That would stall the conversation for the whole backoff
+// schedule, hand a poison message's failures to the healthy ones held back
+// with it (a partition takes one outcome, so every failure is charged to every
+// message in it), and still not be a guarantee: the hold would be one
+// attachment's memory, gone at a seat handoff, and a group with two members
+// redelivers to either. A consumer that cares whether an event is older than
+// one it already handled has the timestamp to ask.
 //
 // Both levels are stable sorts, so ties keep arrival order, and both fall
 // back to arrival order rather than failing: ordering is a fairness and

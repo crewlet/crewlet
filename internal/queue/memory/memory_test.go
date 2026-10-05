@@ -85,11 +85,14 @@ func TestConformance(t *testing.T) {
 			//
 			// IT IS MORE FORGIVING THAN THE ONLY SHIPPED BROKER, and
 			// that is the thing to know when reading a test that passes
-			// here. JetStream returns a redelivery BEHIND
-			// never-delivered messages. Nothing above internal/queue may
-			// depend on either answer: conversation order comes from
-			// event timestamps (see queue.OrderForDispatch) precisely so
-			// that it does not.
+			// here. JetStream withholds a FAILED delivery for its
+			// redelivery backoff and serves never-delivered messages
+			// meanwhile — newer events of the failed one's own
+			// conversation included, each handled before it in a call
+			// of its own. Here that never happens, so a test can lean on
+			// it without knowing. Nothing above internal/queue may:
+			// event timestamps order what one handler call carries and
+			// nothing orders two (see queue.OrderForDispatch).
 			//
 			// THE DEFERRAL COST IS NOT ON THIS LIST ANY MORE, and that
 			// is the difference between a degradation and a divergence.

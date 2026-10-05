@@ -339,14 +339,21 @@ type Capabilities struct {
 	// behind it.
 	//
 	// A capability rather than a requirement, and deliberately so:
-	// measured, the twin replays from the head while JetStream returns a
-	// redelivered message BEHIND never-delivered ones. The engine no
-	// longer depends on either — within-conversation order comes from
-	// event timestamps, which
-	// within_a_partition_events_are_ordered_by_timestamp certifies for
-	// every backend. This flag only asks a backend that DOES replay from
-	// the head to keep doing it, so the property cannot rot unnoticed on
-	// the twin the fleet suite runs against.
+	// measured, the twin returns a failed event to the head at once, while
+	// JetStream withholds it for its redelivery backoff and serves
+	// never-delivered mail meanwhile, so it comes back BEHIND them (a
+	// hand-back — a deferral, a hold — is returned at the head on both).
+	// Nothing above internal/queue may depend on either answer. Event
+	// timestamps order what ONE handler call carries, which
+	// within_a_partition_events_are_ordered_by_timestamp and
+	// a_redelivered_event_rejoins_its_conversation_in_timestamp_order
+	// certify for every backend; nothing orders two calls, so on JetStream
+	// a newer event of a failed one's own conversation is handled before
+	// it (see queue.OrderForDispatch). This flag only asks a backend that
+	// DOES replay from the head to keep doing it, so the property cannot
+	// rot unnoticed on the twin the fleet suite runs against — and a test
+	// that passes on that twin can lean on it without knowing, which is
+	// the reason to read this before trusting one.
 	HeadReplayOnNak bool
 
 	// RequiresStart declares that this backend's publish, subscription and

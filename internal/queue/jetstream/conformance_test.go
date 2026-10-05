@@ -196,10 +196,16 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 		// first. Each event still reaches exactly one member, which is
 		// the part every broker owes.
 		//
-		// HeadReplayOnNak — measured false: a redelivered message returns
-		// BEHIND never-delivered ones. This is precisely why
-		// within-conversation order comes from event timestamps rather
-		// than from the broker.
+		// HeadReplayOnNak — measured false, and the mechanism is the
+		// BACKOFF rather than the broker's queueing: a failure is returned
+		// with NakWithDelay, and the consumer serves never-delivered mail
+		// while it waits, so it comes back behind them. A hand-back — a
+		// deferral, a hold — is a plain Nak, and the broker serves
+		// redeliveries before new mail, so that comes back at the head:
+		// 100 runs of 100 each way, 60 of them under CPU pressure, with
+		// this harness's 25ms backoff. This is why order inside a handler
+		// call comes from event timestamps rather than from the broker,
+		// and why nothing orders two calls (see queue.OrderForDispatch).
 		//
 		// History — this backend has no ledger of everything ever
 		// published; interest retention deliberately drops what no

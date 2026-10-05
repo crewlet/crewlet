@@ -82,7 +82,12 @@ const defaultNakDelay = time.Second
 //
 // The in-memory twin redelivers immediately and deliberately: it models
 // ordering and the delivery budget, not the clock, and a suite that waited
-// out real backoff would spend its life in timers.
+// out real backoff would spend its life in timers. What that leaves out is
+// what the clock does to ORDER here: while a failure waits out its backoff
+// this consumer serves never-delivered mail, newer events of the failed
+// message's own conversation included, and they are handled first, in calls
+// of their own. The contract allows both answers and orders neither across
+// calls — see queue.OrderForDispatch.
 const defaultNakCeiling = 30 * time.Second
 
 func (q *Queue) fetchWait() time.Duration {
