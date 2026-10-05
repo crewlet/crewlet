@@ -42,6 +42,7 @@ import (
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -338,7 +339,40 @@ func (p *Provider) classify(err error) *llm.Error {
 		}
 		return httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
 	}
+	var streamErr *ssestream.StreamError
+	if errors.As(err, &streamErr) {
+		return &llm.Error{Kind: streamErrorKind(streamErr), Provider: p.name, Model: p.model, Err: err}
+	}
 	return httpapi.FromTransport(err, p.name, p.model)
+}
+
+// streamErrorKind classifies an `{"error":…}` chunk that ended a stream already
+// under way.
+//
+// The SDK raises it as a [ssestream.StreamError] carrying no status — the
+// response opened with 200 — so it is neither an API error nor a transport
+// one, and handed to [httpapi.FromTransport] it was fatal: an OpenAI
+// server_error half-way through a round stopped the fallback chain dead.
+//
+// A failure on a response that had already begun is the SERVER's: the
+// endpoint accepted the request, authenticated it and started answering, so
+// it cannot be a request it refused or a key it rejected. The one structured
+// fact some hosts add is an HTTP-shaped `code` — vLLM's error body carries
+// the status it would have sent — and where that is present it decides,
+// because it is the endpoint's own classification rather than this backend's
+// guess. OpenAI's own `code` is a string or null and does not.
+func streamErrorKind(se *ssestream.StreamError) llm.ErrorKind {
+	var body struct {
+		Error struct {
+			Code json.RawMessage `json:"code"`
+		} `json:"error"`
+	}
+	var status int
+	if json.Unmarshal(se.Event.Data, &body) == nil &&
+		json.Unmarshal(body.Error.Code, &status) == nil && status >= 400 && status < 600 {
+		return llm.KindForStatus(status)
+	}
+	return llm.KindServer
 }
 
 func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) {

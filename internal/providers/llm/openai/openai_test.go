@@ -1201,6 +1201,52 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	}
 }
 
+// AN ERROR INSIDE A STREAM IS THE SERVER'S. The response opened with 200, so
+// the SDK raises the `{"error":…}` chunk with no status at all; read as a
+// transport failure it was fatal, and a server_error half-way through a round
+// stopped the fallback chain. A host that names an HTTP-shaped code (vLLM)
+// is classified by it, because that is the endpoint's own answer; OpenAI's
+// string code is not a status. Whatever streamed before is not an answer.
+func TestAnErrorInsideAStreamIsClassified(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		event string
+		want  llm.ErrorKind
+	}{
+		{"openai server_error", `{"error":{"message":"x","type":"server_error","code":null}}`, llm.KindServer},
+		{"a string code", `{"error":{"message":"x","type":"server_error","code":"overloaded"}}`, llm.KindServer},
+		{"a host's 503", `{"error":{"message":"x","type":"ServiceUnavailableError","code":503}}`, llm.KindServer},
+		{"a host's 400", `{"error":{"message":"x","type":"BadRequestError","code":400}}`, llm.KindFatal},
+		{"a host's 429", `{"error":{"message":"x","type":"RateLimitError","code":429}}`, llm.KindRateLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, `data: {"id":"1","object":"chat.completion.chunk","created":1,`+
+					`"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"half"}}]}`+"\n\n")
+				_, _ = io.WriteString(w, "data: "+tc.event+"\n\n")
+			})
+			p := newProvider(t, url, nil)
+			out, err := p.Complete(t.Context(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+				OnDelta:  func(llm.Delta) {},
+			})
+			if out != nil {
+				t.Fatalf("a stream that failed mid-body answered %q", out.Content)
+			}
+			var classified *llm.Error
+			if !errors.As(err, &classified) || classified.Kind != tc.want {
+				t.Fatalf("err = %v, want a %s failure", err, tc.want)
+			}
+			if classified.Provider != "openai" || classified.Model != "gpt-test" {
+				t.Fatalf("error names %s/%s", classified.Provider, classified.Model)
+			}
+		})
+	}
+}
+
 // A USER MESSAGE AFTER TOOL RESULTS — a person's note to a running turn, sent
 // straight after the round's results (internal/agent/steer) — goes as a user
 // message after every tool message, never between a call's results: this
