@@ -1,6 +1,9 @@
 package httpx_test
 
 import (
+	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -72,19 +75,47 @@ func TestPlainTextIsKeptOnOneLine(t *testing.T) {
 	}
 }
 
-// AND EVERYTHING IS BOUNDED. A refusal that needs more than a few hundred
-// bytes to be understood needs the endpoint's own logs, and the caller pastes
-// this into a log line and an error message.
-func TestARefusalIsBounded(t *testing.T) {
+// BOUNDED WHERE IT IS READ, AND SAID. Only the first RefusalBytes are shaped,
+// a body past them is marked, and what is shaped is never cut a second time —
+// a 400-byte cut used to follow the read, silently, so a validation list lost
+// its later fields with nothing to say it had.
+func TestARefusalIsBoundedOnceAndSaysSo(t *testing.T) {
 	t.Parallel()
 	got := httpx.Refusal("text/plain", []byte(strings.Repeat("verbose ", 4096)))
-	if len(got) > httpx.RefusalDetail {
-		t.Errorf("Refusal is %d bytes, past the %d-byte bound", len(got), httpx.RefusalDetail)
+	if len(got) > httpx.RefusalBytes+80 {
+		t.Errorf("Refusal is %d bytes, past the %d-byte read", len(got), httpx.RefusalBytes)
 	}
-	if got == "" {
-		t.Error("a long refusal was dropped entirely rather than cut")
+	if !strings.Contains(got, "runs past the 2 KiB this build reads") {
+		t.Errorf("a body past the read is unmarked: …%q", got[max(0, len(got)-80):])
+	}
+
+	fields := `{"errors":[` + strings.Repeat(`"field is required",`, 40) + `"last field"]}`
+	if len(fields) > httpx.RefusalBytes || len(fields) < 600 {
+		t.Fatalf("the case needs a body between the old cut and the read: %d bytes", len(fields))
+	}
+	if got := httpx.Refusal("application/json", []byte(fields)); !strings.Contains(got, "last field") ||
+		strings.Contains(got, "runs past") {
+		t.Errorf("a refusal within the read was cut: %q", got)
 	}
 }
+
+// THE READING HALF says when it cut and when it could not read at all.
+func TestReadRefusalMarksACutAndNamesAFailedRead(t *testing.T) {
+	t.Parallel()
+	resp := &http.Response{Header: http.Header{"Content-Type": {"text/plain"}},
+		Body: io.NopCloser(strings.NewReader(strings.Repeat("x ", httpx.RefusalBytes)))}
+	if got := httpx.ReadRefusal(resp); !strings.HasSuffix(got, "…(the response runs past the 2 KiB this build reads)") {
+		t.Errorf("a long body read unmarked: …%q", got[max(0, len(got)-80):])
+	}
+	resp = &http.Response{Header: http.Header{}, Body: io.NopCloser(failingReader{})}
+	if got := httpx.ReadRefusal(resp); !strings.Contains(got, "could not be read: connection reset") {
+		t.Errorf("a failed read = %q, want it named", got)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
 
 // A BODY WITH NO CONTENT TYPE IS STILL READ FOR WHAT IT IS.
 //
