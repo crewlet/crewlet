@@ -168,6 +168,32 @@ func (p tracePart) keep(n int) any {
 	return tracePart{Rows: p.Rows[:n], Total: p.Total}
 }
 
+// unsent reports whether the node holds rows of the trace it did not send —
+// its read stopped at the cap, or its reply was cut to fit the transport —
+// and, when it does, the last row it sent, after which every one of them
+// lies: nil when it sent none, which is what [MergeTrace] needs to place
+// nothing past it.
+//
+// A part the horizon cut to NOTHING ([tracePart.within]) reports that it sent
+// none, although it did, and that is exact rather than lost: the last row it
+// sent lay under the horizon, beneath every row the merge still holds, so as a
+// bound it would place nothing either.
+func (p tracePart) unsent() (last *store.EventRecord, held bool) {
+	if p.Total <= len(p.Rows) {
+		return nil, false
+	}
+	return lastOf(p.Rows), true
+}
+
+// lastOf is the last of some rows, or nil when there are none.
+func lastOf(rows []store.EventRecord) *store.EventRecord {
+	if len(rows) == 0 {
+		return nil
+	}
+	last := rows[len(rows)-1]
+	return &last
+}
+
 // within drops the rows under the horizon and takes them off the count. The
 // rows are the node's OLDEST, so the ones under the horizon are among them and
 // the corrected count is exact — unless the node's capped read held nothing
@@ -212,6 +238,19 @@ type turnPart struct {
 	Closing []store.EventRecord `json:"closing,omitempty"`
 	Total   int                 `json:"total"`
 	Traces  []store.TurnTrace   `json:"traces"`
+}
+
+// unsent reports whether the node holds rows of the turn it sent in neither
+// its opening nor its ending — its read stopped at the cap with a gap before
+// the ending, or its reply was cut to fit the transport — and, when it does,
+// the last row of the opening it sent, after which every one of them lies:
+// nil when it sent no opening, for [tracePart.unsent]'s reason and with its
+// exactness when the horizon cut the opening away.
+func (p turnPart) unsent() (last *store.EventRecord, held bool) {
+	if p.Total <= len(union(p.Head, p.Closing)) {
+		return nil, false
+	}
+	return lastOf(p.Head), true
 }
 
 // rows counts the HEAD only: the closing rows are the turn's ending — where

@@ -313,56 +313,118 @@ func FirstFound(parts []eventPart) (store.EventRecord, bool) {
 // MergeTrace is one trace from several nodes: the oldest [store.MaxTraceEvents]
 // of every node's rows, and how many the fleet holds.
 //
-// Exact because each node sent its OWN oldest rows up to the cap, so the
-// fleet's oldest are among them; the total is a sum because no event is in two
-// stores.
+// EXACT FOR [MergeListing]'s REASON, and cut where it cuts. Each node sent its
+// own oldest rows, so the fleet's oldest are among them — up to the point a
+// node stops being known. A node holding rows it did NOT send ([tracePart.unsent])
+// holds every one of them after the last row it sent, so no row past that one
+// can be placed: another node's newer row would be shown while the unsent rows
+// before it were not, a hole inside a view that presents itself as the
+// trace's opening. So the union stops at the OLDEST such last row — kept,
+// since its node sent it — and the cap applies after that; a node that sent
+// no row at all while holding some leaves nothing placeable.
+//
+// While every node sends its whole capped read, that stop is never above the
+// cap and cutting at the cap is already exact. What makes it necessary is a
+// part that sent FEWER rows than the cap and holds more: a reply cut to fit
+// the transport ([fit]), or a capped read the asker's horizon cut rows off the
+// front of ([heldTo]) — whose unsent rows sit inside the cap's cut, where the
+// obvious merge filled the gap with other nodes' newer rows. The total is a
+// sum because no event is in two stores, and it is never cut, so the answer
+// still says what it does not show.
 func MergeTrace(parts []tracePart) (rows []store.EventRecord, total int) {
 	groups := make([][]store.EventRecord, 0, len(parts))
+	var known opening
 	for _, p := range parts {
 		groups = append(groups, p.Rows)
 		total += p.Total
+		if last, held := p.unsent(); held {
+			known.stopAt(last)
+		}
 	}
 	rows = union(groups...)
 	slices.SortFunc(rows, oldestFirst)
+	rows = known.cut(rows)
 	if len(rows) > store.MaxTraceEvents {
 		rows = rows[:store.MaxTraceEvents]
 	}
 	return rows, max(total, len(rows))
 }
 
+// opening is how far an oldest-first view of several nodes' rows is known:
+// through the OLDEST last row sent by a node that holds rows it did not send,
+// or not at all when such a node sent none.
+type opening struct {
+	through *store.EventRecord
+	nothing bool
+}
+
+// stopAt records one node's last sent row — nil when it sent none.
+func (o *opening) stopAt(last *store.EventRecord) {
+	switch {
+	case last == nil:
+		o.nothing = true
+	case o.through == nil || oldestFirst(*last, *o.through) < 0:
+		o.through = last
+	}
+}
+
+// cut keeps the rows, oldest first, not newer than the bound — the bound row
+// itself included, since its own node sent it.
+func (o opening) cut(rows []store.EventRecord) []store.EventRecord {
+	switch {
+	case o.nothing:
+		return rows[:0]
+	case o.through == nil:
+		return rows
+	}
+	for i, r := range rows {
+		if oldestFirst(r, *o.through) > 0 {
+			return rows[:i]
+		}
+	}
+	return rows
+}
+
 // MergeTurn is one turn from several nodes: its oldest [store.MaxTurnEvents]
 // rows, its newest [TurnClosingEvents], how many the fleet holds, and every
 // trace it touched in the order it first touched them.
 //
-// Exact on both ends. The oldest rows are among the nodes' heads, because each
-// head is that node's own oldest. The newest are among the nodes' closings —
-// or their heads, where a head held the whole of that node's share and no
-// closing was needed. What lies between is the gap the total reports.
+// Exact on both ends. The OPENING is [MergeTrace]'s, cut where it cuts: each
+// node sent its own oldest rows, so the fleet's oldest are among them up to
+// the oldest last opening row of a node holding rows it sent in neither its
+// opening nor its ending — every one of those lies after that row, so nothing
+// past it can be placed. It is taken from every row sent, endings included,
+// because a node holding nothing it did not send is known whole. The newest
+// rows are among the nodes' closings — or their heads, where a head held the
+// whole of that node's share and no closing was needed. What lies between is
+// the gap the total reports, which is never cut.
 func MergeTurn(parts []turnPart) (rows []store.EventRecord, total int, traces []string) {
-	heads := make([][]store.EventRecord, 0, len(parts))
 	everything := make([][]store.EventRecord, 0, 2*len(parts))
 	firsts := map[string]time.Time{}
+	var known opening
 	for _, p := range parts {
-		heads = append(heads, p.Head)
 		everything = append(everything, p.Head, p.Closing)
 		total += p.Total
+		if last, held := p.unsent(); held {
+			known.stopAt(last)
+		}
 		for _, t := range p.Traces {
 			if at, seen := firsts[t.TraceID]; !seen || t.FirstAt.Before(at) {
 				firsts[t.TraceID] = t.FirstAt
 			}
 		}
 	}
-	opening := union(heads...)
-	slices.SortFunc(opening, oldestFirst)
-	if len(opening) > store.MaxTurnEvents {
-		opening = opening[:store.MaxTurnEvents]
+	sent := union(everything...)
+	slices.SortFunc(sent, oldestFirst)
+	start := known.cut(sent)
+	if len(start) > store.MaxTurnEvents {
+		start = start[:store.MaxTurnEvents]
 	}
-	ending := union(everything...)
-	slices.SortFunc(ending, oldestFirst)
+	ending := sent
 	if len(ending) > TurnClosingEvents {
 		ending = ending[len(ending)-TurnClosingEvents:]
 	}
-	rows = union(opening, ending)
+	rows = union(start, ending)
 	slices.SortFunc(rows, oldestFirst)
 
 	traces = make([]string, 0, len(firsts))

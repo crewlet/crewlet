@@ -346,3 +346,146 @@ func TestATurnPartHeldToTheHorizonCountsEachRowOnce(t *testing.T) {
 			"as cut", len(rows), rows[0].ID, rows[len(rows)-1].ID, total)
 	}
 }
+
+// rowsAt is n rows named prefix0001…, one second apart from a start.
+func rowsAt(prefix string, start time.Time, n int) []store.EventRecord {
+	out := make([]store.EventRecord, 0, n)
+	for i := range n {
+		out = append(out, store.EventRecord{ID: fmt.Sprintf("%s%04d", prefix, i+1),
+			Time: start.Add(time.Duration(i) * time.Second)})
+	}
+	return out
+}
+
+// A MERGED TRACE STOPS WHERE A NODE'S UNSENT ROWS BEGIN.
+//
+// Each node sends its own oldest rows up to the cap, so the fleet's oldest are
+// among them — until a node sends FEWER than the cap and holds more. Its rows
+// past the last one it sent are older than the other node's rows here, and
+// the obvious merge filled the cap with those instead: a view that presents
+// itself as the trace's opening, with a hole inside it that `truncated` did
+// not say was there. Two ways a part comes to send fewer than it holds, each
+// beside another node's newer rows: the asker's horizon cuts rows off the
+// front of a capped read — an earlier build, behind the asker's clock, sends
+// rows from the strip under the horizon — and a reply cut to fit the
+// transport.
+//
+// Mutation: drop the cut at the oldest last sent row from [MergeTrace], and
+// both cases place the other node's rows past the hole.
+func TestAMergedTraceStopsWhereANodesUnsentRowsBegin(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	// The peer holds 520 rows of the trace, a0001 … a0520; the asker ten,
+	// each newer than the peer's 500th and older than its 501st's
+	// successors — inside the peer's unsent rows.
+	peer := rowsAt("a", base, 520)
+	mine := tracePart{Rows: rowsAt("b", base.Add(503*time.Second+500*time.Millisecond), 10), Total: 10}
+	for name, c := range map[string]struct {
+		part     tracePart
+		floor    time.Time
+		last     string
+		shown    int
+		total    int
+		heldPeer bool
+	}{
+		// a0001 … a0003 under the horizon: the capped read is cut to 497.
+		"held to the horizon": {
+			part:  tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)},
+			floor: base.Add(3 * time.Second), last: "a0500", shown: 497, total: 517 + 10,
+		},
+		// A reply cut to its first 300 rows.
+		"cut to fit the transport": {
+			part:  tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)}.keep(300).(tracePart),
+			floor: base.Add(-time.Hour), last: "a0300", shown: 300, total: 520 + 10,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			parts := []tracePart{mine.within(c.floor), c.part.within(c.floor)}
+			rows, total := MergeTrace(parts)
+			if len(rows) == 0 || rows[len(rows)-1].ID != c.last || len(rows) != c.shown {
+				t.Fatalf("the merged trace shows %d rows ending at %v, want %d ending at %s — "+
+					"the peer's last sent row, with nothing past its unsent rows", len(rows),
+					ids(rows[max(0, len(rows)-3):]), c.shown, c.last)
+			}
+			if total != c.total || total <= len(rows) {
+				t.Errorf("total = %d over %d rows, want %d — the gap still reported", total, len(rows), c.total)
+			}
+		})
+	}
+
+	// A PART THE HORIZON CUT TO NOTHING places nothing past its unsent rows
+	// either. Here every row the peer sent lies under the horizon and some it
+	// did not send lie above it, older than every row the asker holds.
+	floor := base.Add(500*time.Second + 500*time.Millisecond)
+	allUnder := tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)}.within(floor)
+	rows, total := MergeTrace([]tracePart{mine.within(floor), allUnder})
+	if len(rows) != 0 || total != 20+10 {
+		t.Errorf("with every row the peer sent under the horizon, the merge shows %v of %d, "+
+			"want nothing placeable of 30", ids(rows), total)
+	}
+	// AND A NODE HOLDING NOTHING IT DID NOT SEND BOUNDS NOTHING: two whole
+	// parts are merged whole, oldest first, up to the cap.
+	rows, total = MergeTrace([]tracePart{mine, {Rows: peer[:5], Total: 5}})
+	if len(rows) != 15 || total != 15 {
+		t.Errorf("two whole parts merged to %d rows of %d, want all 15", len(rows), total)
+	}
+}
+
+// A MERGED TURN'S OPENING STOPS WHERE A NODE'S UNSENT ROWS BEGIN, for
+// [MergeTrace]'s reason — and its ending is still the turn's last rows.
+//
+// The peer holds 600 rows of the turn and sends its opening and its ending,
+// the 80 between unsent; the asker holds ten rows in that gap. Shown in the
+// opening, they would sit past a hole the opening does not admit to, and they
+// are not in the ending either, which is the peer's last twenty.
+//
+// Mutation: drop the cut at the oldest last sent row from [MergeTurn], and
+// both cases show the asker's rows past the peer's opening.
+func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	peer := rowsAt("a", base, 600)
+	whole := turnPart{Head: peer[:store.MaxTurnEvents], Closing: peer[len(peer)-TurnClosingEvents:],
+		Total: len(peer), Traces: []store.TurnTrace{}}
+	mine := turnPart{Head: rowsAt("b", base.Add(530*time.Second+500*time.Millisecond), 10), Total: 10,
+		Traces: []store.TurnTrace{}}
+	for name, c := range map[string]struct {
+		part  turnPart
+		floor time.Time
+		last  string
+		total int
+	}{
+		"held to the horizon": {
+			part: whole, floor: base.Add(3 * time.Second), last: "a0500", total: 597 + 10,
+		},
+		"cut to fit the transport": {
+			part: whole.keep(200).(turnPart), floor: base.Add(-time.Hour), last: "a0200", total: 600 + 10,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rows, total, _ := MergeTurn([]turnPart{mine.within(c.floor), c.part.within(c.floor)})
+			var shown []string
+			for _, r := range rows {
+				if strings.HasPrefix(r.ID, "b") {
+					shown = append(shown, r.ID)
+				}
+			}
+			if len(shown) > 0 {
+				t.Fatalf("the merged turn shows %v from inside the peer's unsent rows", shown)
+			}
+			opening := rows[:len(rows)-TurnClosingEvents]
+			if opening[len(opening)-1].ID != c.last {
+				t.Errorf("the opening ends at %s, want the peer's last sent row %s",
+					opening[len(opening)-1].ID, c.last)
+			}
+			if ending := rows[len(rows)-TurnClosingEvents:]; ending[0].ID != "a0581" ||
+				ending[len(ending)-1].ID != "a0600" {
+				t.Errorf("the ending runs %s … %s, want the turn's last twenty", ending[0].ID,
+					ending[len(ending)-1].ID)
+			}
+			if total != c.total {
+				t.Errorf("total = %d, want %d — the gap still reported", total, c.total)
+			}
+		})
+	}
+}

@@ -85,7 +85,10 @@ import (
 // `by_category`, the turns a share folds (a page of turns' second scatter is
 // floored at the history, not at the window), and a trace's or a turn's total
 // beyond what it corrects by the rows it dropped. Those can carry the strip
-// and nothing wider. The rest is bounded by edges every build honours: the
+// and nothing wider. The cut leaves a capped trace or turn holding rows it
+// did not send, after its last one, and the merge places nothing past that
+// row ([MergeTrace], [MergeTurn]) — a view cut short and saying so, never one
+// with a hole. The rest is bounded by edges every build honours: the
 // axis's bars and totals lie inside the window every build cuts from `at`
 // alike, whose first bar — the one the floor cuts, which is where an older
 // build behind the asker's clock counts its strip — the asker drops after
