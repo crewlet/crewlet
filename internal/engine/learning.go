@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -462,7 +463,7 @@ func (e *Engine) learningPasses(ctx context.Context, c *Company) learning.Backgr
 	// least wants unsupervised, so no summarizer means no pass at all: the
 	// rows stay raw and readable rather than being dropped unfolded.
 	if summarize := e.auxSummarizer(c); summarize != nil {
-		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize),
+		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize, e.episodeFit(c)),
 			lifecycleOptions(&cfg.EpisodeLifecycle))
 	} else {
 		log.WarnContext(ctx, "episode_compaction_unavailable",
@@ -683,6 +684,34 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 			return "", nil
 		}
 		return completion.Content, nil
+	}
+}
+
+// episodeFit is the compaction pass's [learning.FitFunc]: the epoch's
+// compactor, on the role the cluster belongs to, with the rewrite
+// instructions for the field it is asked about.
+//
+// Nil where the company has no models, which the summarizer reads as "carry
+// every field whole" — the call is then larger, never wrong.
+func (e *Engine) episodeFit(c *Company) learning.FitFunc {
+	fitter := e.compactorFor(c)
+	if fitter == nil {
+		return nil
+	}
+	return func(ctx context.Context, role string, field learning.EpisodeField, text string, budget int) (string, error) {
+		seat := c.Org.Role(role)
+		if seat == nil {
+			return "", fmt.Errorf("engine: condensing an episode for %q: this revision has no such role", role)
+		}
+		kind := compact.KindTask
+		if field == learning.FieldOutcome {
+			kind = compact.KindOutcome
+		}
+		res, err := fitter.For(seat).Fit(ctx, kind, text, budget)
+		if err != nil {
+			return "", err
+		}
+		return res.Text, nil
 	}
 }
 

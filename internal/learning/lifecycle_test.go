@@ -1240,7 +1240,7 @@ func TestTheModelSummarizerMakesOneCallAndParsesIt(t *testing.T) {
 		calls++
 		gotSystem, gotUser = system, user
 		return `{"common_task_pattern":"posted updates","subjects_involved":["finance"]}`, nil
-	})
+	}, nil)
 	got, err := s.Summarize(context.Background(), Cluster{
 		Handle: "ceo", Episodes: []Episode{rawEp("a", t0, "slack_post")},
 	})
@@ -1258,11 +1258,11 @@ func TestTheModelSummarizerMakesOneCallAndParsesIt(t *testing.T) {
 	}
 
 	boom := errors.New("rate limited")
-	s = NewSummarizer(func(context.Context, string, string, string) (string, error) { return "", boom })
+	s = NewSummarizer(func(context.Context, string, string, string) (string, error) { return "", boom }, nil)
 	if _, err := s.Summarize(context.Background(), Cluster{Episodes: []Episode{rawEp("a", t0)}}); !errors.Is(err, boom) {
 		t.Errorf("model error = %v, want it propagated", err)
 	}
-	if _, err := NewSummarizer(nil).Summarize(context.Background(), Cluster{Episodes: []Episode{rawEp("a", t0)}}); err == nil {
+	if _, err := NewSummarizer(nil, nil).Summarize(context.Background(), Cluster{Episodes: []Episode{rawEp("a", t0)}}); err == nil {
 		t.Error("a summarizer with no model answered")
 	}
 	if _, err := s.Summarize(context.Background(), Cluster{}); err == nil {
@@ -1329,7 +1329,7 @@ func TestParseSummaryToleratesWhatAModelActuallySends(t *testing.T) {
 	}
 }
 
-func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
+func TestRenderClusterFlattensAndCarriesEveryFieldWhole(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", perTurnDetail+50)
 	first := rawEp("a", t0, "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9")
@@ -1338,7 +1338,7 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	second := rawEp("b", t0.Add(-time.Hour))
 	second.ReviewOutcome = "failed"
 
-	got := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first, second}})
+	got := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first, second}}, nil)
 
 	if !strings.Contains(got, "Cluster of 2 similar agent turns") {
 		t.Errorf("the count is not stated:\n%s", got)
@@ -1349,23 +1349,17 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	if !strings.Contains(got, "task: line one line two") {
 		t.Errorf("newlines were not flattened:\n%s", got)
 	}
-	if strings.Contains(got, long) || !strings.Contains(got, "xxx…") {
-		t.Errorf("the per-turn clamp did not apply:\n%s", got)
+	// NOTHING IS CUT. A field past the budget with no rewrite is carried
+	// whole: the pattern inferred from a stack trace's first 280 bytes is
+	// the trace's opening and none of what the turn was for.
+	if !strings.Contains(got, "plan: "+long+"\n") {
+		t.Errorf("an unrewritten field was not carried whole:\n%s", got)
 	}
-	// Capped at 8, and it SAYS SO. The compactor is inferring "how this
-	// agent does this kind of work", and a silently shortened tool sequence
-	// reads as a shorter procedure — which is the pattern it then writes
-	// down as the seat's own.
-	if strings.Contains(got, "t9") || !strings.Contains(got, "t8") {
-		t.Errorf("the tool list is not capped at 8:\n%s", got)
-	}
-	if !strings.Contains(got, "(+1 more)") {
-		t.Errorf("the tool-list cut is silent:\n%s", got)
-	}
-	// And a turn under the cap carries no marker at all.
-	under := rawEp("c", t0, "t1", "t2")
-	if u := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{under}}); strings.Contains(u, "more)") {
-		t.Errorf("a short tool list claimed to be cut:\n%s", u)
+	// The whole tool sequence. A shortened one reads as a shorter procedure
+	// — which is the pattern the compactor then writes down as the seat's
+	// own.
+	if !strings.Contains(got, "tools: t1, t2, t3, t4, t5, t6, t7, t8, t9\n") {
+		t.Errorf("the tool sequence is not whole:\n%s", got)
 	}
 	if !strings.Contains(got, "tools: (none)") {
 		t.Errorf("a tool-free turn is not labelled:\n%s", got)
@@ -1378,6 +1372,76 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	}
 	if strings.Count(got, "\n1. ") != 1 {
 		t.Errorf("turns are not numbered once each:\n%s", got)
+	}
+
+	// A REWRITE IS LABELLED, so the compactor reading it knows the wording
+	// is not the turn's own — and only a field past the budget takes one.
+	condensed := map[string]string{long: "posted the release notes to #eng", "line one line two": "nope"}
+	got = RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first}}, condensed)
+	if !strings.Contains(got, "plan: (condensed) posted the release notes to #eng\n") || strings.Contains(got, long) {
+		t.Errorf("the rewrite was not rendered in the field's place:\n%s", got)
+	}
+	if !strings.Contains(got, "task: line one line two\n") {
+		t.Errorf("a field within the budget took a rewrite:\n%s", got)
+	}
+}
+
+// The summarizer rewrites only the fields past the budget, each once, as the
+// account it is — and a field whose rewrite failed is carried whole rather
+// than dropped or cut.
+func TestTheSummarizerCondensesOnlyTheOutliersBeforeTheCall(t *testing.T) {
+	t.Parallel()
+	longTask := strings.Repeat("stack frame ", 40)
+	longPlan := strings.Repeat("deployed the fix and posted it ", 20)
+	broken := strings.Repeat("unrewritable ", 40)
+	a := rawEp("a", t0)
+	a.TaskSummary, a.PlanSummary = longTask, longPlan
+	b := rawEp("b", t0.Add(-time.Hour))
+	b.TaskSummary, b.PlanSummary = longTask, "short" // the same long task twice
+	c := rawEp("c", t0.Add(-2*time.Hour))
+	c.PlanSummary = broken
+
+	var (
+		mu     sync.Mutex
+		asked  = map[string]EpisodeField{}
+		budget int
+	)
+	fit := func(_ context.Context, role string, field EpisodeField, text string, n int) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if role != "ceo-role" {
+			t.Errorf("fit asked on role %q, want the cluster's", role)
+		}
+		if _, again := asked[text]; again {
+			t.Errorf("one text was rewritten twice")
+		}
+		asked[text], budget = field, n
+		if text == flatten(broken) {
+			return "", errors.New("aux unavailable")
+		}
+		return "rewrote " + string(field), nil
+	}
+	var user string
+	s := NewSummarizer(func(_ context.Context, _, _, u string) (string, error) {
+		user = u
+		return `{"common_task_pattern":"p"}`, nil
+	}, fit)
+	if _, err := s.Summarize(context.Background(), Cluster{Handle: "ceo", Role: "ceo-role",
+		Episodes: []Episode{a, b, c}}); err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	if len(asked) != 3 || asked[flatten(longTask)] != FieldTask || asked[flatten(longPlan)] != FieldOutcome ||
+		asked[flatten(broken)] != FieldOutcome || budget != perTurnDetail {
+		t.Errorf("rewrites asked = %v at %d bytes, want the three outliers as their fields at %d",
+			asked, budget, perTurnDetail)
+	}
+	if strings.Count(user, "task: (condensed) rewrote task") != 2 ||
+		!strings.Contains(user, "plan: (condensed) rewrote outcome") ||
+		!strings.Contains(user, "plan: short\n") {
+		t.Errorf("the rewrites did not reach the prompt:\n%s", user)
+	}
+	if !strings.Contains(user, "plan: "+flatten(broken)+"\n") {
+		t.Errorf("a field whose rewrite failed was not carried whole:\n%s", user)
 	}
 }
 

@@ -352,7 +352,7 @@ func parseRefinement(completion *llm.Completion) (refinementChoice, bool) {
 		// UNPARSEABLE IS A DECLINE, not an error. The pass must not fail
 		// over a model that answered in prose, and there is nothing to
 		// write either way.
-		log.Debug("skill_refinement_unparseable", "response", preview(raw, 200))
+		log.Debug("skill_refinement_unparseable", "response", raw)
 		return refinementChoice{}, false
 	}
 	if strings.TrimSpace(choice.SkillName) == "" || strings.TrimSpace(choice.Bullet) == "" {

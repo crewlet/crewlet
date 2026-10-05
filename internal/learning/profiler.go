@@ -273,7 +273,7 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 		// told us nothing new, and failing the observation would stop the
 		// interaction counter as well.
 		log.WarnContext(ctx, "counterparty_patch_unparseable", "turn_id", t.Event.TurnID,
-			"subject", s.subject.ExternalID, "response", preview(text, 200))
+			"subject", s.subject.ExternalID, "response", text)
 		return nil, nil
 	}
 	return scalarTraits(obj), nil

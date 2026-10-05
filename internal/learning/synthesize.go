@@ -370,7 +370,7 @@ func parseSkillDraft(c *llm.Completion) (skillDraft, bool) {
 		// WARN, not debug: a synthesizer that has stopped decoding is
 		// indistinguishable from a model with nothing to draft, and the
 		// second needs no attention while the first does.
-		log.Warn("skill_draft_undecodable", "response", preview(body, 200))
+		log.Warn("skill_draft_undecodable", "response", body)
 		return skillDraft{}, false
 	}
 	draft.Name = strings.TrimSpace(draft.Name)

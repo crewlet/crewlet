@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -960,7 +960,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	log.InfoContext(ctx, "episode_cluster_compacted",
 		"agent_handle", handle, "cluster_size", len(cluster),
 		"exemplars_kept", len(exemplars), "raw_deleted", deleted,
-		"pattern", textcut.Ellipsis(row.CommonTaskPattern, 120))
+		"pattern", row.CommonTaskPattern)
 	return deleted, true, nil
 }
 
@@ -1283,15 +1283,46 @@ func cleanStrings(in []string) []string {
 // provider types back in this package's imports.
 type CompleteFunc func(ctx context.Context, role, system, user string) (string, error)
 
+// FitFunc rewrites one text that will not fit budget bytes, on a role's
+// behalf — the engine's compactor, behind a function for [CompleteFunc]'s
+// reason: the compactor and the chain it runs on stay on the engine's side of
+// it, metered there like any auxiliary call. field says which of a
+// turn's two accounts the text is, because what a rewrite must keep differs:
+// a task keeps what was asked and where, an outcome what was delivered.
+type FitFunc func(ctx context.Context, role string, field EpisodeField, text string, budget int) (string, error)
+
+// EpisodeField names one of a turn's prose fields a [FitFunc] is asked to
+// condense.
+type EpisodeField string
+
+const (
+	// FieldTask is [Episode.TaskSummary]: what the turn was asked.
+	FieldTask EpisodeField = "task"
+	// FieldOutcome is [Episode.PlanSummary]: what the turn concluded.
+	FieldOutcome EpisodeField = "outcome"
+)
+
+// Valid reports whether the field is one this package names.
+func (f EpisodeField) Valid() bool { return f == FieldTask || f == FieldOutcome }
+
 // NewSummarizer builds the model-backed [Summarizer]: it renders the cluster,
 // makes one call, and parses what comes back.
 //
 // It attaches no embedding. The caller that has an embeddings provider can
 // wrap this one and fill [Summary.Embedding]; a compacted row without it is
 // read by every query except similarity recall.
-func NewSummarizer(complete CompleteFunc) Summarizer { return modelSummarizer{complete: complete} }
+//
+// fit condenses a turn's field past [perTurnDetail] before the cluster is
+// rendered — see [RenderCluster]. Nil condenses nothing, and such a field is
+// carried whole.
+func NewSummarizer(complete CompleteFunc, fit FitFunc) Summarizer {
+	return modelSummarizer{complete: complete, fit: fit}
+}
 
-type modelSummarizer struct{ complete CompleteFunc }
+type modelSummarizer struct {
+	complete CompleteFunc
+	fit      FitFunc
+}
 
 func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, error) {
 	if m.complete == nil {
@@ -1305,7 +1336,7 @@ func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, err
 	// chain and attributes the token spend. Dropping it here would compact
 	// every seat's memory on whichever single model the wiring happened to
 	// close over, in a company whose whole point is that seats differ.
-	raw, err := m.complete(ctx, c.Role, CompactorSystemPrompt, RenderCluster(c))
+	raw, err := m.complete(ctx, c.Role, CompactorSystemPrompt, RenderCluster(c, m.condense(ctx, c)))
 	if err != nil {
 		return Summary{}, err
 	}
@@ -1350,36 +1381,103 @@ Rules:
   the agent will see it as low-signal.
 `
 
-// perTurnDetail clamps how much of one turn's prose reaches the prompt.
+// perTurnDetail is the budget one turn's task or plan has in the prompt, past
+// which it is CONDENSED rather than carried — never cut.
 //
 // A cluster can be as large as the batch (200 turns), and every turn renders
-// four lines. At 280 characters each for the task and its summary that is roughly
-// 120 KB, about 30k tokens, in a single call — affordable once a month per
-// seat. Without the clamp one turn carrying a pasted stack trace sets the size
-// of the call.
+// four lines. At 280 bytes each for the task and its plan that is roughly 120
+// KB, about 30k tokens, in a single call — affordable once a month per seat.
+// Without a bound one turn carrying a pasted stack trace sets the size of the
+// call; with a CUT, the compactor inferred the pattern from that turn's first
+// 280 bytes, which is the paste's opening and none of what the turn was for.
+// So a field past it is rewritten by the seat's auxiliary model first — only
+// the outliers, which is a handful of calls on a pass that runs monthly.
 const perTurnDetail = 280
 
+// condense rewrites every task and outcome of the cluster past
+// [perTurnDetail], keyed by the flattened text so [RenderCluster] finds each
+// one. A field that cannot be rewritten is left out of the map and rendered
+// whole.
+//
+// [condenseParallel] at a time, because a long-lived seat's cluster is mostly
+// outliers on its outcome field — a turn's account of what landed is rarely
+// under 280 bytes — so a full batch is a few hundred rewrites, and one at a
+// time each under its own call budget is a pass that holds its lease for
+// hours.
+func (m modelSummarizer) condense(ctx context.Context, c Cluster) map[string]string {
+	if m.fit == nil {
+		return nil
+	}
+	type job struct {
+		field EpisodeField
+		flat  string
+	}
+	var jobs []job
+	seen := map[string]bool{}
+	for _, ep := range c.Episodes {
+		for _, f := range []struct {
+			field EpisodeField
+			text  string
+		}{{FieldTask, ep.TaskSummary}, {FieldOutcome, ep.PlanSummary}} {
+			flat := flatten(f.text)
+			if len(flat) <= perTurnDetail || seen[flat] {
+				continue
+			}
+			seen[flat] = true
+			jobs = append(jobs, job{f.field, flat})
+		}
+	}
+	var (
+		mu  sync.Mutex
+		out = make(map[string]string, len(jobs))
+	)
+	var group errgroup.Group
+	group.SetLimit(condenseParallel)
+	for _, j := range jobs {
+		group.Go(func() error {
+			rewritten, err := m.fit(ctx, c.Role, j.field, j.flat, perTurnDetail)
+			if err != nil {
+				log.DebugContext(ctx, "episode_field_not_condensed", "agent_handle", c.Handle,
+					"field", string(j.field), "bytes", len(j.flat), "error", err.Error())
+				return nil
+			}
+			mu.Lock()
+			out[j.flat] = flatten(rewritten)
+			mu.Unlock()
+			return nil
+		})
+	}
+	_ = group.Wait() // every job answers nil: a failed rewrite is a whole field
+	return out
+}
+
+// condenseParallel is how many of a cluster's rewrites run at once — the
+// compactor's own chunk parallelism, so a pass asks a provider for no more
+// at once than one long rewrite already does.
+const condenseParallel = 4
+
 // RenderCluster is the user half of the compaction prompt: the cluster as a
-// numbered list of brief turn summaries.
-func RenderCluster(c Cluster) string {
+// numbered list of turn summaries.
+//
+// condensed is the rewrite of each task or plan past [perTurnDetail], keyed by
+// its flattened text; a field past the budget that is not in it renders whole.
+// NOTHING IS CUT, the tool sequence included.
+func RenderCluster(c Cluster, condensed map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Cluster of %d similar agent turns from one agent.\n\n", len(c.Episodes))
 	b.WriteString("Turns (numbered):\n")
 	for i, ep := range c.Episodes {
 		tools := "(none)"
 		if len(ep.ToolSequence) > 0 {
-			// SAYS WHEN IT CUTS. The compactor is inferring "how this
-			// agent does this kind of work", and a silently shortened
-			// tool sequence reads as a shorter procedure rather than a
-			// clipped one — which is the pattern it then writes down.
-			shown := ep.ToolSequence
-			tools = strings.Join(shown[:min(8, len(shown))], ", ")
-			if dropped := len(shown) - 8; dropped > 0 {
-				tools += fmt.Sprintf(" (+%d more)", dropped)
-			}
+			// WHOLE. The compactor is inferring "how this agent does
+			// this kind of work", and a shortened tool sequence reads as
+			// a shorter procedure — which is the pattern it then writes
+			// down. Names are short; a turn's whole sequence is cheaper
+			// than the wrong procedure.
+			tools = strings.Join(ep.ToolSequence, ", ")
 		}
-		fmt.Fprintf(&b, "%d. [%s] task: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary))
-		fmt.Fprintf(&b, "   plan: %s\n", oneLine(ep.PlanSummary))
+		fmt.Fprintf(&b, "%d. [%s] task: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary, condensed))
+		fmt.Fprintf(&b, "   plan: %s\n", oneLine(ep.PlanSummary, condensed))
 		fmt.Fprintf(&b, "   tools: %s\n", tools)
 		fmt.Fprintf(&b, "   when: %s\n", ep.EndedAt.UTC().Format(time.DateOnly))
 	}
@@ -1388,16 +1486,21 @@ func RenderCluster(c Cluster) string {
 	return b.String()
 }
 
-// oneLine flattens and clamps one field of a turn.
+// oneLine flattens one field of a turn and takes its rewrite where it has one.
 //
 // Newlines become spaces because the rendering is a numbered list and a turn
 // summary containing its own newlines would look like more turns than there
 // are — a model that miscounts the cluster writes the pattern of a cluster
 // that does not exist.
-func oneLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	return textcut.Ellipsis(s, perTurnDetail)
+func oneLine(s string, condensed map[string]string) string {
+	flat := flatten(s)
+	if rewritten, ok := condensed[flat]; ok && len(flat) > perTurnDetail {
+		return "(condensed) " + rewritten
+	}
+	return flat
 }
+
+func flatten(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // ParseSummary reads a model's answer, tolerating prose around the JSON.
 //
@@ -1426,8 +1529,9 @@ func ParseSummary(raw string) (Summary, error) {
 			NotablePatterns:   jsonText(obj["notable_patterns"]),
 		}, nil
 	}
-	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)",
-		textcut.Ellipsis(text, 200))
+	// THE ANSWER WHOLE: it is bounded by the pass's own output cap, and
+	// the part of an unparseable answer worth reading is rarely its opening.
+	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)", text)
 }
 
 // jsonText reads one string field, answering "" for absent or wrong-typed.

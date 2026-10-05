@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // PersistDecider is the post-turn classifier that decides what, if anything,
@@ -320,9 +319,11 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// The preview is the only diagnosis available for a model that
 		// has stopped honouring the contract — a bare tier count would
 		// say classification collapsed to NOOP without saying why.
-		// Capped because the response can carry the turn's own content.
+		// WHOLE: it is bounded by the classifier's own MaxTokens, and an
+		// opening cut away from the part that broke the contract is a
+		// diagnosis that names nothing.
 		log.WarnContext(ctx, "persist_decider_unparseable",
-			"turn_id", t.Event.TurnID, "response", preview(text, 200))
+			"turn_id", t.Event.TurnID, "response", text)
 		return Decision{Tier: types.PersistNOOP}, nil
 	}
 
@@ -349,7 +350,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		}
 		log.InfoContext(ctx, "persist_decider_doc_observed", "turn_id", t.Event.TurnID,
 			"agent_handle", t.Event.AgentHandle, "target_hint", dir.TargetHint,
-			"content", preview(dir.Content, 120))
+			"content", dir.Content)
 		return Decision{Tier: types.PersistDoc, Directive: dir}, nil
 
 	case types.PersistLong:
@@ -710,12 +711,3 @@ func orElse(s, fallback string) string {
 	}
 	return s
 }
-
-// preview shortens a model's answer for a log line.
-//
-// BYTES, through [textcut.Ellipsis], which is the unit a log field wants — and
-// it walks back to a rune boundary rather than materialising the whole string
-// as runes to cut it, which is what this did when it counted them. Every
-// caller is a diagnostic preview of a model response, so nothing here depends
-// on an exact character count.
-func preview(s string, limit int) string { return textcut.Ellipsis(s, limit) }
