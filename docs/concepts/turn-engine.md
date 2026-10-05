@@ -490,10 +490,12 @@ against that rather than against nothing. A model that still has not
 called after two correctives ends the phase without its submission, and
 the rescue below takes over.
 
-**Every phase asks on `auto`, and the corrective never escalates it.**
-The executor, the reviewer, onboarding and every worker send `auto`, on
-their corrective rounds too. Forcing a call is not something the engine
-can rely on: some endpoints ignore `tool_choice`, and several current
+**No request forces a call, the corrective included.** A request offers
+tools and never names a tool choice — the provider contract has no field
+for one — so the executor, the reviewer, onboarding and every worker get
+each vendor's default, which is the model deciding, on their corrective
+rounds too. Forcing a call is not something the engine can rely on: some
+endpoints ignore `tool_choice`, and several current
 models refuse a forced one outright — Claude Opus 5.5, Sonnet 5.5, Fable
 5.1 and Mythos 5.1 answer `400 tool_choice: type "tool" and "any" are not
 supported for this model`, with `auto` plus an instruction naming the
@@ -502,10 +504,10 @@ tool as the documented replacement, which is exactly the corrective. A
 reviewer and onboarding, which used to ask for a forced call, failed
 outright on those models — every turn at its review, and the onboarding
 pass on every turn the seat took — before the corrective that actually
-enforces the call could run. The loop is what enforces the call — and
-it refuses a configuration that asks for a forced call without naming
-the call that finishes the phase, since that loop could only end by
-exhausting its rounds.
+enforces the call could run. The loop is what enforces the call, and the
+forced choice was retired from the contract altogether rather than kept
+for a caller that might want it: nothing that remained could use it
+safely on the current models.
 
 Before the finishing corrective, a reviewer that thought and stopped fell through
 to the rescue, which sends the whole turn back for another executor

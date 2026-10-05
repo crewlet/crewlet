@@ -239,8 +239,8 @@ func TestAPassThatDoesNotMarkRetriesNextTurn(t *testing.T) {
 	}
 }
 
-// THE ONBOARDING PASS ASKS ON AUTO, its corrective round included, for the
-// reason the reviewer does: a forced tool_choice is a 400 on several current
+// THE ONBOARDING PASS IS NEVER FORCED, its corrective round included, for the
+// reason the reviewer is not: a forced tool choice is a 400 on several current
 // models, and a pass that errors never marks — so it re-ran, and failed, on
 // every turn the seat took. Naming mark_onboarded is what re-asks a pass that
 // answered in prose, and the corrective names that tool, not the catalogue.
@@ -263,11 +263,6 @@ func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
 	}
 	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
 		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
-	}
-	for i, req := range reqs {
-		if req.ToolChoice != llm.ToolChoiceAuto {
-			t.Errorf("onboarding request %d tool_choice = %q, want auto", i+1, req.ToolChoice)
-		}
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}

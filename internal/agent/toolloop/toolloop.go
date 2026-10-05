@@ -43,12 +43,13 @@
 //   - A PHASE THAT FINISHES BY A CALL IS ASKED AGAIN WHEN A ROUND ENDS
 //     WITHOUT ONE. A loop that declares terminators ([Config.TerminateAfter])
 //     has said how it ends — a successful call to one of them — so a round
-//     of prose there is not a finish, whatever tool_choice the request
-//     carried: it is a model that wrote its report where nobody reads it
-//     (a submission's arguments typed out as a JSON block is the measured
-//     case). Some endpoints ignore tool_choice, some models think-then-stop,
-//     and some reject a forced choice outright, so the call is ENFORCED HERE
-//     rather than requested of the provider: a bounded corrective re-prompt
+//     of prose there is not a finish: it is a model that wrote its report
+//     where nobody reads it (a submission's arguments typed out as a JSON
+//     block is the measured case). The request never forces a call — some
+//     endpoints ignore a forced tool choice, some models think-then-stop,
+//     and several current ones reject the force outright — so the call is
+//     ENFORCED HERE rather than requested of the provider: a bounded
+//     corrective re-prompt
 //     naming what finishes the phase is the difference between "the model
 //     declined" and "the phase produced nothing and said it was fine".
 package toolloop
@@ -716,18 +717,6 @@ type Config struct {
 	// MaxRounds bounds the provider calls. Required and positive.
 	MaxRounds int
 
-	// ToolChoice is passed to the provider, on EVERY round including a
-	// corrective one, and changes nothing else about the loop. Empty is
-	// `auto` wherever the surface offers a tool, which is what every phase
-	// of the engine runs on: a forced choice is a request some endpoints
-	// ignore and several current models refuse with a 400, so a phase that
-	// must end in a call says so with [Config.TerminateAfter] instead.
-	//
-	// [llm.ToolChoiceRequired] WITHOUT a terminator is refused: a loop that
-	// demands a call every round and names no call that ends it can only
-	// stop by exhausting MaxRounds.
-	ToolChoice llm.ToolChoice
-
 	// TerminateAfter names tools that end the loop once they have run
 	// SUCCESSFULLY, even if the model asked for more. A phase whose
 	// delivery tool has fired is finished; letting it keep going spends
@@ -840,15 +829,6 @@ func (c Config) validate() error {
 	if c.CorrectivesSpent < 0 || c.CorrectivesSpent > MaxFinishingCorrectives {
 		errs = append(errs, fmt.Errorf("toolloop: CorrectivesSpent must be within 0..%d, got %d",
 			MaxFinishingCorrectives, c.CorrectivesSpent))
-	}
-	// A loop that demands a call on every round and names none that ends it
-	// has no finish but the round cap: prose is refused, every call is
-	// followed by another round, and nothing it can do stops it. That is a
-	// caller that forgot to say how its phase finishes, not a phase.
-	if c.ToolChoice == llm.ToolChoiceRequired && len(c.TerminateAfter) == 0 {
-		errs = append(errs, errors.New("toolloop: ToolChoice is required but TerminateAfter "+
-			"names no tool, so the loop could only end by exhausting MaxRounds — name the "+
-			"call that finishes the phase in TerminateAfter, or leave ToolChoice auto"))
 	}
 	return errors.Join(errs...)
 }
@@ -973,10 +953,6 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// Re-read every round, so a surface mutated by this round's own
 		// tools is visible on the next call rather than the one after.
 		tools := cfg.Surface.ToolDefs()
-		choice := cfg.ToolChoice
-		if choice == "" && len(tools) > 0 {
-			choice = llm.ToolChoiceAuto
-		}
 
 		// ONE SPAN PER ROUND, around the provider call only. The round is
 		// the unit whose LATENCY an operator cares about — it is the wait
@@ -1076,10 +1052,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// arrives, and a unary one says nothing until it is over.
 		publish(roundsUsed, nil)
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
-			Messages:   msgs,
-			Tools:      tools,
-			ToolChoice: choice,
-			OnDelta:    onDelta,
+			Messages: msgs,
+			Tools:    tools,
+			OnDelta:  onDelta,
 		})
 		took := time.Since(began)
 		if err != nil {
@@ -1241,9 +1216,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				// submission phase straight into its rescue. Both
 				// failures draw on one allowance.
 				//
-				// THE TOOL CHOICE IS LEFT AS THE CALLER SET IT — `auto`,
-				// on every phase of the engine — and deliberately never
-				// escalated to `required` for the corrective round. Several current
+				// THE CORRECTIVE ROUND FORCES NOTHING EITHER — no request
+				// this loop sends names a tool choice, so the model decides
+				// as it does on every round. Several current
 				// models reject a forced choice outright: Claude Opus
 				// 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer 400
 				// "tool_choice: type "tool" and "any" are not supported

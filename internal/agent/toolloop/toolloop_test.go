@@ -412,9 +412,9 @@ func finishingCorrectives(msgs []llm.Message) int {
 // A LOOP THAT DECLARES TERMINATORS HAS SAID HOW IT FINISHES. A round of prose
 // there is a model that wrote its report where nobody reads it, and the phase
 // used to end on it — the executor then rescued as incomplete and the reviewer
-// read the fenced JSON as "what the agent produced". It is asked again, on the
-// SAME tool choice (auto here, as the executor runs), and the round is marked
-// declined on the record.
+// read the fenced JSON as "what the agent produced". It is asked again — by a
+// message naming the call, never by forcing one, since a request has no way to
+// force a call — and the round is marked declined on the record.
 func TestAPhaseThatWroteItsSubmissionAsTextIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	p := &scriptedProvider{turns: []llm.Completion{writtenSubmission, submitCall("1")}}
@@ -440,12 +440,6 @@ func TestAPhaseThatWroteItsSubmissionAsTextIsAskedAgain(t *testing.T) {
 		!strings.Contains(last.Content, "JSON included") {
 		t.Errorf("the corrective round opened on %+v, want the finishing corrective "+
 			"naming submit_work", last)
-	}
-	// NEVER escalated to a forced choice: several current models reject one
-	// with a 400, and the loop is what enforces the call.
-	if second.ToolChoice != p.seen[0].ToolChoice || second.ToolChoice != llm.ToolChoiceAuto {
-		t.Errorf("tool choice went %q -> %q, want the caller's auto on both rounds",
-			p.seen[0].ToolChoice, second.ToolChoice)
 	}
 	if len(res.Narration) != 1 || res.Narration[0].Round != 1 || !res.Narration[0].Declined {
 		t.Errorf("narration = %+v, want round 1 marked declined", res.Narration)
@@ -635,43 +629,6 @@ func TestProseAfterAFailedSubmissionIsCorrected(t *testing.T) {
 	}
 	if finishingCorrectives(res.Messages) != 1 {
 		t.Error("the prose after the refused submission was not corrected")
-	}
-}
-
-// REQUIRED AND TERMINATORS: a caller that asks the provider for a forced call
-// still finishes by its terminator, so a prose round gets the finishing
-// corrective — naming the submission, not listing the surface — and the
-// caller's choice is passed on unchanged. No engine phase asks this way; the
-// loop's contract is that ToolChoice is only ever a request.
-func TestARequiredCallWithTerminatorsGetsTheFinishingCorrective(t *testing.T) {
-	t.Parallel()
-	p := &scriptedProvider{turns: []llm.Completion{
-		{Content: "I have read everything I need."},
-		{ToolCalls: []llm.ToolCall{toolCall("1", "mark_onboarded")}},
-	}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("read_page"), def("reflect"), def("mark_onboarded")}}
-
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 5, ToolChoice: llm.ToolChoiceRequired,
-		TerminateAfter: []string{"mark_onboarded"},
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.RoundsUsed != 2 {
-		t.Fatalf("rounds = %d, want 2", res.RoundsUsed)
-	}
-	if finishingCorrectives(res.Messages) != 1 {
-		t.Error("the finishing corrective was not issued")
-	}
-	// The caller's forced choice is kept on the corrective round — the loop
-	// never changes what the caller asked the provider for.
-	if p.seen[1].ToolChoice != llm.ToolChoiceRequired {
-		t.Errorf("tool choice = %q on the corrective round, want the caller's required",
-			p.seen[1].ToolChoice)
-	}
-	if !res.Narration[0].Declined {
-		t.Error("prose on a required round was not marked declined")
 	}
 }
 
@@ -1354,25 +1311,12 @@ func TestRunRefusesAConfigThatCannotWork(t *testing.T) {
 		"more correctives spent than the bound": func(c *toolloop.Config) {
 			c.CorrectivesSpent = toolloop.MaxFinishingCorrectives + 1
 		},
-		// A loop that demands a call every round and names none that
-		// ends it can only stop by running out of rounds.
-		"required without a terminator": func(c *toolloop.Config) {
-			c.ToolChoice = llm.ToolChoiceRequired
-		},
 	} {
 		cfg := base
 		mangle(&cfg)
 		if _, err := toolloop.Run(t.Context(), cfg); err == nil {
 			t.Errorf("%s: Run accepted it", name)
 		}
-	}
-	// The refusal names both fields, because either one is the fix.
-	cfg := base
-	cfg.ToolChoice = llm.ToolChoiceRequired
-	_, err := toolloop.Run(t.Context(), cfg)
-	if err == nil || !strings.Contains(err.Error(), "ToolChoice") ||
-		!strings.Contains(err.Error(), "TerminateAfter") {
-		t.Errorf("err = %v, want a refusal naming ToolChoice and TerminateAfter", err)
 	}
 }
 

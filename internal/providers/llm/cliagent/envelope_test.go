@@ -154,15 +154,18 @@ func TestArgumentsAreAlwaysAMap(t *testing.T) {
 	}
 }
 
-// The corrective re-prompt has to SAY it is corrective, or the model answers
-// with prose a second time and the round is wasted.
-func TestTheRequiredContractDemandsAToolCall(t *testing.T) {
+// THE CONTRACT NEVER DEMANDS A CALL. A request cannot force one, so a phase
+// that must end in a call names it in the conversation and the tool loop asks
+// again; a contract telling the model an empty list is unacceptable would be a
+// second, stricter protocol that only this backend speaks.
+func TestTheContractNeverDemandsAToolCall(t *testing.T) {
 	t.Parallel()
-	if strings.Contains(RenderContract(false), "MUST") {
-		t.Error("the permissive contract demands a tool call")
+	contract := RenderContract()
+	if strings.Contains(contract, "MUST") {
+		t.Errorf("the contract demands a tool call:\n%s", contract)
 	}
-	if !strings.Contains(RenderContract(true), "MUST") {
-		t.Error("the required contract does not demand a tool call")
+	if !strings.Contains(contract, "empty tool_calls list when no tool is needed") {
+		t.Errorf("the contract does not say a call may be omitted:\n%s", contract)
 	}
 }
 

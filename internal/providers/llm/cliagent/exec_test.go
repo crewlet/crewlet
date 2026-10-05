@@ -505,15 +505,14 @@ func TestThePromptReachesTheCLIWithItsContract(t *testing.T) {
 			{Role: llm.RoleSystem, Content: "you are Dev"},
 			{Role: llm.RoleUser, Content: "read the file"},
 		},
-		Tools:      []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
-		ToolChoice: "required",
+		Tools: []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
 	})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	prompt := decodePrompt(t, comp.Content)
 	for _, want := range []string{"## system", "you are Dev", "## user", "read the file",
-		"Available tools", "read_file", "Response contract", "MUST"} {
+		"Available tools", "read_file", "Response contract", "empty tool_calls list"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt is missing %q:\n%s", want, prompt)
 		}

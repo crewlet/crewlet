@@ -204,7 +204,7 @@ const skillCatalogueHeader = "\n## Tool skills" +
 // skillCatalogueReviewHeader is the catalogue's header in Review, which has no
 // load_tool_skill: the loading instruction the other phases get would point
 // the reviewer at a tool it does not have, on a surface whose only tool is its
-// submission and whose tool choice forces that call.
+// submission and whose loop asks again until it makes that call.
 const skillCatalogueReviewHeader = "\n## Tool skills" +
 	"\nHow this company uses specific tools / MCP servers, one line per " +
 	"skill.  Weigh the work you are reviewing against these conventions."

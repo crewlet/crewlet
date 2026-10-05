@@ -665,57 +665,27 @@ func TestToolsCarryTheirSchemaAndACacheBreakpointOnTheLast(t *testing.T) {
 	}
 }
 
-func TestToolChoiceMapping(t *testing.T) {
+// TOOLS ARE OFFERED, NEVER FORCED. With tools present the API's default
+// choice is auto, so none is sent — and a forced `any` is a 400 on Opus 5.5,
+// Sonnet 5.5, Fable 5.1 and Mythos 5.1, and on every Claude model while it is
+// thinking, which the fallback chain does not retry.
+func TestToolsAreOfferedWithNoToolChoice(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		choice llm.ToolChoice
-		want   string // "" means the field must be absent
-	}{
-		{"", "auto"},
-		{"auto", "auto"},
-		{"required", "any"}, // Anthropic spells it `any`
-		{"none", "none"},
-		{"nonsense", ""},
-	} {
-		t.Run("choice="+string(tc.choice), func(t *testing.T) {
-			t.Parallel()
-			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-			p := newProvider(t, url, nil)
-			req := userTurn("hi")
-			req.Tools = []llm.ToolDef{{Name: "t"}}
-			req.ToolChoice = tc.choice
-			if _, err := p.Complete(context.Background(), req); err != nil {
-				t.Fatalf("Complete: %v", err)
-			}
-			body := api.seen()[0].body
-			got, present := body["tool_choice"]
-			if tc.want == "" {
-				if present {
-					t.Fatalf("tool_choice = %v, want the field absent", got)
-				}
-				return
-			}
-			if !present {
-				t.Fatal("tool_choice missing")
-			}
-			if kind := got.(map[string]any)["type"]; kind != tc.want {
-				t.Fatalf("tool_choice type = %v, want %v", kind, tc.want)
-			}
-		})
-	}
-}
-
-func TestToolChoiceIsOmittedWithoutTools(t *testing.T) {
-	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-	p := newProvider(t, url, nil)
-	req := userTurn("hi")
-	req.ToolChoice = "required"
-	if _, err := p.Complete(context.Background(), req); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	if _, present := api.seen()[0].body["tool_choice"]; present {
-		t.Fatal("tool_choice sent with no tools to choose from")
+	for _, tools := range [][]llm.ToolDef{nil, {{Name: "t"}}} {
+		api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+		p := newProvider(t, url, nil)
+		req := userTurn("hi")
+		req.Tools = tools
+		if _, err := p.Complete(context.Background(), req); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		body := api.seen()[0].body
+		if got, present := body["tool_choice"]; present {
+			t.Errorf("%d tools: tool_choice = %v, want the field absent", len(tools), got)
+		}
+		if _, present := body["tools"]; present != (len(tools) > 0) {
+			t.Errorf("%d tools: tools present = %v", len(tools), present)
+		}
 	}
 }
 

@@ -563,10 +563,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: user,
 		rounds: reviewRounds, iteration: round,
-		// ON AUTO, like every phase. The reviewer's only tool is its
-		// submission, so a forced tool_choice once looked free here — but
-		// several current models answer a forced choice with a 400, which
-		// is fatal to the whole turn rather than one round, and the
+		// NEVER FORCED, like every phase — a request has no way to force
+		// a call. The reviewer's only tool is its submission, so a forced
+		// choice once looked free here — but several current models
+		// answer one with a 400, which is fatal to the whole turn rather
+		// than one round, and the
 		// submission named here is what makes a round of prose get asked
 		// again (toolloop.Config.TerminateAfter).
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
@@ -702,9 +703,10 @@ type phaseRun struct {
 	// by one: a round that ends in prose is re-prompted with a corrective
 	// naming them rather than accepted as the phase's end.
 	//
-	// THAT is what makes a phase end in its submission, and there is no
-	// tool_choice beside it: every phase asks the provider on `auto`. A
-	// forced choice was a request some endpoints ignore and several current
+	// THAT is what makes a phase end in its submission, and there is
+	// nothing beside it: a request has no way to force a call
+	// ([llm.Request.Tools]), so the model decides on every round. A forced
+	// choice was a request some endpoints ignore and several current
 	// models refuse with a 400 (Claude Opus 5.5, Sonnet 5.5, Fable 5.1,
 	// Mythos 5.1) — and a 400 is not retried down the chain, so on those
 	// models it failed every review and every onboarding pass before the

@@ -455,8 +455,9 @@ func writtenSubmission() llm.Completion {
 // AN EXECUTOR THAT WROTE ITS SUBMISSION AS TEXT IS RE-ASKED RATHER THAN
 // RESCUED. Before, the phase ended on that round: the outcome was the engine's
 // `incomplete`, and the reviewer read the fenced JSON as "what the agent
-// produced". The loop now asks again on the same `auto` tool choice, naming
-// submit_work, and the model's call is the outcome.
+// produced". The loop now asks again with a message naming submit_work — never
+// a forced call, which a request cannot express — and the model's call is the
+// outcome.
 func TestAnExecutorThatWroteItsSubmissionAsTextIsReAskedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
@@ -475,14 +476,6 @@ func TestAnExecutorThatWroteItsSubmissionAsTextIsReAskedRatherThanRescued(t *tes
 	}
 	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
 		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
-	}
-	// AUTO on both rounds: the executor is never forced, and the corrective
-	// round does not escalate — several current models refuse a forced
-	// tool_choice outright.
-	for i, req := range exec {
-		if req.ToolChoice != llm.ToolChoiceAuto {
-			t.Errorf("request %d tool_choice = %q, want auto", i+1, req.ToolChoice)
-		}
 	}
 	done := completedPhase(t, pub, "execute")
 	if done.RescueFired || done.RoundsUsed != 2 {
@@ -711,12 +704,13 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	}
 }
 
-// THE REVIEWER ASKS ON AUTO, its corrective round included. Its only tool is
-// its submission, so a forced tool_choice once looked free — but Claude Opus
-// 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer a forced choice with a 400,
-// which the chain does not retry, so on those models every review died before
-// the corrective that actually enforces the call could run. The submission it
-// names is what re-asks a reviewer that answered in prose.
+// THE REVIEWER IS NEVER FORCED, its corrective round included — a request has
+// no way to force a call. Its only tool is its submission, so a forced choice
+// once looked free — but Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
+// answer one with a 400, which the chain does not retry, so on those models
+// every review died before the corrective that actually enforces the call
+// could run. The submission it names is what re-asks a reviewer that answered
+// in prose.
 func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{review: []llm.Completion{
@@ -736,11 +730,6 @@ func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
 	}
 	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitReviewTool) {
 		t.Errorf("the second review round opened on %q, want the finishing corrective", last.Content)
-	}
-	for i, req := range reqs {
-		if req.ToolChoice != llm.ToolChoiceAuto {
-			t.Errorf("review request %d tool_choice = %q, want auto", i+1, req.ToolChoice)
-		}
 	}
 }
 

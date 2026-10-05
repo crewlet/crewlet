@@ -624,65 +624,47 @@ func TestUnserialisableArgumentsAreRefusedBeforeTheCall(t *testing.T) {
 	}
 }
 
-func TestToolsAndToolChoice(t *testing.T) {
+// TOOLS ARE OFFERED, NEVER FORCED: no tool_choice goes on the wire, so the
+// API's own default with tools present — auto — is the choice, and an older
+// compatible server has one less field to refuse.
+func TestToolsAreOfferedWithNoToolChoice(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		choice llm.ToolChoice
-		want   any // nil means the field must be absent
-	}{
-		{"", "auto"},
-		{"auto", "auto"},
-		{"required", "required"},
-		{"none", "none"},
-		{"nonsense", nil},
-	} {
-		t.Run("choice="+string(tc.choice), func(t *testing.T) {
-			t.Parallel()
-			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
-			p := newProvider(t, url, nil)
-			req := userTurn("hi")
-			req.ToolChoice = tc.choice
-			req.Tools = []llm.ToolDef{
-				{Name: "with_schema", Description: "d", Parameters: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"x": map[string]any{"type": "string"}},
-					"required":   []any{"x"},
-				}},
-				{Name: "no_schema"},
-			}
-			if _, err := p.Complete(context.Background(), req); err != nil {
-				t.Fatalf("Complete: %v", err)
-			}
-			body := api.seen()[0].body
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	req := userTurn("hi")
+	req.Tools = []llm.ToolDef{
+		{Name: "with_schema", Description: "d", Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"x": map[string]any{"type": "string"}},
+			"required":   []any{"x"},
+		}},
+		{Name: "no_schema"},
+	}
+	if _, err := p.Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	body := api.seen()[0].body
 
-			got, present := body["tool_choice"]
-			if tc.want == nil {
-				if present {
-					t.Fatalf("tool_choice = %v, want the field absent", got)
-				}
-			} else if got != tc.want {
-				t.Fatalf("tool_choice = %v, want %v", got, tc.want)
-			}
+	if got, present := body["tool_choice"]; present {
+		t.Fatalf("tool_choice = %v, want the field absent", got)
+	}
 
-			tools := body["tools"].([]any)
-			if len(tools) != 2 {
-				t.Fatalf("sent %d tools", len(tools))
-			}
-			first := tools[0].(map[string]any)
-			if first["type"] != "function" || dig(t, first, "function", "name") != "with_schema" {
-				t.Fatalf("first tool = %v", first)
-			}
-			if _, ok := dig(t, first, "function", "parameters", "properties").(map[string]any); !ok {
-				t.Fatalf("schema lost: %v", first)
-			}
-			// A tool with no schema still declares an object: several
-			// compatible endpoints reject a function whose parameters are
-			// missing or untyped.
-			second := tools[1].(map[string]any)
-			if dig(t, second, "function", "parameters", "type") != "object" {
-				t.Fatalf("empty schema = %v", second)
-			}
-		})
+	tools := body["tools"].([]any)
+	if len(tools) != 2 {
+		t.Fatalf("sent %d tools", len(tools))
+	}
+	first := tools[0].(map[string]any)
+	if first["type"] != "function" || dig(t, first, "function", "name") != "with_schema" {
+		t.Fatalf("first tool = %v", first)
+	}
+	if _, ok := dig(t, first, "function", "parameters", "properties").(map[string]any); !ok {
+		t.Fatalf("schema lost: %v", first)
+	}
+	// A tool with no schema still declares an object: several compatible
+	// endpoints reject a function whose parameters are missing or untyped.
+	second := tools[1].(map[string]any)
+	if dig(t, second, "function", "parameters", "type") != "object" {
+		t.Fatalf("empty schema = %v", second)
 	}
 }
 

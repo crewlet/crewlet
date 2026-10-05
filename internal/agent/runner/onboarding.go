@@ -252,8 +252,8 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		// the engine, and one a corrective re-prompt fixes for one round.
 		// Naming mark_onboarded here is what arms that corrective, and it
 		// names this tool rather than the whole catalogue the pass carries.
-		// On auto like every phase: see phaseRun.terminateAfter for why a
-		// forced tool_choice is not asked for as well.
+		// Never forced, like every phase: see phaseRun.terminateAfter for
+		// why a forced tool choice is not asked for as well.
 		terminateAfter: []string{MarkOnboardedTool},
 	})
 	if err != nil {

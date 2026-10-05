@@ -378,17 +378,13 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 		}
 	}
 
+	// No tool_choice: with tools present the API's default is auto, which
+	// is the only choice the contract has (see [llm.Request.Tools]) — and
+	// leaving it out is also what every compatible endpoint this backend
+	// serves understands, where an explicit value is one more field an
+	// older server can refuse.
 	if len(req.Tools) > 0 {
 		params.Tools = formatTools(req.Tools)
-		if choice, ok := toolChoice(req.ToolChoice); ok {
-			// OfAuto is the SDK's name for the BARE STRING variant of the
-			// union, which carries "auto", "required" or "none" — not a
-			// field that means auto. The alternatives are the
-			// named-tool forms, which nothing here uses.
-			params.ToolChoice = sdk.ChatCompletionToolChoiceOptionUnionParam{
-				OfAuto: param.NewOpt(choice),
-			}
-		}
 	}
 	return params, nil
 }
@@ -495,21 +491,6 @@ func toolSchema(params map[string]any) shared.FunctionParameters {
 		}
 	}
 	return shared.FunctionParameters(params)
-}
-
-// toolChoice maps the contract's values onto the wire strings. The second
-// return is false when nothing should be sent.
-func toolChoice(choice llm.ToolChoice) (string, bool) {
-	switch choice {
-	case "", llm.ToolChoiceAuto:
-		return string(llm.ToolChoiceAuto), true
-	case llm.ToolChoiceRequired, llm.ToolChoiceNone:
-		// OpenAI's spelling matches the contract's for both.
-		return string(choice), true
-	default:
-		log.Warn("unknown_tool_choice", "value", string(choice))
-		return "", false
-	}
 }
 
 func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error) {

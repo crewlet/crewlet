@@ -184,7 +184,7 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	contains(t, rv, "- `mcp:github` — GITHUB-SUMMARY")
 	excludes(t, rv, "(required — load before use)", "engine rejects calls")
 	// Nor is the reviewer told to LOAD anything: its only tool is its
-	// submission, and its tool choice forces that call, so an instruction
+	// submission, and its loop asks again until it makes that call, so an instruction
 	// naming the loader is an instruction it can only fail.
 	contains(t, rv, "## Tool skills")
 	excludes(t, rv, "load_tool_skill")

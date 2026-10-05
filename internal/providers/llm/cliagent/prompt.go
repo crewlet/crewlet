@@ -50,13 +50,9 @@ func RenderPrompt(req llm.Request) (string, error) {
 		b.WriteString("\n")
 		b.WriteString(catalogue)
 		b.WriteString("\n")
-		// "none" means the caller has offered tools but does not want one
-		// this round, so the contract is the permissive form; "required"
-		// demands a call, and only the doctor's smoke test sends it. Every
-		// phase of a turn asks on auto and gets the permissive form, and the
-		// tool loop asks again when a round of a phase that finishes by a
-		// call ends in prose.
-		b.WriteString(RenderContract(req.ToolChoice == llm.ToolChoiceRequired))
+		// The tool loop asks again when a round of a phase that finishes
+		// by a call ends in prose; the contract itself never demands one.
+		b.WriteString(RenderContract())
 	}
 
 	return strings.TrimSpace(b.String()) + "\n", nil

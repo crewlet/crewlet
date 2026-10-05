@@ -364,11 +364,12 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 	if system != "" {
 		params.System = systemBlocks(system)
 	}
+	// No tool_choice: the API's default with tools present is auto, which
+	// is the only choice the contract has (see [llm.Request.Tools]). A
+	// forced `any` is a 400 on Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos
+	// 5.1, and on every Claude model while it is thinking.
 	if len(req.Tools) > 0 {
 		params.Tools = formatTools(req.Tools)
-		if choice, ok := toolChoice(req.ToolChoice); ok {
-			params.ToolChoice = choice
-		}
 	}
 	return params, nil
 }
@@ -578,25 +579,6 @@ func stringList(value any) []string {
 		return out
 	default:
 		return nil
-	}
-}
-
-// toolChoice maps the contract's four values onto Anthropic's union. The
-// second return is false when nothing should be sent.
-func toolChoice(choice llm.ToolChoice) (sdk.ToolChoiceUnionParam, bool) {
-	switch choice {
-	case "", llm.ToolChoiceAuto:
-		return sdk.ToolChoiceUnionParam{OfAuto: &sdk.ToolChoiceAutoParam{}}, true
-	case llm.ToolChoiceRequired:
-		// Anthropic spells "you must call one of these" as `any`.
-		return sdk.ToolChoiceUnionParam{OfAny: &sdk.ToolChoiceAnyParam{}}, true
-	case llm.ToolChoiceNone:
-		return sdk.ToolChoiceUnionParam{OfNone: &sdk.ToolChoiceNoneParam{}}, true
-	default:
-		// An unrecognised value is the caller's mistake, and guessing at
-		// it would be worse than letting the model decide.
-		log.Warn("unknown_tool_choice", "value", string(choice))
-		return sdk.ToolChoiceUnionParam{}, false
 	}
 }
 

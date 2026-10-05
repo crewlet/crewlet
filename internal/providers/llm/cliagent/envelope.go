@@ -317,7 +317,11 @@ func readArguments(v any) (map[string]any, bool) {
 // tools. A call with NO tools gets no contract at all: auxiliary work
 // (summarisation, the relevance filter) sends a plain prompt and reads a plain
 // answer, with no envelope to get wrong.
-func RenderContract(required bool) string {
+//
+// ONE FORM, the permissive one, because a request never forces a call (see
+// [llm.Request.Tools]): a phase that must end in a call names it in the
+// conversation, and the tool loop asks again when a round ends without it.
+func RenderContract() string {
 	var b strings.Builder
 	b.WriteString("## Response contract\n\n")
 	b.WriteString("Reply with ONE fenced json block and nothing outside it:\n\n")
@@ -325,12 +329,7 @@ func RenderContract(required bool) string {
 	b.WriteString(`{"message": "a short note for the operator, or an empty string", `)
 	b.WriteString(`"tool_calls": [{"name": "tool_name", "arguments": {"argument": "value"}}]}`)
 	b.WriteString("\n```\n\n")
-	if required {
-		b.WriteString("You MUST request at least one tool call. " +
-			"An empty tool_calls list is not an acceptable answer to this turn.\n")
-	} else {
-		b.WriteString("Use an empty tool_calls list when no tool is needed.\n")
-	}
+	b.WriteString("Use an empty tool_calls list when no tool is needed.\n")
 	return b.String()
 }
 

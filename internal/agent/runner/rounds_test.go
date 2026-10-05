@@ -518,8 +518,8 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{review: []llm.Completion{
-		// Round 1: thinks, calls nothing. Some endpoints ignore tool_choice
-		// and some models think-then-stop; this is that round.
+		// Round 1: thinks, calls nothing. Nothing forces a call and
+		// some models think-then-stop; this is that round.
 		text("The work looks fine to me."),
 		submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","notes":"the delivery matches the ask"}`),
