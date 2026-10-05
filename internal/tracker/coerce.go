@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The coercion table: what a field value may BE, decided once at the write.
@@ -587,8 +585,8 @@ func coerceURL(field FieldDef, raw json.RawMessage) (coerced, error) {
 		// The quote is uncut here too, but by a narrower margin than that
 		// doc used to claim: `text` came back from [coerceText] at
 		// [MaxFieldValueBytes] above, and [MaxRefusalQuote] is EQUAL to
-		// that cap rather than wider, so [textcut.Ellipsis] returns it
-		// unchanged. Equal is the whole requirement — a longer value is
+		// that cap rather than wider, so [clip] returns it
+		// whole. Equal is the whole requirement — a longer value is
 		// refused by size before it can reach this line.
 		return coerced{}, invalid("field %q is a url and %q has no "+
 			"scheme — write https://%s", field.Slug, clip(text), text)
@@ -645,17 +643,26 @@ func coerceText(field FieldDef, raw json.RawMessage, limit int) (coerced, error)
 	return coerced{Value: encoded}, nil
 }
 
-// clipRaw is a raw JSON value as a refusal shows it.
-//
-// RUNE-SAFE, through [textcut.Ellipsis], because a refusal is text a model
-// reads and a value cut mid-rune reaches it as a replacement character — the
-// one shared rule [textcut] exists for.
+// clipRaw is a raw JSON value as a refusal shows it — see [clip].
 func clipRaw(raw json.RawMessage) string { return clip(string(raw)) }
 
-// clip shortens what a refusal quotes back.
-func clip(s string) string { return textcut.Ellipsis(s, MaxRefusalQuote) }
+// clip is what a refusal quotes back of a rejected value: the value WHOLE
+// within [MaxRefusalQuote], and past it a statement of its size — never a
+// fragment of it.
+//
+// A fragment is the one thing a quote may not be: the caller reads it as the
+// value it sent, and a refusal naming the opening of a pasted document is a
+// refusal about a value nobody wrote. A size says what went wrong — something
+// far too large for a scalar field — which is all a refusal of such a value
+// has to say.
+func clip(s string) string {
+	if len(s) <= MaxRefusalQuote {
+		return s
+	}
+	return fmt.Sprintf("[a %d-byte value, too large to quote]", len(s))
+}
 
-// MaxRefusalQuote is how much of a rejected value a refusal echoes.
+// MaxRefusalQuote is the largest rejected value a refusal echoes whole.
 //
 // [MaxFieldValueBytes] — which is NOT the largest value these fields hold: a
 // [FieldTextarea] stores four times it, [MaxTextareaBytes]. The cap on its own
@@ -665,7 +672,7 @@ func clip(s string) string { return textcut.Ellipsis(s, MaxRefusalQuote) }
 //   - A refusal that PRESCRIBES a value quotes one [coerceText] has already
 //     accepted at [MaxFieldValueBytes] — [coerceURL] and [coerceEmail] are the
 //     two that parse a value the text cap has bounded. Their input is at most
-//     this cap, so [textcut.Ellipsis] returns it unchanged. EQUAL is the whole
+//     this cap, so [clip] returns it whole. EQUAL is the whole
 //     requirement; a wider cap would buy nothing, because a longer value never
 //     reaches those lines — [coerceText] refuses it first, naming the size.
 //   - Every other site quotes a value that was never a candidate for the field
@@ -674,8 +681,8 @@ func clip(s string) string { return textcut.Ellipsis(s, MaxRefusalQuote) }
 //     that is not a string at all. NOTHING bounds those. Bytes are capped only
 //     where [coerceText] runs, and [MaxFieldValues] and [MaxFieldValueSeq]
 //     bound counts rather than sizes, so a megabyte of prose on a number field
-//     reaches [clip] intact and the cut is real. It costs recognisability and
-//     nothing else, because these refusals only IDENTIFY what was sent and
+//     reaches [clip] intact, and is named by its size rather than quoted. It
+//     costs nothing, because these refusals only IDENTIFY what was sent and
 //     prescribe no value to write back.
 //
 // The larger textarea ceiling never lands in a quote for the same reason: an
