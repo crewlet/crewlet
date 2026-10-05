@@ -354,7 +354,21 @@ providers:
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional, openai only — send reasoning_effort to a reasoning
                                         #   model (default: false). REFUSED on anthropic, where thinking is
-                                        #   not a switch (see "Claude models" below), and on openai-compatible
+                                        #   not a switch (see "Claude models" below), and on openai-compatible.
+                                        #   gpt-4o is not a reasoning model, so this entry sets no
+                                        #   reasoning_effort: with reasoning off it is refused (see `reasoner`)
+                                        # There is NO temperature field, on any type: the phases of a turn
+                                        #   send none, so every round runs at the vendor's own default
+                                        #   (1.0 on OpenAI), and only a call that needs one names it — the
+                                        #   extension judge asks for 0, the knowledge answer and the auxiliary
+                                        #   passes for 0.2. openai sends it on a call that is not reasoning;
+                                        #   anthropic only where the model samples (see "Claude models" below)
+    reasoner:                           # an OpenAI reasoning model
+      type: openai
+      model: gpt-5
+      api_keys:
+        - "${OPENAI_API_KEY}"
+      reasoning: true
       reasoning_effort: high            # optional — how hard the model thinks: low | medium | high | xhigh | max
                                         #   openai: sent while `reasoning` is on (unset: nothing is sent, the
                                         #     endpoint's own default, and no call can lower it, since that
@@ -366,12 +380,6 @@ providers:
                                         #   A CEILING for every call on this entry: a call may ask for less (the
                                         #   extension judge, the knowledge answer, the turn-start filters and every
                                         #   learning pass ask for `low`) and never for more
-                                        # There is NO temperature field, on any type: the phases of a turn
-                                        #   send none, so every round runs at the vendor's own default
-                                        #   (1.0 on OpenAI), and only a call that needs one names it — the
-                                        #   extension judge asks for 0, the knowledge answer and the auxiliary
-                                        #   passes for 0.2. openai sends it on a call that is not reasoning;
-                                        #   anthropic only where the model samples (see "Claude models" below)
     claude:
       type: anthropic
       model: claude-sonnet-5-5          # the request SHAPE follows the model — see "Claude models" below

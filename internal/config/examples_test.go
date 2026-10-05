@@ -11,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
+
+	"gopkg.in/yaml.v3"
 )
 
 // readRepoFile reads a file shipped in this repository, and FAILS when it
@@ -336,6 +338,51 @@ func quickstartCompanyBlock(t *testing.T) string {
 	}
 	t.Fatal("the quickstart no longer contains a company config block")
 	return ""
+}
+
+// THE PROVIDERS REFERENCE VALIDATES. The block under "Providers" in the
+// configuration reference shows every field an entry takes, so it is the one
+// operators copy whole — and nothing read it, so a rule added to the validator
+// (reasoning_effort refused while reasoning is off) left the documented
+// example refused by `crewlet validate` with no test going red. Checked
+// through the whole company path: the reference block replaces the
+// quickstart's providers, so the seats that select `default` still resolve.
+func TestTheProvidersReferenceValidates(t *testing.T) {
+	t.Parallel()
+	page := string(readRepoFile(t, "docs", "getting-started", "configuration.md"))
+	start := strings.Index(page, "\n## Providers\n")
+	if start < 0 {
+		t.Fatal("configuration.md has no Providers section")
+	}
+	m := yamlBlockRE.FindStringSubmatch(page[start:])
+	if m == nil || !strings.HasPrefix(m[1], "providers:") {
+		t.Fatal("the Providers section no longer opens with a providers block")
+	}
+	var reference, company yaml.Node
+	if err := yaml.Unmarshal([]byte(m[1]), &reference); err != nil {
+		t.Fatalf("the Providers reference is not YAML: %v", err)
+	}
+	if err := yaml.Unmarshal([]byte(quickstartCompanyBlock(t)), &company); err != nil {
+		t.Fatalf("the quickstart's company is not YAML: %v", err)
+	}
+	root, providers := company.Content[0], mappingValue(reference.Content[0], "providers")
+	replaced := false
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "providers" {
+			root.Content[i+1], replaced = providers, true
+		}
+	}
+	if !replaced {
+		t.Fatal("the quickstart's company has no providers to replace")
+	}
+	data, err := yaml.Marshal(&company)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if _, err := ParseCompany(data); err != nil {
+		t.Fatalf("the Providers reference in configuration.md is refused by validation "+
+			"— an operator copying it gets a document `crewlet validate` rejects:\n%v", err)
+	}
 }
 
 // wholeRef reports whether a value is exactly one ${VAR} reference, which
