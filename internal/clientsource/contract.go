@@ -95,8 +95,11 @@ var contract = []Entry{
 		"internal/tracker.TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes"},
 	{"CHANGES", ReadLiteral, "internal/tracker.TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase"},
 	{"GROUP_AXES", ReadLiteral, "internal/tracker.TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes"},
-	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsATasksTextAtTheEnginesCaps"},
-	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsATasksTextAtTheEnginesCaps"},
+	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
+		"internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
 
 	// access.ts
 	{"AccessAnswer", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
@@ -223,6 +226,8 @@ var contract = []Entry{
 	{"PageLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
 	{"TaskLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
 	{"LinkedFromStatus", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheBacklinkStatuses"},
+	{"PAGE_TITLE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_MESSAGE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 }
 
 // Contract is every declaration the engine's gates read out of the

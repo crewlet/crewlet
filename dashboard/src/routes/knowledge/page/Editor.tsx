@@ -40,6 +40,8 @@ import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { PAGE_ADDRESS_PREFIX } from "~/contract/links.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { textBudget } from "~/lib/format.ts";
+import { PAGE_MESSAGE_MAX_BYTES } from "~/contract/pages.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { plural } from "~/lib/format.ts";
@@ -81,13 +83,16 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
   // WHY SAVE CANNOT BE PRESSED, one answer for the button and the shortcut
   // alike: a ⌘-Enter that skipped the "moved" clause sent a save the engine
   // could only refuse.
+  const messageBudget = textBudget(message, PAGE_MESSAGE_MAX_BYTES, "a save's note");
   const blocked = merging
     ? "Settle where both edits changed the same lines first."
     : !dirty
       ? "Nothing has changed yet."
       : moved
         ? `Revision ${page.version} was saved since you started — keep editing on top of it first.`
-        : undefined;
+        : messageBudget.over
+          ? `Shorten the note: it is ${messageBudget.bytes} bytes and a save's note holds at most ${messageBudget.limit}.`
+          : undefined;
 
   const press = async () => {
     const result = await save.run(
@@ -246,12 +251,17 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
       <FormField
         label="What changed"
         htmlFor={messageID}
-        helper="One line, kept with the revision — optional."
+        helper={
+          messageBudget.over
+            ? undefined
+            : (messageBudget.line ?? "One line, kept with the revision — optional.")
+        }
+        error={messageBudget.over ? messageBudget.line : undefined}
       >
         <Input
           id={messageID}
           value={message}
-          maxLength={200}
+          error={messageBudget.over}
           onChange={(event) => setMessage(event.target.value)}
         />
       </FormField>

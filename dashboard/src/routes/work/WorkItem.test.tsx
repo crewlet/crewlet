@@ -36,6 +36,7 @@ import type {
   WorkProjectDetail,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
+import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -1271,6 +1272,31 @@ test("a comment is posted on the task", async () => {
       args: { item: "ENG-42", body: "Holding the port for 20s reproduces it." },
     },
   ]);
+});
+
+// AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was
+// sliced to 200 characters — not even the engine's figure, which is 300 bytes —
+// so a long opening line arrived as half a sentence nobody wrote. Past the cap
+// the line under the field says by how much, and Ask is held until it is
+// shortened.
+test("an ask's question is prefilled whole and held past the engine's cap", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  const opening = `Which ${"region ".repeat(60)}do we ship first?`;
+  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+    target: { value: `${opening}\nThe detail.` },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
+  await settle();
+  fireEvent.click(screen.getByRole("checkbox", { name: /choose between options/ }));
+  await settle();
+  const question = screen.getByRole("textbox", {
+    name: "What is being decided",
+  }) as HTMLInputElement;
+  expect(question.value).toBe(opening);
+  expect(document.body.textContent).toContain(
+    `${opening.length} bytes — a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
+  );
 });
 
 /**

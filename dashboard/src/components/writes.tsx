@@ -48,6 +48,8 @@ import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
+import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
+import { textBudget } from "~/lib/format.ts";
 
 /**
  * Hand a task to somebody — or to nobody — with a line saying why.
@@ -506,7 +508,12 @@ function SaveViewDialog({
   const [name, setName] = useState("");
   const [mine, setMine] = useState(false);
   const as = write.access.can ? write.access.as : "";
-  const blocked = name.trim() ? undefined : "Give the view a name first.";
+  const budget = textBudget(name, VIEW_NAME_MAX_BYTES, "a view's name");
+  const blocked = !name.trim()
+    ? "Give the view a name first."
+    : budget.over
+      ? `Shorten the name: it is ${budget.bytes} bytes and a view's name holds at most ${budget.limit}.`
+      : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, because the dialog is a form its one field
     // submits on Enter: a second Enter saved a second view.
@@ -551,12 +558,17 @@ function SaveViewDialog({
         <FormField
           label="Name"
           htmlFor="save-view-name"
-          helper="The tab's label, in the strip above the work."
+          helper={
+            budget.over
+              ? undefined
+              : (budget.line ?? "The tab's label, in the strip above the work.")
+          }
+          error={budget.over ? budget.line : undefined}
         >
           <Input
             id="save-view-name"
             value={name}
-            maxLength={80}
+            error={budget.over}
             onChange={(event) => setName(event.target.value)}
             autoFocus
           />

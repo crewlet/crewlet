@@ -14,7 +14,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { NewTaskSheet, blockedBy, createArgs, startingProject, textBudget } from "./NewTask.tsx";
+import { NewTaskSheet, blockedBy, createArgs, startingProject } from "./NewTask.tsx";
+import { textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
 import { presetForLane } from "~/app/newTask.ts";
 import { Router } from "~/app/router.tsx";

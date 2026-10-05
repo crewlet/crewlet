@@ -93,3 +93,20 @@ export interface PageBacklinks {
   pages_total: number;
   tasks_total: number;
 }
+
+/**
+ * The most a page's TITLE holds, in UTF-8 bytes — `internal/pages`' `MaxTitle`.
+ * Every form that names a page bounds its title here, before the press: the
+ * engine refuses a title past it rather than cutting it, and the fields used to
+ * carry `maxLength={200}`, which the browser applies by cutting a paste —
+ * silently, in characters, short of what the engine would take. Held against the
+ * engine's figure by `internal/pages/client_gate_test.go`.
+ */
+export const PAGE_TITLE_MAX_BYTES = 256;
+
+/**
+ * The most a page save's MESSAGE holds, in UTF-8 bytes — `internal/pages`'
+ * `MaxMessage`. Bounded on the editor for the reason a title is, by the same
+ * gate.
+ */
+export const PAGE_MESSAGE_MAX_BYTES = 256;
