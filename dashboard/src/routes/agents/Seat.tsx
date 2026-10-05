@@ -92,6 +92,7 @@ import {
   findSeat,
   liveRow,
   pillWord,
+  seatRun,
   sentence,
   type SeatTab,
 } from "./seat/profile.ts";
@@ -412,7 +413,7 @@ function Notices({
   if (seat.kind === "human" || !agent) return null;
   const state = activityOf(agent);
   const paused = agent.paused ?? null;
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
+  const sandbox = seatRun(sandboxes, seat);
   const asking = !!sandbox && awaitingPerson(sandbox.status);
   if (!agent.last_error && state !== "stopped" && !asking) return null;
   return (

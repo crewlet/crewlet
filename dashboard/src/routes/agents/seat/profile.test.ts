@@ -12,6 +12,8 @@ import {
   HUMAN_TABS,
   feedRows,
   fortnight,
+  liveRow,
+  seatRun,
   pillWord,
   placementWords,
   sandboxWords,
@@ -25,6 +27,7 @@ import type {
   AgentRow,
   BudgetWindow,
   ConfigRole,
+  SandboxEntry,
   ScheduleRow,
   SeatActivityRow,
   TurnRow,
@@ -48,6 +51,51 @@ describe("the tabs", () => {
     for (const gone of ["model", "cost", "access", "threads"]) {
       expect(AGENT_TABS as readonly string[]).not.toContain(gone);
     }
+  });
+});
+
+describe("which live row is the seat's", () => {
+  const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof liveRow>[2];
+  const row = (id: string, role: string, handle: string) => ({ id, role, handle }) as AgentRow;
+
+  // A ROLE NAME IS SHARED by two unit seats stamped from one template, so the
+  // sibling listed first under it is not this seat's row — the handle says
+  // which one is.
+  test("the seat's own handle wins over an earlier sibling sharing its role name", () => {
+    const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
+    expect(liveRow(agents, "swe-platform", seat)?.id).toBe("b");
+  });
+
+  // A LINK MINTED FROM A CONFIG FIELD addresses the seat by its NAME, and the
+  // resolved seat's handle still finds its own row.
+  test("a seat addressed by name is found by the handle it resolved to", () => {
+    const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
+    expect(liveRow(agents, "SWE", seat)?.id).toBe("b");
+  });
+
+  test("a row the engine named no handle on is matched by role, and only then", () => {
+    expect(liveRow([row("a", "SWE", "")], "swe-platform", seat)?.id).toBe("a");
+    expect(liveRow([row("a", "CTO", "")], "swe-platform", seat)).toBeUndefined();
+    expect(liveRow([row("a", "SWE", "")], "swe-platform", null)).toBeUndefined();
+  });
+});
+
+describe("which coding run is the seat's", () => {
+  const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof seatRun>[1];
+  const run = (turn: string, role: string, handle: string) =>
+    ({ turn_id: turn, role, agent_handle: handle }) as SandboxEntry;
+
+  // A SIBLING'S RUN parked on a question is not this seat's question.
+  test("a run is the seat's by its handle, never a sibling's by the shared role name", () => {
+    expect(seatRun([run("t-core", "SWE", "swe-core")], seat)).toBeNull();
+    const runs = [run("t-core", "SWE", "swe-core"), run("t-mine", "SWE", "swe-platform")];
+    expect(seatRun(runs, seat)?.turn_id).toBe("t-mine");
+  });
+
+  test("the role name is read only where a handle is missing on either side", () => {
+    expect(seatRun([run("t-old", "SWE", "")], seat)?.turn_id).toBe("t-old");
+    const nameless = { name: "SWE", handle: "" } as Parameters<typeof seatRun>[1];
+    expect(seatRun([run("t-core", "SWE", "swe-core")], nameless)?.turn_id).toBe("t-core");
   });
 });
 

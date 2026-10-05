@@ -12,6 +12,7 @@ import { activityOf, roundOf, type OrgIndex, type Seat, type SeatState } from "~
 import type {
   AgentRow,
   BudgetWindow,
+  SandboxEntry,
   ConfigRole,
   SeatActivityDay,
   ScheduleRow,
@@ -72,13 +73,43 @@ export function findSeat(index: OrgIndex, handle: string): Seat | null {
   );
 }
 
-/** The live row for a seat, matched every way the roster and the overlay agree. */
+/**
+ * The live row for a seat, matched every way the roster and the overlay agree.
+ *
+ * BY IDENTITY FIRST, THE ROLE NAME ONLY AFTER. The handle — the one the URL
+ * carried, or the resolved seat's own, since a link minted from a config field
+ * addresses a seat by name — and the row's id name exactly one seat; a role
+ * name is what two unit seats stamped from one template share. One predicate
+ * over all three took the FIRST row that matched any of them, so a sibling
+ * listed earlier under the same role name was this seat's row while its own,
+ * matched by handle, sat later in the roster unread.
+ */
 export function liveRow(
   agents: readonly AgentRow[],
   handle: string,
   seat: Seat | null,
 ): AgentRow | undefined {
-  return agents.find((a) => a.handle === handle || a.id === handle || a.role === seat?.name);
+  const own = seat?.handle ?? "";
+  return (
+    agents.find(
+      (a) => a.handle === handle || a.id === handle || (own !== "" && a.handle === own),
+    ) ?? (seat?.name ? agents.find((a) => a.role === seat.name) : undefined)
+  );
+}
+
+/**
+ * The detached coding run a seat has in flight, by the same rule as
+ * [liveRow]: the run's `agent_handle` names one seat, and its role name is
+ * read only for a run, or a seat, that carries no handle. Matched on the role
+ * alone, a sibling's run parked on a question was drawn on this seat's
+ * profile and peek as THIS seat's question.
+ */
+export function seatRun(sandboxes: readonly SandboxEntry[], seat: Seat): SandboxEntry | null {
+  if (seat.handle) {
+    const own = sandboxes.find((s) => s.agent_handle === seat.handle);
+    if (own) return own;
+  }
+  return sandboxes.find((s) => (!seat.handle || !s.agent_handle) && s.role === seat.name) ?? null;
 }
 
 // ---------------------------------------------------------------------------

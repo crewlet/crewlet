@@ -67,7 +67,7 @@ import { useSandboxes } from "~/lib/store-hooks.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
-import { companyCeilings } from "./seat/profile.ts";
+import { companyCeilings, liveRow, seatRun } from "./seat/profile.ts";
 
 /** How many tool sources the peek names before "+n". */
 const TOOL_CHIPS = 3;
@@ -148,7 +148,7 @@ export function SeatPeek({ handle }: { handle: string }) {
   return (
     <SeatPeekBody
       seat={seat}
-      agent={agents.find((a) => a.role === seat.name)}
+      agent={liveRow(agents, handle, seat)}
       hierarchy={index.hierarchy}
       nameOf={nameOfIn(index)}
     />
@@ -199,7 +199,7 @@ function SeatPeekBody({
   const windows = agent?.budget?.windows ?? [];
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
+  const sandbox = seatRun(sandboxes, seat);
   const place = unitPath(seat.unit);
 
   return (
