@@ -166,13 +166,12 @@ const (
 // and phrased about the RECORD rather than the field, so a caller past a cap
 // got either silence or a number they could not act on.
 //
-// A comment is where that cost is visible, because the read side was built on
-// the promise: the thread page carries [CommentBodyShown] precisely because a
-// whole body may be large, and the single-comment read exists to return the
-// rest. Both are sized against [MaxCommentBody] — so a body stored past it is
-// elided in the page, and refused for weight on the one read that would have
-// returned it, leaving what somebody wrote reachable through no tool at all.
-// The cap is what makes the elision a pointer rather than a loss.
+// A comment is where that cost is visible, because the read side is built on
+// the promise: a thread page carries every comment WHOLE, as many as fit
+// [CommentPageBytes] and at least one, and that only holds while one comment
+// is within [MaxCommentBody] — a body stored past it would be a page heavier
+// than one tool answer may be, refused for weight, leaving what somebody wrote
+// reachable through no tool at all.
 //
 // BYTES rather than runes, because every ceiling downstream of this is a byte
 // budget: a record's own encoded size, and one tool answer's. And pure over

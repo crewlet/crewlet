@@ -944,7 +944,7 @@ over the project's [files](#a-projects-files):
 | Tool | What it does |
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
-| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
+| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** answers one comment by id and nothing else. **Nothing in the answer is cut**: every comment on a thread page is whole — a page holds as many as fit 16 KiB, at least one, and `comments_cursor` continues exactly where it stopped — and the description is whole too. The description is one of the `include` parts (`body`, `comments`, `history`, `links`, `fields`; all five by default), so that each part on its own always fits one answer: a read that names other parts says the description was left out and how large it is, rather than handing over an item that reads as having none. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. It lands in `todo` unless `status` names another — a board lane's **+** files into that lane in the one record, and an unknown status is refused by name. Left without an `assignee` it goes to the project's **default assignee** (the lead's `write_project` setting, read inside the create itself), and lands in triage — where the project's lead is told — only when the project names none, or names a seat that has since left the chart, which the answer's `warnings` say; the answer's `assignee` is who it was filed to. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below, and `ask` (with an optional `decision`) to file the item **as a question** — see [Asking for a decision](#asking-for-a-decision) |
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the project **lead's or a person's own** — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
@@ -1072,7 +1072,13 @@ excerpt under it where there is one. Without it a wake named the kind and
 nothing else — "The status changed by ana." — and the seat had to read the
 task to learn what the status now was, which still left the value it moved
 **from** unrecoverable, because that side is nowhere on the task. A comment is
-the exception: its body is the comment, and the opener has already quoted it.
+the exception: its body is the comment, and the opener has already quoted it —
+**whole**. The card a change leaves in an inbox carries a 600-byte excerpt,
+marked where it was cut, because an inbox is a list read to choose what to
+open; the wake is the one message a seat acts on, so it is given the comment
+(or a new task's description) whole from the change record itself, and never
+the card's excerpt of it. An excerpt somebody stated — a hand-off's reason, a
+purge's line — is shown as the text it is.
 
 A dependency is where the stored form would otherwise show, and so are a
 re-parent and a cascade removal: each records the other item by its **id**,
@@ -1652,16 +1658,21 @@ smallest context the shipped models offer, spent on a single call.
 
 What keeps answers under it is that every collection which grows is paged:
 
-- **Comments** come back twenty at a time, newest page first, each body cut to
-  2 KiB with a marker. `comments_cursor` reads the page before. Twenty comments
-  at their full length would be 640 KiB — ten times the ceiling — for a thread
-  nobody asked to read in full.
-- **The description** comes back cut to 4 KiB with a marker, and `body: true`
-  returns it whole. It is the one value on a detail read that used to carry no
-  bound: a description at its 32 KiB cap would have spent half the ceiling on a
-  part nobody named, and `include` governs the collections *beside* the task,
-  never the task itself — so an item with a long description met a refusal
-  whose own advice could not help.
+- **Comments** come back newest page first, **every one whole**: a page holds
+  as many as fit 16 KiB (at most twenty, at least one), and `comments_cursor`
+  reads the page before. They used to come back twenty at a time with each body
+  cut to 2 KiB — and a review cut there was a review whose "but" never arrived.
+  A long thread is now more pages, never shorter comments.
+- **The description** comes back whole, and is a part of `include` (`body`)
+  like the collections beside it. A description and one comment are each capped
+  at 32 KiB, so together they are a full answer before anything else is said;
+  with the description a part of its own, every part asked for alone fits. It
+  used to come back cut to 4 KiB, with a separate argument to get the rest.
+- **Open asks** in `my_work` come back whole until the block holds 16 KiB of
+  them, the first always; the ones after that carry their decision, their
+  author and the call that answers them, plus `body_not_included` naming the
+  body's size and the `get_work_item` read that returns it — never a body cut
+  to fit.
 - **History** is the fifty most recent changes. `work_activity` is what pages
   properly, with a cursor that survives a reanchor.
 - **Options** page by whole fields: a field whose list does not fit comes back

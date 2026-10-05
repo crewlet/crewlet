@@ -199,3 +199,51 @@ func registry(t *testing.T, handles ...string) *notify.Registry {
 	o.Normalize()
 	return notify.NewRegistry(o)
 }
+
+// A WOKEN SEAT READS THE WHOLE COMMENT, NOT THE CARD'S EXCERPT. The card is a
+// preview cut at MaxExcerpt for a list of notices; the wake prompt is what a
+// seat acts on, and a review cut there is a review whose "but" never arrived.
+// The record carries the comment whole, so the wake is given that — and a
+// stated excerpt (a hand-off's reason) that was never derived from the payload
+// is shown as itself.
+func TestAWokenSeatReadsTheWholeComment(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("Looks good overall. ", 60) + "BUT the migration is missing."
+	wake := tracker.Wake{
+		Kind:    tracker.ChangeComment,
+		Comment: &tracker.Comment{ID: "c-1", Body: long, Author: "ana"},
+		After:   tracker.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "bo"},
+	}.Notify(nil)
+	if wake == nil || !strings.HasSuffix(wake.Excerpt, "…") {
+		t.Fatal("the fixture must produce a cut card excerpt")
+	}
+	record := parseRecord(wake)
+	payload, err := json.Marshal(map[string]any{"comment": tracker.Comment{ID: "c-1", Body: long, Author: "ana"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Mutation = payload
+	routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(
+		t.Context(), delivery(t, record), registry(t, "ana", "bo"))
+	if err != nil || len(routed) == 0 {
+		t.Fatalf("Parse: %d routed, %v", len(routed), err)
+	}
+	if routed[0].Body != long {
+		t.Fatalf("the woken seat read %d bytes of a %d-byte comment", len(routed[0].Body), len(long))
+	}
+
+	// A STATED EXCERPT IS SHOWN AS ITSELF: it was not cut from the payload.
+	stated := parseRecord(&tracker.Notify{
+		Kind: tracker.ChangeComment, Excerpt: "handing this to bo: he owns the schema",
+		Snapshot: tracker.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "bo"},
+	})
+	stated.Mutation = payload
+	routed, err = tracker.NewParser(tracker.ParserOptions{}).Parse(
+		t.Context(), delivery(t, stated), registry(t, "ana", "bo"))
+	if err != nil || len(routed) == 0 {
+		t.Fatalf("Parse: %d routed, %v", len(routed), err)
+	}
+	if routed[0].Body != "handing this to bo: he owns the schema" {
+		t.Fatalf("a stated excerpt was replaced: %q", routed[0].Body)
+	}
+}

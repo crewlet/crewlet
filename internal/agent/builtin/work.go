@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -1192,14 +1191,16 @@ func (t *getWorkItem) Parameters() map[string]any {
 			"include": map[string]any{
 				"type": "array",
 				"description": "Which parts to read beside the item itself: " +
-					"`comments`, `history`, `links`, `fields`. All four by " +
-					"default — name fewer when you only need one, and the " +
-					"answer is smaller. `fields` are the custom-field values " +
-					"with the slug, name and type that explain each, which " +
-					"is what you write back with.",
+					"`body` (its whole description), `comments`, `history`, " +
+					"`links`, `fields`. All five by default — name fewer when " +
+					"you only need one, and the answer is smaller. Every part " +
+					"comes back whole; an item too large to answer at once is " +
+					"refused with a request to name fewer, never cut. `fields` " +
+					"are the custom-field values with the slug, name and type " +
+					"that explain each, which is what you write back with.",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []any{"comments", "history", "links", "fields"},
+					"enum": []any{"body", "comments", "history", "links", "fields"},
 				},
 			},
 			"comments_cursor": map[string]any{
@@ -1209,21 +1210,12 @@ func (t *getWorkItem) Parameters() map[string]any {
 			},
 			"comment": map[string]any{
 				"type": "string",
-				"description": "One comment's id, to read that comment ALONE " +
-					"with its body exactly as it was written. The thread " +
-					"page carries excerpts; this is how you open the one you " +
-					"need after seeing it end in `…`. On its own it answers " +
-					"the item and that comment and nothing else — name " +
-					"`include` as well if you also want the history, the " +
-					"links or the fields.",
-			},
-			"body": map[string]any{
-				"type": "boolean",
-				"description": "Read the item's description in full. Every " +
-					"other read carries the opening of it; this is how you " +
-					"get the rest after seeing one end in `…`. On its own it " +
-					"answers the item and its whole description and nothing " +
-					"else.",
+				"description": "One comment's id, to read that comment ALONE. " +
+					"Every comment on a thread page is already whole; this " +
+					"is for going straight to one you were pointed at. On " +
+					"its own it answers the item and that comment and " +
+					"nothing else — name `include` as well if you also want " +
+					"the history, the links or the fields.",
 			},
 		},
 		"required": []any{"item"},
@@ -1238,38 +1230,36 @@ func (t *getWorkItem) Parameters() map[string]any {
 // part: the answer is then smaller by the parts they did not ask for, rather
 // than by a cap the engine chose for them.
 //
-// `comment` AND `body` ARE THEIR OWN DEFAULTS, and that exception is what
-// keeps either escape hatch usable. Naming one says what the call is for, and
-// both arguments are new enough to have no back-compatible default to honour
-// — where a whole item at its maximum is refused by [ToolAnswerBytes], one
-// whole comment plus fifty history rows plus sixty-four links would be too,
-// so the read that exists to recover a value would meet a refusal telling it
-// to narrow. An explicit `include` still wins: a caller that asks for the
-// comment AND the fields means it.
+// THE DESCRIPTION IS A PART LIKE THE OTHERS, and that is what keeps every part
+// reachable WHOLE. A description and a comment are each capped at 32 KiB, so
+// together they are a full tool answer before anything else is said — and a
+// read that always carried the description would refuse the narrowed call the
+// refusal itself advised. With `body` a part, each part on its own fits, and
+// nothing is ever cut to make room.
 //
-// They do not COMPOSE, and the second return is what says which won: a whole
-// body and a whole comment together are 96 KiB before escaping, against a 64
-// KiB ceiling, so a call naming both would be refused for asking for exactly
-// the two things this pair exists to make reachable. `comment` takes
-// precedence because it is the narrower ask — one value out of a thread,
-// against the item's own description, which the next call gets by dropping it.
+// `comment` IS ITS OWN DEFAULT: naming one comment says what the call is for,
+// so it answers the item and that comment and no other part. An explicit
+// `include` still wins: a caller that asks for the comment AND the fields
+// means it.
 func detailWants(args map[string]any) (tracker.DetailWants, bool, string) {
 	want := tracker.DetailWants{
 		CommentCursor: strings.TrimSpace(argString(args, "comments_cursor")),
 		Comment:       strings.TrimSpace(argString(args, "comment")),
 	}
-	wholeBody := want.Comment == "" && argBool(args, "body")
 	raw, held := args["include"]
 	if !held || raw == nil {
-		if want.Comment != "" || wholeBody {
-			return want, wholeBody, ""
+		if want.Comment != "" {
+			return want, false, ""
 		}
 		want.Comments, want.History = true, true
 		want.Links, want.Fields = true, true
-		return want, wholeBody, ""
+		return want, true, ""
 	}
+	body := false
 	for _, part := range refList(raw) {
 		switch strings.ToLower(part) {
+		case "body":
+			body = true
 		case "comments":
 			want.Comments = true
 		case "history":
@@ -1279,12 +1269,12 @@ func detailWants(args map[string]any) (tracker.DetailWants, bool, string) {
 		case "fields":
 			want.Fields = true
 		default:
-			return want, wholeBody, fmt.Sprintf("get_work_item has no %q to "+
-				"include. The parts are: comments, history, links, fields.",
+			return want, false, fmt.Sprintf("get_work_item has no %q to "+
+				"include. The parts are: body, comments, history, links, fields.",
 				clip(part))
 		}
 	}
-	return want, wholeBody, ""
+	return want, body, ""
 }
 
 func (t *getWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -1304,7 +1294,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if id == "" {
 		return failed("get_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	want, wholeBody, refusal := detailWants(args)
+	want, withBody, refusal := detailWants(args)
 	if refusal != "" {
 		return failed(refusal), nil
 	}
@@ -1333,56 +1323,28 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	case err != nil:
 		return readFailure(GetWorkItemTool, err), nil
 	}
-	// THE CUT IS TAKEN HERE, where the budget is. The tracker answers the
-	// body whole because its other reader — the dashboard — renders a task
-	// page and has no ceiling at all; this is the caller that has to fit
-	// [ToolAnswerBytes], so it is the caller that decides what to carry.
-	// The same division the config diff settled on: the differ reports
-	// everything it found and the surface answering over a wire is the one
-	// that bounds it.
-	detail.Task.Body = shownBody(detail.Task.Body, wholeBody)
-	narrow := "Ask for less with `include`: the parts are comments, history, " +
-		"links and fields."
+	// THE DESCRIPTION IS WHOLE OR ABSENT, NEVER CUT. It used to be cut to
+	// four kilobytes here, with a `body: true` argument to get the rest —
+	// and a model that did not think to ask acted on the opening of a spec
+	// as the spec. It is a part of `include` now, so a caller that did not
+	// ask for it is told it was left out and how large it is, rather than
+	// handed a description that reads as empty.
+	answer := map[string]any{"task": detail}
+	if !withBody && detail.Task.Body != "" {
+		answer["body_not_included"] = fmt.Sprintf("The description (%d bytes) is "+
+			"not in this answer; read it with include=[\"body\"].", len(detail.Task.Body))
+		detail.Task.Body = ""
+		answer["task"] = detail
+	}
 	if !detail.Complete {
-		return jsonAnswer(map[string]any{
-			"task": detail, "incomplete": incompleteNote(detail.Incomplete),
-		}, narrow)
+		answer["incomplete"] = incompleteNote(detail.Incomplete)
 	}
-	return jsonAnswer(detail, narrow)
-}
-
-// TaskBodyShown is how much of a task's description ONE tool answer carries
-// when the caller did not ask for the whole of it.
-//
-// 4 KiB, against [tracker.MaxBody]'s 64 KiB, and the gap is the point: a body
-// at its cap is 64 KiB before JSON escaping, which on its own is already past
-// [ToolAnswerBytes] — so a maximal item was refused by weight with no argument
-// that would narrow it, because `include` governs the collections beside the
-// task and never the task itself. Every part of a detail read is bounded now:
-// the thread is paged, the history is capped, the relation sets are capped,
-// and this was the one value that was not.
-//
-// 4 KiB is roughly a thousand tokens — enough that an ordinary description
-// arrives whole and is never marked at all, while the outliers that would
-// spend a turn's budget become a pointer to `body: true`. It is the same
-// bargain [tracker.CommentBodyShown] strikes one field over, at twice the
-// size because an item has ONE description and a page carries twenty
-// comments.
-const TaskBodyShown = 4 << 10
-
-// shownBody is the description as one tool answer carries it.
-//
-// MARKED when it is cut, which is the half a plain slice leaves out: a body
-// cut at exactly the cap and handed over unmarked reads as a description that
-// ENDED there, and the reader has no way to know there is a `body: true` call
-// worth making. [textcut.Ellipsis] is the tree's one rune-safe cut, so a
-// multi-byte character on the boundary does not reach a model as a
-// replacement character.
-func shownBody(body string, whole bool) string {
-	if whole {
-		return body
+	narrow := "Ask for less with `include`: the parts are body, comments, " +
+		"history, links and fields, and each on its own always fits."
+	if len(answer) == 1 {
+		return jsonAnswer(detail, narrow)
 	}
-	return textcut.Ellipsis(body, TaskBodyShown)
+	return jsonAnswer(answer, narrow)
 }
 
 // ---- create_work_item -------------------------------------------------- //

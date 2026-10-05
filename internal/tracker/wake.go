@@ -941,8 +941,13 @@ func (w Wake) excerpt() string {
 			text = choiceExcerpt(option.Label, strings.TrimSpace(text))
 		}
 	}
-	return textcut.Within(strings.TrimSpace(text), MaxExcerpt)
+	return excerptOf(text)
 }
+
+// excerptOf is the card excerpt a text is shown as — ONE RULE, because the
+// wake prompt recognises an excerpt derived from a text by deriving it again
+// (see [wakeBody]) and two spellings of the rule would stop recognising it.
+func excerptOf(text string) string { return textcut.Within(strings.TrimSpace(text), MaxExcerpt) }
 
 // chosen is the option this wake's comment chose, when its ask carried one.
 func (w Wake) chosen() *DecisionOption {

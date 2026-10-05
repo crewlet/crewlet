@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -263,9 +264,55 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		EventType: string(record.Notify.Kind),
 		Sender:    record.Actor,
 		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
-		Body:      record.Notify.Excerpt,
+		Body:      wakeBody(record),
 		Metadata:  metadata,
 	}
+}
+
+// wakeBody is what a woken seat reads of a change: the WHOLE text the card's
+// excerpt was cut from, wherever the record carries it.
+//
+// The card excerpt is a preview for a list of notices, cut at [MaxExcerpt] and
+// marked, and it points at the whole. The wake prompt is not a list: it is the
+// one message a seat ACTS on, and a comment cut at six hundred bytes there is
+// a comment that ended there — the seat answers the first paragraph of a
+// review and never reads the "but" in the second. The record already carries
+// the comment, or the created task, whole in its payload, so the prompt is
+// given that.
+//
+// RECOGNISED BY DERIVATION, never guessed: the whole text is used exactly when
+// the record's excerpt is what [excerptOf] makes of it. An excerpt somebody
+// stated — a hand-off's reason, a purge's line — is not derived from the
+// payload, does not match, and is shown as the text it is.
+func wakeBody(record MutationRecord) string {
+	excerpt := record.Notify.Excerpt
+	if excerpt == "" {
+		return ""
+	}
+	var carried struct {
+		Comment *Comment `json:"comment"`
+		Body    string   `json:"body"`
+	}
+	if json.Unmarshal(record.Mutation, &carried) != nil {
+		return excerpt
+	}
+	candidates := []string{}
+	if c := carried.Comment; c != nil {
+		body := strings.TrimSpace(c.Body)
+		if answered := record.Notify.Answered; answered != nil && answered.Choice != nil {
+			body = choiceExcerpt(answered.Choice.Label, body)
+		}
+		candidates = append(candidates, body)
+	}
+	if record.Notify.Kind == ChangeCreated {
+		candidates = append(candidates, strings.TrimSpace(carried.Body))
+	}
+	for _, whole := range candidates {
+		if whole != "" && excerptOf(whole) == excerpt {
+			return whole
+		}
+	}
+	return excerpt
 }
 
 // askedDecision is the decision a record's NEW ask carries, or nil.

@@ -244,3 +244,28 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 		t.Error("a read failure was classed as the reader's refusal of an answer")
 	}
 }
+
+// AN AMBIGUOUS ANSWER'S CANDIDATES ARE WHOLE OR BY REFERENCE. They were the
+// first hundred and twenty characters of each, unmarked, so two questions that
+// opened alike read as one question asked twice — and the refusal exists to
+// tell them apart.
+func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
+	t.Parallel()
+	opening := strings.Repeat("About the release plan for next week, ", 4)
+	e := &tracker.ErrAmbiguousAnswer{Task: "ENG-1", Actor: "ana", Asks: []tracker.AskCandidate{
+		{Comment: "c-1", Author: "bo", Body: opening + "should we ship on Friday?"},
+		{Comment: "c-2", Author: "cy", Body: opening + "who signs off the migration?"},
+		{Comment: "c-3", Author: "di", Question: "Pick a region", Body: "context"},
+		{Comment: "c-4", Author: "ed", Body: strings.Repeat("long ", 4000)},
+	}}
+	got := ambiguousText(e)
+	for _, want := range []string{"should we ship on Friday?", "who signs off the migration?",
+		"Pick a region", `get_work_item(item="ENG-1", comment="c-4")`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "long long") || strings.Contains(got, "…") && !strings.Contains(got, "… and more") {
+		t.Errorf("a candidate was cut rather than carried whole or referenced:\n%s", got)
+	}
+}
