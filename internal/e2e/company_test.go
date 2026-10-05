@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // A golden company: two seats, one scripted model, one embedded broker.
@@ -85,6 +87,104 @@ const tickInterval = 25 * time.Millisecond
 // boots with it too: a value read off a clock per node or per boot would be
 // exactly the bug the chart's activation stamp exists to rule out.
 var harnessActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+
+// middayZone names a fixed-offset zone whose local time is within half an hour
+// of noon when it is called, spelled as a company's `timezone` takes it.
+//
+// FOR A CASE WHOSE PREMISE IS ONE COMPANY DAY. A token budget's windows are cut
+// on the company's clock at the instant each charge is made (ADR-0019), so a
+// turn that runs across the company's midnight charges its later rounds to the
+// next day — correctly. A case that sizes a ceiling to bite partway through one
+// turn, or reads back the day a refusal was stamped in, therefore holds only
+// while no midnight falls inside it, and on the wall clock and UTC one falls
+// inside some run every night: the onboarding round charged at 23:59:59.95 and
+// the execute round at 00:00:00.03 each fit a fresh day, nothing is refused,
+// and the case waits out its budget for a refusal that never comes. With the
+// company's local time at noon when the case starts, the nearest boundary of
+// every window — a day, an ISO week and a month all turn over at a local
+// midnight — is eleven and a half hours away, which no case here outlives.
+//
+// THE ZONE MOVES AND THE CLOCK DOES NOT. Pinning the engine's clock to a
+// synthetic noon was the other way to put the run mid-day, and it splits the
+// process in two: the engine shares it with the API, the live projection and
+// the coordination store, which all read the wall clock — the projection
+// judges whether a refused window has ended against it, and the store stamps a
+// refusal with it — so the gate would count a day the screens beside it had
+// already seen end, a node no deployment produces. Moving where the company's
+// day falls keeps every reader on the one calendar a deployment runs: the
+// gate, the park, the live meter, the budgets answer, a refusal's stamp and
+// the case's own read, each on the wall clock and the company's zone. A case
+// reads the zone back from the engine ([engine.Engine.Zone]) rather than
+// loading this name itself, so it judges the day on the clock the gate cut.
+//
+// Etc/GMT names count WEST as positive, so Etc/GMT-5 is five hours ahead of
+// UTC; every offset this takes, -12 to +12, has one.
+func middayZone() string { return middayZoneAt(time.Now()) }
+
+// middayZoneAt is [middayZone] at the instant now.
+func middayZoneAt(now time.Time) string {
+	now = now.UTC()
+	sinceMidnight := now.Sub(now.Truncate(24 * time.Hour)).Hours()
+	switch ahead := int(math.Round(12 - sinceMidnight)); {
+	case ahead > 0:
+		return fmt.Sprintf("Etc/GMT-%d", ahead)
+	case ahead < 0:
+		return fmt.Sprintf("Etc/GMT+%d", -ahead)
+	default:
+		return "Etc/GMT"
+	}
+}
+
+// companyMidday is the zone e cuts its company's windows on, failing the case
+// unless the company's local time is mid-day: the premise [middayZone] is
+// there to make true, held where the case depends on it, so a company whose
+// `timezone` did not take fails at its first line rather than on the one night
+// a midnight falls inside its turn.
+func companyMidday(t *testing.T, e *engine.Engine) *time.Location {
+	t.Helper()
+	zone := e.Zone()
+	if local := time.Now().In(zone); local.Hour() < 11 || local.Hour() > 12 {
+		t.Fatalf("the company's clock reads %s on %s as the case starts; the case "+
+			"holds only inside one company day, which it is guaranteed only from "+
+			"mid-day (middayZone)", local.Format("15:04"), zone)
+	}
+	return zone
+}
+
+// THE ZONE IS MID-DAY WHATEVER THE HOUR. [middayZone] is what keeps the cases
+// that need one company day inside one, and an offset it got wrong would put
+// the company's midnight back inside the very runs it is there for — so a whole
+// day is asked, every name is loaded the way a company's `timezone` is, and the
+// local time each gives must be within half an hour of noon.
+func TestMiddayZoneIsMiddayAtEveryHour(t *testing.T) {
+	t.Parallel()
+	zones := map[string]*time.Location{}
+	day := time.Date(2026, time.October, 5, 0, 0, 0, 0, time.UTC)
+	// A prime step, so the instants asked fall on every second of a minute
+	// as well as every minute of an hour.
+	for at := day; at.Before(day.Add(24 * time.Hour)); at = at.Add(37 * time.Second) {
+		name := middayZoneAt(at)
+		zone, loaded := zones[name]
+		if !loaded {
+			var err error
+			if zone, err = period.LoadZone(name); err != nil {
+				t.Fatalf("at %s UTC the zone is %q, which a company cannot run on: %v",
+					at.Format("15:04:05"), name, err)
+			}
+			zones[name] = zone
+		}
+		local := at.In(zone)
+		noon := time.Date(local.Year(), local.Month(), local.Day(), 12, 0, 0, 0, zone)
+		if off := local.Sub(noon); off < -30*time.Minute || off > 30*time.Minute {
+			t.Fatalf("at %s UTC, %s reads %s — %v from noon, want within half an hour",
+				at.Format("15:04:05"), name, local.Format("15:04:05"), off)
+		}
+	}
+	if len(zones) != 25 {
+		t.Errorf("a day asked for %d zones, want one per whole-hour offset from -12 to +12",
+			len(zones))
+	}
+}
 
 // node is a running node: engine and API in one process, wired as
 // `crewlet run` wires them.

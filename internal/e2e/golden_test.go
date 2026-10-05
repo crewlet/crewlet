@@ -903,10 +903,13 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		doc = strings.Replace(doc, "      slack_user_id: U0FOUNDER\n",
 			"      slack_user_id: U0FOUNDER\n"+
 				"      crewlet_operator_id: "+replayOperator+"\n", 1)
-		return doc + "\ntoken_budget: {day: 100000000}\n"
+		// MID-DAY ON THE COMPANY'S CLOCK, so the refusal waited for below
+		// is stamped in the day it is read back in ([middayZone]).
+		return doc + "\ntimezone: " + middayZone() + "\ntoken_budget: {day: 100000000}\n"
 	}, func(boot *config.Bootstrap) {
 		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Token: replayToken}}
 	})
+	zone := companyMidday(t, n.engine)
 
 	waitFor(t, "the seats to be claimed", func() bool {
 		held := n.engine.Node().Host().Held()
@@ -930,7 +933,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	cfoID, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("cfo"))
 	waitFor(t, "the seat's own ceiling to refuse a charge", func() bool {
 		got, err := budgets.Used(t.Context(), coord.AgentScope(cfoID.String()),
-			coord.WindowsAt(time.Now(), time.UTC))
+			coord.WindowsAt(time.Now(), zone))
 		return err == nil && !got.In(period.Day).RefusedAt.IsZero()
 	})
 
@@ -1184,11 +1187,19 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// ONE round of the turn's own loop, and not for a second — so the cap
 	// bites partway through the turn rather than before it starts, which is
 	// the case a pre-flight check would miss.
+	//
+	// ALL OF IT IN ONE COMPANY DAY, which is what the arithmetic assumes: the
+	// gate cuts each round's windows when the round is charged, so with the
+	// company's midnight between the onboarding round and the execute round
+	// each lands in a day with room and nothing is ever refused. The company
+	// runs on a zone whose local time is noon as the case starts
+	// ([middayZone]).
 	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
 	limit := aux + round + round/2
 	n := startWith(t, func(doc string) string {
-		return doc + fmt.Sprintf("\ntoken_budget: {day: %d}\n", limit)
+		return doc + fmt.Sprintf("\ntimezone: %s\ntoken_budget: {day: %d}\n", middayZone(), limit)
 	})
+	zone := companyMidday(t, n.engine)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
 	})
@@ -1201,10 +1212,10 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// org's write and the seat's (a charge is two writes, org first), and
 	// failed a correct engine on a loaded machine with the seat at 0.
 	//
-	// Read against the company's day, which is UTC for a company that names
-	// no clock: the day the cap is written for.
+	// Read against the company's day, on the zone the engine cuts it on: the
+	// day the cap is written for.
 	budgets := n.engine.Backends().Fleet
-	today := func() coord.Windows { return coord.WindowsAt(time.Now(), time.UTC) }
+	today := func() coord.Windows { return coord.WindowsAt(time.Now(), zone) }
 	waitFor(t, "the company cap to refuse a charge", func() bool {
 		rows, err := budgets.Usage(t.Context(), today())
 		if err != nil {
