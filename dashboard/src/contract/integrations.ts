@@ -205,9 +205,11 @@ export interface IntegrationsAnswer {
   traffic_known: boolean;
   /** Where the ONE window every count covers starts — `inbound`, `skipped`,
    *  `coalesced` and `last_at` alike — which ends when the answer was read:
-   *  the oldest delivery when the delivery page held every one, or just after
-   *  the oldest a full page reached. Null when no delivery was counted (no
-   *  window, and every count is 0) or no event log could be read. */
+   *  the 30-day history floor when no delivery lies past the delivery page
+   *  (an empty page included: nothing delivered in 30 days is a count, and
+   *  the drops and merges of those 30 days are counted beside it), or just
+   *  after the oldest delivery a capped page reached. Null only when no event
+   *  log could be read. RFC 3339 to the microsecond, as `last_at` is. */
   traffic_since: string | null;
   /** Which nodes the traffic counts were read from — a delivery is stored on
    *  whichever node received it — or null when no store could be read. */

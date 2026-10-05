@@ -4467,27 +4467,35 @@ wired, and what has come through it.
 Every count is over **one window**, from `traffic_since` (inclusive) up to the
 instant the answer was read (exclusive), and `traffic_since` is what makes the
 counts a measurement: "42 inbound" alone could be an hour or a year; "42 since
-Tuesday" is not. The window is the deliveries', which are **page-capped, not
-time-bounded** — the most recent page of the delivery log, at most 400
-deliveries across the fleet, however long that spans:
+Tuesday" is not. The window is the widest one whose every delivery the answer
+holds. The deliveries are **page-capped, not time-bounded** — the most recent
+page of the delivery log, at most 400 deliveries across the fleet — and which
+window that is depends on whether any delivery may lie past the page, never
+on how long the page is:
 
-- when the page comes back **short of 400**, it holds every delivery the
-  30-day history keeps, and `traffic_since` is the **oldest delivery** on it;
-- when the page comes back **full**, older deliveries exist that it does not
-  hold, so the window can reach no further back than the page does:
-  `traffic_since` is **one microsecond after the oldest delivery the page
-  reached**. Every later delivery is on the page, but one sharing that
-  instant may not be, so the deliveries at that instant are left out of the
-  window rather than counted short.
+- **Nothing lies past the page** when no node holds 400 or more deliveries in
+  the 30-day history, no node's reply had to be cut to fit the transport, and
+  the fleet holds no more than 400 between them. The page is then every
+  delivery the history keeps — it can hold exactly 400, two nodes holding 200
+  each — and the window is **the whole history**: `traffic_since` is 30 days
+  before the instant the answer was read, so that instant is `traffic_since`
+  plus 30 days. An empty page is this case too: no delivery in 30 days is a
+  count of `0` over those 30 days, beside the drops and merges of the same
+  30 days.
+- **Deliveries may lie past the page** otherwise — the fleet holds more than
+  400, or one node holds 400 or more (its own page filled, which it reads as
+  more behind it even at exactly 400), or a node's reply was cut to fit the
+  transport (a page that can then be shorter than 400). The window reaches no
+  further back than the page does: `traffic_since` is **one microsecond after
+  the oldest delivery the page reached**. Every later delivery is on the page,
+  but one sharing that instant may not be, so the deliveries at that instant
+  are left out of the window rather than counted short.
 
-`traffic_since` is `null` when no delivery was counted. No window is named
-then, and `inbound`, `skipped` and `coalesced` are all `0` — the counts of an
-empty window, never of the whole history, since drops counted over a month
-beside a delivery count of zero would describe a different stretch of time
-from it. It is also `null` when no event log could be read, which
+`traffic_since` is `null` only when no event log could be read, which
 `traffic_known: false` says. It is written to the store's own resolution
-(RFC 3339 with fractional seconds), because an edge cut to the second would
-name a window up to a second wider than the one counted.
+(RFC 3339 with fractional seconds, at most microseconds), because an edge cut
+to the second would name a window up to a second wider than the one counted;
+`last_at` is written the same way.
 
 Integrations had close to no surface at all before this. The dashboard
 branded an event once it had already been accepted and routed, so every
@@ -4513,7 +4521,7 @@ trace anywhere except the provider's own delivery UI.
       "inbound": 128,
       "skipped": 30,
       "coalesced": 2,
-      "last_at": "2026-06-08T07:31:10Z"
+      "last_at": "2026-06-08T07:31:10.052914Z"
     }
   ],
   "tools": [
@@ -4549,7 +4557,8 @@ arrived" on its own cannot tell a working integration from one whose every
 delivery reaches nobody — "128 arrived, 30 dropped, 2 merges" can, and a seat
 draining a thread's backlog as one turn stops looking like a seat that ignored
 twelve messages. All three cover the window above, and so does `last_at`, the
-newest delivery in it (`null` when it holds none).
+newest delivery in it (`null` when it holds none), never earlier than
+`traffic_since`.
 
 The two outcome counts are **three-valued** like the secret fields: `null`
 means this node could not read its event log, and reporting that as `0` would
@@ -4566,8 +4575,11 @@ under the third-party app its `notification_source` tag names; one written
 before the tag existed names none and is not counted. The window is one for
 the whole answer, so a surface whose deliveries leave no inbound row —
 Mattermost, which the engine reads over a websocket rather than receiving at a
-route — has its outcomes counted over the window the other surfaces'
-deliveries name, and none counted when no delivery names one.
+route, so its `inbound` is always `0` — has its outcomes counted over the
+window the other surfaces' deliveries leave: the whole 30 days whenever
+nothing lies past the page (a company receiving no webhook at all included),
+and only as far back as the page reaches when the webhook surfaces' traffic
+fills it.
 
 `secret_present` and `secret_usable` are **two different facts**, and the gap
 between them is a silent outage.

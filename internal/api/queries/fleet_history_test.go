@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -159,6 +160,55 @@ func TestIntegrationCountsAreTheFleets(t *testing.T) {
 	}
 	if !coverage.Complete || len(coverage.Nodes) != 2 {
 		t.Errorf("coverage %+v, want both nodes, complete", coverage)
+	}
+}
+
+// A PAGE OF EXACTLY THE PAGE'S SIZE CAN HOLD EVERY DELIVERY, and its window is
+// then the whole history.
+//
+// The window turns on whether the fleet may hold deliveries past the page,
+// never on the page's length: two nodes holding half a page each fill neither
+// node's own page, so the merged page — exactly [queries.MaxEventPage] long —
+// is every delivery the fleet has. The window is the month, and a drop older
+// than the oldest delivery is counted in it.
+//
+// Mutation: read a page of exactly the page's size as capped, and the window
+// starts a microsecond past the oldest delivery — which goes uncounted, with
+// the drop before it.
+func TestAFullPageFromTwoNodesIsTheWholeHistory(t *testing.T) {
+	t.Parallel()
+	fleet, a, b := twoNodes(t)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	fleet.Clock = func() time.Time { return at }
+	oldest := at
+	for i := range queries.MaxEventPage {
+		log := a
+		if i%2 == 1 {
+			log = b
+		}
+		oldest = at.Add(-time.Duration(i+1) * time.Minute)
+		if err := log.Append(t.Context(), store.EventRecord{ID: fmt.Sprintf("w%03d", i),
+			Type: "webhook:push", Source: "gitlab", Category: "webhook", Summary: "push",
+			Time: oldest}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Append(t.Context(), store.EventRecord{ID: "dropped-early", Type: "notification_skipped",
+		Source: "engine", Category: "notification", Summary: "skipped", Time: oldest.Add(-time.Hour),
+		Tags: map[string]string{"notification_source": "gitlab"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	if got, want := body["traffic_since"], at.Add(-store.EventHistory).Format(time.RFC3339Nano); got != want {
+		t.Errorf("traffic_since = %v, want the history floor, %s — the page held every delivery", got, want)
+	}
+	gitlab := surfacesOf(t, body)["gitlab"]
+	if gitlab["inbound"] != float64(queries.MaxEventPage) || gitlab["skipped"] != float64(1) {
+		t.Errorf("gitlab inbound %v, skipped %v — want all %d deliveries and the drop before "+
+			"the oldest of them", gitlab["inbound"], gitlab["skipped"], queries.MaxEventPage)
 	}
 }
 

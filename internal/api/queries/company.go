@@ -205,8 +205,13 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		// Rendered as a relative time, so an absent one has to be absent
 		// rather than the zero instant — which would print as 1970.
+		//
+		// TO THE STORE'S OWN RESOLUTION, like the window it lies in
+		// (`traffic_since`): cut to the second, the newest delivery read as
+		// arriving before the window that holds it began whenever the two
+		// shared a second.
 		if at, ok := seen.last[kind]; ok {
-			row["last_at"] = at.UTC().Format(time.RFC3339)
+			row["last_at"] = at.UTC().Format(time.RFC3339Nano)
 		} else {
 			row["last_at"] = nil
 		}
@@ -438,19 +443,20 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// WHERE THE WINDOW EVERY COUNT COVERS STARTS — inbound, skipped and
 		// coalesced alike — which ends at the instant the answer was read.
 		// The deliveries are a capped page, so a count means something only
-		// beside the window it covers; see [deliveryWindow]. Null when no
-		// delivery was counted, so no window is named and every count is
-		// zero, or when no store could be read (`traffic_known` false).
+		// beside the window it covers; see [deliveryWindow]. Null only when
+		// no store could be read (`traffic_known` false): every listing
+		// that answered names a window, an empty one included.
 		"traffic_since": nil,
 		// WHICH NODES THE COUNTS WERE READ FROM, or null when no store
 		// could be read — the same case `traffic_known` false reports.
 		"coverage": seen.coverage,
 	}
-	if !seen.since.IsZero() {
+	if seen.known {
 		// TO THE STORE'S OWN RESOLUTION, not the second: the window
-		// starts at a delivery's own microsecond, or one past a full
-		// page's oldest, and a second-truncated edge would name a window
-		// up to a second wider than the one counted.
+		// starts at the history floor under the read's own instant, or
+		// one microsecond past a capped page's oldest delivery, and a
+		// second-truncated edge would name a window up to a second wider
+		// than the one counted.
 		body["traffic_since"] = seen.since.UTC().Format(time.RFC3339Nano)
 	}
 	return body, nil
@@ -541,8 +547,7 @@ type traffic struct {
 
 	// since is where the window every count covers starts; it ends at the
 	// instant the deliveries were read at. See [deliveryWindow] for where,
-	// and why. Zero when no delivery was counted — there is then no window,
-	// and every count is zero — or when nothing was measured.
+	// and why. Zero only when nothing was measured.
 	since time.Time
 
 	// coverage is which nodes the counts were read from. A delivery is
@@ -569,13 +574,6 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 		skipped: map[string]int{}, coalesced: map[string]int{},
 		since: deliveryWindow(listing), coverage: &coverage,
 	}
-	if out.since.IsZero() {
-		// NO DELIVERY, SO NO WINDOW, and the outcome counts are those of
-		// an empty one. Not the whole history: the counts beside a
-		// delivery count of zero would then cover a month the deliveries
-		// do not, which is the disagreement this window exists to end.
-		return out
-	}
 	for _, row := range listing.Rows {
 		// ONLY THE WINDOW'S: a delivery at the oldest instant a capped
 		// page reached may have siblings past the page, and one written
@@ -593,41 +591,60 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 	return out
 }
 
-// deliveryWindow is where the window a page of deliveries covers starts, or
-// the zero instant when the page counted no delivery and so names no window.
-// Its top is the instant the page was read at, [eventfan.Listing.At].
+// deliveryWindow is where the window a page of deliveries covers starts. Its
+// top is the instant the page was read at, [eventfan.Listing.At].
 //
 // THE PAGE IS CAPPED, NOT TIME-BOUNDED — the newest [MaxEventPage] across the
 // fleet — so "42 inbound" alone could span an hour or a year, and naming the
-// window is what makes it a measurement. Two cases, each the window whose
-// EVERY delivery the page holds:
+// window is what makes it a measurement. The window is the widest one whose
+// EVERY delivery the page holds, and which of two it is turns on
+// [eventfan.Listing.More] — whether the fleet may hold deliveries past the
+// page — and never on the page's length, which says neither:
 //
-//   - a page that did not fill holds every delivery the history keeps, and
-//     the window starts at the OLDEST of them, inclusive — the first instant
-//     anything arrived. Rows written after the read are past the window's
-//     top and do not count as its oldest;
-//   - a page that came back full covers what lies AFTER the oldest instant it
-//     reached. Every delivery newer than its last row is on it — the merge
-//     stops at the newest point any node's page stopped at
+//   - a page with nothing past it holds every delivery the 30-day history
+//     keeps on every node that answered: no node's own page filled or was cut
+//     to fit the transport, and the merge did not cut it at its size. So the
+//     window is the WHOLE HISTORY, from the floor under the read's instant —
+//     its rows or none. Such a page can hold exactly [MaxEventPage], two nodes
+//     holding half each; and when it holds none, zero deliveries is exactly
+//     what the month held, which is a count like any other. Started at the
+//     oldest delivery instead, the window narrowed nothing the deliveries
+//     counted — none arrived before it — and cut away what the outcome counts
+//     beside them had, so a company whose drops and merges come over a
+//     websocket (Mattermost, which writes no delivery row at all) saw its
+//     month of them reported over a stretch somebody else's last delivery
+//     chose, or as zero when nobody's webhook had fired;
+//   - a page with deliveries past it covers what lies AFTER the oldest
+//     instant it reached. Every delivery newer than its last row is on it —
+//     the merge stops at the newest point any node's page stopped at
 //     ([eventfan.MergeListing]) — but a delivery sharing that last row's
 //     instant may lie past the cut, so the window starts one tick of the
-//     store's clock (a microsecond) after it, and the rows at that instant
-//     are not counted rather than counted short.
+//     store's clock (a microsecond) after it, and the rows at that instant are
+//     not counted rather than counted short. Such a page can be shorter than
+//     [MaxEventPage], when a node's reply was cut to fit the transport, and it
+//     can be a page with nothing past it after all — a node holding exactly
+//     its page reads as one that filled — when it costs the window only the
+//     deliveries at its oldest instant, and names the window it counted.
 //
 // The outcome counts are then ASKED over exactly this window rather than
 // taken from a page of their own, which is the point of naming it.
 func deliveryWindow(listing eventfan.Listing) time.Time {
+	at := listing.At
+	if !listing.More {
+		return at.Add(-store.EventHistory)
+	}
 	var oldest time.Time
 	for _, row := range listing.Rows {
-		if !listing.More && !row.Time.Before(listing.At) {
-			continue
-		}
 		if oldest.IsZero() || row.Time.Before(oldest) {
 			oldest = row.Time
 		}
 	}
-	if oldest.IsZero() || !listing.More {
-		return oldest
+	// A PAGE SAYING MORE LIES PAST ROWS IT DOES NOT HOLD names nothing it
+	// covers, and nor does one whose every row was written after the read:
+	// the window is then the empty one at the read's own instant, rather
+	// than one starting past its own top.
+	if oldest.IsZero() || !oldest.Before(at) {
+		return at
 	}
 	return oldest.Add(time.Microsecond)
 }

@@ -1561,11 +1561,13 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	// Two inbound deliveries on the edge's own category…
-	for i, src := range []string{"gitlab", "gitlab", "mattermost"} {
+	// Two inbound deliveries on the edge's own category — GitLab's, since
+	// only a webhook route writes one: Mattermost arrives over a websocket
+	// and leaves no delivery row, whatever becomes of its posts…
+	for i := range 2 {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: "w" + strconv.Itoa(i), Type: "webhook:push", Time: now,
-			Source: src, Category: "webhook", Summary: "push",
+			Source: "gitlab", Category: "webhook", Summary: "push",
 		}); err != nil {
 			t.Fatalf("append: %v", err)
 		}
@@ -1682,18 +1684,22 @@ func appendOutcome(t *testing.T, log *store.EventLog, id, kind, app string, at t
 // own: a company whose seats merge and drop busily fills that page in an hour
 // while its deliveries go back weeks, so the counts beside `inbound` covered a
 // different — usually much shorter — stretch of time. Here two deliveries,
-// the oldest three weeks back, sit beside 400 merges and four drops. The
-// window is the deliveries': from the oldest of them, inclusive, to the
-// instant the answer was read. So the drop AT the oldest delivery counts, the
-// one a second before it does not — though it is well inside the history —
-// nor does the one at the instant itself, and every one of the 400 merges does,
-// though they outnumber the deliveries two hundred to one.
+// the oldest three weeks back, sit beside 400 merges and six drops. The page
+// holds every delivery there is, so the window is the whole history: from the
+// floor under the instant the answer was read, inclusive, to that instant. So
+// the drops at the oldest delivery and before it count — nothing arrived
+// before it, and starting the window there would only have cut what became of
+// the deliveries — and so does the one at the floor, while the one a
+// microsecond under it does not, nor does the one at the instant itself; and
+// every one of the 400 merges does, though they outnumber the deliveries two
+// hundred to one. The newest delivery's `last_at` is written to the window's
+// own resolution.
 //
 // Mutation: count the outcomes from a page of `notification` events again, and
-// a merge falls off it while the drop at the instant comes on; count them over
-// the whole history, and the drop before the first delivery is counted; ask the
-// count without its top edge, and the drop at the instant is; count deliveries
-// past the window's top, and the one written at the instant is.
+// a merge falls off it while the drop at the instant comes on; start the window
+// at the oldest delivery, and the drops before it are lost; ask the count
+// without its top edge, and the drop at the instant is counted; count
+// deliveries past the window's top, and the one written at the instant is.
 func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -1713,8 +1719,11 @@ func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testi
 			t.Fatalf("append: %v", err)
 		}
 	}
+	floor := at.Add(-store.EventHistory)
 	appendOutcome(t, log, "at-oldest", "notification_skipped", "gitlab", oldest)
 	appendOutcome(t, log, "before-oldest", "notification_skipped", "gitlab", oldest.Add(-time.Second))
+	appendOutcome(t, log, "at-floor", "notification_skipped", "gitlab", floor)
+	appendOutcome(t, log, "under-floor", "notification_skipped", "gitlab", floor.Add(-time.Microsecond))
 	appendOutcome(t, log, "inside", "notification_skipped", "gitlab", at.Add(-3*time.Hour))
 	appendOutcome(t, log, "at-instant", "notification_skipped", "gitlab", at)
 	for i := range queries.MaxEventPage {
@@ -1726,60 +1735,72 @@ func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testi
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg }, Events: fleet,
 	}, "integrations", nil))
-	if got, want := body["traffic_since"], oldest.Format(time.RFC3339Nano); got != want {
-		t.Errorf("traffic_since = %v, want the oldest delivery, %s — the page held every one", got, want)
+	if got, want := body["traffic_since"], floor.Format(time.RFC3339Nano); got != want {
+		t.Errorf("traffic_since = %v, want the history floor, %s — the page held every delivery", got, want)
 	}
 	rows := surfacesOf(t, body)
 	if got := rows["gitlab"]["inbound"]; got != float64(2) {
 		t.Errorf("gitlab inbound = %v, want the two deliveries before the instant read", got)
 	}
-	if got, want := rows["gitlab"]["last_at"], at.Add(-2*time.Hour).Format(time.RFC3339); got != want {
+	if got, want := rows["gitlab"]["last_at"], at.Add(-2*time.Hour).Format(time.RFC3339Nano); got != want {
 		t.Errorf("gitlab last_at = %v, want the newest delivery in the window, %s", got, want)
 	}
-	if got := rows["gitlab"]["skipped"]; got != float64(2) {
-		t.Errorf("gitlab skipped = %v, want 2 — the drops at the oldest delivery and inside "+
-			"the window, and neither the one before it nor the one at the instant", got)
+	if got := rows["gitlab"]["skipped"]; got != float64(4) {
+		t.Errorf("gitlab skipped = %v, want 4 — the drops at and before the oldest delivery, "+
+			"at the floor and inside the window, and neither the one under the floor nor the "+
+			"one at the instant", got)
 	}
 	if got := rows["mattermost"]["coalesced"]; got != float64(queries.MaxEventPage) {
 		t.Errorf("mattermost coalesced = %v, want all %d merges in the window", got, queries.MaxEventPage)
 	}
 }
 
-// NO DELIVERY NAMES NO WINDOW, and the outcome counts are those of an empty
-// one: zero, never the whole history's. Counted over the month a delivery
-// count of zero does not cover, a row would read "nothing arrived, 3 dropped" —
-// the two numbers describing different stretches of time, which is what the
-// shared window exists to end. `traffic_since` is null, and the measurement is
-// still a measurement: `traffic_known` stays true and the counts are 0, not
-// null, which means the log could not be read.
+// NO DELIVERY IS A COUNT OVER THE WHOLE HISTORY, and so are the outcomes beside
+// it.
 //
-// Mutation: ask the count with no bottom edge when no delivery was counted, and
-// the drops are.
-func TestNoDeliveryNamesNoWindowAndCountsNoOutcomes(t *testing.T) {
+// An empty page that says nothing lies past it is not "no window": it says
+// every node that answered holds no delivery in the thirty days, which is a
+// count of zero over exactly that month — and the drops and merges of that
+// month are counted beside it. This is the Mattermost row's ordinary case,
+// since a websocket writes no delivery row: counted as an empty window, a
+// Mattermost-only company read "Dropped 0" over a month its routing gate
+// dropped everything in. `traffic_since` names the floor under the instant
+// the answer was read, to the microsecond.
+//
+// Mutation: name no window when the page is empty, and every drop and merge is
+// zero beside a null `traffic_since`.
+func TestNoDeliveryCountsTheOutcomesOfTheWholeHistory(t *testing.T) {
 	t.Parallel()
 	log := openStore(t).Events()
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	fleet := eventfan.Solo("node-a", log)
 	fleet.Clock = func() time.Time { return at }
-	appendOutcome(t, log, "drop-1", "notification_skipped", "gitlab", at.Add(-24*time.Hour))
-	appendOutcome(t, log, "drop-2", "notification_skipped", "gitlab", at.Add(-time.Hour))
+	floor := at.Add(-store.EventHistory)
+	appendOutcome(t, log, "drop-1", "notification_skipped", "mattermost", floor.Add(time.Hour))
+	appendOutcome(t, log, "drop-2", "notification_skipped", "mattermost", at.Add(-time.Hour))
+	appendOutcome(t, log, "drop-old", "notification_skipped", "mattermost", floor.Add(-time.Second))
 	appendOutcome(t, log, "merge", "notifications_coalesced", "mattermost", at.Add(-time.Hour))
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg }, Events: fleet,
 	}, "integrations", nil))
-	if body["traffic_known"] != true || body["traffic_since"] != nil {
-		t.Errorf("traffic_known %v, traffic_since %v — want a measurement naming no window",
-			body["traffic_known"], body["traffic_since"])
+	if body["traffic_known"] != true {
+		t.Fatalf("traffic_known = %v, want an empty page reported as measured", body["traffic_known"])
 	}
-	for kind, row := range surfacesOf(t, body) {
-		for _, field := range []string{"inbound", "skipped", "coalesced"} {
-			if got := row[field]; got != float64(0) {
-				t.Errorf("%s %s = %v, want 0 — nothing is counted over a window nobody named",
-					kind, field, got)
-			}
-		}
+	if got, want := body["traffic_since"], floor.Format(time.RFC3339Nano); got != want {
+		t.Errorf("traffic_since = %v, want the history floor, %s", got, want)
+	}
+	rows := surfacesOf(t, body)
+	mattermost := rows["mattermost"]
+	if mattermost["inbound"] != float64(0) || mattermost["skipped"] != float64(2) ||
+		mattermost["coalesced"] != float64(1) {
+		t.Errorf("mattermost inbound %v, skipped %v, coalesced %v — want no delivery, and the "+
+			"month's two drops and its merge beside it, never the drop under the floor",
+			mattermost["inbound"], mattermost["skipped"], mattermost["coalesced"])
+	}
+	if got := rows["gitlab"]["skipped"]; got != float64(0) {
+		t.Errorf("gitlab skipped = %v, want 0 — a measured zero over the month", got)
 	}
 }
 
@@ -1834,6 +1855,60 @@ func TestACappedDeliveryPageNamesTheWindowItsOutcomesAreCountedOver(t *testing.T
 	if got := rows["gitlab"]["skipped"]; got != float64(1) {
 		t.Errorf("gitlab skipped = %v, want 1 — the drop inside the window, and neither "+
 			"the one at the page's oldest instant nor the one under it", got)
+	}
+}
+
+// THE NEWEST DELIVERY LIES INSIDE THE WINDOW IT IS COUNTED IN, to the
+// microsecond.
+//
+// `last_at` is the newest delivery in the window `traffic_since` names, and the
+// window's edge is written to the store's own resolution — so `last_at` has to
+// be too. Cut to the second, the newest delivery read as arriving before the
+// window holding it began whenever the two shared a second. Here a capped
+// page's every delivery lies inside one second: the window starts a
+// microsecond past the oldest it reached, and the newest is a few hundred
+// microseconds later, in the same second.
+//
+// Mutation: write `last_at` to the second, and it reads before `traffic_since`.
+func TestTheNewestDeliveryIsNeverBeforeItsWindow(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	fleet := eventfan.Solo("node-a", log)
+	fleet.Clock = func() time.Time { return at }
+	second := at.Add(-time.Minute)
+	var newest time.Time
+	for i := range queries.MaxEventPage + 1 {
+		newest = second.Add(time.Duration(i+1) * time.Microsecond)
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook",
+			Summary: "push", Time: newest,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	raw, _ := body["traffic_since"].(string)
+	since, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("traffic_since %v: %v", body["traffic_since"], err)
+	}
+	if since.Truncate(time.Second) != second {
+		t.Fatalf("traffic_since = %s, want an edge inside the deliveries' one second", raw)
+	}
+	gitlab := surfacesOf(t, body)["gitlab"]
+	if got, want := gitlab["last_at"], newest.Format(time.RFC3339Nano); got != want {
+		t.Errorf("gitlab last_at = %v, want the newest delivery to the microsecond, %s", got, want)
+	}
+	if rawLast, _ := gitlab["last_at"].(string); rawLast != "" {
+		if last, err := time.Parse(time.RFC3339Nano, rawLast); err != nil || last.Before(since) {
+			t.Errorf("gitlab last_at %s reads before traffic_since %s (%v) — the newest "+
+				"delivery outside the window holding it", rawLast, raw, err)
+		}
 	}
 }
 
