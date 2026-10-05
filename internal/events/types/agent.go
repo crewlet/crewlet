@@ -146,11 +146,13 @@ type ToolExecution = map[string]any
 // `content` — and `declined: true` on a round that answered with prose and NO
 // tool call in a phase that had to end in one (its loop declares a submission
 // tool that finishes it — `submit_work`, `submit_review`, `mark_onboarded`, a
-// worker's `submit_result` — or the caller required a call). Absent otherwise,
-// never `false`. Whether the engine asked again needs no second key: a later
-// round exists exactly when it did, and a declined round that is the phase's
-// last is one the corrective's bound or the round budget left unanswered — the
-// phase ended without its submission, which is what `rescued` then says.
+// worker's `submit_result`). Absent otherwise, never `false`. Whether the
+// engine asked again needs no second key: a later round exists exactly when it
+// did, and a declined round that is the phase's last is one the corrective's
+// bound or the round budget left unanswered — the phase ended without its
+// submission, which the executor's and the reviewer's `rescue_fired` then says
+// (a worker has no such flag: its status is `no_result`, and onboarding simply
+// ends unmarked).
 //
 // It exists because `response` is the JOIN of every round's turn, and a join
 // cannot be undone: the parts are separated by a blank line and prose contains

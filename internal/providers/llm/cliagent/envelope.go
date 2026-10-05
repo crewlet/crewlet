@@ -15,11 +15,9 @@ type Envelope struct {
 	ToolCalls []EnvelopeCall
 	// Parsed is false when nothing in the reply was an envelope. The
 	// caller then hands the whole reply back as assistant content with no
-	// tool calls, and the tool loop's own corrective re-prompt takes over
-	// in every phase that has to end in a call — the finishing corrective
-	// in a phase that finishes by a submission, the forced one where the
-	// caller required a call: a malformed reply costs one round, it never
-	// fails a turn.
+	// tool calls, and the tool loop's finishing corrective takes over in
+	// every phase that finishes by a call, naming its submission: a
+	// malformed reply costs one round, it never fails a turn.
 	Parsed bool
 }
 

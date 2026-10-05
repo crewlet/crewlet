@@ -742,10 +742,12 @@ as an answer of nothing rather than dressing it as an outage:
 - **The tool loop asks again.** In every phase that finishes by a call —
   the executor, the reviewer, onboarding, a worker — the round gets the
   finishing corrective naming the phase's submission, up to twice in a
-  row, the same as a round that answered in prose. A loop that neither
-  finishes by a call nor requires one gets a single corrective naming
-  what went wrong instead: there, a second identical nudge would be just
-  the same prompt against the same model.
+  row on one allowance with a round that answered in prose: there, a
+  round without the call ends the phase only into its rescue, so a
+  second identical send is worth its round. A loop that does not finish
+  by a call gets a single corrective naming what went wrong instead:
+  there a prose answer is a legitimate finish, whatever the model writes
+  next is the result, and there is no rescue for a second nudge to beat.
 - **It is counted.** `empty_answer_rounds` on the phase record is the
   number of rounds that reached nobody. A seat whose model habitually
   answers nothing shows up there, and in `crewlet llm doctor`, which

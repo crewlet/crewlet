@@ -468,13 +468,20 @@ the tool, verbatim (one tool shown; several are offered as "one of …"):
 > done, call `submit_work` now with that report as its arguments; if
 > something is still left to do, call the tool that does it.
 
-It is bounded by `maxForcedToolRetries` = **2** per run of declined
-rounds, and each corrective is a full priced round charged like any
-other — against the executor's 24 rounds that is at most two; against
-the reviewer's four (`reviewRounds`) it leaves one for the submission; a
-worker with `max_turns: 1` has no round left to read one and gets none.
-A model that still answers in prose after two correctives ends the
-phase without its submission, and the rescue below takes over.
+It is bounded by `maxFinishingCorrectives` = **2** per run of rounds
+without the call — prose or nothing at all, one allowance for both — and
+each corrective is a full priced round charged like any other: against
+the executor's 24 rounds that is at most two; against the reviewer's four
+(`reviewRounds`) it leaves one for the submission; a worker with
+`max_turns: 1` has no round left to read one and gets none. The second
+send is the same message as the first, and is still worth its round:
+in a phase that finishes by a call, a round without the call cannot end
+the phase except into its rescue — `incomplete` for the executor, a
+whole extra executor round for the reviewer, an unmarked seat that
+re-runs onboarding on every turn — so the second attempt is weighed
+against that rather than against nothing. A model that still has not
+called after two correctives ends the phase without its submission, and
+the rescue below takes over.
 
 **Every phase asks on `auto`, and the corrective never escalates it.**
 The executor, the reviewer, onboarding and every worker send `auto`, on
@@ -488,15 +495,12 @@ tool as the documented replacement, which is exactly the corrective. A
 reviewer and onboarding, which used to ask for a forced call, failed
 outright on those models — every turn at its review, and the onboarding
 pass on every turn the seat took — before the corrective that actually
-enforces the call could run. The loop is what enforces the call. A loop
-that required a call and named **no** terminator would get the older
-**forced corrective**, which lists the tools on offer; no phase is that
-loop any more:
+enforces the call could run. The loop is what enforces the call — and
+it refuses a configuration that asks for a forced call without naming
+the call that finishes the phase, since that loop could only end by
+exhausting its rounds.
 
-> You must respond by calling one of these tools, not with prose:
-> `<tool>`, `<tool>`.
-
-Before either existed, a reviewer that thought and stopped fell through
+Before the finishing corrective, a reviewer that thought and stopped fell through
 to the rescue, which sends the whole turn back for another executor
 round — a whole extra turn spent on the one failure a model reliably
 fixes when it is asked again.
@@ -512,7 +516,7 @@ submission, and `rescue_fired` says what the engine wrote instead.
 
 **No corrective is sent that nothing will read.** On the last round of a
 phase's budget no round follows, so the loop appends no corrective there
-— finishing, forced or empty alike — rather than leave an unanswered
+— finishing or empty alike — rather than leave an unanswered
 message at the end of the recorded conversation. Nor does the extension
 judge read one: it is asked only about a phase that was still *asking
 for tools* when its budget ran out, and a phase whose last round declined
@@ -531,11 +535,10 @@ a model that spent its whole output budget on hidden reasoning. It costs
 real tokens (Claude Code on `haiku` bills hundreds for one) and reaches
 nobody, and the loop used to take the same branch it takes for a model
 that answered. It now re-prompts once, naming what went wrong — but only in a
-loop that neither finishes by a call nor requires one, which today is
-only a worker whose submission tool a granted tool of the same name
-shadowed. Every phase that finishes by a call gets the
-**finishing corrective** above instead, and a caller that required a call
-the forced one: both are the better instruction for a phase whose output
+loop that does not finish by a call, which today is only a worker whose
+submission tool a granted tool of the same name shadowed. Every phase
+that finishes by a call gets the **finishing corrective** above instead,
+on its allowance: that is the better instruction for a phase whose output
 *is* a call, and the empty-answer corrective — "write it in the response
 itself, or call a tool" — would steer a submission phase straight into
 its rescue. The empty round is still counted either way:
@@ -544,14 +547,16 @@ its rescue. The empty round is still counted either way:
 > no tool. Whatever you worked out, write it in the response itself, or
 > call a tool to act on it.
 
-The bound is **one**, not two, and the asymmetry is deliberate. Naming
-the tools is a genuinely new instruction to a model that misread the
-surface, so a second attempt earns its round; a second identical nudge
-after an empty answer is the same prompt against the same model, which is
-the retry [the provider contract](subscription-llm-backends.md) refuses
-to do. One also fits inside the smallest budget any caller declares —
-`workers.max_turns` is validated at ≥ 1 — so the corrective can never eat
-a delegated task's whole allowance.
+The bound is **one**, not two, and the asymmetry with the finishing
+corrective is keyed on the loop's **contract**, not on the round. Where
+the empty-answer corrective fires, a prose answer is a legitimate finish,
+so whatever the model writes next *is* the phase's result: there is no
+rescue for a second nudge to be weighed against, and a phase that still
+answers nothing simply ends with nothing, which its record counts. In a
+loop that finishes by a call the same empty round draws on the finishing
+allowance of two, because there the alternative is the rescue. Neither
+corrective is ever sent on a round with no round after it, so neither can
+eat a delegated task's whole allowance.
 
 Both allowances bound a **run** of rounds that produced nothing, not the
 phase's lifetime: a round that emits a tool call clears them, so the
@@ -576,7 +581,7 @@ The **judge** takes no tools at all — it answers in two lines of text,
 and a tool on its surface would invite a model to call it and answer
 nothing. It does not run in the tool loop, so none of the correctives
 above apply to it. Inside the loop, a text answer is a legitimate finish
-only where the loop names no submission and requires no call.
+only where the loop names no submission.
 
 **No submission never goes silent.** An executor that ran out of rounds, or
 stopped and kept answering in prose through both correctives, has produced
