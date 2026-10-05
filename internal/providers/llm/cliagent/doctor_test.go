@@ -113,8 +113,9 @@ func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
 }
 
 // The one failure nothing else catches: the CLI answers, and answers with
-// PROSE. A seat on such a provider burns a corrective round every single
-// turn, and the config looks perfect.
+// PROSE. Every phase a seat runs on such a provider spends corrective rounds
+// asking again — and ends without its submission when the model never manages
+// one — while the config looks perfect.
 func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })

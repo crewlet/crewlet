@@ -1918,16 +1918,15 @@ func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
 	if results[2].Status != subagent.StatusOK {
 		t.Errorf("an unrelated task was skipped too: %+v", results[2])
 	}
-	// The skipped task never reached a model. Asserted on what was ASKED
-	// rather than on a count of calls: how many rounds the gather task took
-	// to give up is the tool loop's business — it is reminded once that
-	// prose is not a submission — and a count would make this a test of
-	// that rather than of the skip.
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// The skipped task never reached a model. The other two did: `unrelated`
+	// once, and `gather` three times — its prose was not a submission, so
+	// the loop asked it twice more to finish before it ended `no_result`.
+	if p.count() != 4 {
+		t.Errorf("%d model calls, want 4 — a skipped task must cost nothing", p.count())
+	}
 	for _, req := range p.seen {
 		if strings.Contains(userText(req), "reconcile") {
-			t.Error("the skipped task reached a model — a skipped task must cost nothing")
+			t.Error("the skipped dependent reached a model")
 		}
 	}
 }
@@ -1989,11 +1988,44 @@ func TestAWorkerThatNeverSubmittedIsNotGivenAnAnswer(t *testing.T) {
 		t.Errorf("an answer was synthesised: %+v", res.Output)
 	}
 	// The prose is still handed back: rounds the parent paid for are worth
-	// reading even when the last step was skipped. Contained rather than
-	// equal, because the loop reminds the worker once that prose is not a
-	// submission and its answer to that is part of the same transcript.
-	if !strings.Contains(res.Text, "here is my thinking, at length") {
+	// reading even when the last step was skipped. All three of them — the
+	// first answer and the two the finishing correctives drew out.
+	if strings.Count(res.Text, "here is my thinking, at length") != 3 {
 		t.Errorf("the worker's prose was discarded: %q", res.Text)
+	}
+	if res.Rounds != 3 {
+		t.Errorf("rounds = %d, want 3 — one answer plus the two correctives' bound", res.Rounds)
+	}
+}
+
+// A WORKER THAT WROTE ITS ANSWER AS TEXT IS ASKED TO SUBMIT IT, rather than
+// handed back as `no_result`. Its loop finishes by `submit_result`, so prose is
+// not a finish there however complete it reads — and a parent whose worker
+// answered in the wrong channel would otherwise re-run the whole task.
+func TestAWorkerThatWroteItsAnswerAsTextIsAskedToSubmitIt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+		if n == 1 {
+			return say("```json\n{\"result\":\"the incident was a bad deploy\"}\n```", 1, 1), nil
+		}
+		return answer("the incident was a bad deploy", 1, 1), nil
+	}}
+	res := one(t, baseConfig(t, w, p), request())
+	if res.Status != subagent.StatusOK || res.Output["result"] != "the incident was a bad deploy" {
+		t.Fatalf("status = %q output = %+v, want the submitted answer", res.Status, res.Output)
+	}
+	if p.count() != 2 || res.Rounds != 2 {
+		t.Fatalf("%d model calls over %d rounds, want 2", p.count(), res.Rounds)
+	}
+	second := p.seen[1].Messages
+	if last := second[len(second)-1]; last.Role != llm.RoleUser ||
+		!strings.Contains(last.Content, "`"+subagent.SubmitTool+"`") {
+		t.Errorf("the second round opened on %+v, want the corrective naming %s",
+			last, subagent.SubmitTool)
+	}
+	if len(res.Narration) == 0 || !res.Narration[0].Declined {
+		t.Errorf("narration = %+v, want the prose round marked declined", res.Narration)
 	}
 }
 

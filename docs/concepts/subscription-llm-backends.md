@@ -203,6 +203,16 @@ it, and the *same turn* resumes — possibly in another process on another
 node, days later. Nothing about that is new for agent mode; see
 [Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
 
+**The engine's correctives do not reach an agent-mode run.** The rounds
+are the CLI's own, so the engine's tool loop never sees one end in prose
+and cannot ask the model again: a run whose model writes its report as
+text instead of calling `submit_work` over the bridge comes back with no
+submission, and the phase is rescued as `incomplete` straight away. In
+text mode the same reply is a round the engine's loop re-prompts, naming
+`submit_work`, up to twice (see [Turn Engine](turn-engine.md#round-cap-extension-judge)).
+What an agent-mode run has instead is its brief, which tells it the run
+ends with that call.
+
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
@@ -628,9 +638,11 @@ call list it can read no call from — strings for entries, nameless
 objects, a string or a number where the list belongs — makes the reply
 not an envelope at all, because reading it as one would report a model
 that asked for no tools when it asked for some. When nothing parses, the whole reply
-becomes assistant content with no tool calls, and the tool loop's
-existing `tool_choice="required"` corrective re-prompt takes over. A
-malformed reply costs a round; it never crashes a turn.
+becomes assistant content with no tool calls, and in every phase that
+has to end in a call the tool loop's corrective re-prompt takes over —
+the finishing corrective naming the phase's submission, which keeps the
+request's own `tool_choice` (the executor's is `auto`). A malformed reply
+costs a round; it never crashes a turn.
 
 **A call with no tools gets no contract.** Auxiliary work
 (summarisation, the relevance filter) sends a plain prompt and reads a
@@ -725,12 +737,13 @@ as an answer of nothing rather than dressing it as an outage:
 
 - **The round is charged.** An empty answer costs tokens, and it used to
   be the one outcome that spent them without ever reaching a budget.
-- **The tool loop asks again, once.** A round that produced neither prose
-  nor a tool call gets one corrective re-prompt naming what went wrong.
-  One and not two: unlike a declined tool call, a second identical nudge
-  is just the same prompt against the same model. A phase that required a
-  tool call gets that corrective instead — `call one of these tools` is
-  the better instruction and already covers it.
+- **The tool loop asks again.** In every phase that finishes by a call —
+  the executor, the reviewer, onboarding, a worker — the round gets the
+  finishing corrective naming the phase's submission, up to twice in a
+  row, the same as a round that answered in prose. A loop that neither
+  finishes by a call nor requires one gets a single corrective naming
+  what went wrong instead: there, a second identical nudge would be just
+  the same prompt against the same model.
 - **It is counted.** `empty_answer_rounds` on the phase record is the
   number of rounds that reached nobody. A seat whose model habitually
   answers nothing shows up there, and in `crewlet llm doctor`, which

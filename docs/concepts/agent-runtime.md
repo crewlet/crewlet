@@ -93,7 +93,9 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    └── Ends by calling submit_work: outcome, summary, deliveries,
          checked against the engine's own record of the turn — every
          round of it, so a delivery an earlier round made is citable.
-         Prose before it is answered with one reminder, not accepted
+         A round that ends in prose instead is not an end: the loop
+         asks again, naming submit_work, at most twice in a row, before
+         the phase is rescued as incomplete
 
 3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends

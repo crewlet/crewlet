@@ -479,13 +479,15 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 			return fmt.Sprintf(
 				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
 					"tokens billed), so it spent its whole answer on hidden reasoning. "+
-					"Seats on this provider will burn a corrective round and then "+
-					"produce nothing: point this entry at a stronger model",
+					"Every phase a seat runs on this provider will spend corrective rounds "+
+					"asking again and then end without its submission: point this entry "+
+					"at a stronger model",
 				comp.OutputTokens)
 		}
 		return fmt.Sprintf(
-			"failed — the CLI answered but produced no parseable tool call, so seats on "+
-				"this provider will burn a corrective round every turn. It said: %q",
+			"failed — the CLI answered but produced no parseable tool call, so every phase "+
+				"a seat runs on this provider will spend a corrective round asking again, and "+
+				"end without its submission whenever the model never manages one. It said: %q",
 			textcut.Ellipsis(strings.TrimSpace(comp.Content), 200))
 	}
 	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)

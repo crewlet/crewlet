@@ -40,11 +40,18 @@
 //     between a call and its result, which a provider rejects and a model
 //     reads as the tool's output; before the fence it would be read by a
 //     turn that is about to end. See internal/agent/steer.
-//   - A FORCED TOOL CALL IS ENFORCED, NOT REQUESTED. Some endpoints ignore
-//     tool_choice and some models think-then-stop without emitting the call,
-//     which silently defeats a round the caller required to end in a tool. A
-//     bounded corrective re-prompt is the difference between "the model
-//     declined" and "the phase produced nothing and said it was fine".
+//   - A PHASE THAT FINISHES BY A CALL IS ASKED AGAIN WHEN A ROUND ENDS
+//     WITHOUT ONE. A loop that declares terminators ([Config.TerminateAfter])
+//     has said how it ends — a successful call to one of them — so a round
+//     of prose there is not a finish, whatever tool_choice the request
+//     carried: it is a model that wrote its report where nobody reads it
+//     (a submission's arguments typed out as a JSON block is the measured
+//     case). The same holds for a caller that required a call. Some
+//     endpoints ignore tool_choice, some models think-then-stop, and some
+//     reject a forced choice outright, so the call is ENFORCED HERE rather
+//     than requested of the provider: a bounded corrective re-prompt naming
+//     what finishes the phase is the difference between "the model declined"
+//     and "the phase produced nothing and said it was fine".
 package toolloop
 
 import (
@@ -63,13 +70,22 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// maxForcedToolRetries bounds the corrective re-prompts issued when the caller
-// required a tool call and the model answered with prose.
+// maxForcedToolRetries bounds the corrective re-prompts issued when a round
+// ended without the call the loop needed: the FINISHING corrective, for a loop
+// that declares terminators, and the FORCED one, for a caller that required a
+// call and declared none. One counter for both, because they answer one
+// failure — a model that keeps answering in prose — and a loop only ever
+// issues one of them.
 //
 // Two, because the caller's round budget is the harder bound and the rescue
 // and judge loops run with a budget of two themselves. A model that cannot
 // emit the call in three attempts will not emit it in ten, and each attempt is
-// a full priced round.
+// a full priced round, charged like any other. Against the budgets that arm
+// it: the executor's default 24 rounds lose at most 2 to a run of declines;
+// the reviewer's 4 keep 1 for the submission the corrective asks for; a worker
+// with `max_turns: 1` has no round left to read a corrective at all, and gets
+// none — the bound below is never allowed to spend a round that does not
+// exist.
 //
 // PER RUN OF DECLINED ROUNDS, not per phase — the count clears the moment a
 // round emits a call. The claim it rests on is about a model that keeps
@@ -100,29 +116,6 @@ const maxForcedToolRetries = 2
 // with nineteen rounds unspent — one round before the message it had just said
 // it was about to send.
 const maxEmptyAnswerRetries = 1
-
-// maxUnsubmittedRetries bounds the corrective re-prompts issued when a phase
-// that ENDS BY SUBMITTING — one that declared [Config.TerminateAfter] — answered
-// with prose instead, before any submission ran.
-//
-// The executor's case, and the costliest prose a loop can accept. Its
-// contract is "end by calling submit_work", so a round of prose and no call
-// is not a finish but a submission written as text: the measured one was the
-// submission's own JSON in a code fence, after a correct work-item comment.
-// Accepted as a finish, it went to the rescue path — an engine-written
-// `incomplete` the reviewer is told nobody stands behind — and the reviewer
-// sent the whole turn back for another executor round, which is the price the
-// forced corrective above was introduced to stop a reviewer paying for the
-// same failure.
-//
-// One, for [maxEmptyAnswerRetries]' budget reason: a worker's `max_turns` is
-// validated at >= 1 and routinely set to 2, and the corrective must never eat
-// a delegated task's allowance. A model told by name which call it owes and
-// still answering in prose will not be talked into it by a second sentence.
-//
-// PER RUN OF DECLINED ROUNDS, like the other two: a round that emitted a call
-// clears it.
-const maxUnsubmittedRetries = 1
 
 // Surface is the set of tools a phase runs against.
 //
@@ -379,6 +372,19 @@ type Narration struct {
 	Reasoning string
 	// Content is the visible prose of that turn.
 	Content string
+
+	// Declined marks a round that answered with prose and NO tool call in
+	// a loop that had to end in one — it declares terminators, or the
+	// caller required a call. Recorded on the round rather than inferred
+	// downstream, because a reader cannot tell this round from an ordinary
+	// last word: both are prose with no calls, and only the loop knows the
+	// phase it belonged to could not finish that way.
+	//
+	// Whether the loop asked again is not a second flag: a later round
+	// exists exactly when it did. A declined round that is the phase's
+	// LAST is one the bound or the budget left unanswered, and the phase
+	// ended without its submission.
+	Declined bool
 }
 
 // SpendOutcome is the shared counter's answer to a spend.
@@ -677,9 +683,11 @@ type Config struct {
 	// MaxRounds bounds the provider calls. Required and positive.
 	MaxRounds int
 
-	// ToolChoice is passed to the provider. [llm.ToolChoiceRequired]
-	// additionally turns on the corrective re-prompt: a round answering
-	// with prose and no tool call is re-prompted rather than accepted.
+	// ToolChoice is passed to the provider, on EVERY round including a
+	// corrective one. [llm.ToolChoiceRequired] additionally turns on the
+	// forced corrective re-prompt for a loop that declares no terminators:
+	// a round answering with prose and no tool call is re-prompted rather
+	// than accepted.
 	ToolChoice llm.ToolChoice
 
 	// TerminateAfter names tools that end the loop once they have run
@@ -691,9 +699,22 @@ type Config struct {
 	// A failed call does not terminate: its failure went back to the
 	// model, and ending the phase there means the retry never happens.
 	//
-	// Declaring one also says the phase is NOT finished until one has run:
-	// a round of prose before that is re-prompted once, naming the tool,
-	// rather than accepted as the answer — see [maxUnsubmittedRetries].
+	// DECLARING ONE IS DECLARING HOW THE LOOP FINISHES, so it also changes
+	// what a round of prose means. Without terminators, a round with no
+	// tool call is the model's answer and a clean finish. With them, no
+	// such round can be a finish — a successful terminator ends the loop
+	// before the next round opens, so a prose round always comes before
+	// any submission succeeded — and the loop re-prompts with a FINISHING
+	// corrective naming these tools, under [maxForcedToolRetries]. That
+	// corrective wins over the forced one when the caller also required a
+	// call: naming the submission is a sharper instruction than listing a
+	// surface, which on the onboarding pass is a whole catalogue of tools
+	// that are not how it finishes.
+	//
+	// ONLY A TERMINATOR THE ROUND OFFERS COUNTS. One the surface does not
+	// carry this round cannot be called, so a corrective naming it is a
+	// round spent on nothing, and a loop offering none of its terminators
+	// reads prose as its answer exactly as a loop that declared none.
 	TerminateAfter []string
 
 	// AllowSuspend permits a tool to suspend this loop. Only Execute sets
@@ -803,7 +824,6 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	forcedRetries := 0
 	emptyRetries := 0
-	unsubmittedRetries := 0
 	emptyAnswers := 0
 
 	var partial *Partial
@@ -1093,11 +1113,20 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// the publish below so the live view never shows a finished round
 		// and a fragment of the same round at once.
 		partial = nil
+		// What this round was, decided once and read twice below: on the
+		// record and by the correctives. See [Narration.Declined].
+		answeredNothing := strings.TrimSpace(completion.Content) == ""
+		// Only a terminator this round OFFERS can finish the phase — see
+		// [Config.TerminateAfter] — so it is what makes prose a decline.
+		owed := offered(cfg.TerminateAfter, tools)
+		mustCall := len(owed) > 0 || cfg.ToolChoice == llm.ToolChoiceRequired
+		declined := len(completion.ToolCalls) == 0 && !answeredNothing && mustCall
 		if narrated(completion.ReasoningContent, completion.Content) {
 			narration = append(narration, Narration{
 				Round:     roundsUsed,
 				Reasoning: strings.TrimSpace(completion.ReasoningContent),
 				Content:   strings.TrimSpace(completion.Content),
+				Declined:  declined,
 			})
 		}
 
@@ -1111,73 +1140,102 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// rounds that get none: the number a phase record carries
 			// is "rounds that reached nobody", which is the question
 			// agent/turn already asks about a turn.
-			answeredNothing := strings.TrimSpace(completion.Content) == ""
 			if answeredNothing {
 				emptyAnswers++
 			}
 
-			// A required tool call that did not arrive. Some endpoints
-			// ignore tool_choice and some models think-then-stop, and
-			// accepting this as a clean finish is how a forced round
-			// silently produces nothing.
-			//
-			// THIS CORRECTIVE WINS OUTRIGHT for a caller that required a
-			// call, empty round or not: "call one of these tools" is
-			// strictly the better instruction for a phase whose only
-			// output IS a call, and it already covers the model that
-			// thought and stopped. Letting both fire would tax every
-			// forced caller's round budget — the reviewer's four, the
-			// onboarding pass's — for an instruction they already got.
-			if cfg.ToolChoice == llm.ToolChoiceRequired {
-				if forcedRetries < maxForcedToolRetries {
-					forcedRetries++
-					msgs = append(msgs, llm.Message{
-						Role:    llm.RoleUser,
-						Content: forcedToolCorrective(tools),
-					})
-					continue
-				}
+			// A CORRECTIVE NOTHING WILL READ IS NOT SENT. On the last
+			// round of this invocation's budget no round follows, so a
+			// corrective appended here would only sit at the end of the
+			// conversation the caller records — a user message the model
+			// never answered, on the phase's record and in any transcript
+			// built from it. Nor would an extension read it: the round
+			// cap's judge is asked only about a phase still ASKING for
+			// tools ([Result.ExhaustedRounds]), and this one stopped. A
+			// phase whose budget ends on a declined round therefore ends
+			// there, without its submission, which is what its caller's
+			// rescue path is for — and the round says so on the record
+			// ([Narration.Declined] on the phase's last round).
+			lastRound := roundsUsed == cfg.MaxRounds
+
+			// Which corrective this round earns, and the allowance it
+			// draws on. Chosen first and spent after, so a round that
+			// gets none — the bound reached, or no round left to read
+			// it — spends nothing.
+			var corrective string
+			var allowance *int
+			var bound int
+			switch {
+			case len(owed) > 0:
+				// THE LOOP SAID HOW IT FINISHES, so a round with no call
+				// is not a finish however it reads — see
+				// [Config.TerminateAfter]. This covers the model that
+				// wrote its submission out as text (a fenced JSON block
+				// of the tool's arguments, measured on a cli-agent text
+				// backend) and the one that thought and stopped, so it
+				// wins over the empty-answer corrective below, whose
+				// "write it in the response itself" would steer a
+				// submission phase straight into its rescue. It wins
+				// over the forced corrective too, for a caller that
+				// also required a call: naming what finishes the phase
+				// is the sharper instruction. Both share one allowance.
+				//
+				// THE TOOL CHOICE IS LEFT AS THE CALLER SET IT — `auto`
+				// for the executor — and deliberately never escalated to
+				// `required` for the corrective round. Several current
+				// models reject a forced choice outright: Claude Opus
+				// 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer 400
+				// "tool_choice: type "tool" and "any" are not supported
+				// for this model", and Anthropic's documented
+				// replacement is `auto` plus an instruction naming the
+				// tool, which is exactly this message. The loop is what
+				// enforces the call, by asking again and by never
+				// counting prose as the finish.
+				corrective = finishingCorrective(owed)
+				allowance, bound = &forcedRetries, maxForcedToolRetries
+			case cfg.ToolChoice == llm.ToolChoiceRequired:
+				// A required tool call that did not arrive, on a loop
+				// that names no terminator. Some endpoints ignore
+				// tool_choice and some models think-then-stop, and
+				// accepting this as a clean finish is how a forced round
+				// silently produces nothing.
+				//
+				// THIS CORRECTIVE WINS over the empty-answer one, empty
+				// round or not: "call one of these tools" is strictly
+				// the better instruction for a phase whose only output IS
+				// a call, and it already covers the model that thought
+				// and stopped. Letting both fire would tax the caller's
+				// round budget for an instruction it already got.
+				corrective = forcedToolCorrective(tools)
+				allowance, bound = &forcedRetries, maxForcedToolRetries
+			case answeredNothing:
+				// A ROUND THAT REACHED NOBODY IS NOT A FINISH. No tool
+				// call and no prose is a model that spent its output on
+				// hidden reasoning — the shape every backend now hands
+				// back for it (an empty Content), rather than the
+				// transport error the cli-agent backend used to raise.
+				// Correcting it is the loop's job and not the provider's:
+				// this is the frame that holds the conversation, so it is
+				// the only one that can ask again without inventing a
+				// second prompt contract the operator cannot see.
+				//
+				// Keyed on Content alone. Reasoning is not an answer that
+				// reached anybody, so a thinking-only round from any
+				// backend is the same failure and gets the same
+				// corrective.
+				//
+				// Prose on a loop that declares no terminator and
+				// requires no call matches no case: it is the model's
+				// answer, and a clean finish.
+				corrective = emptyAnswerCorrective
+				allowance, bound = &emptyRetries, maxEmptyAnswerRetries
+			}
+			if corrective == "" || lastRound || *allowance >= bound {
 				break
 			}
-
-			// A ROUND THAT REACHED NOBODY IS NOT A FINISH. No tool call
-			// and no prose is a model that spent its output on hidden
-			// reasoning — the shape every backend now hands back for it
-			// (an empty Content), rather than the transport error the
-			// cli-agent backend used to raise. Correcting it is the
-			// loop's job and not the provider's: this is the frame that
-			// holds the conversation, so it is the only one that can
-			// ask again without inventing a second prompt contract the
-			// operator cannot see.
-			//
-			// Keyed on Content alone. Reasoning is not an answer that
-			// reached anybody, so a thinking-only round from any
-			// backend is the same failure and gets the same corrective.
-			if answeredNothing && emptyRetries < maxEmptyAnswerRetries {
-				emptyRetries++
-				msgs = append(msgs, llm.Message{
-					Role:    llm.RoleUser,
-					Content: emptyAnswerCorrective,
-				})
-				continue
-			}
-
-			// PROSE IS NOT A SUBMISSION. A phase that declared the tool it
-			// ends by calling, and has not called it, has not finished
-			// however finished its prose sounds — see
-			// [maxUnsubmittedRetries]. Only the terminators actually
-			// OFFERED this round are named: a corrective pointing at a
-			// tool the model cannot call is a round spent on nothing.
-			if owed := offered(cfg.TerminateAfter, tools); !answeredNothing &&
-				len(owed) > 0 && unsubmittedRetries < maxUnsubmittedRetries {
-				unsubmittedRetries++
-				msgs = append(msgs, llm.Message{
-					Role:    llm.RoleUser,
-					Content: unsubmittedCorrective(owed),
-				})
-				continue
-			}
-			break
+			*allowance++
+			msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: corrective})
+			continue
 		}
 
 		// A ROUND THAT EMITTED A CALL CLEARS EVERY STALL ALLOWANCE. Each
@@ -1192,7 +1250,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// which is the opposite of a model that has stopped responding.
 		// Gating this on a successful result would withdraw the nudge
 		// exactly where the next round matters most.
-		forcedRetries, emptyRetries, unsubmittedRetries = 0, 0, 0
+		forcedRetries, emptyRetries = 0, 0
 
 		suspended, pendingID, pendingName, payload, err := runCalls(
 			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs,
@@ -1396,21 +1454,31 @@ func offered(terminators []string, tools []llm.ToolDef) []string {
 	return out
 }
 
-// unsubmittedCorrective is the re-prompt for a phase that answered in prose
-// before making the submission it ends with.
+// finishingCorrective is the re-prompt for a round that ended without a call in
+// a loop that finishes by one: it names the tools that finish the phase.
 //
-// It says WHY the prose does not count, rather than only repeating the
-// instruction the system prompt already gave: the model believes it has
-// finished — the measured case had written its submission out as JSON — and
-// "call the tool" alone reads as a request to do again what it thinks it did.
-func unsubmittedCorrective(owed []string) string {
-	call := "`" + owed[0] + "`"
-	if len(owed) > 1 {
-		call = "one of `" + strings.Join(owed, "`, `") + "`"
+// Every clause answers a measured misreading. "Has not finished" because the
+// model believed it had. "Nothing written in a reply is read or delivered"
+// because the reply it just wrote was its report, typed out — and "JSON
+// included" because the case that found this was a submission's ARGUMENTS
+// written as a fenced JSON block, which a model reasonably takes for a
+// structured answer. And the second branch, because a model that stopped
+// halfway must be sent back to the WORK rather than pushed into submitting a
+// report of work it has not done.
+func finishingCorrective(terminators []string) string {
+	names := make([]string, 0, len(terminators))
+	for _, name := range terminators {
+		names = append(names, "`"+name+"`")
 	}
-	return "You answered in prose, but this pass ends only when you call " + call +
-		": nothing you write as text — a summary, or the submission itself spelled " +
-		"out as JSON — is recorded. Call it now, reporting what you actually did."
+	call := names[0]
+	if len(names) > 1 {
+		call = "one of " + strings.Join(names, ", ")
+	}
+	return "Your last reply ended without calling " + call + ", so this phase has not " +
+		"finished. Nothing written in a reply is read or delivered — a report written " +
+		"out as text, JSON included, is not a submission. If the work is done, call " +
+		call + " now with that report as its arguments; if something is still left to " +
+		"do, call the tool that does it."
 }
 
 // emptyAnswerCorrective is the re-prompt for a round that produced neither a
@@ -1423,6 +1491,13 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 	"response and called no tool. Whatever you worked out, write it in the response " +
 	"itself, or call a tool to act on it."
 
+// narrated reports whether a round's turn said anything worth recording. A
+// round that only emitted tool calls has no narration, and an empty entry
+// would render as a blank paragraph above its own tools.
+func narrated(reasoning, content string) bool {
+	return strings.TrimSpace(reasoning) != "" || strings.TrimSpace(content) != ""
+}
+
 // assistantText renders a conversation's assistant turns as ONE displayable
 // string, reasoning included, wrapped so a reader can tell it apart.
 //
@@ -1432,13 +1507,6 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 // the same text — they were assembled separately once, so a reasoning model
 // streamed its tool calls against an empty response and its thinking appeared
 // only when the phase ended.
-// narrated reports whether a round's turn said anything worth recording. A
-// round that only emitted tool calls has no narration, and an empty entry
-// would render as a blank paragraph above its own tools.
-func narrated(reasoning, content string) bool {
-	return strings.TrimSpace(reasoning) != "" || strings.TrimSpace(content) != ""
-}
-
 func assistantText(msgs []llm.Message) string {
 	var parts []string
 	for _, m := range msgs {

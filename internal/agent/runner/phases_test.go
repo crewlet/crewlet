@@ -373,16 +373,51 @@ func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 	}
 }
 
+// isFinishingCorrective reports whether a message is the tool loop's re-prompt
+// for a round that ended without the phase's submission.
+func isFinishingCorrective(m llm.Message, tool string) bool {
+	return m.Role == llm.RoleUser && strings.Contains(m.Content, "so this phase has not finished") &&
+		strings.Contains(m.Content, "`"+tool+"`")
+}
+
 // THE RESCUE PATH. An executor that ran out of rounds, or simply stopped, has
 // produced text and no account of itself. Discarding the turn wastes
 // everything it did; calling it delivered puts words in its mouth on the one
 // question that matters.
+//
+// But only after it was ASKED: its loop finishes by `submit_work`, so a round
+// of prose is not a finish, and the loop asks twice more — naming the tool —
+// before the phase ends without its submission and lands here.
 func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{text("I posted something.")}})
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{text("I posted something.")}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+	exec := prov.requestsFor("execute")
+	if len(exec) != 3 {
+		t.Fatalf("the executor was asked %d times, want 3 — the first answer and two "+
+			"finishing correctives", len(exec))
+	}
+	for i, req := range exec[1:] {
+		last := req.Messages[len(req.Messages)-1]
+		if !isFinishingCorrective(last, runner.SubmitWorkTool) {
+			t.Errorf("request %d opened on %q, want the finishing corrective", i+2, last.Content)
+		}
+	}
+	// Every round declined, the last included: that is what tells a reader
+	// the phase ended without its submission rather than finishing.
+	done := completedPhase(t, pub, "execute")
+	if !done.RescueFired || len(done.RoundNarration) != 3 {
+		t.Fatalf("rescue_fired = %v narration = %v", done.RescueFired, done.RoundNarration)
+	}
+	for _, n := range done.RoundNarration {
+		if n["declined"] != true {
+			t.Errorf("round %v is not marked declined: %v", n["round"], n)
+		}
 	}
 	if w.Outcome != turn.OutcomeIncomplete {
 		t.Errorf("outcome = %s, want incomplete", w.Outcome)
@@ -406,26 +441,99 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	}
 }
 
-// THE SUBMISSION WRITTEN AS PROSE is reminded, not rescued. The measured
-// executor commented on the item and then wrote its submission out as JSON in
-// a code fence; accepted as a finish, the engine wrote `incomplete` for it and
-// the reviewer sent the whole turn back for another round.
-func TestAnExecutorThatWritesItsSubmissionAsProseIsAskedToMakeIt(t *testing.T) {
+// writtenSubmission is the measured failure: an executor on a cli-agent text
+// backend ended its turn with submit_work's ARGUMENTS typed out as a fenced
+// JSON block — the report, as prose — instead of the call.
+func writtenSubmission() llm.Completion {
+	return text("Commented on the work item.\n\n```json\n" +
+		`{"summary":"Commented on the work item","outcome":"blocked",` +
+		`"evidence":"no write tool yet"}` + "\n```")
+}
+
+// AN EXECUTOR THAT WROTE ITS SUBMISSION AS TEXT IS RE-ASKED RATHER THAN
+// RESCUED. Before, the phase ended on that round: the outcome was the engine's
+// `incomplete`, and the reviewer read the fenced JSON as "what the agent
+// produced". The loop now asks again on the same `auto` tool choice, naming
+// submit_work, and the model's call is the outcome.
+func TestAnExecutorThatWroteItsSubmissionAsTextIsReAskedRatherThanRescued(t *testing.T) {
 	t.Parallel()
-	r, p := unaddressedFixture(t, &scriptedProvider{execute: []llm.Completion{
-		text("```json\n{\"outcome\":\"no_action\",\"summary\":\"nothing to do\"}\n```"),
-		submitCall(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"nothing to do"}`),
-	}})
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{writtenSubmission(), submitWork(t)}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if w.Rescued || w.Outcome != turn.OutcomeNoAction {
-		t.Errorf("outcome = %s (rescued %v), want the submission the reminder got",
-			w.Outcome, w.Rescued)
+	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
+		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
 	}
-	if got := len(p.seen); got != 2 {
-		t.Errorf("model calls = %d, want 2 — the prose, then the submission", got)
+	exec := prov.requestsFor("execute")
+	if len(exec) != 2 {
+		t.Fatalf("the executor was asked %d times, want 2", len(exec))
+	}
+	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
+		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
+	}
+	// AUTO on both rounds: the executor is never forced, and the corrective
+	// round does not escalate — several current models refuse a forced
+	// tool_choice outright.
+	for i, req := range exec {
+		if req.ToolChoice != llm.ToolChoiceAuto {
+			t.Errorf("request %d tool_choice = %q, want auto", i+1, req.ToolChoice)
+		}
+	}
+	done := completedPhase(t, pub, "execute")
+	if done.RescueFired || done.RoundsUsed != 2 {
+		t.Errorf("rescue_fired = %v rounds_used = %d, want a submitted phase of 2 rounds",
+			done.RescueFired, done.RoundsUsed)
+	}
+	if len(done.RoundNarration) != 1 || done.RoundNarration[0]["round"] != 1 ||
+		done.RoundNarration[0]["declined"] != true {
+		t.Errorf("round_narration = %v, want round 1 marked declined", done.RoundNarration)
+	}
+}
+
+// A RESUMED EXECUTOR IS ASKED AGAIN TOO. It re-enters the same loop, with the
+// same submission, so a coding run's result followed by a written-out report is
+// the same failure and gets the same corrective — on the phase's round scale.
+func TestAResumedExecutorThatWroteItsSubmissionAsTextIsReAsked(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{writtenSubmission(), submitWork(t)}}
+	// A round the pre-suspend half was corrected on stays marked across the
+	// suspend: the parked row carries the mark and the resumed record keeps
+	// it, or round 1 would read as a finish nothing finished.
+	state := suspendedAfterTwoRounds()
+	state.RoundNarration[0]["declined"] = true
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		pub:    pub,
+		resume: &runner.Resume{State: state, Answer: "the run succeeded"},
+	})
+	w, _, err := r.Resume(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
+		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
+	}
+	exec := prov.requestsFor("execute")
+	if len(exec) != 2 {
+		t.Fatalf("the resumed executor was asked %d times, want 2", len(exec))
+	}
+	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
+		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
+	}
+	// Round 3 of the phase: the two it ran before it parked come first, and
+	// the pre-suspend round 1 keeps its mark.
+	done := completedPhase(t, pub, "execute")
+	var declined []any
+	for _, n := range done.RoundNarration {
+		if n["declined"] == true {
+			declined = append(declined, n["round"])
+		}
+	}
+	if len(declined) != 2 || declined[0] != 1 || declined[1] != 3 {
+		t.Errorf("declined rounds = %v, want [1 3] on the phase's scale", declined)
 	}
 }
 

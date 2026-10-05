@@ -1384,22 +1384,31 @@ func utcOrZero(t time.Time) time.Time {
 }
 
 // roundNarration renders the loop's per-round model turns in the wire shape
-// consumers read: round, reasoning, content.
+// consumers read: round, reasoning, content, and `declined` on a round that
+// answered in prose where the phase had to end in a call.
 //
 // The round number matches the one on that round's tool executions, which is
 // the whole contract — it is what lets a reader interleave the two lists into
 // one chronological ledger without a second ordering rule.
+//
+// `declined` is written only when true, so every round that is not one reads
+// exactly as it did before the key existed — the same "absent means no" every
+// reader of an older peer's record already has to apply.
 func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 	if len(narr) == 0 {
 		return nil
 	}
 	out := make([]types.RoundNarration, 0, len(narr))
 	for _, n := range narr {
-		out = append(out, types.RoundNarration{
+		row := types.RoundNarration{
 			"round":     n.Round,
 			"reasoning": n.Reasoning,
 			"content":   n.Content,
-		})
+		}
+		if n.Declined {
+			row["declined"] = true
+		}
+		out = append(out, row)
 	}
 	return out
 }

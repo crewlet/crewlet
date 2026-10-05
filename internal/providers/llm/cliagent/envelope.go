@@ -15,9 +15,11 @@ type Envelope struct {
 	ToolCalls []EnvelopeCall
 	// Parsed is false when nothing in the reply was an envelope. The
 	// caller then hands the whole reply back as assistant content with no
-	// tool calls, and the tool loop's own tool_choice="required"
-	// corrective re-prompt takes over: a malformed reply costs one round,
-	// it never fails a turn.
+	// tool calls, and the tool loop's own corrective re-prompt takes over
+	// in every phase that has to end in a call — the finishing corrective
+	// in a phase that finishes by a submission, the forced one where the
+	// caller required a call: a malformed reply costs one round, it never
+	// fails a turn.
 	Parsed bool
 }
 
@@ -229,12 +231,13 @@ func fromDocument(doc map[string]any) (Envelope, bool) {
 		}
 		// A NON-EMPTY LIST NOTHING COULD BE READ FROM IS NOT AN ENVELOPE.
 		// An EMPTY list is: the model saying "no calls, here is my note",
-		// which is an ordinary final answer.
+		// which is an ordinary final answer — whether a reply with no call
+		// may END the phase is the tool loop's question, not the parser's.
 		//
 		// The difference matters because of what happens next. A document
-		// that is not an envelope becomes assistant prose and the tool
-		// loop's `tool_choice="required"` corrective re-prompt asks again
-		// — one round, and the model reliably fixes it. Accepting this
+		// that is not an envelope becomes assistant prose, and in a phase
+		// that has to end in a call the tool loop's corrective re-prompt
+		// asks again — one round, and the model reliably fixes it. Accepting this
 		// one instead reported that the model requested NO tools when it
 		// had requested several, so the turn ended on a message like
 		// "I'll post it now" with nothing delivered and nothing to say

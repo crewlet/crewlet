@@ -169,8 +169,8 @@ func TestTheRequiredContractDemandsAToolCall(t *testing.T) {
 // A call list nothing could be read from is NOT an envelope.
 //
 // The distinction is what happens next. A document that is not an envelope
-// becomes assistant prose and the tool loop's forced-tool corrective asks
-// again — one round, and the model reliably fixes it. Accepted as an envelope
+// becomes assistant prose and, in a phase that has to end in a call, the tool
+// loop's corrective asks again — one round, and the model reliably fixes it. Accepted as an envelope
 // instead, the same reply reported that the model asked for NO tools when it
 // had asked for several, so the turn ended on a confident message with nothing
 // delivered.
@@ -249,7 +249,7 @@ func TestANullCallListIsAnEmptyOne(t *testing.T) {
 }
 
 // One unreadable entry beside a readable one keeps the readable one: the
-// forced-tool corrective is for a reply that requested nothing this build
+// tool loop's corrective is for a reply that requested nothing this build
 // could run, not for a reply with a stray element in its list.
 func TestAPartiallyReadableCallListKeepsWhatItCanRun(t *testing.T) {
 	t.Parallel()

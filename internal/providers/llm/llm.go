@@ -190,9 +190,14 @@ const (
 	// ToolChoiceAuto lets the model decide. The zero value means this.
 	ToolChoiceAuto ToolChoice = "auto"
 
-	// ToolChoiceRequired says the answer must be a tool call. It is what
-	// the turn engine's corrective re-prompt sets when a phase must end in
-	// one and the model answered with prose.
+	// ToolChoiceRequired says the answer must be a tool call. A CALLER sets
+	// it for a whole phase — the reviewer and the onboarding pass, whose
+	// every round is a call — and nothing escalates a request to it: the
+	// tool loop's corrective re-prompt keeps whatever choice the caller set,
+	// because a backend may ignore this (some endpoints do) or refuse it
+	// (several current Anthropic models answer a forced choice with a 400).
+	// So it is a request, never the guarantee — the loop is what enforces a
+	// call, by asking again (internal/agent/toolloop).
 	ToolChoiceRequired ToolChoice = "required"
 
 	// ToolChoiceNone forbids a tool call for this request.

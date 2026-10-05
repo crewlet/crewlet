@@ -497,13 +497,14 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 
 // A REVIEWER THAT THINKS AND STOPS IS ASKED AGAIN, not rescued.
 //
-// The tool loop's corrective re-prompt is gated on the caller requiring a tool
-// call, and no caller did — so `maxForcedToolRetries` and
-// `forcedToolCorrective` were unreachable and the package doc's claim that a
-// forced tool call is ENFORCED held for no phase the engine runs. A reviewer
-// that answered with prose fell straight through to the rescue, which sends
-// the whole turn back for another executor round: a whole extra turn spent on
-// the one failure a model reliably fixes when it is simply asked again.
+// The tool loop's corrective re-prompt was once gated on the caller requiring
+// a tool call, and no caller did — so it was unreachable and the package doc's
+// claim that a forced tool call is ENFORCED held for no phase the engine ran. A
+// reviewer that answered with prose fell straight through to the rescue, which
+// sends the whole turn back for another executor round: a whole extra turn
+// spent on the one failure a model reliably fixes when it is simply asked
+// again. The reviewer's loop finishes by `submit_review`, so the corrective it
+// gets now is the FINISHING one, naming that tool.
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{review: []llm.Completion{

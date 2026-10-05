@@ -896,7 +896,8 @@ flags drifted from the installed CLI, an expired login, or the one nothing
 else catches, a model that answers prose instead of the tool-call envelope.
 Only a real completion with a real tool proves the last one, so `doctor`
 runs one, and running it before the first turn is the difference between one
-error now and every seat losing a corrective round for ever.
+error now and every phase spending corrective rounds — and ending without its
+submission whenever the model never manages the envelope.
 
 `-capture-token` — which mints a headless `CLAUDE_CODE_OAUTH_TOKEN` and
 avoids the shared refresh token `-from-host` leaves you with — writes into

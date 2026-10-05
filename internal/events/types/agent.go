@@ -116,7 +116,14 @@ type PromptMessage struct {
 type ToolExecution = map[string]any
 
 // RoundNarration records one round's model turn: `round`, `reasoning` and
-// `content`.
+// `content` — and `declined: true` on a round that answered with prose and NO
+// tool call in a phase that had to end in one (its loop declares a submission
+// tool that finishes it — `submit_work`, `submit_review`, `mark_onboarded`, a
+// worker's `submit_result` — or the caller required a call). Absent otherwise,
+// never `false`. Whether the engine asked again needs no second key: a later
+// round exists exactly when it did, and a declined round that is the phase's
+// last is one the corrective's bound or the round budget left unanswered — the
+// phase ended without its submission, which is what `rescued` then says.
 //
 // It exists because `response` is the JOIN of every round's turn, and a join
 // cannot be undone: the parts are separated by a blank line and prose contains
@@ -678,9 +685,14 @@ type AgentPhaseCompleted struct {
 	// explanation, and the fix is the entry's `model`.
 	EmptyAnswerRounds int    `json:"empty_answer_rounds,omitempty"`
 	Decision          string `json:"decision"`
-	// RescueFired is true when the phase's submit tool was not called on the
-	// first run of the loop, prompting a constrained rescue call. The
-	// executor and the reviewer both can; sub-agent phases never set this.
+	// RescueFired is true when the phase ended without its submission
+	// having succeeded — the tool loop's finishing correctives spent, or
+	// its round budget — so the ENGINE wrote the decision rather than the
+	// model: the executor's outcome is `incomplete`, the reviewer's is
+	// `self_iterate`. There is no rescue model call; the decision is a
+	// fixed one, and this flag is what tells it from one a model chose.
+	// The executor and the reviewer both can; the onboarding pass and
+	// sub-agent phases never set it.
 	RescueFired bool `json:"rescue_fired"`
 	// Notes is free text kept short: review's notes, rejected sub-agent tools,
 	// missing tool names from Execute.

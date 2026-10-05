@@ -144,8 +144,9 @@ providers:
     # configured perfectly and still not work — a missing binary, a
     # profile whose flags drifted from the installed version, an expired
     # login, or the one nothing else catches: a model that answers PROSE
-    # instead of the tool-call envelope, which costs every seat a
-    # corrective round for ever.  Only a real completion with a real tool
+    # instead of the tool-call envelope, which costs every phase
+    # corrective rounds and, when the model never manages the envelope,
+    # ends the phase without its submission.  Only a real completion with a real tool
     # proves that, so `doctor` runs one.
     #
     # See docs/concepts/subscription-llm-backends.md.

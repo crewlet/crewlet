@@ -252,7 +252,9 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		// A pass that thinks and stops never marks, so it re-fires on every
 		// turn this seat ever takes — the most expensive silent failure in
 		// the engine, and one a corrective re-prompt fixes for one round.
-		// Forcing a call is compatible with what onboarding does anyway:
+		// The corrective is armed by naming mark_onboarded above, and it
+		// names that tool; this ASKS the provider for a call on every round
+		// as well, which is compatible with what onboarding does anyway:
 		// every round of it discovers, activates, reads or reflects, and
 		// the round with nothing left to call is the round that marks.
 		toolChoice: llm.ToolChoiceRequired,

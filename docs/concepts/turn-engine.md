@@ -286,7 +286,7 @@ The whole graph is validated **before anything runs**: unique ids, resolvable `a
 
 A worker ends by calling `submit_result` with typed arguments, the same way every other phase in this engine ends. What comes back is **fields the parent can index** rather than prose it has to re-parse with another model call. The shape is the worker template's `output` schema, or a default `{result, notes}` when none is declared.
 
-A worker that answers in prose is reminded once that its answer is `submit_result` and text is not recorded (the [tool loop's submission reminder](#round-cap-extension-judge)); one that still never submits reports `no_result` **with its prose attached**. Nothing is synthesised from the transcript: that would put words in the worker's mouth on the one question the parent asked, and a dependent fed a fabricated answer produces a confident wrong one. A task whose `after` did not **succeed** is `skipped_dependency_failed`, and the skip names which dependency broke the chain and how.
+A worker that answers in prose is asked again — at most twice in a row — to call `submit_result`, since text is not recorded (the [tool loop's finishing corrective](#round-cap-extension-judge)); one that still never submits reports `no_result` **with its prose attached**. Nothing is synthesised from the transcript: that would put words in the worker's mouth on the one question the parent asked, and a dependent fed a fabricated answer produces a confident wrong one. A task whose `after` did not **succeed** is `skipped_dependency_failed`, and the skip names which dependency broke the chain and how.
 
 Statuses: `ok`, `no_result`, `skipped_dependency_failed`, `never_started`, `timed_out`, `budget_exhausted`, `cancelled`, `failed`. A skip is classified **before** the deadline is consulted, so the same graph under the same deadline reports the same statuses — a call that ran out of time reports the broken chain rather than a scattering of timeouts. Results always come back in the order the parent wrote the tasks.
 
@@ -444,35 +444,107 @@ from the turn's own totals for the same reason a worker's is: it is
 already counted once by the meter, and folding it in would stop the
 phase events summing to the turn's number.
 
-**Forced tool calls are enforced, not just requested.** A phase whose
-whole contract is one submission calls the tool loop with
-`llm.ToolChoiceRequired`: the **reviewer**, whose surface carries no
-catalogue at all so "call a tool" and "submit the review" are the same
+**A phase that finishes by a call is asked again, not rescued.** Every
+phase but the judge finishes by calling a tool, and says so to the tool
+loop by naming it (`TerminateAfter`): the **executor** and a resumed
+executor by `submit_work`, the **reviewer** by `submit_review`,
+**onboarding** by `mark_onboarded`, every **worker** by `submit_result`. A
+successful call to that tool ends the phase; a failed one goes back to
+the model to fix. So a round that ends with **no tool call** is never a
+finish there, however it reads — no submission can have succeeded yet,
+or the phase would already have ended. It is a model that wrote its
+report where nobody reads it. The measured case was an executor on a
+`cli-agent` text backend whose last reply was one fenced JSON block
+holding `submit_work`'s *arguments*: the phase ended on it, the engine
+rescued it as `incomplete`, and the reviewer then read the fenced JSON
+as "what the agent produced".
+
+The loop re-prompts that round with a **finishing corrective** naming
+the tool, verbatim (one tool shown; several are offered as "one of …"):
+
+> Your last reply ended without calling `submit_work`, so this phase has
+> not finished. Nothing written in a reply is read or delivered — a report
+> written out as text, JSON included, is not a submission. If the work is
+> done, call `submit_work` now with that report as its arguments; if
+> something is still left to do, call the tool that does it.
+
+It is bounded by `maxForcedToolRetries` = **2** per run of declined
+rounds, and each corrective is a full priced round charged like any
+other — against the executor's 24 rounds that is at most two; against
+the reviewer's four (`reviewRounds`) it leaves one for the submission; a
+worker with `max_turns: 1` has no round left to read one and gets none.
+A model that still answers in prose after two correctives ends the
+phase without its submission, and the rescue below takes over.
+
+**The tool choice is never escalated for it.** The executor runs on
+`auto` and its corrective round does too. Forcing a call is not
+something the engine can rely on: some endpoints ignore `tool_choice`,
+and several current models refuse a forced one outright — Claude Opus
+5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer `400 tool_choice: type
+"tool" and "any" are not supported for this model`, with `auto` plus an
+instruction naming the tool as the documented replacement, which is
+exactly the corrective. The loop is what enforces the call.
+
+A phase whose whole contract is one submission still *asks* for a call
+with `llm.ToolChoiceRequired`: the **reviewer**, whose surface carries no
+catalogue so "call a tool" and "submit the review" are the same
 instruction, and **onboarding**, whose every round discovers, activates,
-reads or reflects and whose last one marks. Some endpoints don't honor
-`tool_choice`, and some models "think then stop" — emitting reasoning
-with no tool call. The loop treats a no-tool-call completion on a
-`required` round as a non-terminal miss: it re-prompts with an explicit
-corrective naming the tool ("you must call `<tool>` now — no prose") and
-retries within the round budget (bounded by `maxForcedToolRetries` = 2
-and the call's `MaxRounds`), instead of accepting the prose as a finish. Without
-it a reviewer that thought and stopped fell through to the rescue, which
-sends the whole turn back for another executor round — a whole extra
-turn spent on the one failure a model reliably fixes when it is asked
-again. The reviewer's budget (`reviewRounds` = 4) is that arithmetic: one
-submission, two correctives, one spare.
+reads or reflects and whose last one marks. Both name their submission
+too, so a prose round there gets the finishing corrective — naming what
+finishes the phase beats listing every tool on the surface. A caller that
+required a call and named **no** terminator gets the older **forced
+corrective**, which lists the tools on offer:
+
+> You must respond by calling one of these tools, not with prose:
+> `<tool>`, `<tool>`.
+
+Before either existed, a reviewer that thought and stopped fell through
+to the rescue, which sends the whole turn back for another executor
+round — a whole extra turn spent on the one failure a model reliably
+fixes when it is asked again.
+
+**The round says so on the record.** A round that answered with prose
+and no tool call in a phase that had to end in one carries
+`declined: true` on its `round_narration` entry, on the live frame and on
+`agent_phase_completed` alike (and across a parked coding run). Whether
+the engine asked again needs no second flag: a later round exists exactly
+when it did, and a declined round that is the phase's last is one the
+bound or the budget left unanswered — the phase ended without its
+submission, and `rescue_fired` says what the engine wrote instead.
+
+**No corrective is sent that nothing will read.** On the last round of a
+phase's budget no round follows, so the loop appends no corrective there
+— finishing, forced or empty alike — rather than leave an unanswered
+message at the end of the recorded conversation. Nor does the extension
+judge read one: it is asked only about a phase that was still *asking
+for tools* when its budget ran out, and a phase whose last round declined
+had stopped. It ends there, and is rescued.
+
+**The agent-mode executor is not covered.** An executor that runs as a
+[coding CLI's own agentic loop](subscription-llm-backends.md#agent-mode)
+makes its rounds inside the CLI, so the engine's loop never sees a round
+end in prose and cannot ask again. Its submission arrives over the
+bridge or not at all; a run that ends without one is rescued exactly as
+a native phase whose correctives ran out.
 
 **A round that said nothing at all is not a finish either.** The other
 half of "think then stop" is a round with **no tool call and no prose** —
 a model that spent its whole output budget on hidden reasoning. It costs
 real tokens (Claude Code on `haiku` bills hundreds for one) and reaches
 nobody, and the loop used to take the same branch it takes for a model
-that answered. It now re-prompts once, naming what went wrong, on any
-caller that did *not* force a tool call — the **executor** and
-**sub-agent workers**. A `required` caller gets the tool corrective
-above instead: "call one of these tools" is the better instruction for a
-phase whose only output *is* a call, and it already covers the same
-model, so the reviewer's and onboarding's round budgets are untouched.
+that answered. It now re-prompts once, naming what went wrong — but only in a
+loop that neither finishes by a call nor requires one, which today is
+only a worker whose submission tool a granted tool of the same name
+shadowed. Every phase that finishes by a call gets the
+**finishing corrective** above instead, and a caller that required a call
+the forced one: both are the better instruction for a phase whose output
+*is* a call, and the empty-answer corrective — "write it in the response
+itself, or call a tool" — would steer a submission phase straight into
+its rescue. The empty round is still counted either way:
+
+> Your last reply was empty: you produced no visible response and called
+> no tool. Whatever you worked out, write it in the response itself, or
+> call a tool to act on it.
 
 The bound is **one**, not two, and the asymmetry is deliberate. Naming
 the tools is a genuinely new instruction to a model that misread the
@@ -502,25 +574,15 @@ Rounds that reached nobody are still counted on the phase record as
 what the turn cost rather than what the loop will tolerate — and the
 dashboard badges them.
 
-The **executor** stays on `auto`, and the **judge** takes no tools at
-all — it answers in two lines of text, and a tool on its surface would
-invite a model to call it and answer nothing. A text answer on an `auto`
-round is a legitimate finish — **unless the phase declared the tool it ends
-by calling and has not called it.** The executor ends by calling
-`submit_work` and a worker with a declared answer shape by calling
-`submit_result`, so for either a round of prose is not a finish but a
-submission written out as text — the measured one was the executor's own
-`submit_work` arguments in a JSON code fence, after a correct work-item
-comment. Accepted, it went to the rescue below and the reviewer, told the
-`incomplete` was the engine's word, sent the whole turn back for another
-executor round. The loop now re-prompts **once**, naming the tool it owes
-and saying that text is not recorded (`maxUnsubmittedRetries` = 1, per run
-of declined rounds like the other two, so a worker's `max_turns` of 2 is
-never eaten). It names only a terminator the round actually offers, and a
-`required` caller never gets it on top of the tool corrective.
+The **judge** takes no tools at all — it answers in two lines of text,
+and a tool on its surface would invite a model to call it and answer
+nothing. It does not run in the tool loop, so none of the correctives
+above apply to it. Inside the loop, a text answer is a legitimate finish
+only where the loop names no submission and requires no call.
 
 **No submission never goes silent.** An executor that ran out of rounds, or
-simply stopped, has produced text and no account of itself. Discarding the
+stopped and kept answering in prose through both correctives, has produced
+text and no account of itself. Discarding the
 turn wastes everything it did; calling it delivered puts words in its mouth on
 the one question that matters. So the engine writes the outcome `incomplete`
 and marks the round RESCUED — both load-bearing. `incomplete` is its own value
@@ -1010,7 +1072,9 @@ showed the FIRST round's thinking as "the reasoning" and every later
 round's thinking as "the answer", tags and all. So both events also carry
 `round_narration`: one `{round, reasoning, content}` per round, recorded
 where the round's assistant message is appended, which is the last frame
-that knows which round the turn belongs to. Its `round` matches
+that knows which round the turn belongs to — plus `declined: true` on a
+round that answered in prose where the phase had to end in a call (see
+[a phase that finishes by a call is asked again](#round-cap-extension-judge)). Its `round` matches
 `tool_executions[].round`, and that shared number is the whole contract —
 it is what lets a consumer interleave the two lists into one ledger of
 "what it thought, what it said, what it called" without a second ordering

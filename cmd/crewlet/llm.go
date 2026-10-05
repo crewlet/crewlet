@@ -38,7 +38,8 @@ import (
 // binary can be missing from the engine host, the profile's flags can have
 // drifted from the installed version, the login can be present but expired,
 // and — the one nothing else catches — the model can answer prose instead of
-// the tool-call envelope, which costs every seat a corrective round for ever.
+// the tool-call envelope, which costs every phase corrective rounds and, when
+// the model never manages the envelope, ends it without its submission.
 // Only a real completion with a real tool proves the last one, so `doctor`
 // runs one.
 //

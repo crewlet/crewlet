@@ -47,15 +47,16 @@ type Caps struct {
 }
 
 // reviewRounds is the reviewer's whole budget: one submission, the tool loop's
-// two corrective re-prompts when a model answers without calling it, and one
+// two finishing correctives when a model answers without calling it, and one
 // spare.
 //
-// That arithmetic is real now. The correctives are gated on the caller asking
-// for a forced tool call and no caller did, so three of these four rounds were
-// headroom for a mechanism that never armed — and a reviewer that thought and
-// stopped went straight to the rescue, sending the whole turn back for another
-// executor round over the one failure a model fixes when it is simply asked
-// again.
+// That arithmetic is real now. The correctives were once gated on the caller
+// asking for a forced tool call and no caller did, so three of these four
+// rounds were headroom for a mechanism that never armed — and a reviewer that
+// thought and stopped went straight to the rescue, sending the whole turn back
+// for another executor round over the one failure a model fixes when it is
+// simply asked again. They are armed by the submission the reviewer names as
+// its terminator, which is what every phase that finishes by a call does.
 const reviewRounds = 4
 
 // Config is everything a runner needs that does not change between rounds.
@@ -474,8 +475,9 @@ type work struct {
 func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.Work, turn.Surface, error) {
 	payload, submitted := w.submit.Value()
 	if !submitted {
-		// THE RESCUE PATH. An executor that ran out of rounds, or simply
-		// stopped, has produced text and no account of itself. Discarding
+		// THE RESCUE PATH. An executor that ran out of rounds, or stopped
+		// and kept answering in prose through the tool loop's finishing
+		// correctives, has produced text and no account of itself. Discarding
 		// the turn wastes everything it did; calling it delivered puts
 		// words in its mouth on the one question that matters.
 		//
@@ -688,20 +690,28 @@ type phaseRun struct {
 	ceiling   int
 	iteration int
 
-	// terminateAfter names tools that end the loop once they have run.
+	// terminateAfter names tools that end the loop once they have run
+	// SUCCESSFULLY — and, by naming them, declares that the phase finishes
+	// by one: a round that ends in prose is re-prompted with a corrective
+	// naming them rather than accepted as the phase's end.
 	terminateAfter []string
 
-	// toolChoice forces the round to end in a tool call, for a phase whose
-	// whole contract is one submission. Empty is the tool loop's `auto`,
-	// which is right for a phase that legitimately spends rounds on calls
-	// that are not its submission — the executor.
+	// toolChoice asks the provider for a tool call on every round, for a
+	// phase whose every round IS one — the reviewer, the onboarding pass.
+	// Empty is the tool loop's `auto`, which is right for a phase that
+	// legitimately spends rounds on calls that are not its submission —
+	// the executor.
 	//
-	// It arms the loop's corrective re-prompt, which is gated on exactly
-	// this and which nothing set: `maxForcedToolRetries` and
-	// `forcedToolCorrective` were unreachable code, and the one failure a
-	// model reliably fixes when asked — thinking and then stopping without
-	// calling — fell straight through to the rescue path instead, at the
-	// cost of a whole extra turn rather than one cheap round.
+	// It is a REQUEST, not what makes a phase end in its submission: some
+	// endpoints ignore it and several current models refuse a forced
+	// choice outright. What enforces the call is terminateAfter above — a
+	// loop that declares how it finishes re-prompts a round of prose with
+	// a corrective naming the submission, on whatever choice this sets
+	// (see toolloop.Config.TerminateAfter). Before that, the corrective was
+	// gated on this field alone and the executor, on auto, fell straight
+	// through to the rescue path on the one failure a model reliably fixes
+	// when asked, at the cost of a whole extra turn rather than one cheap
+	// round.
 	toolChoice llm.ToolChoice
 
 	// seed is the conversation a RESUMED loop starts from: the suspended
