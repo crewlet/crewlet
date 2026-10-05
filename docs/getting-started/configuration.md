@@ -559,6 +559,15 @@ calls may be refused. Every rule above is checked when the config is
 validated, and again when the provider is built, where a model written as a
 `${VAR}` is first known.
 
+The table is compiled into the build and the models are not, so
+`crewlet llm doctor <key>` checks an entry against the live model: it reads
+the model's record from the vendor's Models API, reports every place the
+table disagrees with it — a **problem** when the disagreement puts a field the
+model refuses on every call — and sends one real round in a phase's shape,
+which must come back as a tool call. A gateway that does not serve
+`/v1/models` is reported as *not served* rather than as a failure. See the
+[CLI reference](../reference/cli.md#crewlet-llm).
+
 ## Tier A (`crewlet.yaml`)
 
 Tier A is restart-only and says where this node's stream, store and API

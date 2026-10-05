@@ -165,6 +165,9 @@ type Provider struct {
 	model  string
 	client sdk.Client
 	pool   *credential.Pool
+	// baseURL is the endpoint every call goes to, kept for the doctor's
+	// report: "not served" means nothing until it says by whom.
+	baseURL string
 
 	// profile is what this entry's model accepts, decided once at
 	// construction: every request is shaped from it.
@@ -264,6 +267,7 @@ func New(cfg Config) (*Provider, error) {
 
 	return &Provider{
 		model:   cfg.Model,
+		baseURL: baseURL,
 		client:  sdk.NewClient(opts...),
 		pool:    credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
 		profile: profile,

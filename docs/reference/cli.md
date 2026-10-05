@@ -46,7 +46,7 @@ subcommand below is served by it.
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
-| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
+| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
@@ -1439,7 +1439,9 @@ a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
 the operator's Pro/Max plan instead of an API key, and the login that makes
 that work is established here rather than in the config document. `KEY` is the
 `providers.llm` key; commands that take one and are given none act on the only
-`cli-agent` provider when there is exactly one.
+`cli-agent` provider when there is exactly one. `doctor` also examines every
+`type: anthropic` entry; the other subcommands are `cli-agent` only, since an
+API entry has no login to broker, list or export.
 
 **`list`** is the inventory — provider key, CLI, model and whether it is
 logged in. **`doctor`** is the one to run before a company's first turn: it
@@ -1453,6 +1455,29 @@ seat reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool.
+
+On an **`anthropic` entry** `doctor` checks the two things that make every
+call on it a 400 while the config validates clean. The request is
+[shaped from the model](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling)
+by a capability table compiled into this build, so `doctor` reads the model's
+record from the vendor's Models API (`GET /v1/models/{id}`, under the id the
+table reads — a Bedrock or dated spelling is the model it spells) and compares
+the thinking types, the effort levels and the output ceiling with what the
+entry sends. A disagreement that puts a field the model refuses on the wire is
+a **problem**, naming what to change: a `claude_model` for an alias the table
+does not know, the row a `claude_model` names, or — for a model the table reads
+itself — a Crewlet whose table matches the API. One where the table is merely
+more cautious than the model is a note. A gateway that does not serve
+`/v1/models` (a 404, 405 or 501, or a 200 that is not a model record) is
+reported as *not served* and is not a problem; any other failure of that read
+is. Then, unless you pass `-no-smoke`, it sends **one real round** in the shape
+a phase sends — a tool offered, no tool choice forced, the instruction naming
+it, the entry's own thinking, streamed, at effort `low` — and certifies that a
+call to that tool came back. The Models API read bills nothing, so it runs
+under `-no-smoke` too. `doctor` exits non-zero when any entry has a problem,
+and an entry that does not build at all (a `${VAR}` model that resolved to
+nothing, a dial its resolved model refuses) is reported as one beside the
+others. `openai` entries are not examined.
 
 **`login`** has four shapes because the vendors do:
 

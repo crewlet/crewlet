@@ -142,8 +142,8 @@ var Modern = Profile{
 // The rows. The MaxOutput values marked UNVERIFIED are not in the API
 // reference this table was built from (the reference states 128K for Fable and
 // for Opus and Sonnet from 4.6 on, and 64K for Haiku 4.5, and nothing else);
-// they are the vendor's published figures as last known, and the cli doctor
-// compares every row against the Models API's own max_tokens.
+// they are the vendor's published figures as last known, and `crewlet llm
+// doctor` compares an entry's row against the Models API's own max_tokens.
 var rows = []struct {
 	ids     []string
 	profile Profile

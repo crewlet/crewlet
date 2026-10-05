@@ -429,3 +429,44 @@ func TestTheLLMTimeoutDefaultIsOneNumber(t *testing.T) {
 		t.Errorf("an entry naming 45 s gets %v", got)
 	}
 }
+
+// THE DOCTOR'S PROVIDER IS THE ENGINE'S. `crewlet llm doctor` builds an
+// anthropic entry through BuildAnthropic, so it must resolve what buildProvider
+// resolves — a `${VAR}` model and endpoint included — and refuse what it
+// refuses; one that built its own would certify a request no seat sends.
+func TestBuildAnthropicIsTheBuildASeatGets(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	r := tierB(map[string]string{"LLM_MODEL": "claude-opus-4-1", "LLM_BASE_URL": srv.URL})
+	spec := config.LLMProvider{Type: config.LLMAnthropic, Model: "${LLM_MODEL}", BaseURL: "${LLM_BASE_URL}"}
+	built, err := BuildAnthropic("claude", spec, r)
+	if err != nil {
+		t.Fatalf("BuildAnthropic: %v", err)
+	}
+	seat, err := buildProvider("claude", spec, r)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if built.Model() != "claude-opus-4-1" || built.Model() != seat.Model() {
+		t.Errorf("doctor builds %q, a seat %q", built.Model(), seat.Model())
+	}
+	if d := built.Diagnose(context.Background(), anthropic.DiagnoseOptions{Key: "claude"}); d.Endpoint != srv.URL {
+		t.Errorf("endpoint = %q, want the resolved base_url", d.Endpoint)
+	}
+
+	// The refusals too: a reference that resolved to nothing, and a dial
+	// the resolved model would answer with a 400.
+	if _, err := BuildAnthropic("claude", config.LLMProvider{
+		Type: config.LLMAnthropic, Model: "${LLM_MODEL}",
+	}, tierB(nil)); err == nil || !strings.Contains(err.Error(), "LLM_MODEL resolved to nothing") {
+		t.Errorf("an unresolved model: %v", err)
+	}
+	if _, err := BuildAnthropic("claude", config.LLMProvider{
+		Type: config.LLMAnthropic, Model: "claude-opus-5-5", ReasoningBudgetTokens: 4096,
+	}, r); err == nil || !strings.Contains(err.Error(), "reasoning_budget_tokens") {
+		t.Errorf("a budget on an adaptive model: %v", err)
+	}
+	if _, err := BuildAnthropic("gpt", config.LLMProvider{Type: config.LLMOpenAI, Model: "gpt-5"}, r); err == nil {
+		t.Error("built an openai entry as an anthropic provider")
+	}
+}

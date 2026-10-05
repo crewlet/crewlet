@@ -1379,10 +1379,13 @@ you:
   one process serving every seat, so whatever session, cache or history
   it keeps is shared across your whole company — that is the proxy's
   design to answer, not Crewlet's.
-- **`crewlet llm` does not see it.** `list`, `doctor`, `login` and the
+- **`crewlet llm` sees only the HTTP half of it.** `list`, `login` and the
   rest build `cli-agent` providers only, so there is no login state to
-  report and no smoke test to run. Keeping the proxy authenticated is a
-  separate operational job.
+  report and keeping the proxy authenticated is a separate operational
+  job. `doctor` does examine an `anthropic` entry pointed at a proxy — it
+  sends one real round and certifies a tool call comes back — but a proxy
+  rarely serves `/v1/models`, so the model check reads *not served* there,
+  and an `openai` entry is not examined at all.
 - **A spent window is not translated.** The [prose sentinel](#falling-back-to-a-metered-key)
   that turns "Usage limit reached" into a retryable `rate_limit` is the
   CLI backend's. Over HTTP you get whatever status the proxy returns, and
@@ -1420,8 +1423,8 @@ key you were issued. That is just an endpoint.
 
 ```bash
 crewlet llm list                      # providers, agent, model, login state
-crewlet llm doctor                    # verify all of them, end to end
-crewlet llm doctor default -no-smoke # skip the real completion
+crewlet llm doctor                    # verify them all, anthropic entries too
+crewlet llm doctor default -no-smoke # skip the real completions
 crewlet llm status default            # ask the CLI who it's logged in as
 crewlet llm logout default            # revoke locally + delete credentials
 ```
@@ -1487,6 +1490,36 @@ One caveat worth stating plainly: `doctor` spends three real completions.
 On a subscription that is a few thousand tokens of your plan's allowance,
 which is why `-no-smoke` exists for a scripted health check that runs
 often — it skips all three and says so on each line.
+
+**The metered key behind it is examined too.** A role written
+`llm: [subscription, default]` falls through to an `anthropic` entry
+exactly when the plan is spent, which is the worst moment to learn that
+entry is refused on every call. So `doctor` reports on every `anthropic`
+entry beside the `cli-agent` ones:
+
+```
+provider      : default
+type          : anthropic
+model         : claude-sonnet-5-5
+profile       : claude-sonnet-5-5
+endpoint      : https://api.anthropic.com
+keys          : 1 (3f9a0c1b2d4e)
+request       : thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature
+models api    : served — Claude Sonnet 5.5 (claude-sonnet-5-5), max_tokens 128000, input …
+smoke test    : ok — called crewlet_smoke (streamed), 1204 in / 61 out
+problems      : none
+```
+
+The **request** line is what a phase sends, read from the [Claude model
+table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling);
+the **models api** line is the vendor's own record of the model, and any
+disagreement between the two is listed under **drift** — a *problem* when
+it puts a field the model refuses on every call, a *note* when the table is
+only more cautious than the model. The **smoke test** is one round in a
+phase's shape (no tool choice forced, effort `low`), billed to the entry's
+key, and `-no-smoke` skips it; the Models API read bills nothing and runs
+either way. The full rules are in the [CLI
+reference](../reference/cli.md#crewlet-llm).
 
 ---
 

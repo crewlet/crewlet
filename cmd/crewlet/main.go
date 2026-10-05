@@ -223,7 +223,8 @@ Usage:
                               or resume it, as the person your token is bound to
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
-  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
+  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends;
+                              doctor also checks anthropic entries against their model
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
