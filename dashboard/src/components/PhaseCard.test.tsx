@@ -623,6 +623,10 @@ describe("a round that answered in prose", () => {
     // THE CONTROL: a round that called its tool carries no note.
     expect(second!.querySelector(".round-note")).toBeNull();
     expect(screen.getByText("1 answered in prose")).toBeDefined();
+    // The node on the rail says it too, where a reader scanning for the round
+    // that went wrong looks — the note alone, at caption size, was easy to miss.
+    expect(first!.classList.contains("declined")).toBe(true);
+    expect(second!.classList.contains("declined")).toBe(false);
   });
 
   test("as the last round of a settled phase, says the phase ended without its submission", () => {

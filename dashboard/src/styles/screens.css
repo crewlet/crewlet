@@ -527,15 +527,27 @@
   min-width: 0;
 }
 
-/* A round that CALLED SOMETHING THAT FAILED. The one other colour a round
-   carries, and it is earned: scanning nine rounds for where it went wrong is
-   the actual question a reader brings to a stuck turn, and the answer was
-   previously a small icon inside a collapsed row. Three node states in total
-   — normal, failed, live — not one per round. */
+/* A round that CALLED SOMETHING THAT FAILED. A colour a round carries only
+   when it is earned: scanning nine rounds for where it went wrong is the
+   actual question a reader brings to a stuck turn, and the answer was
+   previously a small icon inside a collapsed row. Four node states in total
+   — normal, failed, answered in prose, live — not one per round. */
 .round.errored .round-node {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 55%, transparent);
   background: var(--color-feedback-danger-soft);
   color: var(--color-feedback-danger-ink);
+}
+/* A round that ANSWERED IN PROSE where the phase needed a call — the other
+   answer to "which round went wrong". Its note says so under its words, at
+   caption size, and that alone was easy to read past: the node looked like
+   every other round's, so nothing at the round caught the eye. CAUTION, never
+   danger — the engine asks again, or rescues the phase, and the turn goes on
+   either way — and on the node whatever the note's own tone, because the
+   node is where a reader scanning the rail looks. */
+.round.declined .round-node {
+  border-color: color-mix(in srgb, var(--color-feedback-warning) 55%, transparent);
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
 }
 
 /* The round in flight. The accent is doing real work here — it is the one

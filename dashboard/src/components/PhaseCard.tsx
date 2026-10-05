@@ -417,7 +417,7 @@ function RoundBlock({
   // used to be an icon inside a collapsed row they had to open to find.
   const errored = round.tools.some((t) => t.failed);
   return (
-    <li className={cx("round", errored && "errored", live && "live")}>
+    <li className={cx("round", errored && "errored", declined && "declined", live && "live")}>
       <div className="round-rail">
         {/* The numeral is decorative — the rail draws it as a node — but WHICH
             round this is is the only thing tying the blocks below together,

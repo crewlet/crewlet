@@ -3172,10 +3172,17 @@ rules fix it, and each one names a specific mechanism:
    rounds are told apart by a two-step alternating tint — not by a hue
    apiece: a colour per round would read as meaning something and mean
    nothing, which is the same objection as a colour per agent and worse at
-   nine rounds. A round's node takes colour for exactly three states —
-   normal, contains a failed call, in flight — because "which round went
+   nine rounds. A round's node takes colour for exactly four states —
+   normal, contains a failed call (danger), answered in prose where the phase
+   needed a call (caution), in flight (the accent) — because "which round went
    wrong" and "where is it now" are the two questions a reader brings to a
-   running turn.
+   running turn, and a round that printed its submission instead of calling
+   it is the first question's other answer. That round's note says what
+   became of it under its words (rule 2), and the note alone, at caption
+   size, was easy to read past: the node looked like every other round's, so
+   nothing on the rail a reader scans caught the eye. Caution and never
+   danger, because the engine asks again or rescues the phase and the turn
+   goes on either way.
 
    Bounding a round and separating it from the next one are two jobs, and
    only the second was being done. The rail was drawn strictly *between*
