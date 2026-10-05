@@ -103,6 +103,12 @@ turn_engine:                            # optional — executor/reviewer turn co
     retention_days: 30                  # matches the event store's horizon; applied at next start
 
 learning:                               # optional — agent-learning subsystem
+                                        #   Every `*budget_tokens` / `*_max_tokens` cap here
+                                        #   bounds the ANSWER of a call that does not think. A
+                                        #   thinking model spends its thinking from the same cap,
+                                        #   so a call to one is sent the model's own output cap
+                                        #   instead, and these passes ask for `low` effort to keep
+                                        #   it short (see "Claude models" under Providers)
   enabled: true                         # master switch (auto-disables without DB + embeddings)
   episodic:
     retrieval_limit: 5                  # default hits query_episodes returns when the
@@ -342,17 +348,40 @@ providers:
                                         #   proxy instead of the vendor host
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
-      reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
-      reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high | max (default: unset — the endpoint's own)
+      reasoning: false                  # optional, openai only — send reasoning_effort to a reasoning
+                                        #   model (default: false). REFUSED on anthropic, where thinking is
+                                        #   not a switch (see "Claude models" below), and on openai-compatible
+      reasoning_effort: high            # optional — how hard the model thinks: low | medium | high | xhigh | max
+                                        #   openai: sent while `reasoning` is on (unset: nothing is sent, the
+                                        #     endpoint's own default, and no call can lower it, since that
+                                        #     default is not a level the engine can compare). Refused with
+                                        #     reasoning off, where it would do nothing
+                                        #   anthropic: output_config.effort on EVERY call (unset: high), on a
+                                        #     model that takes effort at all; a level the model does not take
+                                        #     is refused (see "Claude models" below)
                                         #   A CEILING for every call on this entry: a call may ask for less (the
                                         #   extension judge, the knowledge answer, the turn-start filters and every
-                                        #   learning pass ask for `low`) and never for more. Unset, nothing is sent
-                                        #   and no call can lower it, since the endpoint's default is not a level
-                                        #   the engine can compare
-      reasoning_budget_tokens: 10000    # optional — Anthropic thinking budget in tokens (default: 10000)
-                                        #   All three are REFUSED on a cli-agent entry: a coding CLI driven
-                                        #   headlessly takes no per-call reasoning flag and carries its own
-                                        #   configuration. Pick the reasoning model with `model` instead
+                                        #   learning pass ask for `low`) and never for more
+    claude:
+      type: anthropic
+      model: claude-sonnet-5-5          # the request SHAPE follows the model — see "Claude models" below
+      reasoning_effort: high            # optional (default: high)
+    claude-gateway:
+      type: anthropic
+      model: fast                       # a gateway's own alias for a model...
+      claude_model: claude-haiku-4-5    # optional, anthropic only — ...named here, so its requests are
+                                        #   shaped as that model's. An exact id from the table below;
+                                        #   refused beside a model the table already reads
+      base_url: "${CLAUDE_GATEWAY_URL}"
+      reasoning_budget_tokens: 8000     # optional, anthropic BUDGET-ERA models only (claude-haiku-4-5,
+                                        #   claude-sonnet-4-5, claude-opus-4-5 and older): the thinking
+                                        #   budget, at least 1024 and below the model's output cap.
+                                        #   Unset: that model does not think. Refused on every other model
+                                        #   and every other type
+                                        # reasoning, reasoning_effort and reasoning_budget_tokens are all
+                                        #   REFUSED on a cli-agent entry: a coding CLI driven headlessly takes
+                                        #   no per-call reasoning flag and carries its own configuration.
+                                        #   Pick the reasoning model with `model` instead
     budget:                             # multiple providers supported
       type: openai
       model: gpt-4o-mini
@@ -462,6 +491,64 @@ call is *no vector*, which every caller reads as "no similarity search this
 turn" and carries on with recency. Nothing here retries — the caller's
 degradation costs less than a retry spent inside a turn-start prefetch
 somebody is waiting on.
+
+### Claude models: thinking, effort and sampling
+
+An `anthropic` request's SHAPE is a function of its model, because the Claude
+generations accept different requests and a field a model does not accept is
+an HTTP 400 — which the [fallback chain](../concepts/architecture.md#2-inside-one-node) does not
+retry, since a refusal of the request itself is not something another attempt
+fixes. So the engine reads what each model accepts from one table
+(`internal/providers/llm/anthropic/claudemodel`) and sends nothing the model in
+front of it would refuse:
+
+| Models | Thinking | `reasoning_effort` | `reasoning_budget_tokens` | Output cap |
+|---|---|---|---|---|
+| `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5-5`, `claude-sonnet-5` | adaptive, every call | low · medium · high · xhigh · max | refused | 128K |
+| `claude-opus-4-6`, `claude-sonnet-4-6` | adaptive, every call | low · medium · high · max | refused | 128K |
+| `claude-opus-4-5` | only with a budget | low · medium · high | 1024 to below the cap | 64K |
+| `claude-sonnet-4-5`, `claude-haiku-4-5` and older | only with a budget | refused | 1024 to below the cap | 64K (older: 32K–64K) |
+| any id the table does not know | adaptive, every call | every level | refused | 64K |
+
+- **There is no thinking switch.** On a model with adaptive thinking every
+  call sends `thinking: {type: adaptive, display: summarized}` — the summary
+  is what fills the round's reasoning and the live thinking text on the
+  dashboard, and it costs the same as the hidden default. Turning thinking off
+  is refused outright by Opus 5.5, Fable and Mythos, and on Opus 4.8 and 5 it
+  makes the model write a tool call into its prose instead of making it. How
+  hard the model thinks is `reasoning_effort`, which defaults to `high`: every
+  phase this engine runs is long-horizon agentic tool use, and Opus 5.5's own
+  default is `medium`, so an unset level would silently think less after a
+  model upgrade. The calls that need little — the round-cap judge, the
+  knowledge answer, the turn-start filters and the learning passes — ask for
+  `low` on their own, and no call can ask for more than the entry's level. A
+  call's level that falls on one the model skips (`xhigh` on Opus 4.6) is
+  sent as the next level down that it takes.
+- **A budget-era model thinks only with a budget.** `reasoning_budget_tokens`
+  turns thinking on with that many tokens; unset, it does not think.
+- **No temperature is sent by default.** A call that names one (the judge asks
+  for 0, the auxiliary passes for 0.2) gets it only on a model that takes a
+  sampling parameter and on a call that is not thinking — in practice a
+  budget-era model with no budget. Elsewhere it is dropped rather than
+  refused, because those models answer any temperature with a 400.
+- **`max_tokens` is the model's own cap.** Thinking is spent from the same
+  cap as the answer, so a smaller one truncates a round or empties it; an
+  unused cap costs nothing, and spend is bounded by
+  [token budgets](#token-budgets) instead. A call's own smaller cap is honoured
+  only on a call that is not thinking.
+- **No forced tool choice and no prefill** are ever sent: a phase that must
+  end in a call names it and is asked again when a round ends without it,
+  and a conversation always ends on a user turn or a tool result.
+
+A Bedrock or Vertex spelling of a model (`anthropic.claude-opus-5-5`,
+`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `claude-opus-4-5@20251101`)
+and a dated snapshot are read as the model they spell. An id the table does
+not know — most likely a model released after this build — gets the current
+generation's shape, and `crewlet validate` warns about it at `claude_model`:
+if it is a gateway alias for an older model, name that model there, or its
+calls may be refused. Every rule above is checked when the config is
+validated, and again when the provider is built, where a model written as a
+`${VAR}` is first known.
 
 ## Tier A (`crewlet.yaml`)
 

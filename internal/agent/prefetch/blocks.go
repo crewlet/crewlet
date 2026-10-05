@@ -23,7 +23,8 @@ const (
 	recallHits = 3
 
 	// DefaultSummaryTokens caps the optional summary of those hits when
-	// the operator names no ceiling.
+	// the operator names no ceiling, on a call that does not think (a
+	// thinking call is sent the model's own ceiling; llm.Request.MaxTokens).
 	//
 	// Four hundred, which is what three two-sentence episodes compress
 	// into with room for the briefing sentence that ties them to the task

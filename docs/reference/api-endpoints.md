@@ -4678,7 +4678,7 @@ The rollup: the window's spend by phase, model, provider entry, worker and seat.
     ...
   ],
   "by_provider": [
-    { "provider_key": "anthropic", "models": ["claude-sonnet-5", "claude-haiku-4"],
+    { "provider_key": "anthropic", "models": ["claude-sonnet-5", "claude-haiku-4-5"],
       "seats": ["pm", "coder", "reviewer"], "seats_total": 5,
       "total_tokens": 20100, "calls": 5, ... }
   ],

@@ -264,4 +264,4 @@ curl -X PATCH "$CREWLET_URL/config" \\
   -H "Content-Type: application/merge-patch+json" \\
   -H "X-Summary: add a model provider" \\
   -d '{"providers":{"llm":{"default":{"type":"anthropic",
-       "model":"claude-sonnet-5","api_keys":["\${ANTHROPIC_API_KEY}"]}}}}'`;
+       "model":"claude-sonnet-5-5","api_keys":["\${ANTHROPIC_API_KEY}"]}}}}'`;

@@ -1267,7 +1267,7 @@ providers:
       cli: { agent: claude-code }
     metered:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys: ["${ANTHROPIC_API_KEY}"]
 
 roles:
@@ -1321,7 +1321,7 @@ providers:
     # The proxy speaks the Anthropic Messages API.
     subscription-proxy:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       base_url: "${LLM_PROXY_URL}"      # e.g. http://127.0.0.1:8317
       api_keys: ["${LLM_PROXY_KEY}"]    # the proxy's OWN inbound key
 
@@ -1347,6 +1347,15 @@ because each backend sends its vendor's native one:
 |---|---|
 | `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth |
 | `openai`, `openai-compatible` | `Authorization: Bearer` — and nothing else from the engine's environment. The SDK would add `OpenAI-Organization`, `OpenAI-Project` and every `OPENAI_CUSTOM_HEADERS` line from the process it runs in; the backend undoes each, so a proxy never receives headers an operator exported for some other tool. The OpenAI embeddings provider builds its client the same way |
+
+**The request is shaped for the model the entry names.** An `anthropic`
+entry sends what its Claude model accepts — adaptive thinking and an effort
+level on the current generation, never a temperature there — read from the
+[Claude model table](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling).
+A proxy that answers to its own alias (`model: sonnet`) rather than a Claude
+id is shaped as the current generation; if that alias is an older model,
+name it with `claude_model: claude-haiku-4-5` (or whichever it is), or the
+fields only newer models take will be refused through the proxy.
 
 The `api_keys` value is the credential for **the proxy**, not for the
 vendor: the vendor login lives inside the proxy. Rotation, cooldowns and

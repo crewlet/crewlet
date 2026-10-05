@@ -140,7 +140,7 @@ providers:
   llm:
     default:
       type: anthropic
-      model: claude-sonnet-5
+      model: claude-sonnet-5-5
       api_keys: ["${ANTHROPIC_API_KEY}"]
 
 roles:

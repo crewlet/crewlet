@@ -41,17 +41,22 @@ const (
 
 	// JudgeMaxTokens caps the answer.
 	//
-	// The answer is a verdict word, a small integer and one sentence. This
-	// is deliberately several times that: a thinking model spends its cap
-	// reasoning and returns nothing visible if the cap is tight, which
-	// reads as a judge that refused rather than one that was cut off.
+	// The answer is a verdict word, a small integer and one sentence, and
+	// this is several times that. It applies only to a call that does not
+	// think: a thinking model spends its thinking from the same cap, so a
+	// tight one returns nothing visible — a judge that reads as refusing
+	// rather than as cut off — and a backend sends the model's own ceiling
+	// there instead (see llm.Request.MaxTokens). What keeps a thinking
+	// judge short is judgeEffort.
 	JudgeMaxTokens = 400
 
 	// judgeTemperature is zero because this is a classifier. The same
 	// evidence must produce the same verdict — an extension that depended
 	// on sampling would make a turn's cost non-reproducible, and a judge
 	// that says extend on one run and rescue on the next teaches nobody
-	// anything.
+	// anything. Honoured where the model takes a sampling parameter and the
+	// call is not thinking; the current Claude generation takes none, and
+	// there the two-word verdict at judgeEffort is what keeps it stable.
 	judgeTemperature = 0.0
 
 	// judgeEffort is the most thinking a verdict is worth. The judge

@@ -57,7 +57,7 @@ describe("the edit", () => {
     type: "anthropic",
     model: "m1",
     api_keys: ["${A}", "__redacted__"],
-    reasoning: true,
+    reasoning_effort: "high",
     cooldowns: { rate_limit_seconds: 600 },
   };
 
@@ -67,7 +67,7 @@ describe("the edit", () => {
     expect(form.rateLimit).toBe("600");
     expect(modelEntity(entity, form)).toEqual(entity);
     const cleared = modelEntity(entity, { ...form, rateLimit: "", keys: [] });
-    expect(cleared).toEqual({ type: "anthropic", model: "m1", reasoning: true });
+    expect(cleared).toEqual({ type: "anthropic", model: "m1", reasoning_effort: "high" });
   });
 
   // A SUMMARY NAMES VARIABLES, NEVER A VALUE, and never the mask.

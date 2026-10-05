@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -758,6 +759,9 @@ func TestRedactedThinkingIsHandedBackOpaquely(t *testing.T) {
 			ThinkingBlocks: []llm.ThinkingBlock{{Type: "redacted_thinking", Data: "opaque"}},
 			ToolCalls:      []llm.ToolCall{{ID: "c", Name: "t"}},
 		},
+		// Answered, as every call is before the next round: a
+		// conversation ending on the assistant's turn is a prefill.
+		{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
 	}})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -838,103 +842,329 @@ func TestARequestWithNothingToSayIsRefusedBeforeTheCall(t *testing.T) {
 	}
 }
 
-func TestReasoningSendsAThinkingBudgetAndPinsTemperature(t *testing.T) {
+// --- the request shape, per model --------------------------------------
+
+// shapeFacts is what the API reference says one model accepts, written out
+// HERE rather than read from claudemodel: the test holds the wire to the
+// reference, so a table row edited away from it goes red as a body that
+// changed rather than passing because both sides moved together.
+type shapeFacts struct {
+	name        string
+	model       string
+	claudeModel string
+	adaptive    bool     // false: the budget generation
+	efforts     []string // nil: takes no effort at all
+	sampling    bool
+	maxOutput   float64
+}
+
+var (
+	everyLevel = []string{"low", "medium", "high", "xhigh", "max"}
+	noXHigh    = []string{"low", "medium", "high", "max"}
+)
+
+var shapeModels = []shapeFacts{
+	{"fable 5.1", "claude-fable-5-1", "", true, everyLevel, false, 128000},
+	{"mythos 5.1", "claude-mythos-5-1", "", true, everyLevel, false, 128000},
+	{"fable 5", "claude-fable-5", "", true, everyLevel, false, 128000},
+	{"opus 5.5", "claude-opus-5-5", "", true, everyLevel, false, 128000},
+	{"opus 5", "claude-opus-5", "", true, everyLevel, false, 128000},
+	{"opus 4.8", "claude-opus-4-8", "", true, everyLevel, false, 128000},
+	{"opus 4.7", "claude-opus-4-7", "", true, everyLevel, false, 128000},
+	{"opus 4.6", "claude-opus-4-6", "", true, noXHigh, true, 128000},
+	{"sonnet 5.5", "claude-sonnet-5-5", "", true, everyLevel, false, 128000},
+	{"sonnet 5", "claude-sonnet-5", "", true, everyLevel, false, 128000},
+	{"sonnet 4.6", "claude-sonnet-4-6", "", true, noXHigh, true, 128000},
+	{"haiku 4.5", "claude-haiku-4-5", "", false, nil, true, 64000},
+	{"haiku 4.5 snapshot", "claude-haiku-4-5-20251001", "", false, nil, true, 64000},
+	// An id the table has never seen is a model released after it: the
+	// current generation's shape, at the smallest current output cap.
+	{"unknown id", "claude-opus-5-7", "", true, everyLevel, false, 64000},
+	// The deployment spellings shape as the model they spell.
+	{"bedrock", "anthropic.claude-opus-5-5", "", true, everyLevel, false, 128000},
+	{"bedrock profile", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "", false, nil, true, 64000},
+	{"vertex", "claude-opus-4-5@20251101", "", false, []string{"low", "medium", "high"}, true, 64000},
+	// A gateway alias for an OLDER model, the one case Modern gets wrong,
+	// named by claude_model.
+	{"alias with claude_model", "gateway-fast", "claude-haiku-4-5", false, nil, true, 64000},
+}
+
+// wireShape is every field of a request body the model decides.
+type wireShape struct {
+	ThinkingType    string // "" when the field is absent
+	ThinkingDisplay string
+	Budget          float64
+	Effort          string // "" when output_config is absent
+	Temperature     *float64
+	MaxTokens       float64
+	ToolChoice      bool
+}
+
+func (w wireShape) String() string {
+	temp := "absent"
+	if w.Temperature != nil {
+		temp = fmt.Sprint(*w.Temperature)
+	}
+	return fmt.Sprintf("thinking=%q display=%q budget=%v effort=%q temperature=%s max_tokens=%v tool_choice=%v",
+		w.ThinkingType, w.ThinkingDisplay, w.Budget, w.Effort, temp, w.MaxTokens, w.ToolChoice)
+}
+
+func shapeOf(t *testing.T, body map[string]any) wireShape {
+	t.Helper()
+	var w wireShape
+	if thinking, ok := body["thinking"].(map[string]any); ok {
+		w.ThinkingType, _ = thinking["type"].(string)
+		w.ThinkingDisplay, _ = thinking["display"].(string)
+		w.Budget, _ = thinking["budget_tokens"].(float64)
+	}
+	if out, ok := body["output_config"].(map[string]any); ok {
+		w.Effort, _ = out["effort"].(string)
+		if w.Effort == "" {
+			t.Fatalf("output_config sent with no effort: %v", out)
+		}
+	}
+	if temp, ok := body["temperature"].(float64); ok {
+		w.Temperature = &temp
+	}
+	w.MaxTokens, _ = body["max_tokens"].(float64)
+	_, w.ToolChoice = body["tool_choice"]
+	return w
+}
+
+// TestRequestShapeForEveryModel is the whole of what this backend decides per
+// model, asserted on the WIRE for every id the reference names, an id it does
+// not, the Bedrock and Vertex spellings and an alias that names its model —
+// across the entry's effort and budget and the call's effort, temperature and
+// output cap. Every expectation below is derived from shapeFacts alone:
+//
+//   - thinking is {adaptive, summarized} on every call to an adaptive model,
+//     {enabled, budget_tokens} on a budget-era one only when the entry gives
+//     a budget, and absent otherwise;
+//   - effort is the entry's level (high when it names none) lowered to the
+//     call's, and absent on a model that takes none;
+//   - a temperature is sent only when the model samples, the call is not
+//     thinking and the caller named one;
+//   - max_tokens is the model's ceiling, and a caller's own cap only on a
+//     call that is not thinking;
+//   - tool_choice is never sent.
+func TestRequestShapeForEveryModel(t *testing.T) {
 	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-	p := newProvider(t, url, func(c *Config) {
-		c.Reasoning = true
-		c.ThinkingBudget = 4096
-		c.MaxTokens = 1000
-	})
-	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete: %v", err)
+	type scenario struct {
+		name    string
+		effort  llm.Effort
+		budget  int
+		request func(llm.Request) llm.Request
 	}
-	body := api.seen()[0].body
-	if dig(t, body, "thinking", "type") != "enabled" {
-		t.Fatalf("thinking = %v", body["thinking"])
+	scenarios := []scenario{
+		{name: "defaults", request: func(r llm.Request) llm.Request { return r }},
+		{name: "entry xhigh, call low", effort: llm.EffortXHigh,
+			request: func(r llm.Request) llm.Request { r.Effort = llm.EffortLow; return r }},
+		{name: "caller temperature 0 and cap 400",
+			request: func(r llm.Request) llm.Request {
+				r.Temperature, r.MaxTokens = llm.Temp(0), 400
+				return r
+			}},
+		{name: "budget 2048 with temperature 0 and cap 400", budget: 2048,
+			request: func(r llm.Request) llm.Request {
+				r.Temperature, r.MaxTokens = llm.Temp(0), 400
+				return r
+			}},
 	}
-	if dig(t, body, "thinking", "budget_tokens") != float64(4096) {
-		t.Fatalf("budget = %v", dig(t, body, "thinking", "budget_tokens"))
-	}
-	// Anthropic requires max_tokens strictly greater than the budget and
-	// rejects any temperature but 1 while thinking.
-	if body["max_tokens"] != float64(4096+1000) {
-		t.Fatalf("max_tokens = %v, want the budget plus the cap", body["max_tokens"])
-	}
-	if body["temperature"] != float64(1) {
-		t.Fatalf("temperature = %v, want 1", body["temperature"])
+	for _, m := range shapeModels {
+		for _, sc := range scenarios {
+			t.Run(m.name+"/"+sc.name, func(t *testing.T) {
+				t.Parallel()
+				api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+				p, err := New(Config{
+					Model: m.model, ClaudeModel: m.claudeModel, APIKeys: []string{"k"},
+					BaseURL: url, Timeout: 5 * time.Second,
+					Effort: sc.effort, ThinkingBudget: sc.budget,
+				})
+
+				// The entry settings the model refuses are refused at
+				// construction, by name, rather than sent as a 400 on
+				// every call.
+				switch {
+				case sc.effort != "" && !slices.Contains(m.efforts, string(sc.effort)):
+					if err == nil || !strings.Contains(err.Error(), "Effort") {
+						t.Fatalf("New with effort %s on %s = %v, want a refusal naming Effort",
+							sc.effort, m.model, err)
+					}
+					return
+				case sc.budget > 0 && m.adaptive:
+					if !errors.Is(err, claudemodel.ErrTakesNoBudget) || !strings.Contains(err.Error(), "ThinkingBudget") {
+						t.Fatalf("New with a budget on adaptive %s = %v, want ErrTakesNoBudget naming ThinkingBudget",
+							m.model, err)
+					}
+					return
+				case err != nil:
+					t.Fatalf("New: %v", err)
+				}
+
+				req := sc.request(llm.Request{
+					Messages: userTurn("hi").Messages,
+					Tools:    []llm.ToolDef{{Name: "ok", Parameters: map[string]any{"type": "object"}}},
+				})
+				if _, err := p.Complete(context.Background(), req); err != nil {
+					t.Fatalf("Complete: %v", err)
+				}
+
+				thinking := m.adaptive || sc.budget > 0
+				want := wireShape{MaxTokens: m.maxOutput}
+				switch {
+				case m.adaptive:
+					want.ThinkingType, want.ThinkingDisplay = "adaptive", "summarized"
+				case sc.budget > 0:
+					want.ThinkingType, want.Budget = "enabled", float64(sc.budget)
+				}
+				if m.efforts != nil {
+					want.Effort = "high"
+					if sc.effort != "" {
+						want.Effort = string(sc.effort)
+					}
+					if req.Effort != "" {
+						want.Effort = string(req.Effort) // every case lowers
+					}
+				}
+				if req.Temperature != nil && m.sampling && !thinking {
+					want.Temperature = req.Temperature
+				}
+				if req.MaxTokens > 0 && !thinking {
+					want.MaxTokens = float64(req.MaxTokens)
+				}
+
+				got := shapeOf(t, api.seen()[0].body)
+				if got.String() != want.String() {
+					t.Fatalf("%s\n got  %s\n want %s", m.model, got, want)
+				}
+				if body := api.seen()[0].body; body["model"] != m.model {
+					t.Fatalf("model sent as %v, want %q as configured", body["model"], m.model)
+				}
+			})
+		}
 	}
 }
 
-func TestThinkingBudgetIsRaisedToTheVendorMinimum(t *testing.T) {
-	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-	p := newProvider(t, url, func(c *Config) {
-		c.Reasoning = true
-		c.ThinkingBudget = 10 // below Anthropic's floor of 1024
-	})
-	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	if got := dig(t, api.seen()[0].body, "thinking", "budget_tokens"); got != float64(minThinkingBudget) {
-		t.Fatalf("budget = %v, want it raised to %d", got, minThinkingBudget)
-	}
-}
-
-func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
+// A call's ceiling may fall on a level the model skips — `xhigh` on Opus 4.6,
+// `max` on Opus 4.5 — and lowering it to the next level the model takes is
+// the only reading that neither raises the effort nor sends a 400.
+func TestAnEffortTheModelSkipsIsLoweredToOneItTakes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name            string
-		configure       func(*Config)
-		request         llm.Request
-		wantTemperature float64
-		wantMaxTokens   float64
+		model         string
+		entry, call   llm.Effort
+		wantOnTheWire string
 	}{
-		{
-			// The tool loop sends neither field on any call it makes, so
-			// "unset" is what the whole engine runs on: a nil temperature
-			// must reach the provider's configured default, not 0.0.
-			name: "request says nothing", request: userTurn("hi"),
-			wantTemperature: DefaultTemperature, wantMaxTokens: DefaultMaxTokens,
-		},
-		{
-			name:            "config overrides the default",
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
-			request:         userTurn("hi"),
-			wantTemperature: 0.2, wantMaxTokens: 512,
-		},
-		{
-			name:            "request overrides the config",
-			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0.9), MaxTokens: 77},
-			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
-			wantTemperature: 0.9, wantMaxTokens: 77,
-		},
-		{
-			// The whole reason Temperature is a pointer. A judge asking
-			// for a reproducible answer says 0.0 and MUST get it; a
-			// backend testing `> 0` silently substitutes its default and
-			// the judge is non-deterministic with nothing to show for it.
-			name:            "an explicit zero reaches the wire",
-			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0)},
-			configure:       func(c *Config) { c.Temperature = 0.2 },
-			wantTemperature: 0, wantMaxTokens: DefaultMaxTokens,
-		},
+		{"claude-opus-4-6", llm.EffortMax, llm.EffortXHigh, "high"},
+		{"claude-opus-4-6", llm.EffortMax, "", "max"},
+		{"claude-opus-4-5", llm.EffortHigh, llm.EffortMax, "high"},
+		{"claude-opus-4-5", "", llm.EffortMedium, "medium"},
+		// A ceiling ABOVE the entry never raises it.
+		{"claude-opus-5-5", llm.EffortMedium, llm.EffortMax, "medium"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-			p := newProvider(t, url, tc.configure)
-			if _, err := p.Complete(context.Background(), tc.request); err != nil {
-				t.Fatalf("Complete: %v", err)
-			}
-			body := api.seen()[0].body
-			if body["temperature"] != tc.wantTemperature {
-				t.Fatalf("temperature = %v, want %v", body["temperature"], tc.wantTemperature)
-			}
-			if body["max_tokens"] != tc.wantMaxTokens {
-				t.Fatalf("max_tokens = %v, want %v", body["max_tokens"], tc.wantMaxTokens)
-			}
-		})
+		api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+		p := newProvider(t, url, func(c *Config) { c.Model, c.Effort = tc.model, tc.entry })
+		req := userTurn("hi")
+		req.Effort = tc.call
+		if _, err := p.Complete(context.Background(), req); err != nil {
+			t.Fatalf("%s: Complete: %v", tc.model, err)
+		}
+		if got := dig(t, api.seen()[0].body, "output_config", "effort"); got != tc.wantOnTheWire {
+			t.Errorf("%s entry %q call %q: effort = %v, want %q",
+				tc.model, tc.entry, tc.call, got, tc.wantOnTheWire)
+		}
+	}
+}
+
+// Every combination that would be a 400 on every call is refused when the
+// provider is built, naming the field — the config tier refuses the same
+// combinations for a model written literally, and this is what catches one
+// written as a `${VAR}` that only resolved at build.
+func TestNewRefusesASettingTheModelWouldAnswerWithA400(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cfg   Config
+		field string
+		is    error
+	}{
+		{"claude_model not in the table",
+			Config{Model: "gw", ClaudeModel: "claude-haiku-4"}, "ClaudeModel", claudemodel.ErrNotInTable},
+		{"claude_model beside a model the table reads",
+			Config{Model: "claude-opus-5-5", ClaudeModel: "claude-haiku-4-5"}, "ClaudeModel", claudemodel.ErrOverrideNotNeeded},
+		{"effort on a model that takes none",
+			Config{Model: "claude-haiku-4-5", Effort: llm.EffortLow}, "Effort", claudemodel.ErrTakesNoEffort},
+		{"xhigh before Opus 4.7",
+			Config{Model: "claude-sonnet-4-6", Effort: llm.EffortXHigh}, "Effort", claudemodel.ErrEffortLevel},
+		{"an effort that is not a level",
+			Config{Model: "claude-opus-5-5", Effort: "extreme"}, "Effort", claudemodel.ErrEffortLevel},
+		{"a budget on an adaptive model",
+			Config{Model: "claude-opus-5-5", ThinkingBudget: 4096}, "ThinkingBudget", claudemodel.ErrTakesNoBudget},
+		{"a budget on an unknown id",
+			Config{Model: "gw", ThinkingBudget: 4096}, "ThinkingBudget", claudemodel.ErrTakesNoBudget},
+		{"a budget below the minimum",
+			Config{Model: "claude-haiku-4-5", ThinkingBudget: 10}, "ThinkingBudget", claudemodel.ErrBudgetRange},
+		{"a budget the output cap cannot hold",
+			Config{Model: "claude-haiku-4-5", ThinkingBudget: 64000}, "ThinkingBudget", claudemodel.ErrBudgetRange},
+		{"a negative budget",
+			Config{Model: "claude-haiku-4-5", ThinkingBudget: -1}, "ThinkingBudget", claudemodel.ErrBudgetRange},
+	} {
+		_, err := New(tc.cfg)
+		if !errors.Is(err, tc.is) || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s: New = %v, want %v naming %s", tc.name, err, tc.is, tc.field)
+		}
+	}
+	// The controls: the same fields where the model takes them.
+	for _, cfg := range []Config{
+		{Model: "gw", ClaudeModel: "claude-haiku-4-5", ThinkingBudget: 1024},
+		{Model: "claude-haiku-4-5", ThinkingBudget: 63999},
+		{Model: "claude-opus-4-7", Effort: llm.EffortXHigh},
+		{Model: "claude-opus-4-5", Effort: llm.EffortHigh, ThinkingBudget: 2048},
+	} {
+		if _, err := New(cfg); err != nil {
+			t.Errorf("New(%+v) = %v, want it built", cfg, err)
+		}
+	}
+}
+
+func TestAnInvalidCallEffortIsRefusedBeforeTheCall(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	req := userTurn("hi")
+	req.Effort = "extreme"
+	_, err := p.Complete(context.Background(), req)
+	if llm.KindOf(err) != llm.KindFatal || !strings.Contains(err.Error(), `"extreme"`) {
+		t.Fatalf("Complete = %v, want a fatal error naming the level", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("a request with an invalid effort still reached the network")
+	}
+}
+
+// NO PREFILL: a conversation ending on the assistant's turn is a 400 on every
+// model from 4.6 on. Nothing in the engine sends one, and this keeps it so.
+func TestAPrefillIsRefusedBeforeTheCall(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "start"},
+		{Role: llm.RoleAssistant, Content: "Sure, here is"},
+	}})
+	if !errors.Is(err, ErrPrefill) || llm.KindOf(err) != llm.KindFatal {
+		t.Fatalf("Complete = %v, want ErrPrefill", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("a prefill still reached the network")
+	}
+	// The control: the same assistant turn followed by the user's answer.
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "start"},
+		{Role: llm.RoleAssistant, Content: "Sure, here is"},
+		{Role: llm.RoleUser, Content: "go on"},
+	}}); err != nil {
+		t.Fatalf("a conversation ending on the user: %v", err)
 	}
 }
 

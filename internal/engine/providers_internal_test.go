@@ -1,13 +1,13 @@
 package engine
 
 import (
-	"strings"
-
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -45,10 +45,10 @@ const chatCompletion = `{
 // Both were unwired. base_url was handed to the backend verbatim, so
 // `base_url: "${LLM_BASE_URL}"` — the reference an openai-compatible entry is
 // documented to carry (docs/reference/environment-variables.md) — sent every
-// request to a URL that was the literal reference. And LookupEnv was never passed, so
-// the conventional-key fallback read the process environment and could not
-// see a value `crewlet secrets set OPENAI_API_KEY` had put in the store,
-// which is the case config.Resolver.LookupOK exists for.
+// request to a URL that was the literal reference. And the conventional-key
+// fallback read the process environment, so it could not see a value
+// `crewlet secrets set OPENAI_API_KEY` had put in the store — the case the
+// resolver exists for, and which config.LLMProvider.Keys now reads through.
 func TestBuildProviderResolvesBaseURLAndConventionalKey(t *testing.T) {
 	var gotAuth string
 	var calls int
@@ -93,9 +93,9 @@ func TestBuildProviderResolvesBaseURLAndConventionalKey(t *testing.T) {
 
 // TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey is the same
 // invariant on the other HTTP backend. Anthropic sends its credential on
-// X-Api-Key rather than Authorization, and anthropic.Config.LookupEnv's own
-// doc promises "the engine passes a secret-store-aware resolver" — which it
-// did not.
+// X-Api-Key rather than Authorization, and anthropic.Config reads no variable
+// of its own — its APIKeys are the whole bag — so the conventional key reaches
+// it only if the engine resolved it through the store.
 func TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey(t *testing.T) {
 	var gotKey string
 	var calls int
@@ -309,5 +309,95 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 		APIKeys: []string{"${NOBODY_SET_THIS}"},
 	}, r); err != nil {
 		t.Fatalf("a provider with no credential was refused: %v", err)
+	}
+}
+
+// An anthropic entry's request shape follows its MODEL, and the entry's dials
+// reach the backend: reasoning_effort as output_config.effort, claude_model as
+// the row an alias is shaped from, reasoning_budget_tokens as a budget-era
+// model's thinking. Asserted on the wire, because the wiring is the part that
+// can be dropped with everything still compiling.
+func TestAnAnthropicEntryIsShapedFromItsModel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec config.LLMProvider
+		want map[string]any // body field -> its JSON
+	}{
+		{
+			name: "a referenced current model at the entry's effort",
+			spec: config.LLMProvider{Model: "${LLM_MODEL}", ReasoningEffort: config.EffortXHigh},
+			want: map[string]any{
+				"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
+				"output_config": map[string]any{"effort": "xhigh"},
+				"max_tokens":    float64(128000),
+			},
+		},
+		{
+			name: "an alias named by claude_model, thinking on its budget",
+			spec: config.LLMProvider{Model: "gw-fast", ClaudeModel: "claude-haiku-4-5", ReasoningBudgetTokens: 2048},
+			want: map[string]any{
+				"thinking":   map[string]any{"type": "enabled", "budget_tokens": float64(2048)},
+				"max_tokens": float64(64000),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(raw, &body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant",
+					"model":"m","content":[{"type":"text","text":"ok"}],
+					"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+			}))
+			defer srv.Close()
+			spec := tc.spec
+			spec.Type, spec.BaseURL, spec.APIKeys = config.LLMAnthropic, srv.URL, []string{"sk-ant-test"}
+			p, err := buildProvider("claude", spec, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
+			if err != nil {
+				t.Fatalf("buildProvider: %v", err)
+			}
+			if _, err := p.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			for field, want := range tc.want {
+				if got := fmt.Sprint(body[field]); got != fmt.Sprint(want) {
+					t.Errorf("%s = %s, want %s", field, got, fmt.Sprint(want))
+				}
+			}
+			if _, sent := body["temperature"]; sent {
+				t.Errorf("temperature sent on a thinking call: %v", body["temperature"])
+			}
+		})
+	}
+}
+
+// A model written as a `${VAR}` is judged only once it resolves, so the
+// backend's refusal is the one an operator reads: it names the provider, the
+// model it resolved to and the field to change.
+func TestADialTheResolvedModelRefusesFailsTheBuildByName(t *testing.T) {
+	_, err := buildProvider("claude", config.LLMProvider{
+		Type: config.LLMAnthropic, Model: "${LLM_MODEL}", ReasoningBudgetTokens: 4096,
+	}, tierB(map[string]string{"LLM_MODEL": "claude-sonnet-5-5"}))
+	if err == nil {
+		t.Fatal("built a budget on an adaptive model, which every call would answer with a 400")
+	}
+	for _, want := range []string{`"claude"`, `"claude-sonnet-5-5"`, "reasoning_budget_tokens", "ThinkingBudget"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+}
+
+// The config's levels are the contract's, so a level the config admits is one
+// a backend can compare and lower.
+func TestEveryConfigEffortIsAContractEffort(t *testing.T) {
+	for _, level := range config.ReasoningEfforts {
+		if e := llm.Effort(level); e == "" || !e.Valid() {
+			t.Errorf("config admits reasoning_effort %q, which llm.Effort does not know", level)
+		}
 	}
 }

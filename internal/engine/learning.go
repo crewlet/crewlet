@@ -692,7 +692,8 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 // The same 0.2 the other auxiliary passes use, and for the same reason: a
 // summary is a description of rows that already exist, so there is nothing
 // for sampling to explore — but zero makes some providers degenerate into
-// repeating the input.
+// repeating the input. Honoured only where the model takes a sampling
+// parameter and the call is not thinking.
 const compactionTemperature = 0.2
 
 // compactionEffort is the most thinking a cluster summary is worth: it

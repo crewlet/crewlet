@@ -1275,6 +1275,15 @@
             "null"
           ]
         },
+        "claude_model": {
+          "description": "anthropic only: the Claude model id whose request shape this entry uses, when model is a gateway alias the table cannot read.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "cli": {
           "$ref": "#/$defs/CLIAgent",
           "description": "The cli-agent block. Required for type cli-agent, refused otherwise."
@@ -1292,7 +1301,7 @@
           ]
         },
         "reasoning": {
-          "description": "Enable extended thinking (openai and anthropic only).",
+          "description": "openai only: send reasoning_effort to a reasoning model.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -1301,7 +1310,7 @@
           ]
         },
         "reasoning_budget_tokens": {
-          "description": "Anthropic thinking budget in tokens when reasoning is on. Not accepted on a cli-agent provider.",
+          "description": "anthropic, budget-era models only (claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5 and older): the thinking budget in tokens, 1024 or more and below the model's output cap. Unset means no thinking.",
           "minimum": 0,
           "type": [
             "integer",
@@ -1309,11 +1318,12 @@
           ]
         },
         "reasoning_effort": {
-          "description": "OpenAI reasoning effort when reasoning is on. Not accepted on a cli-agent provider.",
+          "description": "How hard the model thinks. openai: sent while reasoning is on. anthropic: sent on every call, high when unset, refused at a level the model does not take.",
           "enum": [
             "low",
             "medium",
             "high",
+            "xhigh",
             "max",
             "",
             null

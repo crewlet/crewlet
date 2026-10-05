@@ -327,8 +327,8 @@ func seedChars(t *testing.T, msgs []llm.Message) int {
 // every tool and asked nothing.
 //
 // The parked rounds here carry REASONING AND TOOL-CALL ARGUMENTS, which is what
-// a real one carries — `reasoning: true` gives every round a four-figure
-// thinking allowance by default, the tool loop stores the blocks on each
+// a real one carries — every current Claude model thinks on every round and
+// returns its summarized thinking, the tool loop stores the blocks on each
 // assistant message and execstate serialises them into the row — and they were
 // the next term to go missing after the two above: text alone under-reported a
 // resumed executor by the largest thing in its prompt.

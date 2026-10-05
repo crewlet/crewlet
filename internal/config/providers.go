@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -292,24 +294,42 @@ var LLMProviderTypes = []LLMProviderType{
 	LLMOpenAI, LLMAnthropic, LLMOpenAICompatible, LLMCLIAgent,
 }
 
-// ReasoningEffort is the OpenAI-side reasoning budget selector.
+// ReasoningEffort is how hard a model thinks: OpenAI's `reasoning_effort` and
+// Anthropic's `output_config.effort`, which share these spellings. Ordered,
+// lowest first, because a call may lower it (llm.Request.Effort) and lowering
+// needs an order.
 type ReasoningEffort string
 
-// The reasoning-effort levels.
+// The reasoning-effort levels. `xhigh` is accepted by Claude from Opus 4.7 on
+// and by OpenAI's reasoning models; an anthropic entry is held to what its own
+// model takes (see [LLMProvider.validate]).
 const (
 	EffortLow    ReasoningEffort = "low"
 	EffortMedium ReasoningEffort = "medium"
 	EffortHigh   ReasoningEffort = "high"
+	EffortXHigh  ReasoningEffort = "xhigh"
 	EffortMax    ReasoningEffort = "max"
 )
 
-// ReasoningEfforts is the closed set.
-var ReasoningEfforts = []ReasoningEffort{EffortLow, EffortMedium, EffortHigh, EffortMax}
+// ReasoningEfforts is the closed set, lowest first.
+var ReasoningEfforts = []ReasoningEffort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
 
 // LLMProvider is one named entry under providers.llm.
 type LLMProvider struct {
 	Type  LLMProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|anthropic|openai-compatible|cli-agent" desc:"Which implementation to construct."`
 	Model string          `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id this provider serves."`
+
+	// ClaudeModel names the Claude model whose request shape an anthropic
+	// entry uses, when `model` is a gateway alias the capability table
+	// cannot read. An anthropic request's shape — how it thinks, which
+	// effort levels it takes, whether it may carry a temperature, its
+	// output cap — is a function of the model, read from
+	// internal/providers/llm/anthropic/claudemodel; an id the table does
+	// not know is shaped as the current generation, which is right for a
+	// model newer than the table and wrong for an alias hiding an older
+	// one. That last case is what this names. An exact table id; refused
+	// on any other type and beside a model the table already reads.
+	ClaudeModel string `yaml:"claude_model,omitempty" json:"claude_model,omitempty" desc:"anthropic only: the Claude model id whose request shape this entry uses, when model is a gateway alias the table cannot read."`
 
 	// APIKeys is always a list: one entry for the ordinary case, several
 	// for rotation. With more than one the provider rotates on rate-limit
@@ -335,14 +355,21 @@ type LLMProvider struct {
 	// default to fall back to.
 	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy)."`
 
-	// Reasoning turns on extended thinking.
-	Reasoning bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty" desc:"Enable extended thinking (openai and anthropic only)."`
-	// ReasoningEffort is the OpenAI-side budget selector. Refused on a
-	// cli-agent entry, which takes no per-call effort flag.
-	ReasoningEffort ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty" js:"enum=low|medium|high|max" desc:"OpenAI reasoning effort when reasoning is on. Not accepted on a cli-agent provider."`
-	// ReasoningBudgetTokens is the Anthropic-side thinking budget. Refused
-	// on a cli-agent entry, which carries its own.
-	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"Anthropic thinking budget in tokens when reasoning is on. Not accepted on a cli-agent provider."`
+	// Reasoning turns on an OpenAI reasoning model's effort. Refused on an
+	// anthropic entry, where thinking is not a switch: every current Claude
+	// model thinks on every call (several refuse to be told not to), and
+	// the depth is `reasoning_effort`.
+	Reasoning bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty" desc:"openai only: send reasoning_effort to a reasoning model."`
+	// ReasoningEffort is how hard the model thinks — OpenAI's
+	// reasoning_effort while `reasoning` is on, Anthropic's
+	// output_config.effort on every call (high when unset, on a model
+	// that takes effort). A call may lower it and never raise it.
+	ReasoningEffort ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty" js:"enum=low|medium|high|xhigh|max" desc:"How hard the model thinks. openai: sent while reasoning is on. anthropic: sent on every call, high when unset, refused at a level the model does not take."`
+	// ReasoningBudgetTokens is the thinking budget of a BUDGET-ERA Claude
+	// model (Haiku 4.5, Sonnet 4.5, Opus 4.5 and older): 0 means it does
+	// not think. Refused on every other model — the adaptive ones answer a
+	// budget with a 400 or have deprecated it — and on every other type.
+	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens,omitempty" json:"reasoning_budget_tokens,omitempty" js:"min=0" desc:"anthropic, budget-era models only (claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5 and older): the thinking budget in tokens, 1024 or more and below the model's output cap. Unset means no thinking."`
 
 	// TimeoutSeconds is the HTTP client timeout for one call. Raise it for
 	// slow or large-output models that otherwise time out mid-generation;
@@ -492,7 +519,20 @@ func (l *LLMProvider) validate(path Path) error {
 		case LLMOpenAICompatible:
 			p.add(at(path, "reasoning"), ErrConflict,
 				"reasoning is not supported for openai-compatible providers; "+
-					"use type openai or anthropic")
+					"use type openai")
+		case LLMAnthropic:
+			// Not a switch on a Claude model: every current one thinks on
+			// every call — Opus 5.5, Fable and Mythos refuse to be told
+			// otherwise, and Opus 4.8 and 5 with thinking off write a tool
+			// call into their prose instead of making it. Accepting the
+			// field and ignoring it would be the "configured it and nothing
+			// happened" this file refuses everywhere else.
+			p.add(at(path, "reasoning"), ErrConflict,
+				"thinking always runs on an anthropic entry, so there is nothing to "+
+					"switch: drop reasoning, and tune how hard it thinks with "+
+					"reasoning_effort — or, on a budget-era model (claude-haiku-4-5, "+
+					"claude-sonnet-4-5, claude-opus-4-5 and older), turn thinking on with "+
+					"reasoning_budget_tokens")
 		case LLMCLIAgent:
 			p.add(at(path, "reasoning"), ErrConflict,
 				"reasoning is not a Crewlet setting for cli-agent providers: "+
@@ -503,19 +543,22 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	// The two DIALS beside that switch are refused on the same entry for the
 	// same reason, and refused rather than wired up: both are per-call API
-	// parameters (an OpenAI request field and an Anthropic thinking budget),
-	// and a coding CLI driven headlessly takes neither — it exposes no flag
-	// for either and reads its reasoning setup from its own plan. Nothing in
-	// engine/providers.go passes them to cliagent.Config, so today they
-	// validate clean and are read by nobody, which is the worst of the three
-	// possible behaviours: an operator sent here by an error message telling
-	// them to raise the model's effort would set one, see no change, and have
-	// nothing to look at. The honest fix for an under-reasoning CLI entry is
-	// its `model`.
-	if kind == LLMCLIAgent {
+	// parameters (an effort level and an Anthropic thinking budget), and a
+	// coding CLI driven headlessly takes neither — it exposes no flag for
+	// either and reads its reasoning setup from its own plan. Accepted, they
+	// would validate clean and be read by nobody, which is the worst of the
+	// three possible behaviours: an operator sent here by an error message
+	// telling them to raise the model's effort would set one, see no change,
+	// and have nothing to look at. The honest fix for an under-reasoning CLI
+	// entry is its `model`.
+	//
+	// The same rule, applied to every type: a dial is refused wherever the
+	// backend it would reach does not send it.
+	switch kind {
+	case LLMCLIAgent:
 		if l.ReasoningEffort != "" {
 			p.add(at(path, "reasoning_effort"), ErrConflict,
-				"reasoning_effort is an OpenAI request field and does nothing on a "+
+				"reasoning_effort is an API request field and does nothing on a "+
 					"cli-agent provider: the CLI takes no per-call effort flag. "+
 					"Drop it, and point `model` at a stronger model instead")
 		}
@@ -525,6 +568,20 @@ func (l *LLMProvider) validate(path Path) error {
 					"nothing on a cli-agent provider: the CLI carries its own. "+
 					"Drop it, and point `model` at a stronger model instead")
 		}
+	case LLMOpenAI, LLMOpenAICompatible:
+		// The OpenAI backend sends reasoning_effort only while reasoning
+		// is on, and an openai-compatible entry cannot turn it on.
+		if l.ReasoningEffort != "" && !l.Reasoning {
+			p.add(at(path, "reasoning_effort"), ErrConflict,
+				"reasoning_effort is sent only while reasoning is on, so here it does "+
+					"nothing: set `reasoning: true` (type openai only), or drop it")
+		}
+		if l.ReasoningBudgetTokens != 0 {
+			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
+				"reasoning_budget_tokens is an Anthropic thinking budget and does nothing "+
+					"on an %s provider: drop it, and set reasoning_effort for how hard "+
+					"a reasoning model thinks", kind)
+		}
 	}
 	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
 		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
@@ -533,6 +590,13 @@ func (l *LLMProvider) validate(path Path) error {
 	if l.ReasoningBudgetTokens < 0 {
 		p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange,
 			"must not be negative, got %d", l.ReasoningBudgetTokens)
+	}
+	if kind == LLMAnthropic {
+		p.wrap(l.validateClaudeShape(path))
+	} else if l.ClaudeModel != "" {
+		p.add(at(path, "claude_model"), ErrConflict,
+			"claude_model names the request shape of an anthropic entry and does "+
+				"nothing on a %s provider: drop it", kind)
 	}
 
 	// Left unbounded, a timeout of 0 or a negative one passes validation
@@ -569,6 +633,88 @@ func (l *LLMProvider) validate(path Path) error {
 		// api.openai.com with whatever key it was given.
 		p.add(at(path, "base_url"), ErrMissing,
 			"an openai-compatible provider needs the endpoint to talk to")
+	}
+	return p.err()
+}
+
+// llmWarnings is every LLM entry that is valid and worth a second look, in
+// declaration order.
+//
+// One today: an anthropic model the capability table does not know, named
+// with no claude_model. That is VALID — most likely a model released after the
+// table, and the current-generation shape it gets is what those accept — and
+// it is wrong in exactly one case nothing can detect offline, an alias that
+// hides an OLDER model, whose every call would then be a 400. Located at the
+// field that settles it.
+func (p *Providers) llmWarnings() []Warning {
+	var out []Warning
+	for _, key := range p.ProviderOrder() {
+		entry := p.LLM[key]
+		model := strings.TrimSpace(entry.Model)
+		if entry.Type != LLMAnthropic || entry.ClaudeModel != "" || model == "" || envref.Has(model) {
+			continue
+		}
+		if _, known := claudemodel.Lookup(model); known {
+			continue
+		}
+		out = append(out, advisory(at(entryPath(key), "claude_model"), fmt.Sprintf(
+			"provider %q: model %q is not in the Claude capability table, so its "+
+				"requests use the current-generation shape (adaptive thinking, every "+
+				"effort level, no temperature, a %d-token output cap). That is right "+
+				"for a model newer than the table; if it is a gateway alias for an "+
+				"older Claude model, name that model with claude_model, or every call "+
+				"may be refused", key, model, claudemodel.Modern.MaxOutput)))
+	}
+	return out
+}
+
+// entryPath is where provider key sits in the document.
+func entryPath(key string) Path { return entry(field("providers.llm"), key) }
+
+// validateClaudeShape holds an anthropic entry's settings to what its model
+// accepts — the profile its requests are shaped from — by the SAME rules the
+// backend's constructor applies (claudemodel), so `crewlet validate` refuses
+// exactly what would otherwise be a 400 on every call.
+//
+// A model written as a `${VAR}` is judged only once it resolves, by the
+// backend at build, because before then there is no id to look up — unless
+// claude_model names the shape, which needs no model id at all.
+func (l *LLMProvider) validateClaudeShape(path Path) error {
+	var p problems
+	model := strings.TrimSpace(l.Model)
+	if model == "" || (envref.Has(model) && l.ClaudeModel == "") {
+		return nil
+	}
+	profile, err := claudemodel.Resolve(model, l.ClaudeModel)
+	switch {
+	case errors.Is(err, claudemodel.ErrNotInTable):
+		p.add(at(path, "claude_model"), ErrUnknownValue, "%v", err)
+		return p.err()
+	case err != nil:
+		p.add(at(path, "claude_model"), ErrConflict, "%v: drop claude_model", err)
+		return p.err()
+	}
+
+	effort := claudemodel.Effort(l.ReasoningEffort)
+	if effort.Valid() { // an unknown level is reported once, above
+		switch err := profile.CheckEffort(model, effort); {
+		case errors.Is(err, claudemodel.ErrTakesNoEffort):
+			p.add(at(path, "reasoning_effort"), ErrConflict,
+				"%v: drop reasoning_effort (this model's depth is reasoning_budget_tokens)", err)
+		case err != nil:
+			p.add(at(path, "reasoning_effort"), ErrOutOfRange, "%v", err)
+		}
+	}
+	if l.ReasoningBudgetTokens > 0 { // a negative one is reported once, above
+		switch err := profile.CheckBudget(model, l.ReasoningBudgetTokens); {
+		case errors.Is(err, claudemodel.ErrTakesNoBudget):
+			p.add(at(path, "reasoning_budget_tokens"), ErrConflict,
+				"%v: drop it, and tune how hard the model thinks with reasoning_effort — "+
+					"or, if model is a gateway alias for a budget-era model, name that "+
+					"model with claude_model", err)
+		case err != nil:
+			p.add(at(path, "reasoning_budget_tokens"), ErrOutOfRange, "%v", err)
+		}
 	}
 	return p.err()
 }

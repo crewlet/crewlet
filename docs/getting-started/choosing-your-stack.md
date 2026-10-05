@@ -34,7 +34,7 @@ A useful mental model: for each integration there is usually
 
 | Option | Config | Notes |
 |---|---|---|
-| **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Required if you want Claude Code as the sandbox coding agent. |
+| **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Each request is shaped for its Claude model — adaptive thinking and an effort level on the current generation, a thinking budget only on the older models that take one (see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)). Required if you want Claude Code as the sandbox coding agent. |
 | **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
 | **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
 | **A gateway or proxy in front of a vendor** | `base_url` on `anthropic` / `openai` | `base_url` is not an `openai-compatible`-only field. It is merely *required* there. On a vendor entry it redirects that vendor's own wire format at an egress proxy, an Anthropic-API gateway, or a subscription OAuth proxy. The last of those has terms and trade-offs worth reading first: [Subscription LLM Backends § the proxy shape](../concepts/subscription-llm-backends.md#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry). |

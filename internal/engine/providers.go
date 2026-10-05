@@ -148,11 +148,23 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 
 	switch spec.Type {
 	case config.LLMAnthropic:
-		return anthropic.New(anthropic.Config{
-			Model: model, APIKeys: keys, BaseURL: baseURL,
+		// The request shape follows the MODEL (claudemodel), so the entry
+		// passes the model's dials and nothing else — no temperature, no
+		// cap, no thinking switch. New judges them against the resolved
+		// model, which is what catches a `${VAR}` model validation could
+		// not see; its refusal names the backend field, so it is said
+		// here in the operator's own field names too.
+		p, err := anthropic.New(anthropic.Config{
+			Model: model, ClaudeModel: spec.ClaudeModel, APIKeys: keys, BaseURL: baseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
-			Reasoning: spec.Reasoning, ThinkingBudget: spec.ReasoningBudgetTokens,
+			Effort: llm.Effort(spec.ReasoningEffort), ThinkingBudget: spec.ReasoningBudgetTokens,
 		})
+		if err != nil {
+			return nil, fmt.Errorf(
+				"engine: provider %q (model %q; check claude_model, reasoning_effort and "+
+					"reasoning_budget_tokens against it): %w", key, model, err)
+		}
+		return p, nil
 	case config.LLMOpenAI, config.LLMOpenAICompatible:
 		// Name labels errors, logs and the chain's telemetry. An
 		// openai-compatible entry passes its CONFIG KEY so a failure names

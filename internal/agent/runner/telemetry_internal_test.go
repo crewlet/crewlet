@@ -163,8 +163,8 @@ func TestAnUnencodableSchemaNamesTheToolItBelongsTo(t *testing.T) {
 // A PARKED TURN'S REASONING AND TOOL CALLS ARE IN THE FIGURE, AND THE
 // REASONING IS IN IT ONCE.
 //
-// `reasoning: true` is a shipped config field with a four-figure default
-// thinking allowance per round, the tool loop stores what comes back on every
+// Every current Claude model thinks on every call, and its summarized thinking
+// comes back on every round; the tool loop stores what comes back on every
 // assistant message it appends, and execstate serialises all of it into the
 // parked row — so on a resumed executor this is routinely the largest term the
 // prompt carries. The Anthropic backend puts every thinking block straight back

@@ -360,7 +360,7 @@ const entity = {
   type: "anthropic",
   model: "claude-sonnet-5",
   api_keys: ["${ANTHROPIC_KEY_A}", "__redacted__"],
-  reasoning: true,
+  reasoning_effort: "high",
   timeout_seconds: 300,
 };
 

@@ -7,9 +7,17 @@
 // (llm.KindForStatus), everything about which credential to use next is the
 // pool's, and everything about which model to try next is the chain's.
 //
-// Two details here are the ones worth checking against the vendor rather than
-// against intuition:
+// Three details here are the ones worth checking against the vendor rather
+// than against intuition:
 //
+//   - THE REQUEST SHAPE IS THE MODEL'S, read from [claudemodel] once at
+//     construction. Thinking is adaptive with a summarized display on every
+//     model that has that mode and a budget only on the ones that predate
+//     it; effort is the entry's level lowered to the call's ceiling, sent
+//     only where the model takes it; a temperature only where the model
+//     samples and the call is not thinking; max_tokens is the model's own
+//     ceiling. No knob is sent that the model in front of it would answer
+//     with a 400, because a 400 is fatal and the chain does not retry it.
 //   - MAX RETRIES IS ZERO. The SDK retries twice by default, and its retry
 //     predicate (internal/requestconfig: shouldRetry) fires on exactly what
 //     the layers above need to see first — 408, 409, 429, every 5xx and every
@@ -41,6 +49,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
 	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 )
 
@@ -50,20 +59,34 @@ var log = logging.Get("llm.anthropic")
 const providerName = "anthropic"
 
 // Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
+//
+// There is deliberately NO default temperature, max_tokens or thinking budget.
+// A temperature is a 400 on every current model and the engine's own phases
+// never chose one; the output cap is the model's own ceiling (see
+// [Provider.params]); and a budget is something a budget-era entry asks for
+// rather than something every entry is given.
 const (
 	DefaultBaseURL         = "https://api.anthropic.com"
 	DefaultTimeout         = 120 * time.Second
-	DefaultMaxTokens       = 4096
-	DefaultThinkingBudget  = 10000
-	DefaultTemperature     = 0.7
-	minThinkingBudget      = 1024
 	emptyToolResultContent = "(no output)"
 )
 
 // Config builds a provider.
 type Config struct {
-	// Model is the model id this provider serves. Required.
+	// Model is the model id this provider serves. Required. It is sent as
+	// written; the request SHAPE is read from the capability table under
+	// [claudemodel.Normalize], so a Bedrock or Vertex spelling of a known
+	// model is shaped as that model.
 	Model string
+
+	// ClaudeModel names the table row whose request shape this entry uses,
+	// when Model is a gateway alias the table cannot read. It must be one
+	// of the table's own ids exactly ([claudemodel.Known]), and it is
+	// refused beside a Model the table already reads: one entry may not
+	// carry two answers to "which model is this". Empty reads the shape
+	// from Model, and an id the table does not know gets
+	// [claudemodel.Modern].
+	ClaudeModel string
 
 	// APIKeys are the credentials, in declaration order. Several rotate.
 	// These are THE WHOLE BAG: nothing here reads a variable. Which key an
@@ -85,21 +108,28 @@ type Config struct {
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
 	Cooldowns credential.Policy
 
-	// MaxTokens is the output cap for a request that names none. Zero takes
-	// DefaultMaxTokens.
-	MaxTokens int
+	// Effort is how hard the model thinks on this entry, sent as
+	// `output_config.effort`. Empty takes [claudemodel.DefaultEffort].
+	// Refused on a model that takes no effort (Sonnet 4.5, Haiku 4.5 and
+	// older) and at a level the model does not accept (`xhigh` before Opus
+	// 4.7), because either is a 400 on every call. A call lowers it with
+	// [llm.Request.Effort] and never raises it.
+	//
+	// It is the ONLY depth control on a model that thinks adaptively. There
+	// is no "off": Opus 5.5, Fable and Mythos refuse it outright, Sonnet
+	// 5.5 only at the lower efforts, and Opus 4.8 and 5 with thinking off
+	// are documented to write a tool call into their prose instead of
+	// making it — the very failure the tool loop's correctives exist for.
+	Effort llm.Effort
 
-	// Temperature is used for a request that names none (see llm.Request:
-	// its zero value cannot be told apart from an unset field).
-	Temperature float64
-
-	// Reasoning turns on extended thinking.
-	Reasoning bool
-
-	// ThinkingBudget is the thinking allowance. Zero takes
-	// DefaultThinkingBudget. Anthropic requires at least 1024 and strictly
-	// less than max_tokens; both are enforced here rather than discovered
-	// as a 400 on the first turn of a live company.
+	// ThinkingBudget is the thinking allowance on a BUDGET-ERA model (Haiku
+	// 4.5, Sonnet 4.5, Opus 4.5 and older), the only models that take one.
+	// Zero means that model does not think. Refused on an adaptive model,
+	// where `budget_tokens` is a 400 or deprecated, and below
+	// [claudemodel.MinThinkingBudget] or at or above the model's output
+	// cap, where it is a 400 too — refused here rather than silently raised
+	// to fit, which is how a configured 10 used to become a 1024 nobody
+	// chose.
 	ThinkingBudget int
 
 	// HTTPClient overrides the transport. Nil builds one through
@@ -112,13 +142,17 @@ type Config struct {
 
 // Provider is an Anthropic Messages backend.
 type Provider struct {
-	model       string
-	client      sdk.Client
-	pool        *credential.Pool
-	maxTokens   int64
-	temperature float64
-	reasoning   bool
-	budget      int64
+	model  string
+	client sdk.Client
+	pool   *credential.Pool
+
+	// profile is what this entry's model accepts, decided once at
+	// construction: every request is shaped from it.
+	profile claudemodel.Profile
+	// effort is the entry's level, "" on a model that takes none.
+	effort llm.Effort
+	// budget is the thinking allowance on a budget-era model, 0 for none.
+	budget int64
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic because one Provider serves every seat
@@ -128,10 +162,33 @@ type Provider struct {
 
 var _ llm.Provider = (*Provider)(nil)
 
-// New builds a provider.
+// New builds a provider. It refuses a configuration that would be a 400 on
+// every call, naming the field — a combination the config tier already
+// refuses when the model is written literally, and checked again here because
+// a model written as a `${VAR}` is only known once it resolves.
 func New(cfg Config) (*Provider, error) {
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("anthropic: Model is required")
+	}
+	profile, err := claudemodel.Resolve(cfg.Model, cfg.ClaudeModel)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: ClaudeModel: %w", err)
+	}
+	if err := profile.CheckEffort(cfg.Model, claudemodel.Effort(cfg.Effort)); err != nil {
+		return nil, fmt.Errorf("anthropic: Effort: %w", err)
+	}
+	if err := profile.CheckBudget(cfg.Model, cfg.ThinkingBudget); err != nil {
+		return nil, fmt.Errorf("anthropic: ThinkingBudget: %w", err)
+	}
+	// The entry's level: what it named, or the default, on a model that
+	// takes one at all — and nothing on one that does not, where any value
+	// is a 400.
+	effort := cfg.Effort
+	switch {
+	case len(profile.Efforts) == 0:
+		effort = ""
+	case effort == "":
+		effort = llm.Effort(claudemodel.DefaultEffort)
 	}
 
 	keys := cfg.APIKeys
@@ -166,32 +223,25 @@ func New(cfg Config) (*Provider, error) {
 		opts = append(opts, option.WithHTTPClient(httpapi.NewHTTPClient()))
 	}
 
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = DefaultMaxTokens
-	}
-	budget := cfg.ThinkingBudget
-	if budget <= 0 {
-		budget = DefaultThinkingBudget
-	}
-	if cfg.Reasoning && budget < minThinkingBudget {
-		log.Warn("thinking_budget_raised",
-			"model", cfg.Model, "configured", budget, "applied", minThinkingBudget)
-		budget = minThinkingBudget
-	}
-	temperature := cfg.Temperature
-	if temperature <= 0 {
-		temperature = DefaultTemperature
+	if profile.ID == "" {
+		// Not a refusal: an id the table has never seen is most likely a
+		// model released after it, and Modern is what those accept. Said
+		// once per build so an alias for an OLDER model — the one case
+		// Modern gets wrong — has a line to find.
+		log.Warn("model_profile_unknown",
+			"model", cfg.Model,
+			"hint", "shaped as the current generation (adaptive thinking, no "+
+				"temperature); if this id is a gateway alias for an older Claude "+
+				"model, name that model with claude_model")
 	}
 
 	return &Provider{
-		model:       cfg.Model,
-		client:      sdk.NewClient(opts...),
-		pool:        credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
-		maxTokens:   int64(maxTokens),
-		temperature: temperature,
-		reasoning:   cfg.Reasoning,
-		budget:      int64(budget),
+		model:   cfg.Model,
+		client:  sdk.NewClient(opts...),
+		pool:    credential.New(credential.Options{Keys: keys, Policy: cfg.Cooldowns, Clock: cfg.Clock}),
+		profile: profile,
+		effort:  effort,
+		budget:  int64(cfg.ThinkingBudget),
 	}, nil
 }
 
@@ -333,33 +383,67 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 			"anthropic: request carries no non-system message with content")
 	}
 
-	maxTokens := p.maxTokens
-	if req.MaxTokens > 0 {
-		maxTokens = int64(req.MaxTokens)
+	if !req.Effort.Valid() {
+		return sdk.MessageNewParams{}, fmt.Errorf(
+			"anthropic: request effort %q is not a level (want low, medium, high, xhigh, max, or empty)",
+			req.Effort)
 	}
 	params := sdk.MessageNewParams{
 		Model:    p.model,
 		Messages: messages,
 	}
 
-	if p.reasoning {
-		// Anthropic requires max_tokens strictly greater than the thinking
-		// budget, and rejects any temperature but 1 while thinking.
-		if maxTokens <= p.budget {
-			maxTokens = p.budget + maxTokens
-		}
+	// THE SHAPE IS THE MODEL'S. Every field below is sent only where the
+	// profile says the model accepts it, because a field it does not is a
+	// 400, and a 400 is fatal to the call — the chain never tries the next
+	// member on it.
+	thinking := p.profile.Thinks(int(p.budget))
+	switch {
+	case p.profile.Thinking == claudemodel.ThinkingAdaptive:
+		// Explicit, on every call: omitting it means "think" on some of
+		// these models and "do not" on others (Opus 4.6–4.8, Sonnet 4.6 and
+		// 5). SUMMARIZED, because the default display on every current
+		// model is `omitted` — an empty thinking text, so the round's
+		// reasoning, the live thinking stream and the dashboard's thinking
+		// disclosure would all be blank. A summary is billed the same.
+		params.Thinking = sdk.ThinkingConfigParamUnion{OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{
+			Display: sdk.ThinkingConfigAdaptiveDisplaySummarized,
+		}}
+	case thinking:
 		params.Thinking = sdk.ThinkingConfigParamUnion{
 			OfEnabled: &sdk.ThinkingConfigEnabledParam{BudgetTokens: p.budget},
 		}
-		params.Temperature = param.NewOpt(1.0)
-	} else {
-		// TemperatureOr, not a zero test: an explicit 0.0 is a real request
-		// — a judge asking for a reproducible answer — and it must reach
-		// the wire, while a request that named nothing takes the
-		// provider's configured default.
-		params.Temperature = param.NewOpt(req.TemperatureOr(p.temperature))
 	}
-	params.MaxTokens = maxTokens
+
+	// The entry's level lowered to the call's ceiling, and then to the
+	// highest level at or below that the model takes: a call asking for
+	// `xhigh` on a model whose levels skip it gets `high`, not a 400.
+	if effort := fit(p.effort.AtMost(req.Effort), p.profile.Efforts); effort != "" {
+		params.OutputConfig = sdk.OutputConfigParam{Effort: sdk.OutputConfigEffort(effort)}
+	}
+
+	// A caller's temperature reaches the wire only where it can mean
+	// something: a model that takes sampling at all, on a call that is not
+	// thinking (the API takes nothing but 1 while it is). Anywhere else it
+	// is dropped rather than refused — a model with no sampling parameter
+	// cannot honour a 0, and the caller asked for reproducibility, not for
+	// a failed call.
+	if req.Temperature != nil && p.profile.Sampling && !thinking {
+		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+
+	// max_tokens is the MODEL'S OWN CEILING. An unused cap costs nothing,
+	// and runaway spend is bounded by the token budgets rather than here;
+	// a smaller one truncates an executor round mid-call, and on a thinking
+	// model the thinking is spent from the same cap as the answer, so a cap
+	// sized for a short answer is spent before the answer starts — the
+	// empty-answer failure the judge and the knowledge passes describe. A
+	// caller's own cap is therefore honoured only on a call that is not
+	// thinking, and never above the ceiling.
+	params.MaxTokens = int64(p.profile.MaxOutput)
+	if req.MaxTokens > 0 && !thinking && req.MaxTokens < p.profile.MaxOutput {
+		params.MaxTokens = int64(req.MaxTokens)
+	}
 
 	if system != "" {
 		params.System = systemBlocks(system)
@@ -372,6 +456,22 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 		params.Tools = formatTools(req.Tools)
 	}
 	return params, nil
+}
+
+// fit is effort at or below the highest level the model takes: effort itself
+// when the model takes it, the next level down it does take otherwise, and ""
+// when it takes no level at or below it — or none at all, or effort is empty.
+// accepted is lowest first, as every profile's levels are.
+func fit(effort llm.Effort, accepted []claudemodel.Effort) llm.Effort {
+	var out llm.Effort
+	for _, level := range accepted {
+		// level is at or below effort exactly when lowering effort to it
+		// gives it back.
+		if l := llm.Effort(level); effort != "" && effort.AtMost(l) == l {
+			out = l
+		}
+	}
+	return out
 }
 
 // cacheBreakpoint marks the (tools + system) prefix cacheable.
@@ -473,8 +573,23 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 			out = appendUser(out, sdk.NewTextBlock(m.Content))
 		}
 	}
+	// NO PREFILL. A conversation ending on the assistant's turn asks the
+	// model to continue it, which every model from Opus 4.6 and Sonnet 4.6
+	// on answers with a 400. Nothing in the engine sends one — the tool
+	// loop always follows an assistant turn with the results or a user
+	// note — so this is the invariant ENFORCED rather than assumed, refused
+	// here where it can be named rather than discovered as a fatal 400 that
+	// no fallback retries.
+	if n := len(out); n > 0 && out[n-1].Role == sdk.MessageParamRoleAssistant {
+		return nil, ErrPrefill
+	}
 	return out, nil
 }
+
+// ErrPrefill is a request whose conversation ends on the assistant's turn.
+var ErrPrefill = errors.New(
+	"anthropic: the conversation ends on an assistant turn (a prefill), which " +
+		"current Claude models refuse; end it on a user turn or a tool result")
 
 // appendUser adds user-side blocks to the conversation, JOINING the previous
 // turn when it is also the user's.

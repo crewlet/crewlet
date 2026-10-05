@@ -64,10 +64,14 @@ const (
 	// memoryFilterTokens is headroom for the filter's answer.
 	//
 	// The visible output is a JSON array of at most eight integers — ten
-	// tokens. The cap is two thousand because it covers THINKING as well:
-	// on an extended-thinking model a tight cap is spent reasoning, the
-	// call returns with output at the cap and content empty, and every
-	// turn then renders an empty block with no error anywhere to say why.
+	// tokens. Two thousand is not that answer's size but a RUNAWAY bound
+	// on a call that does not think: an unused cap costs nothing, and one
+	// cut to the answer's size truncates the first model that wraps the
+	// array in a sentence, so the block renders empty with no error to say
+	// why. A thinking call is not given it at all — its thinking would be
+	// spent from it, which is that same empty block — and is sent the
+	// model's own ceiling instead (llm.Request.MaxTokens), with auxEffort
+	// keeping it short.
 	memoryFilterTokens = 2000
 )
 

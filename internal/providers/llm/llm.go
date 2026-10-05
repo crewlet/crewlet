@@ -149,7 +149,15 @@ type Request struct {
 	// Temperature is a POINTER because 0.0 is a real request — it is what a
 	// judge or a classifier asks for when it needs a reproducible answer —
 	// and a plain float64 cannot tell that apart from a caller who said
-	// nothing. Nil means "leave it to the provider's configured default".
+	// nothing. Nil means "leave it to the provider".
+	//
+	// A REQUEST, NOT A GUARANTEE: a backend drops it where the model has
+	// no sampling parameter at all or the call is thinking, rather than
+	// failing the call over it — the current Claude generation answers
+	// any temperature with a 400, and every Claude model takes nothing
+	// but 1 while it thinks (internal/providers/llm/anthropic). A model
+	// that cannot be asked for a 0 cannot honour one, and a caller asking
+	// for reproducibility did not ask for a failed call.
 	//
 	// This is the rule the whole tree follows: a field whose zero value is
 	// a legitimate SETTING may not use the zero value to mean "unset". A
@@ -162,6 +170,13 @@ type Request struct {
 	// pointer like Temperature. Nobody ever means "generate zero tokens", so
 	// the zero has no honest reading to protect and a pointer would buy a
 	// nil check at every call site for nothing.
+	//
+	// It caps the ANSWER, so it is honoured only on a call that is not
+	// thinking. A thinking model spends its thinking from the same output
+	// budget, and a cap sized for a short answer is spent before the
+	// answer starts — an empty completion that reads as a model with
+	// nothing to say. Where the call thinks, the backend sends the model's
+	// own ceiling instead; the token budgets, not this, bound the spend.
 	MaxTokens int
 
 	// Effort is the MOST effort this call is worth: a CEILING on how hard

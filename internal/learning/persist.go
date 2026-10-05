@@ -103,13 +103,17 @@ const (
 )
 
 const (
-	// DefaultAuxTokens caps the classifier's output.
+	// DefaultAuxTokens caps the classifier's output on a call that does
+	// not think.
 	//
-	// Generous for an answer that is one small JSON object because the
-	// cap covers THINKING as well: on an extended-thinking model a tight
-	// cap is spent reasoning, the call returns with output_tokens at the
-	// cap and content empty, and every turn then degrades to NOOP with no
-	// error anywhere to say why.
+	// Generous for an answer that is one JSON object because a learning
+	// pass that writes prose into it (a synthesis, a refined entry) must
+	// never be cut off mid-object: a truncated object does not parse, and
+	// every turn then degrades to NOOP with no error anywhere to say why.
+	// A THINKING call is not given this cap at all — its thinking is spent
+	// from the same budget, which is that same empty-answer failure — and
+	// is sent the model's own ceiling instead (llm.Request.MaxTokens),
+	// with auxEffort keeping it short.
 	DefaultAuxTokens = 5000
 
 	// DefaultAuxTimeout bounds one auxiliary call.
@@ -127,7 +131,8 @@ const (
 	// auxTemperature keeps the classification reproducible. Not zero: the
 	// tier is a judgement, and greedy decoding on a judgement makes the
 	// model commit hard to a first token it would otherwise reconsider.
-	// Every learning classifier runs at this value.
+	// Every learning classifier asks for this value, and gets it where the
+	// model takes a sampling parameter and the call is not thinking.
 	auxTemperature = 0.2
 
 	// auxEffort is the most thinking a learning pass is worth. Every one of
