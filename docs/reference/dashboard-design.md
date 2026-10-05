@@ -2477,6 +2477,21 @@ of a failure, cut wherever the provider died, and never becomes the round's
 answer, whereas streaming text is about to become it and is rendered so the
 block does not reshape at the moment it commits.
 
+**Emphasis follows CommonMark's delimiter-run rules**, and for a long time it
+did not: a `*` or `_` opened wherever it stood and closed at the next one. A
+document rarely noticed; a model's words and a prompt do, because they are
+full of snake_case names nobody put in a code span — "call submit_work with
+the result_summary" rendered as "call submit*work with the result*summary",
+both underscores eaten, and a tool catalogue's `- list_mcp_server_tools:` line
+named a tool that does not exist in the one view whose job is showing what a
+model was told. A run now opens only when it is left-flanking and closes only
+when it is right-flanking, so `*foo *` is not emphasis; an underscore inside a
+word is a letter of it (`snake_case_name` stays itself, `_word_` and
+`__init__` are still emphasis); and an asterisk inside a word still opens and
+closes, as the spec says (`foo*bar*`). One walk serves the renderer and the
+plain-text flattening alike, over the whole text, so a run's neighbour is the
+character really beside it.
+
 `.prose` on its own stays a `pre-wrap` block, for text whose every space and
 break is the record — a coding run's activity log. Rendered markdown carries
 `.prose.md`.
