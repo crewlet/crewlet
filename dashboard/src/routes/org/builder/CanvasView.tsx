@@ -186,14 +186,14 @@ export function CanvasView({
    * The node a surface opened OVER the chart is about: the parent an add will
    * hang from, the node an editor is editing. Null while nothing is open.
    *
-   * WHAT IT IS FOR. A dialog that asks for the name of a child says nothing
-   * about WHERE that child will go, and the chart is the only thing that can
-   * say it. Named here, the chart pushes itself back behind the surface and
-   * eases onto the node it is about, and the reader is put back exactly where
-   * they were when it closes. It is the chart this is drawn from's own gesture
-   * (it saves its viewBox, eases onto the ghost of the node being added, and
-   * restores it on close), and it is drawn by the design system's canvas, so a
-   * reader who asked for less motion is moved without an animation.
+   * WHAT IT IS FOR. Named here, the chart pushes itself back behind the
+   * surface, blurred and faded by the design system's canvas, so the decision
+   * being made has the organization it is about behind it.
+   *
+   * THE VIEW DOES NOT MOVE FOR IT. The chart used to ease onto the node a
+   * surface was about and zoom back out when it closed, which turned every
+   * edit into two zooms the reader had not asked for: the node is the one
+   * they just pressed, so it is already on screen, at the zoom they chose.
    */
   about?: string | null;
   /**
@@ -577,19 +577,6 @@ function Chart({
     [],
   );
   useBuilderView(handle);
-
-  /*
-   * THE CHART GOES TO THE NODE A SURFACE IS ABOUT, and comes back when it
-   * closes. Nothing else moves the view: an add that changes the draft is a
-   * relayout, which the chart tweens and anchors on its own.
-   */
-  useEffect(() => {
-    if (about === null) {
-      view.current?.restoreView();
-      return;
-    }
-    view.current?.focusRegion(about);
-  }, [about]);
 
   return (
     <div className="bchart" ref={setHost}>
