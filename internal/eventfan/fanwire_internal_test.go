@@ -105,10 +105,11 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7}); got != 1 {
 		t.Errorf("a page of turns by days is asked in v%d, want v1", got)
 	}
-	// THE ASKER'S INSTANT RAISES NOTHING: a build that ignores it floors at
-	// its own clock, as every build did before it read the field, and
-	// refusing the question would cost that build's every row to save a
-	// strip of seconds thirty days back — see [seriesParams].
+	// THE ASKER'S INSTANT RAISES NOTHING: a build that ignores it answers as
+	// of its own clock — floored there on every question but `event`, which
+	// it did not floor at all — and refusing the question would cost that
+	// build's every row, where the asker can hold every row it returns to the
+	// asker's own horizon instead. See [Protocol] for what that leaves.
 	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7, At: time.Now()}); got != 1 {
 		t.Errorf("a page of turns by days with the asker's instant is asked in v%d, want v1", got)
 	}

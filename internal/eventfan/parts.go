@@ -3,6 +3,7 @@ package eventfan
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -36,6 +37,41 @@ func readAt(at time.Time) time.Time {
 	return at
 }
 
+// THE ASKER HOLDS EVERY ROW THAT COMES BACK TO ITS OWN HORIZON.
+//
+// A node on this build floors every read at the asker's instant, but a node on
+// an earlier build ignores the instant and answers as of its own clock — and
+// its lookup of one event by id was not floored at all (see [Protocol]). So
+// whatever a part carries with its instant is cut at the asker's horizon,
+// `at` − [store.EventHistory], before any merge sees it, and a row past the
+// horizon reaches no answer from any build: a dead link stays dead on a fleet
+// half way through an upgrade. The asker owns `at`, so it is the one place the
+// cut can be made whichever build replied.
+//
+// What a part holds only as a COUNT cannot be cut — see each part's `within`.
+
+// floorable is a part that can be held to a horizon.
+type floorable[T any] interface{ within(floor time.Time) T }
+
+// heldTo holds this node's part and every peer's to the horizon under `at`.
+// This node's own read is already floored there, so its part comes back as it
+// went in.
+func heldTo[T floorable[T]](g gathered[T], at time.Time) gathered[T] {
+	floor := at.Add(-store.EventHistory)
+	g.mine = g.mine.within(floor)
+	peers := make([]peer[T], 0, len(g.peers))
+	for _, p := range g.peers {
+		peers = append(peers, peer[T]{node: p.node, part: p.part.within(floor)})
+	}
+	g.peers = peers
+	return g
+}
+
+// below reports whether a row lies under the horizon.
+func below(floor time.Time) func(store.EventRecord) bool {
+	return func(r store.EventRecord) bool { return r.Time.Before(floor) }
+}
+
 // listPart is one node's page of a keyset listing, newest first.
 type listPart struct {
 	Rows []store.EventRecord `json:"rows"`
@@ -52,6 +88,19 @@ func (p listPart) rows() int { return len(p.Rows) }
 
 func (p listPart) keep(n int) any {
 	return listPart{Rows: p.Rows[:n], Full: true}
+}
+
+// within drops the rows under the horizon. A page whose LAST row lies under it
+// is no longer full: every row it did not send is older still, so nothing it
+// holds inside the window is missing — and left full, the merge would stop at
+// a row it has just dropped.
+func (p listPart) within(floor time.Time) listPart {
+	kept := slices.DeleteFunc(slices.Clone(p.Rows), below(floor))
+	if len(kept) == len(p.Rows) {
+		return p
+	}
+	full := p.Full && !p.Rows[len(p.Rows)-1].Time.Before(floor)
+	return listPart{Rows: kept, Full: full}
 }
 
 func listPartOf(ctx context.Context, log *store.EventLog, q store.ListQuery) (listPart, error) {
@@ -78,6 +127,15 @@ func listPartOf(ctx context.Context, log *store.EventLog, q store.ListQuery) (li
 // eventPart is one node's copy of one event, or nothing.
 type eventPart struct {
 	Event *store.EventRecord `json:"event,omitempty"`
+}
+
+// within drops a copy under the horizon — the one a build before the floor
+// answers with, since its lookup by id read every copy it still held.
+func (p eventPart) within(floor time.Time) eventPart {
+	if p.Event != nil && p.Event.Time.Before(floor) {
+		return eventPart{}
+	}
+	return p
 }
 
 func eventPartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (eventPart, error) {
@@ -108,6 +166,21 @@ func (p tracePart) rows() int { return len(p.Rows) }
 
 func (p tracePart) keep(n int) any {
 	return tracePart{Rows: p.Rows[:n], Total: p.Total}
+}
+
+// within drops the rows under the horizon and takes them off the count. The
+// rows are the node's OLDEST, so the ones under the horizon are among them and
+// the corrected count is exact — unless the node's capped read held nothing
+// but rows under it, when rows it did not send may lie there too and the count
+// can only be an upper bound. That takes a trace with as many rows as the cap
+// inside the strip between two clocks' horizons.
+func (p tracePart) within(floor time.Time) tracePart {
+	kept := slices.DeleteFunc(slices.Clone(p.Rows), below(floor))
+	dropped := len(p.Rows) - len(kept)
+	if dropped == 0 {
+		return p
+	}
+	return tracePart{Rows: kept, Total: max(p.Total-dropped, len(kept))}
 }
 
 func tracePartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (tracePart, error) {
@@ -159,6 +232,34 @@ func (p turnPart) keep(n int) any {
 	}
 	if n < len(out.Head) {
 		out.Head = out.Head[:n]
+	}
+	return out
+}
+
+// within drops the rows under the horizon, from the opening and the ending
+// alike, and corrects the count by what it dropped — exactly, when an ending
+// row went (every row older than it is under the horizon too, so what is left
+// is the ending), and when the opening's last row is above the horizon (so
+// everything it did not send is too); otherwise the count is an upper bound,
+// for the reason [tracePart.within] gives. The traces the node names are kept
+// while any of its rows is: a trace's first instant says nothing about its
+// last, so one that began under the horizon may still have rows above it.
+func (p turnPart) within(floor time.Time) turnPart {
+	head := slices.DeleteFunc(slices.Clone(p.Head), below(floor))
+	closing := slices.DeleteFunc(slices.Clone(p.Closing), below(floor))
+	droppedHead, droppedClosing := len(p.Head)-len(head), len(p.Closing)-len(closing)
+	if droppedHead == 0 && droppedClosing == 0 {
+		return p
+	}
+	out := turnPart{Head: head, Closing: closing, Traces: p.Traces}
+	switch {
+	case droppedClosing > 0:
+		out.Total = len(closing)
+	default:
+		out.Total = max(p.Total-droppedHead, len(head)+len(closing))
+	}
+	if len(head) == 0 && len(closing) == 0 {
+		out.Traces = []store.TurnTrace{}
 	}
 	return out
 }

@@ -54,14 +54,39 @@ import (
 //
 // ONE ADDITION MOVES NO VERSION: the asker's instant, `at`, on every
 // question's parameters — the instant the question is asked at, which every
-// node floors the history at (see [store.EventLog]). A build that does not
-// read it floors at its own clock instead, which is what every build did
-// before one read it: its answer differs from the asker's only by the rows
-// between two clocks' thirty-day horizons, a strip of seconds. It is not a
-// filter that build would answer around, nor a summed field it would leave at
-// zero — and a version would make that build REFUSE the whole question for
-// the length of an upgrade, costing every row it holds to save that strip.
-// The axis has carried its `at` since v1, for the window it cuts.
+// node on this build floors the history at (see [store.EventLog]). A build
+// that does not read it answers as of its own clock instead, and the builds
+// before it did NOT all floor alike:
+//
+//   - every question but `event` was floored at that build's own clock, so
+//     its answer differs from the asker's by the rows between two clocks'
+//     thirty-day horizons — a strip as wide as the skew between them;
+//   - `event`, one event by id, was not floored at all, so such a build
+//     answers with any copy it still holds: the day retention keeps past the
+//     horizon, and any age on a node whose sweep has lapsed.
+//
+// So THE ASKER HOLDS WHAT COMES BACK TO ITS OWN HORIZON wherever an answer
+// carries rows with their instants ([heldTo]): one event, a listing and its
+// trace siblings, a trace, a turn and both phase histories are cut at `at` −
+// [store.EventHistory] before anything is merged, so no build can put a row
+// past the horizon into an answer, and a dead link answers not found however
+// far an upgrade has got. What the asker CANNOT re-check is what arrives as a
+// count, aggregated at the older build's own horizon: the axis's
+// `by_category`, the turns a share folds (a page of turns' second scatter is
+// floored at the history, not at the window), and a trace's or a turn's total
+// beyond what it corrects by the rows it dropped. Those can carry the strip
+// and nothing wider. The rest is bounded by edges every build honours: the
+// axis's bars and totals lie inside the window cut from `at` — which starts
+// above the horizon, and which an older build that cut it differently fails
+// [MergeSeries]'s check on, to be named rather than summed — the spend window
+// and a page of turns name both edges as the asker's instants, and a turn's
+// merged start is held to its window here.
+//
+// It is still not a filter that build would answer around, nor a summed
+// field it would leave at zero — and a version would make that build REFUSE
+// the whole question for the length of an upgrade, costing every row it
+// holds to save that strip. The axis has carried its `at` since v1, for the
+// window it cuts.
 const Protocol = 4
 
 // versionOf is the lowest scatter version that answers one question with

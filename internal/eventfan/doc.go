@@ -56,8 +56,11 @@
 // a count is never floored a moment later than the rows it counts. Floored at
 // each node's own clock, a merged answer was a union of horizons, and a node
 // that answered a second late dropped that second's rows from an axis the
-// answer said covered them. The instant raises no protocol version — see
-// [Protocol].
+// answer said covered them. The instant raises no protocol version, so a node
+// on an earlier build answers as of its own clock — and its lookup of one
+// event by id was not floored at all — which is why the asker also HOLDS
+// every row that comes back to its own horizon before it merges anything
+// ([heldTo]); [Protocol] says what that cannot reach.
 //
 // # Nothing above this package may read one node and call it the fleet
 //

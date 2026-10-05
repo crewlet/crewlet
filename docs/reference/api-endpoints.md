@@ -86,7 +86,7 @@ node means nothing was done.
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
-| `GET` | `/events/{event_id}` | Single event incl. payload — inside the 30-day history (`event_history_seconds`) like every other read of the log, so a link to an older event answers `not_found` on every node, whatever its retention sweep has or has not reached |
+| `GET` | `/events/{event_id}` | Single event incl. payload — inside the 30-day history (`event_history_seconds`) like every other read of the log, so a link to an older event answers `not_found`: the serving node holds every node's copy to its own horizon, whatever a node's retention sweep has or has not reached and whichever build it runs |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | The token-spend rollup by phase / model / provider entry / worker / seat — the live 24 hours, or any window of up to 90 company days from the replicated usage domain (see [below](#token-spend-breakdown)) |
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
@@ -1708,7 +1708,10 @@ answers carries one shape:
   answer, because a link whose node was merely silent is a different fact
   from a dead one. An event older than the 30-day history is not found
   either: it is past the horizon every read of the log stops at, and a row a
-  node's sweep has not deleted yet is not history it serves.
+  node's sweep has not deleted yet is not history it serves. The serving node
+  holds that horizon itself, on every copy any node returns, so a node on an
+  earlier build — whose lookup by id was not floored — cannot resolve the
+  link either.
 - **Every question is asked at one instant** — the serving node's clock when
   the question arrived — and that instant travels with it, so every node
   floors the 30-day history at the serving node's horizon rather than at its
@@ -1716,6 +1719,15 @@ answers carries one shape:
   and its traces) is read at that one instant throughout. A node answering a
   second late, or with a clock a little ahead, therefore holds back nothing
   the others include.
+- **Every row that comes back is held to the serving node's horizon** —
+  `event`, `events` and its trace siblings, `trace`, `turn`, `phases` and a
+  seat's phase history — before anything is merged, because a node on an
+  earlier build reads no instant and answers as of its own clock. What such
+  a node sends only as a count — the axis's `by_category`, the turns a page's
+  second pass folds — can still carry the strip by which its clock runs
+  behind the serving node's;
+  the axis's bars, the spend window and a page of turns are bounded by edges
+  the serving node names, which every build honours.
 
 `turns` merges in two passes — every node's page, then every node's share of
 exactly the turns any page listed — so a turn resumed on another node after a

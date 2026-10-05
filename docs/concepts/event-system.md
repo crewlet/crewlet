@@ -549,9 +549,13 @@ sequenceDiagram
   an older build never sends — goes out in the version that introduced it,
   and a node on the older build refuses by version and is named. Everything else is still answered by the whole fleet during a
   rolling upgrade. The asker's **instant** (below) is not a filter and
-  raises no version: a build that ignores it floors the history at its own
-  clock, as every build did before it read the field, which costs a strip of
-  seconds thirty days back rather than that node's whole answer.
+  raises no version, because refusing it would cost an older node's whole
+  answer. A build that ignores it answers as of its own clock — and the
+  builds before it did not all floor alike: every question but `event` was
+  floored at that build's own clock, a strip as wide as the skew between two
+  clocks, while one event by id was not floored at all and answered with any
+  copy that build still held. So the asker holds what comes back to its own
+  horizon (below).
 - **Every question is asked at one instant.** The asker reads its clock once
   per question and sends the instant with it, and every node floors the
   30-day history at that instant rather than at its own clock — the events
@@ -561,6 +565,17 @@ sequenceDiagram
   floored a moment later than the rows it counts. Floored at each node's own
   clock, a fleet's answer would be a union of horizons, and a node answering
   late would drop what it held at the edge.
+- **The asker holds every row to its own horizon.** Because it owns the
+  instant, the asker cuts every row a node returns at that instant minus 30
+  days before it merges anything — one event, the events page and its trace
+  siblings, a trace, a turn and the phases — so no node, whatever build it
+  runs, can put a row past the horizon into an answer, and a link to an event
+  older than 30 days answers `not_found` however far an upgrade has got. A
+  trace's or a turn's count is corrected by the rows cut. What arrives only
+  as a count aggregated at an older node's own clock cannot be cut: the axis's
+  `by_category` and the turns a page's second scatter folds can carry that
+  node's strip of clock skew, and nothing wider, since the axis's bars, the
+  spend window and a page of turns are all bounded by edges the asker names.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
   visits every row once; a histogram's window is cut at the asker's instant,

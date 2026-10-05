@@ -3,6 +3,7 @@ package eventfan_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -671,6 +672,172 @@ func TestAV4FilterIsNotAnsweredAroundByAV3Peer(t *testing.T) {
 	if coverage.Complete || !missing(coverage, "node-v3", "v4") {
 		t.Errorf("an axis narrowed by failed: coverage %+v does not name node-v3", coverage)
 	}
+}
+
+// servesUnfloored stands a peer on the broker that behaves as a build before
+// the asker's instant does: it ignores `at`, and answers every row question
+// with BOTH rows it holds — one past the asker's horizon, which its lookup by
+// id never floored and its listings floored at a clock running behind the
+// asker's, and one inside it — in the shape each question's part takes, in the
+// version it was asked.
+func servesUnfloored(t *testing.T, b *memory.Broker, node string, stale, fresh store.EventRecord) {
+	t.Helper()
+	q := client(t, b)
+	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
+		var req struct {
+			Version  int    `json:"version"`
+			Question string `json:"question"`
+			Params   struct {
+				ID string `json:"id"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		newest := []store.EventRecord{fresh, stale}
+		oldest := []store.EventRecord{stale, fresh}
+		var answer any
+		switch req.Question {
+		case "event":
+			var hit *store.EventRecord
+			for _, r := range newest {
+				if r.ID == req.Params.ID {
+					hit = &r
+				}
+			}
+			answer = map[string]any{"event": hit}
+		case "trace":
+			answer = map[string]any{"rows": oldest, "total": 2}
+		case "turn":
+			answer = map[string]any{"head": oldest, "total": 2,
+				"traces": []store.TurnTrace{{TraceID: stale.TraceID, FirstAt: stale.Time}}}
+		default:
+			// A PAGE THAT FILLED, so the merge would stop at its last row
+			// if that row were not cut away with the rest under the horizon.
+			answer = map[string]any{"rows": newest, "full": true}
+		}
+		body, err := json.Marshal(answer)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(body)})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+}
+
+// THE ASKER HOLDS EVERY ROW A PEER RETURNS TO ITS OWN HORIZON.
+//
+// The asker's instant raises no protocol version, so a node on an earlier
+// build is still asked, ignores the instant and answers as of its own clock —
+// and that build's lookup of one event by id was not floored at all, so a link
+// to an event past the thirty-day horizon resolved from whichever such node
+// still held a copy, during every upgrade. The asker owns the instant, so it
+// cuts what comes back: the stale row here sits an hour under the asker's
+// horizon on a peer that returns it to every question, and no answer carries
+// it — the link is not found, with every node counted as answering, and a
+// page whose last row was under the horizon no longer claims more behind it.
+//
+// Mutation: drop [heldTo] from any one question in fleet.go and that subtest
+// gets the stale row back.
+func TestAnOlderPeersRowsAreHeldToTheAskersHorizon(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Hour)
+	horizon := at.Add(-store.EventHistory)
+	stale := store.EventRecord{ID: "stale", Type: "agent_phase_completed", Category: "agent",
+		Time: horizon.Add(-time.Hour), TraceID: "tr-1", Actor: "Lead",
+		Tags: map[string]string{"turn_id": "t-1", "agent_role": "Lead"}}
+	fresh := stale
+	fresh.ID, fresh.Time = "fresh", horizon.Add(time.Hour)
+	servesUnfloored(t, broker, "node-old", stale, fresh)
+	fan := fanFrom(a, "node-a", "node-old")
+	fan.Clock = func() time.Time { return at }
+
+	complete := func(t *testing.T, c eventfan.Coverage) {
+		t.Helper()
+		if !c.Complete {
+			t.Fatalf("coverage %+v, want every node answering", c)
+		}
+	}
+	t.Run("event", func(t *testing.T) {
+		_, c, err := fan.ByID(t.Context(), "stale")
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("a link to an event an hour past the horizon answered %v, want not found", err)
+		}
+		complete(t, c)
+		if rec, _, err := fan.ByID(t.Context(), "fresh"); err != nil || rec.ID != "fresh" {
+			t.Errorf("the event inside the horizon: %q, %v — want it found", rec.ID, err)
+		}
+	})
+	t.Run("events", func(t *testing.T) {
+		got, c, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.More {
+			t.Errorf("the page is %v (more %v), want only the row inside the horizon and "+
+				"nothing behind it", ids, got.More)
+		}
+	})
+	t.Run("events by related agent", func(t *testing.T) {
+		got, c, err := fan.List(t.Context(), store.ListQuery{RelatedAgent: "Lead", Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) {
+			t.Errorf("the page and its trace siblings are %v, want only the row inside the horizon", ids)
+		}
+	})
+	t.Run("trace", func(t *testing.T) {
+		got, c, err := fan.Trace(t.Context(), "tr-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.Total != 1 {
+			t.Errorf("the trace is %v (total %d), want the row inside the horizon, counted once",
+				ids, got.Total)
+		}
+	})
+	t.Run("turn", func(t *testing.T) {
+		got, c, err := fan.Turn(t.Context(), "t-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.Total != 1 ||
+			!slices.Equal(got.Nodes, []string{"node-old"}) {
+			t.Errorf("the turn is %v (total %d) on %v, want node-old's row inside the horizon",
+				ids, got.Total, got.Nodes)
+		}
+	})
+	t.Run("phases", func(t *testing.T) {
+		got, c, err := fan.Phases(t.Context(), "", 10, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.More {
+			t.Errorf("the company's phases are %v (more %v), want only the row inside the horizon",
+				ids, got.More)
+		}
+	})
+	t.Run("seat_phases", func(t *testing.T) {
+		got, c, err := fan.SeatPhases(t.Context(), "", "Lead", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) {
+			t.Errorf("the seat's phases are %v, want only the row inside the horizon", ids)
+		}
+	})
 }
 
 // A HISTOGRAM'S FAILED SPLIT IS EVERY NODE'S, summed bar by bar.

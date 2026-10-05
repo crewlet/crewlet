@@ -349,6 +349,7 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 	if err != nil {
 		return Listing{}, Coverage{}, err
 	}
+	g = heldTo(g, q.At)
 	rows, more := MergeListing(g.parts(), q.Limit)
 	coverage := g.coverage
 	if q.RelatedAgent != "" && g.fanned {
@@ -364,7 +365,7 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 				return Listing{}, Coverage{}, err
 			}
 			var siblings [][]store.EventRecord
-			for _, part := range sib.parts() {
+			for _, part := range heldTo(sib, q.At).parts() {
 				siblings = append(siblings, part.Rows)
 			}
 			rows = MergeRelated(rows, union(siblings...), q.Limit, more)
@@ -410,7 +411,10 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 //
 // NOT FOUND ANYWHERE is [store.ErrNotFound], and says which nodes could not be
 // asked: a dead link is the ordinary case, and one whose node was merely
-// silent is a different fact.
+// silent is a different fact. A copy under the history horizon is not found
+// either, whichever node answered with it: a build before the floor read every
+// copy it still held, so the horizon is held HERE, on the asker that owns the
+// instant — see [heldTo].
 func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverage, error) {
 	started := time.Now()
 	at := f.now()
@@ -420,7 +424,7 @@ func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverag
 		return store.EventRecord{}, Coverage{}, err
 	}
 	f.report(QuestionEvent, g.coverage, started)
-	rec, found := FirstFound(g.parts())
+	rec, found := FirstFound(heldTo(g, at).parts())
 	if !found {
 		if missing := g.coverage.Missing(); len(missing) > 0 {
 			return store.EventRecord{}, g.coverage, fmt.Errorf("%w: event %s is held by "+
@@ -440,7 +444,7 @@ func (f *Fleet) Trace(ctx context.Context, id string) (Trace, Coverage, error) {
 	if err != nil {
 		return Trace{}, Coverage{}, err
 	}
-	rows, total := MergeTrace(g.parts())
+	rows, total := MergeTrace(heldTo(g, at).parts())
 	f.report(QuestionTrace, g.coverage, started)
 	return Trace{Rows: rows, Total: total}, g.coverage, nil
 }
@@ -454,6 +458,7 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 	if err != nil {
 		return TurnDetail{}, Coverage{}, err
 	}
+	g = heldTo(g, at)
 	rows, total, traces := MergeTurn(g.parts())
 	f.report(QuestionTurn, g.coverage, started)
 	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g)},
@@ -490,7 +495,7 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	if err != nil {
 		return Listing{}, Coverage{}, err
 	}
-	rows, more := MergeListing(g.parts(), limit)
+	rows, more := MergeListing(heldTo(g, at).parts(), limit)
 	f.report(QuestionPhases, g.coverage, started)
 	return Listing{Rows: rows, More: more}, g.coverage, nil
 }
@@ -518,7 +523,7 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 	if err != nil {
 		return Listing{}, Coverage{}, err
 	}
-	rows, more := MergeListing(g.parts(), store.AgentPhaseLimit)
+	rows, more := MergeListing(heldTo(g, at).parts(), store.AgentPhaseLimit)
 	f.report(QuestionSeatPhases, g.coverage, started)
 	return Listing{Rows: rows, More: more}, g.coverage, nil
 }
