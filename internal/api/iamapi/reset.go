@@ -66,7 +66,15 @@ func (e errNotResettable) Error() string {
 // grant the issuer lacks is `403`, for the reason a machine token is minted
 // only for a service account and an invitation carries only what its issuer
 // holds — `people:manage` must never be a way to act with a grant one does not
-// have.
+// have. And since the judgement is the issue's, a grant the person GAINS while
+// the link is outstanding revokes it, in the record that adds the grant
+// ([iamdomain.Writer.UpdatePerson]): that grant was judged against nobody
+// holding the link.
+//
+// What the issue does NOT follow is the ISSUER: an administrator demoted after
+// issuing a link still holds a link that opens, as an invitation they issued
+// still confers what it carries. The link lives a day, and whoever demotes
+// them revokes it with `DELETE /iam/credentials/{id}`.
 //
 // # It signs nobody in
 //
@@ -126,19 +134,13 @@ func (s *Service) PostPasswordReset(w http.ResponseWriter, r *http.Request) {
 			if refused := writer.MayConfer(nil, p.Grants); refused != nil {
 				return p, refused
 			}
-			held := slices.Clone(p.Credentials)
-			for i, c := range held {
-				if c.Method == iamdomain.MethodReset && c.RevokedAt.IsZero() {
-					held[i].RevokedAt = now
-				}
-			}
-			held = append(held, iamdomain.Credential{
-				V: iamdomain.DocumentVersion, ID: id,
-				Method:    iamdomain.MethodReset,
-				Verifier:  credential.ResetVerifier(id, secret),
-				ExpiresAt: expires,
-			})
-			p.Credentials = held
+			p.Credentials = append(iamdomain.RevokeResetLinks(p.Credentials, now),
+				iamdomain.Credential{
+					V: iamdomain.DocumentVersion, ID: id,
+					Method:    iamdomain.MethodReset,
+					Verifier:  credential.ResetVerifier(id, secret),
+					ExpiresAt: expires,
+				})
 			return p, nil
 		},
 		OpID: opID, Reason: reason,

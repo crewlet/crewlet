@@ -2,11 +2,13 @@ package iamdomain_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -135,6 +137,63 @@ func TestAPasswordSetIsOneRecordThatEndsEveryTokenAndLink(t *testing.T) {
 	if got := checked(t, rig, after); got.Answer != credential.TokenValid {
 		t.Errorf("a token minted after the set answered %q (%s) — the control",
 			got.Answer, got.Detail)
+	}
+}
+
+// A GRANT GAINED REVOKES AN OUTSTANDING RESET LINK.
+//
+// A link is judged at its issue against the grants of whoever issued it, and
+// the issuer is shown it and can spend it — so a grant the person gains while
+// it is outstanding, judged against nobody holding the link, would reach
+// whoever spends it. The edit that adds a grant revokes the link in its own
+// record. The CONTROL is an edit that only takes a grant away, which leaves the link opening. Mutation:
+// drop the revocation from UpdatePerson and the link still opens once the
+// person holds config:write.
+func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := tokenOwner(t, rig, "jane.doe")
+	link, secret := issueReset(t, rig, person)
+	edit := func(change func([]iam.Grant) []iam.Grant) {
+		t.Helper()
+		if err := rig.draining(func() error {
+			_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
+				PersonID: person, OpID: operationKey(), Reason: "an edit",
+				Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
+					p.Grants = change(p.Grants)
+					return p, nil
+				},
+			})
+			return err
+		}); err != nil {
+			t.Fatalf("UpdatePerson: %v", err)
+		}
+		rig.drain()
+	}
+	opens := func() bool {
+		t.Helper()
+		row, err := rig.reader(t).ResetByID(t.Context(), link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row.Opens(secret, brokerAt)
+	}
+
+	edit(func(held []iam.Grant) []iam.Grant {
+		return slices.DeleteFunc(slices.Clone(held),
+			func(g iam.Grant) bool { return g == iam.GrantSecretRead })
+	})
+	if !opens() {
+		t.Fatal("an edit that only took a grant away revoked the link — " +
+			"the control")
+	}
+
+	edit(func(held []iam.Grant) []iam.Grant {
+		return append(slices.Clone(held), iam.GrantConfigWrite)
+	})
+	if opens() {
+		t.Error("the link still opens after its person gained config:write, " +
+			"which nobody holding it was judged against")
 	}
 }
 

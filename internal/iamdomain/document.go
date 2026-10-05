@@ -489,7 +489,9 @@ const (
 	// machine-token read refuses a row of any other method, and its
 	// verifier is formed under a prefix of its own, so no token value
 	// could verify against one. Spending it is the one thing it does
-	// ([Writer.SetPassword]), and the spend revokes it.
+	// ([Writer.SetPassword]), and the spend revokes it — as does a grant
+	// its person gains ([Writer.UpdatePerson]), since the link was judged
+	// against its issuer's grants at the issue.
 	MethodReset CredentialMethod = "reset"
 )
 

@@ -2337,17 +2337,13 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 		}
 		now := w.Now()
 		kept := make([]Credential, 0, len(person.Credentials)+1)
-		for _, c := range person.Credentials {
-			switch {
-			case c.Method == MethodPassword:
-				// REPLACED, not revoked: a password has no listing of
-				// its own anybody reads afterwards, and a second one
-				// on the row is a second password that works.
-				continue
-			case c.Method == MethodReset && c.RevokedAt.IsZero():
-				c.RevokedAt = now
+		for _, c := range RevokeResetLinks(person.Credentials, now) {
+			// REPLACED, not revoked: a password has no listing of its
+			// own anybody reads afterwards, and a second one on the
+			// row is a second password that works.
+			if c.Method != MethodPassword {
+				kept = append(kept, c)
 			}
-			kept = append(kept, c)
 		}
 		kept = append(kept, Credential{
 			V: DocumentVersion, ID: id, Method: MethodPassword,
@@ -2367,6 +2363,25 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 	}
 	return w.publish(ctx,
 		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
+}
+
+// RevokeResetLinks answers held with every reset link still outstanding in it
+// revoked at now — a copy, so the caller's slice is untouched.
+//
+// THREE RECORDS END A PERSON'S LINKS, and each through this: a password set
+// ([Writer.SetPassword]), because a link must not be a second way back in once
+// a password is; a new link's issue, because a person holds at most one; and
+// an edit that ADDS a grant ([Writer.UpdatePerson]), because a link is judged
+// against its issuer's grants at the issue and a grant gained afterwards was
+// judged against nobody who holds it.
+func RevokeResetLinks(held []Credential, now time.Time) []Credential {
+	out := slices.Clone(held)
+	for i, c := range out {
+		if c.Method == MethodReset && c.RevokedAt.IsZero() {
+			out[i].RevokedAt = now
+		}
+	}
+	return out
 }
 
 // PasswordSet is what replacing somebody's password needs.
@@ -2408,6 +2423,20 @@ type PasswordSet struct {
 // once rather than the design's two, because "on my own record" and "on
 // somebody else's" have the same answer and splitting them is how one of the
 // two arms comes to be checked and the other not.
+//
+// # A grant gained revokes every outstanding reset link
+//
+// A reset link is issued only for somebody whose every grant its issuer holds,
+// judged at the issue — and the issuer is shown the link and can spend it. A
+// grant the person gains while it is outstanding was judged against nobody
+// holding the link, so spending it would hand that grant to a party that may
+// never have held it: an administrator holding people:manage would act with
+// secrets:read because somebody else granted it to the person they issued a
+// link for. So the record that adds a grant revokes the link, in the snapshot
+// the grant lands in, and the next link is judged against the new set. This
+// is the one write that grows an existing person's grants, so it is the one
+// place the rule needs stating; taking a grant away revokes nothing, since a
+// link that now reaches less was judged against more.
 func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	statelog.Result, error) {
 
@@ -2463,6 +2492,10 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		}
 		if err = w.MayConfer(person.Grants, updated.Grants); err != nil {
 			return err
+		}
+		// A GRANT GAINED ENDS EVERY OUTSTANDING RESET LINK, in this record.
+		if added, _ := grantDelta(person.Grants, updated.Grants); len(added) > 0 {
+			updated.Credentials = RevokeResetLinks(updated.Credentials, w.Now())
 		}
 		if updated.Credentials, err = fitHeld(updated.Credentials, w.Now(),
 			ErrInvalid); err != nil {

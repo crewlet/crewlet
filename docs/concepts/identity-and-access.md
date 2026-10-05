@@ -810,7 +810,14 @@ it and could spend it themselves, so a link for somebody holding `secrets:read`
 or `config:write` would let a `people:manage` holder without either act with
 it. It is the rule an invitation and an edit are held to — nobody hands out
 what they do not hold — and the reason a machine token is minted only for a
-service account.
+service account. Because it is judged when the link is issued, **an edit that
+gives the person a grant revokes their outstanding link** in the same record:
+that grant was never judged against whoever holds the link, so they ask for
+another, judged against the new set. Taking a grant away revokes nothing. What
+the issue does not follow is the *issuer*: an administrator demoted after
+issuing a link still holds one that opens, as an invitation they issued still
+confers what it carries — so whoever demotes them revokes it with `DELETE
+/iam/credentials/{id}`.
 
 **It is good for one day.** It travels out of band — by chat or mail, where a
 link sits unread and gets forwarded — to somebody locked out *today*, so it
