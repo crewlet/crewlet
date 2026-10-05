@@ -697,8 +697,11 @@ func TestTheFinishingCorrectiveNamesEveryTerminator(t *testing.T) {
 
 // A CORRECTIVE NOTHING WILL READ IS NOT SENT. On the last round of the budget
 // no round follows, so each corrective — finishing and empty alike — would only
-// sit unanswered at the end of the conversation the caller records.
-// The phase ends there, and the declined mark on its last round says why.
+// sit unanswered at the end of the conversation the caller records. The loop
+// ends there and the declined mark on its last round says why; a FINISHING
+// corrective is handed back as Withheld, for a caller that may run the phase
+// past this budget, and an empty-answer one is not, since that loop's prose
+// is a finish.
 func TestNoCorrectiveIsAppendedOnTheLastRound(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -706,9 +709,11 @@ func TestNoCorrectiveIsAppendedOnTheLastRound(t *testing.T) {
 		answer   llm.Completion
 		cfg      toolloop.Config
 		declined bool
+		withheld bool
 	}{
-		{"finishing", writtenSubmission, toolloop.Config{TerminateAfter: []string{"submit_work"}}, true},
-		{"empty", llm.Completion{}, toolloop.Config{}, false},
+		{"finishing", writtenSubmission, toolloop.Config{TerminateAfter: []string{"submit_work"}}, true, true},
+		{"finishing, empty", llm.Completion{}, toolloop.Config{TerminateAfter: []string{"submit_work"}}, false, true},
+		{"empty", llm.Completion{}, toolloop.Config{}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -734,7 +739,79 @@ func TestNoCorrectiveIsAppendedOnTheLastRound(t *testing.T) {
 			if tc.declined && (len(res.Narration) != 1 || !res.Narration[0].Declined) {
 				t.Errorf("narration = %+v, want the last round marked declined", res.Narration)
 			}
+			if got := res.Withheld != ""; got != tc.withheld {
+				t.Errorf("withheld = %q, want one: %v", res.Withheld, tc.withheld)
+			}
+			if tc.withheld && !strings.Contains(res.Withheld, "`submit_work`") {
+				t.Errorf("withheld = %q, want the finishing corrective", res.Withheld)
+			}
+			if res.ExhaustedRounds {
+				t.Error("a loop that stopped asking for tools reported itself exhausted")
+			}
 		})
+	}
+}
+
+// NOTHING IS WITHHELD ONCE THE ALLOWANCE IS SPENT: a run of declines that had
+// both its correctives inside the budget has none left to hand back, so a
+// caller cannot extend it past the bound.
+func TestNothingIsWithheldOnceTheAllowanceIsSpent(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		writtenSubmission, writtenSubmission, writtenSubmission,
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("submit_work")}},
+		MaxRounds: 3, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Withheld != "" || res.CorrectivesSpent != 2 {
+		t.Errorf("withheld = %q spent = %d, want nothing withheld after both correctives",
+			res.Withheld, res.CorrectivesSpent)
+	}
+}
+
+// A CONTINUATION SHARES THE ALLOWANCE it was seeded with: one that picks up a
+// run of declines that already had a corrective, plus the withheld one its
+// caller sent, has nothing left to send — the same two a single invocation
+// would have spent.
+func TestASeededAllowanceIsSharedNotReset(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{writtenSubmission, writtenSubmission}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("submit_work")}},
+		MaxRounds: 5, TerminateAfter: []string{"submit_work"}, CorrectivesSpent: 2,
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 1 || finishingCorrectives(res.Messages) != 0 {
+		t.Errorf("rounds = %d correctives = %d, want the run to end on its first decline",
+			res.RoundsUsed, finishingCorrectives(res.Messages))
+	}
+}
+
+// A TERMINATOR ON THE BUDGET'S LAST ROUND IS A FINISH, not exhaustion: the
+// round's last message is a call, which is what an exhausted loop's is, and
+// read that way the caller asked the judge — and ran granted rounds — about a
+// phase that had already submitted.
+func TestATerminatorOnTheLastRoundIsNotExhaustion(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read")}}, submitCall("2"),
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read"), def("submit_work")}},
+		MaxRounds: 2, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExhaustedRounds {
+		t.Error("a loop its terminator ended reported itself exhausted")
 	}
 }
 
@@ -760,6 +837,10 @@ func TestATerminatorTheRoundDoesNotOfferIsNotOwed(t *testing.T) {
 	}
 	if len(res.Narration) != 1 || res.Narration[0].Declined {
 		t.Errorf("narration = %+v, want the round not marked declined", res.Narration)
+	}
+	if res.Withheld != "" {
+		t.Errorf("withheld = %q, want nothing owed to a phase that could not call it",
+			res.Withheld)
 	}
 
 	// And of several, only the offered ones are named.
@@ -1232,10 +1313,14 @@ func TestRunRefusesAConfigThatCannotWork(t *testing.T) {
 		Provider: &scriptedProvider{}, Surface: &fakeSurface{}, MaxRounds: 1,
 	}
 	for name, mangle := range map[string]func(*toolloop.Config){
-		"no provider":  func(c *toolloop.Config) { c.Provider = nil },
-		"no surface":   func(c *toolloop.Config) { c.Surface = nil },
-		"no rounds":    func(c *toolloop.Config) { c.MaxRounds = 0 },
-		"negative cap": func(c *toolloop.Config) { c.MaxRounds = -1 },
+		"no provider":                func(c *toolloop.Config) { c.Provider = nil },
+		"no surface":                 func(c *toolloop.Config) { c.Surface = nil },
+		"no rounds":                  func(c *toolloop.Config) { c.MaxRounds = 0 },
+		"negative cap":               func(c *toolloop.Config) { c.MaxRounds = -1 },
+		"negative correctives spent": func(c *toolloop.Config) { c.CorrectivesSpent = -1 },
+		"more correctives spent than the bound": func(c *toolloop.Config) {
+			c.CorrectivesSpent = toolloop.MaxFinishingCorrectives + 1
+		},
 		// A loop that demands a call every round and names none that
 		// ends it can only stop by running out of rounds.
 		"required without a terminator": func(c *toolloop.Config) {

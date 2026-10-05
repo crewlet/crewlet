@@ -407,6 +407,13 @@ Extensions chain: when an extended run exhausts again, the judge fires
 once more, up to the configured ceiling. Token budget cascade still
 bounds the whole thing economically; the ceiling is a sanity check.
 
+**A phase that submitted on its last round is finished, not exhausted.**
+Exhaustion means the budget ran out with the model still *asking for
+tools*, and a submission on the last round is a call too — so it used to
+read as one, the judge was asked (and charged) about a phase that had
+nothing left to do, and its grant ran more priced rounds after the
+submission. A loop its terminator ended never reports exhaustion.
+
 ```mermaid
 flowchart TD
     A["phase loop hits max_tool_rounds (ExhaustedRounds)"]
@@ -514,13 +521,31 @@ when it did, and a declined round that is the phase's last is one the
 bound or the budget left unanswered — the phase ended without its
 submission, and `rescue_fired` says what the engine wrote instead.
 
-**No corrective is sent that nothing will read.** On the last round of a
-phase's budget no round follows, so the loop appends no corrective there
-— finishing or empty alike — rather than leave an unanswered
-message at the end of the recorded conversation. Nor does the extension
-judge read one: it is asked only about a phase that was still *asking
-for tools* when its budget ran out, and a phase whose last round declined
-had stopped. It ends there, and is rescued.
+**No corrective is sent that nothing will read — and none is lost
+either.** On the last round of a loop's budget no round follows, so the
+loop appends no corrective there, finishing or empty alike, rather than
+leave an unanswered message at the end of the recorded conversation. A
+finishing corrective the round earned is **handed back** to the phase
+instead. That round matters: the round a budget ends on is the one a
+phase most naturally submits on — the extension nudge tells it to — and
+without the hand-back the outcome turned on *which* round a decline
+landed on, the same fenced JSON re-asked one round earlier and rescued
+as `incomplete` on the cap with the ceiling's rounds unspent.
+
+Where the phase may run past its budget — extensions on and the ceiling
+above the rounds used — the engine sends the corrective itself and
+continues the phase **without the judge**. The judge's question is
+whether a phase still working deserves more rounds; this one has done
+its work and is missing only the call that reports it. What bounds the
+continuation instead is the finishing allowance itself: it is *shared*
+with the rounds before it rather than reset, so a phase split across the
+cap is asked no more often than one that was not; it is as long as the
+correctives left to read, so a continuation that turns back to work and
+exhausts is the judge's question again; and the rounds a phase runs past
+its budget this way are capped at that same two, so working and
+declining by turns cannot extend a phase round by round on nobody's
+decision. With extensions off, or a ceiling equal to the budget, the cap
+stays hard: the phase ends on the declined round, and is rescued.
 
 **The agent-mode executor is not covered.** An executor that runs as a
 [coding CLI's own agentic loop](subscription-llm-backends.md#agent-mode)

@@ -187,6 +187,19 @@ func extendableRunner(
 	meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
+	return cappedRunner(t, prov, pub, judge, runner.Caps{
+		ExecutorRounds: 2, ExecutorCeiling: 8,
+		ExtensionOn: true, ExtensionStep: 4,
+	}, meter...)
+}
+
+// cappedRunner is extendableRunner under caps a case states itself — the
+// extension switch off, or a ceiling equal to the budget.
+func cappedRunner(
+	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
+	caps runner.Caps, meter ...toolloop.BudgetMeter,
+) *runner.Runner {
+	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -200,10 +213,7 @@ func extendableRunner(
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,
-		Caps: runner.Caps{
-			ExecutorRounds: 2, ExecutorCeiling: 8,
-			ExtensionOn: true, ExtensionStep: 4,
-		},
+		Caps:      caps,
 		Task:      "read the files",
 		Publisher: pub,
 		Judge:     judge,

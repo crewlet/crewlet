@@ -917,6 +917,16 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		}
 	}
 	budget := in.rounds
+	// The finishing correctives the run of declines being CONTINUED has
+	// already had — nonzero only for an invocation that picks up a
+	// corrective the last one withheld. See toolloop.Config.CorrectivesSpent.
+	correctivesSpent := 0
+	// Rounds this phase has run past an invocation's budget WITHOUT the
+	// judge, to read a withheld corrective. A phase's own allowance of
+	// finishing correctives, and never more: past it, a phase that keeps
+	// working and declining by turns would be extending itself round by
+	// round on nobody's decision.
+	unjudged := 0
 	for {
 		// What the phase holds BEFORE this invocation, captured by value:
 		// the loop calls OnProgress from inside Run, and `out` is written
@@ -950,8 +960,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// member that actually served — see toolloop.Config.
 			ProviderKey: members[0].Key,
 			MaxRounds:   budget, Budget: r.cfg.Budget,
-			Fence:        r.cfg.Fence,
-			AllowSuspend: in.allowSuspend,
+			Fence:            r.cfg.Fence,
+			AllowSuspend:     in.allowSuspend,
+			CorrectivesSpent: correctivesSpent,
 			// A phase that has SUBMITTED is finished. Without this the
 			// loop asks again, the model submits again, and the phase
 			// spends its whole round budget re-deciding — measured at
@@ -985,6 +996,36 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		out.Rounds = prior.Rounds + res.RoundsUsed
 		messages = res.Messages
 
+		// A CORRECTIVE THE LOOP WITHHELD IS SENT HERE, when the phase may
+		// run past this invocation's budget. Its last round ended without
+		// the submission and had no round after it to be asked in — the
+		// round a phase most naturally submits on, and the one the
+		// extension nudge tells it to submit on — so without this the
+		// outcome turned on WHICH round a decline landed on: the same
+		// fenced JSON on the round before the cap was re-asked and
+		// submitted, on the cap it was rescued as incomplete with the
+		// ceiling's rounds unspent.
+		//
+		// No judge. Its question is whether a phase still working deserves
+		// more rounds, and this one has finished its work and is missing
+		// only the call that reports it. What bounds it instead is the
+		// allowance the loop would have spent had the rounds been inside
+		// the budget, shared with it rather than reset (CorrectivesSpent),
+		// and the phase's ceiling, which an operator who turned extensions
+		// off has set to the budget itself.
+		if !res.Suspended && res.Withheld != "" && policy.Enabled {
+			room := min(toolloop.MaxFinishingCorrectives-res.CorrectivesSpent,
+				toolloop.MaxFinishingCorrectives-unjudged, policy.Headroom(out.Rounds))
+			if room > 0 {
+				log.InfoContext(ctx, "phase_asked_for_submission_past_budget", "phase", ph,
+					"iteration", iteration, "rounds_used", out.Rounds, "granted", room)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: res.Withheld})
+				budget, unjudged = room, unjudged+room
+				correctivesSpent = res.CorrectivesSpent + 1
+				continue
+			}
+		}
+
 		if res.Suspended || !res.ExhaustedRounds {
 			// Read off the phase TOTALS, never off `res`: an extended
 			// phase ran the loop more than once and the last invocation
@@ -1009,7 +1050,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			Role:    llm.RoleUser,
 			Content: extension.Nudge(ph, granted, decision.Reason),
 		})
-		budget = granted
+		// An exhausted phase was still calling tools, so no run of
+		// declines is being continued.
+		budget, correctivesSpent = granted, 0
 	}
 }
 

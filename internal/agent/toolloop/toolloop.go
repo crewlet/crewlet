@@ -69,9 +69,15 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// maxFinishingCorrectives bounds the FINISHING correctives: the re-prompts a
+// MaxFinishingCorrectives bounds the FINISHING correctives: the re-prompts a
 // loop that declares terminators issues when a round ended without the call
 // that finishes it — in prose, or with nothing at all.
+//
+// Exported because the bound is the PHASE's, not one invocation's: a caller
+// that continues a phase past a corrective this loop withheld on its last
+// round ([Result.Withheld]) sizes the continuation by it, and seeds the next
+// invocation's count with [Config.CorrectivesSpent], so a phase split across
+// two invocations is asked no more often than one that ran in a single one.
 //
 // Two, and every one of them an IDENTICAL message, which is not the waste it
 // would be elsewhere. In a loop that finishes by a call, a round without the
@@ -90,15 +96,15 @@ import (
 // PER RUN OF DECLINED ROUNDS, not per phase — the count clears the moment a
 // round emits a call. The claim it rests on is about a model that keeps
 // declining, and a phase that called a tool in between is not that model.
-const maxFinishingCorrectives = 2
+const MaxFinishingCorrectives = 2
 
 // maxEmptyAnswerRetries bounds the corrective re-prompts issued when a round
 // produced NEITHER prose NOR a tool call — a model that spent its whole output
 // budget on hidden reasoning and stopped — in a loop that does NOT finish by a
 // call. A loop that does gets the finishing corrective for that round instead,
-// under [maxFinishingCorrectives].
+// under [MaxFinishingCorrectives].
 //
-// One, not two, and the asymmetry with maxFinishingCorrectives is keyed on the
+// One, not two, and the asymmetry with MaxFinishingCorrectives is keyed on the
 // loop's CONTRACT rather than on the round. Here a prose answer is a legitimate
 // finish — today that is only a worker whose submission tool a granted tool
 // shadowed — so whatever the model writes next IS the phase's result, and the
@@ -602,7 +608,34 @@ type Result struct {
 	// ExhaustedRounds means the loop hit MaxRounds with the model still
 	// asking for tools. Distinct from a clean finish, because the caller
 	// may extend the cap rather than accept a truncated phase.
+	//
+	// NEVER SET ON A LOOP A TERMINATOR ENDED, even on the budget's last
+	// round, where the round's last message is still a call: a phase that
+	// submitted is finished, and reporting it exhausted had its caller pay
+	// the extension judge, and then run granted rounds, for a phase that
+	// had nothing left to do.
 	ExhaustedRounds bool
+
+	// Withheld is the finishing corrective this invocation EARNED AND DID
+	// NOT SEND: its last round ended without the call that finishes it, the
+	// run of declines still had allowance, and there was no round left to
+	// read a corrective in. Empty otherwise — including in a loop with no
+	// terminators, whose prose is a finish.
+	//
+	// Not appended to Messages, because nothing may be on the record that
+	// nothing answered. Handed back instead, because the round the budget
+	// ended on is the round a phase most naturally SUBMITS on — the
+	// extension nudge tells it to — and only the caller knows whether the
+	// phase may run past this invocation's budget: one that can appends
+	// this as a user message and continues, and one that cannot ends there
+	// and rescues, exactly as before.
+	Withheld string
+
+	// CorrectivesSpent is the finishing allowance the current run of
+	// declined rounds has used, as the loop ended — the count a
+	// continuation passes back as [Config.CorrectivesSpent], plus the one
+	// it sends.
+	CorrectivesSpent int
 
 	// EmptyAnswers counts the rounds that produced neither prose nor a tool
 	// call — a model that spent its output on hidden reasoning and stopped.
@@ -707,7 +740,7 @@ type Config struct {
 	// such round can be a finish — a successful terminator ends the loop
 	// before the next round opens, so a prose round always comes before
 	// any submission succeeded — and the loop re-prompts with a FINISHING
-	// corrective naming these tools, under [maxFinishingCorrectives]. It
+	// corrective naming these tools, under [MaxFinishingCorrectives]. It
 	// names the submission rather than the surface, which on the
 	// onboarding pass is a whole catalogue of tools that are not how it
 	// finishes.
@@ -717,6 +750,15 @@ type Config struct {
 	// round spent on nothing, and a loop offering none of its terminators
 	// reads prose as its answer exactly as a loop that declared none.
 	TerminateAfter []string
+
+	// CorrectivesSpent is how many finishing correctives the run of
+	// declined rounds this invocation CONTINUES has already been sent — by
+	// an earlier invocation of the same phase, the withheld one its caller
+	// appended included. It seeds the allowance, so a continuation shares
+	// [MaxFinishingCorrectives] with the invocation before it rather than
+	// starting a fresh pair. Zero for every invocation that does not
+	// continue a run of declines.
+	CorrectivesSpent int
 
 	// AllowSuspend permits a tool to suspend this loop. Only Execute sets
 	// it — see ToolResult.Suspend.
@@ -792,6 +834,10 @@ func (c Config) validate() error {
 	if c.MaxRounds <= 0 {
 		errs = append(errs, fmt.Errorf("toolloop: MaxRounds must be positive, got %d", c.MaxRounds))
 	}
+	if c.CorrectivesSpent < 0 || c.CorrectivesSpent > MaxFinishingCorrectives {
+		errs = append(errs, fmt.Errorf("toolloop: CorrectivesSpent must be within 0..%d, got %d",
+			MaxFinishingCorrectives, c.CorrectivesSpent))
+	}
 	// A loop that demands a call on every round and names none that ends it
 	// has no finish but the round cap: prose is refused, every call is
 	// followed by another round, and nothing it can do stops it. That is a
@@ -832,9 +878,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	for _, name := range cfg.TerminateAfter {
 		terminators[name] = struct{}{}
 	}
-	finishingRetries := 0
+	finishingRetries := cfg.CorrectivesSpent
 	emptyRetries := 0
 	emptyAnswers := 0
+	// What ended the loop, where it was not the budget: a terminator that
+	// ran, or a corrective withheld for want of a round. See
+	// [Result.ExhaustedRounds] and [Result.Withheld].
+	terminated := false
+	withheld := ""
 
 	var partial *Partial
 	// state is the loop's record as it stands, the one shape every exit and
@@ -1158,12 +1209,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// corrective appended here would only sit at the end of the
 			// conversation the caller records — a user message the model
 			// never answered, on the phase's record and in any transcript
-			// built from it. Nor would an extension read it: the round
-			// cap's judge is asked only about a phase still ASKING for
-			// tools ([Result.ExhaustedRounds]), and this one stopped. A
-			// phase whose budget ends on a declined round therefore ends
-			// there, without its submission, which is what its caller's
-			// rescue path is for — and the round says so on the record
+			// built from it. A finishing corrective the round earned is
+			// HANDED BACK instead ([Result.Withheld]): whether the phase
+			// may run past this budget is its caller's to decide, and a
+			// caller that may continues the phase with it — while one that
+			// may not ends it here, without its submission, which is what
+			// its rescue path is for, and the round says so on the record
 			// ([Narration.Declined] on the phase's last round).
 			lastRound := roundsUsed == cfg.MaxRounds
 
@@ -1199,7 +1250,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				// enforces the call, by asking again and by never
 				// counting prose as the finish.
 				corrective = finishingCorrective(owed)
-				allowance, bound = &finishingRetries, maxFinishingCorrectives
+				allowance, bound = &finishingRetries, MaxFinishingCorrectives
 			case answeredNothing:
 				// A ROUND THAT REACHED NOBODY IS NOT A FINISH. No tool
 				// call and no prose is a model that spent its output on
@@ -1221,7 +1272,13 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				corrective = emptyAnswerCorrective
 				allowance, bound = &emptyRetries, maxEmptyAnswerRetries
 			}
-			if corrective == "" || lastRound || *allowance >= bound {
+			if corrective == "" || *allowance >= bound {
+				break
+			}
+			if lastRound {
+				if allowance == &finishingRetries {
+					withheld = corrective
+				}
 				break
 			}
 			*allowance++
@@ -1265,13 +1322,16 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 
 		if ranTerminator(execs, terminators, roundsUsed) {
+			terminated = true
 			break
 		}
 	}
 
 	out := state(roundsUsed)
-	out.ExhaustedRounds = roundsUsed == cfg.MaxRounds && lastAskedForTools(msgs)
+	out.ExhaustedRounds = roundsUsed == cfg.MaxRounds && lastAskedForTools(msgs) && !terminated
 	out.EmptyAnswers = emptyAnswers
+	out.Withheld = withheld
+	out.CorrectivesSpent = finishingRetries
 	return &out, nil
 }
 
