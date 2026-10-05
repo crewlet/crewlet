@@ -685,6 +685,77 @@ func TestToolsCarryTheirSchemaAndACacheBreakpointOnTheLast(t *testing.T) {
 	}
 }
 
+// countBreakpoints counts every cache_control marker anywhere in a body.
+func countBreakpoints(v any) int {
+	n := 0
+	switch x := v.(type) {
+	case map[string]any:
+		for key, child := range x {
+			if key == "cache_control" {
+				n++
+			}
+			n += countBreakpoints(child)
+		}
+	case []any:
+		for _, child := range x {
+			n += countBreakpoints(child)
+		}
+	}
+	return n
+}
+
+// A TOOL LOOP'S CONVERSATION IS CACHED, NOT ONLY ITS PREFIX. The system and
+// tool breakpoints cache the static prefix and nothing after it, so without
+// the request's own automatic breakpoint every round re-billed the whole
+// history at the full input price. It is set only where a next round exists
+// — a call offering tools — because a one-shot call's tail is written at a
+// premium and never read. Three breakpoints, inside the API's cap of four,
+// all on the default TTL: an automatic entry may not outlive a marker ahead
+// of it, and the API refuses the request when it does.
+func TestAToolLoopCachesItsConversation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		tools []llm.ToolDef
+		want  int // breakpoints in the body
+	}{
+		{"a tool loop's round", []llm.ToolDef{{Name: "a"}, {Name: "b"}}, 3},
+		{"a one-shot call", nil, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+			p := newProvider(t, url, nil)
+			_, err := p.Complete(context.Background(), llm.Request{Tools: tc.tools, Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: "frame"},
+				{Role: llm.RoleUser, Content: "do it"},
+				{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "a"}}},
+				{Role: llm.RoleTool, ToolCallID: "c1", Name: "a", Content: "done"},
+			}})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			body := api.seen()[0].body
+			top, present := body["cache_control"]
+			if want := len(tc.tools) > 0; present != want {
+				t.Fatalf("top-level cache_control present = %v, want %v", present, want)
+			}
+			if present {
+				marker := top.(map[string]any)
+				if marker["type"] != "ephemeral" {
+					t.Fatalf("top-level cache_control = %v, want the automatic ephemeral breakpoint", marker)
+				}
+				if ttl, set := marker["ttl"]; set {
+					t.Fatalf("top-level ttl = %v, want the default the other markers carry", ttl)
+				}
+			}
+			if got := countBreakpoints(body); got != tc.want || got > 4 {
+				t.Fatalf("%d breakpoints, want %d (the API allows four)", got, tc.want)
+			}
+		})
+	}
+}
+
 // TOOLS ARE OFFERED, NEVER FORCED. With tools present the API's default
 // choice is auto, so none is sent — and a forced `any` is a 400 on Opus 5.5,
 // Sonnet 5.5, Fable 5.1 and Mythos 5.1, and on every Claude model while it is

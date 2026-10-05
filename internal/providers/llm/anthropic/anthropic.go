@@ -492,6 +492,26 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 	// 5.1, and on every Claude model while it is thinking.
 	if len(req.Tools) > 0 {
 		params.Tools = formatTools(req.Tools)
+		// THE CONVERSATION IS CACHED TOO, on a call that will be continued.
+		// The breakpoints on the system block and the last tool cache the
+		// static prefix and nothing after it, so every round of a tool loop
+		// re-billed the whole history it had grown so far at the full input
+		// price — and by round twenty that history, not the prefix, is most
+		// of what a round sends. The top-level marker is the API's automatic
+		// breakpoint: it lands on the last cacheable block and moves forward
+		// with the conversation, so round N writes what round N+1 reads.
+		//
+		// Three breakpoints in all, inside the API's cap of four, and all on
+		// the default 5-minute TTL — an automatic entry may not outlive a
+		// marker ahead of it.
+		//
+		// ONLY WITH TOOLS, because only then is there a next round: a call
+		// that offers tools is a tool loop's, and its answer comes back as
+		// this same prefix plus the results. A call with none — a judge, a
+		// knowledge or learning pass — is asked once, and caching its tail
+		// would pay the write premium on every one of them for a read that
+		// never comes.
+		params.CacheControl = cacheBreakpoint()
 	}
 	return params, nil
 }
@@ -512,12 +532,14 @@ func fit(effort llm.Effort, accepted []claudemodel.Effort) llm.Effort {
 	return out
 }
 
-// cacheBreakpoint marks the (tools + system) prefix cacheable.
+// cacheBreakpoint is one prompt-cache breakpoint, on the default 5-minute TTL.
 //
-// That prefix is the large static part of every executor and reviewer
-// round: without the breakpoint it is re-billed in full on every round of
-// every turn. Anthropic silently ignores a breakpoint on a prefix below the
-// cacheable minimum, so setting it is always safe.
+// Three are set: on the system block and the last tool, which cache the
+// (tools + system) prefix — the large static part of every executor and
+// reviewer round, re-billed in full on every round without them — and the
+// request's top-level automatic one, which caches a tool loop's conversation
+// (see [Provider.params]). Anthropic silently ignores a breakpoint on a prefix
+// below the cacheable minimum, so setting one is always safe.
 func cacheBreakpoint() sdk.CacheControlEphemeralParam {
 	return sdk.NewCacheControlEphemeralParam()
 }
