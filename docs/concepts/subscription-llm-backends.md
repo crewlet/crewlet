@@ -641,8 +641,10 @@ that asked for no tools when it asked for some. When nothing parses, the whole r
 becomes assistant content with no tool calls, and in every phase that
 has to end in a call the tool loop's corrective re-prompt takes over —
 the finishing corrective naming the phase's submission, which keeps the
-request's own `tool_choice` (the executor's is `auto`). A malformed reply
-costs a round; it never crashes a turn.
+request's own `tool_choice` — `auto` on every phase, so the contract a
+seat's prompt carries is always the permissive one, and the strict
+"you MUST request a tool call" form is sent only by `crewlet llm doctor`'s
+smoke test. A malformed reply costs a round; it never crashes a turn.
 
 **A call with no tools gets no contract.** Auxiliary work
 (summarisation, the relevance filter) sends a plain prompt and reads a

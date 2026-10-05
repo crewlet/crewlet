@@ -190,14 +190,17 @@ const (
 	// ToolChoiceAuto lets the model decide. The zero value means this.
 	ToolChoiceAuto ToolChoice = "auto"
 
-	// ToolChoiceRequired says the answer must be a tool call. A CALLER sets
-	// it for a whole phase — the reviewer and the onboarding pass, whose
-	// every round is a call — and nothing escalates a request to it: the
-	// tool loop's corrective re-prompt keeps whatever choice the caller set,
-	// because a backend may ignore this (some endpoints do) or refuse it
-	// (several current Anthropic models answer a forced choice with a 400).
-	// So it is a request, never the guarantee — the loop is what enforces a
-	// call, by asking again (internal/agent/toolloop).
+	// ToolChoiceRequired says the answer must be a tool call.
+	//
+	// NO PHASE SENDS IT. Its one caller in this tree is the cli-agent
+	// doctor's smoke test (cliagent's smokeTest), which asks a CLI for one
+	// call to prove the tool channel parses. Every phase of a turn — the
+	// executor, the reviewer, onboarding, a worker — asks on auto, because
+	// a backend may ignore this (some endpoints do) or refuse it (Claude
+	// Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer a forced choice
+	// with a 400, which the fallback chain does not retry). A phase that
+	// must end in a call names the call that ends it, and the tool loop
+	// enforces it by asking again (internal/agent/toolloop).
 	ToolChoiceRequired ToolChoice = "required"
 
 	// ToolChoiceNone forbids a tool call for this request.

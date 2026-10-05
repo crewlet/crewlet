@@ -476,24 +476,22 @@ worker with `max_turns: 1` has no round left to read one and gets none.
 A model that still answers in prose after two correctives ends the
 phase without its submission, and the rescue below takes over.
 
-**The tool choice is never escalated for it.** The executor runs on
-`auto` and its corrective round does too. Forcing a call is not
-something the engine can rely on: some endpoints ignore `tool_choice`,
-and several current models refuse a forced one outright — Claude Opus
-5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer `400 tool_choice: type
-"tool" and "any" are not supported for this model`, with `auto` plus an
-instruction naming the tool as the documented replacement, which is
-exactly the corrective. The loop is what enforces the call.
-
-A phase whose whole contract is one submission still *asks* for a call
-with `llm.ToolChoiceRequired`: the **reviewer**, whose surface carries no
-catalogue so "call a tool" and "submit the review" are the same
-instruction, and **onboarding**, whose every round discovers, activates,
-reads or reflects and whose last one marks. Both name their submission
-too, so a prose round there gets the finishing corrective — naming what
-finishes the phase beats listing every tool on the surface. A caller that
-required a call and named **no** terminator gets the older **forced
-corrective**, which lists the tools on offer:
+**Every phase asks on `auto`, and the corrective never escalates it.**
+The executor, the reviewer, onboarding and every worker send `auto`, on
+their corrective rounds too. Forcing a call is not something the engine
+can rely on: some endpoints ignore `tool_choice`, and several current
+models refuse a forced one outright — Claude Opus 5.5, Sonnet 5.5, Fable
+5.1 and Mythos 5.1 answer `400 tool_choice: type "tool" and "any" are not
+supported for this model`, with `auto` plus an instruction naming the
+tool as the documented replacement, which is exactly the corrective. A
+400 is not retried down the [fallback chain](architecture.md#2-inside-one-node), so the
+reviewer and onboarding, which used to ask for a forced call, failed
+outright on those models — every turn at its review, and the onboarding
+pass on every turn the seat took — before the corrective that actually
+enforces the call could run. The loop is what enforces the call. A loop
+that required a call and named **no** terminator would get the older
+**forced corrective**, which lists the tools on offer; no phase is that
+loop any more:
 
 > You must respond by calling one of these tools, not with prose:
 > `<tool>`, `<tool>`.

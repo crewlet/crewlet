@@ -50,13 +50,11 @@ type Caps struct {
 // two finishing correctives when a model answers without calling it, and one
 // spare.
 //
-// That arithmetic is real now. The correctives were once gated on the caller
-// asking for a forced tool call and no caller did, so three of these four
-// rounds were headroom for a mechanism that never armed — and a reviewer that
-// thought and stopped went straight to the rescue, sending the whole turn back
-// for another executor round over the one failure a model fixes when it is
-// simply asked again. They are armed by the submission the reviewer names as
-// its terminator, which is what every phase that finishes by a call does.
+// The correctives are armed by the submission the reviewer names as its
+// terminator, as they are for every phase that finishes by a call, and they
+// are what a reviewer that thought and stopped gets INSTEAD of the rescue —
+// which sends the whole turn back for another executor round over the one
+// failure a model fixes when it is simply asked again.
 const reviewRounds = 4
 
 // Config is everything a runner needs that does not change between rounds.
@@ -565,13 +563,14 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: user,
 		rounds: reviewRounds, iteration: round,
+		// ON AUTO, like every phase. The reviewer's only tool is its
+		// submission, so a forced tool_choice once looked free here — but
+		// several current models answer a forced choice with a 400, which
+		// is fatal to the whole turn rather than one round, and the
+		// submission named here is what makes a round of prose get asked
+		// again (toolloop.Config.TerminateAfter).
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
 		steerable: true,
-		// THE REVIEWER'S ONLY TOOL IS ITS SUBMISSION. Its surface carries
-		// no catalogue at all, so "call a tool" and "submit the review" are
-		// the same instruction here — which is what makes forcing it safe
-		// as well as right.
-		toolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
 		// Nothing to salvage here, and nothing lost: a reviewer's surface
@@ -702,25 +701,15 @@ type phaseRun struct {
 	// SUCCESSFULLY — and, by naming them, declares that the phase finishes
 	// by one: a round that ends in prose is re-prompted with a corrective
 	// naming them rather than accepted as the phase's end.
-	terminateAfter []string
-
-	// toolChoice asks the provider for a tool call on every round, for a
-	// phase whose every round IS one — the reviewer, the onboarding pass.
-	// Empty is the tool loop's `auto`, which is right for a phase that
-	// legitimately spends rounds on calls that are not its submission —
-	// the executor.
 	//
-	// It is a REQUEST, not what makes a phase end in its submission: some
-	// endpoints ignore it and several current models refuse a forced
-	// choice outright. What enforces the call is terminateAfter above — a
-	// loop that declares how it finishes re-prompts a round of prose with
-	// a corrective naming the submission, on whatever choice this sets
-	// (see toolloop.Config.TerminateAfter). Before that, the corrective was
-	// gated on this field alone and the executor, on auto, fell straight
-	// through to the rescue path on the one failure a model reliably fixes
-	// when asked, at the cost of a whole extra turn rather than one cheap
-	// round.
-	toolChoice llm.ToolChoice
+	// THAT is what makes a phase end in its submission, and there is no
+	// tool_choice beside it: every phase asks the provider on `auto`. A
+	// forced choice was a request some endpoints ignore and several current
+	// models refuse with a 400 (Claude Opus 5.5, Sonnet 5.5, Fable 5.1,
+	// Mythos 5.1) — and a 400 is not retried down the chain, so on those
+	// models it failed every review and every onboarding pass before the
+	// corrective that actually enforces the call could run.
+	terminateAfter []string
 
 	// seed is the conversation a RESUMED loop starts from: the suspended
 	// messages plus the answer to their dangling call. Nil for an ordinary
@@ -962,7 +951,6 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			ProviderKey: members[0].Key,
 			MaxRounds:   budget, Budget: r.cfg.Budget,
 			Fence:        r.cfg.Fence,
-			ToolChoice:   in.toolChoice,
 			AllowSuspend: in.allowSuspend,
 			// A phase that has SUBMITTED is finished. Without this the
 			// loop asks again, the model submits again, and the phase

@@ -709,6 +709,39 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	}
 }
 
+// THE REVIEWER ASKS ON AUTO, its corrective round included. Its only tool is
+// its submission, so a forced tool_choice once looked free — but Claude Opus
+// 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer a forced choice with a 400,
+// which the chain does not retry, so on those models every review died before
+// the corrective that actually enforces the call could run. The submission it
+// names is what re-asks a reviewer that answered in prose.
+func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
+	t.Parallel()
+	r, prov, _ := fixture(t, &scriptedProvider{review: []llm.Completion{
+		text("Looks done to me."),
+		submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
+	}})
+	got, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil)
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got.Decision != phase.Done {
+		t.Fatalf("decision = %s, want the submitted done", got.Decision)
+	}
+	reqs := prov.requestsFor("review")
+	if len(reqs) != 2 {
+		t.Fatalf("the reviewer was asked %d times, want 2", len(reqs))
+	}
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitReviewTool) {
+		t.Errorf("the second review round opened on %q, want the finishing corrective", last.Content)
+	}
+	for i, req := range reqs {
+		if req.ToolChoice != llm.ToolChoiceAuto {
+			t.Errorf("review request %d tool_choice = %q, want auto", i+1, req.ToolChoice)
+		}
+	}
+}
+
 func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 	t.Parallel()
 	// The submission tool is per-phase state. Registering it into the

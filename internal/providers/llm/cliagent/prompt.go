@@ -52,10 +52,10 @@ func RenderPrompt(req llm.Request) (string, error) {
 		b.WriteString("\n")
 		// "none" means the caller has offered tools but does not want one
 		// this round, so the contract is the permissive form; "required"
-		// is a phase whose every round must be a call (the reviewer, the
-		// onboarding pass) and says so. A phase that merely FINISHES by a
-		// call — the executor, on auto — gets the permissive form, and the
-		// tool loop asks again when a round ends in prose.
+		// demands a call, and only the doctor's smoke test sends it. Every
+		// phase of a turn asks on auto and gets the permissive form, and the
+		// tool loop asks again when a round of a phase that finishes by a
+		// call ends in prose.
 		b.WriteString(RenderContract(req.ToolChoice == llm.ToolChoiceRequired))
 	}
 

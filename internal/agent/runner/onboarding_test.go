@@ -239,6 +239,44 @@ func TestAPassThatDoesNotMarkRetriesNextTurn(t *testing.T) {
 	}
 }
 
+// THE ONBOARDING PASS ASKS ON AUTO, its corrective round included, for the
+// reason the reviewer does: a forced tool_choice is a 400 on several current
+// models, and a pass that errors never marks — so it re-ran, and failed, on
+// every turn the seat took. Naming mark_onboarded is what re-asks a pass that
+// answered in prose, and the corrective names that tool, not the catalogue.
+func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
+	t.Parallel()
+	store := &markers{claimHeld: true}
+	prov := &scriptedProvider{onboarding: []llm.Completion{
+		text("I have read everything I need."),
+		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "mark_onboarded",
+			Arguments: map[string]any{"notes": "read the pages"}}}},
+	}}
+	latch := runner.NewLatch()
+	r := onboardingRunner(t, store, latch, prov)
+	if ran, err := r.Onboard(context.Background()); !ran || err != nil {
+		t.Fatalf("ran = %v, err = %v", ran, err)
+	}
+	reqs := prov.requestsFor("onboarding")
+	if len(reqs) != 2 {
+		t.Fatalf("the pass was asked %d times, want 2", len(reqs))
+	}
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
+		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
+	}
+	for i, req := range reqs {
+		if req.ToolChoice != llm.ToolChoiceAuto {
+			t.Errorf("onboarding request %d tool_choice = %q, want auto", i+1, req.ToolChoice)
+		}
+	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
+	id, _ := organization.AgentIDFor(role)
+	if !latch.Confirmed(id.String(), learning.ChainHash(organization, role)) {
+		t.Error("the corrected pass did not mark the seat")
+	}
+}
+
 func TestNoMarkerStoreMeansNoPass(t *testing.T) {
 	t.Parallel()
 	// Without somewhere to mark, the pass could never complete — it would
