@@ -1804,7 +1804,7 @@ below), plus:
 | Name | Default | Description |
 |------|---------|-------------|
 | `bucket` | *(required)* | `minute`, `hour` or `day`. A closed set rather than a duration, for the reason the spend series gives for its two: an axis with an arbitrary bucket width is one nobody can label. The log has `minute` and the spend series does not, because "what just happened" is the commonest question asked of a log and an hour is the whole of that answer's window. An unknown value is refused naming what is accepted, never defaulted. |
-| `since` / `until` | (the retention window, to now) | RFC 3339 instants, half-open. Both edges are snapped **outward** to whole buckets, so the first and last bars are whole ones — a partial bar has a height that means something different from its neighbours' and a reader has no way to know. The answer is labelled with the window it actually covers. |
+| `since` / `until` | (the 30-day history, to now) | RFC 3339 instants, half-open. Both edges are snapped **outward** to whole buckets, so the first and last bars are whole ones — a partial bar has a height that means something different from its neighbours' and a reader has no way to know. The one edge no snap crosses is the 30-day history (`event_history_seconds`): a window it clips — the default one included — begins at the **first whole bucket inside it**, since a bar reaching below it could count only its upper part, and a window lying wholly below that bucket covers nothing (`since` equals `until`, no bars). The answer is labelled with the window it actually covers. |
 
 The answer is `{bucket, since, until, bars, total, failed, by_category}`.
 `bars` is **every** bucket in the window including the empty ones, so a
@@ -1813,10 +1813,12 @@ quiet hour is a gap of full width rather than a bar the chart squeezed out.
 The whole answer is cut against **one instant** — the serving node's clock
 when the question arrived — and every count in it, `bars`, `total`, `failed`
 and `by_category` alike, keeps rows from 30 days before that same instant.
-Across a fleet that instant is sent with the question, so every node floors
-what it counts at the serving node's horizon rather than its own, and a row
-any node holds inside the first bar is counted in it however long that node
-took to answer.
+Across a fleet that instant is sent with the question, so every node cuts the
+same bars and floors what it counts at the serving node's horizon rather than
+its own. Because no bar starts below that horizon (see `since` above), every
+bar lies wholly inside the history, and a row any node holds inside a bar —
+the first one included — is counted in it however long that node took to
+answer.
 
 Each bar is `{at, count, failed}`. `failed` is how many of the bar's rows
 reported a failure — by the rule a turn's own `failed` mark uses: the event
@@ -1837,7 +1839,9 @@ It is counted over the window **that was asked for**, not the snapped one
 `since` and `until` report: a chip says how many rows choosing it would
 show, and the rows come from `GET /events`, which takes the caller's own
 edges. So the chips need not sum to `total` — `total` describes the bars,
-which are whole buckets.
+which are whole buckets. On a window the history clips, the chips reach down
+to the horizon itself and so also count the rows between it and the first
+whole bucket, which no bar draws.
 
 Two refusals, both **400** rather than a smaller answer:
 

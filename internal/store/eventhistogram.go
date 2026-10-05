@@ -182,16 +182,34 @@ type EventHistogram struct {
 	ByCategory map[string]int `json:"by_category"`
 }
 
-// Window reports the instants this query covers, after the retention floor.
+// Window reports the instants this query covers, after the history floor.
 //
 // Total in both edges, like [PhaseTokenQuery.Window] and for the same reason:
 // the caller LABELS the answer, and an unbounded top edge is "up to now"
 // rather than the zero time. Both edges are snapped OUTWARD to the bucket, so
 // the first and last bars are whole ones rather than a partial bar at each end
 // whose height means something different from its neighbours'.
+//
+// EXCEPT AT THE FLOOR, which no snap may cross. Every count is floored at
+// `now` − [EventHistory], so a bottom edge snapped DOWN past it drew a first
+// bar labelled with the whole bucket and counting only the part above the
+// floor — the partial bar the outward snap exists to prevent, on the default
+// window of every ask that names no `since`, while the rows below the floor in
+// that bucket were still on disk (retention keeps a day past it) and in no
+// bar. So a window the floor clips begins at the FIRST WHOLE BUCKET INSIDE the
+// history, the boundary at or after the floor; and a window lying wholly
+// below that boundary covers nothing — both edges on it, no bars — rather
+// than a bar it cannot fill or one the caller did not ask for. A degenerate
+// window inside the history still widens to the one bucket holding it.
 func (q HistogramQuery) Window(now time.Time) (since, until time.Time) {
 	step := q.Bucket.Step()
 	floor := now.Add(-EventHistory)
+	// The first whole bucket inside the history: the boundary at or after
+	// the floor.
+	bottom := floor.UTC().Truncate(step)
+	if bottom.Before(floor) {
+		bottom = bottom.Add(step)
+	}
 	since = q.Since
 	if since.IsZero() || since.Before(floor) {
 		since = floor
@@ -218,6 +236,14 @@ func (q HistogramQuery) Window(now time.Time) (since, until time.Time) {
 	until = top.UTC().Truncate(step)
 	if until.Before(top) || until.Equal(since) {
 		until = until.Add(step)
+	}
+	// NEVER BELOW THE FIRST WHOLE BUCKET, and a window that ended at or
+	// before it is empty there rather than inverted.
+	if since.Before(bottom) {
+		since = bottom
+	}
+	if until.Before(since) {
+		until = since
 	}
 	return since, until
 }

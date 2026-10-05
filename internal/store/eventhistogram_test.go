@@ -318,6 +318,96 @@ func TestEveryCountOnTheAxisIsFlooredAtTheInstantItIsCutAgainst(t *testing.T) {
 	}
 }
 
+// A WINDOW THE FLOOR CLIPS BEGINS AT ITS FIRST WHOLE BAR.
+//
+// Every count is floored at the instant minus the thirty-day history, and the
+// default window — any ask that names no `since` — starts at that floor, which
+// lies mid-bucket whenever the instant does. Snapped DOWN like any other bottom
+// edge, its first bar was labelled with the whole bucket and counted only the
+// part above the floor: a partial bar, which is what the outward snap exists to
+// prevent, while the rows of that bucket below the floor were still on disk and
+// in no bar. Here the instant is half past an hour, so the floor is half past
+// too, and the bucket it falls in holds a row on each side of it.
+//
+// Mutation: drop the clamp to the first whole bucket from
+// [store.HistogramQuery.Window], and `since` is the bucket the floor cuts, its
+// bar a partial one counting one row of the two it covers.
+func TestAWindowTheFloorClipsBeginsAtItsFirstWholeBar(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Truncate(time.Hour).Add(-90 * time.Minute)
+	floor := at.Add(-store.EventHistory)
+	cut := floor.Truncate(time.Hour) // the bucket the floor falls in
+	first := cut.Add(time.Hour)      // the first whole one inside the history
+	for _, r := range []store.EventRecord{
+		{ID: "under-the-floor", Category: "system", Time: floor.Add(-10 * time.Minute)},
+		{ID: "over-the-floor", Category: "task", Time: floor.Add(10 * time.Minute)},
+		{ID: "first-bar", Category: "task", Time: first.Add(10 * time.Minute)},
+		{ID: "recent", Category: "system", Time: at.Add(-10 * time.Minute)},
+	} {
+		r.Type, r.Payload = "thing_happened", []byte(`{}`)
+		if err := log.Append(t.Context(), r); err != nil {
+			t.Fatalf("append %s: %v", r.ID, err)
+		}
+	}
+
+	got, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
+		ListQuery: store.ListQuery{At: at}})
+	if err != nil {
+		t.Fatalf("histogram: %v", err)
+	}
+	until := at.Truncate(time.Hour).Add(time.Hour)
+	if got.Since != first.Format(time.RFC3339) || got.Until != until.Format(time.RFC3339) {
+		t.Fatalf("window = %s .. %s, want %s .. %s — from the first whole hour inside the "+
+			"history to the end of the one in progress", got.Since, got.Until,
+			first.Format(time.RFC3339), until.Format(time.RFC3339))
+	}
+	if want := int(until.Sub(first) / time.Hour); len(got.Bars) != want {
+		t.Fatalf("%d bars, want %d", len(got.Bars), want)
+	}
+	// EVERY ROW INSIDE A REPORTED BAR IS COUNTED IN IT, which a bar starting
+	// below the floor cannot do.
+	if b := got.Bars[0]; b.At != first.Format(time.RFC3339) || b.Count != 1 {
+		t.Errorf("the first bar is %s counting %d, want %s counting the one row in it",
+			b.At, b.Count, first.Format(time.RFC3339))
+	}
+	if got.Total != 2 {
+		t.Errorf("total = %d, want the two rows inside the bars", got.Total)
+	}
+	// THE CHIPS take the caller's own edges — the floor, here — so they hold
+	// the row above the floor in the bucket no bar draws, and need not sum to
+	// the bars' total, as the API reference says.
+	if got.ByCategory["task"] != 2 || got.ByCategory["system"] != 1 {
+		t.Errorf("by_category = %v, want task 2 and system 1", got.ByCategory)
+	}
+
+	// A WINDOW WHOLLY BELOW THE FIRST WHOLE BAR COVERS NOTHING, rather than
+	// a bar it cannot fill or the next one, which the caller did not ask for.
+	below, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
+		ListQuery: store.ListQuery{At: at, Until: floor.Add(20 * time.Minute)}})
+	if err != nil {
+		t.Fatalf("histogram: %v", err)
+	}
+	if below.Since != first.Format(time.RFC3339) || below.Until != below.Since ||
+		len(below.Bars) != 0 || below.Total != 0 {
+		t.Errorf("a window ending inside the floor's bucket is %s .. %s with %d bars and "+
+			"total %d, want an empty window at %s", below.Since, below.Until,
+			len(below.Bars), below.Total, first.Format(time.RFC3339))
+	}
+	// AND A DEGENERATE WINDOW INSIDE THE HISTORY STILL WIDENS to the one
+	// bucket holding it.
+	point := first.Add(2 * time.Hour)
+	one, err := log.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour,
+		ListQuery: store.ListQuery{At: at, Since: point, Until: point}})
+	if err != nil {
+		t.Fatalf("histogram: %v", err)
+	}
+	if one.Since != point.Format(time.RFC3339) || len(one.Bars) != 1 {
+		t.Errorf("a zero-width window at %s is %s .. %s with %d bars, want the one bucket",
+			point, one.Since, one.Until, len(one.Bars))
+	}
+}
+
 // TOO MANY BUCKETS IS A REFUSAL, never a truncation or a coarser bucket.
 //
 // Dropping the oldest bars silently would put a month's heading over a day of

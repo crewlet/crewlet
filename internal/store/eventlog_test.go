@@ -51,11 +51,17 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 			rows, err := log.List(ctx, store.ListQuery{RelatedAgent: "PM", At: at})
 			return len(rows), err
 		}},
+		// THE CHIPS, which take the caller's own edges and so reach down to
+		// the floor itself. The bars begin at the first whole day above it,
+		// and a row a minute above the floor is in the day the floor cuts —
+		// see TestAWindowTheFloorClipsBeginsAtItsFirstWholeBar, and
+		// TestEveryCountOnTheAxisIsFlooredAtTheInstantItIsCutAgainst for
+		// the bars' own floor.
 		{"Histogram", func(at time.Time) (int, error) {
 			h, err := log.Histogram(ctx, store.HistogramQuery{
 				ListQuery: store.ListQuery{At: at}, Bucket: store.BucketDay,
 			})
-			return h.Total, err
+			return h.ByCategory["agent"], err
 		}},
 		{"TraceRows", func(at time.Time) (int, error) {
 			rows, err := log.TraceRows(ctx, []string{"tr-edge"}, 10, at)

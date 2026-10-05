@@ -214,11 +214,13 @@ func MergeRelated(direct, siblings []store.EventRecord, limit int, more bool) []
 //
 // Summable because the window is PINNED — every node was handed the asker's
 // clock, so every node snapped the same edges and produced the same bars —
-// and because no event is in two stores. A part whose window differs (a peer
-// on a build that ignores the pinned clock) cannot be summed bar for bar
-// without adding one node's minute to another's next one; it is left out and
-// its index reported, so the caller names that node rather than drawing a
-// wrong bar.
+// and because no event is in two stores. A part whose window differs cannot be
+// summed bar for bar without adding one node's minute to another's next one —
+// a peer on a build that ignores the pinned clock, or one that snaps a window
+// the history clips DOWN to the bucket the horizon cuts rather than up to the
+// first whole one inside it ([store.HistogramQuery.Window]), which every build
+// before that rule does on the default window. It is left out and its index
+// reported, so the caller names that node rather than drawing a wrong bar.
 func MergeSeries(base store.EventHistogram, others []store.EventHistogram) (store.EventHistogram, []int) {
 	out := base
 	out.Bars = slices.Clone(base.Bars)

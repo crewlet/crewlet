@@ -796,7 +796,10 @@ export interface EventBar {
  */
 export interface EventSeries {
   bucket: "minute" | "hour" | "day";
-  /** The window COVERED, snapped outward to whole buckets. */
+  /** The window COVERED, snapped outward to whole buckets — and never below
+   *  the first whole bucket inside the engine's 30-day history, so a window
+   *  the history clips starts later than it was asked to, and one lying wholly
+   *  below that bucket comes back empty (`since` equal to `until`, no bars). */
   since: string;
   until: string;
   /** Every bucket in the window, INCLUDING the empty ones. */
