@@ -75,21 +75,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 				"every person and every open invitation by"})
 		return
 	}
-	if s.external == "" {
-		// NAMED RATHER THAN A BROKEN LINK. The alternative is answering
-		// a relative path, which looks like a working invitation right
-		// up to the moment somebody clicks it in their mail client.
-		//
-		// A 500 AND NOT A 503: this node's own configuration lacks the
-		// setting, and no amount of waiting supplies it — a 503 told
-		// every client to retry in two seconds for ever.
-		httpjson.FailWith(w, http.StatusInternalServerError,
-			httpjson.CodeNoExternalURL, map[string]string{
-				"config_path": "api.external_url",
-				"detail": "this deployment has no api.external_url, so there " +
-					"is no address an invitation link could point at. Set it " +
-					"in this node's own configuration file and restart it.",
-			})
+	if !s.linksPoint(w, "an invitation") {
 		return
 	}
 	writer, ok := s.writerFor(r.Context())
@@ -138,6 +124,31 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 			"estate holds is the invitation's id and a verifier of the secret " +
 			"the link carries beside it, which is what redeeming it presents",
 	})
+}
+
+// linksPoint reports whether this node can build a link a person follows —
+// whether it has an `api.external_url` — and refuses the gesture naming the
+// setting, false, where it has none. what is the link's kind, for the sentence.
+//
+// NAMED RATHER THAN A BROKEN LINK. The alternative is answering a relative
+// path, which looks like a working link right up to the moment somebody clicks
+// it in their mail client.
+//
+// A 500 AND NOT A 503: this node's own configuration lacks the setting, and no
+// amount of waiting supplies it — a 503 told every client to retry in two
+// seconds for ever.
+func (s *Service) linksPoint(w http.ResponseWriter, what string) bool {
+	if s.external != "" {
+		return true
+	}
+	httpjson.FailWith(w, http.StatusInternalServerError,
+		httpjson.CodeNoExternalURL, map[string]string{
+			"config_path": "api.external_url",
+			"detail": "this deployment has no api.external_url, so there " +
+				"is no address " + what + " link could point at. Set it " +
+				"in this node's own configuration file and restart it.",
+		})
+	return false
 }
 
 // inviteRoute is the dashboard's invitation screen, as a fragment route of its

@@ -175,6 +175,11 @@ type Directory interface {
 	// be a lie about it. See [iamdomain.Reader.SessionStanding].
 	SessionStanding(ctx context.Context, lineage string, now time.Time) (
 		owner string, live bool, err error)
+
+	// ResetByID resolves one password reset link by its credential id, on
+	// the same three answers — the zero value for an id that is no link.
+	// BY ITS OWN ID, for [Directory.InvitationByID]'s reason.
+	ResetByID(ctx context.Context, id string) (iamdomain.ResetRow, error)
 }
 
 // Writer is what this surface writes, defined here for Directory's reason.
@@ -219,8 +224,8 @@ type Writer interface {
 	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Result, error)
 
 	// SetPassword replaces a person's password and moves their revocation
-	// epoch in ONE record, judged by the caller's own proof in its snapshot:
-	// the person's current password.
+	// epoch in ONE record, judged by the caller's own proof in its snapshot
+	// — a person's change, or a reset link's spend.
 	SetPassword(ctx context.Context, in iamdomain.PasswordSet) (statelog.Result, error)
 }
 

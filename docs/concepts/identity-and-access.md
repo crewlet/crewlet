@@ -674,6 +674,7 @@ would be a credential every operator with a backup holds.
 | Second factor | The TOTP shared secret, sealed under the **fleet keyring** and bound to the person, the credential it was enrolled as and the field — see [below](#what-is-in-the-clear-and-what-is-not) | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
 | Recovery code | SHA-256 | Minted here from `crypto/rand`, so there is no dictionary to grind and no memory cost to buy |
 | Machine token | SHA-256 over the prefix, the credential id and the secret — everything but the log position the value carries, which is a hint about *when* to look and proves nothing | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
+| Password reset link | SHA-256 over a prefix of its own, the credential id and the secret | Minted here from `crypto/rand`, as a machine token is — and it opens nothing but its own two routes, once |
 
 The rule is not "hash secrets with argon2id", it is **spend cost where an
 attacker has a shortcut** — and against a 32-byte value this engine minted,
@@ -780,6 +781,52 @@ A change this node has not applied yet answers `202` with `status:
 password_changed` and **no session**: the epoch a new session is opened at is
 read from rows that do not hold the move yet, so the person signs in again with
 the new password. Each change is an `iam_password_changed` event.
+
+### A forgotten password is a one-time link from an administrator
+
+Somebody who cannot sign in at all has no current password to present, so an
+administrator issues them a **reset link**: `POST
+/iam/people/{id}/password-reset`, or `crewlet iam reset-password` with their id
+or login, on `people:manage` and a recent proof, as resetting a second factor
+is. The link reads
+
+```text
+https://crewlet.example.com/dashboard#/reset/<id>.<secret>
+```
+
+— the invitation link's shape, for the invitation link's reasons: the dashboard's
+reset screen with the credential after the `#`, which no browser sends to a
+server; the screen asks `/auth/reset/{id}` with the id in the path and the
+secret beside it, in the `X-Crewlet-Reset-Secret` header to say whose password
+it sets and in the body to set one. It is **shown once** and the engine never
+sends it: what the estate keeps is a `reset` credential on the person — the
+SHA-256 of the secret, listed among their credentials and revoked like any of
+them — and issuing another revokes the one before, so a person holds at most
+one. A machine has no password and is refused, and so is somebody suspended or
+retired, because a link would hand back an account somebody stopped.
+
+**It is good for one day.** It travels out of band — by chat or mail, where a
+link sits unread and gets forwarded — to somebody locked out *today*, so it
+lives long enough to reach them the next working day and no longer.
+An invitation's week is for somebody who does not work here yet.
+
+**Opening it spends nothing**, as an invitation's GET does not, and every way a
+link fails to open — an id that is no link, a secret that is not the id's, a
+link spent, revoked or aged out, a person the reset no longer reaches — is
+**one `410 reset_spent`** in the same bytes, counted as a failed attempt (method
+`reset`) only where the link did not prove itself. It meets no curve: it names
+nobody until it opens, and its secret is 256 bits of `crypto/rand`.
+
+**Spending it is one record, and it signs nobody in.** The new password, the
+link spent with every other the person held, and their revocation epoch moved
+— every session and machine token they held ends — exactly as a change of their
+own does, judged by the link again in the record's own snapshot, so one spent
+from another tab in between opens nothing. The answer is the login and nothing
+else: the person signs in next, where a second factor they hold still applies,
+which a session handed out by the link would skip. A spend whose answer was lost
+is retried under the same operation, derived from the link, and answered from
+the ledger. Issuing is an `iam_password_reset_issued` event and spending an
+`iam_password_reset` one; neither carries the link.
 
 ### A required second factor is enrolled before anything else
 
@@ -1520,7 +1567,7 @@ or because a client must reach it to obtain a credential at all.
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
-| `/auth/config`, `/auth/login`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
+| `/auth/config`, `/auth/login`, `/auth/invite/…`, `/auth/reset/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link and a password reset link are each the credential. Exact paths plus the two prefixes, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
 | `/auth/logout` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered it `503` before it ran, and a person left a shared machine still signed in. It verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges it. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
 
 Everything else needs one, **reads included**. `allow_anonymous_read` used to
@@ -1600,8 +1647,8 @@ sandbox box presents the signed token in its path, and refusing either would
 take every integration off the air.
 
 **The sign-in routes are judged, although no credential guards them.** A login
-cannot require a login, so `POST /auth/login` and `/auth/invite/{id}` are
-exempt from the *guard* — and from nothing else. They
+cannot require a login, so `POST /auth/login`, `/auth/invite/{id}` and
+`/auth/reset/{id}` are exempt from the *guard* — and from nothing else. They
 are routes a browser posts to, and each one ends with that browser holding a
 session: a form on somebody else's page that could post an attacker's password
 to the sign-in or redeem an attacker's invitation would leave the victim signed
@@ -1848,7 +1895,7 @@ verb asks for one:
 | Window | Sized by | Asked by |
 |---|---|---|
 | none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — and every identity-directory write: enrolling, inviting, editing or removing somebody, resetting their second factor, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two

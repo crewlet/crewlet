@@ -280,6 +280,19 @@ func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
 	return result, nil
 }
 
+// ResetByID answers a reset link this estate's person holds, as the reader
+// joins it to its person.
+func (e *estate) ResetByID(_ context.Context, id string) (iamdomain.ResetRow, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	row := iamdomain.ResetOf(iamdomain.Person{Kind: e.person.Kind,
+		Stage: e.person.Stage, Credentials: e.person.Credentials}, id)
+	if row.ID != "" {
+		row.PersonID, row.Login = e.person.ID, e.person.Login
+	}
+	return row, nil
+}
+
 const (
 	password = "a-long-enough-passphrase"
 	totpSeed = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"

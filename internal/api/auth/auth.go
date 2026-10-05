@@ -94,13 +94,13 @@ var log = logging.Get("api.auth")
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
-//   - FOUR ROUTES UNDER /auth/, and only four. Two because a login cannot
+//   - FIVE ENTRIES UNDER /auth/, and only five. Two because a login cannot
 //     require a login: the posture read and the sign-in are how somebody
 //     OBTAINS a credential, so requiring one is a deployment nobody can
 //     enter. What stands in for the guard on each is the throttle and the
-//     origin check, which they are NOT exempt from. Plus /auth/invite/,
-//     whose link is the credential — the id in the path and the secret
-//     beside it, never in a URL. And the SIGN-OUT
+//     origin check, which they are NOT exempt from. Plus /auth/invite/ and
+//     /auth/reset/, whose links are the credential — the id in the path and
+//     the secret beside it, never in a URL. And the SIGN-OUT
 //     OF THIS SESSION, because a sign-out must clear the cookie whatever this
 //     node can read: guarded, a node that could not read its identity estate
 //     answered it `503 identity_unavailable` before it ran, so on exactly the
@@ -131,6 +131,7 @@ var unguardedExact = map[string]struct{}{
 
 var unguardedPrefixes = []string{
 	WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/", AuthInvitePrefix,
+	AuthResetPrefix,
 }
 
 // The sign-in routes served without a credential, named HERE rather than in
@@ -160,6 +161,11 @@ const (
 	// secret, which travels beside the id in a header, a body or a form
 	// and never in a path.
 	AuthInvitePrefix = "/auth/invite/"
+
+	// AuthResetPrefix is the password reset pair — the link's view and its
+	// spend — exempt for the invitation's reason: holding the link is the
+	// credential, its secret in a header or a body and never in a path.
+	AuthResetPrefix = "/auth/reset/"
 
 	// PathDashboard is the dashboard's shell: the page every screen is a
 	// fragment route of, and so the page a link a person follows points

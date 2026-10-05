@@ -239,6 +239,8 @@ node means nothing was done.
 | `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up`, refused as `POST /auth/totp` is, a machine token included. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
 | `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine. It ends the session behind **either** cookie name — the one this deployment issues, and the other a browser may still hold from before `api.external_url` moved to https, which the guard no longer authenticates — and clears both. Only a session this node's rows still hold is closed and announced as `iam_session_ended`: a cookie past its deadline, revoked, or naming a session a record already ended is cleared and nothing is written, and a node that cannot read its rows records the close without announcing it. **Unguarded**, and that is what makes the promise true: behind the request guard, a node that could not read its identity estate answered `503 identity_unavailable` before the sign-out ran and the cookie stayed set. It verifies every bearer the browser holds itself, and the origin check still judges it |
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
+| `GET` | `/auth/reset/{id}` | **Says whose password a reset link sets, and never spends it** — the invitation view's rule, for its reason. **Unguarded**: the link is the credential, its **secret** presented in the `X-Crewlet-Reset-Secret` header and never in the URL; the link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/reset/<id>.<secret>`. Answers `{login, expires_at, min_password_length}`. Every way a link fails to open — an id that is no link, a secret that is not its link's, a link spent, revoked or aged out, a person suspended, retired or removed since — is one `410 reset_spent` in the same bytes, and only a link that did **not** prove itself is a failed attempt on the per-minute failure row (method `reset`). It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) |
+| `POST` | `/auth/reset/{id}` | **Sets a new password from a reset link, once.** **Unguarded**. `{secret, password}`, the password held to the floor (`422 invalid`, naming the rule). One record sets it, spends the link with every other the person held and moves their revocation epoch — every session and machine token they held ends — judged by the link again in that record's own snapshot, so a link spent from another tab in between is the same `410 reset_spent`. Answers `{status: "password_set", login}` and **no session**: the person signs in next, where a second factor they hold still applies. A spend whose answer was lost is retried under the same operation, derived from the link, and answered from the ledger rather than refused as a link already used. Issued by an administrator — `POST /iam/people/{id}/password-reset` |
 | `POST` | `/auth/password` | **Change your own password.** Takes `{current_password, new_password}`; the current one is the proof, verified on the step-up's terms — on the throttle's curve for the login you are signed in as, a wrong one the `401 sign_in_refused` every failed sign-in answers — so no step-up is asked first, and the new one is held to the password floor (`422 invalid`, naming the rule). Needs a person present: a machine token is `403 unauthorized` with `reason: token_refused`, and a session exchanged from a Tier A token, which is no person's, is `403 forbidden`. **One record** sets the password and moves the person's revocation epoch, ending every session and machine token they held and every outstanding reset link; this browser is then handed a new session, answered in the sign-in's own shape. A change this node has not applied yet is `202` with `status: password_changed` and no session — sign in again with the new password — and one that finds the password changed by somebody else since it was verified is `409 stale` with the cookie cleared, because that change ended this session too. See [Changing your own password ends everything else](../concepts/identity-and-access.md#changing-your-own-password-ends-everything-else) |
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows, and whether you may end it is the authority table's — the same rule as `DELETE /iam/people/{id}/sessions`, so ending one session and ending all of somebody's never answer differently: your **own** on no proof at all (a session exchanged from a Tier A token counts the token's other sessions as its own), and **anybody else's** on `people:manage`, a proof inside `step_up` and a person present. A refusal is the table's own envelope — `403 unauthorized` naming `people:manage`, `403 step_up_required`, or `403 unauthorized` with `reason: token_refused` for a machine token. A lineage nobody holds answers `ended`, as a session already over does — ended by a record, past its absolute deadline, revoked or invalidated — with nothing written or announced; "nobody holds it" is **proved** against the identity log's end, so a node whose rows have not applied every record the log holds (it is behind, or holds one it could not apply) does not say it — a session opened through a peer is a row such a node is still missing, and `ended` would be a lie about a session still running. That node, and one that cannot read its rows at all, answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id`; asking again is a fresh close, and one that finds the first had landed answers `ended` |
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through — and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a bound person, the login for everybody else. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named, always an array — and `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
@@ -282,8 +284,8 @@ node means nothing was done.
 > off its URL**, the socket included: a `?token=…` authenticates nobody,
 > because a URL lands in proxy logs and browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
 > `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/static/*`),
-> and the five sign-in routes plus `/auth/invite/*` — a login cannot require a
-> login. That is an **exact list and not a `/auth/` prefix**: the same surface
+> and the five sign-in routes plus `/auth/invite/*` and `/auth/reset/*` — a
+> login cannot require a login. That is an **exact list and not a `/auth/` prefix**: the same surface
 > ends sessions and enrols second factors, and a prefix would put those behind
 > no credential at all. See
 > [Configuration § Auth](../concepts/configuration.md#auth).
@@ -333,7 +335,7 @@ node means nothing was done.
 > refused for theirs, and neither are the server-to-server edges (`/webhooks/*`,
 > `/otlp/*`, `/mcp/*`), which a server reaches with a credential of its own.
 > The sign-in routes are judged like every other write although no credential
-> guards them — `POST /auth/login` and `/auth/invite/{id}`
+> guards them — `POST /auth/login`, `/auth/invite/{id}` and `/auth/reset/{id}`
 > — because a sign-in posted from somebody else's
 > page is how an attacker leaves a victim's browser signed in as somebody the
 > attacker controls. See
@@ -378,6 +380,7 @@ already have:
 | `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens. It is also the `403` a session that may only enrol a second factor meets at `POST /auth/totp` once its person holds one — enrolled since, from another session: a password alone never enrols over a factor, and the remedy is to sign in again with it |
 | `second_factor_enrolment_required` | A `status` on a successful sign-in, and a `403` from every guarded route but three for the session it opened — reached only by somebody who proved the password, so it says nothing to a stranger. The deployment requires a second factor and this person holds none: the session may read `GET /auth/session`, enrol one at `POST /auth/totp` and re-confirm the password at `POST /auth/step-up`, and sign out at `POST /auth/logout`, which no guard stands in front of — and enrolling replaces it with a whole one. Its own code rather than `step_up_required`, because no fresher password changes the answer |
 | `invite_spent` | Read by somebody holding the link, which is already evidence it was issued to them. One code for redeemed, withdrawn and expired — and for a secret that is not the link's, answered in the same bytes as an id nobody issued — because the remedy is the same and telling them apart would say "already used" to somebody whose link merely aged out, or say which ids exist to somebody guessing secrets |
+| `reset_spent` | A password reset link's `410`, for `invite_spent`'s reasons: read by somebody holding the link, one code for spent, revoked, expired and a person the reset no longer reaches — and for a secret that is not the link's, in the same bytes as an id nobody issued. The remedy is the same: ask an administrator for a new one |
 
 ### A failure costs a wait, never a lockout
 
@@ -538,7 +541,7 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
 | none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password is itself the proof; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
@@ -685,6 +688,7 @@ list and nothing ever will be.
 | `GET /iam/people/{id}/sessions` | the person themselves, `people:manage` or `audit:read` |
 | `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
+| `POST /iam/people/{id}/password-reset` | `people:manage` |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
 | `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused` with nothing written, on a node that had listed the credential before the write and on one that had not alike |
@@ -859,11 +863,13 @@ record may hold the value, so another node decides it.
 
 #### Values that are shown once
 
-`POST /iam/invitations` answers the invitation URL and `POST /iam/credentials`
-answers the token. Neither is stored and neither can be read back: what the
-estate holds is the invitation's id and a SHA-256 of the secret its link
-carries, and a SHA-256 of the token. An invitation an administrator lost is
-cancelled and issued again rather than recovered.
+`POST /iam/invitations` answers the invitation URL, `POST
+/iam/people/{id}/password-reset` a reset link and `POST /iam/credentials` the
+token. None is stored and none can be read back: what the estate holds is the
+invitation's id and a SHA-256 of the secret its link carries, the same for a
+reset link, and a SHA-256 of the token. An invitation an administrator lost is
+cancelled and issued again rather than recovered, and a reset link is simply
+issued again.
 
 The invitation URL is the **dashboard's invitation screen**:
 
@@ -923,6 +929,41 @@ and a **redeemed** invitation is `409` naming the `person` it created: the
 link is spent, and what undoes it is removing that person. Each cancellation
 is an `iam_invitation_cancelled` event, by the invitation's id and never its
 address.
+
+#### `POST /iam/people/{id}/password-reset` issues a one-time link
+
+```json
+{
+  "id": "018f3a9c-…",
+  "credential": "0192f00d-…",
+  "url": "https://crewlet.example.com/dashboard#/reset/<credential>.<secret>",
+  "expires_at": "2026-06-09T09:12:00Z",
+  "outcome": "applied",
+  "position": "CREWLET_IAM_LOG@0:1841"
+}
+```
+
+`201` with a link that sets the person a new password **once**: the
+dashboard's reset screen, the credential's id and a secret in the fragment, as
+an invitation's link is built — and on a node with no `api.external_url` it is
+the same `500 no_external_url`. The link is a `reset` credential on the person,
+stored as the SHA-256 of its secret and good for **24 hours**: it travels out
+of band to somebody locked out today. It is listed among the person's
+credentials (`GET /iam/credentials?person=`), revoked like any of them, and
+issuing another revokes the one before it — a person holds at most one. A
+machine is `409` (it has no password; mint it a token), and so is a person
+`suspended` or `retired`, naming the `stage`, because a link would hand back an
+account somebody stopped: reactivate them first.
+
+**Shown once, and no key is read.** Like a token's mint, a replay of the issue
+could not hand back a secret its first attempt never showed, so the route
+ignores `Idempotency-Key`; an issue whose outcome is unknown is `503` naming
+its `op_id` and carrying no link, and the remedy is to issue again, which
+revokes the one that may have landed. Each issue is an
+`iam_password_reset_issued` event — for whom, by whom, until when, never the
+link. **Spending it** is `POST /auth/reset/{id}`, among the `/auth` routes
+above: it sets the password, ends every session and machine token the person
+held, and signs nobody in.
 
 #### `GET /iam/people` pages on a key the applier writes
 

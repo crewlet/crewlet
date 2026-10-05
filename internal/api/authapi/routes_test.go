@@ -32,15 +32,16 @@ import (
 func TestEveryAuthRouteIsClassified(t *testing.T) {
 	t.Parallel()
 
-	// THE UNGUARDED SIGN-IN ROUTES, plus the invitation pair and the
-	// sign-out. Each sign-in route is here because requiring a credential to
-	// obtain one is a deployment nobody can enter — for the invitation,
+	// THE UNGUARDED SIGN-IN ROUTES, plus the invitation and reset pairs and
+	// the sign-out. Each sign-in route is here because requiring a credential
+	// to obtain one is a deployment nobody can enter — for the two links,
 	// because holding the link IS the credential — and the sign-out because
 	// it must clear the cookie on a node that cannot read its identity
 	// estate, verifying every bearer it ends for itself.
 	unguarded := []string{
 		auth.PathAuthConfig, auth.PathAuthLogin,
-		auth.AuthInvitePrefix + "{id}", auth.PathAuthLogout,
+		auth.AuthInvitePrefix + "{id}", auth.AuthResetPrefix + "{id}",
+		auth.PathAuthLogout,
 	}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
 	// than derived as "the rest": a route that went missing from the

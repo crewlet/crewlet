@@ -341,6 +341,10 @@ type fakeWriter struct {
 	// against, the way the real decide runs it against the snapshot.
 	held []iamdomain.Credential
 
+	// document, when a case sets it, is the person an UpdatePerson call's
+	// Apply is run against, and what it formed afterwards.
+	document *iamdomain.Person
+
 	// rerun, when set, is a SECOND snapshot the Apply is run against
 	// after the first — the real decide's round after a lost race, whose
 	// verdict is the one that lands.
@@ -413,6 +417,16 @@ func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) 
 
 	w.updated = in
 	w.op("update", in.OpID)
+	if w.document != nil && in.Apply != nil {
+		// THE DECIDE'S OWN ROUND, against the document a case set: a
+		// refusal publishes nothing and comes back unwrapped.
+		formed, err := in.Apply(*w.document)
+		if err != nil {
+			w.calls = append(w.calls, "update")
+			return statelog.Result{}, err
+		}
+		*w.document = formed
+	}
 	return w.did("update")
 }
 

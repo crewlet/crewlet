@@ -133,6 +133,10 @@ func (stubDirectory) SessionStanding(context.Context, string, time.Time) (string
 	return "", false, nil
 }
 
+func (stubDirectory) ResetByID(context.Context, string) (iamdomain.ResetRow, error) {
+	return iamdomain.ResetRow{}, nil
+}
+
 type stubWriter struct{}
 
 // applied is a write that landed at a position and was applied here — what a

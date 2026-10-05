@@ -490,6 +490,13 @@ const (
 	// evidence it was issued to them.
 	CodeInviteSpent Code = "invite_spent"
 
+	// CodeResetSpent is a password reset link that opens nothing: an id that
+	// is no link, a secret that is not the id's, one spent, revoked or past
+	// its expiry, or a person the reset no longer reaches. ONE CODE FOR ALL
+	// OF THEM, for [CodeInviteSpent]'s reason — told apart they would say
+	// which ids exist — and the remedy is the same: ask for a new one.
+	CodeResetSpent Code = "reset_spent"
+
 	// CodeSeatUnavailable is somebody whose session validated perfectly
 	// and whose SEAT the org chart no longer holds.
 	//
@@ -782,6 +789,8 @@ var codes = map[Code]string{
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
+	CodeResetSpent: "This password reset link is no longer valid. Ask an " +
+		"administrator for a new one.",
 
 	CodeForbidden: "That change is not yours to make here, and nothing was " +
 		"written. The detail says whose it is.",

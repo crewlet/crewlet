@@ -25,7 +25,7 @@ import (
 // guards its listing.
 const Prefix = "/iam/"
 
-// Routes registers the nineteen on a mux.
+// Routes registers the twenty on a mux.
 //
 // EVERY ROUTE CARRIES ITS OWN POLICY, stated where it is mounted, through
 // [authz.Router] — which is the only reader of the matched pattern, because a
@@ -102,6 +102,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 		about(authz.ActionSessionEnd), s.DeleteSessions)
 	mount("POST /iam/people/{id}/mfa/reset",
 		at(authz.ActionDirectoryWrite), s.PostMFAReset)
+	// THE SAME VERB AS THE SECOND FACTOR'S RESET, for its reason: both
+	// change how somebody else proves who they are, from outside.
+	mount("POST /iam/people/{id}/password-reset",
+		at(authz.ActionDirectoryWrite), s.PostPasswordReset)
 	mount("GET /iam/credentials",
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",
