@@ -369,18 +369,25 @@ func (q ListQuery) at() time.Time { return askedAt(q.At) }
 // question, so every node must floor it at the ASKER'S instant or the merged
 // answer is a union of different windows, each node's as of its own clock.
 //
-// A GROUPED READ SELECTS ITS ROWS IN A DERIVED TABLE — `SELECT … FROM (SELECT
-// … FROM crewlet_events WHERE …) GROUP BY …` — because only there does the
-// planner seek the index a filter has. Over the table itself, a GROUP BY under
-// the history floor was planned on the primary key `event_time` leads: the
-// floor taken as a range of it and read whole (a turn's traces), or that range
+// A READ GROUPING ITS ROWS BY A COLUMN SELECTS THEM IN A DERIVED TABLE —
+// `SELECT … FROM (SELECT … FROM crewlet_events WHERE …) GROUP BY …` — because
+// there the planner seeks the index a filter has: the facet counts
+// ([ListQuery.facetSQL]), a turn's traces ([turnTracesSQL]), the turn list and
+// its shares ([TurnQuery.partialsSQL]) and the outcome counts
+// ([OutcomeQuery.countSQL]). Over the table itself, such a GROUP BY under the
+// history floor was planned on the primary key `event_time` leads: the floor
+// taken as a range of it and read whole (a turn's traces), or that range
 // intersected with the filter's own index (`MULTI-INDEX AND`: a facet count
 // narrowed to a seat, a trace, a turn, a unit of work, an item or a channel,
 // and the turn list narrowed to a unit of work). Either way the read cost the
 // thirty-day window rather than the rows it was about — on 60,000 rows, 15 ms
 // against 0.2 ms for one turn's traces and 10 ms against 0.2 ms for a facet
-// count of one unit of work, on every node a fleet asks. The plans are read
-// back for the exact statements in TestEveryGroupedReadSeeksItsFiltersIndex.
+// count of one unit of work, on every node a fleet asks. The axis's bars are
+// the one grouped read over the table itself: they group by an expression over
+// `event_time` rather than by a column, and for that the planner seeks the
+// filter's index as the statement stands ([HistogramQuery.barsSQL]). The plans
+// are read back for the exact statements in
+// TestEveryGroupedReadSeeksItsFiltersIndex, the bars' at every bucket width.
 type EventLog struct{ db *DB }
 
 // Events returns the audit log backed by this database.

@@ -326,20 +326,13 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// bars and the facet counts are floored under it — see [ListQuery.At]
 	// for what flooring at a second read of the clock cost.
 	at := q.at()
-	since, until := q.Window(at)
+	since, until, query, args := q.barsSQL(at)
 	bars := int(until.Sub(since) / step)
 	if bars > MaxHistogramBuckets {
 		return EventHistogram{}, fmt.Errorf("%w: %s over %s is %d buckets, and the "+
 			"most this answers is %d — ask for a coarser bucket or a shorter window",
 			ErrHistogramSpan, q.Bucket, until.Sub(since), bars, MaxHistogramBuckets)
 	}
-
-	// THE WINDOW THE BARS COVER, not the one that was asked for: the edges
-	// were snapped to the bucket above, and counting rows outside them
-	// would put events in no bar at all.
-	filters := q.ListQuery
-	filters.Since, filters.Until = since, until
-	query, args := filters.barsSQL(step, at)
 
 	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -403,17 +396,29 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	return out, nil
 }
 
-// barsSQL is the statement [EventLog.Histogram] counts its bars with, over the
-// window already snapped into q's Since and Until, and its arguments — a
-// function of its own so its plan can be read back for exactly the statement
-// that runs (TestEveryGroupedReadSeeksItsFiltersIndex).
+// barsSQL is the statement [EventLog.Histogram] counts its bars with when it is
+// asked at `at`, and its arguments, beside the window the bars cover — a
+// function of its own, the window's cut included, so its plan can be read
+// back for exactly the statement that runs at every bucket width
+// (TestEveryGroupedReadSeeksItsFiltersIndex).
+//
+// THE WINDOW THE BARS COVER, not the one that was asked for: the edges are
+// snapped to the bucket ([HistogramQuery.Window]), and counting rows outside
+// them would put events in no bar at all.
 //
 // It groups over the table itself, unlike [ListQuery.facetSQL], and still
-// seeks a filter's index: the window bounds `event_time` on both sides, and
-// with both edges the planner takes the filter's index range rather than the
-// primary key's. The gate holds it to that.
-func (q ListQuery) barsSQL(step time.Duration, at time.Time) (string, []any) {
-	from, where, args, col := q.predicate(at)
+// seeks a filter's index. MEASURED, NOT REASONED: grouped by this expression
+// over `event_time`, the planner takes the filter's index range — with the
+// window's edges or with the floor alone — where a facet count grouped by a
+// column over the table intersected that index with the primary key's floor
+// range. Nothing promises a planner keeps either choice, so the gate reads the
+// plan back for the statement this returns, at every bucket width.
+func (q HistogramQuery) barsSQL(at time.Time) (since, until time.Time, query string, args []any) {
+	step := q.Bucket.Step()
+	since, until = q.Window(at)
+	filters := q.ListQuery
+	filters.Since, filters.Until = since, until
+	from, where, args, col := filters.predicate(at)
 	// Integer arithmetic on the stored microseconds — the column is a
 	// UnixMicro (see [EncodeTime]) — so the bucket is a division rather
 	// than a date function, and every engine agrees about what it means.
@@ -430,10 +435,10 @@ func (q ListQuery) barsSQL(step time.Duration, at time.Time) (string, []any) {
 	// column here, although this read never joins (a related-agent axis is
 	// refused by [EventLog.Histogram]).
 	failedExpr, failedArgs := failedRow(col)
-	query := "SELECT " + bucketExpr + " AS bucket, COUNT(*), " +
+	query = "SELECT " + bucketExpr + " AS bucket, COUNT(*), " +
 		"SUM(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END) FROM " + from +
 		" WHERE " + strings.Join(where, " AND ") + " GROUP BY bucket ORDER BY bucket"
-	return query, append(failedArgs, args...)
+	return since, until, query, append(failedArgs, args...)
 }
 
 // countBy counts the window's rows per value of one column, with that column's

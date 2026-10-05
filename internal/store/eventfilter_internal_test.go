@@ -1,7 +1,9 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,12 +89,14 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 // that range intersected with the filter's own index (`MULTI-INDEX AND`) —
 // either way the read cost the thirty-day window rather than the rows it was
 // about. Selecting the rows in a derived table and grouping outside it is what
-// makes the planner seek (see [EventLog]); the axis's bars group over the table
-// itself and seek because their window bounds `event_time` on both sides. Read
-// back for the EXACT statement each read runs: a turn's traces, the turn list
-// and its share of named turns, and every filter of the axis's bars and its
-// facet counts — the ones with an index of their own seek it, and none of
-// them, whatever it filters on, intersects the key.
+// makes the planner seek a column's groups (see [EventLog]); the axis's bars
+// group over the table itself by an expression over `event_time`, and seek as
+// they are. Read back for the EXACT statement each read runs: a turn's traces,
+// the turn list and its share of named turns, every filter of the facet
+// counts, and every filter of the axis's bars — the category's too — at every
+// bucket width Histogram draws, each over a window it answers rather than
+// refuses. The ones with an index of their own seek it, and none of them,
+// whatever it filters on, intersects the key.
 //
 // A read that names a WINDOW seeks it too, on the filter's index: the count of
 // notification outcomes is two types over `[since, at)`, and the planner seeks
@@ -102,7 +106,11 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 // Mutation: select [turnTracesSQL]'s, [ListQuery.facetSQL]'s or
 // [TurnQuery.partialsSQL]'s rows from the table rather than from a derived
 // table, and its cases read the key — a range of it for the traces, `MULTI-
-// INDEX AND` for a filtered facet count or a unit of work's turns. Spell
+// INDEX AND` for a filtered facet count or a unit of work's turns. Force the
+// primary key under [HistogramQuery.barsSQL]'s statement for one bucket width
+// alone, or for the category's windowed bars alone, and that width's cases, or
+// the category's, name it — the statements a gate reading only the hour's
+// bars, or the category's without a window, never read. Spell
 // [OutcomeQuery.countSQL]'s types as one `IN` and its seeks lose the window;
 // as an `OR`, and it intersects two reads of the index.
 func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
@@ -144,11 +152,12 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		q, a := c.q.partialsSQL(at, len(c.q.IDs) > 0, DefaultTurnPage+1)
 		reads = append(reads, read{c.name, q, a, c.index, false})
 	}
-	for _, c := range []struct {
+	type filter struct {
 		name  string
 		q     ListQuery
 		index string
-	}{
+	}
+	filters := []filter{
 		{"unfiltered", ListQuery{}, ""},
 		{"type", ListQuery{Type: "turn_completed"}, "crewlet_events_type_time_idx"},
 		{"source", ListQuery{Source: "engine"}, "crewlet_events_source_time_idx"},
@@ -160,17 +169,31 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		{"work item", ListQuery{WorkItem: "native:t-1"}, "crewlet_events_work_item_idx"},
 		{"channel", ListQuery{ChannelID: "ch-1"}, "crewlet_events_channel_idx"},
 		{"failed", ListQuery{Failed: new(bool)}, ""},
-	} {
+	}
+	for _, c := range filters {
 		q, a := c.q.facetSQL("category", at)
 		reads = append(reads, read{"the facet count by " + c.name, q, a, c.index, false})
-		bars := c.q
-		bars.Since, bars.Until = HistogramQuery{ListQuery: c.q, Bucket: BucketHour}.Window(at)
-		q, a = bars.barsSQL(BucketHour.Step(), at)
-		reads = append(reads, read{"the bars by " + c.name, q, a, c.index, false})
 	}
-	// The category's own facet is lifted, so its index is the bars' alone.
-	q, a = ListQuery{Category: "task"}.barsSQL(BucketHour.Step(), at)
-	reads = append(reads, read{"the bars by category", q, a, "crewlet_events_category_time_idx", false})
+	// THE BARS, AT EVERY WIDTH, each over the widest window Histogram answers
+	// at that width — the whole history for an hour or a day, a day of
+	// minutes — and through the one function Histogram cuts its window and
+	// builds its statement with, so the statement read back is the one that
+	// runs, both edges and all. The category's own facet is lifted, so its
+	// index is the bars' alone.
+	bars := append(slices.Clone(filters), filter{"category", ListQuery{Category: "task"},
+		"crewlet_events_category_time_idx"})
+	for _, bucket := range EventBuckets {
+		for _, c := range bars {
+			hq := HistogramQuery{ListQuery: c.q, Bucket: bucket}
+			hq.Since = at.Add(-time.Duration(MaxHistogramBuckets-1) * bucket.Step())
+			since, until, q, a := hq.barsSQL(at)
+			if n := until.Sub(since) / bucket.Step(); n > MaxHistogramBuckets {
+				t.Fatalf("the %s bars by %s cover %d buckets, which Histogram refuses "+
+					"rather than runs", bucket, c.name, n)
+			}
+			reads = append(reads, read{fmt.Sprintf("the %s bars by %s", bucket, c.name), q, a, c.index, false})
+		}
+	}
 
 	for _, r := range reads {
 		plan := planOf(t, db, r.query, r.args)
