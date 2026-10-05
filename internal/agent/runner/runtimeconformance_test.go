@@ -105,6 +105,14 @@ func conformanceCases() []scenario {
 			want: turn.Work{Outcome: turn.OutcomeBlocked, Summary: "no channel to post in"},
 		},
 		{
+			// NO TEXT IN `want`, because the two runtimes legitimately
+			// differ there and the agreement this suite asserts is about
+			// the OUTCOME. The native loop reminds an executor once that
+			// prose is not a submission (a model call the agent runtime,
+			// whose rounds are the CLI's, does not make), so its
+			// transcript carries the answer to that reminder too. That
+			// the prose survives a rescue is asserted per runtime:
+			// phases_test.go and agentrun_test.go.
 			name: "an executor that never submits is rescued",
 			native: []llm.Completion{
 				{Content: "I looked around and ran out of road"},
@@ -113,7 +121,6 @@ func conformanceCases() []scenario {
 			text:    "I looked around and ran out of road",
 			want: turn.Work{
 				Outcome: turn.OutcomeIncomplete,
-				Text:    "I looked around and ran out of road",
 				Rescued: true,
 			},
 		},

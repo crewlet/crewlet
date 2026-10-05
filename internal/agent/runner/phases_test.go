@@ -406,6 +406,29 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	}
 }
 
+// THE SUBMISSION WRITTEN AS PROSE is reminded, not rescued. The measured
+// executor commented on the item and then wrote its submission out as JSON in
+// a code fence; accepted as a finish, the engine wrote `incomplete` for it and
+// the reviewer sent the whole turn back for another round.
+func TestAnExecutorThatWritesItsSubmissionAsProseIsAskedToMakeIt(t *testing.T) {
+	t.Parallel()
+	r, p := unaddressedFixture(t, &scriptedProvider{execute: []llm.Completion{
+		text("```json\n{\"outcome\":\"no_action\",\"summary\":\"nothing to do\"}\n```"),
+		submitCall(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"nothing to do"}`),
+	}})
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if w.Rescued || w.Outcome != turn.OutcomeNoAction {
+		t.Errorf("outcome = %s (rescued %v), want the submission the reminder got",
+			w.Outcome, w.Rescued)
+	}
+	if got := len(p.seen); got != 2 {
+		t.Errorf("model calls = %d, want 2 — the prose, then the submission", got)
+	}
+}
+
 // A DELIVERY AN EARLIER ROUND MADE IS CITABLE. The prior-work ledger tells a
 // round sent back for a re-read not to comment again, so a check reading only
 // the round refused the one citation that was true — eleven times, in the

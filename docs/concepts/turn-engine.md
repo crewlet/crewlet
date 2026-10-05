@@ -286,7 +286,7 @@ The whole graph is validated **before anything runs**: unique ids, resolvable `a
 
 A worker ends by calling `submit_result` with typed arguments, the same way every other phase in this engine ends. What comes back is **fields the parent can index** rather than prose it has to re-parse with another model call. The shape is the worker template's `output` schema, or a default `{result, notes}` when none is declared.
 
-A worker that produced prose and never submitted reports `no_result` **with its prose attached**. Nothing is synthesised from the transcript: that would put words in the worker's mouth on the one question the parent asked, and a dependent fed a fabricated answer produces a confident wrong one. A task whose `after` did not **succeed** is `skipped_dependency_failed`, and the skip names which dependency broke the chain and how.
+A worker that answers in prose is reminded once that its answer is `submit_result` and text is not recorded (the [tool loop's submission reminder](#round-cap-extension-judge)); one that still never submits reports `no_result` **with its prose attached**. Nothing is synthesised from the transcript: that would put words in the worker's mouth on the one question the parent asked, and a dependent fed a fabricated answer produces a confident wrong one. A task whose `after` did not **succeed** is `skipped_dependency_failed`, and the skip names which dependency broke the chain and how.
 
 Statuses: `ok`, `no_result`, `skipped_dependency_failed`, `never_started`, `timed_out`, `budget_exhausted`, `cancelled`, `failed`. A skip is classified **before** the deadline is consulted, so the same graph under the same deadline reports the same statuses — a call that ran out of time reports the broken chain rather than a scattering of timeouts. Results always come back in the order the parent wrote the tasks.
 
@@ -505,7 +505,19 @@ dashboard badges them.
 The **executor** stays on `auto`, and the **judge** takes no tools at
 all — it answers in two lines of text, and a tool on its surface would
 invite a model to call it and answer nothing. A text answer on an `auto`
-round is a legitimate finish.
+round is a legitimate finish — **unless the phase declared the tool it ends
+by calling and has not called it.** The executor ends by calling
+`submit_work` and a worker with a declared answer shape by calling
+`submit_result`, so for either a round of prose is not a finish but a
+submission written out as text — the measured one was the executor's own
+`submit_work` arguments in a JSON code fence, after a correct work-item
+comment. Accepted, it went to the rescue below and the reviewer, told the
+`incomplete` was the engine's word, sent the whole turn back for another
+executor round. The loop now re-prompts **once**, naming the tool it owes
+and saying that text is not recorded (`maxUnsubmittedRetries` = 1, per run
+of declined rounds like the other two, so a worker's `max_turns` of 2 is
+never eaten). It names only a terminator the round actually offers, and a
+`required` caller never gets it on top of the tool corrective.
 
 **No submission never goes silent.** An executor that ran out of rounds, or
 simply stopped, has produced text and no account of itself. Discarding the
@@ -1162,7 +1174,7 @@ All fields are optional; defaults apply when absent.
 | `internal/agent/ledger/conversation.go` | The cross-turn ledger — what this seat already said in one thread |
 | `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
 | `internal/agent/extension/` | Round-cap extension judge |
-| `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through |
+| `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — its three correctives (a forced call declined, an empty answer, a submission written as prose), and the suspend primitive a detached run returns through |
 | `internal/agent/steer/` | A running turn's note box: what an offer is answered, the bounds on a note, and the wire a note crosses to reach the node running the turn |
 | `internal/engine/steer.go` | Each node's desk of its running turns' boxes: serving the scatter, answering only for its own turns, and recording the notes a turn never read |
 | `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |

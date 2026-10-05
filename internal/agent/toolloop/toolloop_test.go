@@ -499,6 +499,145 @@ func TestProseWithNoToolCallStaysACleanFinish(t *testing.T) {
 	}
 }
 
+// --- the submission written as prose ---------------------------------------
+
+// reminders counts the "prose is not a submission" re-prompts in a transcript.
+func reminders(msgs []llm.Message) int {
+	n := 0
+	for _, m := range msgs {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "You answered in prose") {
+			n++
+		}
+	}
+	return n
+}
+
+// A PHASE THAT ENDS BY SUBMITTING HAS NOT ENDED IN PROSE. The measured case
+// was an executor that made its delivery, then wrote its submission out as
+// JSON in a code fence and called nothing: accepted as a finish, it went to
+// the rescue as an engine-written `incomplete`, and the reviewer sent the
+// whole turn back for another executor round over a call one sentence would
+// have got.
+func TestProseBeforeTheSubmissionIsRemindedOnce(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "```json\n{\"outcome\": \"delivered\"}\n```"},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "submit_work")}},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read"), def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(s.ran) != 1 || s.ran[0] != "submit_work" {
+		t.Fatalf("ran = %v, want the submission the reminder asked for", s.ran)
+	}
+	if res.RoundsUsed != 2 {
+		t.Errorf("rounds = %d, want 2 — the prose, then the submission", res.RoundsUsed)
+	}
+	// NAMED, because "call the tool" alone reads to a model that thinks it
+	// has finished as a request to do again what it believes it did.
+	var named bool
+	for _, m := range p.seen[1].Messages {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "`submit_work`") {
+			named = true
+		}
+	}
+	if !named {
+		t.Error("the reminder did not reach the model, or did not name the submission it owes")
+	}
+}
+
+// ONE reminder, for the empty-answer corrective's budget reason: a worker's
+// max_turns is routinely 2, and a model told by name which call it owes and
+// still answering in prose will not be talked into it by a second sentence.
+func TestTheSubmissionReminderIsBoundedToOne(t *testing.T) {
+	t.Parallel()
+	prose := llm.Completion{Content: "here is what I did"}
+	p := &scriptedProvider{turns: []llm.Completion{prose, prose, prose, prose, prose}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 2 {
+		t.Errorf("rounds = %d, want 2 — one attempt plus one reminder", res.RoundsUsed)
+	}
+	if got := reminders(res.Messages); got != 1 {
+		t.Errorf("reminders = %d, want 1", got)
+	}
+}
+
+// A run of rounds, not the phase: a model that called a tool in between has
+// shown it can, so its next prose finish is a new one and earns its own
+// reminder — the same rule as the other two correctives.
+func TestAProseFinishAfterACallGetsItsOwnReminder(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "done, I think"},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{Content: "now I am done"},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "submit_work")}},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read"), def("submit_work")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(s.ran) != 2 || s.ran[1] != "submit_work" {
+		t.Fatalf("ran = %v, want the read and then the submission", s.ran)
+	}
+	if got := reminders(res.Messages); got != 2 {
+		t.Errorf("reminders = %d, want 2 — one per run of prose finishes", got)
+	}
+}
+
+// The counterfactuals. A phase that declared no submission ends in prose
+// legitimately (TestProseWithoutARequiredToolCallIsACleanFinish); one whose
+// submission is not offered THIS round cannot make it, so a reminder naming it
+// would be a round spent on nothing; and a forced caller already has the tool
+// corrective, which must not be taxed a third round on top of it.
+func TestTheSubmissionReminderFiresOnlyWhereItCanHelp(t *testing.T) {
+	t.Parallel()
+	prose := llm.Completion{Content: "the answer"}
+
+	p := &scriptedProvider{turns: []llm.Completion{prose, prose}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("read")}},
+		MaxRounds: 5, TerminateAfter: []string{"submit_work"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 1 || reminders(res.Messages) != 0 {
+		t.Errorf("rounds = %d, reminders = %d, want 1 and 0 — the submission was "+
+			"not on the surface", res.RoundsUsed, reminders(res.Messages))
+	}
+
+	p = &scriptedProvider{turns: []llm.Completion{prose, prose, prose, prose, prose}}
+	res, err = toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("submit_review")}},
+		MaxRounds: 10, ToolChoice: llm.ToolChoiceRequired,
+		TerminateAfter: []string{"submit_review"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 3 || reminders(res.Messages) != 0 {
+		t.Errorf("rounds = %d, reminders = %d, want 3 and 0 — the forced corrective "+
+			"is a required caller's whole allowance", res.RoundsUsed, reminders(res.Messages))
+	}
+}
+
 // --- the budget ------------------------------------------------------------
 
 func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {

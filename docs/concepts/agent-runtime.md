@@ -92,7 +92,8 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    │     advance, so nothing has to be reconciled afterwards.
    └── Ends by calling submit_work: outcome, summary, deliveries,
          checked against the engine's own record of the turn — every
-         round of it, so a delivery an earlier round made is citable
+         round of it, so a delivery an earlier round made is citable.
+         Prose before it is answered with one reminder, not accepted
 
 3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends

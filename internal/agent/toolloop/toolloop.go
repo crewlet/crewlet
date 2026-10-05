@@ -101,6 +101,29 @@ const maxForcedToolRetries = 2
 // it was about to send.
 const maxEmptyAnswerRetries = 1
 
+// maxUnsubmittedRetries bounds the corrective re-prompts issued when a phase
+// that ENDS BY SUBMITTING — one that declared [Config.TerminateAfter] — answered
+// with prose instead, before any submission ran.
+//
+// The executor's case, and the costliest prose a loop can accept. Its
+// contract is "end by calling submit_work", so a round of prose and no call
+// is not a finish but a submission written as text: the measured one was the
+// submission's own JSON in a code fence, after a correct work-item comment.
+// Accepted as a finish, it went to the rescue path — an engine-written
+// `incomplete` the reviewer is told nobody stands behind — and the reviewer
+// sent the whole turn back for another executor round, which is the price the
+// forced corrective above was introduced to stop a reviewer paying for the
+// same failure.
+//
+// One, for [maxEmptyAnswerRetries]' budget reason: a worker's `max_turns` is
+// validated at >= 1 and routinely set to 2, and the corrective must never eat
+// a delegated task's allowance. A model told by name which call it owes and
+// still answering in prose will not be talked into it by a second sentence.
+//
+// PER RUN OF DECLINED ROUNDS, like the other two: a round that emitted a call
+// clears it.
+const maxUnsubmittedRetries = 1
+
 // Surface is the set of tools a phase runs against.
 //
 // An interface rather than a concrete registry because the phases differ in
@@ -667,6 +690,10 @@ type Config struct {
 	//
 	// A failed call does not terminate: its failure went back to the
 	// model, and ending the phase there means the retry never happens.
+	//
+	// Declaring one also says the phase is NOT finished until one has run:
+	// a round of prose before that is re-prompted once, naming the tool,
+	// rather than accepted as the answer — see [maxUnsubmittedRetries].
 	TerminateAfter []string
 
 	// AllowSuspend permits a tool to suspend this loop. Only Execute sets
@@ -776,6 +803,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	forcedRetries := 0
 	emptyRetries := 0
+	unsubmittedRetries := 0
 	emptyAnswers := 0
 
 	var partial *Partial
@@ -1133,10 +1161,26 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				})
 				continue
 			}
+
+			// PROSE IS NOT A SUBMISSION. A phase that declared the tool it
+			// ends by calling, and has not called it, has not finished
+			// however finished its prose sounds — see
+			// [maxUnsubmittedRetries]. Only the terminators actually
+			// OFFERED this round are named: a corrective pointing at a
+			// tool the model cannot call is a round spent on nothing.
+			if owed := offered(cfg.TerminateAfter, tools); !answeredNothing &&
+				len(owed) > 0 && unsubmittedRetries < maxUnsubmittedRetries {
+				unsubmittedRetries++
+				msgs = append(msgs, llm.Message{
+					Role:    llm.RoleUser,
+					Content: unsubmittedCorrective(owed),
+				})
+				continue
+			}
 			break
 		}
 
-		// A ROUND THAT EMITTED A CALL CLEARS BOTH STALL ALLOWANCES. Each
+		// A ROUND THAT EMITTED A CALL CLEARS EVERY STALL ALLOWANCE. Each
 		// corrective above bounds a RUN of rounds that produced nothing,
 		// never the phase's lifetime: a model that just asked for a tool
 		// has demonstrated it can, so its next stall is a new stall and
@@ -1148,7 +1192,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// which is the opposite of a model that has stopped responding.
 		// Gating this on a successful result would withdraw the nudge
 		// exactly where the next round matters most.
-		forcedRetries, emptyRetries = 0, 0
+		forcedRetries, emptyRetries, unsubmittedRetries = 0, 0, 0
 
 		suspended, pendingID, pendingName, payload, err := runCalls(
 			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs,
@@ -1335,6 +1379,38 @@ func forcedToolCorrective(tools []llm.ToolDef) string {
 	}
 	return "You must respond by calling one of these tools, not with prose: " +
 		strings.Join(names, ", ") + "."
+}
+
+// offered narrows a phase's terminators to the ones on this round's surface,
+// in the order the caller declared them.
+func offered(terminators []string, tools []llm.ToolDef) []string {
+	var out []string
+	for _, name := range terminators {
+		for _, t := range tools {
+			if t.Name == name {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// unsubmittedCorrective is the re-prompt for a phase that answered in prose
+// before making the submission it ends with.
+//
+// It says WHY the prose does not count, rather than only repeating the
+// instruction the system prompt already gave: the model believes it has
+// finished — the measured case had written its submission out as JSON — and
+// "call the tool" alone reads as a request to do again what it thinks it did.
+func unsubmittedCorrective(owed []string) string {
+	call := "`" + owed[0] + "`"
+	if len(owed) > 1 {
+		call = "one of `" + strings.Join(owed, "`, `") + "`"
+	}
+	return "You answered in prose, but this pass ends only when you call " + call +
+		": nothing you write as text — a summary, or the submission itself spelled " +
+		"out as JSON — is recorded. Call it now, reporting what you actually did."
 }
 
 // emptyAnswerCorrective is the re-prompt for a round that produced neither a
