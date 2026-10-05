@@ -89,9 +89,9 @@ export interface Narration {
   /**
    * The round ANSWERED IN PROSE where the phase had to end in a tool call —
    * `round_narration[].declined`, set by the engine when a phase that finishes
-   * only by its submission (`submit_work`, `submit_review`, a worker's
-   * `submit_result`) or that required a call got words and no call. False on
-   * every other round, and on a record an engine that did not flag it wrote.
+   * only by its submission (`submit_work`, `submit_review`, `mark_onboarded`,
+   * a worker's `submit_result`) got words and no call. False on every other
+   * round, and on a record an engine that did not flag it wrote.
    */
   declined: boolean;
 }
