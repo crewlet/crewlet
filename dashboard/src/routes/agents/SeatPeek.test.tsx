@@ -3,7 +3,7 @@
  * do — without a refused request and within three reads.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
@@ -195,6 +195,26 @@ test("the state card names the turn on the task and the round", async () => {
   expect(screen.getByText(/Executing ENG-412/)).toBeTruthy();
   expect(screen.getByText("Turn 2 · round 7 of 25")).toBeTruthy();
   expect(screen.getByText(/serving now: claude-sonnet-5/)).toBeTruthy();
+});
+
+// THE CHART TO THE TURN IN TWO PRESSES: the card opens this peek, and its state
+// card watches the running turn — its Transcript, the phase it is on open. A
+// seat that is not working has no such link, and neither has one whose turn
+// has published no id yet.
+test("the state card watches the running turn, and only a running one", async () => {
+  await mount(OPERATOR);
+  const state = screen.getByRole("region", { name: "Doing now" });
+  expect(within(state).getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
+    "#/live/turns/turn-2?tab=transcript",
+  );
+  cleanup();
+  await mount(OPERATOR, {
+    agents: [{ ...SWE, activity: "idle", turn: null, live_call: null } as AgentRow],
+  });
+  expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
+  cleanup();
+  await mount(OPERATOR, { agents: [{ ...SWE, turn: null, live_call: null } as AgentRow] });
+  expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
 });
 
 // A BUDGET IS LABELLED BY ITS OWN WINDOW, never by a period the screen

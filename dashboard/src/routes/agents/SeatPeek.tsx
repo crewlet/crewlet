@@ -30,6 +30,14 @@
  * public projection, so a per-peek read of the whole guarded configuration
  * (on every `[`/`]` step through a list) would buy nothing.
  *
+ * # Watch live, from the chart in two presses
+ *
+ * While the seat is working the state card ends with "Watch live" — the turn's
+ * watch link, its Transcript with the phase it is on open. In the card, not on
+ * the chart: a chart card is a tree item, and a link inside a tree item is a
+ * control nested in a control, which neither a keyboard nor a screen reader
+ * can reach as itself. So it is the chart's card, then this link.
+ *
  * # Message is a task that asks
  *
  * There is no person-to-seat chat channel. Message opens the one New task
@@ -64,6 +72,7 @@ import {
 import { unitPath } from "~/lib/orgchart.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
+import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
@@ -231,6 +240,11 @@ function SeatPeekBody({
           </span>
         </span>
         {state === "working" && facts && <span className="seat-peek-facts">{facts}</span>}
+        {state === "working" && turnIdOf(agent) && (
+          <a className="t-link seat-peek-watch" href={watchHref(turnIdOf(agent))}>
+            Watch live
+          </a>
+        )}
         {human && (
           <span className="seat-peek-facts">
             The engine never runs a human seat, so there is no turn, model or token budget here.

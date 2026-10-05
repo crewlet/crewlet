@@ -1122,6 +1122,13 @@ a.oc-key:hover {
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
+/* WATCH LIVE, at the state card's end: as wide as its words — a column's
+   child stretches to the card's width, which made the whole tinted line one
+   link — and in the facts' size, the line it follows. */
+.seat-peek-watch {
+  align-self: flex-start;
+  font-size: var(--font-size-xs);
+}
 .seat-peek-facts-grid {
   display: grid;
   grid-template-columns: 6rem minmax(0, 1fr);

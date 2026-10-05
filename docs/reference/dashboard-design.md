@@ -2205,7 +2205,11 @@ Running on (the node that holds the lease and since when for an operator;
 every other reader reads what the public health push says — this node by name,
 or "another node" — which is what the profile's Setup card says too, and no
 guarded read is sent), Open work (`work_workload`), where its tools come from,
-and its goal, drawn as the inline markdown it is written in. It asks at most three questions. **Open profile** and **Message** are the
+and its goal, drawn as the inline markdown it is written in. It asks at most three questions. While the
+seat is working the state card ends with **Watch live**, the turn's watch link
+— so the chart's card, then that link, is the way from the company running to
+a turn running: two presses, with no link nested inside the chart's tree item,
+which a keyboard and a screen reader could not reach as itself. **Open profile** and **Message** are the
 rail's foot, pinned to its bottom edge; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
@@ -2248,6 +2252,15 @@ holds every link to a seat to a tab its profile has. The Work tab counts the
 seat's open work — the engine's `total_hint`, the same answer the Overview's
 card and the Work tab read.
 
+**While the seat is working, the page bar leads with Watch live** — the
+running turn's watch link (its Transcript, the phase it is on open) — and the
+**Turns** tab carries the kit's pulsing info dot, the steady-state mark of a
+state still happening, with its words read after the tab's name ("Turns,
+running now"), because a dot is never the only carrier; folded into the
+strip's More, the words are the item's second line. Neither is drawn while
+the seat is idle, needs a person or is stopped, and the profile's Overview
+card keeps its own **Watch live**.
+
 **Three actions, in the page bar, each a write control held with its reason**
 for a reader who cannot make it:
 
@@ -2273,8 +2286,8 @@ is offered on an **agent's** profile only: `seat=` narrows the log to the
 events a seat published under the id every node derives for it, and a person
 publishes none — the engine never runs a human seat. On a phone the bar keeps
 **one** action in view — Message, or Resume on a paused seat — and folds the
-rest into the same More menu, each disabled there with the sentence its inline
-control is held with. A notice under the tab strip, above whichever tab is
+rest into the same More menu (Watch live first, while there is a turn to
+watch), each disabled there with the sentence its inline control is held with. A notice under the tab strip, above whichever tab is
 open, carries what stops the seat or waits on somebody, in the state's own
 tone: its last error, a pause, another stop, or a coding run parked on a
 question — answerable from the notice.
@@ -4924,7 +4937,8 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
 row of a list, a settled turn's *Trace*, a monitor's row on Home's Live now and
 Live › Now running — opens the page on its Timeline, the default tab. A link
 whose job is to WATCH a running turn — every **Watch live** (a seat's current
-turn, a task's live row and its page bar), the sidebar's **Running** group,
+turn card, its profile's page bar and its peek, a task's live row and its page
+bar), the sidebar's **Running** group,
 `g r` and ⌘K's **Running now** — opens it on the
 **Transcript** (`?tab=transcript`, `lib/turns.ts`' `watchLink`), where the
 phase the turn is on is drawn OPEN with its rounds arriving. Landing on the

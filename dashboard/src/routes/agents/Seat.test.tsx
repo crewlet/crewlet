@@ -15,6 +15,7 @@ import { SeatScreen } from "./Seat.tsx";
 import { contactLabel } from "./seat/Settings.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
+import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
@@ -740,9 +741,65 @@ test("the phone's More holds every action but Message, and each opens what its b
   ).not.toBeNull();
   expect(screen.getByRole("button", { name: "Message" }).closest(".page-action-folds")).toBeNull();
   const names = pageMore();
-  expect(names.slice(0, 4)).toEqual(["Assign task", "Pause", "Events", "Edit in org"]);
+  // WATCH LIVE FIRST while it works, as it leads the bar.
+  expect(names.slice(0, 5)).toEqual([
+    "Watch live",
+    "Assign task",
+    "Pause",
+    "Events",
+    "Edit in org",
+  ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Pause" }));
   expect(await screen.findByRole("dialog", { name: "Pause SWE" })).toBeTruthy();
+});
+
+// WHILE IT WORKS THE BAR WATCHES ITS TURN — the turn's Transcript, the phase it
+// is on open — folded on a phone into the same More, which goes to the same
+// place. A seat that is not working has nothing to watch and draws no such
+// control.
+test("a working seat's page bar watches its turn, and an idle one's offers nothing to watch", async () => {
+  mount("#/agents/seats/swe", { shell: true, agents: [WORKING] });
+  await settle();
+  const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+  const watch = within(bar).getByRole("link", { name: "Watch live" });
+  expect(watch.getAttribute("href")).toBe("#/live/turns/t-7?tab=transcript");
+  expect(watch.closest(".page-action-folds")).not.toBeNull();
+  pageMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Watch live" }));
+  expect(location.hash).toBe("#/live/turns/t-7?tab=transcript");
+
+  cleanup();
+  mount("#/agents/seats/swe", {
+    shell: true,
+    agents: [{ ...WORKING, activity: "idle", turn: null, live_call: null }],
+  });
+  await settle();
+  const idle = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+  expect(within(idle).queryByRole("link", { name: "Watch live" })).toBeNull();
+  expect(pageMore()).not.toContain("Watch live");
+});
+
+// THE TURNS TAB SAYS A TURN IS RUNNING BEHIND IT — the pulsing dot, and the
+// words, since a dot is never the only carrier — while the engine says the seat
+// is working, and only then.
+test("the Turns tab carries a running mark, in words too, only while the seat works", async () => {
+  mount("#/agents/seats/swe", { agents: [WORKING] });
+  await settle();
+  const turns = screen.getByRole("tab", { name: /^Turns/ });
+  expect(turns.textContent).toBe("Turns, running now");
+  expect(turns.querySelector(".crewlet-status-dot")).not.toBeNull();
+  // NO OTHER TAB IS MARKED.
+  const marked = screen.getAllByRole("tab").filter((t) => t.querySelector(".crewlet-status-dot"));
+  expect(marked).toEqual([turns]);
+
+  cleanup();
+  mount("#/agents/seats/swe", {
+    agents: [{ ...WORKING, activity: "needs", live_call: null }],
+  });
+  await settle();
+  const quiet = screen.getByRole("tab", { name: /^Turns/ });
+  expect(quiet.textContent).toBe("Turns");
+  expect(quiet.querySelector(".crewlet-status-dot")).toBeNull();
 });
 
 // A PAUSED SEAT'S ONE ACTION IS RESUME, so that is the one kept in view.
