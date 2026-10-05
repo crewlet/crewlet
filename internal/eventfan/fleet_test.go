@@ -183,6 +183,111 @@ func TestAPageOfTurnsIsHeldToItsWindowAcrossNodes(t *testing.T) {
 	}
 }
 
+// servesTurnSharesBehindTheAsker stands a peer that answers a page of turns as
+// a node on a build that ignores the asker's instant does, with its clock
+// running behind the asker's: its own page lists nothing — every turn it
+// holds starts under the window — and its share of a turn the asker names is
+// floored at ITS horizon, so it reaches into the strip under the asker's.
+func servesTurnSharesBehindTheAsker(t *testing.T, b *memory.Broker, node string, shares ...store.TurnPartial) {
+	t.Helper()
+	q := client(t, b)
+	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
+		var req struct {
+			Version  int      `json:"version"`
+			Question string   `json:"question"`
+			TurnIDs  []string `json:"turn_ids"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		if req.Question != "turns" || req.Version > 4 {
+			return json.Marshal(map[string]any{"version": 4, "node": node,
+				"error": "this peer answers a page of turns up to v4 alone"})
+		}
+		turns := []store.TurnPartial{}
+		for _, s := range shares {
+			if slices.Contains(req.TurnIDs, s.TurnID) {
+				turns = append(turns, s)
+			}
+		}
+		body, err := json.Marshal(map[string]any{"turns": turns, "full": false})
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(body)})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+}
+
+// A TURN AN EARLIER BUILD READS PAST THE ASKER'S HORIZON STAYS ON THE PAGE.
+//
+// A page of turns asks every node for its share of the turns listed, floored
+// at the history rather than at the window — and a node on a build that
+// ignores the asker's instant floors it at its own clock. One running a second
+// behind the asker folds rows from the strip under the asker's horizon into
+// the turn, so the merged start lands under the horizon, and held against a
+// window starting AT the horizon the turn read as one that began before it and
+// left the page. The turn page asks for its attempts from exactly there, so
+// during an upgrade a turn at the edge of the history was missing from its own
+// list of attempts. Its start is held to the horizon now and its counts keep
+// the strip; a window starting above the horizon still drops a turn whose
+// first rows lie under it, because that turn did begin before the window.
+//
+// Mutation: drop the hold at the horizon from [eventfan.Fleet.Turns] and the
+// turn at the edge of the history is missing from the page.
+func TestATurnAnEarlierBuildReadsPastTheHorizonStaysOnThePage(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	horizon := at.Add(-store.EventHistory)
+	strip := horizon.Add(-500 * time.Millisecond)
+	phaseOn(t, a, "a-edge", "t-edge", horizon.Add(time.Minute), 30, "m")
+	completionOn(t, a, "a-edge-done", "t-edge", horizon.Add(2*time.Minute))
+	phaseOn(t, a, "a-late", "t-late", at.Add(-time.Hour), 30, "m")
+	servesTurnSharesBehindTheAsker(t, broker, "node-old",
+		store.TurnPartial{TurnID: "t-edge", AgentRole: "Lead", StartedAt: strip, EndedAt: strip,
+			Phases: 1, TotalTokens: 5, InputTokens: 5},
+		store.TurnPartial{TurnID: "t-late", AgentRole: "Lead", StartedAt: strip, EndedAt: strip,
+			Phases: 1, TotalTokens: 5, InputTokens: 5})
+	fan := fanFrom(a, "node-a", "node-old")
+	fan.Clock = func() time.Time { return at }
+
+	page, coverage, err := fan.Turns(t.Context(), store.TurnQuery{SinceDays: store.MaxTurnDays})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete {
+		t.Fatalf("coverage %+v", coverage)
+	}
+	var edge *store.Turn
+	for i := range page.Turns {
+		if page.Turns[i].TurnID == "t-edge" {
+			edge = &page.Turns[i]
+		}
+	}
+	if edge == nil {
+		t.Fatalf("the page over the whole history is %v, want the turn at its edge on it", turnIDs(page))
+	}
+	if !edge.StartedAt.Equal(horizon) || edge.TotalTokens != 35 || !edge.Complete {
+		t.Errorf("the turn at the edge starts %s with %d tokens (complete %v), want it held to the "+
+			"horizon %s with both nodes' 35, complete", edge.StartedAt, edge.TotalTokens, edge.Complete, horizon)
+	}
+
+	// A WINDOW STARTING ABOVE THE HORIZON still drops the turn whose first
+	// rows lie under it: it began before the window.
+	page, _, err = fan.Turns(t.Context(), store.TurnQuery{SinceDays: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := turnIDs(page); slices.Contains(ids, "t-late") {
+		t.Errorf("the last week lists %v, want no turn whose first rows lie under it", ids)
+	}
+}
+
 func turnIDs(page eventfan.TurnPage) []string {
 	out := []string{}
 	for _, t := range page.Turns {

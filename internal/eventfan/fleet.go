@@ -637,6 +637,25 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			partials = MergeTurnPartials(shares...)
 			coverage = coverage.And(second.coverage)
 		}
+		// NO TURN STARTS BELOW THE ASKER'S HORIZON. A share is floored at
+		// the history rather than at the window, and a node on a build that
+		// ignores the asker's instant floors it at its OWN clock — so one
+		// running behind the asker folds rows from the strip under the
+		// asker's horizon into a turn, and the merged start lands below it.
+		// Held against the window as it stands, that start read as a turn
+		// that began before the window, and the turn left the page whole —
+		// the turn page's own attempts among them, which are asked from the
+		// horizon, so the turn being shown was missing from its own list.
+		// What lies under the horizon is not history this asker serves, so
+		// the start is held to the horizon and the counts keep the strip; a
+		// window starting above the horizon still drops the turn, which did
+		// begin before it.
+		history := q.At.Add(-store.EventHistory).UTC()
+		for i := range partials {
+			if partials[i].StartedAt.Before(history) {
+				partials[i].StartedAt = history
+			}
+		}
 		// THE TURN-LEVEL FILTERS AGAIN, over the WHOLE turn: a node lists
 		// a turn as clean when its own half is, and the other half may
 		// have failed.

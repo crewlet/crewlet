@@ -1734,7 +1734,11 @@ answers carries one shape:
   earlier build reads no instant and answers as of its own clock. What such
   a node sends only as a count — the axis's `by_category`, the turns a page's
   second pass folds — can still carry the strip by which its clock runs
-  behind the serving node's. The axis's bars cannot: every build cuts them
+  behind the serving node's. Such a turn is listed from the horizon, its
+  start held there and its counts keeping the strip, rather than dropped as
+  one that began before a window starting at the horizon — so `turn`'s
+  `attempts`, asked from exactly there, still name the turn being shown. The
+  axis's bars cannot: every build cuts them
   from the serving node's instant alike, and the first bar, the one the
   horizon cuts and the one such a node counts its strip in, is dropped after
   the sum. The spend window and a page of turns are bounded by edges the

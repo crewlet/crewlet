@@ -581,7 +581,11 @@ sequenceDiagram
   trace's or a turn's count is corrected by the rows cut. What arrives only
   as a count aggregated at an older node's own clock cannot be cut: the axis's
   `by_category` and the turns a page's second scatter folds can carry that
-  node's strip of clock skew, and nothing wider. The axis's bars cannot: every
+  node's strip of clock skew, and nothing wider. A turn whose share reaches
+  into the strip is listed from the horizon — its start held there, its
+  counts keeping the strip — rather than dropped as a turn that began before
+  a window starting at the horizon, which is where the turn page asks for a
+  turn's attempts from. The axis's bars cannot: every
   build cuts them from the asker's instant alike, and the one bar an older
   node behind the asker's clock counts its strip in — the first, which the
   horizon cuts — is dropped after the sum (below). The spend window and a page

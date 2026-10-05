@@ -81,20 +81,21 @@ import (
 // [store.EventHistory] before anything is merged, so no build can put a row
 // past the horizon into an answer, and a dead link answers not found however
 // far an upgrade has got. What the asker CANNOT re-check is what arrives as a
-// count, aggregated at the older build's own horizon: the axis's
-// `by_category`, the turns a share folds (a page of turns' second scatter is
-// floored at the history, not at the window), and a trace's or a turn's total
-// beyond what it corrects by the rows it dropped. Those can carry the strip
-// and nothing wider. The cut leaves a capped trace or turn holding rows it
-// did not send, after its last one, and the merge places nothing past that
-// row ([MergeTrace], [MergeTurn]) — a view cut short and saying so, never one
-// with a hole. The rest is bounded by edges every build honours: the
-// axis's bars and totals lie inside the window every build cuts from `at`
-// alike, whose first bar — the one the floor cuts, which is where an older
-// build behind the asker's clock counts its strip — the asker drops after
-// summing ([store.EventHistogram.InsideHistory]); the spend window and a page
-// of turns name both edges as the asker's instants, and a turn's merged start
-// is held to its window here.
+// count, aggregated at the older build's own horizon: the axis's `by_category`,
+// the turns a share folds (a page of turns' second scatter is floored at the
+// history, not at the window), and a trace's or a turn's total beyond what it
+// corrects by the rows it dropped. Those can carry the strip and nothing wider:
+// a turn whose share reaches into it is held to start at the horizon rather
+// than dropped as one that began before the window ([Fleet.Turns]). The cut
+// leaves a capped trace or turn holding rows it did not send, after its last
+// one, and the merge places nothing past that row ([MergeTrace], [MergeTurn]) —
+// a view cut short and saying so, never one with a hole. The rest is bounded by
+// edges every build honours: the axis's bars and totals lie inside the window
+// every build cuts from `at` alike, whose first bar — the one the floor cuts,
+// which is where an older build behind the asker's clock counts its strip — the
+// asker drops after summing ([store.EventHistogram.InsideHistory]); the spend
+// window and a page of turns name both edges as the asker's instants, and a
+// turn's merged start is held to its window here.
 //
 // It is still not a filter that build would answer around, nor a summed
 // field it would leave at zero — and a version would make that build REFUSE
