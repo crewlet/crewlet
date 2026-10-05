@@ -715,6 +715,245 @@ func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
 	}
 }
 
+// EVERY NODE FLOORS A PINNED WINDOW AT THE ASKER'S INSTANT.
+//
+// The axis, the page of turns and the spend window are each cut on the asker's
+// clock before anybody is asked, and the instant travels with the question —
+// so by the time a peer reads, it is in that peer's past. Each peer floored
+// its rows at its OWN clock's history horizon instead, so what it held between
+// the asker's horizon and its own was missing from bars, a turn and a window
+// the merged answer said it covered. Node-b's rows here sit a minute above the
+// pinned horizon: below its clock's, and still on disk, since retention keeps
+// a day past the floor.
+//
+// Mutation: floor any of the three reads in the store at `now()` rather than
+// the query's instant, or leave `at` off the turns or the spend question's
+// wire parameters, and node-b's rows drop out of that answer.
+func TestEveryNodeFloorsAPinnedWindowAtTheAskersInstant(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	// AN HOUR BOUNDARY one to two hours back, so the horizon under it is one
+	// too and the axis's first bar begins exactly there.
+	at := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	horizon := at.Add(-store.EventHistory)
+	phaseOn(t, b, "b-phase", "t-edge", horizon.Add(time.Minute), 30, "m")
+	completionOn(t, b, "b-done", "t-edge", horizon.Add(2*time.Minute))
+	appendTo(t, b, store.EventRecord{ID: "b-failed", Type: "x", Category: "system",
+		Time: horizon.Add(3 * time.Minute), Tags: map[string]string{"failed": "true"}})
+	fan := fanFrom(a, "node-a", "node-b")
+
+	t.Run("event_series", func(t *testing.T) {
+		got, coverage, err := fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour, At: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !coverage.Complete {
+			t.Fatalf("coverage %+v", coverage)
+		}
+		if got.Since != horizon.Format(time.RFC3339) {
+			t.Fatalf("since = %s, want the horizon under the pinned instant, %s", got.Since, horizon)
+		}
+		if first := got.Bars[0]; first.Count != 3 || first.Failed != 1 {
+			t.Errorf("the first bar is %d with %d failed, want node-b's 3 with 1", first.Count, first.Failed)
+		}
+		if got.Total != 3 || got.Failed != 1 || got.ByCategory["task"] != 2 || got.ByCategory["system"] != 1 {
+			t.Errorf("total %d, failed %d, by_category %v — want node-b's three rows in every count",
+				got.Total, got.Failed, got.ByCategory)
+		}
+	})
+	t.Run("turns", func(t *testing.T) {
+		page, coverage, err := fan.Turns(t.Context(), store.TurnQuery{SinceDays: store.MaxTurnDays, At: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !coverage.Complete {
+			t.Fatalf("coverage %+v", coverage)
+		}
+		if len(page.Turns) != 1 || !page.Turns[0].Complete || page.Turns[0].TotalTokens != 30 {
+			t.Errorf("the page is %+v, want node-b's whole turn", page.Turns)
+		}
+	})
+	t.Run("phase_tokens", func(t *testing.T) {
+		records, coverage, err := fan.PhaseTokens(t.Context(),
+			store.PhaseTokenQuery{SinceDays: store.MaxPhaseTokenDays, At: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !coverage.Complete {
+			t.Fatalf("coverage %+v", coverage)
+		}
+		if len(records) != 1 || records[0].EventID != "b-phase" {
+			t.Errorf("records %+v, want node-b's phase", records)
+		}
+	})
+}
+
+// EVERY QUESTION IS ASKED AT THE ASKER'S INSTANT, on every node.
+//
+// A listing, a related-agent page and its siblings, one event, a trace, a turn
+// and the phase histories carry no window, but each is floored at the history
+// horizon — and each node floored at its OWN clock's, so a fleet's answer was a
+// union of different horizons and a node answering late, or running a little
+// ahead, dropped what it held at the edge. The asker's [eventfan.Fleet.Clock]
+// is read once per question and its instant sent with it; node-b's rows here
+// sit just above the horizon under that instant and below its own clock's.
+//
+// Mutation: leave `at` off any question's wire parameters — the listing's, the
+// trace rows', an id question's, the phases' — and node-b's rows drop out of
+// that answer; ignore the Clock and node-a's own row does too.
+func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	at := time.Now().UTC().Add(-time.Hour)
+	horizon := at.Add(-store.EventHistory)
+	// The cause: names nobody, on the node the delivery reached.
+	appendTo(t, b, store.EventRecord{ID: "b-cause", Type: "webhook_received", Category: "webhook",
+		Time: horizon.Add(time.Minute), TraceID: "tr-edge"})
+	appendTo(t, b, store.EventRecord{ID: "b-phase", Type: "agent_phase_completed", Category: "task",
+		Time: horizon.Add(2 * time.Minute), TraceID: "tr-edge",
+		Tags:  map[string]string{"turn_id": "t-edge", "agent_role": "Lead"},
+		Spend: &store.Spend{Phase: "execute", Model: "m", TurnID: "t-edge", TotalTokens: 30}})
+	completionOn(t, b, "b-done", "t-edge", horizon.Add(3*time.Minute))
+	// The work, naming the seat, on the node that held it.
+	appendTo(t, a, store.EventRecord{ID: "a-work", Type: "a2a_asked", Category: "task",
+		Time: horizon.Add(4 * time.Minute), TraceID: "tr-edge", Actor: "PM"})
+	fan := fanFrom(a, "node-a", "node-b")
+	fan.Clock = func() time.Time { return at }
+
+	answered := func(t *testing.T, c eventfan.Coverage) {
+		t.Helper()
+		if !c.Complete {
+			t.Fatalf("coverage %+v", c)
+		}
+	}
+	t.Run("events", func(t *testing.T) {
+		got, c, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"a-work", "b-done", "b-phase", "b-cause"}) {
+			t.Errorf("the page is %v, want every node's rows above the asker's horizon", ids)
+		}
+	})
+	t.Run("events by related agent", func(t *testing.T) {
+		got, c, err := fan.List(t.Context(), store.ListQuery{RelatedAgent: "PM", Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"a-work", "b-phase", "b-cause"}) {
+			t.Errorf("the page is %v, want the work and its trace siblings from node-b", ids)
+		}
+	})
+	t.Run("event", func(t *testing.T) {
+		rec, c, err := fan.ByID(t.Context(), "b-cause")
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered(t, c)
+		if rec.ID != "b-cause" {
+			t.Errorf("got %q, want node-b's event", rec.ID)
+		}
+	})
+	t.Run("trace", func(t *testing.T) {
+		got, c, err := fan.Trace(t.Context(), "tr-edge")
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered(t, c)
+		if ids := idsOf(got.Rows); len(ids) != 3 || got.Total != 3 {
+			t.Errorf("the trace is %v (total %d), want its three rows on both nodes", ids, got.Total)
+		}
+	})
+	t.Run("turn", func(t *testing.T) {
+		got, c, err := fan.Turn(t.Context(), "t-edge")
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered(t, c)
+		if len(got.Rows) != 2 || got.Total != 2 || !slices.Equal(got.Nodes, []string{"node-b"}) ||
+			!slices.Equal(got.Traces, []string{"tr-edge"}) {
+			t.Errorf("the turn is %d rows (total %d) on %v touching %v, want node-b's two rows and its trace",
+				len(got.Rows), got.Total, got.Nodes, got.Traces)
+		}
+	})
+	t.Run("phases", func(t *testing.T) {
+		got, c, err := fan.Phases(t.Context(), "", 10, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"b-phase"}) {
+			t.Errorf("the company's phases are %v, want node-b's", ids)
+		}
+	})
+	t.Run("seat_phases", func(t *testing.T) {
+		got, c, err := fan.SeatPhases(t.Context(), "", "Lead", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		answered(t, c)
+		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"b-phase"}) {
+			t.Errorf("the seat's phases are %v, want node-b's", ids)
+		}
+	})
+}
+
+// ONE NODE'S PART IS READ AT ONE INSTANT, so its count is never short.
+//
+// A turn's part is four reads — its oldest rows, how many it holds, its newest
+// rows and the traces it touched — and a trace's is two. Each read floored the
+// history at its own reading of the clock, so a row crossing the floor between
+// the rows and the count made the count come back short of them: a long turn
+// counted at the cap was reported whole, lost its ending, and named no trace.
+// The turn here is one row past the cap, every row above the horizon under the
+// asker's instant and below the clock's — so a read floored anywhere but that
+// instant finds none of it.
+//
+// Mutation: hand any of the part's follow-up reads (the count, the ending, the
+// traces) the zero instant rather than the part's own, and that half of the
+// answer comes back empty.
+func TestOneNodesPartIsReadAtOneInstant(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Hour)
+	start := at.Add(-store.EventHistory).Add(time.Minute)
+	held := store.MaxTurnEvents + 1
+	for i := range held {
+		appendTo(t, a, store.EventRecord{ID: fmt.Sprintf("r%04d", i), Type: "x", Category: "task",
+			Time: start.Add(time.Duration(i) * time.Millisecond), TraceID: "tr-long",
+			Tags: map[string]string{"turn_id": "t-long"}})
+	}
+	fan := eventfan.Solo("node-a", a.log)
+	fan.Clock = func() time.Time { return at }
+
+	turn, _, err := fan.Turn(t.Context(), "t-long")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := fmt.Sprintf("r%04d", held-1)
+	if turn.Total != held || len(turn.Rows) == 0 || turn.Rows[len(turn.Rows)-1].ID != last ||
+		!slices.Equal(turn.Traces, []string{"tr-long"}) {
+		got := ""
+		if len(turn.Rows) > 0 {
+			got = turn.Rows[len(turn.Rows)-1].ID
+		}
+		t.Errorf("the turn counts %d ending at %q touching %v, want %d ending at %s touching tr-long",
+			turn.Total, got, turn.Traces, held, last)
+	}
+	trace, _, err := fan.Trace(t.Context(), "tr-long")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trace.Total != held {
+		t.Errorf("the trace counts %d, want %d — counted where its rows were read", trace.Total, held)
+	}
+}
+
 // missing reports whether a node is named as not answering, for a reason
 // mentioning want.
 func missing(c eventfan.Coverage, node, want string) bool {

@@ -503,9 +503,10 @@ company's history. A read of turn-level detail — `events`, `event`,
 and the integrations' delivery counts — is answered by **every live node at
 query time** (`internal/eventfan`, ADR-0021). The same scatter seeds the live
 projection when a node starts: its feed, its 24-hour spend window (the
-`phase_tokens` question, cut to the asker's window so every node answers the
-same one) and each seat's last turn, so a restarted node's screens show the
-company rather than the part of it this node published:
+`phase_tokens` question, cut to the asker's window and floored at the asker's
+instant, so every node answers the same one) and each seat's last turn, so a
+restarted node's screens show the company rather than the part of it this node
+published:
 
 ```mermaid
 sequenceDiagram
@@ -547,10 +548,22 @@ sequenceDiagram
   role name two unit seats can share, and the event axis, whose failed split
   an older build never sends — goes out in the version that introduced it,
   and a node on the older build refuses by version and is named. Everything else is still answered by the whole fleet during a
-  rolling upgrade.
+  rolling upgrade. The asker's **instant** (below) is not a filter and
+  raises no version: a build that ignores it floors the history at its own
+  clock, as every build did before it read the field, which costs a strip of
+  seconds thirty days back rather than that node's whole answer.
+- **Every question is asked at one instant.** The asker reads its clock once
+  per question and sends the instant with it, and every node floors the
+  30-day history at that instant rather than at its own clock — the events
+  page and its trace siblings, one event, a trace, a turn, the phases, the
+  axis, a page of turns and the spend window alike. One node's part of an
+  answer is read at that instant throughout, so a turn's count is never
+  floored a moment later than the rows it counts. Floored at each node's own
+  clock, a fleet's answer would be a union of horizons, and a node answering
+  late would drop what it held at the edge.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
-  visits every row once; a histogram's window is pinned to the asker's clock
+  visits every row once; a histogram's window is cut at the asker's instant,
   so every node cuts the same bars before they are summed; and a list of
   turns is two scatters — every node's page, then every node's share of
   exactly the turns listed — so a turn resumed on another node after a

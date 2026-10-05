@@ -23,7 +23,7 @@ func custodyBatch(id string, at time.Time) store.CustodyBatch {
 
 func holds(t *testing.T, log *store.EventLog, id string) bool {
 	t.Helper()
-	_, err := log.ByID(t.Context(), id)
+	_, err := log.ByID(t.Context(), id, time.Now())
 	switch {
 	case err == nil:
 		return true

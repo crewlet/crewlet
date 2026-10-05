@@ -99,6 +99,10 @@ var ErrHistogramRelated = errors.New("store: a histogram cannot filter by relate
 // copy, so a filter added to one is a filter the other already has. `Limit` and
 // `Before` are meaningless here and ignored: a page size is about rows and a
 // cursor is about where a page resumes, and a histogram has neither.
+//
+// The instant the window is cut against — and the floor under it — is the
+// embedded [ListQuery.At], so the bars and the listing beside them are floored
+// by one field rather than by two that could disagree.
 type HistogramQuery struct {
 	ListQuery
 
@@ -106,24 +110,6 @@ type HistogramQuery struct {
 	// accepted, never defaulted — an axis labelled by one width over
 	// another's bars is worse than an error.
 	Bucket EventBucket
-
-	// At is the instant the window is cut against — what an unbounded top
-	// edge means, and where the history floor sits. Zero is now.
-	//
-	// A FIELD rather than every log reading its own clock, because a fleet
-	// asks several logs for ONE axis (internal/eventfan) and sums their
-	// bars index by index: two nodes whose clocks straddle a minute would
-	// otherwise snap to windows one bar apart, and every bar of the sum
-	// would add one node's minute to the other's next one.
-	At time.Time
-}
-
-// at is the instant the window is cut against.
-func (q HistogramQuery) at() time.Time {
-	if q.At.IsZero() {
-		return now()
-	}
-	return q.At
 }
 
 // EventBar is one bucket of the axis.
@@ -246,7 +232,11 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 		return EventHistogram{}, ErrHistogramRelated
 	}
 	step := q.Bucket.Step()
-	since, until := q.Window(q.at())
+	// ONE INSTANT FOR THE WHOLE ANSWER: the window is cut against it, and the
+	// bars and the facet counts are floored under it — see [ListQuery.At]
+	// for what flooring at a second read of the clock cost.
+	at := q.at()
+	since, until := q.Window(at)
 	bars := int(until.Sub(since) / step)
 	if bars > MaxHistogramBuckets {
 		return EventHistogram{}, fmt.Errorf("%w: %s over %s is %d buckets, and the "+
@@ -259,7 +249,7 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// would put events in no bar at all.
 	filters := q.ListQuery
 	filters.Since, filters.Until = since, until
-	from, where, args, col := filters.predicate()
+	from, where, args, col := filters.predicate(at)
 
 	// Integer arithmetic on the stored microseconds — the column is a
 	// UnixMicro (see [EncodeTime]) — so the bucket is a division rather
@@ -310,7 +300,7 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// caller's own edges. Counted over the snapped window it would include
 	// up to two buckets the list will never show, and on a busy hour that
 	// is thousands of rows a chip claims and the list does not have.
-	byCategory, err := l.countBy(ctx, q.ListQuery, "category")
+	byCategory, err := l.countBy(ctx, q.ListQuery, "category", at)
 	if err != nil {
 		return EventHistogram{}, err
 	}
@@ -351,14 +341,17 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 // chip but the selected one reads zero, which is not a fact about anything.
 // Every other filter still applies, because a chip has to answer "how many,
 // given what is already narrowed".
-func (l *EventLog) countBy(ctx context.Context, filters ListQuery, column string) (map[string]int, error) {
+//
+// `at` is the instant the answer it belongs to is asked at, so the chips are
+// floored where the bars beside them are — see [ListQuery.predicate].
+func (l *EventLog) countBy(ctx context.Context, filters ListQuery, column string, at time.Time) (map[string]int, error) {
 	switch column {
 	case "category":
 		filters.Category = ""
 	default:
 		return nil, fmt.Errorf("store: no facet count for %q", column)
 	}
-	from, where, args, col := filters.predicate()
+	from, where, args, col := filters.predicate(at)
 	query := "SELECT " + col(column) + ", COUNT(*) FROM " + from +
 		" WHERE " + strings.Join(where, " AND ") + " GROUP BY " + col(column)
 

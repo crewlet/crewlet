@@ -86,7 +86,7 @@ node means nothing was done.
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
-| `GET` | `/events/{event_id}` | Single event incl. payload |
+| `GET` | `/events/{event_id}` | Single event incl. payload — inside the 30-day history (`event_history_seconds`) like every other read of the log, so a link to an older event answers `not_found` on every node, whatever its retention sweep has or has not reached |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | The token-spend rollup by phase / model / provider entry / worker / seat — the live 24 hours, or any window of up to 90 company days from the replicated usage domain (see [below](#token-spend-breakdown)) |
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
@@ -1706,12 +1706,23 @@ answers carries one shape:
   are answered by the replicated `usage` domain instead.
 - **`event` not found** answers `not_found` naming any node that did not
   answer, because a link whose node was merely silent is a different fact
-  from a dead one.
+  from a dead one. An event older than the 30-day history is not found
+  either: it is past the horizon every read of the log stops at, and a row a
+  node's sweep has not deleted yet is not history it serves.
+- **Every question is asked at one instant** — the serving node's clock when
+  the question arrived — and that instant travels with it, so every node
+  floors the 30-day history at the serving node's horizon rather than at its
+  own, and one node's part of an answer (a turn's rows, its count, its ending
+  and its traces) is read at that one instant throughout. A node answering a
+  second late, or with a clock a little ahead, therefore holds back nothing
+  the others include.
 
 `turns` merges in two passes — every node's page, then every node's share of
 exactly the turns any page listed — so a turn resumed on another node after a
 restart is one row folded from both halves. The window is pinned to the asker's clock
-first, and the merged turn is held to it whole: a node's half of a resumed
+first — and the instant travels with the question, so every node floors the
+window and its share of each turn at the asker's 30-day horizon rather than at
+its own — and the merged turn is held to it whole: a node's half of a resumed
 turn can start inside the window while the turn began before it elsewhere. Its `next` is the fleet's cursor:
 it can be present on an empty page, where a node's page stopped before any
 turn above it could be shown. With `sort=-tokens` the page ranks each node's
@@ -1798,6 +1809,14 @@ below), plus:
 The answer is `{bucket, since, until, bars, total, failed, by_category}`.
 `bars` is **every** bucket in the window including the empty ones, so a
 quiet hour is a gap of full width rather than a bar the chart squeezed out.
+
+The whole answer is cut against **one instant** — the serving node's clock
+when the question arrived — and every count in it, `bars`, `total`, `failed`
+and `by_category` alike, keeps rows from 30 days before that same instant.
+Across a fleet that instant is sent with the question, so every node floors
+what it counts at the serving node's horizon rather than its own, and a row
+any node holds inside the first bar is counted in it however long that node
+took to answer.
 
 Each bar is `{at, count, failed}`. `failed` is how many of the bar's rows
 reported a failure — by the rule a turn's own `failed` mark uses: the event

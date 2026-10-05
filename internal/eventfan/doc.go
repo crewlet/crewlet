@@ -45,6 +45,20 @@
 // node's share of exactly those turns, because the node a turn was selected
 // on is not always the only node that holds it.
 //
+// # Every question is asked at one instant
+//
+// Exact for disjoint stores, and only if every store answers the same
+// question — and every one of these is floored at the thirty-day history
+// horizon, which is a function of WHEN it is asked. So the asker reads its
+// [Fleet.Clock] once per question and sends the instant with it, and every
+// node floors at that instant rather than at its own clock; and one node's
+// part of an answer is read at that one instant throughout (see parts.go), so
+// a count is never floored a moment later than the rows it counts. Floored at
+// each node's own clock, a merged answer was a union of horizons, and a node
+// that answered a second late dropped that second's rows from an axis the
+// answer said covered them. The instant raises no protocol version — see
+// [Protocol].
+//
 // # Nothing above this package may read one node and call it the fleet
 //
 // internal/api/queries declares the interface it reads history through, and

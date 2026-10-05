@@ -12,7 +12,27 @@ import (
 // now is the clock every store row and every time-bounded query reads. One
 // function so the read floor, the retention sweep and a row's own timestamp
 // cannot disagree about what "now" is.
+//
+// AND READ ONCE PER ANSWER. Every call is a different instant, so a read that
+// applies the history floor in more than one place — a count beside its rows,
+// a page beside its trace siblings — takes this once at its entry and hands
+// the instant to each half, rather than letting each half read the clock for
+// itself and floor its rows a few microseconds, or a few seconds, apart.
 func now() time.Time { return time.Now().UTC() }
+
+// askedAt is the instant a query is asked at: the one it PINNED, or now.
+//
+// A query pins one when somebody else's clock has to govern it — a fleet read,
+// whose asker cuts the window on its own clock and sends that instant to every
+// node, so each one floors its rows where the asker's window begins rather
+// than where its own clock says thirty days ago is. Like [now], it is read
+// once per answer: called twice on an unpinned query it is two instants.
+func askedAt(pinned time.Time) time.Time {
+	if pinned.IsZero() {
+		return now()
+	}
+	return pinned.UTC()
+}
 
 // EncodeTime converts an instant to the storage encoding: microseconds since
 // the Unix epoch, UTC.

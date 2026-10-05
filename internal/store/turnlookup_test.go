@@ -42,7 +42,7 @@ func TestATurnReadsEveryEventItTouchedNotOnlyItsPhases(t *testing.T) {
 		}
 	}
 
-	got, err := log.Turn(t.Context(), "turn-1")
+	got, err := log.Turn(t.Context(), "turn-1", time.Now())
 	if err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestAWorkKeyIsReadFromItsColumnAndNotFromTheTags(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	rows, err := log.Turn(t.Context(), "run-legacy")
+	rows, err := log.Turn(t.Context(), "run-legacy", time.Now())
 	if err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestAWorkKeyIsReadFromItsColumnAndNotFromTheTags(t *testing.T) {
 	// AND THE SINGLE-EVENT READ AGREES, which is the read a person reaches
 	// by pasting an id and the one a second hand-written Scan silently
 	// left behind when the column was added.
-	one, err := log.ByID(t.Context(), "e-legacy")
+	one, err := log.ByID(t.Context(), "e-legacy", time.Now())
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}

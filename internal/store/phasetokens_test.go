@@ -98,6 +98,42 @@ func TestAnInstantWindowSelectsExactlyItsOwnRows(t *testing.T) {
 	}
 }
 
+// A PINNED WINDOW IS CUT AND FLOORED AT ITS OWN INSTANT.
+//
+// A fleet cuts the spend window on the asker's clock and sends the instant
+// with it ([store.PhaseTokenQuery.At]), and by the time a peer reads, that
+// instant is in the peer's past. The read cut the window against its own clock
+// instead: the floor rose past the records just above the asker's, and the
+// open top edge reached records the asker's window ends before.
+//
+// Mutation: cut the window in [store.EventLog.PhaseTokens] against `now()`
+// rather than the query's instant, and the record above the floor is lost
+// while the one after the instant is counted.
+func TestAPinnedSpendWindowIsCutAtItsOwnInstant(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	floor := at.Add(-time.Duration(store.MaxPhaseTokenDays) * 24 * time.Hour)
+	seedPhase(t, log, "above-the-floor", floor.Add(time.Minute), "PM", 7, 0)
+	seedPhase(t, log, "under-the-floor", floor.Add(-time.Minute), "PM", 100, 0)
+	seedPhase(t, log, "after-the-instant", at.Add(time.Minute), "PM", 1000, 0)
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{
+		SinceDays: store.MaxPhaseTokenDays, At: at,
+	})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	var sum int
+	for _, r := range got {
+		sum += r.TotalTokens
+	}
+	if sum != 7 {
+		t.Errorf("tokens = %d over %d records, want 7 — the record above the floor under "+
+			"the instant, and nothing past the instant itself", sum, len(got))
+	}
+}
+
 // AND THE FLOOR IS REPORTED, not silently applied.
 //
 // A request further back than the table's retention cannot return more rows.

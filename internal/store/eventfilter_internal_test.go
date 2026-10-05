@@ -39,7 +39,7 @@ func TestEveryPartiallyIndexedFilterSeeksItsIndex(t *testing.T) {
 		{"channel_id", ListQuery{ChannelID: "ch-1"}, "crewlet_events_channel_idx"},
 		{"agent_id", ListQuery{AgentID: "id-sre"}, "crewlet_events_agent_id_time_idx"},
 	} {
-		query, args := c.q.listSQL(DefaultListLimit)
+		query, args := c.q.listSQL(DefaultListLimit, now())
 		plan := planOf(t, db, query, args)
 		if !strings.Contains(plan, c.index) {
 			t.Errorf("%s: the listing's plan is %q — it does not seek %s, so it "+

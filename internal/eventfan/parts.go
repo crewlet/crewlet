@@ -3,6 +3,7 @@ package eventfan
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/store"
@@ -18,6 +19,22 @@ var logger = logging.Get("eventfan")
 // node's rows stop being known), a trace and a turn say how many rows the node
 // HOLDS (so the merged view can say it is cut), and a turn carries its newest
 // rows beside its oldest (so a long turn keeps its ending).
+//
+// EVERY PART IS READ AT ONE INSTANT, the asker's: every read a part makes is
+// floored at it, so a count asked beside the rows it counts is floored where
+// they are — read at two instants, a row crossing the floor between the two
+// made the count come back short of the rows beside it, and a long turn
+// whose count fell to the cap was reported whole and lost its ending.
+
+// readAt is the instant one node's part is read at: the asker's, or — for a
+// question from a build that sent none — this node's clock, read ONCE for the
+// whole part.
+func readAt(at time.Time) time.Time {
+	if at.IsZero() {
+		return time.Now().UTC()
+	}
+	return at
+}
 
 // listPart is one node's page of a keyset listing, newest first.
 type listPart struct {
@@ -63,8 +80,8 @@ type eventPart struct {
 	Event *store.EventRecord `json:"event,omitempty"`
 }
 
-func eventPartOf(ctx context.Context, log *store.EventLog, id string) (eventPart, error) {
-	rec, err := log.ByID(ctx, id)
+func eventPartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (eventPart, error) {
+	rec, err := log.ByID(ctx, id, readAt(at))
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		// NOT HELD HERE is an answer, and the ordinary one: an event
@@ -93,8 +110,9 @@ func (p tracePart) keep(n int) any {
 	return tracePart{Rows: p.Rows[:n], Total: p.Total}
 }
 
-func tracePartOf(ctx context.Context, log *store.EventLog, id string) (tracePart, error) {
-	rows, err := log.Trace(ctx, id)
+func tracePartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (tracePart, error) {
+	at = readAt(at)
+	rows, err := log.Trace(ctx, id, at)
 	if err != nil {
 		return tracePart{}, err
 	}
@@ -103,7 +121,7 @@ func tracePartOf(ctx context.Context, log *store.EventLog, id string) (tracePart
 		// ASKED, NOT INFERRED: a trace of exactly the cap holds every
 		// row it has. DEGRADES, because the rows are in hand and a
 		// missing caution badge beats a missing screen.
-		total, err := log.TraceEventCount(ctx, id)
+		total, err := log.TraceEventCount(ctx, id, at)
 		if err != nil {
 			logger.WarnContext(ctx, "trace_extent_unavailable", "trace", id, "error", err)
 		} else {
@@ -166,8 +184,9 @@ func (p turnPart) keep(n int) any {
 // same two numbers.
 const TurnClosingEvents = 20
 
-func turnPartOf(ctx context.Context, log *store.EventLog, id string) (turnPart, error) {
-	head, err := log.Turn(ctx, id)
+func turnPartOf(ctx context.Context, log *store.EventLog, id string, at time.Time) (turnPart, error) {
+	at = readAt(at)
+	head, err := log.Turn(ctx, id, at)
 	if err != nil {
 		return turnPart{}, err
 	}
@@ -181,13 +200,13 @@ func turnPartOf(ctx context.Context, log *store.EventLog, id string) (turnPart, 
 	// rows are in hand, and failing them over a count turns the largest
 	// turns into `query_failed`.
 	if len(head) >= store.MaxTurnEvents {
-		total, countErr := log.TurnEventCount(ctx, id)
+		total, countErr := log.TurnEventCount(ctx, id, at)
 		switch {
 		case countErr != nil:
 			logger.WarnContext(ctx, "turn_extent_unavailable", "turn", id, "error", countErr)
 		case total > len(head):
 			part.Total = total
-			closing, closingErr := log.TurnClosing(ctx, id, TurnClosingEvents)
+			closing, closingErr := log.TurnClosing(ctx, id, TurnClosingEvents, at)
 			if closingErr != nil {
 				logger.WarnContext(ctx, "turn_ending_unavailable", "turn", id, "error", closingErr)
 			} else {
@@ -197,7 +216,7 @@ func turnPartOf(ctx context.Context, log *store.EventLog, id string) (turnPart, 
 	}
 	// EVERY TRACE THIS TURN TOUCHED, asked rather than derived from rows a
 	// cap may have dropped. Degrades like the reads above.
-	traces, tracesErr := log.TurnTraces(ctx, id)
+	traces, tracesErr := log.TurnTraces(ctx, id, at)
 	if tracesErr != nil {
 		logger.WarnContext(ctx, "turn_traces_unavailable", "turn", id, "error", tracesErr)
 	} else {

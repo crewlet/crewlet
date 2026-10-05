@@ -14,6 +14,12 @@ var v1ListFields = map[string]bool{
 	"Since": true, "Until": true, "Before": true, "Limit": true,
 }
 
+// unversionedListFields is every listing field added since v1 that is
+// DELIBERATELY not a version: the asker's instant, which a build that does
+// not read it answers as of its own clock rather than around — see [Protocol].
+// An entry here is a decision with a reason at the field, not an escape hatch.
+var unversionedListFields = map[string]bool{"At": true}
+
 // EVERY FILTER ADDED SINCE v1 RAISES THE VERSION A LISTING IS ASKED IN.
 //
 // A peer on an older build ignores a filter it does not know and answers a
@@ -35,6 +41,16 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 	for i := range typ.NumField() {
 		field := typ.Field(i)
 		if v1ListFields[field.Name] {
+			continue
+		}
+		if unversionedListFields[field.Name] {
+			// AND IT STAYS UNVERSIONED: a listing carrying only the
+			// asker's instant is still answered by every build.
+			p := listParams{Limit: 10}
+			reflect.ValueOf(&p).Elem().Field(i).Set(reflect.ValueOf(time.Now()))
+			if got := versionOf(QuestionEvents, p); got != 1 {
+				t.Errorf("listParams.%s raises a listing to v%d, want v1 — see [Protocol]", field.Name, got)
+			}
 			continue
 		}
 		var p listParams
@@ -88,5 +104,25 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 	}
 	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7}); got != 1 {
 		t.Errorf("a page of turns by days is asked in v%d, want v1", got)
+	}
+	// THE ASKER'S INSTANT RAISES NOTHING: a build that ignores it floors at
+	// its own clock, as every build did before it read the field, and
+	// refusing the question would cost that build's every row to save a
+	// strip of seconds thirty days back — see [seriesParams].
+	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7, At: time.Now()}); got != 1 {
+		t.Errorf("a page of turns by days with the asker's instant is asked in v%d, want v1", got)
+	}
+	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{At: time.Now()}); got != 1 {
+		t.Errorf("the spend window with the asker's instant is asked in v%d, want v1", got)
+	}
+	for q, p := range map[Question]any{
+		QuestionEvent: idParams{ID: "e", At: time.Now()}, QuestionTrace: idParams{ID: "t", At: time.Now()},
+		QuestionTurn: idParams{ID: "t", At: time.Now()}, QuestionPhases: phasesParams{At: time.Now()},
+		QuestionSeatPhases: phasesParams{Role: "PM", At: time.Now()},
+		QuestionTraceRows:  traceRowsParams{TraceIDs: []string{"t"}, At: time.Now()},
+	} {
+		if got := versionOf(q, p); got != 1 {
+			t.Errorf("%s with the asker's instant is asked in v%d, want v1", q, got)
+		}
 	}
 }

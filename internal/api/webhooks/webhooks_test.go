@@ -524,7 +524,7 @@ func TestTheStoredPayloadIsWhatTheProviderSent(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("%d rows", len(rows))
 	}
-	rec, err := e.events.ByID(t.Context(), rows[0].ID)
+	rec, err := e.events.ByID(t.Context(), rows[0].ID, time.Now())
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}

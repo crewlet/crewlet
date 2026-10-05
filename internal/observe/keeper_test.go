@@ -59,7 +59,7 @@ func newDataNode(t *testing.T, name string, c *claims) *dataNode {
 // holds reports whether this node's log has the event.
 func (n *dataNode) holds(t *testing.T, id string) bool {
 	t.Helper()
-	_, err := n.log.ByID(t.Context(), id)
+	_, err := n.log.ByID(t.Context(), id, time.Now())
 	switch {
 	case err == nil:
 		return true

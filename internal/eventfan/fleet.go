@@ -61,6 +61,24 @@ type Fleet struct {
 	// dependency, so this package does not import the recorder to say one
 	// sentence. Nil counts nothing.
 	Report func(Question, Coverage, time.Duration)
+
+	// Clock is the ASKER'S clock: every question is asked at one instant
+	// read from it, which this node's own read and every peer's floor the
+	// history at — see [store.EventLog]. Nil is the wall clock.
+	//
+	// A dependency rather than a call to time.Now buried in each question,
+	// because the instant is what the answer is about: a question asked of
+	// three nodes is one question only if all three answer it as of the
+	// same moment, and the moment has to come from one place to be one.
+	Clock func() time.Time
+}
+
+// now is the instant a question is asked at, read ONCE per question.
+func (f *Fleet) now() time.Time {
+	if f.Clock != nil {
+		return f.Clock().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // Solo is a fleet of this node alone: its own store, nobody to ask.
@@ -322,6 +340,10 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 	if q.Limit <= 0 {
 		q.Limit = store.DefaultListLimit
 	}
+	// ONE INSTANT for the page and the siblings, on every node.
+	if q.At.IsZero() {
+		q.At = f.now()
+	}
 	g, err := gather(ctx, f, QuestionEvents, listParamsOf(q), nil,
 		func(ctx context.Context) (listPart, error) { return listPartOf(ctx, f.Local, q) })
 	if err != nil {
@@ -332,10 +354,10 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 	if q.RelatedAgent != "" && g.fanned {
 		traces := store.TraceIDsOf(rows)
 		if len(traces) > 0 {
-			p := traceRowsParams{TraceIDs: traces, Limit: q.Limit}
+			p := traceRowsParams{TraceIDs: traces, Limit: q.Limit, At: q.At}
 			sib, err := gather(ctx, f, QuestionTraceRows, p, nil,
 				func(ctx context.Context) (listPart, error) {
-					sibs, err := f.Local.TraceRows(ctx, traces, q.Limit)
+					sibs, err := f.Local.TraceRows(ctx, traces, q.Limit, q.At)
 					return listPart{Rows: sibs}, err
 				})
 			if err != nil {
@@ -356,14 +378,14 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 // Histogram answers the log's time axis over the fleet.
 //
 // THE WINDOW IS PINNED to this node's clock before anybody is asked, so every
-// node cuts the same bars — see [store.HistogramQuery.At].
+// node cuts the same bars and floors the rows it counts into them at the same
+// instant — see [store.ListQuery.At].
 func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.EventHistogram, Coverage, error) {
 	started := time.Now()
 	if q.At.IsZero() {
-		q.At = time.Now().UTC()
+		q.At = f.now()
 	}
-	p := seriesParams{List: listParamsOf(q.ListQuery), Bucket: q.Bucket, At: q.At}
-	g, err := gather(ctx, f, QuestionSeries, p, nil,
+	g, err := gather(ctx, f, QuestionSeries, seriesParamsOf(q), nil,
 		func(ctx context.Context) (store.EventHistogram, error) { return f.Local.Histogram(ctx, q) })
 	if err != nil {
 		return store.EventHistogram{}, Coverage{}, err
@@ -391,8 +413,9 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 // silent is a different fact.
 func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverage, error) {
 	started := time.Now()
-	g, err := gather(ctx, f, QuestionEvent, idParams{ID: id}, nil,
-		func(ctx context.Context) (eventPart, error) { return eventPartOf(ctx, f.Local, id) })
+	at := f.now()
+	g, err := gather(ctx, f, QuestionEvent, idParams{ID: id, At: at}, nil,
+		func(ctx context.Context) (eventPart, error) { return eventPartOf(ctx, f.Local, id, at) })
 	if err != nil {
 		return store.EventRecord{}, Coverage{}, err
 	}
@@ -411,8 +434,9 @@ func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverag
 // Trace answers every row sharing one trace, oldest first.
 func (f *Fleet) Trace(ctx context.Context, id string) (Trace, Coverage, error) {
 	started := time.Now()
-	g, err := gather(ctx, f, QuestionTrace, idParams{ID: id}, nil,
-		func(ctx context.Context) (tracePart, error) { return tracePartOf(ctx, f.Local, id) })
+	at := f.now()
+	g, err := gather(ctx, f, QuestionTrace, idParams{ID: id, At: at}, nil,
+		func(ctx context.Context) (tracePart, error) { return tracePartOf(ctx, f.Local, id, at) })
 	if err != nil {
 		return Trace{}, Coverage{}, err
 	}
@@ -424,8 +448,9 @@ func (f *Fleet) Trace(ctx context.Context, id string) (Trace, Coverage, error) {
 // Turn answers every event of one turn, from every node that ran part of it.
 func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, error) {
 	started := time.Now()
-	g, err := gather(ctx, f, QuestionTurn, idParams{ID: id}, nil,
-		func(ctx context.Context) (turnPart, error) { return turnPartOf(ctx, f.Local, id) })
+	at := f.now()
+	g, err := gather(ctx, f, QuestionTurn, idParams{ID: id, At: at}, nil,
+		func(ctx context.Context) (turnPart, error) { return turnPartOf(ctx, f.Local, id, at) })
 	if err != nil {
 		return TurnDetail{}, Coverage{}, err
 	}
@@ -455,10 +480,11 @@ func turnNodes(self string, g gathered[turnPart]) []string {
 func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	limit = phaseLimit(limit)
-	p := phasesParams{AgentID: agentID, Limit: limit, Before: cursorOf(before)}
+	at := f.now()
+	p := phasesParams{AgentID: agentID, Limit: limit, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.Phases(ctx, agentID, limit, before)
+			rows, more, err := f.Local.Phases(ctx, agentID, limit, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
@@ -482,10 +508,11 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 		// with an empty one — the store says so the same way.
 		return Listing{}, solo(f.Self), nil
 	}
-	p := phasesParams{AgentID: agentID, Role: role, Before: cursorOf(before)}
+	at := f.now()
+	p := phasesParams{AgentID: agentID, Role: role, Before: cursorOf(before), At: at}
 	g, err := gather(ctx, f, QuestionSeatPhases, p, nil,
 		func(ctx context.Context) (listPart, error) {
-			rows, more, err := f.Local.AgentPhases(ctx, agentID, role, before)
+			rows, more, err := f.Local.AgentPhases(ctx, agentID, role, before, at)
 			return listPart{Rows: rows, Full: more}, err
 		})
 	if err != nil {
@@ -528,8 +555,14 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	// THE WINDOW IS PINNED to this node's clock before anybody is asked, for
 	// [Fleet.PhaseTokens]' reason — and because the whole turn has to be
 	// held against it: a node's half of a resumed turn can start inside the
-	// window while the turn began outside it on another node.
-	q.Since, q.Until = q.Window(time.Now().UTC())
+	// window while the turn began outside it on another node. The INSTANT
+	// travels with it, so every node floors the window and its shares at the
+	// asker's history horizon rather than at its own — see
+	// [store.TurnQuery.At].
+	if q.At.IsZero() {
+		q.At = f.now()
+	}
+	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
 	first, err := gather(ctx, f, QuestionTurns, turnsParamsOf(q), nil,
 		func(ctx context.Context) (turnsPart, error) { return turnsPartOf(ctx, f.Local, q) })
@@ -640,10 +673,14 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 //
 // THE WINDOW IS PINNED to this node's clock before anybody is asked, for
 // [Fleet.Histogram]'s reason: a peer counting "a day back" from its own clock
-// would answer a window its neighbours did not.
+// would answer a window its neighbours did not. And so is the instant it was
+// cut against, which every node floors it at — see [store.PhaseTokenQuery.At].
 func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, Coverage, error) {
 	started := time.Now()
-	q.Since, q.Until = q.Window(time.Now().UTC())
+	if q.At.IsZero() {
+		q.At = f.now()
+	}
+	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
 	g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(q), nil,
 		func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, q) })

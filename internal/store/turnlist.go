@@ -293,13 +293,31 @@ type TurnQuery struct {
 	IDs []string
 
 	Limit int
+
+	// At is the instant the window is cut against — what SinceDays counts
+	// back from, and where the history horizon sits under the window and
+	// under a share. Zero is now.
+	//
+	// A FIELD for [ListQuery.At]'s reason: a fleet pins the window on
+	// the asker's clock, and every node must floor it at the asker's
+	// instant rather than its own. The asker's Since is already floored at
+	// ITS clock; floored again at a peer's later one, a turn that began
+	// between the two floors was dropped by that peer when all of it lay
+	// there, and otherwise folded — on the peer's page and in the share
+	// that asked for it by id — from its rows above the peer's floor alone:
+	// listed as starting later than it did, with only those rows' tokens.
+	At time.Time
 }
+
+// at is the instant the window is cut against, read ONCE per answer.
+func (q TurnQuery) at() time.Time { return askedAt(q.At) }
 
 // Window is the START window a query selects in, as two instants against now:
 // Since (or SinceDays back, or [DefaultTurnDays]) floored at [MaxTurnDays] and
 // at the history horizon, and Until, zero when the query names no upper
 // bound. [PhaseTokenQuery.Window]'s rule, for its reason: a fleet pins the
-// window to the asker's clock with this, and every node applies the same one.
+// window to the asker's clock with this — and pins [TurnQuery.At] to the same
+// instant, so every node floors it there rather than at its own clock.
 func (q TurnQuery) Window(now time.Time) (since, until time.Time) {
 	since = q.Since
 	if since.IsZero() {
@@ -591,7 +609,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 	// listed, and applying the window again here would drop the half of a
 	// resumed turn that ran before it — which is the half that says when the
 	// turn began. Only the history horizon bounds it.
-	at := now()
+	at := q.at()
 	history := at.Add(-EventHistory)
 	floor, until := q.Window(at)
 	if shares {

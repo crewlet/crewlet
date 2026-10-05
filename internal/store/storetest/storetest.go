@@ -456,7 +456,7 @@ func testTrace(t *testing.T, db *store.DB) {
 			Category: "task", TraceID: "tr-1",
 		})
 	}
-	got, err := log.Trace(t.Context(), "tr-1")
+	got, err := log.Trace(t.Context(), "tr-1", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
 	}
@@ -485,7 +485,7 @@ func testTraceCap(t *testing.T, db *store.DB) {
 			TraceID:  "tr-long",
 		})
 	}
-	got, err := log.Trace(t.Context(), "tr-long")
+	got, err := log.Trace(t.Context(), "tr-long", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
 	}
@@ -517,7 +517,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 	}
 
 	// The head read keeps the OPENING, as its own doc says.
-	head, err := log.Turn(t.Context(), "tn-long")
+	head, err := log.Turn(t.Context(), "tn-long", time.Now())
 	if err != nil {
 		t.Fatalf("turn: %v", err)
 	}
@@ -529,7 +529,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 			"not exercising a cut at all")
 	}
 
-	got, err := log.TurnClosing(t.Context(), "tn-long", 5)
+	got, err := log.TurnClosing(t.Context(), "tn-long", 5, time.Now())
 	if err != nil {
 		t.Fatalf("turn closing: %v", err)
 	}
@@ -554,7 +554,7 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 			"came for are empty")
 	}
 	// A limit of zero asks for nothing rather than for everything.
-	none, err := log.TurnClosing(t.Context(), "tn-long", 0)
+	none, err := log.TurnClosing(t.Context(), "tn-long", 0, time.Now())
 	if err != nil {
 		t.Fatalf("turn closing, no limit: %v", err)
 	}
@@ -586,17 +586,17 @@ func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
 	} else if got == nil {
 		t.Error("PhaseTokens answered nil on an empty window, which serializes as null")
 	}
-	if got, err := log.Turn(ctx, "tn-nothing-wrote-this"); err != nil {
+	if got, err := log.Turn(ctx, "tn-nothing-wrote-this", time.Now()); err != nil {
 		t.Fatalf("turn: %v", err)
 	} else if got == nil {
 		t.Error("Turn answered nil for a turn with no rows, which serializes as null")
 	}
-	if got, err := log.Trace(ctx, "tr-nothing-shares-this"); err != nil {
+	if got, err := log.Trace(ctx, "tr-nothing-shares-this", time.Now()); err != nil {
 		t.Fatalf("trace: %v", err)
 	} else if got == nil {
 		t.Error("Trace answered nil for a trace with no rows, which serializes as null")
 	}
-	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5); err != nil {
+	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5, time.Now()); err != nil {
 		t.Fatalf("turn closing: %v", err)
 	} else if got == nil {
 		t.Error("TurnClosing answered nil for a turn with no rows, which serializes as null")
@@ -612,7 +612,7 @@ func testByID(t *testing.T, db *store.DB) {
 		Payload: json.RawMessage(`{"id":"one","detail":"kept"}`),
 	})
 
-	rec, err := log.ByID(ctx, "one")
+	rec, err := log.ByID(ctx, "one", time.Now())
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
@@ -637,7 +637,7 @@ func testByID(t *testing.T, db *store.DB) {
 		t.Fatalf("listing carried a payload: %s", page[0].Payload)
 	}
 
-	if _, err := log.ByID(ctx, "absent"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := log.ByID(ctx, "absent", time.Now()); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing id gave %v, want ErrNotFound", err)
 	}
 }
@@ -665,17 +665,24 @@ func testReadFloor(t *testing.T, db *store.DB) {
 	if !slices.Equal(ids(page), []string{"recent"}) {
 		t.Fatalf("listing reached past the floor: %v", ids(page))
 	}
-	tr, err := log.Trace(ctx, "tr-1")
+	tr, err := log.Trace(ctx, "tr-1", time.Now())
 	if err != nil {
 		t.Fatalf("trace: %v", err)
 	}
 	if !slices.Equal(ids(tr), []string{"recent"}) {
 		t.Fatalf("trace reached past the floor: %v", ids(tr))
 	}
+	// A LINK TO IT IS DEAD TOO: one event by id is a read of the log like
+	// any other, so the floor stops it — a row the sweep has not reached yet
+	// is not history the log serves.
+	if _, err := log.ByID(ctx, "ancient", time.Now()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ByID on a row past the floor gave %v, want ErrNotFound", err)
+	}
 	// The row is still THERE — unreadable, not deleted. That is exactly the
-	// state the retention sweep exists to end.
-	if _, err := log.ByID(ctx, "ancient"); err != nil {
-		t.Fatalf("ByID on a row past the floor: %v", err)
+	// state the retention sweep exists to end. Asked at an instant two hours
+	// back, whose floor lies below the row, the same read finds it.
+	if _, err := log.ByID(ctx, "ancient", time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("ByID asked at an instant whose floor is below the row: %v", err)
 	}
 }
 
@@ -699,10 +706,10 @@ func testRetention(t *testing.T, db *store.DB) {
 	if n != 1 {
 		t.Fatalf("purged %d rows, want 1", n)
 	}
-	if _, err := log.ByID(ctx, "stale"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := log.ByID(ctx, "stale", time.Now()); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("swept row still present: %v", err)
 	}
-	if _, err := log.ByID(ctx, "keep"); err != nil {
+	if _, err := log.ByID(ctx, "keep", time.Now()); err != nil {
 		t.Fatalf("sweep took a row inside retention: %v", err)
 	}
 
@@ -741,7 +748,7 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	if n != int64(stale) {
 		t.Fatalf("purged %d rows, want the whole %d-row backlog", n, stale)
 	}
-	if _, err := log.ByID(ctx, "keep"); err != nil {
+	if _, err := log.ByID(ctx, "keep", time.Now()); err != nil {
 		t.Fatalf("sweep took a row inside retention: %v", err)
 	}
 }
@@ -1032,7 +1039,7 @@ func testBackup(t *testing.T, db *store.DB) {
 		t.Fatalf("the copy will not open as a database: %v", err)
 	}
 	defer func() { _ = restored.Close() }()
-	if _, err := restored.Events().ByID(ctx, "backed-up"); err != nil {
+	if _, err := restored.Events().ByID(ctx, "backed-up", time.Now()); err != nil {
 		t.Fatalf("the copy lost a row the original held: %v", err)
 	}
 }

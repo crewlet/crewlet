@@ -51,6 +51,17 @@ import (
 //   - v4: `failed` on a listing's filters — the event log's "Failures only",
 //     which used to narrow the rows a tab had paged in rather than the rows
 //     it was sent.
+//
+// ONE ADDITION MOVES NO VERSION: the asker's instant, `at`, on every
+// question's parameters — the instant the question is asked at, which every
+// node floors the history at (see [store.EventLog]). A build that does not
+// read it floors at its own clock instead, which is what every build did
+// before one read it: its answer differs from the asker's only by the rows
+// between two clocks' thirty-day horizons, a strip of seconds. It is not a
+// filter that build would answer around, nor a summed field it would leave at
+// zero — and a version would make that build REFUSE the whole question for
+// the length of an upgrade, costing every row it holds to save that strip.
+// The axis has carried its `at` since v1, for the window it cuts.
 const Protocol = 4
 
 // versionOf is the lowest scatter version that answers one question with
@@ -234,6 +245,9 @@ type listParams struct {
 
 	// v4.
 	Failed *bool `json:"failed,omitempty"`
+
+	// At is the asker's instant. Unversioned — see [Protocol].
+	At time.Time `json:"at,omitzero"`
 }
 
 func listParamsOf(q store.ListQuery) listParams {
@@ -243,7 +257,7 @@ func listParamsOf(q store.ListQuery) listParams {
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
 		ChannelID: q.ChannelID, AgentID: q.AgentID, Suspended: q.Suspended,
-		Failed: q.Failed,
+		Failed: q.Failed, At: q.At,
 	}
 }
 
@@ -254,24 +268,51 @@ func (p listParams) query() store.ListQuery {
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
 		ChannelID: p.ChannelID, AgentID: p.AgentID, Suspended: p.Suspended,
-		Failed: p.Failed,
+		Failed: p.Failed, At: p.At,
 	}
 }
 
+// seriesParams is the axis's question: a listing's filters, a bar width, and
+// the instant the asker cut the window against.
 type seriesParams struct {
 	List   listParams        `json:"list"`
 	Bucket store.EventBucket `json:"bucket"`
-	// At is the ASKER's clock, so every node cuts the same window.
+	// At is the ASKER's clock, so every node cuts the same window and floors
+	// the rows it counts at the same instant.
+	//
+	// THE AXIS'S OWN FIELD, and the one place its instant travels: every
+	// build since v1 reads it here to cut the window, so the listing's own
+	// `at` is left off the filters this carries rather than sent twice.
 	At time.Time `json:"at"`
+}
+
+func seriesParamsOf(q store.HistogramQuery) seriesParams {
+	list := listParamsOf(q.ListQuery)
+	list.At = time.Time{}
+	return seriesParams{List: list, Bucket: q.Bucket, At: q.At}
+}
+
+func (p seriesParams) query() store.HistogramQuery {
+	list := p.List.query()
+	list.At = p.At
+	return store.HistogramQuery{ListQuery: list, Bucket: p.Bucket}
 }
 
 type idParams struct {
 	ID string `json:"id"`
+
+	// At is the asker's instant — one for every read of a part. Unversioned;
+	// see [Protocol].
+	At time.Time `json:"at,omitzero"`
 }
 
 type traceRowsParams struct {
 	TraceIDs []string `json:"trace_ids"`
 	Limit    int      `json:"limit"`
+
+	// At is the page's own instant, so the siblings are floored where the
+	// matches were. Unversioned; see [Protocol].
+	At time.Time `json:"at,omitzero"`
 }
 
 type turnsParams struct {
@@ -289,11 +330,15 @@ type turnsParams struct {
 	// v3 — see [versionOf].
 	Since time.Time `json:"since,omitzero"`
 	Until time.Time `json:"until,omitzero"`
+
+	// At is the instant the asker cut the window against, which every node
+	// floors it at. Unversioned — see [Protocol].
+	At time.Time `json:"at,omitzero"`
 }
 
 func turnsParamsOf(q store.TurnQuery) turnsParams {
 	return turnsParams{
-		Since: q.Since, Until: q.Until,
+		Since: q.Since, Until: q.Until, At: q.At,
 		SinceDays: q.SinceDays, AgentRole: q.AgentRole, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
 		Failed: q.Failed, Before: q.Before, Sort: q.Sort, Limit: q.Limit,
@@ -302,7 +347,7 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 
 func (p turnsParams) query(ids []string) store.TurnQuery {
 	return store.TurnQuery{
-		Since: p.Since, Until: p.Until,
+		Since: p.Since, Until: p.Until, At: p.At,
 		SinceDays: p.SinceDays, AgentRole: p.AgentRole, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
 		Failed: p.Failed, Before: p.Before, Sort: p.Sort, Limit: p.Limit,
@@ -318,23 +363,32 @@ type phasesParams struct {
 	Role    string      `json:"role,omitempty"`
 	Limit   int         `json:"limit,omitempty"`
 	Before  *cursorWire `json:"before,omitempty"`
+
+	// At is the asker's instant. Unversioned; see [Protocol].
+	At time.Time `json:"at,omitzero"`
 }
 
 // phaseTokenParams names the window as the ASKER's two instants, so every node
-// cuts the same one rather than each counting back from its own clock.
+// cuts the same one rather than each counting back from its own clock — and
+// the instant it was cut against, so every node floors it there too.
 type phaseTokenParams struct {
 	Since     time.Time `json:"since"`
 	Until     time.Time `json:"until"`
 	AgentRole string    `json:"role,omitempty"`
 	Limit     int       `json:"limit,omitempty"`
+
+	// At is unversioned — see [Protocol].
+	At time.Time `json:"at,omitzero"`
 }
 
 func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
-	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole, Limit: q.Limit}
+	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole,
+		Limit: q.Limit, At: q.At}
 }
 
 func (p phaseTokenParams) query() store.PhaseTokenQuery {
-	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole, Limit: p.Limit}
+	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole,
+		Limit: p.Limit, At: p.At}
 }
 
 // ---- serving --------------------------------------------------------- //
@@ -410,28 +464,25 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		h, err := log.Histogram(ctx, store.HistogramQuery{
-			ListQuery: p.List.query(), Bucket: p.Bucket, At: p.At,
-		})
-		return h, err
+		return log.Histogram(ctx, p.query())
 	case QuestionEvent:
 		var p idParams
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		return eventPartOf(ctx, log, p.ID)
+		return eventPartOf(ctx, log, p.ID, p.At)
 	case QuestionTrace:
 		var p idParams
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		return tracePartOf(ctx, log, p.ID)
+		return tracePartOf(ctx, log, p.ID, p.At)
 	case QuestionTurn:
 		var p idParams
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		return turnPartOf(ctx, log, p.ID)
+		return turnPartOf(ctx, log, p.ID, p.At)
 	case QuestionTurns:
 		var p turnsParams
 		if err := decode(&p); err != nil {
@@ -443,7 +494,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		rows, more, err := log.Phases(ctx, p.AgentID, p.Limit, p.Before.cursor())
+		rows, more, err := log.Phases(ctx, p.AgentID, p.Limit, p.Before.cursor(), p.At)
 		if err != nil {
 			return nil, err
 		}
@@ -453,7 +504,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Role, p.Before.cursor())
+		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Role, p.Before.cursor(), p.At)
 		if err != nil {
 			return nil, err
 		}
@@ -469,7 +520,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		rows, err := log.TraceRows(ctx, p.TraceIDs, p.Limit)
+		rows, err := log.TraceRows(ctx, p.TraceIDs, p.Limit, p.At)
 		if err != nil {
 			return nil, err
 		}

@@ -329,7 +329,7 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 	// AND THE SAME TRAP ONE FUNCTION OVER. `AgentPhases` bound both
 	// identifiers the same way, so a handle that resolved to no role was
 	// answered every seatless phase in the window.
-	phases, _, err := log.AgentPhases(t.Context(), "", "PM", nil)
+	phases, _, err := log.AgentPhases(t.Context(), "", "PM", nil, time.Now())
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -639,6 +639,45 @@ func TestATurnThatBeganBeforeTheWindowIsNotInIt(t *testing.T) {
 		}
 	}
 	t.Fatalf("the wider window lost the straddling turn: %+v", wide)
+}
+
+// A PINNED WINDOW IS FLOORED AT ITS OWN INSTANT, page and share alike.
+//
+// A fleet cuts the turns window on the asker's clock and sends the instant with
+// it ([store.TurnQuery.At]), and by the time a peer reads, that instant is in
+// the peer's past. The read floored the window and every share at its own
+// clock's history horizon instead, so a turn that began between the asker's
+// horizon and the reader's was missing from the reader's page — and from the
+// share that asked for it by id. The turn here began a minute above the pinned
+// horizon: below the clock's, and still on disk, since retention keeps a day
+// past the floor.
+//
+// Mutation: read `now()` in [store.EventLog.TurnPartials] rather than the
+// query's instant, and the page lists nothing and the share is empty.
+func TestAPinnedTurnWindowIsFlooredAtItsOwnInstant(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	horizon := at.Add(-store.EventHistory)
+	seedTurn(t, log, "at-the-horizon", horizon.Add(time.Minute), "PM", nil)
+
+	page, err := log.Turns(t.Context(), store.TurnQuery{SinceDays: store.MaxTurnDays, At: at})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(page) != 1 || page[0].TurnID != "at-the-horizon" || page[0].Phases != 2 || !page[0].Complete {
+		t.Errorf("the page is %+v, want the whole turn that began above the pinned horizon", page)
+	}
+	share, _, err := log.TurnPartials(t.Context(), store.TurnQuery{
+		At: at, IDs: []string{"at-the-horizon"},
+	})
+	if err != nil {
+		t.Fatalf("TurnPartials: %v", err)
+	}
+	if len(share) != 1 || share[0].Phases != 2 {
+		t.Errorf("the share is %+v, want the whole turn — a share is bounded by the "+
+			"pinned horizon, not by this log's clock", share)
+	}
 }
 
 // A SHARE IGNORES THE WINDOW: it is the rest of a turn somebody else already
