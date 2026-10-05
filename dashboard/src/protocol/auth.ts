@@ -17,7 +17,9 @@ import { rest } from "./rest.ts";
 import type {
   AuthConfig,
   InvitationView,
+  PasswordSet,
   RecoveryCodes,
+  ResetView,
   SecondFactorEnrolled,
   SecondFactorSeed,
   SessionAnswer,
@@ -33,6 +35,10 @@ import type {
  * server sees it on the way to this page.
  */
 const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+
+/** The header a password reset link's secret travels in to its view, for
+ *  [INVITE_SECRET_HEADER]'s reason. */
+const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 
 export const auth = {
   /** What a sign-in page may know before anybody has signed in. */
@@ -69,6 +75,24 @@ export const auth = {
     body: { secret: string; login: string; name: string; password: string },
   ): Promise<SignedIn> =>
     (await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body)) as SignedIn,
+
+  /** Say whose password a reset link sets, without spending it. */
+  viewReset: async (id: string, secret: string): Promise<ResetView> =>
+    (
+      await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, {
+        headers: { [RESET_SECRET_HEADER]: secret },
+      })
+    ).body as ResetView,
+
+  /**
+   * Set a new password from a reset link, once. It ends every session the
+   * person held and signs nobody in: the person signs in next.
+   */
+  spendReset: async (
+    id: string,
+    body: { secret: string; password: string },
+  ): Promise<PasswordSet> =>
+    (await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body)) as PasswordSet,
 
   /**
    * Enrolment's first leg: a seed, and nothing stored. A person who never

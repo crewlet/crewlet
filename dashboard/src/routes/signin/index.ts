@@ -7,6 +7,7 @@
 
 export { SignIn } from "./SignIn.tsx";
 export { Invite } from "./Invite.tsx";
+export { Reset } from "./Reset.tsx";
 export { Enrol } from "./Enrol.tsx";
 // THE TWO PROOF DIALOGS a person opens from the sidebar's user block — in this
 // chunk rather than the entry, because every signed-in reader carries the

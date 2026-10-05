@@ -44,23 +44,8 @@ import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { LANDING, useSignedIn } from "~/lib/session.ts";
 import { auth, RestError, type InvitationView } from "~/protocol/index.ts";
+import { characters, parseLink } from "./link.ts";
 import { SignInPage } from "./SignInPage.tsx";
-
-/**
- * The two halves of a link's last segment, or null for one that is not a
- * whole link. The id is a uuid and the secret unpadded URL-safe base64, so
- * neither half can hold the dot that joins them.
- */
-export function parseInviteLink(segment: string): { id: string; secret: string } | null {
-  const at = segment.indexOf(".");
-  if (at <= 0 || at === segment.length - 1) return null;
-  return { id: segment.slice(0, at), secret: segment.slice(at + 1) };
-}
-
-/** How many characters a password is, as the engine counts them: runes. */
-function characters(text: string): number {
-  return [...text].length;
-}
 
 type Read =
   | { state: "loading" }
@@ -69,7 +54,7 @@ type Read =
   | { state: "failed"; sentence: string };
 
 export function Invite({ link }: { link: string }) {
-  const parsed = parseInviteLink(link);
+  const parsed = parseLink(link);
   if (!parsed) {
     return (
       <SignInPage title="This invitation link is incomplete">

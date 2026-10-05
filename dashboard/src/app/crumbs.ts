@@ -124,6 +124,7 @@ const SIGN_IN_TITLES: Record<SignInScreen["screen"], string> = {
   login: "Sign in",
   enrol: "Two-step verification",
   invite: "Invitation",
+  reset: "Password reset",
 };
 
 export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {

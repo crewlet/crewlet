@@ -14,7 +14,7 @@ import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, needSession, Store, sessionRestored } from "~/protocol/index.ts";
-import { parseInviteLink } from "./Invite.tsx";
+import { parseLink } from "./link.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -133,11 +133,11 @@ afterEach(() => {
 
 describe("reading the link", () => {
   test("the two halves are split at the dot that joins them", () => {
-    expect(parseInviteLink(`${ID}.${SECRET}`)).toEqual({ id: ID, secret: SECRET });
+    expect(parseLink(`${ID}.${SECRET}`)).toEqual({ id: ID, secret: SECRET });
     // THE CONTROL: a link a mail client cut short is not a link.
-    expect(parseInviteLink(ID)).toBeNull();
-    expect(parseInviteLink(`${ID}.`)).toBeNull();
-    expect(parseInviteLink(`.${SECRET}`)).toBeNull();
+    expect(parseLink(ID)).toBeNull();
+    expect(parseLink(`${ID}.`)).toBeNull();
+    expect(parseLink(`.${SECRET}`)).toBeNull();
   });
 
   test("the view is asked with the secret beside the id, and never in a URL", async () => {

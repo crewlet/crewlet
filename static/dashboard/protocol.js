@@ -1709,6 +1709,9 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 * server sees it on the way to this page.
 */
 var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+/** The header a password reset link's secret travels in to its view, for
+*  [INVITE_SECRET_HEADER]'s reason. */
+var RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 var auth = {
 	/** What a sign-in page may know before anybody has signed in. */
 	config: async () => await rest.get("/auth/config"),
@@ -1729,6 +1732,13 @@ var auth = {
 	viewInvite: async (id, secret) => (await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
 	/** Redeem an invitation, which creates the person and signs them in. */
 	redeemInvite: async (id, body) => await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body),
+	/** Say whose password a reset link sets, without spending it. */
+	viewReset: async (id, secret) => (await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, { headers: { [RESET_SECRET_HEADER]: secret } })).body,
+	/**
+	* Set a new password from a reset link, once. It ends every session the
+	* person held and signs nobody in: the person signs in next.
+	*/
+	spendReset: async (id, body) => await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body),
 	/**
 	* Enrolment's first leg: a seed, and nothing stored. A person who never
 	* completes the second leg has enrolled nothing.

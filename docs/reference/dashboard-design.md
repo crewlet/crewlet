@@ -776,6 +776,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home |
 | `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it and the seat it binds, then a login, a name and a password. The link the engine mints lands here | |
+| `#/reset/{id}.{secret}` | **Password reset** *(outside the frame)* — whose password the link sets, then a new one, once; it ends every session the person held and signs nobody in, so it ends on the sign-in form. The link an administrator issues lands here | |
 | `#/enrol` | **Second factor** *(outside the frame)* — the authenticator a deployment that requires one asks for before anything else opens, then the first recovery codes | `next=`, as the sign-in's |
 
 **There is no redirect table.** There was one, and it was always a liability: a
@@ -1755,9 +1756,10 @@ Both of these shipped wrong once, and neither is visible in a URL.
 
 ### Signing in is a screen outside the frame
 
-Three routes draw no sidebar and no page header — `#/login`,
-`#/invite/{id}.{secret}` and `#/enrol` (`FRAMELESS` in `app/nav.ts`): a frame
-whose every row is locked is a frame showing a person what they cannot open.
+Four routes draw no sidebar and no page header — `#/login`,
+`#/invite/{id}.{secret}`, `#/reset/{id}.{secret}` and `#/enrol` (`FRAMELESS` in
+`app/nav.ts`): a frame whose every row is locked is a frame showing a person
+what they cannot open.
 
 **The session cookie is the browser's only credential.** The dashboard keeps
 no token anywhere — not in storage, not in a URL — and every REST call and the
@@ -1781,7 +1783,7 @@ same access.
 **`next` is an address on this page, or nothing.** It is the one parameter of
 a sign-in an outsider can choose for somebody else — a `#/login?next=…` link in
 a message — so `lib/session.ts` accepts only a hash route of this dashboard: no
-`//`, no backslash, no control character, never one of the three screens above.
+`//`, no backslash, no control character, never one of the four screens above.
 Anything it refuses lands on Home.
 
 **A sign-in replaces the history entry it was made from**, re-dials the socket
@@ -1804,6 +1806,16 @@ the engine suggested and states the password length `/auth/config` asks for. A
 spent, withdrawn or mistyped link is one screen (`410`), and a login or address
 somebody else holds is the engine's own sentence (`409`) over the form as
 typed.
+
+**A password reset link is the invitation's screen again, and signs nobody
+in.** The link an administrator issues carries its credential in the fragment
+the same way, and the screen sends the secret beside the id — the
+`X-Crewlet-Reset-Secret` header on the view, the body on the spend. The view
+names whose password it sets and states the length `/auth/config` asks for; a
+spent, revoked, expired or mistyped link is one screen (`410`). Setting the
+password ends every session the person held and opens none, so the screen ends
+on a **Sign in** button rather than in the product: a second factor the person
+holds is asked for there, which a session handed out by the link would skip.
 
 **A required second factor is enrolled before anything else opens.** `#/enrol`
 asks `POST /auth/totp` for a seed — shown as the key, grouped for typing, and

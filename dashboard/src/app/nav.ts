@@ -611,8 +611,9 @@ export function workspaceOf(path: string[]): Workspace | "" {
 }
 
 /**
- * The routes drawn OUTSIDE the frame: signing in, redeeming an invitation, and
- * enrolling the second factor a deployment requires before anything else.
+ * The routes drawn OUTSIDE the frame: signing in, redeeming an invitation,
+ * setting a password from a reset link, and enrolling the second factor a
+ * deployment requires before anything else.
  *
  * NOT WORKSPACES, and not rows anywhere. Each is somewhere a browser is before
  * it holds a session the frame can use — nobody, or a session that may do
@@ -626,7 +627,7 @@ export function workspaceOf(path: string[]): Workspace | "" {
  * Every head is lowercase and none is a key the engine mints, which
  * `router.test.ts` holds as it holds the reserved segments.
  */
-export const FRAMELESS = ["login", "invite", "enrol"] as const;
+export const FRAMELESS = ["login", "invite", "reset", "enrol"] as const;
 
 export type FramelessRoute = (typeof FRAMELESS)[number];
 

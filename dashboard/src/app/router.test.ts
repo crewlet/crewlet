@@ -230,9 +230,10 @@ describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
 
   // THE SIGN-IN SCREENS take exactly the tail their address has. An
-  // invitation is the exception: its screen answers a link that is not whole
-  // (an empty one) rather than Not Found, since its holder pasted it.
-  test("a sign-in screen is its exact address, and an invitation its one link", () => {
+  // invitation and a reset link are the exceptions: each screen answers a link
+  // that is not whole (an empty one) rather than Not Found, since its holder
+  // pasted it.
+  test("a sign-in screen is its exact address, and an invitation or a reset its one link", () => {
     expect(resolve(["login"])).toMatchObject({ screen: "login", workspace: "" });
     expect(resolve(["login", "x"]).resolved).toBe(false);
     expect(resolve(["enrol"])).toMatchObject({ screen: "enrol", workspace: "" });
@@ -242,6 +243,12 @@ describe("the resolver", () => {
       link: `${uuid}.secret`,
     });
     expect(resolve(["invite", "a", "b"])).toMatchObject({ screen: "invite", link: "" });
+    expect(resolve(["reset", `${uuid}.secret`])).toMatchObject({
+      screen: "reset",
+      link: `${uuid}.secret`,
+      workspace: "",
+    });
+    expect(resolve(["reset", "a", "b"])).toMatchObject({ screen: "reset", link: "" });
   });
 
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
@@ -646,8 +653,10 @@ describe("the information architecture", () => {
       // THE SCREENS OUTSIDE THE FRAME, which no workspace declares: a page a
       // person is sent to before anything else opens is one somebody
       // starting from the document has to be able to find.
-      // An invitation is written down as the link it carries.
-      ...FRAMELESS.map((head) => (head === "invite" ? [head, "{id}.{secret}"] : [head])),
+      // An invitation and a reset link are written down as the link each carries.
+      ...FRAMELESS.map((head) =>
+        head === "invite" || head === "reset" ? [head, "{id}.{secret}"] : [head],
+      ),
     ];
     for (const path of paths) {
       expect(

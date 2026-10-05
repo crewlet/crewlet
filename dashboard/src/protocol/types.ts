@@ -4283,6 +4283,22 @@ export interface InvitationView {
   seat?: { handle?: string; name?: string };
 }
 
+/** What a password reset link's screen renders from, before anything is spent. */
+export interface ResetView {
+  /** Whose password the link sets. */
+  login: string;
+  /** When the link stops opening. */
+  expires_at: string;
+  /** The floor every password is held to. */
+  min_password_length: number;
+}
+
+/** A password set from a reset link — and no session: the person signs in next. */
+export interface PasswordSet {
+  status: "password_set";
+  login: string;
+}
+
 /**
  * A second factor's seed: the first leg of an enrolment, which stores nothing.
  * The second leg sends `secret` back with a code derived from it.

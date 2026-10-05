@@ -18,9 +18,10 @@
  *
  * # And a level above both: in the frame, or outside it
  *
- * Signing in, redeeming an invitation and enrolling a required second factor
- * are drawn OUTSIDE the frame (`FRAMELESS` in `nav.ts`), because a browser on
- * one of them holds no session the frame could use. They are also where the
+ * Signing in, redeeming an invitation, spending a password reset link and
+ * enrolling a required second factor are drawn OUTSIDE the frame (`FRAMELESS`
+ * in `nav.ts`), because a browser on one of them holds no session the frame
+ * could use. They are also where the
  * transports send a browser that lost its session — `FollowSessionNeed`,
  * mounted once here beside both, is what reads that and moves. The step-up
  * ceremony (`StepUp.tsx`) is mounted beside both for the same reason: a
@@ -106,6 +107,7 @@ const Backups = lazyScreen("settings", (m) => m.Backups);
 const Audit = lazyScreen("settings", (m) => m.Audit);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
+const Reset = lazyScreen("signin", (m) => m.Reset);
 const Enrol = lazyScreen("signin", (m) => m.Enrol);
 
 /** One resolved screen, drawn. */
@@ -117,6 +119,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Enrol />;
     case "invite":
       return <Invite key={route.link} link={route.link} />;
+    case "reset":
+      return <Reset key={route.link} link={route.link} />;
     case "home":
       return <Home />;
     case "inbox":
@@ -241,7 +245,7 @@ function FollowSessionNeed() {
     if (need === null) return;
     const at = framelessOf(route.path);
     if (need === "sign_in") {
-      if (at === "login" || at === "invite") return;
+      if (at === "login" || at === "invite" || at === "reset") return;
       const target = parseHash(signInHash(route.hash));
       nav.replace(target.path, target.query);
       return;
