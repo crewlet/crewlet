@@ -14,7 +14,8 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { TurnPeek, TurnScreen } from "./Turn.tsx";
+import { TURN_TABS, TurnPeek, TurnScreen } from "./Turn.tsx";
+import { WATCH_TAB, watchHref } from "~/lib/turns.ts";
 import { ABSORBED } from "~/contract/turnbands.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -917,4 +918,111 @@ test("the turn as JSON is in the page bar's menu, and only Steer stays on a phon
   fireEvent.click(more);
   expect(await screen.findByRole("menuitem", { name: /Download turn as JSON/ })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: /Copy turn as JSON/ })).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// Watching it live
+// ---------------------------------------------------------------------------
+
+/** The seat's push while it runs this turn's `phase`, as the projection sends it. */
+function runningSeat(phase: string) {
+  return {
+    role: "CEO",
+    handle: "ceo",
+    activity: "working",
+    turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage: "phase" },
+    live_call: {
+      turn_id: TURN,
+      phase,
+      iteration: 1,
+      model: "claude-sonnet-5",
+      in_progress: true,
+      round_num: 0,
+      rounds_used: 1,
+      max_rounds: 25,
+      started_at: "2026-09-13T10:01:00Z",
+      updated_at: "2026-09-13T10:01:30Z",
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+    },
+  };
+}
+
+/** Each phase card on the Transcript: its phase, whether it is live, whether it is open. */
+function cards() {
+  return [...document.querySelectorAll(".phase-card")].map((card) => ({
+    phase: card.querySelector(".phase-head")?.textContent ?? "",
+    live: card.classList.contains("live"),
+    open: card.querySelector(".phase-body") !== null,
+  }));
+}
+
+test("a watch link's tab is one the page has", () => {
+  expect(TURN_TABS as readonly string[]).toContain(WATCH_TAB);
+});
+
+// A WATCH LINK LANDS ON THE PHASE THE TURN IS ON, OPEN. With the first card the
+// only open one, it opened on the context pass that ended minutes ago and the
+// execute the reader came to watch was a closed row under it.
+test("a watch link lands on the transcript with the running phase open", async () => {
+  location.hash = watchHref(TURN);
+  const store = new Store();
+  store.applyAgents([runningSeat("execute")] as never);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({
+          turn_id: TURN,
+          events: [
+            phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
+            phase("2026-09-13T10:00:40Z", 20_000, { phase: "context" }),
+          ],
+          truncated: false,
+        })
+      : Promise.resolve({});
+  frame(store, socket);
+  await waitFor(() => expect(cards()).toHaveLength(3));
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("Transcript");
+  // NOT THE FIRST CARD, or "the first is open" would pass this for nothing.
+  expect(cards()[0]?.live).toBe(false);
+  expect(cards().find((c) => c.live)?.open, "the running phase is open").toBe(true);
+  // AND THE FIRST STAYS OPEN, as it always was, and a settled one after it shut.
+  expect(
+    cards()
+      .filter((c) => !c.live)
+      .map((c) => c.open),
+  ).toEqual([true, false]);
+});
+
+// A PHASE THAT GOES LIVE WHILE THE PAGE IS OPEN is a new card, and it mounts
+// open; the settled phase a reader had closed stays closed, because a card's
+// open state is latched at mount and owned by the reader after it.
+test("a phase that starts while the transcript is open arrives open, and the settled ones keep theirs", async () => {
+  location.hash = watchHref(TURN);
+  const store = new Store();
+  store.applyAgents([{ ...runningSeat("context"), live_call: null }] as never);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({
+          turn_id: TURN,
+          events: [
+            phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
+            phase("2026-09-13T10:00:40Z", 20_000, { phase: "context" }),
+          ],
+          truncated: false,
+        })
+      : Promise.resolve({});
+  frame(store, socket);
+  await waitFor(() => expect(cards()).toHaveLength(2));
+  expect(cards().map((c) => c.open)).toEqual([true, false]);
+  act(() => store.applyAgents([runningSeat("execute")] as never));
+  await waitFor(() => expect(cards()).toHaveLength(3));
+  expect(cards().find((c) => c.live)?.open, "the phase that started is open").toBe(true);
+  expect(
+    cards()
+      .filter((c) => !c.live)
+      .map((c) => c.open),
+  ).toEqual([true, false]);
 });

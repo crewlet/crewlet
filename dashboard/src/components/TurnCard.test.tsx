@@ -184,3 +184,27 @@ test("the trigger line clamps rather than being cut at one line", () => {
   ).not.toContain("truncate");
   expect(line.getAttribute("title")).toBe(SUMMARY);
 });
+
+// A RUNNING TURN OPENS THE PHASE IT IS ON. "Running now" on a seat's Turns tab
+// is where a reader comes to watch, and a turn of two phases opened none of
+// them, so what was moving was a closed row inside an open card.
+test("an open running turn opens the phase it is on, and not the settled one", () => {
+  const group = groupTurns([
+    phase({ key: "t1|context|1", phase: "context" }),
+    phase({
+      key: "t1|execute|1",
+      phase: "execute",
+      live: true,
+      startedAt: "2026-09-13T10:03:00Z",
+      at: "2026-09-13T10:05:00Z",
+    }),
+  ])[0]!;
+  const { container } = draw(<TurnCard group={group} defaultOpen />);
+  const cards = [...container.querySelectorAll(".phase-card")].map((c) => ({
+    live: c.classList.contains("live"),
+    open: !!c.querySelector(".phase-body"),
+  }));
+  expect(cards).toHaveLength(2);
+  expect(cards.find((c) => c.live)?.open, "the running phase is open").toBe(true);
+  expect(cards.find((c) => !c.live)?.open, "the settled one stays closed").toBe(false);
+});

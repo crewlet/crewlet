@@ -1003,8 +1003,9 @@ test("the current turn names its round against the granted cap, its calls and th
   expect(rows[2]?.textContent).toContain("running");
   // The recorded phases are none yet, so the turn's tokens are the running phase's.
   expect(card.textContent).toContain("2,500 tokens");
+  // A WATCH LINK: the turn's Transcript, where the phase it is on is open.
   expect(within(card).getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
-    "#/live/turns/t-7",
+    "#/live/turns/t-7?tab=transcript",
   );
 });
 

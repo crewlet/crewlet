@@ -55,6 +55,7 @@ import {
 } from "~/lib/seats.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
+import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useNow } from "~/lib/clock.ts";
 import { typeIcon, type LabelContext } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -235,7 +236,7 @@ export function WorkItem({ id }: { id: string }) {
   usePageLabels(
     item ? { [id]: item.key, ...(projectName ? { [item.project]: projectName } : {}) } : {},
   );
-  const liveTurn = live?.turn?.turn_id ?? live?.live_call?.turn_id ?? "";
+  const liveTurn = turnIdOf(live);
 
   // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
   // and the task is the frame's `peek=` token.
@@ -268,7 +269,7 @@ export function WorkItem({ id }: { id: string }) {
             size="small"
             variant="secondary"
             leadingIcon={<ActivityGlyph size="sm" />}
-            href={href(["live", "turns", liveTurn])}
+            href={watchHref(liveTurn)}
           >
             Watch live
           </ButtonLink>

@@ -1858,7 +1858,16 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                       key={p.key}
                       record={p}
                       nested={nested.get(p.key)}
-                      defaultOpen={i === 0}
+                      // THE FIRST PHASE, AND THE ONE THAT IS RUNNING. A watch
+                      // link lands here (`lib/turns.ts`' `watchLink`) to see
+                      // what the turn is doing now, and with only the first
+                      // open that was the context pass that finished minutes
+                      // ago, the execute it is on a closed row under it. A
+                      // phase that goes live while the page is open is a new
+                      // key, so it mounts — and opens — then; one that
+                      // completes keeps its key and its card, and the card
+                      // latches, so finishing never closes it under a reader.
+                      defaultOpen={i === 0 || p.live}
                     />
                   ))}
                   {!own.length && (

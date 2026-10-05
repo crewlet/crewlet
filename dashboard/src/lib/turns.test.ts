@@ -6,7 +6,8 @@
 
 import { expect, test } from "vitest";
 
-import { runningNow, workItemLabel } from "./turns.ts";
+import { buildHash } from "~/app/router.tsx";
+import { runningNow, turnIdOf, watchHref, watchLink, workItemLabel } from "./turns.ts";
 import type { AgentRow, TurnRow } from "~/protocol/index.ts";
 
 const ID = "4d631f6d-8a1b-4c2d-9e3f-0a1b2c3d4e5f";
@@ -68,4 +69,32 @@ test("a turn that ended, or that no seat is running, is not running now", () => 
 test("a turn parked on its coding run says so", () => {
   const parked = seat({ turn: { turn_id: "t-7", stage: "parked" } } as Partial<AgentRow>);
   expect(runningNow(row({ parked: true }), [parked])?.words).toBe("parked — coding run");
+});
+
+// ---------------------------------------------------------------------------
+// Watching one
+// ---------------------------------------------------------------------------
+
+// A WATCH LINK IS THE TURN'S OWN PAGE ON ITS TRANSCRIPT, where the phase it is
+// on is open — and both spellings of it are one address.
+test("a watch link is the turn's page on its transcript, as a path and as an href", () => {
+  expect(watchLink("t-7")).toEqual({
+    path: ["live", "turns", "t-7"],
+    query: { tab: "transcript" },
+  });
+  expect(watchHref("t-7")).toBe(buildHash(["live", "turns", "t-7"], { tab: "transcript" }));
+});
+
+// THE TURN RECORD FIRST, as `seatOnTurn` reads it, and nothing — never a link
+// to `#/live/turns/` — while the overlay names no turn yet.
+test("the turn a seat is on is its turn record's, then its call's, else none", () => {
+  expect(turnIdOf(seat())).toBe("t-7");
+  expect(turnIdOf(seat({ turn: null }))).toBe("t-7");
+  expect(
+    turnIdOf(
+      seat({ turn: { turn_id: "t-8", stage: "phase" } as AgentRow["turn"], live_call: null }),
+    ),
+  ).toBe("t-8");
+  expect(turnIdOf(seat({ turn: null, live_call: null }))).toBe("");
+  expect(turnIdOf(undefined)).toBe("");
 });

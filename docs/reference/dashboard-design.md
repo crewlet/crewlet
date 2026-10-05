@@ -2303,7 +2303,8 @@ days the event store keeps, a page of fifty at a time with "Load older turns"
 following the engine's cursor, and a count of what is loaded — "50+" while an
 older page exists), with **Running now** leading the tab so a turn in flight is
 on screen as it opens, and the settled transcripts after the list under their
-own heading, **Transcripts · newest first**. A phase that finishes while the
+own heading, **Transcripts · newest first**. A turn under Running now opens
+the phase it is on, as the trace's Transcript does. A phase that finishes while the
 tab is open reaches its transcripts off the push, matched on the seat's own id
 as Live's recent phases are — never on its role name, which two unit seats
 stamped from one template share. A row for a turn still running says what the seat is doing
@@ -3438,7 +3439,10 @@ be read at a glance:
   on the stepper's one line),
   how long it has run from the turn's own start —
   so a turn still gathering context is already timed — the call it is making
-  or last made, and the whole row a link to its trace. A round with no update
+  or last made, and the whole row a link to its trace — the turn's record, on
+  its Timeline, as every row of a list of turns is; the links that say
+  **Watch** are the ones that open its Transcript on the running phase (see
+  [the turn trace](#the-turn-trace-four-tabs-one-clock)). A round with no update
   for two minutes is marked **no update**, for ten **stalled**, in the
   caution and failure tones — and never while the turn is parked, because a
   detached coding run is silent on purpose.
@@ -4892,6 +4896,16 @@ in two ways: *what did this turn do, in order and how long*, and *what is it
 doing now*. So its header says where the turn is and what a reader can do
 about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
 
+**The two readings are two kinds of link.** A link into a turn's RECORD — a
+row of a list, a settled turn's *Trace*, a monitor's row on Home's Live now and
+Live › Now running — opens the page on its Timeline, the default tab. A link
+whose job is to WATCH a running turn — every **Watch live** (a seat's current
+turn, a task's live row and its page bar) — opens it on the
+**Transcript** (`?tab=transcript`, `lib/turns.ts`' `watchLink`), where the
+phase the turn is on is drawn OPEN with its rounds arriving. Landing on the
+Timeline, a reader who pressed Watch saw one drifting bar and had to find the
+tab, then open the phase, to read a word of it.
+
 - **The trail names the turn the way its task does.** On a work item it reads
   *Live › {agent} › Turn n · KEY* — the ordinal off the task's own turn list
   (`work_item_turns`, walked a page at a time until the turn is found; a turn
@@ -4990,7 +5004,11 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
   *not settled* when none is — the same reading on the trace, the Live turns
   list and a seat's Turns tab — and neither while the live view is
   disconnected, when there are no seats to ask.
-- **Transcript** is the phase cards and the story bands above; **Context** is
+- **Transcript** is the phase cards and the story bands above — the first
+  phase open and, while the turn runs, the phase it is on: a card opens as it
+  MOUNTS when its phase is live, so a phase that starts while the page is open
+  arrives open, and one that completes keeps its card and its open state
+  (phase cards latch; the reader's own open and close is never overridden); **Context** is
   what woke the turn and what its prompt was assembled from; **Tools** is every
   execution with where it ran (built in, or the MCP server), each row opening
   its span on the Timeline.

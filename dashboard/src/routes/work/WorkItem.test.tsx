@@ -954,10 +954,12 @@ test("the live row appears only for a turn on this item", async () => {
   const live = screen.getByRole("link", { name: /is on turn 3 of ENG-42/ });
   expect(live.textContent).toContain("SWE is on turn 3");
   expect(live.textContent).toContain("executing · round 7 of 25");
-  expect(live.getAttribute("href")).toBe(href(["live", "turns", "run-9"]));
+  // BOTH ARE WATCH LINKS — the turn's Transcript, its running phase open —
+  // where a settled turn's "Trace" is the record, on the Timeline.
+  expect(live.getAttribute("href")).toBe(href(["live", "turns", "run-9"], { tab: "transcript" }));
   // AND THE PAGE BAR'S WAY TO WATCH IT.
   expect(screen.getByRole("link", { name: "Watch live" }).getAttribute("href")).toBe(
-    href(["live", "turns", "run-9"]),
+    href(["live", "turns", "run-9"], { tab: "transcript" }),
   );
 
   cleanup();

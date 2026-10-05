@@ -66,6 +66,7 @@ import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useEngineHealth, useOrg, useSandboxes, useSchedules } from "~/lib/store-hooks.ts";
 import { turnSteps } from "~/lib/turnsteps.ts";
+import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useClipped } from "~/lib/useClipped.ts";
 import { inboxFigure, useInboxCountsOf } from "~/lib/useInboxCounts.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
@@ -322,7 +323,7 @@ function CurrentTurn({
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
-  const turnId = turn?.turn_id ?? call?.turn_id ?? "";
+  const turnId = turnIdOf(agent);
   const key = call?.work_item?.key || turn?.work_item?.key || "";
   const onTurn = turnId !== "" && !!agent;
   // WHICH TURN ON THE TASK, from the task's own turn list — the same reading
@@ -425,8 +426,10 @@ function CurrentTurn({
             </span>
           ) : undefined
         }
+        // A WATCH LINK, onto the Transcript with the running phase open —
+        // never the trace's Timeline, which is where "Open last turn" goes.
         actions={
-          <a className="t-link" href={href(["live", "turns", turnId])}>
+          <a className="t-link" href={watchHref(turnId)}>
             Watch live
           </a>
         }

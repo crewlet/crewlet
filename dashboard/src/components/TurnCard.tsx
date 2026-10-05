@@ -199,7 +199,12 @@ export function TurnCard({
               key={p.key}
               record={p}
               nested={group.nested.get(p.key)}
-              defaultOpen={i === 0 && group.phases.length === 1}
+              // A TURN OF ONE PHASE OPENS IT, and a running turn opens the
+              // phase it is on — "Running now" on a seat's Turns tab is where
+              // a reader comes to watch, and the phase that is moving is the
+              // one they came for. Latched like the card: it opens as it
+              // mounts, and a phase that completes is never closed for it.
+              defaultOpen={(i === 0 && group.phases.length === 1) || p.live}
             />
           ))}
           {/* THE WAY OUT OF THIS CARD, drawn as a control rather than as a

@@ -56,6 +56,7 @@ import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
+import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { renderMarkdown, plainText } from "~/lib/markdown.ts";
 import {
   fmtCount,
@@ -735,7 +736,7 @@ function LiveRow({
 }) {
   const handle = row.handle ?? "";
   const name = chrome.seatName?.(handle) ?? handle;
-  const turn = row.turn?.turn_id ?? row.live_call?.turn_id ?? "";
+  const turn = turnIdOf(row);
   const doing = doingWords(row);
   const since = Date.parse(row.turn?.started_at ?? row.live_call?.started_at ?? "");
   // THE PROFILE CARD'S CLOCK (`fmtElapsed`), seconds under a minute: the
@@ -749,7 +750,7 @@ function LiveRow({
       </span>
       <a
         className="task-live"
-        href={turn ? href(["live", "turns", turn]) : href(["live"])}
+        href={turn ? watchHref(turn) : href(["live"])}
         aria-label={`${name} is on turn ${ordinal} of ${item.key} — watch live`}
       >
         <span className="task-live-dot" aria-hidden="true" />

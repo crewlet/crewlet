@@ -1,6 +1,7 @@
 /**
  * What every list of turns shares: how far back the engine will look for one,
- * and how the work item a turn was on is named on a row.
+ * how the work item a turn was on is named on a row, and where a link that
+ * WATCHES a running turn lands.
  *
  * TWO LISTS READ THEM — the company's turns (`routes/live/Turns.tsx`) and one
  * seat's (`routes/agents/seat/Turns.tsx`) — and each used to spell both for
@@ -9,6 +10,8 @@
  * full `native:<uuid>` that no row had room for.
  */
 
+import { pathOf } from "~/app/frame/objects.ts";
+import { href } from "~/app/router.tsx";
 import { doingWords } from "./seats.ts";
 import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
 
@@ -72,6 +75,51 @@ export function runningNow(
     words: `${parked ? "parked" : "running"} — ${doingWords(seat)}`,
     item: seat.live_call?.work_item ?? seat.turn?.work_item ?? null,
   };
+}
+
+/**
+ * The turn a seat's live overlay says it is on — its turn record first, then
+ * its call in flight, the order [seatOnTurn] reads them in — or "" while it
+ * names none: a seat the engine calls working can be a frame or two ahead of
+ * the turn id, and a link to `#/live/turns/` with no id is a link to nothing.
+ */
+export function turnIdOf(row: AgentRow | null | undefined): string {
+  return row?.turn?.turn_id || row?.live_call?.turn_id || "";
+}
+
+/**
+ * The tab a watch link opens a running turn on: the TRANSCRIPT, where the
+ * phase it is on is drawn open with its rounds arriving (`routes/live/Turn.tsx`
+ * opens a live phase's card as it mounts). Every other link to a turn lands on
+ * the Timeline, the page's default, because a reader following a turn from a
+ * list or a record is asking what it did and how long each part took. A
+ * reader who pressed "Watch live" is asking what it is doing NOW, and on the
+ * Timeline that is one drifting bar, with its words a tab and a press away.
+ * `Turn.test.tsx` holds this to a tab the page has.
+ */
+export const WATCH_TAB = "transcript";
+
+/**
+ * Where a link whose job is to WATCH a running turn goes: the turn's own page
+ * (`pathOf`, the one map of an object to its route), on [WATCH_TAB]. For a
+ * caller that navigates (`nav.to(path, query)`) or draws a row the kit links
+ * itself; [watchHref] is the same address as an `href`.
+ *
+ * NOT THE ROWS OF A MONITOR. Home's Live now and Live › Now running list
+ * running turns as rows whose link is the turn's TRACE — the default tab —
+ * because a monitor's row is a way into the record of the turn, the same
+ * address a settled turn's row has. A watch link is a control that says what
+ * it is for: "Watch live", the sidebar's Running group, `g r`, ⌘K's
+ * Running now.
+ */
+export function watchLink(turnId: string): { path: string[]; query: Record<string, string> } {
+  return { path: pathOf({ kind: "turn", id: turnId }), query: { tab: WATCH_TAB } };
+}
+
+/** [watchLink] as an `href`. */
+export function watchHref(turnId: string): string {
+  const { path, query } = watchLink(turnId);
+  return href(path, query);
 }
 
 /**
