@@ -3,9 +3,10 @@
 // It implements [llm.Provider] over the official anthropic-sdk-go, and it is
 // deliberately thin: it translates the neutral request into Anthropic's wire
 // shape, makes exactly one HTTP attempt per credential, and translates the
-// answer back. Everything about what a failure MEANS is the contract's
-// (llm.KindForStatus), everything about which credential to use next is the
-// pool's, and everything about which model to try next is the chain's.
+// answer back. What a failure MEANS is the contract's vocabulary (the
+// llm.ErrorKind), read from the error type the API names in its body and from
+// the status only where it names none ([kindOf] says why); which credential to
+// use next is the pool's, and which model to try next is the chain's.
 //
 // Three details here are the ones worth checking against the vendor rather
 // than against intuition:
@@ -364,9 +365,46 @@ func (p *Provider) classify(err error) *llm.Error {
 		if apiErr.Response != nil {
 			header = apiErr.Response.Header
 		}
-		return httpapi.FromStatus(err, providerName, p.model, apiErr.StatusCode, header)
+		return httpapi.FromKind(err, providerName, p.model, kindOf(apiErr), apiErr.StatusCode, header)
 	}
 	return httpapi.FromTransport(err, providerName, p.model)
+}
+
+// kindOf classifies an API error by the TYPE its body names first and by its
+// status only when the body names none this backend knows.
+//
+// The type first, because the status is not always the API's answer. An
+// `error` event inside a stream reaches the SDK after the response opened
+// with 200, and the SDK attaches THAT status to it — so an `overloaded_error`
+// half-way through a round classified by status is a 200, which is fatal: no
+// other member of the chain is tried and the turn fails over a capacity blip
+// the next model would have absorbed. The type is the API's own structured
+// classification — the body of every Anthropic error carries one, a status
+// response's as much as a stream's — so reading it is not prose matching, and
+// on a status response the two agree.
+//
+// The status decides only when the type is absent or new. An unrecognised
+// type on a response that had already succeeded is a SERVER failure rather
+// than whatever 200 maps to: the API accepted the request, authenticated it
+// and began answering, so the one thing the failure cannot be is a request it
+// refused.
+func kindOf(apiErr *sdk.Error) llm.ErrorKind {
+	switch apiErr.Type() {
+	case sdk.ErrorTypeRateLimitError, sdk.ErrorTypeBillingError:
+		return llm.KindRateLimit
+	case sdk.ErrorTypeAuthenticationError, sdk.ErrorTypePermissionError:
+		return llm.KindAuth
+	case sdk.ErrorTypeOverloadedError, sdk.ErrorTypeAPIError:
+		return llm.KindServer
+	case sdk.ErrorTypeTimeoutError:
+		return llm.KindTimeout
+	case sdk.ErrorTypeInvalidRequestError, sdk.ErrorTypeNotFoundError:
+		return llm.KindFatal
+	}
+	if apiErr.StatusCode >= 200 && apiErr.StatusCode < 300 {
+		return llm.KindServer
+	}
+	return llm.KindForStatus(apiErr.StatusCode)
 }
 
 // params renders the neutral request into Anthropic's wire shape.

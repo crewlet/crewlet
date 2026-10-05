@@ -373,25 +373,44 @@ func TestSDKRetriesAreDisabled(t *testing.T) {
 
 // --- classification ----------------------------------------------------
 
+// Every pair is one the API documents (its errors page lists the status and
+// the type together), so on a status response the type and the status agree
+// and either would do. The rows WITHOUT a type are the fallback: a gateway's
+// own HTML 503, or a type this build does not know, is still classified — by
+// the status, as it always was. The case where the two DISAGREE is the
+// stream's, below.
 func TestStatusClassification(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		status int
+		typ    string // "" sends a body naming no type
 		want   llm.ErrorKind
 	}{
-		{400, llm.KindFatal},
-		{401, llm.KindAuth},
-		{403, llm.KindAuth},
-		{404, llm.KindFatal},
-		{408, llm.KindTimeout},
-		{429, llm.KindRateLimit},
-		{500, llm.KindServer},
-		{529, llm.KindServer},
+		{400, "invalid_request_error", llm.KindFatal},
+		{401, "authentication_error", llm.KindAuth},
+		{402, "billing_error", llm.KindRateLimit},
+		{403, "permission_error", llm.KindAuth},
+		{404, "not_found_error", llm.KindFatal},
+		{413, "request_too_large", llm.KindFatal},
+		{429, "rate_limit_error", llm.KindRateLimit},
+		{500, "api_error", llm.KindServer},
+		{504, "timeout_error", llm.KindTimeout},
+		{529, "overloaded_error", llm.KindServer},
+
+		{400, "", llm.KindFatal},
+		{401, "", llm.KindAuth},
+		{408, "", llm.KindTimeout},
+		{429, "", llm.KindRateLimit},
+		{503, "", llm.KindServer},
 	} {
-		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+		t.Run(fmt.Sprint(tc.status, "/", tc.typ), func(t *testing.T) {
 			t.Parallel()
 			_, url := serve(t, func(w http.ResponseWriter, _ int) {
-				writeJSON(w, tc.status, apiError("api_error"))
+				body := apiError(tc.typ)
+				if tc.typ == "" {
+					body = `<html>bad gateway</html>`
+				}
+				writeJSON(w, tc.status, body)
 			})
 			p := newProvider(t, url, nil)
 			_, err := p.Complete(context.Background(), userTurn("hi"))
@@ -1418,5 +1437,264 @@ func TestAUserMessageAfterToolResultsJoinsTheirTurnAfterThem(t *testing.T) {
 	}
 	if note := blocks[2].(map[string]any); note["type"] != "text" || note["text"] != "a note from the founder" {
 		t.Errorf("the note is %v, want it last, as text", note)
+	}
+}
+
+// --- streaming ---------------------------------------------------------
+
+// sseEvent is one server-sent event of a Messages stream. The SDK dispatches
+// on the `event:` line, so the name matters as much as the data.
+type sseEvent struct{ name, data string }
+
+// writeStream answers a request as a Messages stream, flushing each event so
+// the client sees them as separate arrivals rather than one buffered body.
+func writeStream(w http.ResponseWriter, events ...sseEvent) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	for _, e := range events {
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, e.data)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+func streamStart() sseEvent {
+	return sseEvent{"message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message",` +
+		`"role":"assistant","model":"claude-test","content":[],"stop_reason":null,` +
+		`"usage":{"input_tokens":10,"output_tokens":1}}}`}
+}
+
+// textBlock is a text content block at index, written in parts.
+func textBlock(index int, parts ...string) []sseEvent {
+	out := []sseEvent{{"content_block_start", fmt.Sprintf(
+		`{"type":"content_block_start","index":%d,"content_block":{"type":"text","text":""}}`, index)}}
+	for _, part := range parts {
+		out = append(out, sseEvent{"content_block_delta", fmt.Sprintf(
+			`{"type":"content_block_delta","index":%d,"delta":{"type":"text_delta","text":%q}}`, index, part)})
+	}
+	return append(out, sseEvent{"content_block_stop", fmt.Sprintf(
+		`{"type":"content_block_stop","index":%d}`, index)})
+}
+
+func streamEnd(stop string) []sseEvent {
+	return []sseEvent{
+		{"message_delta", fmt.Sprintf(
+			`{"type":"message_delta","delta":{"stop_reason":%q},"usage":{"output_tokens":5}}`, stop)},
+		{"message_stop", `{"type":"message_stop"}`},
+	}
+}
+
+// streamError is the `error` event the API sends when a response that has
+// already begun fails — after the 200, so the type in its body is the only
+// thing that says what went wrong.
+func streamError(kind string) sseEvent { return sseEvent{"error", apiError(kind)} }
+
+// streamOf joins events and event lists in order.
+func streamOf(parts ...any) []sseEvent {
+	var out []sseEvent
+	for _, part := range parts {
+		switch v := part.(type) {
+		case sseEvent:
+			out = append(out, v)
+		case []sseEvent:
+			out = append(out, v...)
+		}
+	}
+	return out
+}
+
+// streamingTurn is userTurn asking to be streamed, recording every delta.
+func streamingTurn(text string, got *[]llm.Delta) llm.Request {
+	req := userTurn(text)
+	req.OnDelta = func(d llm.Delta) { *got = append(*got, d) }
+	return req
+}
+
+// A STREAMED ROUND IS SHOWN AS IT IS WRITTEN AND ANSWERS AS A UNARY ONE DOES.
+// Text and thinking are forwarded fragment by fragment; a half-written JSON
+// argument and a signature are not (neither is readable); and the completion
+// is the accumulated message — signature, tool arguments and usage included —
+// because one interpretation of a response is all [Provider.completion] has.
+func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeStream(w, streamOf(
+			streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"thinking","thinking":"","signature":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"thinking_delta","thinking":"Weighing it."}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"signature_delta","signature":"sig-1"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			textBlock(1, "Hel", "lo"),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":2,` +
+				`"content_block":{"type":"tool_use","id":"tu_1","name":"lookup","input":{}}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"input_json_delta","partial_json":"\"x\"}"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":2}`},
+			streamEnd("tool_use"),
+		)...)
+	})
+	p := newProvider(t, url, nil)
+	var got []llm.Delta
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if stream := api.seen()[0].body["stream"]; stream != true {
+		t.Fatalf("stream = %v, want the request to ask for a stream", stream)
+	}
+	want := []llm.Delta{{Reasoning: "Weighing it."}, {Content: "Hel"}, {Content: "lo"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("deltas = %+v, want %+v — each readable fragment as it arrived, nothing else", got, want)
+	}
+	if out.Content != "Hello" || out.ReasoningContent != "Weighing it." {
+		t.Fatalf("content %q / reasoning %q, want the assembled message", out.Content, out.ReasoningContent)
+	}
+	if len(out.ThinkingBlocks) != 1 || out.ThinkingBlocks[0].Signature != "sig-1" {
+		t.Fatalf("thinking blocks = %+v, want the streamed signature kept for the next round", out.ThinkingBlocks)
+	}
+	if len(out.ToolCalls) != 1 || out.ToolCalls[0].Arguments["q"] != "x" {
+		t.Fatalf("tool calls = %+v, want the argument assembled from its fragments", out.ToolCalls)
+	}
+	if out.InputTokens != 10 || out.OutputTokens != 5 || out.FinishReason != "tool_use" {
+		t.Fatalf("tokens %d/%d, stop %q", out.InputTokens, out.OutputTokens, out.FinishReason)
+	}
+}
+
+// AN ENDPOINT THAT ANSWERS A STREAMING REQUEST WITHOUT STREAMING STILL ANSWERS,
+// on the same key, and is never asked to stream again. "Anthropic-compatible"
+// has real variance — a local shim or a proxy may serve the unary route only —
+// and failing a phase over that would regress every such deployment.
+func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("Hello")) })
+	p := newProvider(t, url, nil)
+	var got []llm.Delta
+	req := streamingTurn("hi", &got)
+	out, err := p.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.Content != "Hello" {
+		t.Fatalf("content = %q, want the unary answer", out.Content)
+	}
+	seen := api.seen()
+	if len(seen) != 2 || seen[0].body["stream"] != true || seen[1].body["stream"] != nil {
+		t.Fatalf("attempts = %d, want one streaming ask and one unary retry", len(seen))
+	}
+	if seen[1].apiKey != "k1" {
+		t.Fatalf("the unary retry went out on %q, want the same key — a capability is not a key failure", seen[1].apiKey)
+	}
+	for _, s := range p.Pool().Stats() {
+		if s.Cooling != 0 {
+			t.Fatal("a missing capability benched the credential")
+		}
+	}
+
+	// LATCHED: discovered once per process, never re-probed.
+	if _, err := p.Complete(context.Background(), req); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	seen = api.seen()
+	if len(seen) != 3 || seen[2].body["stream"] != nil {
+		t.Fatalf("the second call made %d requests (stream %v), want one unary request",
+			len(seen)-2, seen[len(seen)-1].body["stream"])
+	}
+}
+
+// A ROTATION IS A RESTART, and a RATE LIMIT INSIDE A STREAM IS A RATE LIMIT.
+// The first key streams half an answer and the API then ends the response
+// with a rate_limit_error — after the 200, so only the body's type says so.
+// Read by its status that is fatal and the call dies with half an answer;
+// read by its type the key is benched, the next key answers, and the consumer
+// is told the first half was abandoned rather than shown two halves as one.
+func TestARateLimitInsideAStreamRotatesAndRestarts(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeStream(w, streamOf(streamStart(),
+				sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+					`"content_block":{"type":"text","text":""}}`},
+				sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+					`"delta":{"type":"text_delta","text":"Hel"}}`},
+				streamError("rate_limit_error"))...)
+			return
+		}
+		writeStream(w, streamOf(streamStart(), textBlock(0, "Hello"), streamEnd("end_turn"))...)
+	})
+	p := newProvider(t, url, func(c *Config) { c.APIKeys = []string{"k1", "k2"} })
+	var got []llm.Delta
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.Content != "Hello" {
+		t.Fatalf("content = %q, want the second key's whole answer, not the halves joined", out.Content)
+	}
+	want := []llm.Delta{{Content: "Hel"}, {Restart: true, Model: "claude-test"}, {Content: "Hello"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("deltas = %+v, want %+v", got, want)
+	}
+	if seen := api.seen(); len(seen) != 2 || seen[0].apiKey != "k1" || seen[1].apiKey != "k2" {
+		t.Fatalf("attempts = %d, want k1 then k2", len(seen))
+	}
+	if stats := p.Pool().Stats(); stats[0].Cooling == 0 || stats[1].Cooling != 0 {
+		t.Fatalf("pool = %+v, want only the rate-limited key benched", stats)
+	}
+}
+
+// AN OVERLOAD INSIDE A STREAM IS THE SERVER'S, not a fatal refusal of the
+// request: the chain may try its next model, and no key is benched for a
+// capacity blip. Before the type was read this was a 200 and therefore fatal.
+// And what streamed before the failure is NOT an answer — handing it back
+// would give the loop a truncated round as though the model had finished.
+func TestAnOverloadInsideAStreamIsAServerFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		typ  string
+		want llm.ErrorKind
+	}{
+		{"overloaded_error", llm.KindServer},
+		{"api_error", llm.KindServer},
+		{"timeout_error", llm.KindTimeout},
+		// A type this build does not know, on a response the API had
+		// already accepted: it cannot be a request the API refused.
+		{"some_future_error", llm.KindServer},
+		{"invalid_request_error", llm.KindFatal},
+	} {
+		t.Run(tc.typ, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeStream(w, streamOf(streamStart(),
+					sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+						`"content_block":{"type":"text","text":""}}`},
+					sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+						`"delta":{"type":"text_delta","text":"half an ans"}}`},
+					streamError(tc.typ))...)
+			})
+			p := newProvider(t, url, nil)
+			var got []llm.Delta
+			out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+			if out != nil {
+				t.Fatalf("a stream that failed mid-body answered %q", out.Content)
+			}
+			var classified *llm.Error
+			if !errors.As(err, &classified) {
+				t.Fatalf("err = %v, want a classified failure", err)
+			}
+			if classified.Kind != tc.want {
+				t.Fatalf("classified %s, want %s (status %d, err %v)", classified.Kind, tc.want, classified.Status, err)
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatal("a failure of the server benched the credential")
+				}
+			}
+		})
 	}
 }

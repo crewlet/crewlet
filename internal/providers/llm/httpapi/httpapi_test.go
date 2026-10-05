@@ -176,6 +176,41 @@ func TestFromStatusReadsTheHintOnlyForBenchingKinds(t *testing.T) {
 	}
 }
 
+// THE KIND IS THE CALLER'S, NOT THE STATUS'S. A failure inside a stream
+// carries the 200 the stream opened with, which [llm.KindForStatus] reads as
+// fatal; the backend that read the body's own error type has the better
+// answer, and it must survive here — hint included — rather than be
+// re-derived from a status that describes the start of the response.
+func TestFromKindKeepsTheKindItIsGiven(t *testing.T) {
+	t.Parallel()
+	h := header("Retry-After", "30")
+	for _, tc := range []struct {
+		kind llm.ErrorKind
+		hint time.Duration
+	}{
+		{llm.KindServer, 0},
+		{llm.KindTimeout, 0},
+		{llm.KindRateLimit, 30 * time.Second},
+		{llm.KindAuth, 30 * time.Second},
+		{llm.KindFatal, 0},
+	} {
+		t.Run(tc.kind.String(), func(t *testing.T) {
+			t.Parallel()
+			cause := errors.New("boom")
+			e := FromKind(cause, "anthropic", "claude", tc.kind, http.StatusOK, h)
+			if e.Kind != tc.kind {
+				t.Fatalf("kind = %s, want %s as given", e.Kind, tc.kind)
+			}
+			if e.Status != http.StatusOK || !errors.Is(e, cause) {
+				t.Fatalf("status %d / cause wrapped %v", e.Status, errors.Is(e, cause))
+			}
+			if e.RetryAfter != tc.hint {
+				t.Fatalf("RetryAfter = %v, want %v", e.RetryAfter, tc.hint)
+			}
+		})
+	}
+}
+
 // --- FromTransport -----------------------------------------------------
 
 type timeoutError struct{}

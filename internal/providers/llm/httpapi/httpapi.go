@@ -82,8 +82,21 @@ func NewHTTPClient() *http.Client {
 // read for a server-supplied cooldown, which the credential pool prefers over
 // its configured TTL.
 func FromStatus(err error, provider, model string, status int, h http.Header) *llm.Error {
+	return FromKind(err, provider, model, llm.KindForStatus(status), status, h)
+}
+
+// FromKind builds the contract's error for a failure whose kind the backend
+// has already decided from something more specific than the status — the
+// error TYPE a vendor names in the body. A failure that arrives INSIDE a
+// stream is the case that needs it: the response began as a 200, so the status
+// the SDK attaches to it says nothing about what went wrong, and only the body
+// does.
+//
+// The cooldown hint is read exactly as [FromStatus] reads it, because it is
+// the same question asked of the same headers.
+func FromKind(err error, provider, model string, kind llm.ErrorKind, status int, h http.Header) *llm.Error {
 	e := &llm.Error{
-		Kind:     llm.KindForStatus(status),
+		Kind:     kind,
 		Provider: provider,
 		Model:    model,
 		Status:   status,
