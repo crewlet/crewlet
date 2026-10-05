@@ -179,27 +179,27 @@ The block rides the **user** message for the executor, never its system prompt: 
 
 **Reads are marked, not merged with writes.** Tool *results* are deliberately not carried across rounds, so a read the next round needs must be re-run — telling it "do not repeat" a `jira_get_issue` would push it to invent the data instead. Each record carries the positively-known read names the delivery check resolves from [MCP annotations](tool-capabilities.md), reads render as `→ success (read)`, and the prompt permits re-running exactly those. Failed calls stay marked `→ error`: they did not take effect and may be retried. Only the reads the round actually CALLED are recorded, not the whole surface's annotation set: the row is persisted across a sandbox suspend, and carrying every read-only tool on a large MCP surface makes it grow with the catalogue rather than with what the round did.
 
-### What the ledger trims, and why
+### What the ledger budgets, and why
 
-One principle decides every budget: **elide payloads, never structure.**
+One principle decides every budget: **budget payloads, never structure — and rewrite a payload, never cut it.**
 
-A *payload* is a tool **argument** — a message body, page HTML, a diff. It is unbounded, gets re-authored next round, and can never answer "did this already fire", so carrying it whole only buries the two lines that can. *Structure* is everything else — the round's own account of what it set out to do, the draft under review, the reviewer's correction, the trigger, the reply that was sent — and it is carried **verbatim**: it is exactly what the next round must act on, and the ledger is its only carrier.
+A *payload* is a tool **argument** — a message body, page HTML, a diff — or a failed call's error document. It is unbounded, gets re-authored next round, and can never answer "did this already fire" on its own, so carrying it whole only buries the two lines that can. *Structure* is everything else — the round's own account of what it set out to do, the draft under review, the reviewer's correction, the trigger, the reply that was sent — and it is carried **verbatim**: it is exactly what the next round must act on, and the ledger is its only carrier.
 
-It used not to be. Six further limits sat beside the two below, cutting each of those at 400–2000 runes — the principle above applied to the half it excludes. A reviewer's correction trimmed mid-instruction loses the engine-critical part of the only carrier it has, and unlike a chat message or an issue comment there is no surface to go back and re-read: on the cross-turn ledger the cut was applied at **write** time, so the stored row was the only copy.
+It used not to be. Six further limits sat beside the ones below, cutting each of those at 400–2000 runes — the principle above applied to the half it excludes. A reviewer's correction trimmed mid-instruction loses the engine-critical part of the only carrier it has, and unlike a chat message or an issue comment there is no surface to go back and re-read: on the cross-turn ledger the cut was applied at **write** time, so the stored row was the only copy.
 
-What is left bounds arguments and the read-call list, and both say when they cut. Prompt caching keys on the system+tools prefix, which the ledger never touches, so a larger block costs little.
+**A payload past its budget is rewritten, not cut.** The budgets below were once where a payload was cut, and what survived was its opening — a message body's greeting, an error page's preamble — read by the next round as though it were the call. The ledger now only *names* the payloads past their budget; the runner has each one rewritten to fit by the seat's auxiliary model (`internal/compact`, on `llm_auxiliary`, charged to the seat's token windows like any auxiliary call) and marked `(condensed)`, so what survives is what the payload *said*. A rewrite is cached by its input, so the block re-rendered for the executor and again for the reviewer pays for each payload once per turn. Where no rewrite can be had, an argument or an error is shown by its **size and digest** — never a fragment of it — which still tells two identical calls from two different ones, and a round's own produced text is shown **whole**, because it is the draft the next round exists to revise.
 
 | Budget | Value | Anchored on |
 |---|---|---|
-| `ValueLimit` | 200 | A Confluence/GitHub URL with query params runs ~180 chars, so the whole discriminator survives while bodies are cut by an order of magnitude |
-| `BlobLimit` | 800 | ~12 identifier-shaped arguments — more than any real delivery tool takes |
-| `MaxReadCalls` | 12 | The recon a normal round does; only reads are ever dropped, and the line says how many |
+| `ValueLimit` | 200 | A Confluence/GitHub URL with query params runs ~180 chars, so an identifier is always carried as itself; only a body, a document or an error page is past it, and it is rewritten to about thirty words |
+| `MaxReadCalls` | 12 | The recon a normal round does; only reads are ever omitted — they are re-runnable by construction — and the line says how many |
+| `RenderedArtifactLimit` | 4000 | A full draft; past it a round's output is rewritten deliverable-first, reasoning compressed hardest |
 
-A prior round's **produced text** is kept whole in the record and elided at `RenderedArtifactLimit` (4000 runes) when *rendered* into the next round's block — from the TAIL, because `Work.Text` is that round's whole tool loop concatenated (thinking included) and its deliverable is at the end. The block accumulates one of those per `self_iterate` and is re-sent on every round of both phases that follow, so the product is what the bound answers.
+Whether a value is past its budget is judged in **characters**, so an identifier in a script whose characters are several bytes each — a channel name, a page title — is never handed to a model to paraphrase. There is no longer a budget on a call's serialised argument object as a whole: it existed to drop whole keys once every value had been *cut*, and with each value rewritten to its own budget a call's line is bounded by its argument count.
 
-A failed call's *result* is elided at `ValueLimit` too. It is tool output — authored outside the engine and unbounded, so a failed HTTP call would otherwise put a whole error document on one ledger line, re-sent on every round of every later phase. The full text is on the phase event that line summarises.
+A prior round's **produced text** is kept whole in the record and rewritten at `RenderedArtifactLimit` only when *rendered* into the next round's block — `Work.Text` is that round's whole tool loop concatenated (thinking included), and the block accumulates one of those per `self_iterate` and is re-sent on every round of both phases that follow, so the product is what the bound answers.
 
-Arguments use **per-value** elision, never a cap on the serialised blob. `json.Marshal` sorts map keys, so capping the object would drop whichever keys sort last — and the discriminating argument (`channel`, `key`, `page_id`) is usually the *shortest* one. A line that kept a 400-char message body but lost `channel` would look precise while hiding which of two deliveries actually fired. When even fully elided values exceed `BlobLimit`, the backstop drops **whole keys** — shortest-value-first, so identifiers survive — and appends `+N more` rather than cutting mid-serialisation. The same priority governs the read-line cap: only reads are ever omitted, never a write.
+The full text of every payload is on the phase event the ledger line summarises.
 
 **The ledger survives a sandbox suspend.** A detached `run_sandbox` ends the turn and its completion resumes it in another process, so the records are serialised into the pending run's `execute_state` (`internal/agent/execstate`) and rehydrated onto the resumed turn. Without that round-trip, a turn that self-iterated before suspending would forget those rounds and re-fire their deliveries after the resume. That blob carries an explicit version and a permanent reader for the previous one, because a parked run can outlive the build that suspended it and nothing rewrites a parked row.
 
@@ -226,8 +226,8 @@ Everything above is scoped to a single turn. The cross-turn counterpart —
 what this seat already said in *this Slack thread / issue / pull request*,
 carried into that conversation's next turn — is
 [Conversation Sessions](conversation-sessions.md). It inherits this section's
-doctrine wholesale (elide arguments never structure, writes never dropped,
-reads marked so they are re-run rather than trusted) and rides the same user
+doctrine wholesale (budget payloads never structure, rewrite rather than cut,
+writes never dropped, reads marked so they are re-run rather than trusted) and rides the same user
 message, immediately above `## Task`. The executor receives it; the reviewer does
 not, because the reviewer judges *this* turn's work and the ledger above already
 carries its duplicate-delivery rule.

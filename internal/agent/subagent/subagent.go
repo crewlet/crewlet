@@ -57,12 +57,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -120,14 +120,6 @@ const (
 // [toolloop.SpendOutcome] carries the scope, so the honest answer is simply a
 // different scope name.
 const ScopeSubagent = "subagent"
-
-// errorLimit caps the failure text carried back to the model, in runes.
-//
-// A panic's message can arrive with a stack behind it and a provider error can
-// carry a whole response body; either would blow past the tool result the
-// parent reads. 500 runes holds two or three sentences — enough to say what
-// stopped, never enough to bury the sibling results it is rendered next to.
-const errorLimit = 500
 
 // controlDenylist is the first-party engine-control surface a sub-agent never
 // gets, whatever the parent names.
@@ -305,6 +297,12 @@ type Config struct {
 	// granted, which is the right shape for a caller that does not want a
 	// worker widening itself at all.
 	Discovery func(surface func() *tools.Surface) []tools.Callable
+
+	// Compact is the PARENT seat's compactor, which rewrites a dependency's
+	// answer that will not fit its share of a dependent task's prompt — see
+	// [dependencyBudget]. The zero value rewrites nothing, and every answer
+	// is then carried whole.
+	Compact compact.Bound
 
 	// Workers are the templates this seat may delegate to, already
 	// narrowed to what its role can see. A task naming one that is not
@@ -561,7 +559,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 				// away work that is already in flight.
 				return Result{
 					ID: r.ID, Worker: r.Worker, Status: StatusFailed,
-					Error: ledger.Elide(err.Error(), errorLimit),
+					Error: err.Error(),
 				}
 			}
 			// THE CLOCK STARTS WHERE THE CAP DOES, and the two
@@ -641,7 +639,10 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		}
 		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
 		res.Status = StatusFailed
-		res.Error = ledger.Elide(fmt.Sprintf("worker panicked: %v", r), errorLimit)
+		// THE MESSAGE WHOLE, the stack in the log line above: the stack
+		// is the operator's, and the message is what the parent needs to
+		// decide whether to retry the task.
+		res.Error = fmt.Sprintf("worker panicked: %v", r)
 	}()
 
 	grant := Permit(cfg.Universe, cfg.parentNames(), task.tools)
@@ -723,7 +724,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		Submits:        submit != nil,
 		Skills:         cfg.Skills,
 	})
-	res.UserPrompt = withDependencies(task.Prompt, deps)
+	res.UserPrompt = withDependencies(ctx, cfg.Compact, task.Prompt, deps)
 
 	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
@@ -847,7 +848,7 @@ func stopReason(ctx context.Context) (kind, reason string) {
 		// The parent turn was torn down. NOT a timeout: nothing exceeded a
 		// cap, and an executor told "timed out" would helpfully retry with
 		// a smaller task against an engine that is shutting down.
-		return KindCancelled, ledger.Elide(cause.Error(), errorLimit)
+		return KindCancelled, cause.Error()
 	}
 }
 

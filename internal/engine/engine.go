@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -238,8 +239,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 			ExtensionStep:   te.ExtensionRoundStep,
 			ExtensionOn:     te.ExtensionEnabled.Or(true),
 		},
-		Budget: in.Budget,
-		Judge:  in.Judge,
+		Budget:  in.Budget,
+		Judge:   in.Judge,
+		Compact: in.Compact.For(role),
 		// Threaded from the caller rather than resolved here, because
 		// whether this node holds the seat is a fact about its leases and
 		// not about the configuration — the same reason reg is a
@@ -300,6 +302,11 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 type RunnerInput struct {
 	Task         string
 	Conversation string
+
+	// Compact is the epoch's compactor; the runner binds it to the seat.
+	// Nil rewrites nothing, and every reader of it then carries a payload
+	// whole or names it by its size — never a cut.
+	Compact *compact.Compactor
 
 	// Skills is the company's tool-skill registry, threaded per turn like
 	// everything else the runner reads: the registry itself outlives an

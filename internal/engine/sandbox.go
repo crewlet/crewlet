@@ -572,7 +572,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	box := steerBox(agentRun)
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
-			Task: resumeTask(in),
+			Task:    resumeTask(in),
+			Compact: e.compactorFor(company),
 			// THE RUNNER NEEDS IT TOO, not just the loop below. This
 			// field reaches runner.Config.Reply, which is what
 			// submit_work's own citation check reads — so a resumed turn

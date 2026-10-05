@@ -103,14 +103,14 @@ history and becomes a standing order the reviewer never issued, aimed at a
 round that already came and went. Nothing is lost by dropping it: the calls
 that failed are in the tool lines and the verdict is in **Turn ended**.
 
-Every field is written **verbatim**, apart from the tool *arguments*, which are
-elided against the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)
-on the *elide payloads, never structure* rule. Nothing else is cut at write
-time, and that is deliberate: this row is the store's only record of the turn,
-so a trigger trimmed on the way in is not a shortened entry, it is the only
-copy. How much of it a later turn is *shown* is a read-side decision — see
-`ledger.HistoryOptions`, which drops whole entries oldest-first and says how
-many — and answering that display question at write time destroyed the data.
+Every field is written **verbatim**, apart from a tool *argument* or a failed
+call's error past the [ledger budgets](turn-engine.md#what-the-ledger-budgets-and-why),
+which is **rewritten** to fit by the seat's auxiliary model before the row is
+written — never cut. Nothing else is touched at write time, and that is
+deliberate: this row is the store's only record of the turn, so a trigger
+trimmed on the way in is not a shortened entry, it is the only copy. How much
+of it a later turn is *shown* is a read-side decision — see Cost below — and
+answering that display question at write time destroyed the data.
 
 ### Reads stay marked, never merged
 
@@ -227,11 +227,17 @@ things bound that product, and which one applies where is the whole design:
   at all. A chat DM is one conversation for the whole channel, so its ledger
   never stops receiving entries.
 - **`ledger.InjectedMaxChars` (24 000 bytes), at render time** — how much
-  reaches one prompt. It drops **whole entries**, oldest first, and says how
-  many it dropped; the newest always survives however long it is. An entry
-  carries the seat's own reply, which is unbounded — a turn that produced a
-  document puts that document in the row — so without this a busy conversation
+  reaches one prompt. Past it the **newest entries render whole** in three
+  quarters of the room, and the older ones are **condensed** by the seat's
+  auxiliary model into one account in the last quarter, under a heading that
+  says how many turns it stands for and that it is a rewrite. Only where no
+  rewrite can be had are the older entries left out — and the block then says
+  how many. The newest always survives however long it is. An entry carries
+  the seat's own reply, which is unbounded — a turn that produced a document
+  puts that document in the row — so without this a busy conversation
   eventually exceeds the model's context and the turn cannot run at all.
+  Dropping was the old behaviour, and it told a seat on a long thread that it
+  had delivered nothing in the turns it could no longer see.
 
 Never a cut *inside* an entry, and never at write time. The stored row is the
 only copy of that turn, and a half-recorded reply reads as the whole of what
@@ -295,9 +301,10 @@ channel rather than a thread, so its ledger never stops receiving entries),
 and the [maintenance worker](scaling.md) sweeps past `retention_days`.
 
 Every field of a recorded entry is stored **verbatim** apart from the tool
-arguments and results, which the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)
-elide. This row is the store's only record of the turn, so a field cut at write
-time is not a shortened rendering — it is the only copy. Bounding what a
+arguments and errors past the [ledger budgets](turn-engine.md#what-the-ledger-budgets-and-why),
+which are rewritten to fit — never cut. This row is the store's only record of
+the turn, so a field cut at write time would not be a shortened rendering — it
+would be the only copy. Bounding what a
 *prompt* shows is a separate decision, made at render time; see Cost above.
 
 **Failure never stops a turn.** A write that fails is swallowed — it happens on

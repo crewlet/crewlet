@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
-	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -558,6 +559,15 @@ type Engine struct {
 	// every seat and re-run a pass for agents already marked. It is keyed
 	// by chain hash, so a live restructure still re-onboards by design.
 	onboarded *runner.Latch
+
+	// rewrites is the cache every compaction this process makes is kept in
+	// — see [Engine.compactorFor].
+	//
+	// On the engine rather than on an epoch for the latch's reason: a
+	// rewrite is a function of the text it was made from, so it stays
+	// right across an apply that did not touch it, and a turn running
+	// across that apply re-renders its ledger against the same payloads.
+	rewrites *compact.Cache
 }
 
 // Options configure an engine.
@@ -800,6 +810,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		profile:  opts.Bootstrap.Profile(nodeID),
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
+		rewrites:            compact.NewCache(),
 		steers:              newSteerDesk(),
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
@@ -1334,6 +1345,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d.Conversation = func() config.ConversationSession {
 			return e.Company().Config.TurnEngine.ConversationSession
 		}
+	}
+	if d.Rewriter == nil {
+		d.Rewriter = func(handle string) ledgerfit.Fitter { return e.seatCompactor(e.Company(), handle) }
 	}
 	if d.Park == nil {
 		d.Park = e.park
@@ -1985,21 +1999,20 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	box := steerBox(agentRun)
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
+		Compact: e.compactorFor(company),
 		Context: blocks,
 		Skills:  e.skills,
 		Reply:   reply,
 		// BOUNDED AT RENDER, never at write. The stored row is the only copy
 		// of the turn; what a prompt shows is a display decision, and this
-		// one drops whole entries oldest-first and says how many.
-		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{
-			MaxChars: ledger.InjectedMaxChars,
-		}),
-		Publisher: e.backends.Queue,
-		Turn:      turnIdentity,
-		AgentRun:  agentRun,
-		Steer:     box,
-		Markers:   e.markers(),
-		Latch:     e.onboarded,
+		// one keeps the newest entries whole and condenses the rest.
+		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History),
+		Publisher:    e.backends.Queue,
+		Turn:         turnIdentity,
+		AgentRun:     agentRun,
+		Steer:        box,
+		Markers:      e.markers(),
+		Latch:        e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),

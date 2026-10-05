@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 )
@@ -336,6 +335,13 @@ func (r Result) Answer() string {
 
 // classify turns a finished loop's error into a status and a message.
 //
+// THE MESSAGE IS WHOLE. It used to be cut to five hundred runes "so a provider
+// error carrying a whole response body would not bury the sibling results" —
+// but the parent reads this to decide whether to retry, and the end of a
+// wrapped error is where its cause is. What bounds it is where it is made: a
+// provider's error is the vendor's error envelope, not its response body, and
+// every vendor client reads a refusal through a bounded read.
+//
 // The CAUSE decides, never the error's shape: a provider's own HTTP client
 // returns DeadlineExceeded for its own reasons, and reporting somebody
 // else's timeout as the worker's cap sends an operator to raise a limit that
@@ -353,10 +359,10 @@ func classify(kind, reason string, err error) (Status, string) {
 		if errors.As(err, &be) && be.Scope == ScopeSubagent {
 			// The call's own slice, not the seat's cap. Its own status so
 			// nobody goes looking for a company budget that never ran out.
-			return StatusBudget, ledger.Elide(err.Error(), errorLimit)
+			return StatusBudget, err.Error()
 		}
-		return StatusFailed, ledger.Elide(err.Error(), errorLimit)
+		return StatusFailed, err.Error()
 	default:
-		return StatusFailed, ledger.Elide(err.Error(), errorLimit)
+		return StatusFailed, err.Error()
 	}
 }

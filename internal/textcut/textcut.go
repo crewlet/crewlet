@@ -17,34 +17,16 @@
 // once the input stops being ASCII, which in a company's traffic is a matter
 // of when rather than whether.
 //
-// # The other shared cut, and why it is not this one
-//
-// [github.com/crewlet/crewlet/internal/agent/ledger.Elide] is also an exported,
-// marked, rune-safe head cut, and its doc makes this package's own argument:
-// "Two trimming functions would eventually disagree about where a limit falls
-// and whether the cut is marked." They are still separate on purpose, because
-// they disagree about the two things that matter most at a call site:
-//
-//   - ITS BUDGET IS RUNES, this one's is BYTES. A ledger budget is a character
-//     count an operator configured; a payload cap and a log field are bytes.
-//   - A LIMIT OF 0 MEANS UNBOUNDED THERE and empty HERE. Review's
-//     single-iteration evidence log depends on 0 leaving the text verbatim,
-//     and a payload cap of 0 that returned the whole payload would be the
-//     opposite of a cap.
-//
-// Folding them together would mean one of those two contracts changing
-// silently under callers that rely on it, so the honest answer is two
-// functions whose docs point at each other rather than one that quietly
-// means different things in different packages.
-//
 // # Cutting is the last resort, not the first
 //
 // Most of what this package once shortened is no longer shortened at all, and
 // that is the better fix wherever it is available: content a turn reasons over
-// is passed whole, and a value with a vendor limit is REFUSED with a message
-// naming the field rather than silently cut to fit. What is left here is the
-// cases where cutting is genuinely right — a diagnostic, a log field, a prompt
-// budget — where the alternative to a bounded string is an unbounded one.
+// is passed whole, a value with a vendor limit is REFUSED with a message
+// naming the field rather than silently cut to fit, and text that genuinely
+// has to fit a budget a model reads is REWRITTEN to fit by
+// [github.com/crewlet/crewlet/internal/compact] — never cut by this package.
+// What is left here is the cases where no reader acts on the text as content:
+// a diagnostic, a transport ceiling, an identifier with a length limit.
 package textcut
 
 import "unicode/utf8"

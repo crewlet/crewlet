@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -165,6 +166,18 @@ type Dispatcher struct {
 	// that cannot say which seat it is: the panic is still logged, the
 	// trigger still recorded and the delivery still settled.
 	Identify func(handle string) (role, agentID string)
+
+	// Rewriter is the seat's compactor, which rewrites a tool-call payload
+	// past the ledger's budget before the conversation entry is written —
+	// see [ledger.SessionInput.Fitted].
+	//
+	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s
+	// reason: the auxiliary chain is the company's, and a live apply
+	// replaces it. Nil records every payload whole, which is the honest
+	// answer for a dispatcher with no model to rewrite with: the row is the
+	// store's only record of the turn, and a fragment written into it is a
+	// fragment for ever.
+	Rewriter func(handle string) ledgerfit.Fitter
 
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
@@ -1410,6 +1423,15 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 			// empty string standing in for a real account.
 			in.BlockedOn = w.Evidence
 		}
+	}
+	if d.Rewriter != nil {
+		// REWRITTEN BEFORE THE WRITE, never cut: the row is the only copy,
+		// and what a later turn reads of a payload past the budget is what
+		// the seat's auxiliary model made of it. Bounded by the turn's own
+		// context rather than a detached one, because the turn's work is
+		// done and an entry written a moment later with the payload whole
+		// is better than a dispatcher held behind a slow provider.
+		in.Fitted = ledgerfit.Fit(ctx, d.Rewriter(handle), ledger.SessionPieces(in))
 	}
 	entry := ledger.BuildSession(in)
 	if res.LastReview != nil {

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -210,4 +212,63 @@ func (e *Engine) meteredModelsFor(c *Company) learningModels {
 		inner:  c.Models,
 		charge: func(seat *org.Role) spendRecorder { return e.spendFor(c, seatHandle(seat)) },
 	}
+}
+
+// compactorFor is the compactor a turn of this epoch rewrites over-budget
+// text with: the seat's own auxiliary chain through the metered seam every
+// learning worker uses — so a rewrite is charged to the seat's token windows
+// like any other auxiliary call — over the engine's one cache.
+//
+// Built per call rather than held on the epoch, because it is two pointers:
+// what makes it worth keeping is the cache, and that is the engine's.
+func (e *Engine) compactorFor(c *Company) *compact.Compactor {
+	models := e.meteredModelsFor(c)
+	if models == nil {
+		return nil
+	}
+	return compact.New(models, e.rewrites)
+}
+
+// seatCompactor is the epoch's compactor bound to one seat — the zero
+// [compact.Bound], which rewrites nothing, where the handle names no agent
+// seat or the company has no models.
+func (e *Engine) seatCompactor(c *Company, handle string) compact.Bound {
+	if c == nil || c.Org == nil {
+		return compact.Bound{}
+	}
+	return e.compactorFor(c).For(c.Org.AgentSeatByHandle(handle))
+}
+
+// conversationBlock is the prior turns of this conversation as a turn is
+// given them: the newest whole, and the older ones that will not fit
+// [ledger.InjectedMaxChars] condensed by the seat's auxiliary model into one
+// account — or, where none can be had, left out and counted.
+//
+// A REWRITE WHERE A DROP WAS. The block used to leave its oldest entries out,
+// and the deliveries they recorded with them, so a seat on a long thread was
+// told it had said nothing it could not see. The rewrite keeps them, in fewer
+// words; the drop is now the fallback, and still says so.
+func (e *Engine) conversationBlock(ctx context.Context, c *Company, handle string,
+	history []ledger.Session,
+) string {
+	opts := ledger.HistoryOptions{MaxChars: ledger.InjectedMaxChars}
+	if overflow, _ := ledger.SplitHistory(history, opts.MaxChars); len(overflow) > 0 {
+		res, err := e.seatCompactor(c, handle).Fit(ctx, compact.KindConversation,
+			ledger.RenderSessions(overflow), opts.MaxChars/ledger.EarlierShare)
+		switch {
+		case err == nil && !res.Compacted:
+			// THE OLDER TURNS FIT THEIR SHARE AS THEY ARE — the newest
+			// entry alone was what pushed the block over — so every entry
+			// renders verbatim. Labelling them condensed would be a lie
+			// about text nobody rewrote.
+			opts.MaxChars = 0
+		case err == nil:
+			opts.Earlier = res.Text
+		default:
+			log.WarnContext(ctx, "conversation_history_not_condensed", "seat", handle,
+				"turns", len(overflow), "error", err.Error(),
+				"detail", "the older turns are left out of this turn's block, and it says how many")
+		}
+	}
+	return ledger.RenderHistory(history, opts)
 }

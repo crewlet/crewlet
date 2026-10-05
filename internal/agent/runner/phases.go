@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -68,6 +70,14 @@ type Config struct {
 	// Judge decides round-cap extensions. Nil means every exhaustion goes
 	// straight to the rescue path.
 	Judge extension.Judge
+
+	// Compact rewrites a payload past its budget with the seat's own
+	// auxiliary model: a prior round's argument values, failed calls'
+	// errors and produced text, as the prior-work ledger renders them. The
+	// zero value rewrites nothing, and the ledger then renders a draft
+	// whole and omits a payload by its size — never a cut. See
+	// internal/agent/ledger/ledgerfit for which is which.
+	Compact compact.Bound
 
 	// Subagent is what this turn needs to spawn sub-agents: the company's
 	// caps and a way to read the seat's remaining allowance. Nil leaves
@@ -446,10 +456,23 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
 	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
-		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
+		PriorWork:           r.priorWork(ctx, history),
 		ConversationHistory: r.cfg.Conversation,
 	})
 	return system, user
+}
+
+// priorWork renders the turn's earlier rounds, every payload past its budget
+// rewritten by the seat's auxiliary model first.
+//
+// Rewritten here, at render, and not when the round closed: the record keeps
+// every payload whole, so the bound is a property of what this prompt can
+// carry rather than of what happened. The compactor caches by content, so the
+// block re-rendered for the executor and again for the reviewer pays for each
+// payload once.
+func (r *Runner) priorWork(ctx context.Context, history []ledger.Iteration) string {
+	fitted := ledgerfit.Fit(ctx, r.cfg.Compact, ledger.IterationPieces(history, r.cfg.SkipNames))
+	return ledger.RenderIterations(history, r.cfg.SkipNames, fitted)
 }
 
 // work is one executor pass, assembled for reporting.
@@ -551,7 +574,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
 		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
-		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
+		EarlierIterations: r.priorWork(ctx, history),
 		// THE SKILLS AN OPERATOR SCOPED TO REVIEW, which the prompt, the
 		// parser and the docs all supported and nothing ever passed: a
 		// skill authored with `phases: [review]` reached no reviewer.

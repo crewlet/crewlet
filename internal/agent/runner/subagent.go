@@ -107,6 +107,7 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 			return s.Active()
 		},
 		Discovery: DiscoveryTools,
+		Compact:   r.cfg.Compact,
 		Skills:    offer.Catalogue(),
 		Budget:    r.cfg.Budget,
 		// The parent's OWN fence, not a second one: a worker has no grant

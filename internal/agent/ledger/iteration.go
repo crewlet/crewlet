@@ -35,8 +35,8 @@ type Call struct {
 // FormatOptions controls how a run of calls renders.
 //
 // The zero value is the VERBATIM contract Review's single-iteration evidence
-// log depends on: no elision, no read cap, nothing dropped. The cross-round
-// and cross-turn ledgers opt into the budgets explicitly.
+// log depends on: nothing fitted, no read cap, nothing dropped. The
+// cross-round and cross-turn ledgers opt into the budgets explicitly.
 type FormatOptions struct {
 	// Skip names never render. Meta-tools (activate_tool, list_..._tools)
 	// are never a delivery, so in a record whose only job is "what already
@@ -47,17 +47,45 @@ type FormatOptions struct {
 	// gate resolved them. Positively is the operative word — see phase.Delivery.
 	Reads []string
 
-	ValueLimit   int
-	BlobLimit    int
+	// ValueLimit is the budget past which an argument value or a failed
+	// call's error is a [Piece] the caller fits; 0 renders every one whole.
+	ValueLimit int
+
+	// MaxReadCalls caps the READ lines rendered; 0 renders every one.
 	MaxReadCalls int
+
+	// Fitted is the caller's rewrite of each piece [CallPieces] named.
+	// A piece missing from it renders whole.
+	Fitted Fitted
 }
 
 // Format is the budgeted form the cross-round and cross-turn ledgers use.
+// The caller fits the pieces it names and sets [FormatOptions.Fitted].
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
 		Skip: skip, Reads: reads,
-		ValueLimit: ValueLimit, BlobLimit: BlobLimit, MaxReadCalls: MaxReadCalls,
+		ValueLimit: ValueLimit, MaxReadCalls: MaxReadCalls,
 	}
+}
+
+// visible is the calls a render shows: everything but the skipped names, and
+// the reads past MaxReadCalls.
+func visible(calls []Call, opts FormatOptions) []Call {
+	out := make([]Call, 0, len(calls))
+	reads := 0
+	for _, call := range calls {
+		if slices.Contains(opts.Skip, call.Name) {
+			continue
+		}
+		if slices.Contains(opts.Reads, call.Name) {
+			if opts.MaxReadCalls > 0 && reads >= opts.MaxReadCalls {
+				continue
+			}
+			reads++
+		}
+		out = append(out, call)
+	}
+	return out
 }
 
 // FormatCalls renders an evidence-only summary of tool calls.
@@ -70,37 +98,37 @@ func Format(skip, reads []string) FormatOptions {
 // absent section. The difference matters: a missing section reads as a section
 // the engine forgot to fill in.
 func FormatCalls(calls []Call, opts FormatOptions) string {
+	shown := visible(calls, opts)
 	var lines []string
-	readsRendered, readsDropped := 0, 0
-	for _, call := range calls {
-		if slices.Contains(opts.Skip, call.Name) {
-			continue
-		}
+	readsShown := 0
+	for _, call := range shown {
 		isRead := slices.Contains(opts.Reads, call.Name)
-		if isRead && opts.MaxReadCalls > 0 && readsRendered >= opts.MaxReadCalls {
-			readsDropped++
-			continue
-		}
 		outcome := "success"
 		if call.Failed {
-			// ELIDED, like the arguments beside it. Call.Result is the
+			// FITTED, like the arguments beside it. Call.Result is the
 			// tool's own output, which is a PAYLOAD by this package's
 			// definition — authored outside the engine and unbounded, so a
 			// failed HTTP call can put a whole error document on one
 			// ledger line, re-sent on every round of every later phase.
-			// The cut is marked, and the full text is on the phase event
-			// this line summarises.
-			outcome = "error: " + elide(call.Result, opts.ValueLimit)
+			// The full text is on the phase event this line summarises.
+			text := call.Result
+			if over(text, opts.ValueLimit) {
+				text = opts.Fitted.text(Piece{Kind: PieceError, Text: text, Limit: opts.ValueLimit})
+			}
+			outcome = "error: " + text
 		}
 		marker := ""
 		if isRead {
 			marker = " (read)"
-			readsRendered++
+			readsShown++
 		}
 		lines = append(lines, "- "+call.Name+"("+renderArgs(call.Args, opts)+") → "+outcome+marker)
 	}
-	if readsDropped > 0 {
-		lines = append(lines, "- (+"+itoa(readsDropped)+" further read call(s) omitted)")
+	if dropped := readsIn(calls, opts) - readsShown; dropped > 0 {
+		// Only READS are ever omitted, and they are re-runnable by
+		// construction — the prompt permits re-running exactly those. A
+		// write is the whole reason the ledger exists and always renders.
+		lines = append(lines, "- (+"+itoa(dropped)+" further read call(s) omitted)")
 	}
 	if len(lines) == 0 {
 		return "(none)"
@@ -108,18 +136,15 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderArgs(args map[string]any, opts FormatOptions) string {
-	if len(args) == 0 {
-		return ""
+// readsIn counts the read calls a render would show without a cap.
+func readsIn(calls []Call, opts FormatOptions) int {
+	n := 0
+	for _, call := range calls {
+		if !slices.Contains(opts.Skip, call.Name) && slices.Contains(opts.Reads, call.Name) {
+			n++
+		}
 	}
-	if opts.ValueLimit <= 0 {
-		return marshal(args)
-	}
-	elided := make(map[string]any, len(args))
-	for k, v := range args {
-		elided[k] = elideValue(v, opts.ValueLimit)
-	}
-	return fitArguments(elided, opts.BlobLimit)
+	return n
 }
 
 // Iteration is one completed executor → reviewer round of a single turn.
@@ -175,7 +200,10 @@ type Iteration struct {
 // done, do not repeat" while the reviewer frames it as duplicate-delivery
 // evidence, so engine prose stays in the prompt package and this stays a
 // renderer.
-func RenderIterations(records []Iteration, skip []string) string {
+//
+// fitted is the caller's rewrite of the pieces [IterationPieces] named; nil
+// renders every payload whole.
+func RenderIterations(records []Iteration, skip []string, fitted Fitted) string {
 	if len(records) == 0 {
 		return ""
 	}
@@ -185,13 +213,20 @@ func RenderIterations(records []Iteration, skip []string) string {
 		if rec.Intent != "" {
 			lines = append(lines, "Set out to: "+rec.Intent)
 		}
-		lines = append(lines, "Called:", FormatCalls(rec.Calls, Format(skip, rec.Reads)))
+		opts := Format(skip, rec.Reads)
+		opts.Fitted = fitted
+		lines = append(lines, "Called:", FormatCalls(rec.Calls, opts))
 		if rec.Text != "" {
-			// TAIL-ELIDED at render, whole in the record. See
+			// FITTED at render, whole in the record. See
 			// RenderedArtifactLimit: this text is a whole tool loop's
 			// assistant output, one per iteration, re-sent on every round
-			// of every later phase — and its deliverable is at the end.
-			lines = append(lines, "Produced: "+elideTail(rec.Text, RenderedArtifactLimit))
+			// of every later phase — so past the limit it is rewritten
+			// to fit, deliverable first, rather than cut from either end.
+			text := rec.Text
+			if over(text, RenderedArtifactLimit) {
+				text = fitted.text(Piece{Kind: PieceProduced, Text: text, Limit: RenderedArtifactLimit})
+			}
+			lines = append(lines, "Produced: "+text)
 		}
 		if rec.CompletedWork != "" {
 			lines = append(lines, "Reviewer, on what already landed: "+rec.CompletedWork)
