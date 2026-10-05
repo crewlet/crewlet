@@ -678,14 +678,21 @@ func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
-	at := time.Now().UTC().Add(-time.Minute)
+	// The window is cut at a PINNED instant half way through an hour that
+	// has already ended, and the events sit a minute before it, so both are
+	// in one bar whatever the wall clock says. Cut against now with the
+	// events a minute back, the case failed whenever it ran in the first
+	// minute of an hour: the events fell in the previous bar and the
+	// current one was empty.
+	cut := time.Now().UTC().Truncate(time.Hour).Add(-30 * time.Minute)
+	at := cut.Add(-time.Minute)
 	appendTo(t, a, store.EventRecord{ID: "a-fail", Type: "x", Category: "task", Time: at,
 		Tags: map[string]string{"failed": "true"}})
 	appendTo(t, b, store.EventRecord{ID: "b-fail", Type: "budget_exhausted", Category: "task", Time: at})
 	appendTo(t, b, store.EventRecord{ID: "b-ok", Type: "x", Category: "task", Time: at})
 
 	got, coverage, err := fanFrom(a, "node-a", "node-b").Histogram(t.Context(),
-		store.HistogramQuery{Bucket: store.BucketHour})
+		store.HistogramQuery{Bucket: store.BucketHour, At: cut})
 	if err != nil {
 		t.Fatal(err)
 	}
