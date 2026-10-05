@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -254,6 +255,12 @@ func priorRounds(state execstate.State) toolloop.Result {
 			CacheRead:    r.CacheReadTokens,
 			CacheWrite:   r.CacheWriteTokens,
 			ToolCalls:    r.ToolCalls,
+			// Why each parked round stopped travels like its timing does:
+			// the resumed record is the only account this phase will ever
+			// have, and a second suspend re-encodes these rows from here —
+			// so a field dropped on this side is lost for good, not merely
+			// for one record.
+			StopReason: llm.StopReason(r.StopReason),
 		})
 	}
 	for _, exec := range state.ToolExecutions {

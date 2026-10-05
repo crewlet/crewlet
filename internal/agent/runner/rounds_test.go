@@ -338,6 +338,91 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 	}
 }
 
+// WHY A PARKED ROUND STOPPED SURVIVES THE RESUME — AND THE NEXT SUSPEND.
+//
+// The parked row carries each round's stop reason, and the resume rebuilds the
+// loop's rounds from it field by field. A field left out of that rebuild is
+// blank on the resumed record (which reads as "the backend reported none"),
+// and because a second suspend re-encodes the rounds from the rebuilt ones,
+// it is gone from every later record too. Both ends are asserted: the record
+// the resume publishes, and the row a second suspension would persist.
+func TestAParkedRoundsStopReasonSurvivesTheResume(t *testing.T) {
+	t.Parallel()
+	parked := func() execstate.State {
+		state := suspendedAfterTwoRounds()
+		state.Rounds = []types.PhaseRound{
+			{Round: 1, Model: "earlier", StopReason: string(llm.StopToolUse)},
+			{Round: 2, Model: "earlier", StopReason: string(llm.StopToolUse)},
+		}
+		// Through JSON, as the pending-run row hands it back.
+		blob, err := execstate.Encode(state)
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		out, _, err := execstate.Decode(blob)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		return out
+	}
+	wantParked := func(t *testing.T, rounds []types.PhaseRound) {
+		t.Helper()
+		if len(rounds) < 2 {
+			t.Fatalf("rounds = %+v, want the two parked rounds first", rounds)
+		}
+		for _, r := range rounds[:2] {
+			if r.StopReason != string(llm.StopToolUse) {
+				t.Errorf("parked round %d stop_reason = %q, want %q",
+					r.Round, r.StopReason, llm.StopToolUse)
+			}
+		}
+	}
+
+	t.Run("the resumed record", func(t *testing.T) {
+		t.Parallel()
+		prov := &scriptedProvider{execute: []llm.Completion{
+			submitCall(t, runner.SubmitWorkTool,
+				`{"outcome":"delivered","summary":"shipped it","evidence":"the box did the work"}`),
+		}}
+		pub := newCapture()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+			pub:    pub,
+			resume: &runner.Resume{State: parked(), Answer: "the run succeeded"},
+		})
+		if _, _, err := r.Resume(context.Background(), nil); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		wantParked(t, completedPhase(t, pub, "execute").Rounds)
+	})
+
+	t.Run("a second suspension", func(t *testing.T) {
+		t.Parallel()
+		state := parked()
+		state.ActiveTools = append(state.ActiveTools, "run_sandbox")
+		prov := &scriptedProvider{execute: []llm.Completion{
+			submitCall(t, "run_sandbox", `{"task":"and the follow-up"}`),
+		}}
+		r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+			resume: &runner.Resume{State: state, Answer: "the run succeeded"},
+		})
+		if err := reg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+		w, _, err := r.Resume(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		if !w.Suspended {
+			t.Fatal("the resumed phase did not suspend again, so there is no second row to read")
+		}
+		again, ok := r.Suspended()
+		if !ok {
+			t.Fatal("no second suspension was recorded")
+		}
+		wantParked(t, again.State.Rounds)
+	})
+}
+
 // suspendedAfterTwoRounds is a phase parked on run_sandbox, two rounds in.
 func suspendedAfterTwoRounds() execstate.State {
 	return execstate.State{
