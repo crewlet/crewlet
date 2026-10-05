@@ -1502,11 +1502,10 @@ describe("the chart's chrome", () => {
 });
 
 /*
- * THE CHART SAYS WHERE. A dialog that asks for the name of a child says
- * nothing about where the child will go, and the chart is the only thing that
- * can say it: it goes to the node the surface is about, pushes itself back
- * behind it, and gives the reader their own view back when it closes. It is
- * the gesture the chart this is drawn from makes with the viewBox it saves.
+ * THE CHART STEPS BACK, AND STAYS PUT. A surface about one node pushes the
+ * chart back behind it, and the view the reader chose is the view they keep:
+ * the node is the one they just pressed, so it is already on screen, and an
+ * edit that zoomed in on it and back out again was two zooms nobody asked for.
  */
 describe("a surface opened about one node", () => {
   const mountAbout = (about: string | null) => {
@@ -1541,13 +1540,12 @@ describe("a surface opened about one node", () => {
     expect(canvas().getAttribute("data-dimmed")).toBe("false");
   });
 
-  test("the view goes to the node it is about, and comes back when it closes", () => {
+  test("the view stays where the reader left it while it is open and after it closes", () => {
     const { container, show } = mountAbout(null);
     const view = () => canvasWorld(container).style.transform;
     const before = view();
     show(unitKey("Engineering"));
-    const onIt = view();
-    expect(onIt).not.toBe(before);
+    expect(view()).toBe(before);
     show(null);
     expect(view()).toBe(before);
   });

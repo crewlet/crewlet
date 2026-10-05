@@ -356,9 +356,9 @@ describe("the views the builder hosts", () => {
   });
 
   /*
-   * WHICH NODE A SURFACE IS ABOUT reaches the chart, so it can ease onto it
-   * and push the rest of itself back: an add is about the PARENT the child
-   * will hang from, and closing gives the reader their view back.
+   * WHICH NODE A SURFACE IS ABOUT reaches the chart, so it can push itself
+   * back behind the decision: an add is about the PARENT the child will hang
+   * from, and closing draws the chart plainly again.
    */
   test("the chart is told which node an open surface is about", async () => {
     const engine = new Engine(company());

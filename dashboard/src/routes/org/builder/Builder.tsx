@@ -195,9 +195,8 @@ export interface BuilderSurfaces {
      */
     chrome?: { controls?: ReactNode; switcher?: ReactNode };
     /**
-     * The node an open surface is about, so the chart can ease onto it and
-     * push the rest of itself back behind the decision. `null` gives the
-     * reader their view back.
+     * The node an open surface is about, so the chart can push itself back
+     * behind the decision. The reader's view of the chart never moves for it.
      */
     about?: string | null;
     /**
