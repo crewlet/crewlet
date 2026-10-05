@@ -1,13 +1,14 @@
 // Package credential is what somebody proves themselves with, and the
 // arithmetic behind each of them: a password, a second factor, a recovery
-// code, and a machine's bearer token.
+// code, a machine's bearer token, and the one-time link an administrator
+// issues somebody to set a new password with (reset.go).
 //
 // # What is stored is a VERIFIER, never a secret
 //
 // Every value this package puts in front of the identity estate is something a
 // presented secret is checked AGAINST and which cannot be presented to
 // anything: an argon2id digest with its own parameters beside it, a SHA-256 of
-// a machine token, a TOTP shared secret sealed under the fleet keyring and
+// a machine token or a reset link's secret, a TOTP shared secret sealed under the fleet keyring and
 // bound to its person and its credential.
 // The estate is replicated to every node, snapshotted, backed up and donated
 // to joining peers — so a value that could be replayed out of it would be a

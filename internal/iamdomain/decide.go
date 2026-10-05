@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -2178,6 +2180,211 @@ type InviteMint struct {
 	// derived from it ([Blinder.InvitationID]) — so the id is the
 	// operation's rather than the caller's, and a retry under the same key
 	// names the invitation its first attempt issued.
+	OpID   string
+	Reason string
+}
+
+// CancelInvitation withdraws an invitation nobody has redeemed — open, or aged
+// out and not yet collected — so its link opens nothing and the address it held
+// is free for a new invitation the moment the record lands.
+//
+// # A directory record, because the address is held there
+//
+// The invitation holds its address on the directory subject, so the record
+// that frees it rides there too: an issue to the same address decided after
+// it is decided from rows that no longer hold the old one, and one racing it
+// contends at the broker. It TAKES nothing, so it does not ask
+// [wholeDirectory], for a removal's reason.
+//
+// # Three answers about the row, read in the record's own snapshot
+//
+// An invitation this snapshot does not hold is [ErrNoInvitation] — never
+// issued, cancelled already, or collected by the sweep, which a link to it
+// cannot tell apart either. One somebody REDEEMED is [InvitationRedeemed],
+// naming whom it created: the link is spent, and what undoes it is removing
+// that person. Anything else is cancelled.
+func (w *Writer) CancelInvitation(ctx context.Context, id, opID, reason string) (
+	statelog.Result, error) {
+
+	if err := w.mayAdminister(OpCancel); err != nil {
+		return statelog.Result{}, err
+	}
+	if id == "" || opID == "" {
+		return statelog.Result{}, errors.New("iamdomain: cancelling an " +
+			"invitation needs its id and an operation id")
+	}
+	// THE BUCKET IS THE ADDRESS'S, as the issue's was and as the row's is,
+	// and an invitation this snapshot does not hold has none — the decide
+	// refuses it, so the id's own bucket is only a scope that encodes.
+	scopeOf := func(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
+		held, found, err := invitationIn(ctx, tx, id)
+		if err != nil || !found {
+			return BucketScope(BucketOf(id)), err
+		}
+		return BucketScope(BucketOf(held.Blind)), nil
+	}
+	decide := func(tx *sql.Tx) ([]byte, error) {
+		held, found, err := invitationIn(ctx, tx, id)
+		switch {
+		case err != nil:
+			return nil, err
+		case !found:
+			return nil, fmt.Errorf("%w: %s", ErrNoInvitation, id)
+		case held.Person != "":
+			return nil, &InvitationRedeemed{ID: id, Person: held.Person}
+		}
+		return EncodeCancellation(Cancellation{
+			V: DocumentVersion, Invitation: id, EmailBlind: held.Blind,
+		})
+	}
+	return w.publishDirectory(ctx, OpCancel, "", opID, reason, scopeOf, decide)
+}
+
+// invitationIn is the address blind one invitation holds and the person a
+// redemption created, read inside a decide's snapshot — and false for an id it
+// does not hold.
+func invitationIn(ctx context.Context, tx *sql.Tx, id string) (
+	InvitationRow, bool, error) {
+
+	var held InvitationRow
+	err := tx.QueryRowContext(ctx, `
+		SELECT email_blind, person_id FROM iam_invites WHERE id = ?`, id).
+		Scan(&held.Blind, &held.Person)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return InvitationRow{}, false, nil
+	case err != nil:
+		return InvitationRow{}, false, fmt.Errorf("iamdomain: read "+
+			"invitation %s: %w", id, err)
+	}
+	return held, true, nil
+}
+
+// ErrNoInvitation reports an invitation this estate does not hold: never
+// issued, cancelled already, or collected by the sweep once it was redeemed or
+// aged out.
+var ErrNoInvitation = errors.New("iamdomain: no such invitation")
+
+// InvitationRedeemed refuses the cancellation of an invitation somebody
+// redeemed, naming the person it created — the link is spent, and what undoes
+// it is removing them.
+type InvitationRedeemed struct {
+	ID     string
+	Person string
+}
+
+func (e *InvitationRedeemed) Error() string {
+	return fmt.Sprintf("iamdomain: invitation %s was redeemed and created "+
+		"person %s — it cannot be cancelled; remove the person instead",
+		e.ID, e.Person)
+}
+
+// SetPassword replaces a person's password and moves their revocation epoch,
+// in ONE record ([OpPassword]): every session and machine token they hold ends
+// with the password it replaces.
+//
+// # Two callers, one record
+//
+// A person CHANGING their own password, having presented the current one, and
+// a person SPENDING a reset link an administrator issued them. Both are a
+// password somebody else may have had — which is why the epoch moves — and
+// both revoke every reset link the person still holds, the one spent
+// included, so a link is never a second way back in once a password is set.
+//
+// # No grant, and the caller's proof instead
+//
+// Neither caller holds an administrative capability: the first is the person,
+// the second nobody yet. What bounds it is [PasswordSet.Check], which the
+// surface hands in and which runs in the record's own snapshot — the verifier
+// of the password the change presented still the one held, or the reset link
+// still live and its secret the link's — so a password changed by somebody
+// else between the proof and the record, or a link spent by another tab, is
+// refused with nothing published.
+//
+// THE NEW CREDENTIAL'S ID IS MINTED ONCE, before the decide that may run more
+// than once, so every round forms the same document.
+func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
+	statelog.Result, error) {
+
+	switch {
+	case in.PersonID == "" || in.OpID == "":
+		return statelog.Result{}, errors.New("iamdomain: setting a password " +
+			"needs a person and an operation id")
+	case in.Verifier == "":
+		return statelog.Result{}, errors.New("iamdomain: setting a password " +
+			"needs the new password's verifier — the password itself is " +
+			"never published")
+	}
+	id := uuid.NewString()
+	rec, err := w.record(PersonSubject(in.PersonID), OpPassword, in.PersonID,
+		PeopleScope(in.PersonID), nil, in.Reason)
+	if err != nil {
+		return statelog.Result{}, err
+	}
+	decide := func(tx *sql.Tx) error {
+		person, err := heldPerson(ctx, tx, in.PersonID, "their new password")
+		if err != nil {
+			return err
+		}
+		if person.Kind != iam.KindPerson {
+			return fmt.Errorf("%w: %s is a %s, and only a person holds a "+
+				"password", ErrRefused, in.PersonID, person.Kind)
+		}
+		if in.Check != nil {
+			if err = in.Check(person); err != nil {
+				return err
+			}
+		}
+		now := w.Now()
+		kept := make([]Credential, 0, len(person.Credentials)+1)
+		for _, c := range person.Credentials {
+			switch {
+			case c.Method == MethodPassword:
+				// REPLACED, not revoked: a password has no listing of
+				// its own anybody reads afterwards, and a second one
+				// on the row is a second password that works.
+				continue
+			case c.Method == MethodReset && c.RevokedAt.IsZero():
+				c.RevokedAt = now
+			}
+			kept = append(kept, c)
+		}
+		kept = append(kept, Credential{
+			V: DocumentVersion, ID: id, Method: MethodPassword,
+			Verifier: in.Verifier,
+		})
+		if person.Credentials, err = fitHeld(kept, now, ErrInvalid); err != nil {
+			return err
+		}
+		epoch, err := epochOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
+		rec.Mutation, err = EncodePasswordChange(PasswordChange{
+			V: DocumentVersion, Person: person, Epoch: epoch + 1,
+		})
+		return err
+	}
+	return w.publish(ctx,
+		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
+}
+
+// PasswordSet is what replacing somebody's password needs.
+type PasswordSet struct {
+	PersonID string
+
+	// Verifier is the new password's argon2id verifier — never the
+	// password, which no record carries.
+	Verifier string
+
+	// Check is the caller's proof, judged in the record's own snapshot
+	// against the person as it holds them, and refusing with nothing
+	// published. A FUNCTION for [CredentialSet.Apply]'s reason: the proof
+	// is about the credential set the write lands on, which the caller
+	// does not hold and must not read separately. It may refuse; it forms
+	// nothing.
+	Check func(Person) error
+
 	OpID   string
 	Reason string
 }

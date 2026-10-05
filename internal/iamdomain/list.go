@@ -119,6 +119,18 @@ const (
 	MaxPageSize     = 200
 )
 
+// pageLimit is how many rows one directory page holds: [DefaultPageSize] for a
+// caller that named none, and at most [MaxPageSize] — clamped, never refused.
+func pageLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return DefaultPageSize
+	case limit > MaxPageSize:
+		return MaxPageSize
+	}
+	return limit
+}
+
 // PeoplePage is one page and where the next one starts.
 type PeoplePage struct {
 	People []PersonRow
@@ -133,13 +145,7 @@ type PeoplePage struct {
 
 // People answers one page of the directory.
 func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) {
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = DefaultPageSize
-	case limit > MaxPageSize:
-		limit = MaxPageSize
-	}
+	limit := pageLimit(q.Limit)
 	out := PeoplePage{At: r.committed()}
 	// ONE MORE THAN ASKED FOR, which is how the cursor is derived without
 	// a second count: the extra row is what says there IS a next page, and
@@ -348,6 +354,75 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// InvitationsQuery is one page of the invitations this estate holds.
+type InvitationsQuery struct {
+	// After is the last id of the previous page, exclusive; Limit is
+	// [PeopleQuery.Limit]'s. An invitation's id is a uuid7 at its issue's
+	// instant ([Blinder.InvitationID]), so id order is issue order.
+	After string
+	Limit int
+
+	// All includes the invitations that no longer open — redeemed, or
+	// past their expiry — which the estate holds until the sweep collects
+	// them. Without it a page is the OPEN ones alone, judged at Now.
+	All bool
+	Now time.Time
+}
+
+// InvitationPage is one page of invitations and where the next one starts.
+type InvitationPage struct {
+	Invitations []InvitationRow
+	Next        string
+	At          statelog.Position
+}
+
+// Invitations answers one page of the invitations this estate holds.
+//
+// THE ROW CARRIES THE VERIFIER, as [Reader.InvitationByID]'s does, and a
+// surface renders none of it: what a listing shows is who was invited, to
+// what, by whom and until when — never the link, which is shown once by the
+// issue that made it.
+func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
+	InvitationPage, error) {
+
+	limit := pageLimit(q.Limit)
+	out := InvitationPage{At: r.committed()}
+	query := `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id > ?`
+	args := []any{q.After}
+	if !q.All {
+		// OPEN IS [InvitationRow.Spent]'s complement: not redeemed, and a
+		// deadline still ahead — the predicate the issue's own decide
+		// reads an address as held by ([openInvitationFor]).
+		query += ` AND redeemed_at = 0 AND expires_at > ?`
+		args = append(args, q.Now.UnixMilli())
+	}
+	query += ` ORDER BY id LIMIT ?`
+	args = append(args, limit+1)
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("iamdomain: read the invitations: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			row, err := scanInvitation(rows.Scan)
+			if err != nil {
+				return err
+			}
+			out.Invitations = append(out.Invitations, row)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return InvitationPage{}, err
+	}
+	if len(out.Invitations) > limit {
+		out.Next = out.Invitations[limit-1].ID
+		out.Invitations = out.Invitations[:limit]
 	}
 	return out, nil
 }

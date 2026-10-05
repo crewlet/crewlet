@@ -54,6 +54,18 @@ func (a *Applier) applyDirectory(ctx context.Context, tx *sql.Tx,
 		at.aboutKind, at.aboutID = historyObjectAddress, invitation.EmailBlind
 		at.blind = invitation.EmailBlind
 		return a.writeInvitation(ctx, tx, *at, invitation)
+	case OpCancel:
+		cancelled, err := DecodeCancellation(at.record.Mutation)
+		if err != nil {
+			return 0, fmt.Errorf("iamdomain: the cancellation record at %s: %w",
+				at.position, err)
+		}
+		// FILED WHERE THE ISSUE WAS: under the address, in its bucket, so
+		// "what happened to the invitations sent here" is one object's
+		// trail and a removal's erasure finds both rows.
+		at.aboutKind, at.aboutID = historyObjectAddress, cancelled.EmailBlind
+		at.blind = cancelled.EmailBlind
+		return a.writeCancellation(ctx, tx, cancelled)
 	case OpIdentity:
 		return a.writeIdentity(ctx, tx, *at)
 	case OpRemove:
@@ -274,6 +286,32 @@ func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 		at.bucket(), at.unix(), at.packed, document)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: write an invitation: %w", err)
+	}
+	written, _ := result.RowsAffected()
+	return int(written), nil
+}
+
+// writeCancellation deletes an invitation nobody redeemed.
+//
+// A DELETE AND NOT A MARK: the row is what holds the address
+// ([openInvitationFor] reads it), its sealed copy goes with it, and an id the
+// estate does not hold is exactly what a link to it must look like afterwards
+// — the same refusal as one nobody issued. The guard is the column: a
+// redeemed invitation created somebody, and its row stays until the sweep
+// collects it.
+//
+// NO TOMBSTONE, because nothing needs one: a node applies the log in order,
+// so the issue this deletes is always applied before it, and the framework
+// passes a redelivery below its checkpoint through unapplied.
+func (a *Applier) writeCancellation(ctx context.Context, tx *sql.Tx,
+	cancelled Cancellation) (int, error) {
+
+	result, err := tx.ExecContext(ctx,
+		`DELETE FROM iam_invites WHERE id = ? AND redeemed_at = 0`,
+		cancelled.Invitation)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: cancel invitation %s: %w",
+			cancelled.Invitation, err)
 	}
 	written, _ := result.RowsAffected()
 	return int(written), nil

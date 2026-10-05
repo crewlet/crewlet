@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -854,6 +855,7 @@ type InvitationRow struct {
 	Sealed     string
 	InvitedBy  string
 	Grants     []iam.Grant
+	CreatedAt  time.Time
 	ExpiresAt  time.Time
 	RedeemedAt time.Time
 	Person     string
@@ -911,35 +913,147 @@ func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, 
 	}
 	var out InvitationRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		var document []byte
-		var expires, redeemed int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT id, email_blind, expires_at, redeemed_at, person_id, document
-			  FROM iam_invites WHERE id = ?`, id).
-			Scan(&out.ID, &out.Blind, &expires, &redeemed, &out.Person, &document)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
+		var err error
+		out, err = scanInvitation(tx.QueryRowContext(ctx, `
+			SELECT `+invitationColumns+` FROM iam_invites WHERE id = ?`, id).Scan)
+		if errors.Is(err, sql.ErrNoRows) {
 			out = InvitationRow{}
 			return nil
-		case err != nil:
-			return fmt.Errorf("iamdomain: read an invitation: %w", err)
 		}
-		doc, err := DecodeInvitation(document)
-		if err != nil {
-			return fmt.Errorf("iamdomain: open invitation %q: %w", id, err)
-		}
-		out.Sealed = doc.Sealed
-		out.InvitedBy = doc.InvitedBy
-		out.Grants = doc.Grants
-		out.Verifier = doc.Verifier
-		out.Seat = doc.Seat
-		out.ExpiresAt = fromMillis(expires)
-		out.RedeemedAt = fromMillis(redeemed)
-		return nil
+		return err
 	})
 	if err != nil {
 		return InvitationRow{}, err
 	}
+	return out, nil
+}
+
+// ResetRow is one password reset link as the link's own screen resolves it:
+// whose it is, whether it still opens, and the verifier its secret is checked
+// against — never the secret, which the estate does not hold.
+type ResetRow struct {
+	ID       string
+	PersonID string
+	Login    string
+	Kind     iam.Kind
+	Stage    iam.Stage
+
+	Verifier  string
+	ExpiresAt time.Time
+	RevokedAt time.Time
+}
+
+// Opens reports whether a secret presented with this link's id is the link's,
+// and the link still sets a password at now: not revoked — which is what
+// spending it does — not past its expiry, and its person somebody a reset
+// may reach ([ResetStages]).
+//
+// ONE PREDICATE, for [InvitationRow.Spent]'s reason: every way a link stops
+// working has one remedy, ask for another, and told apart they would say
+// which ids exist to anybody guessing secrets against them.
+func (r ResetRow) Opens(secret string, now time.Time) bool {
+	return r.ID != "" && r.Kind == iam.KindPerson &&
+		slices.Contains(ResetStages, r.Stage) &&
+		r.RevokedAt.IsZero() && now.Before(r.ExpiresAt) &&
+		credential.VerifyReset(r.Verifier, r.ID, secret)
+}
+
+// ResetOf is the reset link id names among a person's credentials, as a
+// document a decide read holds them — the zero row for one it does not hold.
+// It is what a spend's [PasswordSet.Check] judges the link by, in the record's
+// own snapshot, with the same [ResetRow.Opens] the link's screen asks.
+func ResetOf(person Person, id string) ResetRow {
+	for _, c := range person.Credentials {
+		if c.ID == id && c.Method == MethodReset {
+			return ResetRow{ID: id, Kind: person.Kind, Stage: person.Stage,
+				Verifier: c.Verifier, ExpiresAt: c.ExpiresAt,
+				RevokedAt: c.RevokedAt}
+		}
+	}
+	return ResetRow{}
+}
+
+// ResetStages are the stages a password reset reaches: everybody enrolled and
+// not turned away — an invitation's person who never finished enrolling as
+// much as somebody active. A suspended or retired person is reactivated
+// first, because a link that set their password would hand back an account an
+// administrator deliberately stopped.
+var ResetStages = []iam.Stage{iam.StageInvited, iam.StageEnrolling, iam.StageActive}
+
+// ResetByID resolves one reset link by its credential id, on this file's three
+// answers: the zero value for an id that is not a reset link this estate
+// holds, and an error for a node that could not tell.
+func (r *Reader) ResetByID(ctx context.Context, id string) (ResetRow, error) {
+	if id == "" {
+		return ResetRow{}, nil
+	}
+	var out ResetRow
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		var (
+			verifier         []byte
+			expires, revoked int64
+			kind, stage      string
+		)
+		err := tx.QueryRowContext(ctx, `
+			SELECT c.person_id, c.verifier, c.expires_at, c.revoked_at,
+			       p.login, p.kind, p.stage
+			  FROM iam_credentials c
+			  JOIN iam_people p ON p.id = c.person_id
+			 WHERE c.id = ? AND c.method = ?`, id, string(MethodReset)).
+			Scan(&out.PersonID, &verifier, &expires, &revoked,
+				&out.Login, &kind, &stage)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			out = ResetRow{}
+			return nil
+		case err != nil:
+			return fmt.Errorf("iamdomain: read a reset link: %w", err)
+		}
+		out.ID = id
+		out.Verifier = string(verifier)
+		out.ExpiresAt = fromMillis(expires)
+		out.RevokedAt = fromMillis(revoked)
+		out.Kind, out.Stage = iam.Kind(kind), iam.Stage(stage)
+		return nil
+	})
+	if err != nil {
+		return ResetRow{}, err
+	}
+	return out, nil
+}
+
+// invitationColumns are what [scanInvitation] reads, in its order.
+const invitationColumns = `id, email_blind, created_at, expires_at, redeemed_at,
+	person_id, document`
+
+// scanInvitation reads one invitation row, opening the document for the halves
+// no column carries.
+func scanInvitation(scan func(...any) error) (InvitationRow, error) {
+	var (
+		out                        InvitationRow
+		document                   []byte
+		created, expires, redeemed int64
+	)
+	if err := scan(&out.ID, &out.Blind, &created, &expires, &redeemed,
+		&out.Person, &document); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return InvitationRow{}, err
+		}
+		return InvitationRow{}, fmt.Errorf("iamdomain: read an invitation: %w", err)
+	}
+	doc, err := DecodeInvitation(document)
+	if err != nil {
+		return InvitationRow{}, fmt.Errorf("iamdomain: open invitation %q: %w",
+			out.ID, err)
+	}
+	out.Sealed = doc.Sealed
+	out.InvitedBy = doc.InvitedBy
+	out.Grants = doc.Grants
+	out.Verifier = doc.Verifier
+	out.Seat = doc.Seat
+	out.CreatedAt = fromMillis(created)
+	out.ExpiresAt = fromMillis(expires)
+	out.RedeemedAt = fromMillis(redeemed)
 	return out, nil
 }
 

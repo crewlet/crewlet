@@ -10,10 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE PERSON'S OWN SUBJECT, and the three ops that arbitrate on it.
+// THE PERSON'S OWN SUBJECT, and the four ops that arbitrate on it.
 //
 // Everything about somebody that is not unique contends here — their content,
-// their stage and their revocation epoch — so two administrators editing one
+// their stage and their revocation epoch, and a password change that moves the
+// first and the last at once — so two administrators editing one
 // person contend and two editing two people never do. A person's row is
 // created and removed on the directory ([Applier.applyDirectory]), never here.
 
@@ -27,6 +28,8 @@ func (a *Applier) applyPerson(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return a.writeStage(ctx, tx, at, id)
 	case OpRevoke:
 		return a.writeRevocation(ctx, tx, at, id)
+	case OpPassword:
+		return a.writePassword(ctx, tx, at, id)
 	}
 	return 0, fmt.Errorf("iamdomain: the record at %s is op %q on a person, "+
 		"which this build has no case for", at.position, at.record.Op)
@@ -51,6 +54,35 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("iamdomain: the person record at %s: %w",
 			at.position, err)
 	}
+	return a.writeDocument(ctx, tx, at, id, person)
+}
+
+// writePassword writes a password change: the person's document, exactly as a
+// content record writes it, and the epoch the record states, exactly as a
+// revocation bumps it — two writes one record makes, so a node holds both or
+// neither.
+func (a *Applier) writePassword(ctx context.Context, tx *sql.Tx, at applyContext,
+	id string) (int, error) {
+
+	change, err := DecodePasswordChange(at.record.Mutation)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: the password record at %s: %w",
+			at.position, err)
+	}
+	written, err := a.writeDocument(ctx, tx, at, id, change.Person)
+	if err != nil {
+		return written, err
+	}
+	bumped, err := a.bumpEpoch(ctx, tx, at, id, change.Epoch)
+	return written + bumped, err
+}
+
+// writeDocument writes one person's document and their credentials onto the
+// row the directory created — the half of a content record and a password
+// change that is the same.
+func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext,
+	id string, person Person) (int, error) {
+
 	document, err := EncodePerson(person)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: re-encode the person at %s: %w",
@@ -254,6 +286,14 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: the revocation record at %s: %w",
 			at.position, err)
 	}
+	return a.bumpEpoch(ctx, tx, at, id, revocation.Epoch)
+}
+
+// bumpEpoch moves one person's revocation epoch to the value a record states —
+// the half of a revocation and a password change that is the same.
+func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
+	id string, epoch uint64) (int, error) {
+
 	// THE GUARD IS THE EPOCH ITSELF AND NOT THE VERSION, which is the one
 	// place this domain guards on a payload value. An epoch is MONOTONE by
 	// its own meaning — it only ever ends more sessions — so a redelivered
@@ -269,7 +309,7 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 			bumped_at = excluded.bumped_at,
 			version   = excluded.version
 		WHERE excluded.epoch > iam_revocation_epochs.epoch`,
-		id, int64(revocation.Epoch), at.record.Reason, at.unix(),
+		id, int64(epoch), at.record.Reason, at.unix(),
 		at.bucket(), at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: bump person %s's epoch: %w", id, err)

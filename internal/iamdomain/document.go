@@ -473,11 +473,29 @@ const (
 	// invalidating the codes they printed, and regenerates the codes
 	// without re-enrolling the app.
 	MethodRecovery CredentialMethod = "recovery"
+
+	// MethodReset is a ONE-TIME PASSWORD RESET LINK an administrator
+	// issued: a 256-bit crypto/rand secret held, like a machine token's,
+	// as a SHA-256 verifier ([credential.ResetVerifier]), with an expiry.
+	//
+	// A CREDENTIAL ROW RATHER THAN A TABLE OF ITS OWN, because it is one:
+	// something presented and checked against a verifier, owned by one
+	// person, listed among their credentials so an administrator sees the
+	// outstanding link and revokes it like anything else, and collected
+	// by the sweep once it is spent, revoked or past its expiry.
+	//
+	// IT AUTHENTICATES NOTHING BUT ITS OWN SPEND. No sign-in reads it — a
+	// password is found by its method — and no bearer path does: the
+	// machine-token read refuses a row of any other method, and its
+	// verifier is formed under a prefix of its own, so no token value
+	// could verify against one. Spending it is the one thing it does
+	// ([Writer.SetPassword]), and the spend revokes it.
+	MethodReset CredentialMethod = "reset"
 )
 
-// CredentialMethods are the four.
+// CredentialMethods are the five.
 var CredentialMethods = []CredentialMethod{
-	MethodPassword, MethodToken, MethodTOTP, MethodRecovery,
+	MethodPassword, MethodToken, MethodTOTP, MethodRecovery, MethodReset,
 }
 
 // SecondFactorMethods are the methods that satisfy a second factor rather
@@ -506,6 +524,38 @@ func (m CredentialMethod) Valid() bool {
 		}
 	}
 	return false
+}
+
+// Cancellation is an invitation withdrawn before anybody redeemed it
+// ([OpCancel]).
+//
+// IT NAMES THE INVITATION AND THE ADDRESS IT HELD, as the blind, and nothing
+// else: the address's blind is what the trail row is filed under and what
+// buckets the record, as the issue's own did, and the apply deletes the row by
+// its id. The address itself is in neither.
+type Cancellation struct {
+	V int `json:"v"`
+
+	Invitation string `json:"invitation"`
+	EmailBlind string `json:"email_blind"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// PasswordChange is a person's password replaced and their revocation epoch
+// moved, in one record ([OpPassword]).
+//
+// THE DOCUMENT IS FULL POST-STATE, as every content record's is — the new
+// password among the credentials, every outstanding reset link revoked — and
+// the EPOCH IS STATED, never incremented by the applier, for [Revocation]'s
+// reason.
+type PasswordChange struct {
+	V int `json:"v"`
+
+	Person Person `json:"person"`
+	Epoch  uint64 `json:"epoch"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Revocation is a bump of somebody's revocation epoch.
@@ -781,6 +831,52 @@ func DecodeSession(data []byte) (Session, error) {
 	return s, nil
 }
 
+// EncodeCancellation is the bytes an invitation's cancellation travels as,
+// with every field a newer build wrote folded back in.
+func EncodeCancellation(c Cancellation) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
+
+// DecodeCancellation reads an invitation's cancellation, keeping every field
+// this build has no home for, and refuses one written at a version above
+// [DocumentVersion].
+func DecodeCancellation(data []byte) (Cancellation, error) {
+	var c Cancellation
+	extra, err := jsoncarry.Decode(data, &c, cancellationFields)
+	if err != nil {
+		return Cancellation{}, fmt.Errorf("iamdomain: decode a cancellation: %w", err)
+	}
+	if err := checkVersion(c.V); err != nil {
+		return Cancellation{}, err
+	}
+	c.Extra = extra
+	return c, nil
+}
+
+// EncodePasswordChange is the bytes a password change travels as, with every
+// field a newer build wrote folded back in.
+func EncodePasswordChange(c PasswordChange) ([]byte, error) {
+	return jsoncarry.Encode(c, c.Extra)
+}
+
+// DecodePasswordChange reads a password change, keeping every field this build
+// has no home for, and refuses one written at a version above
+// [DocumentVersion]. The person document inside it is held to the same rule.
+func DecodePasswordChange(data []byte) (PasswordChange, error) {
+	var c PasswordChange
+	extra, err := jsoncarry.Decode(data, &c, passwordChangeFields)
+	if err != nil {
+		return PasswordChange{}, fmt.Errorf("iamdomain: decode a password "+
+			"change: %w", err)
+	}
+	if err := checkVersion(c.V); err != nil {
+		return PasswordChange{}, err
+	}
+	if err := checkVersion(c.Person.V); err != nil {
+		return PasswordChange{}, err
+	}
+	c.Extra = extra
+	return c, nil
+}
+
 // EncodeRevocation is the bytes a revocation's payload travels as, with every
 // field a newer build wrote folded back in.
 func EncodeRevocation(r Revocation) ([]byte, error) { return jsoncarry.Encode(r, r.Extra) }
@@ -952,17 +1048,19 @@ func checkVersion(got int) error {
 // The field sets, DERIVED from each struct's own tags rather than typed
 // again — see [jsoncarry.Names] for the four names hand-kept lists missed.
 var (
-	personFields       = jsoncarry.Names(Person{})
-	enrolledFields     = jsoncarry.Names(Enrolled{})
-	identityFields     = jsoncarry.Names(IdentityChange{})
-	invitationFields   = jsoncarry.Names(Invitation{})
-	sessionFields      = jsoncarry.Names(Session{})
-	revocationFields   = jsoncarry.Names(Revocation{})
-	statusFields       = jsoncarry.Names(StatusChange{})
-	removalFields      = jsoncarry.Names(Removal{})
-	sweepFields        = jsoncarry.Names(Sweep{})
-	invalidationFields = jsoncarry.Names(Invalidation{})
-	evictionFields     = jsoncarry.Names(Eviction{})
-	generationFields   = jsoncarry.Names(Generation{})
-	credentialFields   = jsoncarry.Names(Credential{})
+	personFields         = jsoncarry.Names(Person{})
+	enrolledFields       = jsoncarry.Names(Enrolled{})
+	identityFields       = jsoncarry.Names(IdentityChange{})
+	invitationFields     = jsoncarry.Names(Invitation{})
+	sessionFields        = jsoncarry.Names(Session{})
+	cancellationFields   = jsoncarry.Names(Cancellation{})
+	passwordChangeFields = jsoncarry.Names(PasswordChange{})
+	revocationFields     = jsoncarry.Names(Revocation{})
+	statusFields         = jsoncarry.Names(StatusChange{})
+	removalFields        = jsoncarry.Names(Removal{})
+	sweepFields          = jsoncarry.Names(Sweep{})
+	invalidationFields   = jsoncarry.Names(Invalidation{})
+	evictionFields       = jsoncarry.Names(Eviction{})
+	generationFields     = jsoncarry.Names(Generation{})
+	credentialFields     = jsoncarry.Names(Credential{})
 )
