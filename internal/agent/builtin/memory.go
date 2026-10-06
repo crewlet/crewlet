@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -808,14 +809,30 @@ const outcomeOverfetch = 4
 // wires the prefetch's.
 var errNoRecall = errors.New("no similarity search is wired into this registry")
 
-// similarityRefusal says which of THREE things stopped a `query`, because
-// each sends a model somewhere different: a company with no embeddings will
-// never search by meaning, so the model should stop asking; a search that
-// failed — an embedder that refused or did not answer in time, a store that
-// could not be read — may answer if asked again; and a registry with no
-// search wired is neither. They were one sentence, "no embeddings are
-// configured", which every embedder timeout told a model on a company that
-// has them.
+// similarityRefusal says what stopped a `query`, because each cause sends a
+// model somewhere different and only ONE of them is worth asking again:
+//
+//   - a company with no embeddings will never search by meaning, so the model
+//     should stop asking;
+//   - an embedder that refuses its CONFIGURATION ([embeddings.ErrConfiguration]:
+//     a rejected key, a missing model or endpoint, a vector of a width the
+//     store was not sized for) refuses every query until an operator fixes
+//     providers.embeddings, so the model should stop asking too — and the
+//     operator's fix is named, so a seat that reports it reports the right one;
+//   - an embedder that refuses THIS QUERY ([embeddings.ErrRefused]) refuses it
+//     again unchanged, so only a different query may answer;
+//   - an embedder that could not answer NOW ([embeddings.ErrTransient] — a
+//     429, a 5xx, a network failure — or a deadline) may answer if asked again;
+//   - anything else — an episode store that could not be read, an answer the
+//     engine could not use, a cancelled turn — is said as what it was, with no
+//     promise either way, because nothing classified it;
+//   - and a registry with no search wired is none of these.
+//
+// The embeddings package classifies its failures precisely so a caller can
+// tell these apart, and the class survives every wrap on the way here. Told
+// "calling again may answer" about a revoked key, an executor asked again,
+// was refused identically, and spent rounds of every turn on it until an
+// operator noticed.
 func similarityRefusal(err error) string {
 	const fallback = " Pass `conversation` to read one thread's turns, or neither argument for your most recent ones — neither needs it."
 	switch {
@@ -823,8 +840,17 @@ func similarityRefusal(err error) string {
 		return "This company configures no embeddings, so your turns cannot be searched by meaning." + fallback
 	case errors.Is(err, errNoRecall):
 		return "Searching your turns by meaning is not available here." + fallback
-	default:
+	case errors.Is(err, embeddings.ErrConfiguration):
+		return fmt.Sprintf("Searching your turns by meaning is misconfigured on this deployment (%v): "+
+			"no query will answer until an operator fixes providers.embeddings, so do not search "+
+			"by meaning again until then.", err) + fallback
+	case errors.Is(err, embeddings.ErrRefused):
+		return fmt.Sprintf("The embedder refuses this query (%v) and will refuse it again unchanged; "+
+			"a shorter or differently worded `query` may answer.", err) + fallback
+	case errors.Is(err, embeddings.ErrTransient), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Sprintf("Searching your turns by meaning failed this time (%v); calling again may answer.", err) + fallback
+	default:
+		return fmt.Sprintf("Searching your turns by meaning could not run (%v).", err) + fallback
 	}
 }
 

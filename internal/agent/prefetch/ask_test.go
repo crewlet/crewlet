@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
 // What every relevance judgement is made against: the turn's ASK, never the
@@ -230,6 +231,29 @@ func TestRecallEpisodesTellsAFailedSearchFromNoEmbeddings(t *testing.T) {
 			}
 			if !tc.none && !tc.failed && (err != nil || len(got.Hits) != 1) {
 				t.Fatalf("RecallEpisodes = %v, %v; want the hit", got, err)
+			}
+		})
+	}
+}
+
+// AN EMBEDDER'S FAILURE KEEPS ITS CLASS THROUGH THE PULL, because the class is
+// what tells the tool's model whether asking again can help: a revoked key
+// (a configuration no request avoids) and an overloaded provider (which may
+// answer next time) are both a failed search, and only the class says which.
+func TestRecallEpisodesKeepsTheEmbeddersFailureClass(t *testing.T) {
+	t.Parallel()
+	_, seat := company(t)
+	for _, class := range []error{embeddings.ErrConfiguration, embeddings.ErrRefused, embeddings.ErrTransient} {
+		t.Run(class.Error(), func(t *testing.T) {
+			t.Parallel()
+			embed := func(context.Context, string) (learning.Vector, error) {
+				return learning.Vector{}, &embeddings.Error{Model: "embed-small", Status: 401, Class: class,
+					Err: errors.New("the provider said no")}
+			}
+			_, err := prefetch.New(prefetch.Sources{Episodes: episodes{}, Embed: embed}).
+				RecallEpisodes(t.Context(), seat, "the deploy freeze", 3)
+			if !errors.Is(err, prefetch.ErrSimilarityFailed) || !errors.Is(err, class) {
+				t.Fatalf("err = %v: want a failed search that is still %v", err, class)
 			}
 		})
 	}

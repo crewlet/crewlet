@@ -136,5 +136,9 @@ var ErrNoSimilarity = fmt.Errorf("prefetch: a similarity search cannot run: %w",
 // ErrSimilarityFailed reports a similarity search that could have run and did
 // not: the embedder refused or did not answer in time, or the store could not
 // be read. Distinct from [ErrNoSimilarity] because it is not how the company
-// is set up — the same call may answer a moment later.
+// is set up. Whether the same call may answer later is the CAUSE's to say,
+// and it is wrapped beside this one: an embedder's failure keeps its class
+// (embeddings.ErrConfiguration, embeddings.ErrRefused,
+// embeddings.ErrTransient) through the wrap, and only a transient one or a
+// deadline is worth asking again.
 var ErrSimilarityFailed = errors.New("prefetch: the similarity search could not run")

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
 // The company's own retrieval_limit, honoured. It was validated (1..20),
@@ -345,12 +346,24 @@ func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 }
 
 // "Nothing resembles this" and "this company cannot search by meaning" send
-// a model to opposite places, and so does a search that FAILED, which may
-// answer if asked again: each says which it is. They were one sentence, "no
-// embeddings are configured", which every embedder timeout told a model on a
-// company that has them.
+// a model to opposite places, and so does a search that FAILED: each says
+// which it is. They were one sentence, "no embeddings are configured", which
+// every embedder timeout told a model on a company that has them.
+//
+// AND ONLY A FAILURE THAT MAY CLEAR IS CALLED ONE. Every failure that was not
+// "no embeddings" used to answer "calling again may answer" — a revoked key
+// too, which the embeddings package classifies as a configuration no request
+// will avoid, so an executor asked again, was refused identically, and spent
+// rounds of every turn on it until an operator fixed providers.embeddings.
+// Each case is the error as the recall path really hands it over: the
+// provider's classified error, wrapped twice on the way.
 func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 	t.Parallel()
+	const retry = "calling again may answer"
+	// failed is an embed failure as prefetch.RecallEpisodes wraps it.
+	failed := func(err error) builtin.Recaller {
+		return &fakeRecall{err: fmt.Errorf("prefetch: the similarity search could not run: embedding the query: %w", err)}
+	}
 	for _, tc := range []struct {
 		name    string
 		recall  builtin.Recaller
@@ -363,9 +376,39 @@ func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 			want:   "configures no embeddings", wantNot: "again",
 		},
 		{
-			name:   "an embedder that did not answer",
-			recall: &fakeRecall{err: errors.New("prefetch: the similarity search could not run: context deadline exceeded")},
-			want:   "failed this time", wantNot: "no embeddings",
+			name: "a provider that rejects the key",
+			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 401,
+				Class: embeddings.ErrConfiguration, Err: errors.New("invalid api key")}),
+			want: "until an operator fixes providers.embeddings", wantNot: retry,
+		},
+		{
+			name: "a vector of a width the store was not sized for",
+			recall: failed(fmt.Errorf("%w: text-embedding-3-small returned a 3072-wide vector but "+
+				"providers.embeddings.dimensions says 1536", embeddings.ErrConfiguration)),
+			want: "misconfigured on this deployment", wantNot: retry,
+		},
+		{
+			name: "a provider that refuses this query",
+			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 400,
+				Class: embeddings.ErrRefused, Err: errors.New("invalid input")}),
+			want: "will refuse it again unchanged", wantNot: retry,
+		},
+		{
+			name: "a provider that is overloaded",
+			recall: failed(&embeddings.Error{Model: "text-embedding-3-small", Status: 503,
+				Class: embeddings.ErrTransient, Err: errors.New("service unavailable")}),
+			want: retry, wantNot: "no embeddings",
+		},
+		{
+			name:   "an embedder that did not answer in time",
+			recall: failed(context.DeadlineExceeded),
+			want:   retry, wantNot: "no embeddings",
+		},
+		{
+			name: "an episode store that could not be read",
+			recall: &fakeRecall{err: fmt.Errorf("prefetch: the similarity search could not run: "+
+				"reading ceo's episodes: %w", errors.New("database disk image is malformed"))},
+			want: "could not run (", wantNot: "again",
 		},
 		{
 			name: "a registry with no search wired",

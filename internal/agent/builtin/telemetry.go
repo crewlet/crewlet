@@ -129,7 +129,10 @@ type Recaller interface {
 	// none, and it says why: one wrapping [learning.ErrNoEmbeddings] is a
 	// company with no embeddings, and any other a search that failed — an
 	// embedder that refused or did not answer in time, a store that could
-	// not be read.
+	// not be read. An embedder's failure keeps its class through the wrap
+	// ([embeddings.ErrConfiguration], [embeddings.ErrRefused],
+	// [embeddings.ErrTransient]), which is what says whether asking again
+	// can help.
 	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) (learning.EpisodeSearch, error)
 
 	// RecallMemories re-runs the personal-memory relevance filter against a
