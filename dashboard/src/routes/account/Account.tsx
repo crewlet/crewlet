@@ -22,9 +22,11 @@
  *
  * # Changing the password keeps this browser, and ends everything else
  *
- * `POST /auth/password` takes the current password as its proof — no step-up
- * — moves the person's revocation epoch, which ends every other session and
- * every personal token, and answers a fresh session for this browser. Where
+ * `POST /auth/password` takes the current password as its proof — and, from
+ * somebody who holds a second factor, a code, exactly as a step-up asks it;
+ * no step-up is asked first — moves the person's revocation epoch, which ends
+ * every other session and every personal token, and answers a fresh session
+ * for this browser. Where
  * this node has not applied the change yet it answers no session (`202`): the
  * cookie is cleared, so the tab goes to the sign-in at once, a toast saying
  * why — every read here would be refused, and the socket the engine closes
@@ -291,6 +293,9 @@ function Security({
   const live = (credentials.data ?? []).filter((c) => !c.revoked);
   const app = live.some((c) => c.method === "totp");
   const codes = live.some((c) => c.method === "recovery");
+  // WHAT THE ENGINE ASKS A CODE OF: any second factor held, the app or the
+  // recovery codes — its own reading — and unknown while the list is.
+  const holdsFactor = credentials.data === null ? null : app || codes;
   const close = () => {
     setDialog(null);
     onChanged();
@@ -301,7 +306,7 @@ function Security({
         <Card.Title>Security</Card.Title>
       </Card.Header>
       <div className="col gap-4">
-        <ChangePassword onChanged={onChanged} />
+        <ChangePassword holdsFactor={holdsFactor} onChanged={onChanged} />
         <section className="col gap-2" aria-label="Two-step verification">
           <span className="t-label">Two-step verification</span>
           {credentials.data === null ? (
@@ -361,31 +366,63 @@ function Security({
 type Changed = { kind: "kept" } | { kind: "refused"; text: string };
 
 /**
- * Change your own password: the current one, and the new one twice. The
- * current one IS the proof, so no step-up is asked.
+ * Change your own password: the current one, a code where a second factor is
+ * held, and the new one twice. Those ARE the proof — a step-up's, taken in the
+ * one request — so no step-up is asked.
+ *
+ * # The code is asked of whoever holds a second factor
+ *
+ * The change ends every other session the person holds, so on the password
+ * alone somebody holding their cookie and their password, but not their
+ * authenticator, could sign them out everywhere and lock them out. The engine
+ * asks a code of anybody who holds one, as a step-up does; the field is drawn
+ * when the credential list says one is held, and — where that list is unknown
+ * or behind — once the engine has answered `second_factor_required`.
  */
-function ChangePassword({ onChanged }: { onChanged: () => void }) {
+function ChangePassword({
+  holdsFactor,
+  onChanged,
+}: {
+  /** Whether this person holds a second factor, or null while unknown. */
+  holdsFactor: boolean | null;
+  onChanged: () => void;
+}) {
   const toast = useToast();
   const config = useRest("/auth/config", (signal) => auth.config(signal));
   const floor = config.data?.min_password_length ?? null;
   const [current, setCurrent] = useState("");
+  const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Changed | null>(null);
+  // THE ENGINE ASKED FOR A CODE: the field stays drawn whatever the list
+  // said, because the engine is what decides whether one is held.
+  const [asked, setAsked] = useState(false);
+  const needsCode = holdsFactor === true || asked;
 
   async function submit() {
     setTried(true);
-    if (busy || current === "" || !newPasswordReady(password, confirm, floor)) return;
+    if (
+      busy ||
+      current === "" ||
+      (needsCode && code.trim() === "") ||
+      !newPasswordReady(password, confirm, floor)
+    ) {
+      return;
+    }
+    const sent = needsCode ? code.trim() : "";
     setBusy(true);
     setOutcome(null);
     try {
       const answer = await auth.changePassword({
         current_password: current,
         new_password: password,
+        ...(sent ? { code: sent } : {}),
       });
       setCurrent("");
+      setCode("");
       setPassword("");
       setConfirm("");
       setTried(false);
@@ -406,15 +443,14 @@ function ChangePassword({ onChanged }: { onChanged: () => void }) {
       setOutcome({ kind: "kept" });
       onChanged();
     } catch (err) {
-      // NOBODY KNOWS whether a change nothing confirmed landed: the next
-      // sign-in with the new password is what says.
-      const unknown = err instanceof RestError && (err.unanswered || err.status === 503);
-      setOutcome({
-        kind: "refused",
-        text: unknown
-          ? `${refusalText(err)} It is not known whether your password changed: if the new one signs you in, it did.`
-          : refusalText(err),
-      });
+      // A CODE IS SINGLE-USE, and one the engine refused is no use again:
+      // cleared, as the step-up dialog clears it — and the form is not
+      // "tried" again until it is sent again, or the emptied field would
+      // say it is missing under the refusal that emptied it.
+      setCode("");
+      setTried(false);
+      setOutcome({ kind: "refused", text: changeRefusal(err, sent !== "") });
+      if (err instanceof RestError && err.code === "second_factor_required") setAsked(true);
     } finally {
       setBusy(false);
     }
@@ -431,6 +467,9 @@ function ChangePassword({ onChanged }: { onChanged: () => void }) {
     >
       <span className="t-label">Password</span>
       <CurrentPassword value={current} onChange={setCurrent} missing={tried && current === ""} />
+      {needsCode && (
+        <SecondFactorCode value={code} onChange={setCode} missing={tried && code.trim() === ""} />
+      )}
       <NewPasswordFields
         floor={floor}
         password={password}
@@ -454,6 +493,67 @@ function ChangePassword({ onChanged }: { onChanged: () => void }) {
         {busy ? "Changing" : "Change password"}
       </Button>
     </form>
+  );
+}
+
+/**
+ * What a refused change says, `coded` where it presented a code.
+ *
+ * THE STEP-UP DIALOG'S WORDS for a refusal that may be the code: the engine
+ * answers a wrong code with the sign-in's one refusal, worded for a form this
+ * person is not on, and names `current_password` only where it was the
+ * password — which it then says itself.
+ */
+function changeRefusal(err: unknown, coded: boolean): string {
+  if (err instanceof RestError) {
+    if (err.code === "second_factor_required") {
+      return "Changing your password needs a code from your authenticator app, or one of your recovery codes, as well as your current password.";
+    }
+    if (err.code === "sign_in_refused" && coded && err.body.field !== "current_password") {
+      return "That password or code was not accepted. Check both and try again.";
+    }
+    // NOBODY KNOWS whether a change nothing confirmed landed: the next
+    // sign-in with the new password is what says.
+    if (err.unanswered || err.status === 503) {
+      return `${refusalText(err)} It is not known whether your password changed: if the new one signs you in, it did.`;
+    }
+  }
+  return refusalText(err);
+}
+
+/** The second factor's code: asked beside the password of whoever holds one. */
+function SecondFactorCode({
+  value,
+  onChange,
+  missing,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  missing: boolean;
+}) {
+  return (
+    <FormField
+      label="Code"
+      helper="The current code from your authenticator app, or one of your recovery codes."
+      error={
+        missing
+          ? "Type a code from your authenticator app, or one of your recovery codes: with your password, it proves the change is yours."
+          : undefined
+      }
+    >
+      {(field) => (
+        <Input
+          id={field.id}
+          aria-describedby={field.describedBy}
+          aria-invalid={field.invalid || undefined}
+          autoComplete="one-time-code"
+          spellCheck={false}
+          width="full"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </FormField>
   );
 }
 

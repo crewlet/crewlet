@@ -1025,9 +1025,10 @@ var auth = {
 	*/
 	stepUp: async (body) => await rest.post("/auth/step-up", body),
 	/**
-	* Change your own password. The current one is the proof, so no step-up is
-	* asked; the change ends every other session and personal token you hold,
-	* and answers a fresh session for this browser.
+	* Change your own password. The current one — and, from somebody who holds
+	* a second factor, a code, exactly as a step-up asks it — is the proof, so
+	* no step-up is asked first; the change ends every other session and
+	* personal token you hold, and answers a fresh session for this browser.
 	*/
 	changePassword: async (body) => await rest.post("/auth/password", body),
 	/**

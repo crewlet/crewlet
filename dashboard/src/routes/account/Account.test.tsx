@@ -8,10 +8,12 @@
  * read, a mint or a revocation; this browser's own session is marked and
  * offered no named sign-out, while another is ended by its lineage — after a
  * gesture whose step-up replaced this browser's session too; a password
- * change sends the current one as its proof and says what it ended, and one
- * that ended this browser's session sends it to sign in saying so; a wrong
- * current password is the engine's sentence and does NOT send the person to
- * sign in; recovery codes are offered only beside an authenticator; and a Tier
+ * change sends the current one as its proof — and a code, from somebody who
+ * holds a second factor, whose field nobody else is shown — and says what it
+ * ended, and one that ended this browser's session sends it to sign in saying
+ * so; a wrong current password is the engine's sentence, a wrong code the
+ * step-up dialog's, and neither sends the person to sign in; recovery codes
+ * are offered only beside an authenticator; and a Tier
  * A token's session is told what it is and asks the directory nothing.
  */
 
@@ -86,6 +88,7 @@ const SESSIONS = {
   ],
 };
 
+const PASSWORD = { id: "c-pw", person: "p-1", method: "password", revoked: false };
 const APP = { id: "c-totp", person: "p-1", method: "totp", revoked: false };
 const CODES = { id: "c-codes", person: "p-1", method: "recovery", revoked: false };
 const TOKEN = {
@@ -119,7 +122,7 @@ function json(status: number, payload: unknown): Response {
  */
 function engine({
   session = PERSON,
-  credentials = [{ id: "c-pw", person: "p-1", method: "password", revoked: false }, APP, TOKEN],
+  credentials = [PASSWORD, APP, TOKEN],
   writes = {},
 }: {
   session?: SessionAnswer;
@@ -321,16 +324,23 @@ describe("a person's own page", () => {
 });
 
 describe("changing the password", () => {
-  async function fill(current: string, next: string, again = next) {
+  /** Somebody holding no second factor: a password and a token. */
+  const PASSWORD_ONLY = [PASSWORD, TOKEN];
+
+  async function fill(current: string, next: string, again = next, code?: string) {
     await screen.findByLabelText("Current password");
     type("Current password", current);
+    if (code !== undefined) type("Code", code);
     type("New password", next);
     type("Confirm new password", again);
     fireEvent.click(screen.getByRole("button", { name: "Change password" }));
   }
 
+  // SOMEBODY HOLDING NO SECOND FACTOR is asked for nothing beside the
+  // password, which is the whole of a step-up from them.
   test("sends the current one as its proof, and keeps this browser signed in", async () => {
     const engineIs = engine({
+      credentials: PASSWORD_ONLY,
       writes: {
         "POST /auth/password": () =>
           json(200, {
@@ -344,6 +354,8 @@ describe("changing the password", () => {
     mount();
     const sessionReads = () => engineIs.reads("/auth/session").length;
     await screen.findByText("This browser");
+    await screen.findByRole("button", { name: "Set up an authenticator…" });
+    expect(screen.queryByLabelText("Code")).toBeNull();
     const before = sessionReads();
     await fill("the old long passphrase", "a brand new long passphrase");
     expect(
@@ -377,6 +389,7 @@ describe("changing the password", () => {
   // to sign in — a 401 of any other kind would have.
   test("a wrong current password is the engine's sentence, and nobody is signed out", async () => {
     engine({
+      credentials: PASSWORD_ONLY,
       writes: {
         "POST /auth/password": () =>
           json(401, {
@@ -409,14 +422,124 @@ describe("changing the password", () => {
     });
     mount();
     await screen.findByText("This browser");
+    await screen.findByLabelText("Code");
     const before = engineIs.reads("/auth/session").length;
-    await fill("the old long passphrase", "a brand new long passphrase");
+    await fill(
+      "the old long passphrase",
+      "a brand new long passphrase",
+      "a brand new long passphrase",
+      "123456",
+    );
     expect((await screen.findAllByText("Your password is changed")).length).toBeGreaterThan(0);
     expect(
       screen.getAllByText(/this one included: sign in with the new password/).length,
     ).toBeGreaterThan(0);
     await waitFor(() => expect(location.hash.startsWith("#/login")).toBe(true));
     expect(engineIs.reads("/auth/session").length).toBe(before);
+    expect(currentSessionNeed()).toBeNull();
+  });
+});
+
+describe("changing the password while holding a second factor", () => {
+  async function fill(code: string) {
+    await screen.findByLabelText("Code");
+    type("Current password", "the old long passphrase");
+    if (code) type("Code", code);
+    type("New password", "a brand new long passphrase");
+    type("Confirm new password", "a brand new long passphrase");
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+  }
+
+  // THE CHANGE ENDS EVERY OTHER SESSION, so the engine asks somebody holding
+  // a second factor for its code as a step-up does: on the password alone a
+  // stolen cookie and a known password signed the owner out everywhere. The
+  // CONTROL is the password-only change above, which draws no field and
+  // sends none. Mutation: send the body without the code and the write
+  // carries none.
+  test.each([
+    ["an authenticator app", [PASSWORD, APP, CODES]],
+    ["recovery codes alone", [PASSWORD, CODES]],
+  ])("holding %s, it asks for a code and sends it", async (_, credentials) => {
+    const engineIs = engine({
+      credentials,
+      writes: {
+        "POST /auth/password": () => json(200, { ...PERSON, lineage: undefined, position: "1:9" }),
+      },
+    });
+    mount();
+    expect(await screen.findByLabelText("Code")).toBeDefined();
+    expect(
+      screen.getByText(
+        "The current code from your authenticator app, or one of your recovery codes.",
+      ),
+    ).toBeDefined();
+    await fill(" 123456 ");
+    expect(await screen.findByText(/this browser stays signed in/)).toBeDefined();
+    expect(engineIs.writes()).toHaveLength(1);
+    expect(engineIs.writes()[0]!.body).toEqual({
+      current_password: "the old long passphrase",
+      new_password: "a brand new long passphrase",
+      code: "123456",
+    });
+  });
+
+  // NOTHING IS SENT WITHOUT IT: the engine would only ask for it back.
+  test("a change without the code posts nothing, and says what is missing", async () => {
+    const engineIs = engine();
+    mount();
+    await fill("");
+    expect(
+      await screen.findByText(
+        /Type a code from your authenticator app, or one of your recovery codes/,
+      ),
+    ).toBeDefined();
+    expect(engineIs.writes()).toEqual([]);
+  });
+
+  // A WRONG CODE IS THE SIGN-IN'S ONE REFUSAL, naming no field — said as the
+  // step-up dialog says it, the spent code cleared, and nobody signed out. The
+  // CONTROL is the wrong current password above, which the engine names and
+  // words itself.
+  test("a wrong code is worded as the step-up dialog words it, and nobody is signed out", async () => {
+    engine({
+      writes: {
+        "POST /auth/password": () =>
+          json(401, {
+            error: "sign_in_refused",
+            message: "Those sign-in details were not accepted. Check them and try again.",
+          }),
+      },
+    });
+    mount();
+    await fill("000000");
+    expect(
+      await screen.findByText("That password or code was not accepted. Check both and try again."),
+    ).toBeDefined();
+    expect(screen.getByLabelText("Code")).toHaveProperty("value", "");
+    expect(currentSessionNeed()).toBeNull();
+  });
+
+  // THE ENGINE IS WHAT DECIDES whether a code is held: a list that is behind
+  // — a factor enrolled in another tab — draws no field, and the engine's
+  // `second_factor_required` draws it, saying why, with nobody signed out.
+  test("an engine asking for a code the list did not show draws the field", async () => {
+    const engineIs = engine({
+      credentials: [PASSWORD],
+      writes: {
+        "POST /auth/password": () =>
+          json(401, { error: "second_factor_required", message: "Enter your code." }),
+      },
+    });
+    mount();
+    await screen.findByRole("button", { name: "Set up an authenticator…" });
+    expect(screen.queryByLabelText("Code")).toBeNull();
+    type("Current password", "the old long passphrase");
+    type("New password", "a brand new long passphrase");
+    type("Confirm new password", "a brand new long passphrase");
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+    expect(await screen.findByLabelText("Code")).toBeDefined();
+    expect(screen.getByText(/needs a code from your authenticator app/)).toBeDefined();
+    expect(engineIs.writes()[0]!.body).not.toHaveProperty("code");
     expect(currentSessionNeed()).toBeNull();
   });
 });

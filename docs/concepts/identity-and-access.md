@@ -804,7 +804,8 @@ read from rows that do not hold the move yet, so the person signs in again with
 the new password. Each change is an `iam_password_changed` event.
 
 In the dashboard it is the Account page's **Change password** (`#/account`):
-the current password, and the new one typed twice.
+the current password, a code where the person holds a second factor, and the
+new one typed twice.
 
 ### A forgotten password is a one-time link from an administrator
 
@@ -1478,7 +1479,7 @@ asking about the caller and nobody else:
 | Section | What it does, and what it ends |
 |---|---|
 | **Profile** | Their login, name, address, seat and grants, read-only — an administrator changes them |
-| **Change password** | [The current password and the new one](#changing-your-own-password-ends-everything-else), typed twice. Ends every other session and every personal token; this browser stays signed in |
+| **Change password** | [The current password, a code where a second factor is held, and the new one](#changing-your-own-password-ends-everything-else), typed twice. Ends every other session and every personal token; this browser stays signed in |
 | **Two-step verification** | Sets up or replaces the authenticator app, and issues new [recovery codes](#a-code-is-spent-when-it-is-used) — only beside an app |
 | **Where you are signed in** | Their live sessions, this browser marked (`GET /auth/session`'s `lineage`); any other signed out by name with `POST /auth/logout/{lineage}`, or all of them — and every personal token — with **Sign out everywhere**, which asks first |
 | **Personal access tokens** | [Their machine tokens](#machine-tokens-a-persons-own-and-a-service-accounts): minted with no `?person=`, the value shown once, and revoked |

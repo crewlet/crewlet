@@ -5594,16 +5594,25 @@ into swapping for somebody else's.
   grants, read-only, with the line that an administrator changes them: a
   person changing their own would be the escalation the directory exists to
   close. A sealed value reads *sealed*, never blank.
-- **Security** — **Change password**: the current one, which is the proof (no
-  step-up is asked), and the new one typed twice against the floor
-  `/auth/config` names. The change ends every other session and every personal
-  access token the person holds and keeps this browser signed in, which the
-  page says; a `202` (this node has not applied it yet) ended this browser's
-  session too and cleared its cookie, so the tab goes straight to the sign-in
-  with a toast saying the password changed and to sign in with the new one —
-  the page reads nothing more, since every read would be refused. A wrong
-  current password is the sign-in surface's one refusal, about what was typed,
-  and never sends the person to sign in. **Two-step verification** sets up or
+- **Security** — **Change password**: the current one, a **Code** — for
+  somebody holding a second factor, an authenticator app or recovery codes:
+  the app's current code or a recovery code, as at the sign-in — and the new
+  one typed twice against the floor `/auth/config` names. The password and
+  the code are the proof, a step-up's taken in the one request, so no step-up
+  is asked. The Code field is drawn when the credential list says a factor is
+  held, and also once the engine answers `second_factor_required` for a list
+  that was behind; somebody holding none is never shown it. The change ends
+  every other session and every personal access token the person holds and
+  keeps this browser signed in, which the page says; a `202` (this node has
+  not applied it yet) ended this browser's session too and cleared its
+  cookie, so the tab goes straight to the sign-in with a toast saying the
+  password changed and to sign in with the new one — the page reads nothing
+  more, since every read would be refused. A wrong current password or code
+  is the sign-in surface's one refusal, about what was typed, and never sends
+  the person to sign in: the engine names a wrong current password and words
+  it itself, and a refusal naming no field after a code was sent reads as the
+  step-up dialog reads it ("That password or code was not accepted"), the
+  code cleared. **Two-step verification** sets up or
   replaces the authenticator app — a first one issuing a first set of recovery
   codes, shown once, as `#/enrol` does, and a replacement keeping the set held
   — and **New recovery codes** issues a set —
