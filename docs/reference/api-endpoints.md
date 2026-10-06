@@ -283,9 +283,9 @@ node means nothing was done.
 > cookie, and any other client sets the header. **No route reads a credential
 > off its URL**, the socket included: a `?token=…` authenticates nobody,
 > because a URL lands in proxy logs and browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
-> `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/static/*`),
-> and the five sign-in routes plus `/auth/invite/*` and `/auth/reset/*` — a
-> login cannot require a login. That is an **exact list and not a `/auth/` prefix**: the same surface
+> `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/favicon.ico`,
+> `/static/*`), and `/auth/config`, `/auth/login`, `/auth/logout`,
+> `/auth/invite/*` and `/auth/reset/*` — a login cannot require a login. That is an **exact list and not a `/auth/` prefix**: the same surface
 > ends sessions and enrols second factors, and a prefix would put those behind
 > no credential at all. See
 > [Configuration § Auth](../concepts/configuration.md#auth).
