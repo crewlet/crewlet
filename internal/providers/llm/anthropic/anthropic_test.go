@@ -1220,3 +1220,94 @@ func TestAUserMessageAfterToolResultsJoinsTheirTurnAfterThem(t *testing.T) {
 		t.Errorf("the note is %v, want it last, as text", note)
 	}
 }
+
+// --- streaming --------------------------------------------------------------
+
+// AN ENDPOINT THAT CANNOT STREAM IS ASKED ONCE, AND ITS ANSWER IS KEPT.
+//
+// "Anthropic-compatible" is a de-facto standard with real variance: a local
+// shim or a gateway may take `stream: true` and answer with a whole message.
+// The SDK reads any 2xx body as an event stream, a JSON body has no events,
+// and the answer — usage included — was thrown away and asked for again
+// unary: the round was billed twice and the first answer reached no counter.
+// It is read as the message it is now, and the capability is latched.
+func TestAnEndpointThatCannotStreamIsAskedOnceAndItsAnswerKept(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, http.StatusOK, okMessage("Hello"))
+	})
+	p := newProvider(t, url, nil)
+	req := llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		OnDelta:  func(llm.Delta) {},
+	}
+
+	out, err := p.Complete(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.Content != "Hello" || out.InputTokens != 10 || out.OutputTokens != 5 {
+		t.Errorf("completion = %q with %d/%d tokens, want the endpoint's answer and the "+
+			"10/5 it billed", out.Content, out.InputTokens, out.OutputTokens)
+	}
+	if got := api.count(); got != 1 {
+		t.Errorf("the first call cost %d requests, want 1: the endpoint's answer was "+
+			"thrown away and asked for again", got)
+	}
+	if stream, _ := api.seen()[0].body["stream"].(bool); !stream {
+		t.Error("the first request did not ask to stream, so nothing was negotiated")
+	}
+
+	// LATCHED: the next call goes unary without asking to stream.
+	if _, err := p.Complete(t.Context(), req); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	if got := api.count(); got != 2 {
+		t.Errorf("the second call cost %d requests, want 1", got-1)
+	}
+	if stream, _ := api.seen()[1].body["stream"].(bool); stream {
+		t.Error("the second request asked to stream again: the capability was not latched")
+	}
+}
+
+// A STREAM IS STILL A STREAM: fragments forwarded as they land, and the
+// accumulated message the same shape the unary path returns.
+func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
+	t.Parallel()
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		for _, ev := range []struct{ name, data string }{
+			{"message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message",` +
+				`"role":"assistant","model":"claude-test","content":[],"stop_reason":null,` +
+				`"usage":{"input_tokens":10,"output_tokens":1}}}`},
+			{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"text","text":""}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"text_delta","text":"Hel"}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"text_delta","text":"lo"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},` +
+				`"usage":{"output_tokens":5}}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		} {
+			_, _ = io.WriteString(w, "event: "+ev.name+"\ndata: "+ev.data+"\n\n")
+		}
+	})
+	var got []string
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		OnDelta:  func(d llm.Delta) { got = append(got, d.Content) },
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(got) != 2 || got[0] != "Hel" || got[1] != "lo" {
+		t.Errorf("fragments = %#v, want each piece as it arrived", got)
+	}
+	if out.Content != "Hello" || out.InputTokens != 10 || out.OutputTokens != 5 {
+		t.Errorf("completion = %q with %d/%d tokens, want the assembled answer at 10/5",
+			out.Content, out.InputTokens, out.OutputTokens)
+	}
+}

@@ -27,6 +27,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -230,21 +231,29 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			if attempt > 1 {
 				req.Send(llm.Delta{Restart: true, Model: p.model})
 			}
-			msg, sErr := p.streamOnce(ctx, req, params, opt)
-			if errors.Is(sErr, errNoStream) {
+			msg, unary, sErr := p.streamOnce(ctx, req, params, opt)
+			if unary || errors.Is(sErr, errNoStream) {
 				// This endpoint answered the streaming request without
 				// streaming. "OpenAI-compatible" and "Anthropic-compatible"
 				// are de-facto standards with real variance — a local shim
 				// or a proxy may implement the unary route only — so the
 				// capability is NEGOTIATED rather than assumed or pushed
 				// onto the operator as a config field they would have to
-				// know to set. Latched, so it costs one call per process
-				// and never repeats.
+				// know to set. Latched, so it is found out once per process
+				// and never again.
 				p.noStream.Store(true)
 				log.WarnContext(ctx, "provider_does_not_stream",
 					"provider", providerName, "model", p.model,
 					"hint", "the endpoint answered a streaming request without streaming; "+
 						"live phase text will appear per round instead of as it is written")
+				if unary {
+					// THE ANSWER IT GAVE IS THE ANSWER. It was processed
+					// and billed, and asking again would pay twice for a
+					// round whose first answer no counter ever heard of.
+					return msg, nil
+				}
+				// Answered with nothing a message could be read from, so
+				// there is no answer to keep: asked again, unary.
 				return p.client.Messages.New(ctx, params, opt)
 			}
 			return msg, sErr
@@ -256,7 +265,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 }
 
 // errNoStream reports an endpoint that accepted a streaming request and
-// answered without streaming.
+// answered with neither a stream nor a message.
 var errNoStream = errors.New("endpoint did not stream")
 
 // streamOnce runs one streamed attempt, forwarding fragments as they land.
@@ -265,20 +274,35 @@ var errNoStream = errors.New("endpoint did not stream")
 // signatures on thinking blocks included, which must survive verbatim or the
 // next round is rejected — so [Provider.completion] reads one shape however
 // the response arrived, rather than growing a second interpretation.
+//
+// unary reports an endpoint that answered with a whole message instead of a
+// stream ([httpapi.UnaryAnswer]): that message is the answer, decoded exactly
+// as the unary path decodes one, and no fragment was forwarded.
 func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.MessageNewParams, opt option.RequestOption,
-) (*sdk.Message, error) {
-	stream := p.client.Messages.NewStreaming(ctx, params, opt)
+) (msg *sdk.Message, unary bool, err error) {
+	var answer sdk.Message
+	whole := httpapi.NewUnaryAnswer(func(body []byte) bool {
+		var m sdk.Message
+		// A message names itself or carries content; an error envelope a
+		// gateway sent with a 2xx status, or an empty body, does neither.
+		if json.Unmarshal(body, &m) != nil || (m.ID == "" && len(m.Content) == 0) {
+			return false
+		}
+		answer = m
+		return true
+	})
+	stream := p.client.Messages.NewStreaming(ctx, params, opt, option.WithMiddleware(whole.Middleware))
 	defer func() { _ = stream.Close() }()
 
-	var msg sdk.Message
+	var streamed sdk.Message
 	events := 0
 	for stream.Next() {
 		events++
 		event := stream.Current()
-		if err := msg.Accumulate(event); err != nil {
-			return nil, err
+		if err := streamed.Accumulate(event); err != nil {
+			return nil, false, err
 		}
 		switch d := event.Delta; d.Type {
 		case "text_delta":
@@ -294,15 +318,18 @@ func (p *Provider) streamOnce(
 		// A stream that dies MID-BODY is a failure of the call, not a
 		// short answer: handing back what accumulated would give the loop
 		// a truncated response as though the model had finished.
-		return nil, err
+		return nil, false, err
 	}
 	if events == 0 {
+		if whole.Taken() {
+			return &answer, true, nil
+		}
 		// Not an error of the call — the endpoint simply does not do this.
 		// Distinguished from a failure so the caller can fall back rather
 		// than fail a phase over a capability.
-		return nil, errNoStream
+		return nil, false, errNoStream
 	}
-	return &msg, nil
+	return &streamed, false, nil
 }
 
 // classify turns an SDK failure into the contract's error. The errors.As on

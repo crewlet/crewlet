@@ -501,30 +501,6 @@ func (m *scriptedModel) seen() []string {
 	return append([]string(nil), m.calls...)
 }
 
-// kept is the phase of every call whose answer the engine was HANDED, in
-// order: every call but a streamed one. The fixture answers every request
-// unary, so the first streamed request of a process is answered without a
-// stream, which the provider adapter reads as an endpoint that does not
-// stream — it drops that answer, asks again unary and stops streaming (see
-// providers/llm/anthropic's errNoStream). A streamed request here is
-// therefore never a completion the engine saw, and a case that adds up what
-// the engine was billed for leaves it out.
-func (m *scriptedModel) kept() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []string
-	for i, phase := range m.calls {
-		var req struct {
-			Stream bool `json:"stream"`
-		}
-		if i < len(m.bodies) && json.Unmarshal(m.bodies[i], &req) == nil && req.Stream {
-			continue
-		}
-		out = append(out, phase)
-	}
-	return out
-}
-
 // systemPrompts is what the model was actually shown, per call.
 func (m *scriptedModel) systemPrompts() []string {
 	m.mu.Lock()

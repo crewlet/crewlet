@@ -1116,6 +1116,20 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	if out.Content != "Hello" {
 		t.Errorf("content = %q, want the unary answer", out.Content)
 	}
+	// ASKED ONCE, AND THE ANSWER IT GAVE IS THE ONE RETURNED, usage and
+	// all. The endpoint processed and billed the streaming request; asking
+	// again unary paid for the round twice, and the first answer reached
+	// no counter and no rollup.
+	if got := api.count(); got != 1 {
+		t.Errorf("the first call cost %d requests, want 1: the endpoint's answer "+
+			"was thrown away and asked for again", got)
+	}
+	if out.InputTokens != 10 || out.OutputTokens != 5 {
+		t.Errorf("tokens = %d/%d, want the 10/5 the endpoint billed", out.InputTokens, out.OutputTokens)
+	}
+	if stream, _ := api.seen()[0].body["stream"].(bool); !stream {
+		t.Error("the first request did not ask to stream, so nothing was negotiated")
+	}
 	before := api.count()
 
 	// LATCHED: the capability is discovered once, not re-probed per call.

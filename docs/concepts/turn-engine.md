@@ -1022,7 +1022,10 @@ of a backend: only the tool loop sets `OnDelta`, because every other provider
 call in the engine (reflection, summaries, the extension judge) wants an
 answer rather than a running commentary. An endpoint that accepts a streaming
 request and answers without streaming is negotiated down to the unary call,
-once per process.
+once per process — and the answer it gave that first time is the round's
+answer, usage and all, rather than thrown away and asked for again: the
+endpoint billed it, and a second request paid for the round twice while the
+first answer reached no budget counter and no spend rollup.
 
 **`response` is a join, so the split travels beside it.** That string is
 every round's assistant turn joined with a blank line, and the join cannot

@@ -1297,13 +1297,16 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// the two agree once the charges are through, and the poll that sees them
 	// agree is a snapshot in which every refused round so far is counted.
 	// Every round of the loop here is a tool-use reply, and every auxiliary
-	// pass a text reply, so each call's cost is known from its kind. Only
-	// the calls whose answer the engine was handed are summed (see
-	// [scriptedModel.kept]).
+	// pass a text reply, so each call's cost is known from its kind. EVERY
+	// call the model answered is summed, the first streamed request
+	// included: the fixture answers it unary, and the adapter keeps that
+	// answer rather than dropping it and asking again
+	// (httpapi.UnaryAnswer), so there is no call the engine was billed for
+	// and never handed.
 	var used, want int
 	var calls []string
 	waitFor(t, "the counter to hold every completion the model answered", func() bool {
-		calls = n.model.kept()
+		calls = n.model.seen()
 		org, err := budgets.Used(t.Context(), coord.OrgScope, today())
 		if err != nil {
 			return false
