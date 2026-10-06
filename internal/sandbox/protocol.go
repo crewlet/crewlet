@@ -19,6 +19,14 @@
 // lost the answer outright. The rule, and what it does with a row parked
 // before a conversation identity was written, is [ConversationRef.Answers].
 //
+// AND BY WHEN IT WAS WRITTEN, against when the question was asked
+// ([PendingRun.AskedAt]): the first reply posted after the question is the
+// answer, and it is RECORDED on the run ([StatusAnswered]) before anything is
+// done with it. Resuming with it is then this package's job, retried on its
+// own schedule with the seat's inbox held behind it, never the inbox's — a
+// person's message handed back to the broker returns behind their next one,
+// which then took the question. See answerowed.go.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 

@@ -368,6 +368,18 @@ type Result struct {
 	// the failure sealed itself, and a follow-up asking "did you do it?"
 	// was answered against a fiction.
 	Delivered bool
+
+	// WorkedThrough are completion-ledger keys for EARLIER triggers this
+	// turn answered without being woken for them: the chat messages its
+	// thread block showed it that were still waiting for an answer.
+	//
+	// FILLED BY THE ENGINE, which assembled the block, and never by the
+	// loop, which does not know what a prompt showed. The dispatch records
+	// them beside the turn's own triggers when the turn completes, so a
+	// message that comes round on its own afterwards — a failed delivery
+	// returns behind its conversation's newer mail — is dropped as already
+	// worked instead of being answered a second time, out of order.
+	WorkedThrough []string
 }
 
 // Run drives the turn.

@@ -62,6 +62,22 @@ const (
 	// one would stop every other thing that seat does.
 	StatusAwaiting = "awaiting_clarification"
 
+	// StatusAnswered — a person's reply to the question is RECORDED on the
+	// row and the resume it drives is owed. Nobody is being waited on any
+	// more, so it is not [Awaiting]; nothing is running yet, so it does not
+	// hold the seat either — what keeps the seat's later mail behind the
+	// resume is an inbox hold the coordinator takes for as long as the
+	// answer is owed (see [Coordinator.TryResumeFromAnswer]).
+	//
+	// ITS OWN STATUS rather than a field on an awaiting row, because the
+	// fact it records — this question has its answer — is what every reader
+	// that matches, reaps or lists questions has to see, and a status is
+	// what a build that predates it refuses rather than misreads: an older
+	// node's answer match lists [Awaiting] rows only, so it can never take a
+	// later reply as the answer to a question that already has one, which a
+	// field it does not decode would let it do.
+	StatusAnswered = "answered"
+
 	// StatusResumed — the tail has been claimed. THE AT-MOST-ONCE GATE.
 	StatusResumed = "resumed"
 
@@ -79,7 +95,12 @@ const (
 // LAUNCHING IS DELIBERATELY ABSENT. A claim is the promise that a resume can
 // follow it, and a launching row has no conversation to resume — claiming one
 // is exactly the mistake [StatusLaunching] exists to make impossible.
-var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed}
+//
+// ANSWERED IS HERE because recording an answer is not resuming with it: the
+// resume claims the row out of [StatusAnswered], and a resume that fails hands
+// the claim back there, for the coordinator's own retry rather than for a
+// redelivery of the person's message.
+var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed, StatusAnswered}
 
 // Tail is what a claim expects to find on a run: the job the signal is about,
 // and the statuses that signal may take the tail out of.
@@ -112,9 +133,18 @@ func CompletionTail(launch string) Tail {
 	return Tail{Launch: launch, From: []string{StatusRunning}}
 }
 
-// AnswerTail is what an answer claims: the job that asked, while it waits.
+// AnswerTail is what an answer BY TURN claims: the job that asked, while it
+// waits. An answer by turn names its run, so it is resumed with directly and
+// never recorded first — and a run whose question already has a recorded
+// answer ([StatusAnswered]) is not waiting for it.
 func AnswerTail(launch string) Tail {
 	return Tail{Launch: launch, From: Awaiting}
+}
+
+// RecordedAnswerTail is what the resume of a RECORDED answer claims: the job
+// that asked, once its reply is on the row. See [StatusAnswered].
+func RecordedAnswerTail(launch string) Tail {
+	return Tail{Launch: launch, From: []string{StatusAnswered}}
 }
 
 // Release is how a claimed tail is handed back for its signal's retry: the
@@ -177,8 +207,13 @@ var Awaiting = []string{StatusAwaiting, StatusReseed}
 // LAUNCHING is here for the same reason and only that reason — it is never
 // polled, but a node that died mid-launch left a box behind, and a row nobody
 // lists is a box nobody reclaims.
+//
+// ANSWERED is here because the resume it owes has to be found again by
+// whichever node holds the seat next: an answer recorded on a node that then
+// stopped is re-driven by the successor's recovery pass, not by the person
+// sending it a second time.
 var Active = []string{
-	StatusLaunching, StatusRunning, StatusAwaiting, StatusReseed, StatusResumed,
+	StatusLaunching, StatusRunning, StatusAwaiting, StatusReseed, StatusAnswered, StatusResumed,
 }
 
 // BridgeCall is one tool call a bridged run made.
@@ -468,6 +503,37 @@ type PendingRun struct {
 	ParkedInputTokens  int `json:"parked_input_tokens,omitempty"`
 	ParkedOutputTokens int `json:"parked_output_tokens,omitempty"`
 
+	// AskedAt is the instant the question was put — taken before it was
+	// announced, so it precedes the moment anybody could have read it.
+	//
+	// THE ANCHOR EVERY ANSWER IS MEASURED AGAINST. A reply qualifies only if
+	// it was posted at or after this instant ([Reply.Posted]): a message
+	// written before the question existed cannot be its answer, however it
+	// is threaded. Without it the match was purely positional — "the next
+	// inbound on the conversation" — so a reply that answered an EARLIER
+	// question, held back by a failed resume and redelivered behind the
+	// conversation's newer mail, was spliced into the run as the answer to
+	// whatever it asked next, and a message sent while the job was still
+	// running was taken as the answer the moment it parked.
+	//
+	// Zero on a row parked by a build that did not record it, which keeps
+	// the positional match that build made: nothing rewrites a parked run.
+	AskedAt time.Time `json:"asked_at,omitzero"`
+
+	// Answer is the reply recorded as this question's answer, set exactly
+	// while the run is [StatusAnswered] (and while that answer's resume is
+	// claimed). See [RecordedAnswer].
+	Answer *RecordedAnswer `json:"answer,omitempty"`
+
+	// DeclinedAnswers are the deliveries this question was recorded with
+	// and then let go of — every attempt to resume with them failed, so they
+	// went on to the seat's ordinary route instead (see
+	// [Coordinator.declineAnswer]) — by event id, and the ids of the copies
+	// handed back. Neither is ever recorded as this question's answer
+	// again, which is what stops a copy circling the run it already failed
+	// to reach. Bounded by [maxDeclinedAnswers]; cleared with the question.
+	DeclinedAnswers []string `json:"declined_answers,omitempty"`
+
 	// WorkItem is the one work item the launching turn was charged to, nil
 	// when it was on nothing.
 	//
@@ -666,6 +732,10 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 // wrong in: the box is held a moment longer rather than reclaimed out from
 // under a person who is still typing.
 //
+// AN ANSWERED RUN TAKES THE SAME FALLBACK, for the same reason: its box is
+// still the park's, held while the recorded answer waits on its resume, and
+// its last write is the record of that answer — later still than the park.
+//
 // A RUN THE ENGINE IS DRIVING TAKES NO FALLBACK. Every other pause in the
 // lifecycle lasts one dispatch and is settled by the tail that made it, so
 // there the stamp is the whole answer and its absence means the box is live —
@@ -678,7 +748,7 @@ func (r PendingRun) HeldSince() (time.Time, bool) {
 	if r.Paused() {
 		return r.PausedAt, true
 	}
-	if !slices.Contains(Awaiting, r.Status) || r.UpdatedAt.IsZero() {
+	if (!slices.Contains(Awaiting, r.Status) && r.Status != StatusAnswered) || r.UpdatedAt.IsZero() {
 		return time.Time{}, false
 	}
 	return r.UpdatedAt, true
@@ -785,8 +855,20 @@ type PendingStore interface {
 	// arrived since — ClaimForResume has already moved the row and an
 	// Execute loop is reconnecting to that very box. Killing the box before
 	// this returns true destroys it underneath that resume. Conditional on
-	// StatusAwaiting alone: a run already reseeded has no snapshot left to
-	// expire, and any other status means somebody else owns the tail.
+	// StatusAwaiting or [StatusAnswered]: a run already reseeded has no
+	// snapshot left to expire, and any other status means somebody else
+	// owns the tail.
+	//
+	// AN ANSWERED RUN EXPIRES TOO, because its box is held for exactly as
+	// open-ended a wait as a parked one's: the answer is recorded, but its
+	// resume waits on the seat's holder and its conditions, and a seat no
+	// node holds may wait for days. It keeps its status and its answer —
+	// the run is still owed its resume, which re-seeds from the branch as
+	// a reseeded run's does — and the answer's From becomes
+	// [StatusReseed], so an answer that is let go of reopens the question
+	// on a run with no box rather than one naming the box just destroyed.
+	// The flip is still the authority over the box: a resume that claimed
+	// the row first moved it out of answered, and this loses.
 	//
 	// It clears the box IN THE SAME WRITE rather than leaving that to a
 	// following ReleaseBox, because the gap between two writes is a state a
@@ -843,16 +925,27 @@ type PendingStore interface {
 	// ListActiveForSeat is the "is this seat busy?" read.
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
 
-	// FindAwaitingByConversation matches a person's answer back to the run
-	// that asked, on the CONVERSATION the question was asked in.
+	// RecordAnswer records a person's reply as the answer to the question a
+	// run is parked on, flipping it to [StatusAnswered], and hands back the
+	// row IFF THIS CALL WON.
 	//
-	// The rule is [ConversationRef.Best] and lives there rather than in an
-	// implementation, because it is a statement about two VALUES that every
-	// store has to make the same way — which rows a delivery may answer,
-	// which of them it answers when several may, and what either does with a
-	// row written before the conversation identity existed. A store lists
-	// the seat's parked runs and decides none of it.
-	FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error)
+	// A COMPARE-AND-SET, because the first qualifying reply is the answer
+	// and every later one is not: the run must still be [Awaiting], on the
+	// launch the caller matched, with no answer recorded and none of the
+	// reply's deliveries among [PendingRun.DeclinedAnswers]. Two replies
+	// racing for one question — on two nodes across a seat handoff, or a
+	// chat reply and an answer by turn — resolve here, and the loser reads
+	// false. FALSE IS NOT AN ERROR.
+	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer) (PendingRun, bool, error)
+
+	// DeclineAnswer lets go of a recorded answer the run could not be
+	// resumed with: the run goes back to the status the record took it out
+	// of, the answer is cleared, and its deliveries — with the copies
+	// handed back for them, declined — join [PendingRun.DeclinedAnswers].
+	// Only while the run is still [StatusAnswered] on that launch, holding
+	// that answer, and no newer lease outranks the fence; reports whether
+	// THIS call did. FALSE IS NOT AN ERROR.
+	DeclineAnswer(ctx context.Context, turnID, launch string, declined []string, fence Fence) (bool, error)
 }
 
 // Conversation is the durable conversation this run reports back to.
@@ -1067,6 +1160,53 @@ type Clarification struct {
 	// Answerers is who the question may be answered by, resolved from
 	// Audience against the chart — see [PendingRun.AudienceHandles].
 	Answerers Audience
+
+	// AskedAt is when the question was put, taken before it was announced
+	// — see [PendingRun.AskedAt].
+	AskedAt time.Time
+}
+
+// RecordedAnswer is a person's reply, recorded on the run it answers before
+// anything is done with it.
+//
+// RECORDING IS NOT RESUMING, and splitting the two is the whole point. The
+// reply used to be held by its inbox delivery until a resume succeeded: a
+// resume that failed handed the MESSAGE back to the queue, which on the only
+// broker this engine ships returns a failure BEHIND the conversation's newer
+// mail — so the person's next message reached the still-waiting run first
+// and was spliced in as the answer, and the first one came round afterwards
+// to answer whatever the run asked next. Recorded here, by a compare-and-set
+// that only the first qualifying reply wins, the answer is durable the moment
+// the delivery is acknowledged, and retrying the resume is the coordinator's
+// job ([Coordinator.retryAnswer]) rather than the inbox's.
+type RecordedAnswer struct {
+	// Text is the reply as the resumed turn is handed it.
+	Text string `json:"text"`
+
+	// By is who gave it, as the delivery's envelope names them.
+	By string `json:"by,omitempty"`
+
+	// EventIDs are the deliveries the answer was made of. A copy of one of
+	// them reaching the seat again is the same answer, already recorded —
+	// never a second one, and never an ordinary message.
+	EventIDs []string `json:"event_ids"`
+
+	// Events are those deliveries, encoded, oldest first: the resume raises
+	// the working indicator off the newest one, and an answer this node gives
+	// up on hands them back to the seat's ordinary route as what they are.
+	Events []json.RawMessage `json:"events,omitempty"`
+
+	// PostedAt is when the newest of them was posted, the instant the
+	// question's [PendingRun.AskedAt] was compared against.
+	PostedAt time.Time `json:"posted_at,omitzero"`
+
+	// RecordedAt is when the answer was recorded.
+	RecordedAt time.Time `json:"recorded_at"`
+
+	// From is the status the record took the run out of — awaiting, or
+	// reseed when the pause reaper had already reclaimed the box — and the
+	// one an answer that is let go of puts it back to.
+	From string `json:"from"`
 }
 
 // Audience is who a parked question may be answered by: the seats, and

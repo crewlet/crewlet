@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -90,9 +91,16 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARowWithNoIdentityReportsBackToItsPartition", testARowWithNoIdentityReportsBackToItsPartition},
 		{"APreSplitRowIsStillAnswerable", testAPreSplitRowIsStillAnswerable},
 		{"ListingsAreStable", testListingsAreStable},
+		{"TheFirstReplyRecordedIsTheAnswer", testTheFirstReplyRecordedIsTheAnswer},
+		{"AnAnswerIsRecordedOnlyOnTheQuestionThatAsked", testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked},
+		{"AnAnswerIsResumedFromItsRecord", testAnAnswerIsResumedFromItsRecord},
+		{"ADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain", testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain},
+		{"ANewQuestionForgetsTheLastOnesAnswer", testANewQuestionForgetsTheLastOnesAnswer},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
 		{"AnAnsweredRunCannotBeExpiredUnderTheResume", testAnAnsweredRunCannotBeExpiredUnderTheResume},
+		{"AnAnswerWaitingOnItsResumeStillExpiresTheBox", testAnAnswerWaitingOnItsResumeStillExpiresTheBox},
+		{"AClaimedAnswerIsNotExpired", testAClaimedAnswerIsNotExpired},
 		{"ExpiringAPauseClearsTheBoxInTheSameWrite", testExpiringAPauseClearsTheBoxInTheSameWrite},
 		{"BridgeCallsAreAppendedInOrder", testBridgeCallsAreAppendedInOrder},
 		{"BridgeCallsSurviveWithoutAFence", testBridgeCallsSurviveWithoutAFence},
@@ -137,6 +145,21 @@ func run(turnID string) sandbox.PendingRun {
 		Reply:   "tool",
 		TraceID: "tr-1", CreatedAt: base,
 	}
+}
+
+// findAwaiting is the answer match as the coordinator makes it: the seat's runs
+// as this store lists them, judged by [sandbox.Reply.Best]. The rule is a
+// value's ([sandbox.ConversationRef.Best]); what the store is certified on is
+// handing over every candidate, and nothing else.
+func findAwaiting(ctx context.Context, s sandbox.PendingStore, handle string,
+	conv sandbox.ConversationRef,
+) (sandbox.PendingRun, bool, error) {
+	runs, err := s.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		return sandbox.PendingRun{}, false, err
+	}
+	got, ok := sandbox.Reply{Conv: conv}.Best(runs)
+	return got, ok, nil
 }
 
 // answerOnTheDM is the reply to the question [run] parked on: the same DM
@@ -474,7 +497,7 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	if seat, err := s.ListActiveForSeat(ctx, "swe"); err != nil || len(seat) != 0 {
 		t.Errorf("the seat's busy read still sees a finished run: %+v, %v", seat, err)
 	}
-	if _, found, err := s.FindAwaitingByConversation(ctx, "swe", answerOnTheDM); err != nil || found {
+	if _, found, err := findAwaiting(ctx, s, "swe", answerOnTheDM); err != nil || found {
 		t.Errorf("an answer matched the question of a finished run: found %v, %v", found, err)
 	}
 	if _, won, err := s.ClaimForResume(ctx, "t1", tail); err != nil || won {
@@ -1179,7 +1202,7 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 			t.Fatalf("park %s: %v", id, err)
 		}
 	}
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
+	got, ok, err := findAwaiting(t.Context(), s, "swe", answerOnTheDM)
 	if err != nil || !ok {
 		t.Fatalf("find: ok=%v err=%v", ok, err)
 	}
@@ -1187,7 +1210,7 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("matched %s, want the most recently parked question", got.TurnID)
 	}
 	// And a different seat's conversation is not this seat's.
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", answerOnTheDM); ok {
+	if _, ok, _ := findAwaiting(t.Context(), s, "other", answerOnTheDM); ok {
 		t.Error("another seat's answer matched this seat's run")
 	}
 	// THE MATCH IS ON THE CONVERSATION, NOT ON THE BATCH BESIDE IT: a direct
@@ -1196,7 +1219,7 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 	// Compared on the partition this would miss, which is the same miss that
 	// strands a question asked the other way round — see
 	// testARunParkedOnATopLevelDMIsAnsweredInItsThread.
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+	if _, ok, _ := findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
 		Identity: "chat:D1", Partition: "chat:D1",
 	}); !ok {
 		t.Error("a top-level reply on the DM line did not answer the question asked on it")
@@ -1247,7 +1270,7 @@ func testARunParkedOnATopLevelDMIsAnsweredInItsThread(t *testing.T, s sandbox.Pe
 	park(t, s, "t1")
 
 	// The person's reply, in the thread the seat was told to open.
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+	got, ok, err := findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
 		Identity: "chat:D1", Partition: "chat:D1:root-1",
 	})
 	if err != nil {
@@ -1283,7 +1306,7 @@ func testTwoQuestionsOnOneDMAreToldApartByTheirThreads(t *testing.T, s sandbox.P
 	park(t, s, "t1")
 	park(t, s, "t2")
 
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+	got, ok, err := findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
 		Identity: "chat:D1", Partition: "chat:D1:root-1",
 	})
 	if err != nil || !ok {
@@ -1295,7 +1318,7 @@ func testTwoQuestionsOnOneDMAreToldApartByTheirThreads(t *testing.T, s sandbox.P
 	}
 	// AND THE OTHER THREAD'S REPLY REACHES THE OTHER RUN, so what is under
 	// test is the pairing rather than a preference for the older row.
-	got, ok, err = s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+	got, ok, err = findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
 		Identity: "chat:D1", Partition: "chat:D1:root-2",
 	})
 	if err != nil || !ok || got.TurnID != "t2" {
@@ -1304,7 +1327,7 @@ func testTwoQuestionsOnOneDMAreToldApartByTheirThreads(t *testing.T, s sandbox.P
 	// AND RECENCY IS STILL THE LAST WORD where the thread cannot decide: a
 	// TOP-LEVEL reply on the DM line matches neither thread, and the person
 	// is answering what they were just asked.
-	got, ok, err = s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+	got, ok, err = findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
 		Identity: "chat:D1", Partition: "chat:D1",
 	})
 	if err != nil || !ok || got.TurnID != "t2" {
@@ -1319,7 +1342,7 @@ func testTwoQuestionsOnOneDMAreToldApartByTheirThreads(t *testing.T, s sandbox.P
 func testAnAnswerOnAnotherConversationMatchesNothing(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+	if _, ok, _ := findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
 		Identity: "chat:D2", Partition: "chat:D2:root-9",
 	}); ok {
 		t.Error("a message on another conversation answered this run's question")
@@ -1342,7 +1365,7 @@ func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
 	threaded.ConversationKey = ""
 	mustLaunched(t, s, threaded)
 	park(t, s, "t1")
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
+	got, ok, err := findAwaiting(t.Context(), s, "swe", answerOnTheDM)
 	if err != nil || !ok || got.TurnID != "t1" {
 		t.Fatalf("find = %q ok=%v err=%v; a row parked before the split stopped "+
 			"being answerable at all", got.TurnID, ok, err)
@@ -1354,7 +1377,7 @@ func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
 	toplevel.CreatedAt = base.Add(time.Minute)
 	mustLaunched(t, s, toplevel)
 	park(t, s, "t2")
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
+	if _, ok, _ := findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
 		Identity: "chat:D9", Partition: "chat:D9:root-2",
 	}); !ok {
 		t.Error("a pre-split row parked from a top-level DM is still unanswerable")
@@ -1370,7 +1393,7 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 		sandbox.Clarification{Question: "?"}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe",
+	if _, ok, _ := findAwaiting(t.Context(), s, "swe",
 		sandbox.ConversationRef{}); ok {
 		t.Error("a message with no conversation matched a parked run")
 	}
@@ -1383,7 +1406,7 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 	keyless.CreatedAt = base.Add(time.Minute)
 	mustLaunched(t, s, keyless)
 	park(t, s, "t2")
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
+	got, ok, err := findAwaiting(t.Context(), s, "swe", answerOnTheDM)
 	if err != nil {
 		t.Fatalf("find: %v", err)
 	}
@@ -1499,6 +1522,68 @@ func testAnAnsweredRunCannotBeExpiredUnderTheResume(t *testing.T, s sandbox.Pend
 	}
 	if won {
 		t.Fatal("the reaper expired a run whose answer had already claimed it — it would destroy the box the resume is reconnecting to")
+	}
+}
+
+// A recorded answer waits on its resume, which waits on the seat's holder and
+// its conditions — on a seat no node holds, for as long as nobody takes it.
+// Its box is held for that whole wait, so the reaper expires it exactly as it
+// would a parked run's: the answer and its debt survive, the box does not, and
+// letting the answer go reopens the question on a run with nothing to
+// reconnect to.
+func testAnAnswerWaitingOnItsResumeStillExpiresTheBox(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	if err := s.MarkBoxPaused(ctx, "t1", base); err != nil {
+		t.Fatalf("MarkBoxPaused: %v", err)
+	}
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	if held, ok := mustGet(t, s, "t1").HeldSince(); !ok || !held.Equal(base) {
+		t.Fatalf("HeldSince = %v, %v: an answered run's box is still being held", held, ok)
+	}
+
+	won, err := s.ExpirePause(ctx, "t1")
+	if err != nil || !won {
+		t.Fatalf("ExpirePause = %v, %v: the box of an answer waiting on its resume was never reclaimed", won, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+		t.Fatalf("run = %q answer %+v, want the answer still recorded and owed", got.Status, got.Answer)
+	}
+	if got.SandboxID != "" || got.CommandID != "" || !got.PausedAt.IsZero() {
+		t.Fatalf("the row still names the box being destroyed: %+v", got)
+	}
+	if _, held := got.HeldSince(); held {
+		t.Fatal("the row still reads as holding a box")
+	}
+
+	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1"}, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("DeclineAnswer = %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusReseed {
+		t.Fatalf("a let-go answer reopened the question as %q, want %q — the box it was parked in is gone",
+			got.Status, sandbox.StatusReseed)
+	}
+}
+
+// An answered run whose resume already claimed it is not the reaper's.
+func testAClaimedAnswerIsNotExpired(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	if _, won, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch)); err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	if won, err := s.ExpirePause(ctx, "t1"); err != nil || won {
+		t.Fatalf("ExpirePause = %v, %v: the reaper took a box the answer's resume is reconnecting to", won, err)
 	}
 }
 
@@ -1924,5 +2009,199 @@ func testALaunchRecordKeptForAnotherJobIsNotThisOnes(
 	}
 	if f := mustGet(t, s, "t1").LaunchFacts(); f.ID != "job-new" || !f.Published {
 		t.Errorf("the publish was not recorded against job-new: %+v", f)
+	}
+}
+
+// answerOf is a recorded answer made of one delivery.
+func answerOf(id, text string) sandbox.RecordedAnswer {
+	return sandbox.RecordedAnswer{Text: text, EventIDs: []string{id}, RecordedAt: base}
+}
+
+// THE FIRST REPLY IS THE ANSWER, and the store is where that is decided: two
+// replies racing for one question — on two nodes across a handoff — both read
+// it waiting, and exactly one record lands.
+func testTheFirstReplyRecordedIsTheAnswer(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+
+	const racers = 8
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	won := 0
+	for i := range racers {
+		wg.Go(func() {
+			_, ok, err := s.RecordAnswer(ctx, "t1", launch,
+				answerOf(fmt.Sprintf("reply-%d", i), fmt.Sprintf("answer %d", i)))
+			if err != nil {
+				t.Errorf("RecordAnswer: %v", err)
+				return
+			}
+			if ok {
+				mu.Lock()
+				won++
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if won != 1 {
+		t.Fatalf("%d replies were recorded as the answer to one question, want 1", won)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil {
+		t.Fatalf("run = %q with answer %+v, want it answered", got.Status, got.Answer)
+	}
+	if got.Answer.From != sandbox.StatusAwaiting {
+		t.Errorf("the record took the run out of %q, want %q", got.Answer.From, sandbox.StatusAwaiting)
+	}
+	// AND A LATER ONE FINDS IT ANSWERED, whoever asks.
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("late", "late")); err != nil || ok {
+		t.Errorf("a reply after the answer = %v, %v, want refused", ok, err)
+	}
+	// AN ANSWERED QUESTION IS NOT WAITING, so no listing offers it a reply.
+	if _, found, _ := findAwaiting(ctx, s, "swe", answerOnTheDM); found {
+		t.Error("a question that has its answer was matched to another reply")
+	}
+}
+
+// A RECORD NAMES ITS QUESTION: the launch that asked, while it waits. One for
+// a job that replaced the asker, or for a run that is not waiting, is refused.
+func testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || ok {
+		t.Fatalf("an answer to a RUNNING run = %v, %v, want refused", ok, err)
+	}
+	park(t, s, "t1")
+	if _, ok, err := s.RecordAnswer(ctx, "t1", "another-launch", answerOf("r1", "use main")); err != nil || ok {
+		t.Fatalf("an answer naming another launch = %v, %v, want refused", ok, err)
+	}
+	if _, ok, err := s.RecordAnswer(ctx, "gone", launch, answerOf("r1", "use main")); err != nil || ok {
+		t.Fatalf("an answer to a missing run = %v, %v, want false and no error", ok, err)
+	}
+	if _, _, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{Text: "x"}); err == nil {
+		t.Fatal("an answer naming no delivery was recorded")
+	}
+	// A RESEED IS STILL WAITING: the box was reaped, the question was not.
+	if err := s.SetStatus(ctx, "t1", sandbox.StatusReseed, sandbox.Fence{}); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	if got, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok ||
+		got.Answer.From != sandbox.StatusReseed {
+		t.Fatalf("an answer to a reseeded run = %+v, %v, %v, want it recorded from reseed",
+			got.Answer, ok, err)
+	}
+}
+
+// THE RESUME CLAIMS THE RECORD, not the question: an answered run is claimed
+// out of answered, and a claim that is handed back puts it there again — the
+// answer still on it, owed the same resume.
+func testAnAnswerIsResumedFromItsRecord(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	// AN ANSWER BY TURN claims a question still open, and this one is not.
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.AnswerTail(launch)); err != nil || ok {
+		t.Fatalf("an answer by turn claimed a question that already has its answer: %v, %v", ok, err)
+	}
+	claimed, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch))
+	if err != nil || !ok || claimed.ClaimedFrom != sandbox.StatusAnswered {
+		t.Fatalf("claim = %v from %q, %v, want it claimed from answered", ok, claimed.ClaimedFrom, err)
+	}
+	if released, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{
+		Launch: launch, To: sandbox.StatusAnswered,
+	}); err != nil || !released {
+		t.Fatalf("ReleaseClaim = %v, %v", released, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+		t.Fatalf("run = %q with answer %+v, want the answer still owed", got.Status, got.Answer)
+	}
+}
+
+// A DECLINED ANSWER REOPENS THE QUESTION, and the reply it was is declined for
+// good — with its copy — so it can never be recorded against it again.
+func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	// Only the answer it holds is let go of.
+	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"other"}, sandbox.Fence{}); err != nil || ok {
+		t.Fatalf("declining an answer the run does not hold = %v, %v, want refused", ok, err)
+	}
+	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1", "r1-copy"}, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("DeclineAnswer = %v, %v", ok, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusAwaiting || got.Answer != nil ||
+		!slices.Equal(got.DeclinedAnswers, []string{"r1", "r1-copy"}) {
+		t.Fatalf("run = %q answer %+v declined %v, want the question open again with r1 "+
+			"and its copy declined", got.Status, got.Answer, got.DeclinedAnswers)
+	}
+	for _, id := range []string{"r1", "r1-copy"} {
+		if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf(id, "use main")); err != nil || ok {
+			t.Errorf("a declined reply %s was recorded again: %v, %v", id, ok, err)
+		}
+	}
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r2", "use dev")); err != nil || !ok {
+		t.Errorf("a new reply to the reopened question = %v, %v, want it recorded", ok, err)
+	}
+	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r2"}, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("DeclineAnswer: %v, %v", ok, err)
+	}
+	// BOUNDED, newest kept.
+	for i := range 20 {
+		id := fmt.Sprintf("r%d", i+3)
+		if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf(id, "x")); err != nil || !ok {
+			t.Fatalf("RecordAnswer %s = %v, %v", id, ok, err)
+		}
+		if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{id}, sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("DeclineAnswer %s = %v, %v", id, ok, err)
+		}
+	}
+	got = mustGet(t, s, "t1")
+	if len(got.DeclinedAnswers) != 16 || got.DeclinedAnswers[15] != "r22" {
+		t.Errorf("declined = %v, want the newest 16", got.DeclinedAnswers)
+	}
+}
+
+// A NEW QUESTION IS MEASURED FROM ITS OWN ASKING, with nothing recorded or
+// declined against it: a reply one question let go of may be exactly what the
+// next is waiting for, and an answer belongs to the question it answered.
+func testANewQuestionForgetsTheLastOnesAnswer(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	asked := base.Add(time.Hour)
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "?", AskedAt: asked}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); !got.AskedAt.Equal(asked) {
+		t.Fatalf("asked at %v, want %v", got.AskedAt, asked)
+	}
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "x")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1"}, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("DeclineAnswer = %v, %v", ok, err)
+	}
+	if err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	got := mustGet(t, s, "t1")
+	if !got.AskedAt.IsZero() || got.Answer != nil || len(got.DeclinedAnswers) != 0 {
+		t.Fatalf("a new launch kept asked_at %v, answer %+v, declined %v",
+			got.AskedAt, got.Answer, got.DeclinedAnswers)
 	}
 }

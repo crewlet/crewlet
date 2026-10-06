@@ -106,8 +106,18 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	return map[string]any{"runs": out}, nil
 }
 
-// putTo reports whether a run's question is put to any of these identities.
+// putTo reports whether a run's question is put to any of these identities and
+// is still waiting for them.
+//
+// STILL WAITING, because "what is waiting on me" is the question this answers:
+// a run whose question already has its answer recorded ([sandbox.StatusAnswered])
+// or is being resumed with it keeps the audience it was asked of, and listing
+// it would put a question the person already answered back in front of them.
+// The home screen's decisions read the same set ([sandbox.Awaiting]).
 func putTo(run sandbox.PendingRun, who []string) bool {
+	if !slices.Contains(sandbox.Awaiting, run.Status) {
+		return false
+	}
 	for _, handle := range run.AudienceHandles {
 		if slices.Contains(who, handle) {
 			return true

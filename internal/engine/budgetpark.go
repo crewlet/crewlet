@@ -118,7 +118,9 @@ func (p *budgetParks) arm(d time.Duration, f func()) alarm {
 // lets the delivery through, logged, because the turn's own meter is the gate
 // and fails closed — parking on a read that failed would hold a seat's mail on
 // a store blip that the meter would have ridden out. The error it returns is
-// the hold that could not be taken, which the dispatcher NAKs.
+// the hold that could not be taken, which the dispatcher DEFERS (see
+// [Dispatcher.parkOnBudget]): the refusal is the node's, and a deferral keeps
+// the delivery's place at the head of the seat's inbox.
 func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, error) {
 	c := e.Company()
 	m, ok := e.meterFor(c, handle).(*meter)
@@ -169,6 +171,25 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		e.releaseBudgetPark(ctx, handle, "the ceilings changed while it parked")
 	}
 	return reason, true, nil
+}
+
+// budgetRefusing reports whether one of a seat's capped windows is refusing,
+// and the reason naming it — the budget stage's question, ASKED WITHOUT
+// PARKING. For a caller that is not a delivery (a retried resume) and so has
+// no mail of its own to hold: it waits rather than parks, and a delivery that
+// arrives meanwhile takes the park itself. An unreadable counter is not a
+// refusal, for the reason [Engine.budgetPark] gives.
+func (e *Engine) budgetRefusing(ctx context.Context, handle string) (string, bool) {
+	m, ok := e.meterFor(e.Company(), handle).(*meter)
+	if !ok || m == nil || !m.basis.capped() {
+		return "", false
+	}
+	r, refusing, err := m.refusing(ctx)
+	if err != nil || !refusing {
+		return "", false
+	}
+	return fmt.Sprintf("budget: %s window %s resets %s",
+		r.Window.Period, r.Window.Label, rfc3339(r.Window.End)), true
 }
 
 // recordBudgetParkLocked records a park and arms its reset. The caller holds

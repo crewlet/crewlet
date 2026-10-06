@@ -427,6 +427,25 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	if got, ok := all["to-nobody"]["audience_handles"].([]string); !ok || len(got) != 0 {
 		t.Errorf("an unresolved run's audience_handles = %#v, want an empty list", all["to-nobody"]["audience_handles"])
 	}
+
+	// AND A QUESTION THAT HAS ITS ANSWER IS NOT WAITING ON ANYBODY: the run
+	// keeps the audience it asked, but listing it under "waiting on me" would
+	// put a question ana already answered back in front of her.
+	run, _, err := store.Get(t.Context(), "to-ana")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, won, err := store.RecordAnswer(t.Context(), "to-ana", run.LaunchID, sandbox.RecordedAnswer{
+		Text: "use main", EventIDs: []string{"reply-1"},
+	}); err != nil || !won {
+		t.Fatalf("RecordAnswer = %v, %v", won, err)
+	}
+	if mine := ask(map[string]any{"audience": "ana"}); len(mine) != 0 {
+		t.Fatalf("audience=ana answered %v after she answered, want nothing waiting on her", keysOf(mine))
+	}
+	if all := ask(nil); all["to-ana"]["status"] != sandbox.StatusAnswered {
+		t.Fatalf("the board shows to-ana as %v, want %q", all["to-ana"]["status"], sandbox.StatusAnswered)
+	}
 }
 
 func keysOf(m map[string]map[string]any) []string {

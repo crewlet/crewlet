@@ -74,6 +74,13 @@ const (
 	// HoldSeatPaused is taken while a person has the seat paused, and lifted
 	// when they resume it.
 	HoldSeatPaused Hold = "seat_paused"
+
+	// HoldAnswerOwed is taken while a reply recorded as a parked coding
+	// run's answer is still owed the resume it drives, and lifted once that
+	// resume has returned — so the seat's later mail is worked after the
+	// answer rather than racing it. No screening asks for it: the sandbox
+	// coordinator takes and lifts it (see sandbox.AnswerHold).
+	HoldAnswerOwed Hold = "sandbox_answer_owed"
 )
 
 func (a Action) String() string {

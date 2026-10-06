@@ -2075,6 +2075,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 
 	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
 		turnInputFor(req, reply))
+	// WHAT THE TURN ANSWERED WITHOUT BEING WOKEN FOR IT: the waiting
+	// messages its thread block showed it, which the dispatch records as
+	// worked through beside its own triggers. Off the block this frame
+	// assembled, because the loop never knew what a prompt showed — see
+	// workedthrough.go.
+	res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
 	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
 	// a note, and one offered from here on is answered `closed`.
 	closeSteer(ctx)

@@ -509,7 +509,7 @@ export interface SandboxEntry {
   sandbox_id: string;
   task: string;
   /** The run record's own word: `launching`, `running`,
-   *  `awaiting_clarification` or `reseed`. */
+   *  `awaiting_clarification`, `reseed` or `answered`. */
   status: string;
   started_at: string;
   question?: string;
@@ -523,7 +523,7 @@ export interface SandboxEntry {
 }
 
 /**
- * The five statuses a run record can hold.
+ * The six statuses a run record can hold.
  *
  * THERE IS NO `done` OR `failed` HERE, and that is the engine's shape rather
  * than an omission: a run's record is DELETED once the run settles and its box
@@ -533,7 +533,7 @@ export interface SandboxEntry {
  * reason — never on this row.
  */
 export type SandboxStatus =
-  "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
+  "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
 
 /** One durable coding run, as the `sandbox_runs` query answers it. */
 export interface SandboxRun {

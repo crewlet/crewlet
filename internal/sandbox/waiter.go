@@ -431,7 +431,10 @@ func (w *Waiter) reapExpiredPauses(ctx context.Context, manager *Manager, runs [
 	now := w.now()
 	reaped := 0
 	for _, run := range runs {
-		if run.Status != StatusAwaiting {
+		// An ANSWERED run's box is held for as long as its resume waits,
+		// which on a seat nobody holds is open-ended — see
+		// [PendingStore.ExpirePause].
+		if run.Status != StatusAwaiting && run.Status != StatusAnswered {
 			continue
 		}
 		heldSince, held := run.HeldSince()

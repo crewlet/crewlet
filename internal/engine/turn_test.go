@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,8 +279,11 @@ func TestAFailedPauseDoesNotPark(t *testing.T) {
 	d.Conditions = func(string) inbox.Conditions { return inbox.Conditions{Owned: true} }
 	d.Pause = func(context.Context, string, inbox.Hold, string) error { return errors.New("no") }
 	got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")})
-	if got.Outcome != queue.OutcomeNak {
-		t.Errorf("outcome = %v, want a NAK", got.Outcome)
+	// DEFERRED, not NAKed: a hold the queue refused is the node's condition,
+	// and a Nak would return the delivery behind its conversation's newer
+	// mail — queue.OutcomeNak — where the deferral keeps its place.
+	if got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral", got.Outcome)
 	}
 	if len(r.parked) != 0 {
 		t.Error("the partition was parked despite the pause failing")
@@ -1410,9 +1414,8 @@ func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
 			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
 	var asked []string
-	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
-		answer string, trigger *events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(_ context.Context, handle string, reply sandbox.Reply) (sandbox.AnswerDisposition, error) {
+		conv, answer, trigger := unpackReply(reply)
 		asked = append(asked, handle+"/"+conv.Identity)
 		if answer == "" || trigger == nil {
 			t.Error("the answer text and its trigger did not reach the coordinator")
@@ -1455,9 +1458,8 @@ func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	var asked []string
-	d.Answer = func(_ context.Context, handle string, conv sandbox.ConversationRef,
-		answer string, trigger *events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(_ context.Context, handle string, reply sandbox.Reply) (sandbox.AnswerDisposition, error) {
+		conv, answer, trigger := unpackReply(reply)
 		asked = append(asked, handle+"/"+conv.Identity+"/"+conv.Partition)
 		if answer == "" || trigger == nil {
 			t.Error("the answer text and its trigger did not reach the coordinator")
@@ -1495,15 +1497,18 @@ func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 // come. It is requeued instead, so this node or the seat's next owner is
 // offered it again.
 //
-// HANDED BACK WITH A NAK rather than deferred or requeued, and each of those
-// three is a different thing. A DEFERRAL stops the seat consuming altogether,
-// and one parked run's failing resume must not wedge a whole mailbox on a seat
-// that is otherwise free — a run parked on a question holds nothing. A REQUEUE
-// is a republish: a new message, delivered again the instant it lands, so
-// nothing spaced the attempts the bound allows and all of them burned in
-// milliseconds against a transient that had had no time to clear. A NAK is the
-// one return that carries the queue's own backoff, which is exactly what a
-// completion that cannot be resumed already got.
+// HANDED BACK WITH A DEFERRAL rather than a Nak or a requeue, and each of
+// those three is a different thing. A REQUEUE is a republish: a new message at
+// the TAIL of the inbox, behind the person's next message. A NAK is no better
+// on the broker this engine ships: it withholds a failure for its backoff and
+// serves never-delivered mail meanwhile (queue.OutcomeNak), so the person's
+// next message reached the still-waiting run first and was taken as its
+// answer, and this one came round afterwards to answer whatever the run asked
+// next. A DEFERRAL returns the delivery at the HEAD (queue.OutcomeDefer), so it
+// is still the first reply the question is offered — and the seat's inbox stops
+// until the seat host's next renew, which is right for what reaches here: the
+// coordinator could not RECORD the answer, a store failure, under which no
+// turn could run either.
 func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done}}
@@ -1513,24 +1518,20 @@ func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 	}
 
 	answer := inThread("notification", "chat:C1")
 	got := d.Dispatch(context.Background(), "swe", []*events.Event{answer})
 
-	if got.Outcome != queue.OutcomeNak {
-		t.Errorf("outcome = %v, want a nak: that is the one return the queue "+
-			"spaces, and an ack would have to requeue the delivery itself — "+
-			"immediately, which is what burned the whole bound in milliseconds",
-			got.Outcome)
+	if got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral: the one return that keeps the "+
+			"answer ahead of the person's next message", got.Outcome)
 	}
-	if !errors.Is(got.Err, sandbox.ErrResumeUnavailable) {
-		t.Errorf("the nak carried %v, want the coordinator's own failure: the "+
-			"queue logs this one and a dead-letter boundary reads it", got.Err)
+	if !strings.Contains(got.Reason, sandbox.ErrResumeUnavailable.Error()) {
+		t.Errorf("the deferral carried %q, want the coordinator's own failure: the "+
+			"queue logs this one", got.Reason)
 	}
 	if len(r.reqs) != 0 {
 		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
@@ -1543,8 +1544,8 @@ func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 
 // THE HEADROOM IS WHAT THE MESSAGE CARRIES, not what this process remembers.
 //
-// A deferred answer goes back with a NAK and every return spends one of the
-// message's deliveries, so a route that kept offering until the last one
+// An answer that could not be recorded goes back with a deferral and every
+// return spends one of the message's deliveries, so a route that kept offering until the last one
 // would hand the final delivery back and the broker would dead-letter a
 // person's reply. The coordinator's own ceiling cannot prevent that: it is
 // per node and per process, and it resets on exactly the events — a seat
@@ -1580,9 +1581,7 @@ func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 			}
 			var offers int
-			d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-				*events.Event,
-			) (sandbox.AnswerDisposition, error) {
+			d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 				offers++
 				return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 			}
@@ -1599,8 +1598,8 @@ func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 					t.Fatalf("the delivery was offered %d times, want once: it has "+
 						"deliveries to spare, so a run still owed it must be asked", offers)
 				}
-				if got.Outcome != queue.OutcomeNak {
-					t.Errorf("outcome = %v, want a nak: the run is still owed this answer",
+				if got.Outcome != queue.OutcomeDefer {
+					t.Errorf("outcome = %v, want a deferral: the run is still owed this answer",
 						got.Outcome)
 				}
 				if len(r.reqs) != 0 {
@@ -1645,9 +1644,7 @@ func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		// EVERY node fails the same way, and every one of them starts
 		// its own attempt count.
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
@@ -1658,7 +1655,7 @@ func TestNoNumberOfHandoffsSpendsAReplysLastDeliveries(t *testing.T) {
 	for {
 		got := d.Dispatch(headroom(context.Background(), map[*events.Event]int{answer: left}),
 			"swe", []*events.Event{answer})
-		if got.Outcome != queue.OutcomeNak {
+		if got.Outcome != queue.OutcomeDefer {
 			break
 		}
 		// The hand-back spends one, whatever it meant.
@@ -1698,9 +1695,7 @@ func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
 	// The coordinator's own bound, as this seam reports it: deferred until
 	// the attempts are spent, then the ordinary message it looks like.
 	var offers int
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		offers++
 		if offers < sandbox.MaxAnswerAttempts {
 			return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
@@ -1715,7 +1710,7 @@ func TestThePerProcessAttemptBudgetStillEndsTheHandBack(t *testing.T) {
 	var got queue.Result
 	for range sandbox.MaxAnswerAttempts {
 		got = d.Dispatch(ctx, "swe", []*events.Event{answer})
-		if got.Outcome != queue.OutcomeNak {
+		if got.Outcome != queue.OutcomeDefer {
 			break
 		}
 	}
@@ -1755,9 +1750,7 @@ func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	var offers int
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		offers++
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 	}
@@ -1779,8 +1772,8 @@ func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
 			"whole budget in hand, and a parked run is still owed it however "+
 			"little the message batched beside it has left", offers)
 	}
-	if got.Outcome != queue.OutcomeNak {
-		t.Errorf("outcome = %v, want a nak: the run is still owed this answer", got.Outcome)
+	if got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral: the run is still owed this answer", got.Outcome)
 	}
 	if len(r.reqs) != 0 {
 		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
@@ -1802,9 +1795,7 @@ func TestAPartitionWhoseMessagesAreAllSpentIsNotOffered(t *testing.T) {
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	var offers int
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		offers++
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 	}
@@ -1861,15 +1852,14 @@ func TestAnAnswerIsOfferedOnlyWhatTheLedgerLeft(t *testing.T) {
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	var offered *events.Event
-	d.Answer = func(_ context.Context, _ string, _ sandbox.ConversationRef, _ string,
-		trigger *events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(_ context.Context, _ string, reply sandbox.Reply) (sandbox.AnswerDisposition, error) {
+		_, _, trigger := unpackReply(reply)
 		offered = trigger
 		return sandbox.AnswerDeferred, sandbox.ErrResumeUnavailable
 	}
 
-	if got := d.Dispatch(ctx, "swe", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeNak {
-		t.Errorf("outcome = %v, want a nak", got.Outcome)
+	if got := d.Dispatch(ctx, "swe", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral", got.Outcome)
 	}
 	if offered != fresh {
 		t.Fatalf("offered %v, want only the trigger the ledger had not worked", offered)
@@ -1909,9 +1899,7 @@ func TestAnAnswerForARunThatIsGoneRunsItsOrdinaryTurn(t *testing.T) {
 				return inbox.Conditions{Owned: true, TurnEngineReady: true,
 					AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 			}
-			d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-				*events.Event,
-			) (sandbox.AnswerDisposition, error) {
+			d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 				return disposition, nil
 			}
 
@@ -1942,9 +1930,7 @@ func TestAMessageThatAnswersNothingStillRunsItsTurn(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		return sandbox.AnswerNotMine, nil
 	}
 
@@ -1986,9 +1972,7 @@ func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
 			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	called := false
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		called = true
 		return sandbox.AnswerConsumed, nil
 	}
@@ -2008,34 +1992,22 @@ func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
 // conversation the partition cannot name, a coordinator that errored, and a
 // node with no coordinator at all must each park as before: parking is
 // recoverable, and acking a message nothing handled is not.
+//
+// A delivery a run is still OWED is the one exception, and it is not parked:
+// see TestAnAnswerStillOwedOnAHeldSeatIsDeferredNotParked.
 func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 	t.Parallel()
-	type answerer func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event) (sandbox.AnswerDisposition, error)
+	type answerer func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error)
 	for name, answer := range map[string]answerer{
-		"not this run's answer": func(context.Context, string, sandbox.ConversationRef,
-			string, *events.Event,
-		) (sandbox.AnswerDisposition, error) {
+		"not this run's answer": func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 			return sandbox.AnswerNotMine, nil
 		},
-		"an unreadable store": func(context.Context, string, sandbox.ConversationRef,
-			string, *events.Event,
-		) (sandbox.AnswerDisposition, error) {
+		"an unreadable store": func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 			return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
-		},
-		// A RUN THIS NODE CANNOT RESUME asks for the delivery back, and
-		// the park is exactly that: the screening was going to requeue it
-		// anyway, which is why a held seat needs no branch of its own.
-		"a run this node cannot resume": func(context.Context, string, sandbox.ConversationRef,
-			string, *events.Event,
-		) (sandbox.AnswerDisposition, error) {
-			return sandbox.AnswerDeferred, errors.New("this node cannot resume the run")
 		},
 		// AND A DISPOSITION THIS BUILD CANNOT READ falls back to what a
 		// node with no coordinator does, which is this same park.
-		"a disposition this build does not know": func(context.Context, string,
-			sandbox.ConversationRef, string, *events.Event,
-		) (sandbox.AnswerDisposition, error) {
+		"a disposition this build does not know": func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 			return sandbox.AnswerDisposition("something else"), nil
 		},
 		"no coordinator": nil,
@@ -2081,9 +2053,7 @@ func TestAFailedAnswerDispatchNamesBothKeys(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
 	}
 	d.Dispatch(context.Background(), "swe",
@@ -2116,9 +2086,7 @@ func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
 			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
 	called := false
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		called = true
 		return sandbox.AnswerConsumed, nil
 	}
@@ -2143,9 +2111,7 @@ func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: false, AdmitsTriggers: true}
 	}
 	called := false
-	d.Answer = func(context.Context, string, sandbox.ConversationRef, string,
-		*events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		called = true
 		return sandbox.AnswerConsumed, nil
 	}
@@ -2609,9 +2575,8 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
 			AdmitsTriggers: true, SeatHeldBySandbox: true}
 	}
-	dp.Answer = func(_ context.Context, _ string, conv sandbox.ConversationRef,
-		_ string, _ *events.Event,
-	) (sandbox.AnswerDisposition, error) {
+	dp.Answer = func(_ context.Context, _ string, reply sandbox.Reply) (sandbox.AnswerDisposition, error) {
+		conv, _, _ := unpackReply(reply)
 		offered = conv
 		return sandbox.AnswerConsumed, nil
 	}
@@ -2684,7 +2649,7 @@ func TestAnAnswerTheStoreCouldNotPlaceIsHandedBackRatherThanRun(t *testing.T) {
 		// Something on this seat IS waiting for somebody's reply and only
 		// WHICH row could not be read: the delivery comes back.
 		"a run is awaiting an answer on this seat": {
-			awaiting: true, outcome: queue.OutcomeNak, turns: 0,
+			awaiting: true, outcome: queue.OutcomeDefer, turns: 0,
 		},
 		// Nothing is owed the delivery, so there is nothing for a
 		// hand-back to come back to: it is the ordinary message it looks
@@ -2727,6 +2692,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	t.Helper()
 	ctx := context.Background()
 	store := sandbox.NewCoordStore(coordmemory.NewFleet())
+	blind := &atomic.Bool{}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
 		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
@@ -2736,7 +2702,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Audience: noAudience{},
-		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store}, Manager: manager,
+		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store, blind: blind}, Manager: manager,
 		// A RESUMER THAT PANICS, because these cases never reach one:
 		// the lookup is what fails, and a resume from here would be the
 		// answer being run after the store said it could not say which
@@ -2746,7 +2712,9 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
+	t.Cleanup(coordinator.Stop)
 	if !awaiting {
+		blind.Store(true)
 		return coordinator
 	}
 	run := sandbox.PendingRun{
@@ -2773,17 +2741,24 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	if _, awaits := coordinator.SeatRuns("swe"); !awaits {
 		t.Fatal("the seat does not report the run parked on its question")
 	}
+	blind.Store(true)
 	return coordinator
 }
 
 // blindLookupStore is a store that works except for the one read the answer
-// match turns on.
-type blindLookupStore struct{ sandbox.PendingStore }
+// match turns on — the seat's run listing — once blind is set: the seat's
+// counts are seeded from that same read first, as a node claiming the seat
+// seeds them.
+type blindLookupStore struct {
+	sandbox.PendingStore
+	blind *atomic.Bool
+}
 
-func (blindLookupStore) FindAwaitingByConversation(context.Context, string,
-	sandbox.ConversationRef,
-) (sandbox.PendingRun, bool, error) {
-	return sandbox.PendingRun{}, false, errors.New("the coordination store refused the call")
+func (s blindLookupStore) ListActiveForSeat(ctx context.Context, handle string) ([]sandbox.PendingRun, error) {
+	if s.blind.Load() {
+		return nil, errors.New("the coordination store refused the call")
+	}
+	return s.PendingStore.ListActiveForSeat(ctx, handle)
 }
 
 // discardPublisher stands in for the queue: this case publishes nothing.
@@ -2912,5 +2887,46 @@ func TestAnAnswerIsTakenOutOfTheDeliveryBeforeTheTurn(t *testing.T) {
 		if e.ID == answer.ID {
 			t.Fatal("the answer by turn reached the turn as part of its trigger")
 		}
+	}
+}
+
+// unpackReply is a [sandbox.Reply] as the three values the answer seam used to
+// be handed: the conversation, the text, and the delivery's leading event.
+func unpackReply(reply sandbox.Reply) (sandbox.ConversationRef, string, *events.Event) {
+	var trigger *events.Event
+	if len(reply.Events) > 0 {
+		trigger = reply.Events[0]
+	}
+	return reply.Conv, reply.Text, trigger
+}
+
+// AN ANSWER STILL OWED ON A HELD SEAT IS DEFERRED, NOT PARKED.
+//
+// The park REPUBLISHES, which puts the copy at the TAIL of the inbox — behind
+// the person's next message, which would then be offered to the question
+// first and taken as its answer. So the held seat hands an owed answer back
+// the way the free seat does: a deferral, which keeps it at the head.
+func TestAnAnswerStillOwedOnAHeldSeatIsDeferredNotParked(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, SeatHeldBySandbox: true}
+	}
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
+		return sandbox.AnswerDeferred, errors.New("the answer could not be recorded")
+	}
+	got := d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:C1")})
+	if got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral", got.Outcome)
+	}
+	if len(r.parked) != 0 {
+		t.Errorf("an answer still owed was republished behind the conversation's newer mail: %v",
+			r.parked)
+	}
+	if len(r.reqs) != 0 {
+		t.Errorf("a turn ran on a seat a coding job holds")
 	}
 }

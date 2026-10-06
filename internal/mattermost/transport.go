@@ -473,6 +473,9 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 		rootSeen = rootSeen || isRoot
 		out.Messages = append(out.Messages, notify.Message{
 			SenderID: post.UserID,
+			// THE POST ID, which is what the trigger's `ts` is on this
+			// backend — see [notify.Message.ID].
+			ID: post.ID,
 			// NO NAME. A Mattermost post carries a user id and nothing
 			// else, so the party registry is the only thing that can
 			// turn one into a colleague — and a miss renders the raw

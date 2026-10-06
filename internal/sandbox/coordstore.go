@@ -136,6 +136,12 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// And whom it was put to: the audience is the question's, and a
 		// question that is gone waits on nobody.
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
+		// AND EVERYTHING ITS ANSWER WAS MEASURED AGAINST: when it was
+		// asked, what answered it, and which replies it let go of. The
+		// next job's question is anchored on its own asking, and a reply
+		// one question declined may be exactly what the next one is
+		// waiting for.
+		existing.AskedAt, existing.Answer, existing.DeclinedAnswers = time.Time{}, nil, nil
 		// AND ITS COST: a parked job's tokens are paid by the resume its
 		// answer drives, which has happened by the time a new job opens.
 		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
@@ -230,9 +236,75 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
+		// A NEW QUESTION, measured from its own asking, with nothing yet
+		// recorded against it and nothing yet declined: an answer and the
+		// replies let go of belong to the question they were matched to.
+		run.AskedAt = q.AskedAt
+		run.Answer, run.DeclinedAnswers = nil, nil
 		return true
 	})
 	return err
+}
+
+// RecordAnswer records a reply as the answer to a parked run's question. See
+// the contract on [PendingStore].
+func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer) (PendingRun, bool, error) {
+	if len(answer.EventIDs) == 0 {
+		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s names no delivery", turnID)
+	}
+	if answer.RecordedAt.IsZero() {
+		answer.RecordedAt = s.clock()
+	}
+	return s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || !slices.Contains(Awaiting, run.Status) || run.Answer != nil {
+			return false
+		}
+		for _, id := range answer.EventIDs {
+			if slices.Contains(run.DeclinedAnswers, id) {
+				return false
+			}
+		}
+		recorded := answer
+		recorded.From = run.Status
+		run.Status = StatusAnswered
+		run.Answer = &recorded
+		return true
+	})
+}
+
+// DeclineAnswer lets go of a recorded answer. See the contract on
+// [PendingStore].
+func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, declined []string, fence Fence) (bool, error) {
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusAnswered || run.LaunchID != launch || run.Answer == nil ||
+			outranked(*run, fence) || !slices.Contains(declined, firstID(run.Answer.EventIDs)) {
+			return false
+		}
+		run.Status = run.Answer.declinedTo()
+		run.Answer = nil
+		run.DeclinedAnswers = boundedDeclined(append(run.DeclinedAnswers, declined...))
+		return true
+	})
+	return won, err
+}
+
+// boundedDeclined keeps the NEWEST [maxDeclinedAnswers] declined ids. An id
+// that falls off is one whose copies have long since been delivered or
+// dropped; the bound is what stops a question that is answered and declined
+// over and over from growing its row without limit.
+func boundedDeclined(ids []string) []string {
+	if len(ids) <= maxDeclinedAnswers {
+		return ids
+	}
+	return slices.Clone(ids[len(ids)-maxDeclinedAnswers:])
+}
+
+// firstID is the first of a list of ids, or empty.
+func firstID(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 // ClaimOwnership moves a run to this node, refusing to steal a newer lease.
@@ -264,14 +336,27 @@ func (s *CoordStore) SetStatus(ctx context.Context, turnID, status string, fence
 	return err
 }
 
-// ExpirePause flips a parked run to reseed and clears its box record. See the
+// ExpirePause flips a parked run to reseed — or, for an answered one, keeps
+// the answer and forgets the box — and clears its box record. See the
 // contract on [PendingStore].
 func (s *CoordStore) ExpirePause(ctx context.Context, turnID string) (bool, error) {
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.Status != StatusAwaiting {
+		switch run.Status {
+		case StatusAwaiting:
+			run.Status = StatusReseed
+		case StatusAnswered:
+			// The answer stays recorded and the run stays owed: only
+			// the box goes, and the resume re-seeds from the branch as a
+			// reseeded run's would. The record's From moves with it, so
+			// an answer that is let go of puts the run back to reseed
+			// rather than to a park naming a box that no longer exists.
+			if run.Answer == nil {
+				return false
+			}
+			run.Answer.From = StatusReseed
+		default:
 			return false
 		}
-		run.Status = StatusReseed
 		// Cleared in the SAME write as the flip: two writes leave a
 		// state a reader can see, in which a reseeded run still names
 		// the box an arriving answer would be told to continue in.
@@ -408,31 +493,6 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 	return s.list(ctx, func(r PendingRun) bool {
 		return r.AgentHandle == handle && slices.Contains(Active, r.Status)
 	})
-}
-
-// FindAwaitingByConversation finds the parked run a reply belongs to.
-//
-// MATCHED BY [ConversationRef.Best] — which is where the whole rule lives:
-// which parked runs a delivery may answer, which of them it answers when
-// several may, and what either does with a row written before the conversation
-// identity existed. This store contributes the CANDIDATES and nothing else: a
-// store that decided any of it its own way would be a second opinion about
-// which question a person just replied to, and the two would disagree the
-// first time one of them was changed.
-func (s *CoordStore) FindAwaitingByConversation(ctx context.Context, handle string, conv ConversationRef) (PendingRun, bool, error) {
-	if conv.Identity == "" && conv.Partition == "" {
-		// A delivery that names no conversation must never match, or
-		// every parked run answers every wake that could not name one.
-		return PendingRun{}, false, nil
-	}
-	parked, err := s.list(ctx, func(r PendingRun) bool {
-		return r.AgentHandle == handle && slices.Contains(Awaiting, r.Status)
-	})
-	if err != nil {
-		return PendingRun{}, false, err
-	}
-	run, found := conv.Best(parked)
-	return run, found, nil
 }
 
 // Finish ends a run by deleting its record. See the contract on

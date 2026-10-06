@@ -171,7 +171,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a person's reply on the run's own conversation",
 		call: func(t *testing.T, rig *coordRig) {
 			if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-				answerOnTheDM, "the release branch", nil); err != nil {
+				chatReply(answerOnTheDM, "the release branch", nil)); err != nil {
 				t.Logf("TryResumeFromAnswer: %v", err)
 			}
 		},
@@ -236,6 +236,10 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a live reload of providers.sandbox",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SetManager(rig.manager) },
 	}},
+	"Stop": {{
+		name: "a node shutting down, whose recorded answers its successor drives",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Stop() },
+	}},
 }
 
 // placements is how a run REACHES each status a record can hold, by the route
@@ -274,6 +278,18 @@ var placements = map[string]func(t *testing.T, rig *coordRig){
 	StatusAwaiting: func(_ *testing.T, rig *coordRig) {
 		rig.launch("t1")
 		rig.park("t1")
+	},
+	StatusAnswered: func(t *testing.T, rig *coordRig) {
+		rig.launch("t1")
+		rig.park("t1")
+		// A person's reply recorded against the question, its resume
+		// still owed — which a node that stopped between the two leaves
+		// for the seat's next holder.
+		run := rig.get("t1")
+		if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
+			chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now)); err != nil || !won {
+			t.Fatalf("RecordAnswer = %v, %v", won, err)
+		}
 	},
 	StatusReseed: func(t *testing.T, rig *coordRig) {
 		rig.launch("t1")
@@ -737,11 +753,20 @@ func (s *refusingStore) ListActiveForSeat(ctx context.Context, handle string) ([
 	return s.inner.ListActiveForSeat(ctx, handle)
 }
 
-func (s *refusingStore) FindAwaitingByConversation(ctx context.Context, handle string,
-	conv ConversationRef,
+func (s *refusingStore) RecordAnswer(ctx context.Context, turnID, launch string,
+	answer RecordedAnswer,
 ) (PendingRun, bool, error) {
-	if s.called("FindAwaitingByConversation") {
+	if s.called("RecordAnswer") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.FindAwaitingByConversation(ctx, handle, conv)
+	return s.inner.RecordAnswer(ctx, turnID, launch, answer)
+}
+
+func (s *refusingStore) DeclineAnswer(ctx context.Context, turnID, launch string,
+	declined []string, fence Fence,
+) (bool, error) {
+	if s.called("DeclineAnswer") {
+		return false, errRefusedCall
+	}
+	return s.inner.DeclineAnswer(ctx, turnID, launch, declined, fence)
 }

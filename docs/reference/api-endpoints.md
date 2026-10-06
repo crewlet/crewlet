@@ -1411,7 +1411,7 @@ snapshot means a tab that refreshes or reconnects mid-call re-renders
 the live row immediately instead of waiting for the next progress
 event.  State transitions in the projection are
 gated on the event timestamp so out-of-order delivery (measured,
-JetStream returns a redelivered message *behind* never-delivered ones
+JetStream returns a failed (NAK'd) message *behind* never-delivered ones
 rather than replaying it from the head, and in a fleet several nodes
 publish into the event stream at once) can't clobber newer
 state with an older event — including a final progress round that
@@ -4200,7 +4200,11 @@ refused during a [drain](#during-a-drain). Every refusal carries `detail` and
 
 Every detached [coding run](../concepts/code-sandbox.md) the engine still
 holds, oldest first — `launching`, `running`, `awaiting_clarification`,
-`reseed`, and `resumed` run records.
+`reseed`, `answered` and `resumed` run records. An `answered` run has a
+person's reply recorded as the answer to its question and is owed the resume
+that answer drives; it is no longer waiting on anybody, so `audience=` — what
+is waiting on one person — lists only runs still waiting (`awaiting_clarification`
+or `reseed`).
 
 A run that has settled, whether its turn finished or it was lost, is not
 listed because it has no record: its record is deleted once its box is

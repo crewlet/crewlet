@@ -69,7 +69,8 @@ type Dispatcher struct {
 	// Budget parks the seat when one of its capped token windows is
 	// refusing, and reports the deferral reason naming the window — see
 	// budgetpark.go. An error is a park that could not be taken, which
-	// NAKs the delivery rather than running a turn the counter refuses.
+	// DEFERS the delivery rather than running a turn the counter refuses:
+	// the refusal is the node's, and a deferral keeps the message's place.
 	//
 	// Nil parks nothing, which is a dispatcher with no counters: every
 	// turn then runs, and its own meter, if it has one, is the gate.
@@ -95,12 +96,13 @@ type Dispatcher struct {
 	//
 	// Nil is a node with no coordinator, where a park is the whole answer.
 	//
-	// It takes the delivery's WHOLE conversation reference rather than one
-	// key: the match turns on the identity, and the partition travels for
-	// the rows parked before an identity was written. See
-	// [sandbox.ConversationRef.Answers].
-	Answer func(ctx context.Context, handle string, conv sandbox.ConversationRef,
-		answer string, trigger *events.Event) (sandbox.AnswerDisposition, error)
+	// It takes the WHOLE delivery as a [sandbox.Reply]: the conversation
+	// reference (the match turns on the identity, and the partition travels
+	// for the rows parked before an identity was written — see
+	// [sandbox.ConversationRef.Answers]), the text, and the events, whose
+	// own instants are what decide whether the delivery was written after
+	// the question it would answer ([sandbox.PendingRun.AskedAt]).
+	Answer func(ctx context.Context, handle string, reply sandbox.Reply) (sandbox.AnswerDisposition, error)
 
 	// AnswerByTurn hands a person's answer BY TURN — a
 	// [types.SandboxAnswerGiven] on the seat's inbox — to the parked coding
@@ -395,34 +397,52 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			if err := d.Pause(ctx, handle, screening.Hold, screening.Reason); err != nil {
 				// The pause is what stops the requeued copies looping
 				// back at whatever rate the broker will serve. Without it
-				// the park is worse than doing nothing, so NAK and let
-				// the delivery come back rather than spin.
-				return queue.Nak(fmt.Errorf("engine: pause %s: %w", handle, err))
+				// the park is worse than doing nothing, so the delivery
+				// is handed back rather than parked.
+				//
+				// DEFERRED, NOT NAKED: a hold the queue would not take is
+				// this NODE's condition, not the message's, and a Nak
+				// returns a message behind its conversation's newer mail
+				// (queue.OutcomeNak) — which the next delivery of this
+				// seat would then be screened ahead of, into the very
+				// park this one could not set up. A deferral keeps its
+				// place at the head and stops the attachment until the
+				// seat host's next renew, which is the spacing a retry of
+				// a refused queue call wants.
+				if d.NoteDeferred != nil {
+					d.NoteDeferred(handle)
+				}
+				return queue.Defer(fmt.Sprintf("engine: pause %s: %s", handle, err))
 			}
 		}
 		return d.park(ctx, handle, screening.Events, held)
 	case inbox.ActionPark:
-		if screening.OfferAsSandboxAnswer {
-			if disposition, _ := d.answered(ctx, handle, screening.Events); disposition == sandbox.AnswerConsumed {
-				// The delivery WAS the answer, and the resume it
-				// triggered has already run. Acking is what stops it
-				// being requeued behind the question it just answered.
-				//
-				// ONLY THAT ONE ANSWER ACKS. The other two both land on
-				// the park below and want exactly what it does — a
-				// deferred answer asks to come back, and a delivery no
-				// run is owed is the held seat's ordinary mail — so this
-				// branch needs no case for them.
-				//
-				// AND THE PARK IS NOT SPACED, unlike the hand-back the
-				// free-seat path makes below: this delivery is being
-				// requeued because a coding job HOLDS the seat, which
-				// outlasts any ack window, so it cannot sit unacked
-				// waiting for a backoff. That is also why the offer
-				// charges no attempt while a run holds the seat — see
-				// [sandbox.MaxAnswerAttempts].
+		if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle, screening.Events) {
+			disposition, cause := d.answered(ctx, handle, screening.Events)
+			switch disposition {
+			case sandbox.AnswerConsumed:
+				// The delivery WAS the answer, recorded on the run that
+				// asked; the coordinator owns its resume from here.
+				// Acking is what stops it being requeued behind the
+				// question it just answered.
+				d.recordAnswered(ctx, handle, screening.Events)
 				return queue.Ack()
+			case sandbox.AnswerDeferred:
+				// STILL OWED, and handed back the way the free-seat path
+				// hands it back — DEFERRED, never parked. A park
+				// REPUBLISHES, which is a new message at the TAIL of the
+				// inbox, so the person's next message, already waiting
+				// there, would be offered to the question first and
+				// taken as its answer. See the free-seat branch below.
+				if d.NoteDeferred != nil {
+					d.NoteDeferred(handle)
+				}
+				return queue.Defer(answerOwedReason(handle, cause))
 			}
+			// A delivery no run is owed is the held seat's ordinary
+			// mail, and the park below is exactly what it wants: a
+			// coding job HOLDS the seat, which outlasts any ack window,
+			// so it cannot sit unacked waiting for a backoff.
 		}
 		return d.park(ctx, handle, screening.Events, held)
 	}
@@ -442,7 +462,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return result
 	}
 
-	surviving := d.dropWorked(ctx, handle, screening.Events)
+	surviving, answeredInThread := d.dropWorked(ctx, handle, screening.Events)
 	// WHAT THE LEDGER DROPPED, on the record.
 	//
 	// [types.TurnTriggerSkipped] was registered, categorised, documented as
@@ -456,7 +476,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// because here is the only frame that holds both lists.
 	// The dropped constituents were settled by the turn that worked them.
 	held.events = surviving
-	d.noteSkipped(ctx, handle, screening.Events, surviving)
+	d.noteSkipped(ctx, handle, screening.Events, surviving, answeredInThread)
 	if len(surviving) == 0 {
 		return queue.Ack()
 	}
@@ -481,40 +501,42 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
 		case sandbox.AnswerConsumed:
-			// Spent on the run it answered: the resume has already run,
-			// and no turn runs on it here.
+			// Spent on the run it answered: the answer is recorded on
+			// the run, the coordinator owns its resume from here, and no
+			// turn runs on it here.
+			d.recordAnswered(ctx, handle, surviving)
 			return queue.Ack()
 		case sandbox.AnswerDeferred:
-			// STILL OWED TO A RUN, so it comes back rather than being
-			// worked — and it comes back SPACED, which a requeue could
-			// not do. A NAK is the one return that carries the queue's
-			// own backoff (seed, doubling, ceiling), so the attempts
-			// this node's bound allows are spread across minutes
-			// instead of being burned in milliseconds against a
-			// transient that has had no time to clear. It is also
-			// exactly what a completion that cannot be resumed does,
-			// which is the parity the answer route only claimed before.
+			// STILL OWED TO A RUN, and not recorded against it — the
+			// seat's runs could not be read, or the record could not be
+			// written — so it comes back rather than being worked.
 			//
-			// NOT A DEFERRAL, which would stop this seat consuming
-			// altogether: one parked run's failing resume must not
-			// wedge the whole mailbox, and the seat is otherwise free —
-			// a run parked on a question holds nothing. A NAK returns
-			// this delivery and nothing else.
+			// A DEFERRAL, AND NEVER A NAK, which is what this used to
+			// be. Both failures are the NODE's or its STORE's, not the
+			// message's, and a Nak is the one return that puts a message
+			// BEHIND its conversation's newer mail: on the only broker
+			// this engine ships a failure waits out its backoff while
+			// never-delivered messages are served (queue.OutcomeNak). The
+			// person's next message then reached the still-waiting run
+			// first and was taken as its answer, and this one came round
+			// afterwards to answer whatever the run asked next. A
+			// deferral returns the delivery at the HEAD
+			// (queue.OutcomeDefer), so it is still the first reply the
+			// question is offered.
 			//
-			// NOT A REQUEUE either, which is what this was: a republish
-			// is a NEW message, delivered again the instant it lands,
-			// so nothing spaced the attempts and the broker's own
-			// delivery budget started over on every copy. It sent the
-			// message to the TAIL as well, behind anything that
-			// followed it on the same conversation; a NAK keeps its
-			// place.
-			//
-			// THE WHOLE PARTITION GOES BACK, the ledger's own survivors
-			// included, because a NAK returns the delivery as it
-			// arrived. Nothing is lost by that: the redelivery reads
-			// the completion ledger again and drops what was worked
-			// before the offer is made a second time.
-			return d.handBackAnswer(handle, cause)
+			// AND IT STOPS THE SEAT'S INBOX until the seat host's next
+			// renew resumes it, which is right for the condition it
+			// reports: a store that cannot record an answer cannot run a
+			// turn either, and the renew interval is the spacing the
+			// retry gets. The delivery spends one of its deliveries, as
+			// every hand-back does, which is why
+			// [Dispatcher.mayOfferAnswer] stops offering while
+			// [sandbox.AnswerDeliveryReserve] of them are left, and
+			// [sandbox.MaxAnswerAttempts] bounds the series on this node.
+			if d.NoteDeferred != nil {
+				d.NoteDeferred(handle)
+			}
+			return queue.Defer(answerOwedReason(handle, cause))
 		}
 	}
 
@@ -707,6 +729,16 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// Nothing this turn did can be proven to have left the
 			// engine, and nothing about the failure says it will recur,
 			// so a redelivery really does run it cleanly.
+			//
+			// A NAK, and so it comes back BEHIND the conversation's
+			// newer mail (queue.OutcomeNak): the spaced, budgeted retry a
+			// failing turn needs, which a deferral is not. What that
+			// order costs is closed where it would bite — a newer
+			// message's turn that was shown this one waiting in its
+			// thread answers the thread as it stands and records it as
+			// worked through, so this delivery is dropped when it comes
+			// round rather than answered a second time, out of order.
+			// See workedthrough.go.
 			return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
 		}
 		return d.abandon(ctx, handle, req, err, reason)
@@ -728,7 +760,18 @@ func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string) (queue.Res
 	}
 	reason, parked, err := d.Budget(ctx, handle)
 	if err != nil {
-		return queue.Nak(err), true
+		// THE PARK COULD NOT BE TAKEN — the hold the budget stage
+		// decided on was refused by the queue — which is this NODE's
+		// condition rather than the message's. Deferred, so the delivery
+		// keeps its place at the head of the seat's inbox and comes back
+		// first once the seat host's next renew resumes the attachment; a
+		// Nak would return it behind the conversation's newer mail
+		// (queue.OutcomeNak), and the turn that next ran on this seat
+		// would be answering a later message first.
+		if d.NoteDeferred != nil {
+			d.NoteDeferred(handle)
+		}
+		return queue.Defer("budget park could not be taken: " + err.Error()), true
 	}
 	if !parked {
 		return queue.Result{}, false
@@ -976,11 +1019,12 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // mayOfferAnswer reports whether this delivery still has the deliveries to
 // spare for the answer route, on what the MESSAGES carry.
 //
-// THE OFFER IS WHAT IS GATED, not the hand-back. A deferred answer goes back
-// with a NAK, and on the broker this engine ships every return spends one of
-// the message's deliveries — so a route that kept offering until the last one
-// would hand the twenty-fifth back and the broker would dead-letter a
-// person's reply, which is the one ending this route must never take. The
+// THE OFFER IS WHAT IS GATED, not the hand-back. A reply the coordinator could
+// not record is handed back with a deferral, and on the broker this engine
+// ships every return spends one of the message's deliveries — so a route that
+// kept offering until the last one would hand the twenty-fifth back and the
+// broker would dead-letter a person's reply, which is the one ending this
+// route must never take. The
 // coordinator's own ceiling cannot prevent that: it is per node and per
 // process, and it resets on exactly the event (a seat handoff, a restart)
 // that does NOT reset the count the broker enforces. See
@@ -1000,12 +1044,13 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // [queue.DeliveriesLeftFor] per event and [sandbox.MayOfferAnswer] folds
 // them, which is where the reasoning for that fold lives.
 //
-// ONLY THE FREE-SEAT OFFER, which is the one whose deferral NAKs. The park
-// branch above offers too, and must keep doing so with no reserve at all: a
-// delivery it does not consume is REPUBLISHED by the park, which is a new
-// message with a budget of its own, so nothing there is spending the count
-// this guard is protecting. Gating it would only cost the seat an answer it
-// could have taken.
+// BOTH OFFERS ARE GATED, the held seat's as well as the free seat's. The held
+// seat's used to be exempt, because a delivery it did not consume was
+// REPUBLISHED by the park — a new message with a budget of its own. An answer
+// still owed is no longer parked: a republish lands at the TAIL of the inbox,
+// behind the person's next message, which would then be offered to the
+// question first. So both hand it back by deferral, both spend the count this
+// guard protects, and both stop offering at the same reserve.
 //
 // ON THIS NODE'S LOG EITHER WAY, and the two lines are different facts.
 // Refusing means the delivery becomes an ordinary turn while a coding run may
@@ -1105,7 +1150,9 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 	if conv.Identity == "" && conv.Partition == "" {
 		return sandbox.AnswerNotMine, nil
 	}
-	disposition, err := d.Answer(ctx, handle, conv, DescribeTrigger(evs), first(evs))
+	disposition, err := d.Answer(ctx, handle, sandbox.Reply{
+		Conv: conv, Text: DescribeTrigger(evs), Events: evs,
+	})
 	if err != nil {
 		// BOTH KEYS, for the reason the offer carries both: only the
 		// store knows which age of row it is matching, so a line naming
@@ -1214,19 +1261,28 @@ func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Co
 	return rest, queue.Result{}, false
 }
 
-// handBackAnswer returns a delivery a parked coding run is still owed, so the
-// broker offers it again.
+// handBackAnswer returns an answer BY TURN that the parked coding run it names
+// is still owed, so the broker offers it again.
 //
-// A NAK, which on this path buys two things a requeue could not. It is SPACED
-// — the queue backs a failed delivery off (seed, doubling, ceiling) — so the
-// attempts [sandbox.MaxAnswerAttempts] allows are spread across the minutes a
-// seat handoff, a config apply or a store blip actually take, where a
-// republish handed all of them over in milliseconds. It also SPENDS one of
-// the message's deliveries, which is why [Dispatcher.mayOfferAnswer] stops
-// offering while [sandbox.AnswerDeliveryReserve] of them are still left. And
-// it keeps the message's IDENTITY and its place: a republish is a new message
-// at the tail of the inbox, behind whatever followed it on the same
-// conversation, and one whose delivery budget starts over on every copy.
+// A NAK, and on this route — and only this one — that is right. The delivery
+// names its run, so where it comes back relative to the seat's other mail
+// decides nothing: no later message can be taken as its answer, and it cannot
+// be taken as the answer to anything else. What the Nak buys is SPACING — the
+// queue backs a failed delivery off (seed, doubling, ceiling), so the attempts
+// are spread across the minutes a seat handoff, a config apply or a store blip
+// actually take — and the message's IDENTITY, which a republish would replace
+// with a new message whose delivery budget starts over on every copy. Its
+// bound is that budget: an answer by turn has nowhere else to go, so it is
+// dead-lettered loudly rather than dropped (see
+// [sandbox.Coordinator.AnswerByTurn]).
+//
+// A CHAT REPLY IS NEVER HANDED BACK THIS WAY. It names no run, so a Nak —
+// which returns a message BEHIND its conversation's newer mail
+// (queue.OutcomeNak) — let the person's next message reach the question first
+// and be taken as its answer. A chat reply is recorded on the run instead and
+// its resume retried by the coordinator, and the one hand-back it still has,
+// when the record itself could not be made, is a deferral that keeps its
+// place (see [Dispatcher.dispatch]).
 //
 // The cause travels into the NAK because the queue logs it and the
 // dead-letter boundary reads it: "this seat is still owed this answer" with
@@ -1241,15 +1297,44 @@ func (d *Dispatcher) handBackAnswer(handle string, cause error) queue.Result {
 	return queue.Nak(fmt.Errorf("engine: %s is still owed this answer: %w", handle, cause))
 }
 
-// first is the partition's leading event, which is the one a resume is traced
-// under — the same event [DescribeTrigger] leads with.
-func first(evs []*events.Event) *events.Event {
+// answerOwedReason is the deferral reason a chat reply is handed back with
+// while a parked run is still owed it.
+func answerOwedReason(handle string, cause error) string {
+	if cause == nil {
+		return fmt.Sprintf("%s is still owed this answer", handle)
+	}
+	return fmt.Sprintf("%s is still owed this answer: %s", handle, cause)
+}
+
+// recordAnswered records a delivery that became a parked run's answer as
+// worked, in the completion ledger the ordinary route reads.
+//
+// THE ANSWER IS SPENT, and a copy of it must not become a turn: a redelivery
+// whose acknowledgement was lost, or a park's republished copy, would
+// otherwise reach a seat whose question is no longer waiting — the recorded
+// answer is matched only while its run still holds it — and be run as an
+// ordinary message the run has already been resumed with. The ledger is the
+// fleet's, so the copy is dropped on whichever node it reaches.
+//
+// FAILS OPEN, like every completion write: the answer is recorded on the run
+// either way, and while the run holds it a copy is recognised there.
+func (d *Dispatcher) recordAnswered(ctx context.Context, handle string, evs []*events.Event) {
+	if d.Completions == nil {
+		return
+	}
+	now := d.now()
 	for _, ev := range evs {
-		if ev != nil {
-			return ev
+		if ev == nil || !d.ledgered(ev.Type) {
+			continue
+		}
+		key := workkey.Derive([]string{ev.ID.String()})
+		if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
+			log.WarnContext(ctx, "answer_not_recorded_worked", "seat", handle, "error", err,
+				"detail", "a copy of this answer reaching the seat after its run has "+
+					"settled may be run as an ordinary message")
+			return
 		}
 	}
-	return nil
 }
 
 // park requeues a delivery and acks it, or NAKs where it could not be
@@ -1282,31 +1367,59 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 // A partial overlap is the case that matters: a redelivery of (A, B) after
 // (A, B, C) was worked drops A and B and runs C, rather than re-running all
 // three or skipping all three.
-func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*events.Event) []*events.Event {
+//
+// TWO KEYS PER CHAT MESSAGE, either of which drops it: the delivery's own —
+// a turn that was woken for it — and the message's identity on its chat
+// backend, which a LATER turn records when its thread block showed it the
+// message still waiting (see workedthrough.go). The second is what stops a
+// failed message that comes round behind its conversation's newer mail being
+// answered a second time, out of order, after the newer one's turn answered
+// the thread it was in.
+//
+// It reports the dropped events that were covered ONLY by the second key, so
+// the record of the skip can say a later turn answered them in their thread
+// rather than that a turn was woken for them.
+func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*events.Event) ([]*events.Event, map[uuid.UUID]bool) {
 	if d.Completions == nil {
-		return evs
+		return evs, nil
 	}
 	keys := make([]string, 0, len(evs))
 	for _, ev := range evs {
-		if d.ledgered(ev.Type) {
-			keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
+		if !d.ledgered(ev.Type) {
+			continue
+		}
+		keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
+		if chat, ok := chatKeyOf(ev); ok {
+			keys = append(keys, chat)
 		}
 	}
 	if len(keys) == 0 {
-		return evs
+		return evs, nil
 	}
 	worked := d.Completions.Worked(ctx, handle, keys)
 	if len(worked) == 0 {
-		return evs
+		return evs, nil
 	}
 	out := make([]*events.Event, 0, len(evs))
+	var inThread map[uuid.UUID]bool
 	for _, ev := range evs {
-		if d.ledgered(ev.Type) && worked[workkey.Derive([]string{ev.ID.String()})] {
+		if !d.ledgered(ev.Type) {
+			out = append(out, ev)
+			continue
+		}
+		if worked[workkey.Derive([]string{ev.ID.String()})] {
+			continue
+		}
+		if chat, ok := chatKeyOf(ev); ok && worked[chat] {
+			if inThread == nil {
+				inThread = map[uuid.UUID]bool{}
+			}
+			inThread[ev.ID] = true
 			continue
 		}
 		out = append(out, ev)
 	}
-	return out
+	return out, inThread
 }
 
 // recordWorked writes both ledgers after a turn.
@@ -1321,11 +1434,17 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Request, res turn.Result) {
 	now := d.now()
 	if d.Completions != nil {
+		keys := make([]string, 0, len(req.Events)+len(res.WorkedThrough))
 		for _, ev := range req.Events {
-			if !d.ledgered(ev.Type) {
-				continue
+			if d.ledgered(ev.Type) {
+				keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
 			}
-			key := workkey.Derive([]string{ev.ID.String()})
+		}
+		// AND THE MESSAGES IT ANSWERED WITHOUT BEING WOKEN FOR THEM — the
+		// waiting messages its thread block showed it. See
+		// workedthrough.go.
+		keys = append(keys, res.WorkedThrough...)
+		for _, key := range keys {
 			if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
 				log.WarnContext(ctx, "completion_not_recorded", "seat", handle, "error", err)
 				break
@@ -1673,7 +1792,9 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string
 // Best effort and nil-safe, like the coalescing record beside it: a node whose
 // queue refused the row has still skipped correctly, and failing the dispatch
 // over an observability event would trade real work for a feed entry.
-func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviving []*events.Event) {
+func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviving []*events.Event,
+	answeredInThread map[uuid.UUID]bool,
+) {
 	if d.Observe == nil || len(all) == len(surviving) {
 		return
 	}
@@ -1687,6 +1808,14 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		if ev == nil || kept[ev.ID] {
 			continue
 		}
+		// WHICH TURN WORKED IT is the half of the reason a reader needs:
+		// a turn woken for this very trigger, or a later turn that was
+		// shown it waiting in its thread and answered the thread as it
+		// stood (see workedthrough.go).
+		reason := "a previous turn already worked this trigger"
+		if answeredInThread[ev.ID] {
+			reason = "a later turn was shown this message waiting in its thread and answered it there"
+		}
 		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
 		// question this record answers is "what happened to my webhook",
 		// and the answer belongs under the webhook rather than under a
@@ -1695,7 +1824,7 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			AgentHandle: handle,
 			TriggerID:   ev.ID.String(),
 			TriggerType: ev.Type,
-			Reason:      "a previous turn already worked this trigger",
+			Reason:      reason,
 		}, triggerTrace([]*events.Event{ev}))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)

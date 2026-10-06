@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -524,24 +525,25 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     so a later resume has only the hold to take back — where on the
 	//     dispatch path a redelivered trigger simply raises a fresh one. So
 	//     it is KEPT.
-	//   - A PERSON'S ANSWER was claimed from a question still open, so the
-	//     revert puts the run back to awaiting THEM. Nothing is working, and
-	//     an indicator over that wait tells the one person who could move it
-	//     that nobody needs them — the same lie the park exists to stop. So
-	//     it is CLEARED, and this is the only place that clear happens: the
-	//     coordinator's revert reports no stop, deliberately, because the
-	//     same revert on the completion route puts a run back to a box that
-	//     is still working. See [sandbox.Coordinator.unclaim].
+	//   - A PERSON'S ANSWER was claimed from the answer recorded on the run
+	//     (or, by turn, from a question still open), so the revert puts the
+	//     run back to owing that answer's resume. Nothing is working, and an
+	//     indicator over that wait tells the one person who could move it
+	//     that the run is busy with their reply when it is not — the same
+	//     lie the park exists to stop. So it is CLEARED, and this is the
+	//     only place that clear happens: the coordinator's revert reports no
+	//     stop, deliberately, because the same revert on the completion
+	//     route puts a run back to a box that is still working. See
+	//     [sandbox.Coordinator.unclaim].
 	//
-	//     THE MESSAGE ITSELF IS HANDED BACK, not spent. The offer reports
-	//     [sandbox.AnswerDeferred] — the run is awaiting THIS answer again
-	//     — so the dispatcher NAKs the delivery instead of letting it be
-	//     run as the ordinary chat message it looks like, and the
-	//     redelivery, once the queue's backoff has passed, raises its own
-	//     indicator off its own trigger. It used to fall through, which
-	//     answered the person with a turn rather than with the coding run
-	//     they were replying to and left that run waiting for a further
-	//     message. See [Dispatcher.answered].
+	//     THE ANSWER ITSELF IS NOT LOST. A chat reply is recorded on the run
+	//     before its resume is attempted, so the coordinator retries the
+	//     resume on its own schedule and each attempt raises its own
+	//     indicator off the recorded trigger; an answer by turn is handed
+	//     back to the seat's inbox and comes round again. Neither falls
+	//     through to an ordinary turn, which answered the person with a turn
+	//     rather than with the coding run they were replying to. See
+	//     [sandbox.Coordinator.TryResumeFromAnswer].
 	working := rejoined
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
@@ -1430,6 +1432,11 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
 		Stopped: e.releaseWorkingStatus,
+		// The seat's later mail waits behind an owed answer's resume, and
+		// a retried resume asks the seat's conditions first — see
+		// [answerHold] and [Engine.mayResumeAnswer].
+		Hold:  answerHold{engine: e},
+		Admit: e.mayResumeAnswer,
 	})
 	if err != nil {
 		return nil, err
@@ -1471,11 +1478,15 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 	return nil
 }
 
-// stopSandbox halts the poll loop. The rows and the boxes are untouched: a
-// detached run belongs to its row, and the next owner of its seat recovers it.
+// stopSandbox halts the poll loop and the coordinator's own retries. The rows
+// and the boxes are untouched: a detached run belongs to its row — an answer
+// still owed its resume included — and the next owner of its seat recovers it.
 func (e *Engine) stopSandbox() {
 	if w := e.sandboxWaiter.Load(); w != nil {
 		w.Stop()
+	}
+	if rt := e.sandbox.Load(); rt != nil {
+		rt.coordinator.Stop()
 	}
 }
 
@@ -1494,13 +1505,71 @@ func (e *Engine) sandboxSeatRuns(handle string) (held, awaitsAnswer bool) {
 // runtime current when it arrives; with none, nothing is parked here to take
 // it.
 func (e *Engine) answerParkedRun(ctx context.Context, handle string,
-	conv sandbox.ConversationRef, answer string, trigger *events.Event) (sandbox.AnswerDisposition, error) {
+	reply sandbox.Reply) (sandbox.AnswerDisposition, error) {
 
 	rt := e.sandbox.Load()
 	if rt == nil {
 		return sandbox.AnswerNotMine, nil
 	}
-	return rt.coordinator.TryResumeFromAnswer(ctx, handle, conv, answer, trigger)
+	return rt.coordinator.TryResumeFromAnswer(ctx, handle, reply)
+}
+
+// answerHold is the seat-inbox hold the sandbox coordinator keeps while one of
+// a seat's runs is owed the resume of a recorded answer — see
+// [sandbox.AnswerHold] and [inbox.HoldAnswerOwed].
+//
+// A HOLD, NOT A PARK: the mail waits on the broker with its order and its
+// delivery count intact, where a park would republish it in a loop for as
+// long as the resume's retries take.
+type answerHold struct{ engine *Engine }
+
+var _ sandbox.AnswerHold = answerHold{}
+
+func (h answerHold) Hold(ctx context.Context, handle string) error {
+	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+	if subject == "" || group == "" {
+		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	}
+	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, string(inbox.HoldAnswerOwed))
+}
+
+func (h answerHold) Release(ctx context.Context, handle string) error {
+	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+	if subject == "" || group == "" {
+		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	}
+	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, string(inbox.HoldAnswerOwed))
+}
+
+// mayResumeAnswer is the coordinator's [sandbox.Admission]: whether a seat may
+// run a RETRIED resume of a recorded answer now.
+//
+// THE SCREENING'S OWN CONDITIONS, read the way a delivery reads them, because
+// the first attempt runs inside the delivery that carried the answer and so
+// passed them; a retry runs outside any delivery and must not be the one way a
+// turn starts on a seat whose lease is not fresh, that a person paused, that
+// has no model, whose node refuses new work, or whose budget is refusing.
+// Whether a sandbox run holds the seat is deliberately NOT asked: a resume of
+// an answer was always admitted beside another of the seat's jobs, which is
+// what the answer offer on a held seat is for.
+func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (bool, string) {
+	c := e.conditionsFor(nil)(handle)
+	switch {
+	case !c.Owned:
+		return false, "seat is not owned here"
+	case c.PauseUnknown:
+		return false, "this node has not yet read whether the seat is paused"
+	case c.Paused:
+		return false, "a person paused this seat"
+	case !c.TurnEngineReady:
+		return false, "no turn engine"
+	case !c.AdmitsTriggers:
+		return false, "config posture refuses new work"
+	}
+	if reason, refusing := e.budgetRefusing(ctx, handle); refusing {
+		return false, reason
+	}
+	return true, ""
 }
 
 // answerRunByTurn hands a person's answer BY TURN to the parked coding run it

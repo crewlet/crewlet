@@ -297,7 +297,7 @@ func TestTheChatAnswerPathRecordsWhoAnswered(t *testing.T) {
 	reply := events.New(types.ExternalNotification{
 		NotificationSource: "slack", Sender: "Ada", Body: "use main",
 	}, events.TraceContext{})
-	d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", answerOnTheDM, "use main", reply)
+	d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", chatReply(answerOnTheDM, "use main", reply))
 	if err != nil || d != AnswerConsumed {
 		t.Fatalf("TryResumeFromAnswer = %q, %v", d, err)
 	}
@@ -325,7 +325,7 @@ func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 	parksOnAQuestion(t, rig, "t1")
 
 	elsewhere := ConversationRef{Identity: "chat:D9", Partition: "chat:D9"}
-	d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", elsewhere, "hello", nil)
+	d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", chatReply(elsewhere, "hello", nil))
 	if err != nil || d != AnswerNotMine {
 		t.Fatalf("TryResumeFromAnswer = %q, %v, want not_mine", d, err)
 	}

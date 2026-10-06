@@ -122,6 +122,11 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// indicator, the reply target and this block must never disagree
 		// about which thread a turn is in.
 		Thread: threadOf(req.Ask()),
+		// AND WHICH MESSAGE IN IT WOKE THE TURN, so the block can say
+		// which of the messages it shows were waiting for this turn —
+		// see [prefetch.Blocks.ThreadContextAnswered] and
+		// workedthrough.go.
+		Message: triggerMessageOf(req.Ask()),
 	}
 	// TIMED where it runs: the context assembly is the stretch between a
 	// turn announcing itself and its first phase opening, and nothing else

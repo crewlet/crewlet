@@ -464,12 +464,18 @@ const (
 	// SandboxReseed — the box was reclaimed past its pause TTL while the
 	// run waited. The question survives and an answer relaunches it.
 	SandboxReseed SandboxStatus = "reseed"
+	// SandboxAnswered — a person's reply is recorded as the answer to the
+	// question, and the resume it drives is owed: the engine is working on
+	// it, and nobody is being waited on any more.
+	SandboxAnswered SandboxStatus = "answered"
 )
 
 // SandboxStatuses is the closed set a live entry can carry. The record's
 // `resumed` is deliberately not in it: the run itself is over and the turn
 // that launched it has taken its result back, so it is not a run in flight.
-var SandboxStatuses = []SandboxStatus{SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed}
+var SandboxStatuses = []SandboxStatus{
+	SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed, SandboxAnswered,
+}
 
 // Valid reports whether s is a status a live entry can carry.
 func (s SandboxStatus) Valid() bool { return slices.Contains(SandboxStatuses, s) }

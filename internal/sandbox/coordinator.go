@@ -246,6 +246,24 @@ type CoordinatorOptions struct {
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
 
+	// Hold keeps a seat's later mail behind the resume of an answer it
+	// owes — see [AnswerHold]. Nil holds nothing, which a coordinator built
+	// without an inbox (a test's) is entitled to: the answer is still
+	// recorded and resumed, and only the order of the seat's next turn
+	// against that resume is left to chance.
+	Hold AnswerHold
+
+	// Admit says whether a seat may run a retried resume now — see
+	// [Admission]. Nil admits every retry.
+	Admit Admission
+
+	// After schedules f to run after d, in its own goroutine, and returns a
+	// function that cancels it and reports whether it had not started —
+	// time.AfterFunc's contract. Nil is time.AfterFunc; a test replaces it
+	// to fire a retry when it chooses. It must never call f before it
+	// returns.
+	After func(d time.Duration, f func()) (stop func() bool)
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -268,15 +286,19 @@ type CoordinatorOptions struct {
 //     already flipped, with the suspended conversation permanently lost.
 //   - PARK → ANSWER. A run that stops to ask a person something gives the
 //     seat BACK — the answer arrives on that seat's own inbox, and a person
-//     can take days — and leaves a question open on it instead. The seat then
-//     works as usual, with one difference: every delivery is offered to
+//     can take days — and leaves a question open on it instead, stamped with
+//     the instant it was asked. The seat then works as usual, with one
+//     difference: every delivery is offered to
 //     [Coordinator.TryResumeFromAnswer] before anything else consumes it,
 //     because the reply that resumes an hours-old coding run is an ordinary
 //     chat message and nothing about it says so. The wait is DURABLE FIRST
 //     and everything else follows it: a park whose write does not land gives
 //     the claim it holds back instead, and ends the run where even that
 //     cannot be written — because a row left in the claim is picked up by
-//     nothing at all ([Coordinator.unclaim]).
+//     nothing at all ([Coordinator.unclaim]). And so is the ANSWER: the
+//     first reply posted after the question is RECORDED on the run before
+//     the resume is attempted, so a resume that fails is this coordinator's
+//     to retry and never a reason to hand the person's message back.
 //   - RESTART RECOVERY. A node claiming a seat re-marks its running jobs held,
 //     inherits its open questions, and reaps any tail the previous owner
 //     abandoned mid-resume.
@@ -313,6 +335,29 @@ type Coordinator struct {
 	// That clause is [AnswerDeliveryReserve], and it is measured on the
 	// delivery rather than remembered here.
 	attempts map[answerKey]map[string]answerBudget
+
+	// retries are the owed answers this node is retrying the resume of,
+	// by turn id; owed is which of them each seat owes, the set its inbox
+	// hold is taken for; held whether that hold is applied, and holdBusy
+	// and holdDirty the serialisation [Coordinator.reconcileHold] runs
+	// under. All under mu.
+	retries   map[string]*answerRetry
+	owed      map[string]map[string]struct{}
+	held      map[string]bool
+	holdBusy  map[string]bool
+	holdDirty map[string]bool
+
+	hold  AnswerHold
+	admit Admission
+	after func(time.Duration, func()) func() bool
+
+	// life is the coordinator's own lifetime, which a scheduled retry runs
+	// under — it outlives every delivery — and ends with [Coordinator.Stop],
+	// which waits for inflight: every scheduled attempt not yet cancelled.
+	life     context.Context
+	end      context.CancelFunc
+	inflight sync.WaitGroup
+	closed   bool
 }
 
 // seatRuns is this node's count of one seat's detached runs, by the question
@@ -377,16 +422,45 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
-		ended:    opts.Ended,
-		stopped:  opts.Stopped,
-		now:      opts.Now,
-		runs:     map[string]seatRuns{},
-		attempts: map[answerKey]map[string]answerBudget{},
+		ended:     opts.Ended,
+		stopped:   opts.Stopped,
+		now:       opts.Now,
+		runs:      map[string]seatRuns{},
+		attempts:  map[answerKey]map[string]answerBudget{},
+		retries:   map[string]*answerRetry{},
+		owed:      map[string]map[string]struct{}{},
+		held:      map[string]bool{},
+		holdBusy:  map[string]bool{},
+		holdDirty: map[string]bool{},
+		hold:      opts.Hold,
+		admit:     opts.Admit,
+		after:     opts.After,
 	}
 	if c.now == nil {
 		c.now = time.Now
 	}
+	if c.after == nil {
+		c.after = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
+	}
+	c.life, c.end = context.WithCancel(context.Background())
 	return c, nil
+}
+
+// Stop ends every retry this coordinator has scheduled and waits for any that
+// is running. An answer whose resume is still owed stays recorded on its run,
+// and whichever node holds the seat next drives it ([Coordinator.RecoverSeat]).
+func (c *Coordinator) Stop() {
+	c.mu.Lock()
+	c.closed = true
+	for _, r := range c.retries {
+		if r.stop != nil && r.stop() {
+			c.inflight.Done()
+		}
+		r.stop = nil
+	}
+	c.mu.Unlock()
+	c.end()
+	c.inflight.Wait()
 }
 
 // SetManager swaps the sandbox manager, for a live reload of providers.sandbox.
@@ -872,6 +946,11 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 // for zero holding cost. The answer resumes the work either way; only the
 // starting point differs, a live checkout against the pushed branch.
 func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) error {
+	// THE ANCHOR, taken BEFORE the question is announced: nobody can read
+	// the question before the announcement, so nobody can answer it before
+	// this instant, and a reply posted earlier is not its answer. See
+	// [PendingRun.AskedAt].
+	asked := c.now()
 	announcement := types.SandboxClarificationRequested{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
@@ -908,6 +987,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// on me" is a question nobody could answer while it was all the
 		// row said. See [PendingRun.AudienceHandles].
 		Answerers: c.audience.ResolveAudience(run, result.AskTo),
+		AskedAt:   asked,
 	}); err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
 		// is not waiting for anybody: the row is still in the claim that
@@ -956,157 +1036,166 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	return nil
 }
 
-// TryResumeFromAnswer resumes a parked run if this event answers its question.
+// TryResumeFromAnswer records a delivery as the answer to the question a
+// parked run of this seat is waiting on, if it is one, and resumes the run
+// with it.
 //
 // Reports what the CALLER must do with the delivery — see [AnswerDisposition],
 // which is the whole contract and states what each answer costs when it is
 // wrong. The error beside it is the explanation and never the decision: a
 // caller logs it and acts on the disposition.
 //
-// The disambiguation is positional WITHIN A CONVERSATION: the next inbound on
-// the conversation the question was asked in, while a clarification is
-// pending, IS the answer. Hence the whole [ConversationRef] rather than one
-// key — the identity is what the match turns on, and the partition rides
-// along for the rows parked before an identity was written. Matching on the
-// partition alone lost every answer the engine's own prompt pushed into a
-// thread; see [ConversationRef.Answers].
+// # Which question a delivery answers
+//
+// The CONVERSATION it arrived on admits the runs it may answer, and its batch
+// picks between them ([ConversationRef.Best]). THE QUESTION'S OWN ASKING
+// decides whether it can answer at all: a delivery written before the
+// question was asked is not its answer ([Reply.qualifies], against
+// [PendingRun.AskedAt]), and neither is a reply this question already let go
+// of. Only a run still waiting is a candidate, so the first qualifying reply
+// is the answer and every later one is the ordinary message it looks like.
+//
+// # Recorded first, resumed second
+//
+// The answer is RECORDED on the run by a compare-and-set before anything is
+// done with it ([PendingStore.RecordAnswer]), and from that moment the
+// delivery is spent: [AnswerConsumed], whatever the resume then concludes. The
+// resume's first attempt runs inline; a failure is retried by this
+// coordinator on its own schedule, with the seat's inbox held so its later
+// mail waits behind it. See answerowed.go for why receiving an answer and
+// resuming with it were split, and for what ends an answer that cannot be
+// resumed.
 //
 // # Every failure, classified
 //
-// Nothing here reports an error and leaves the caller to guess what it meant,
-// which is precisely what the bool beside it cost: the dispatcher read every
-// error as "not handled" and spent the person's answer on an unrelated turn
-// while the run that asked was still waiting for it.
+//   - No conversation keys at all, no run awaiting this one, or none the
+//     delivery qualifies for: [AnswerNotMine]. Nothing is owed it.
+//   - The delivery is already the recorded answer of one of the seat's runs:
+//     [AnswerConsumed]. It is a copy of an answer, never a second one.
+//   - The seat's runs could not be read: whichever answer THIS NODE'S OWN
+//     COUNT supports — see [Coordinator.answerLookupFailed]. No awaiting run
+//     on the seat: [AnswerNotMine]. An awaiting run: [AnswerDeferred].
+//   - The answer could not be recorded: [AnswerDeferred]. The write MAY have
+//     landed, so this is the ambiguous case, resolved towards the run — the
+//     delivery comes back and, if the record did land, is recognised as the
+//     answer it already is.
+//   - The answer was recorded and its first resume ended the run for good —
+//     no conversation to resume into, or a claim that could not be given back
+//     and was settled instead: [AnswerNotMine]. The run is gone and
+//     announced, nothing is owed the delivery, and it is still in hand, so it
+//     is the ordinary message it looks like.
 //
-//   - No conversation keys at all, and no run awaiting this one:
-//     [AnswerNotMine]. Nothing was matched, so nothing is owed.
-//   - The lookup itself failed: whichever answer THIS NODE'S OWN COUNT
-//     supports, because the store that could not say which row is awaiting is
-//     not the only thing here that knows whether one is — see
-//     [Coordinator.answerLookupFailed]. No awaiting run on the seat:
-//     [AnswerNotMine], the original fail-open, because nothing is owed the
-//     delivery and an unreadable store must not swallow an ordinary message.
-//     An awaiting run: [AnswerDeferred], because something IS owed an answer
-//     here and only WHICH row could not be read.
-//   - The claim could not be written: [AnswerDeferred]. The claim MAY have
-//     landed, so this is the ambiguous case, and the ambiguity is resolved
-//     towards the run — an answer arriving twice is recoverable and an answer
-//     spent is not. If it did land, the redelivery finds no awaiting row,
-//     answers [AnswerNotMine] and the message becomes the turn it looks like,
-//     while the claimed row is reaped by the seat's next recovery pass.
-//   - The claim was lost to another inbound: [AnswerConsumed]. That delivery
-//     is resuming the run, so this one must not ALSO be run as an unrelated
-//     message.
-//   - The resume ran, whatever it concluded: [AnswerConsumed]. Including a
-//     resumed turn that broke after writing outside the engine
-//     ([ErrResumeActed]), whose claim is deliberately never given back.
-//   - The resume could not be made and the claim went back:
-//     [AnswerDeferred] — the run is awaiting this same answer again, so the
-//     delivery has to come back. [ErrResumeUnavailable] is the case this
-//     exists for.
-//   - The run is terminally gone — no suspended conversation to resume into,
-//     or a claim that could not be given back and was settled instead:
-//     [AnswerNotMine]. Requeueing for a run that no longer exists is a loop
-//     with no end, and the message is an ordinary one now.
+// Every other outcome of the resume — it ran, or it failed and will be
+// retried — is [AnswerConsumed]: the answer is the run's now.
 //
-// See [Coordinator.resumeAndSettle], which makes the last three of those calls,
-// and [MaxAnswerAttempts] for what bounds a requeue that keeps failing.
-func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, conv ConversationRef, answer string, trigger *events.Event) (AnswerDisposition, error) {
-	if conv.Identity == "" && conv.Partition == "" {
+// [AnswerDeferred] is a failure of this NODE or its store, never of the
+// message, and the caller hands the delivery back so it keeps its place at the
+// head of the seat's inbox — a deferral, not a Nak, which would return it
+// behind the conversation's newer mail and hand the question to the wrong
+// reply. [MaxAnswerAttempts] bounds how often one delivery is handed back.
+func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, reply Reply) (AnswerDisposition, error) {
+	if reply.Conv.Identity == "" && reply.Conv.Partition == "" {
 		return AnswerNotMine, nil
 	}
-	run, found, err := c.pending.FindAwaitingByConversation(ctx, handle, conv)
+	trigger := reply.trigger()
+	runs, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
-		// BOTH KEYS. The match turns on the identity and falls back to
-		// the partition for a row parked before an identity was
-		// written, so a line naming one of them cannot say which read
-		// was attempted against what — and on a direct message the two
-		// are different values.
+		// BOTH KEYS. The match turns on the identity and falls back to the
+		// partition for a row parked before an identity was written, so a
+		// line naming one of them cannot say which read was attempted
+		// against what — and on a direct message the two are different
+		// values.
 		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
-			"agent", handle, "conversation", conv.Identity,
-			"partition", conv.Partition, "error", err.Error())
+			"agent", handle, "conversation", reply.Conv.Identity,
+			"partition", reply.Conv.Partition, "error", err.Error())
 		return c.answerLookupFailed(ctx, handle, trigger, err)
-	}
-	if !found {
-		// NOTHING WAS MATCHED, so nothing is owed the delivery: it is an
-		// ordinary message and is handled as one.
-		c.clearLookupAttempts(handle)
-		return AnswerNotMine, nil
 	}
 	// THE LOOKUP ANSWERED, so whatever this seat was counting against a
 	// store that would not read is spent.
 	c.clearLookupAttempts(handle)
-	// THE JOB THAT ASKED, still waiting. The lookup is a snapshot, and a
-	// claim that took whatever the row held by now would hand this answer
-	// to the next job, which asked nothing.
-	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, AnswerTail(run.LaunchID))
-	if err != nil {
-		// THE CLAIM MAY HAVE LANDED. A store that could not say is not a
-		// store that said no, and the two would be told apart by nothing
-		// on the delivery's side — so the run keeps its answer and the
-		// message comes back. See the classification above.
-		return c.deferAnswer(ctx, run, trigger,
-			fmt.Errorf("sandbox: claiming %s for the answer it is waiting on: %w", run.TurnID, err))
+	// Bounded by the seat's runs: every lost race is a run some other reply
+	// or transition took, and a delivery cannot lose one more often than
+	// there are runs for it to lose.
+	for range len(runs) + 1 {
+		if recorded, ok := reply.recordedOn(runs); ok {
+			// A COPY OF AN ANSWER ALREADY RECORDED. Spent as the answer
+			// it is — and if this node is not already driving its
+			// resume, it starts: the node that recorded it may have
+			// stopped before it could.
+			c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
+			if recorded.Status == StatusAnswered && !c.owes(recorded.TurnID) {
+				if gone := c.resumeOwed(ctx, recorded); gone {
+					return AnswerNotMine, nil
+				}
+			}
+			return AnswerConsumed, nil
+		}
+		run, found := reply.Best(runs)
+		if !found {
+			// NOTHING WAS MATCHED, so nothing is owed the delivery: it
+			// is an ordinary message and is handled as one.
+			return AnswerNotMine, nil
+		}
+		recorded, won, err := c.recordAnswer(ctx, run, reply)
+		if err != nil {
+			// THE RECORD MAY HAVE LANDED. A store that could not say is
+			// not a store that said no, so the delivery comes back — and
+			// a copy of it that finds the record is spent above.
+			return c.deferAnswer(ctx, run, trigger,
+				fmt.Errorf("sandbox: recording the answer %s is waiting on: %w", run.TurnID, err))
+		}
+		if won {
+			c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
+			if gone := c.resumeOwed(ctx, recorded); gone {
+				// THE RUN ENDED UNDER ITS OWN RESUME — no conversation
+				// to resume into, or a claim that could not be given
+				// back — settled and announced as lost. Nothing is owed
+				// the delivery now, and it is still in hand: it is the
+				// ordinary message it looks like.
+				return AnswerNotMine, nil
+			}
+			return AnswerConsumed, nil
+		}
+		// LOST: another reply was recorded first, or the run moved on.
+		// Read again, so the decision is made against what the store holds
+		// now rather than against the snapshot that lost.
+		if runs, err = c.pending.ListActiveForSeat(ctx, handle); err != nil {
+			return c.answerLookupFailed(ctx, handle, trigger, err)
+		}
 	}
-	if !won {
-		// Another inbound already claimed it: that delivery is resuming
-		// the run, so this one is spent rather than run as an unrelated
-		// message.
-		c.clearAnswerAttempts(run.AgentHandle, run.TurnID)
-		c.announceAnswered(ctx, run, types.AnswerViaChat, types.AnswerNotAwaiting,
-			answererOf(trigger), "")
-		return AnswerConsumed, nil
+	return c.answerLookupFailed(ctx, handle, trigger,
+		errors.New("sandbox: the seat's runs kept changing under the answer's record"))
+}
+
+// owes reports whether this node is already driving a run's owed answer.
+func (c *Coordinator) owes(turnID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.retries[turnID]; ok {
+		return true
 	}
-	// FOUR VALUES, BECAUSE THE MATCH HAS TWO ENDS. The delivery's pair and
-	// the row's pair together are what say WHICH row won and WHY: a row
-	// whose conversation equals the delivery's was admitted on the
-	// identity, a row with no conversation at all was matched on the
-	// partition fallback because it predates the split, and two questions
-	// parked on one direct-message line are told apart by the partitions
-	// alone — [ConversationRef.Best] prefers the row whose batch the reply
-	// arrived in. Logging the identity by itself left every one of those
-	// indistinguishable from the others.
-	log.InfoContext(ctx, "sandbox_clarification_answered",
-		"turn_id", claimed.TurnID,
-		"conversation", conv.Identity, "partition", conv.Partition,
-		"run_conversation", claimed.ConversationKey,
-		"run_partition", claimed.PartitionKey)
-	// The claim CLOSED THE QUESTION and took the seat: the parked run freed
-	// it, and re-entering the Execute loop is work like any other. One move,
-	// so no delivery sees the seat between the two halves.
-	c.moveRun(claimed.AgentHandle, StatusAwaiting, StatusResumed)
-	// NO OUTCOME: this resume collects no run. The box is still parked and
-	// its cost is charged where it is collected, so reporting one here would
-	// bill the same run twice.
-	// THE PARKED JOB'S TOKENS, off the row it parked on: this resume is
-	// that job's one segment, so it is the one that charges them.
-	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer, ""), true, trigger, runOutcome{
-		InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
-	})
-	if disposition == AnswerDeferred {
-		// The claim went back and the run is awaiting this same answer
-		// again — so the delivery has to come back, up to the budget
-		// [MaxAnswerAttempts] gives it. NOTHING IS ANNOUNCED: the answer
-		// has not become anything yet.
-		return c.deferAnswer(ctx, claimed, trigger, err)
+	for _, owed := range c.owed {
+		if _, ok := owed[turnID]; ok {
+			return true
+		}
 	}
-	// SPENT OR HANDED ON, either way not a failure in a series, so the next
-	// one starts its own.
-	c.clearAnswerAttempts(claimed.AgentHandle, claimed.TurnID)
-	c.announceAnswered(ctx, claimed, types.AnswerViaChat, answeredAs(disposition),
-		answererOf(trigger), "")
-	return disposition, err
+	return false
 }
 
 // AnswerByTurn resumes the parked run a person answered BY NAMING IT, rather
 // than by replying on the conversation it was asked in.
 //
-// It is [Coordinator.TryResumeFromAnswer] with the lookup replaced by the
-// run's own row: the same claim ([PendingStore.ClaimForResume] under
-// [AnswerTail]), so an answer by turn and a chat reply racing for one question
-// resume it exactly once between them, and the same resume and settle
-// ([Coordinator.resumeAndSettle]). What it does not share is the chat route's
-// bound, because it has no ordinary route to fall back to — see below.
+// The run's own row replaces the chat route's lookup, and it is resumed with
+// DIRECTLY rather than recorded first: the delivery names its run, so where it
+// comes back relative to the seat's other mail decides nothing, and handing it
+// back is safe in a way handing back a chat reply is not (see
+// [Coordinator.TryResumeFromAnswer]). The claim is [PendingStore.ClaimForResume]
+// under [AnswerTail] — out of a question still OPEN — so an answer by turn
+// loses to a chat reply already recorded against the question
+// ([StatusAnswered]) and the two resume it exactly once between them; the
+// resume and settle are the same ([Coordinator.resumeAndSettle]). What it does
+// not share is the chat route's bound, because it has no ordinary route to
+// fall back to — see below.
 //
 // # What the caller does with each answer
 //
@@ -1272,13 +1361,13 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 // "the resume did not happen" is three different facts and only one of them is
 // a retry: the run can be back where the claim found it (the delivery is still
 // owed to it), or terminally gone (nothing is owed it any more), or the turn
-// can have run and concluded something (the delivery is spent). Its two
-// callers arrive by different routes and read the pair differently — a
-// completion NAKs on the error and lets the broker's own budget bound the
-// retry, while a person's answer is handed back on [AnswerDeferred] — the same
-// NAK, under this package's own shorter bound — and falls through to an
-// ordinary turn on [AnswerNotMine]. The classification is stated
-// once, at [Coordinator.TryResumeFromAnswer].
+// can have run and concluded something (the delivery is spent). Its callers
+// arrive by different routes and read the pair differently — a completion
+// NAKs on the error and lets the broker's own budget bound the retry (the
+// message names its run, so where it comes back does not matter); an answer
+// by turn is handed back the same way on [AnswerDeferred]; and a RECORDED chat
+// answer is retried by this coordinator on [AnswerDeferred], bounded by
+// [MaxAnswerAttempts] ([Coordinator.attemptOwed]).
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) (AnswerDisposition, error) {
@@ -1993,6 +2082,21 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 			}
 			c.countRun(run.AgentHandle, run.Status)
 			recovered++
+		case StatusAnswered:
+			// AN ANSWER THE PREVIOUS OWNER RECORDED AND NEVER RESUMED
+			// WITH: it stopped, or the seat moved, between the record and
+			// the resume that settles it. The answer is on the row, so it
+			// is this node's to drive — the person is not asked to send
+			// it again — and the seat's mail waits behind it here exactly
+			// as it did there. Scheduled rather than run, because this is
+			// the seat's preparation and the mailbox is not open yet.
+			if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
+				log.WarnContext(ctx, "sandbox_ownership_claim_failed",
+					"turn_id", run.TurnID, "error", err.Error())
+			}
+			c.countRun(run.AgentHandle, run.Status)
+			c.recoverOwed(ctx, run)
+			parked++
 		case StatusAwaiting, StatusReseed:
 			// NOTHING IS DONE TO THE RUN — its answer is what moves it —
 			// but the new owner has to know the question is open, or the
@@ -2103,6 +2207,10 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// run it inherits, and this node keeps no count for a seat it will
 	// never be offered a delivery for again. See [MaxAnswerAttempts].
 	c.releaseAnswerAttempts(handle)
+	// AND ANY ANSWER IT WAS STILL RESUMING: it stays recorded on the run, and
+	// the successor's recovery pass drives it. The inbox hold taken for it
+	// goes too — the seat's mail is the successor's to order now.
+	c.releaseOwed(c.life, handle)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.runs, handle)

@@ -580,6 +580,33 @@ func TestAnExpiredPauseIsReclaimedAndTheRunReseeds(t *testing.T) {
 	}
 }
 
+// A recorded answer waits on its resume, and on a seat no node holds that
+// wait is as open-ended as the question's was. Skipping answered rows left
+// exactly those boxes paused and billed; the answer itself must survive the
+// reap, since the resume re-seeds from the branch.
+func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	rig.park("t1")
+	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
+		Text: "use main", EventIDs: []string{"r1"}, RecordedAt: rig.now,
+	}); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+
+	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
+	rig.tick()
+
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the answered run's box %q reclaimed", killed, run.SandboxID)
+	}
+	got := rig.get("t1")
+	if got.Status != StatusAnswered || got.Answer == nil || got.SandboxID != "" {
+		t.Fatalf("run = %q answer %+v box %q, want the answer kept and the box forgotten",
+			got.Status, got.Answer, got.SandboxID)
+	}
+}
+
 // Connect auto-resumes, so reclaiming through it would boot the work back up
 // purely to shut it down.
 func TestTheReaperKillsByIdRatherThanConnecting(t *testing.T) {

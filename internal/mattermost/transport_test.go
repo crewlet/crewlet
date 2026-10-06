@@ -491,6 +491,12 @@ func TestASeatsThreadComesBackMarkedWithItsOwnPosts(t *testing.T) {
 	if got.Messages[0].SenderID != "U-ana" {
 		t.Errorf("the sender id was lost: %+v", got.Messages[0])
 	}
+	// EACH CARRIES ITS POST ID — what a chat trigger's metadata names it by
+	// on this backend — so the dispatch can record which messages a turn
+	// was shown.
+	if got.Messages[0].ID != "root" || got.Messages[1].ID == "" {
+		t.Errorf("the post ids were lost: %+v", got.Messages)
+	}
 	// AND NOTHING IS CLAIMED MISSING. This endpoint answers the WHOLE
 	// thread in one response — no cursor, no page size — so a transcript
 	// from here can never be short at either end, and a renderer told
