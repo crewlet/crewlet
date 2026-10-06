@@ -413,7 +413,10 @@ operator, and it carries the `grants` its own `api.auth.tokens` entry declares,
 cut on every request to the node's `max_grants` ceiling — never the whole
 ceiling by default (see [Tier A](../getting-started/configuration.md#tier-a)).
 So the first person is **invited, like everybody after them**, by whoever holds
-a token declaring `people:manage`:
+a token declaring `people:manage`. On the dashboard that is: sign in with the
+token (the sign-in page opens its token form while `/health` says nobody has
+been invited), open **Settings › People & access** and press **Invite person**
+— your address, your seat, the grants. Or from a shell:
 
 ```sh
 export CREWLET_API_TOKEN=...   # the value of one of api.auth.tokens
@@ -421,7 +424,7 @@ crewlet iam invite founder@example.com \
   -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run
 ```
 
-The command prints a link, shown once. The person opens it — the dashboard's
+Either way the link is shown once. The person opens it — the dashboard's
 invitation screen — chooses a login (one is proposed from the address) and a
 password, and redeems it exactly as the next section describes. Nothing about
 the first redemption is special:
@@ -1354,12 +1357,13 @@ of what a browser presents, on every REST call and on the live socket's
 handshake alike, and being `HttpOnly` it is out of reach of every script on the
 page. There is no token in the browser's storage and none in any URL — the
 socket reads no `?token=`, because a query string is written into every proxy's
-access log. Its sign-in surface is three screens outside the frame:
+access log. Its sign-in surface is four screens outside the frame:
 
 | Screen | What it does |
 |---|---|
 | `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Behind **Use an API token instead** — open from the start where `/health` says `identity: unclaimed`, with a line saying to invite yourself from Settings › People & access — it takes **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere; the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
 | `#/invite/<id>.<secret>` | [The invitation link](#everybody-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose — which signs them in |
+| `#/reset/<id>.<secret>` | [A password reset link](#a-forgotten-password-is-a-one-time-link-from-an-administrator). It says whose password it sets with the secret in the `X-Crewlet-Reset-Secret` header, spends nothing by being opened, and sets the new password once — which signs nobody in, so it ends on the sign-in form |
 | `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` (the key and its `otpauth://` address), the first code, and the recovery codes shown once |
 
 A button that changes something — filing work, a save, marking the inbox,
@@ -1389,6 +1393,30 @@ sign-in there by anybody other than the person the tab was read by hands it
 over the same way; the same person signing back in carries on where they were.
 [Dashboard Design](../reference/dashboard-design.md#signing-in-is-a-screen-outside-the-frame)
 has the whole of it.
+
+### People are managed from Settings › People & access
+
+The directory's own screen is where an administrator — whoever holds
+`people:manage` — does everything this page describes, through the same `/iam`
+routes `crewlet iam` calls; a reader holding `audit:read` alone sees it
+read-only. What each gesture ends is the route's:
+
+| Gesture | What it does, and what it ends |
+|---|---|
+| **Invite person** | An address, a human seat nobody holds, the grants (none the inviter does not hold). The [link](#everybody-arrives-by-invitation) is shown once; redeeming it creates the person |
+| **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address |
+| **New service account** · **Mint token** | A machine with a coloned login and grants, then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants — never `secrets:read` or `people:manage` — shown once |
+| **Edit login, seat and grants** | One edit carrying only what changed. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
+| **Suspend** · **Reactivate** | A suspended person may not act and their seat is withheld; reactivating restores what they held |
+| **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold |
+| **Reset second factor** | Clears their authenticator and recovery codes and ends every session and token they hold; they enrol again at their next sign-in |
+| **End all sessions** | Moves their revocation epoch: every session — and every personal token — they hold ends |
+| **Revoke** (a credential) | Ends that one credential — a token, a reset link, or how they prove who they are |
+| **Remove** | Typed back by login. Deletes the person and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-nodes-rows); undone only by inviting them again |
+
+Every write among these asks for a recent proof, so a stale one opens the step-up
+dialog first and the gesture then goes through. A human seat's own page says
+who holds it, and offers **Invite** with that seat chosen where nobody does.
 
 ### A cookie cannot tell its owner from a copy, and nothing pretends it can
 

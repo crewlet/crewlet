@@ -28,6 +28,16 @@
  * A person is messaged and assigned work like anybody else and is never
  * paused: the engine runs no turn for them, so there is nothing to hold.
  *
+ * # Who holds a human seat
+ *
+ * A human seat is held by whoever the identity directory binds to it, and the
+ * chart cannot say who that is. So a person's page states it from
+ * `GET /iam/seats` — the holder's login and stage, or "Nobody holds this seat"
+ * with an Invite button that opens the invitation prefilled with this seat.
+ * The read takes `people:manage` or `audit:read`, so it is asked only of a
+ * reader holding one, and the button is drawn only for `people:manage`; a
+ * reader holding neither sees the page as it was.
+ *
  * # Tabs are sections
  *
  * They push a history entry, because the reader called them, and the tab is
@@ -78,6 +88,10 @@ import {
   type Seat,
 } from "~/lib/seats.ts";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useRest } from "~/lib/useRest.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { canManagePeople, InviteDialog, type HumanSeat } from "~/components/people.tsx";
+import { rest } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
@@ -313,6 +327,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       </header>
 
       <div className="prof-body">
+        {human && seat.handle && <Holder handle={seat.handle} />}
         <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
         {/* THEIR STRIP, OUR PANEL: the kit's `TabPanel` spreads nothing, so
             it cannot take the `tabIndex={0}` that puts the content in the tab
@@ -390,6 +405,55 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           {human && seat.availability ? ` · ${seat.availability}` : ""}
         </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Who the identity directory binds to this human seat, or the plain fact that
+ * nobody holds it — with the invitation that would fill it, for a reader who
+ * may send one. See the file's doc.
+ */
+function Holder({ handle }: { handle: string }) {
+  const viewer = useViewer();
+  const manages = canManagePeople(viewer.grants);
+  const reads = manages || viewer.grants.includes("audit:read");
+  const [inviting, setInviting] = useState(false);
+  const seats = useRest(reads ? "/iam/seats" : null, async (signal) => {
+    const answer = (await rest.get("/iam/seats", signal)) as { seats?: HumanSeat[] | null } | null;
+    return answer?.seats ?? [];
+  });
+  const row = seats.data?.find((s) => s.handle === handle);
+  if (!seats.data || !row) return null;
+  return (
+    <div className="prof-notices">
+      {row.holder ? (
+        <Callout variant="neutral">
+          Held by <code className="inline">{row.holder.login || row.holder.person}</code>
+          {row.holder.stage && row.holder.stage !== "active" ? ` (${row.holder.stage})` : ""}.
+        </Callout>
+      ) : (
+        <Callout
+          variant="neutral"
+          action={
+            manages ? (
+              <Button size="small" variant="secondary" onClick={() => setInviting(true)}>
+                Invite
+              </Button>
+            ) : undefined
+          }
+        >
+          Nobody holds this seat.
+        </Callout>
+      )}
+      {inviting && (
+        <InviteDialog
+          held={viewer.grants}
+          seat={handle}
+          onClose={() => setInviting(false)}
+          onDone={() => void seats.reload({ quiet: true })}
+        />
+      )}
     </div>
   );
 }

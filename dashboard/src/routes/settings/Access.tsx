@@ -14,9 +14,9 @@
  * principal with the seat it holds, each human seat with whoever holds it, and
  * each of this node's tokens with the row its login names.
  *
- * # Read from the identity directory, never written here
+ * # Read from the identity directory
  *
- * Five answers of `/iam`, none of them changed from this page:
+ * Six answers of `/iam`:
  *
  *  - `GET /iam/people` — every principal, walked to its last page, because a
  *    directory drawn from its first page is a company that looks smaller than
@@ -30,9 +30,23 @@
  *  - `GET /iam/check` — what the directory reports wrong, worded per kind
  *    with the engine's own detail beside it, so a kind this build does not
  *    know still reads.
+ *  - `GET /iam/invitations` — the invitations nobody has redeemed and that
+ *    are still good, and with `?all=true` the expired and redeemed ones the
+ *    estate still holds. Never a link: it was shown once.
  *
- * Inviting, granting, binding, suspending and revoking are `crewlet iam`'s: a
- * write about who may do what is a step-up gesture this page does not make.
+ * # And written, by a reader holding `people:manage`
+ *
+ * Inviting somebody, creating a service account and minting its token,
+ * cancelling an invitation, and — on an opened row — changing a login, a seat
+ * or grants, suspending and reactivating, resetting a second factor, issuing a
+ * password reset link, ending every session, revoking one credential and
+ * removing somebody. Each is one `/iam` write through `lib/iamWrite.ts`: a
+ * step-up the engine asks for is confirmed and the same request replayed, an
+ * unknown answer is retried under the same operation key, and a refusal is the
+ * engine's sentence with the grants that would admit. After each write the
+ * lists it moved are read again. The controls are drawn for a reader holding
+ * `people:manage` only — see `components/people.tsx` for why an auditor's
+ * read view stays as it was.
  *
  * # Labels and verifiers, never values
  *
@@ -51,33 +65,46 @@
  * rather than shown seats nobody can reach.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
+  Button,
+  Callout,
   Card,
+  Checkbox,
   EMPTY_VALUE,
   EmptyValue,
-  InlineCode,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
 } from "@crewlethq/ui";
-import { KeyGlyph, TriangleAlertGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
+import {
+  KeyGlyph,
+  SendGlyph,
+  PlusGlyph,
+  TriangleAlertGlyph,
+  UserPlusGlyph,
+  UsersGlyph,
+} from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import { canManagePeople, ConfirmDialog, InviteDialog, ShownOnce } from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useIamGesture } from "~/lib/iamWrite.ts";
+import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
+import { EditPersonDialog, MintTokenDialog, ServiceAccountDialog } from "./AccessDialogs.tsx";
 
 // ---------------------------------------------------------------------------
 // The wire, as internal/api/iamapi writes it
@@ -111,7 +138,7 @@ interface DirectoryPage {
 export interface CredentialRow {
   id: string;
   person: string;
-  /** `password`, `totp`, `recovery` or `token`. */
+  /** `password`, `totp`, `recovery`, `token` or `reset`. */
   method: string;
   label?: string;
   created_at?: string;
@@ -159,6 +186,30 @@ export interface NodeToken {
    * a verdict: whether the company still holds it is `/iam/check`'s finding.
    */
   seat?: string;
+}
+
+/** One invitation (`iamapi.invitationView`): never its link, its secret or what the estate keeps of it. */
+export interface InvitationRow {
+  id: string;
+  email?: string;
+  /** The address this node's keyring cannot open — a state, never a blank. */
+  sealed?: boolean;
+  /** The human seat redeeming it binds, by handle. */
+  seat?: string;
+  grants: string[] | null;
+  invited_by?: string;
+  created_at?: string;
+  expires_at?: string;
+  redeemed_at?: string;
+  /** The person a redemption created. */
+  person?: string;
+  /** `open`, `expired` or `redeemed`. */
+  state: string;
+}
+
+interface InvitationPage {
+  invitations: InvitationRow[] | null;
+  next: string;
 }
 
 /** One row of `GET /iam/check`. */
@@ -250,6 +301,18 @@ const METHOD_WORDS: Record<string, string> = {
   totp: "Authenticator app",
   recovery: "Recovery codes",
   token: "Machine token",
+  reset: "Password reset link",
+};
+
+/** What an invitation's state is called. */
+export const INVITATION_WORDS: Record<string, Words> = {
+  open: { label: "Open", tone: "success", hint: "Not redeemed, and still good." },
+  expired: {
+    label: "Expired",
+    tone: "neutral",
+    hint: "Past its deadline; the link answers that it is no longer valid.",
+  },
+  redeemed: { label: "Redeemed", tone: "neutral", hint: "Spent: it created the person it names." },
 };
 
 /**
@@ -302,13 +365,41 @@ const CONFIG_READ = "config:read";
 
 /** Every row of the directory, walked to its last page. */
 async function readDirectory(signal: AbortSignal): Promise<DirectoryRow[]> {
-  const rows: DirectoryRow[] = [];
+  return walk(
+    (query) => rest.get(`/iam/people?${query}`, signal) as Promise<DirectoryPage | null>,
+    "",
+    (page) => page.people,
+  );
+}
+
+/** Every invitation the listing holds — the open ones, or with `all` every state. */
+function readInvitations(all: boolean) {
+  return (signal: AbortSignal) =>
+    walk(
+      (query) => rest.get(`/iam/invitations?${query}`, signal) as Promise<InvitationPage | null>,
+      all ? "all=true" : "",
+      (page) => page.invitations,
+    );
+}
+
+/**
+ * A paged `/iam` listing, walked to its last page: `read` asks one page with
+ * the query it is handed — its own path a literal at its call, which is what
+ * the dev proxy's gate reads.
+ */
+async function walk<T, P extends { next: string }>(
+  read: (query: string) => Promise<P | null>,
+  extra: string,
+  rowsOf: (page: P) => T[] | null,
+): Promise<T[]> {
+  const rows: T[] = [];
   let after = "";
   for (;;) {
-    const params = new URLSearchParams({ limit: String(PAGE) });
+    const params = new URLSearchParams(extra);
+    params.set("limit", String(PAGE));
     if (after) params.set("after", after);
-    const page = (await rest.get(`/iam/people?${params}`, signal)) as DirectoryPage | null;
-    rows.push(...(page?.people ?? []));
+    const page = await read(params.toString());
+    rows.push(...((page && rowsOf(page)) ?? []));
     // THE CURSOR MUST MOVE: a page that names its own cursor again would
     // otherwise be asked for ever.
     if (!page?.next || page.next === after) return rows;
@@ -329,11 +420,18 @@ const READ = { pollMs: POLL_MS, refetchOnFocus: true };
 // The screen
 // ---------------------------------------------------------------------------
 
+/** The dialog a page action has open. */
+type Opening = "invite" | "service" | null;
+
 export function PeopleAndAccess() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const viewer = useViewer();
+  const health = useEngineHealth();
+  const manages = canManagePeople(viewer.grants);
   const [opened, setOpened] = useParam("person", "");
+  const [opening, setOpening] = useState<Opening>(null);
+  const [allInvitations, setAllInvitations] = useState(false);
 
   const directory = useRest("/iam/people", readDirectory, READ);
   const seats = useRest(
@@ -351,6 +449,30 @@ export function PeopleAndAccess() {
     async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
     READ,
   );
+  const invitations = useRest(
+    `/iam/invitations?all=${allInvitations}`,
+    readInvitations(allInvitations),
+    READ,
+  );
+  // AFTER A WRITE, EVERY LIST IT MAY HAVE MOVED is read again, quietly: an
+  // invitation moves the invitations and the vacant seats, a create the
+  // directory, an edit the directory, the seats and the report.
+  const { reload: reloadDirectory } = directory;
+  const { reload: reloadSeats } = seats;
+  const { reload: reloadTokens } = tokens;
+  const { reload: reloadCheck } = check;
+  const { reload: reloadInvitations } = invitations;
+  const refresh = useCallback(() => {
+    for (const reload of [
+      reloadDirectory,
+      reloadSeats,
+      reloadTokens,
+      reloadCheck,
+      reloadInvitations,
+    ]) {
+      void reload({ quiet: true });
+    }
+  }, [reloadDirectory, reloadSeats, reloadTokens, reloadCheck, reloadInvitations]);
   // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S, which takes
   // `config:read`. A reader without it is never asked: the refusal is known
   // before the question, and each seat says what it would take instead.
@@ -369,6 +491,24 @@ export function PeopleAndAccess() {
   return (
     <>
       <PageActions>
+        {manages && (
+          <>
+            <Button
+              variant="primary"
+              leadingIcon={<UserPlusGlyph size="sm" />}
+              onClick={() => setOpening("invite")}
+            >
+              Invite person
+            </Button>
+            <Button
+              variant="secondary"
+              leadingIcon={<PlusGlyph size="sm" />}
+              onClick={() => setOpening("service")}
+            >
+              New service account
+            </Button>
+          </>
+        )}
         <a className="t-link" href={href(["settings", "audit"], { kind: "identity" })}>
           Identity trail →
         </a>
@@ -379,11 +519,45 @@ export function PeopleAndAccess() {
         </a>
       </PageActions>
       <PageNote>
-        Who can reach this company and as whom: the identity directory, the human seats and who
-        holds them, and this node&rsquo;s API tokens. Read-only — inviting, granting, binding and
-        revoking are <InlineCode>crewlet iam</InlineCode>&rsquo;s. This screen never holds a
-        credential&rsquo;s value.
+        Who can reach this company and as whom: the identity directory, its open invitations, the
+        human seats and who holds them, and this node&rsquo;s API tokens.{" "}
+        {manages
+          ? "Invite, change and remove people here; an invitation's link, a reset link and a token are shown once."
+          : "Changing any of it takes people:manage."}{" "}
+        This screen never reads a credential&rsquo;s value back.
       </PageNote>
+      {opening === "invite" && (
+        <InviteDialog held={viewer.grants} onClose={() => setOpening(null)} onDone={refresh} />
+      )}
+      {opening === "service" && (
+        <ServiceAccountDialog
+          held={viewer.grants}
+          onClose={() => setOpening(null)}
+          onDone={refresh}
+        />
+      )}
+
+      {/* FIRST RUN: nobody has been invited, and somebody signed in with an
+          API token is reading this — the one moment the next step is
+          inviting yourself. */}
+      {health?.identity === "unclaimed" && (
+        <Callout
+          variant="neutral"
+          title="Nobody has been invited yet"
+          action={
+            manages ? (
+              <Button size="small" variant="primary" onClick={() => setOpening("invite")}>
+                Invite person
+              </Button>
+            ) : undefined
+          }
+        >
+          This company has no person in it, so nobody can sign in with a password yet. Invite
+          yourself — your address, your seat and the grants you need — and open the link it shows:
+          that is where you choose your login and password. The API token you are using stays the
+          way back in.
+        </Callout>
+      )}
 
       {/* A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: every read here is
           decided on the same grant, so the first refusal is the whole page's,
@@ -443,7 +617,7 @@ export function PeopleAndAccess() {
               onRowActivate={(p) => setOpened(p.id === opened ? "" : p.id)}
               empty={{
                 title: "Nobody is in the directory yet",
-                hint: "Invite the first person with crewlet iam invite, under this node's API token.",
+                hint: "Invite the first person with Invite person above (or crewlet iam invite), signed in with this node's API token.",
               }}
               columns={[
                 {
@@ -493,7 +667,18 @@ export function PeopleAndAccess() {
             />
           </Card>
 
-          {openedRow && <Principal row={openedRow} />}
+          {openedRow && (
+            <Principal row={openedRow} manages={manages} held={viewer.grants} onChanged={refresh} />
+          )}
+
+          <Invitations
+            invitations={invitations}
+            all={allInvitations}
+            onAll={setAllInvitations}
+            manages={manages}
+            index={index}
+            onChanged={refresh}
+          />
 
           <Card padding="none">
             <Card.Header icon={<UsersGlyph size="sm" />} count={seatRows.length}>
@@ -635,17 +820,7 @@ function contactsByHandle(
  * gave a name.
  */
 function PersonName({ row }: { row: DirectoryRow }) {
-  if (row.sealed) {
-    return (
-      <Tag
-        size="sm"
-        variant="warning"
-        title="This node's keyring cannot open this row's name and address: a key was dropped before crewlet secrets rekey moved them off it, or the estate was restored under another keyring."
-      >
-        sealed
-      </Tag>
-    );
-  }
+  if (row.sealed) return <SealedTag />;
   return <TextCell>{row.name || row.login || row.id}</TextCell>;
 }
 
@@ -755,10 +930,201 @@ function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
 }
 
 /**
- * One principal opened: the credentials they prove themselves with and the
- * sessions they are signed in with, read for this row alone.
+ * The invitations nobody has redeemed and that are still good — and, asked, the
+ * expired and redeemed ones the estate still holds until the sweep collects
+ * them. Never a link: it was shown once, and an inviter who lost it cancels and
+ * issues another.
  */
-function Principal({ row }: { row: DirectoryRow }) {
+function Invitations({
+  invitations,
+  all,
+  onAll,
+  manages,
+  index,
+  onChanged,
+}: {
+  invitations: RestResult<InvitationRow[]>;
+  all: boolean;
+  onAll: (all: boolean) => void;
+  manages: boolean;
+  index: ReturnType<typeof indexOrg>;
+  onChanged: () => void;
+}) {
+  const now = useNow();
+  const [cancelling, setCancelling] = useState<InvitationRow | null>(null);
+  const rows = invitations.data ?? [];
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<SendGlyph size="sm" />}
+        count={rows.length}
+        actions={
+          <Checkbox label="Show expired and redeemed" checked={all} onCheckedChange={onAll} />
+        }
+      >
+        Invitations
+      </Card.Header>
+      <QueryState
+        error={invitations.code}
+        refusal={invitations.refusal}
+        detail={invitations.error?.detail || undefined}
+        loading={invitations.loading && !invitations.data}
+      >
+        <DataGrid<InvitationRow>
+          rows={rows}
+          rowKey={(i) => i.id}
+          defaultSort="expires"
+          empty={{
+            title: all ? "No invitations are held" : "No invitation is waiting to be redeemed",
+          }}
+          columns={[
+            {
+              key: "email",
+              header: "Address",
+              floor: "12rem",
+              sortValue: (i) => i.email ?? "",
+              cell: (i) => (i.sealed ? <SealedTag /> : <TextCell>{i.email}</TextCell>),
+            },
+            {
+              key: "seat",
+              header: "Seat",
+              drop: 2,
+              sortValue: (i) => i.seat ?? "",
+              cell: (i) => <BoundSeat seat={i.seat} index={index} />,
+            },
+            {
+              key: "grants",
+              header: "Grants",
+              drop: 1,
+              sortValue: (i) => (i.grants ?? []).length,
+              cell: (i) => <Grants grants={i.grants} />,
+            },
+            {
+              key: "by",
+              header: "Invited by",
+              shrink: true,
+              drop: 2,
+              sortValue: (i) => i.invited_by ?? "",
+              cell: (i) =>
+                i.invited_by ? <KeyCell value={i.invited_by} /> : <EmptyValue label="Unknown" />,
+            },
+            {
+              key: "expires",
+              header: "Expires",
+              shrink: true,
+              sortValue: (i) => i.expires_at ?? "",
+              cell: (i) =>
+                i.state === "open" ? (
+                  <DateCell at={i.expires_at} now={now} />
+                ) : (
+                  <WordTag words={INVITATION_WORDS[i.state]} fallback={i.state} />
+                ),
+            },
+            ...(manages
+              ? [
+                  {
+                    key: "cancel",
+                    header: "",
+                    label: "Cancel",
+                    shrink: true,
+                    cell: (i: InvitationRow) =>
+                      i.state === "redeemed" ? null : (
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          aria-label={`Cancel the invitation to ${i.sealed ? i.id : i.email}`}
+                          onClick={() => setCancelling(i)}
+                        >
+                          Cancel
+                        </Button>
+                      ),
+                  },
+                ]
+              : []),
+          ]}
+        />
+      </QueryState>
+      {cancelling && (
+        <CancelInvitation
+          row={cancelling}
+          onClose={() => setCancelling(null)}
+          onChanged={onChanged}
+        />
+      )}
+    </Card>
+  );
+}
+
+/** Withdraw an invitation nobody redeemed: its link stops working, and the address is free. */
+function CancelInvitation({
+  row,
+  onClose,
+  onChanged,
+}: {
+  row: InvitationRow;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const write = useIamGesture();
+  return (
+    <ConfirmDialog
+      title="Cancel this invitation?"
+      confirm="Cancel invitation"
+      danger
+      write={write}
+      onClose={onClose}
+      onConfirm={async () => {
+        const answer = await write.run({
+          method: "DELETE",
+          path: `/iam/invitations/${encodeURIComponent(row.id)}`,
+        });
+        if (answer?.kind === "done") {
+          onChanged();
+          if (!answer.pending) onClose();
+        }
+      }}
+    >
+      The link sent to {row.sealed ? "this address" : <strong>{row.email}</strong>} stops working at
+      once, as one nobody issued, and the address is free to invite again.
+    </ConfirmDialog>
+  );
+}
+
+/** A name or an address this node's keyring cannot open. */
+function SealedTag() {
+  return (
+    <Tag
+      size="sm"
+      variant="warning"
+      title="This node's keyring cannot open this value: a key was dropped before crewlet secrets rekey moved it off, or the estate was restored under another keyring."
+    >
+      sealed
+    </Tag>
+  );
+}
+
+/** A gesture on one opened principal. */
+type PersonGesture =
+  "edit" | "stage" | "mfa" | "reset" | "sessions" | "remove" | "mint" | { revoke: CredentialRow };
+
+/**
+ * One principal opened: the credentials they prove themselves with and the
+ * sessions they are signed in with, read for this row alone — and, for a reader
+ * holding `people:manage`, what may be done about them. A machine is offered
+ * what applies to one: its grants, its stage, its tokens and its removal; it
+ * has no password, no second factor and no session.
+ */
+function Principal({
+  row,
+  manages,
+  held,
+  onChanged,
+}: {
+  row: DirectoryRow;
+  manages: boolean;
+  held: readonly string[];
+  onChanged: () => void;
+}) {
   const now = useNow();
   const id = encodeURIComponent(row.id);
   const credentials = useRest(
@@ -773,10 +1139,151 @@ function Principal({ row }: { row: DirectoryRow }) {
       listOf<SessionRow>(await rest.get(`/iam/people/${id}/sessions`, signal), "sessions"),
     READ,
   );
+  const [gesture, setGesture] = useState<PersonGesture | null>(null);
   const who = row.sealed ? row.id : row.name || row.login || row.id;
+  const machine = row.kind === "machine";
+  const live = (credentials.data ?? []).filter((c) => !c.revoked);
+  const holdsFactor = live.some((c) => c.method === "totp" || c.method === "recovery");
+  const suspended = row.stage === "suspended";
+  const { reload: reloadCredentials } = credentials;
+  const { reload: reloadSessions } = sessions;
+  const changed = () => {
+    onChanged();
+    void reloadCredentials({ quiet: true });
+    void reloadSessions({ quiet: true });
+  };
+  const close = () => setGesture(null);
+
   return (
     <Card padding="none">
       <Card.Header icon={<KeyGlyph size="sm" />}>{who}: credentials and sessions</Card.Header>
+      {manages && (
+        <div
+          className="row gap-2"
+          style={{ flexWrap: "wrap", padding: "var(--spacing-3) var(--spacing-4)" }}
+        >
+          <Button size="small" variant="secondary" onClick={() => setGesture("edit")}>
+            Edit login, seat and grants
+          </Button>
+          {(row.stage === "active" || suspended) && (
+            <Button size="small" variant="secondary" onClick={() => setGesture("stage")}>
+              {suspended ? "Reactivate" : "Suspend"}
+            </Button>
+          )}
+          {machine ? (
+            <Button size="small" variant="secondary" onClick={() => setGesture("mint")}>
+              Mint token
+            </Button>
+          ) : (
+            <>
+              {/* NOT FOR A STOPPED PERSON: a link would hand back an account
+                  somebody stopped, and the engine refuses it naming the stage. */}
+              {!suspended && row.stage !== "retired" && (
+                <Button size="small" variant="secondary" onClick={() => setGesture("reset")}>
+                  Issue password reset link
+                </Button>
+              )}
+              {holdsFactor && (
+                <Button size="small" variant="secondary" onClick={() => setGesture("mfa")}>
+                  Reset second factor
+                </Button>
+              )}
+              <Button size="small" variant="secondary" onClick={() => setGesture("sessions")}>
+                End all sessions
+              </Button>
+            </>
+          )}
+          <Button size="small" variant="danger" onClick={() => setGesture("remove")}>
+            Remove
+          </Button>
+        </div>
+      )}
+      {gesture === "edit" && (
+        <EditPersonDialog row={row} held={held} onClose={close} onDone={changed} />
+      )}
+      {gesture === "mint" && (
+        <MintTokenDialog owner={row} held={held} onClose={close} onDone={changed} />
+      )}
+      {gesture === "reset" && <ResetLink row={row} who={who} onClose={close} onDone={changed} />}
+      {gesture !== null && typeof gesture === "object" && (
+        <PersonWrite
+          title={`Revoke this ${METHOD_WORDS[gesture.revoke.method]?.toLowerCase() ?? "credential"}?`}
+          confirm="Revoke"
+          danger
+          request={{
+            method: "DELETE",
+            path: `/iam/credentials/${encodeURIComponent(gesture.revoke.id)}`,
+            query: { person: row.id },
+          }}
+          onClose={close}
+          onDone={changed}
+        >
+          {gesture.revoke.method === "token"
+            ? `Anything presenting it is refused from now on${gesture.revoke.label ? ` — "${gesture.revoke.label}"` : ""}.`
+            : gesture.revoke.method === "reset"
+              ? "The link stops working; issue another if they still need one."
+              : `${who} can no longer prove who they are with it.`}
+        </PersonWrite>
+      )}
+      {gesture === "stage" && (
+        <PersonWrite
+          title={suspended ? `Reactivate ${who}?` : `Suspend ${who}?`}
+          confirm={suspended ? "Reactivate" : "Suspend"}
+          danger={!suspended}
+          request={{
+            method: "PATCH",
+            path: `/iam/people/${id}`,
+            body: { stage: suspended ? "active" : "suspended" },
+          }}
+          onClose={close}
+          onDone={changed}
+        >
+          {suspended
+            ? `${who} may act again, with what they held; nothing has to be enrolled again.`
+            : `${who} may not act while suspended: their sign-ins are refused and their seat is withheld. Their record is kept, and reactivating restores it.`}
+        </PersonWrite>
+      )}
+      {gesture === "mfa" && (
+        <PersonWrite
+          title={`Reset ${who}'s second factor?`}
+          confirm="Reset second factor"
+          danger
+          request={{ method: "POST", path: `/iam/people/${id}/mfa/reset` }}
+          onClose={close}
+          onDone={changed}
+        >
+          Their authenticator app and recovery codes stop working, and every session and token they
+          hold ends. They enrol a new factor at their next sign-in.
+        </PersonWrite>
+      )}
+      {gesture === "sessions" && (
+        <PersonWrite
+          title={`End every session ${who} holds?`}
+          confirm="End all sessions"
+          danger
+          request={{ method: "DELETE", path: `/iam/people/${id}/sessions` }}
+          onClose={close}
+          onDone={changed}
+        >
+          They are signed out everywhere, and every personal access token they minted stops working
+          too.
+        </PersonWrite>
+      )}
+      {gesture === "remove" && (
+        <PersonWrite
+          title={`Remove ${who}?`}
+          confirm="Remove"
+          danger
+          typeToConfirm={row.login || row.id}
+          request={{ method: "DELETE", path: `/iam/people/${id}` }}
+          onClose={close}
+          onDone={changed}
+        >
+          Their row, credentials and sessions are deleted, their seat is freed, and every sealed
+          value of theirs is erased. This cannot be undone: to bring them back, invite them again.
+          The trail keeps what they did.
+        </PersonWrite>
+      )}
       <QueryState
         error={credentials.code}
         refusal={credentials.refusal}
@@ -847,58 +1354,184 @@ function Principal({ row }: { row: DirectoryRow }) {
                   <EmptyValue label="Its holder's grants" />
                 ),
             },
+            ...(manages
+              ? [
+                  {
+                    key: "revoke",
+                    header: "",
+                    label: "Revoke",
+                    shrink: true,
+                    cell: (c: CredentialRow) =>
+                      c.revoked ? null : (
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          aria-label={`Revoke ${METHOD_WORDS[c.method] ?? c.method}${c.label ? ` ${c.label}` : ""}`}
+                          onClick={() => setGesture({ revoke: c })}
+                        >
+                          Revoke
+                        </Button>
+                      ),
+                  },
+                ]
+              : []),
           ]}
         />
       </QueryState>
-      <QueryState
-        error={sessions.code}
-        refusal={sessions.refusal}
-        detail={sessions.error?.detail || undefined}
-        loading={sessions.loading && !sessions.data}
-      >
-        <DataGrid<SessionRow>
-          rows={sessions.data ?? []}
-          rowKey={(s) => s.lineage}
-          defaultSort="started"
-          empty={{ title: "Signed in nowhere" }}
-          columns={[
-            {
-              key: "started",
-              header: "Session",
-              sortValue: (s) => s.created_at ?? "",
-              cell: (s) => <DateCell at={s.created_at} now={now} />,
-            },
-            {
-              key: "state",
-              header: "State",
-              shrink: true,
-              sortValue: (s) => (s.live ? 0 : 1),
-              cell: (s) =>
-                s.live ? (
-                  <Tag
-                    size="sm"
-                    variant="success"
-                    title={s.enrolment_only ? "May only enrol a second factor" : undefined}
-                  >
-                    {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
-                  </Tag>
-                ) : (
-                  <Tag size="sm" variant="neutral" title={s.ended_reason}>
-                    Ended
-                  </Tag>
-                ),
-            },
-            {
-              key: "ends",
-              header: "Ends",
-              shrink: true,
-              drop: 1,
-              sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
-              cell: (s) => <DateCell at={s.ended_at ?? s.expires_at} now={now} />,
-            },
-          ]}
-        />
-      </QueryState>
+      {!machine && (
+        <QueryState
+          error={sessions.code}
+          refusal={sessions.refusal}
+          detail={sessions.error?.detail || undefined}
+          loading={sessions.loading && !sessions.data}
+        >
+          <DataGrid<SessionRow>
+            rows={sessions.data ?? []}
+            rowKey={(s) => s.lineage}
+            defaultSort="started"
+            empty={{ title: "Signed in nowhere" }}
+            columns={[
+              {
+                key: "started",
+                header: "Session",
+                sortValue: (s) => s.created_at ?? "",
+                cell: (s) => <DateCell at={s.created_at} now={now} />,
+              },
+              {
+                key: "state",
+                header: "State",
+                shrink: true,
+                sortValue: (s) => (s.live ? 0 : 1),
+                cell: (s) =>
+                  s.live ? (
+                    <Tag
+                      size="sm"
+                      variant="success"
+                      title={s.enrolment_only ? "May only enrol a second factor" : undefined}
+                    >
+                      {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
+                    </Tag>
+                  ) : (
+                    <Tag size="sm" variant="neutral" title={s.ended_reason}>
+                      Ended
+                    </Tag>
+                  ),
+              },
+              {
+                key: "ends",
+                header: "Ends",
+                shrink: true,
+                drop: 1,
+                sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
+                cell: (s) => <DateCell at={s.ended_at ?? s.expires_at} now={now} />,
+              },
+            ]}
+          />
+        </QueryState>
+      )}
     </Card>
+  );
+}
+
+/** One confirmed write about a principal: the dialog, the request, the answer. */
+function PersonWrite({
+  title,
+  confirm,
+  danger,
+  typeToConfirm,
+  request,
+  onClose,
+  onDone,
+  children,
+}: {
+  title: string;
+  confirm: string;
+  danger?: boolean;
+  typeToConfirm?: string;
+  request: Parameters<ReturnType<typeof useIamGesture>["run"]>[0];
+  onClose: () => void;
+  onDone: () => void;
+  children: React.ReactNode;
+}) {
+  const write = useIamGesture();
+  return (
+    <ConfirmDialog
+      title={title}
+      confirm={confirm}
+      danger={danger}
+      typeToConfirm={typeToConfirm}
+      write={write}
+      onClose={onClose}
+      onConfirm={async () => {
+        const answer = await write.run(request);
+        if (answer?.kind === "done") {
+          onDone();
+          if (!answer.pending) onClose();
+        }
+      }}
+    >
+      {children}
+    </ConfirmDialog>
+  );
+}
+
+/**
+ * Issue a one-time password reset link, and show it ONCE: it sets a new
+ * password, ends every session and token the person holds, and signs nobody
+ * in. Issuing another revokes this one; the outstanding link is listed among
+ * their credentials, where it can be revoked.
+ */
+function ResetLink({
+  row,
+  who,
+  onClose,
+  onDone,
+}: {
+  row: DirectoryRow;
+  who: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const write = useIamGesture();
+  const issued = write.answer?.kind === "done" ? write.answer.body : null;
+  if (issued) {
+    const url = typeof issued.url === "string" ? issued.url : "";
+    const expires = typeof issued.expires_at === "string" ? issued.expires_at : "";
+    return (
+      <ConfirmDialog
+        title={`Password reset link for ${who}`}
+        confirm="Done"
+        write={write}
+        onClose={onClose}
+        onConfirm={onClose}
+      >
+        <ShownOnce label="Reset link" value={url}>
+          This link sets a new password for {who} once, and expires {fmtDateTime(expires)}. It is
+          shown only now — send it to them yourself. Setting the password ends every session and
+          token they hold; they sign in afterwards, with their second factor if they hold one.
+        </ShownOnce>
+      </ConfirmDialog>
+    );
+  }
+  return (
+    <ConfirmDialog
+      title={`Issue a password reset link for ${who}?`}
+      confirm="Issue link"
+      write={write}
+      onClose={onClose}
+      onConfirm={async () => {
+        // A LINK READS NO KEY: a replay could not hand back a secret its first
+        // attempt never showed, so a retry is a new link — which revokes the one
+        // that may have landed.
+        const answer = await write.run(
+          { method: "POST", path: `/iam/people/${encodeURIComponent(row.id)}/password-reset` },
+          false,
+        );
+        if (answer?.kind === "done") onDone();
+      }}
+    >
+      The link lets {who} choose a new password once, within a day. It revokes any link issued for
+      them before.
+    </ConfirmDialog>
   );
 }

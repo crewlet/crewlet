@@ -94,7 +94,7 @@ api:
                     #   `optional` is fine here because the browser reaches
                     #   this on loopback; leave the line out anywhere else.
                     #   Nobody holds a password yet: the token below invites
-                    #   the first person (step 5).
+                    #   the first person (step 4).
     max_grants:     # THE CEILING on what this deployment will ever let a
                     #   directory record confer. Required once a port is set.
       [state:read, audit:read, config:read, secrets:read, work:write,
@@ -420,16 +420,82 @@ terminal. Piping instead? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`),
 because a plain `tee` dies on the first Ctrl+C and the drain's log has nowhere
 to go.
 
-## 4. Watch the first turn
+## 4. Sign in, and invite yourself
 
 Open the dashboard at <http://localhost:8000/>. **Opening it means signing
 in**: every route needs a credential, reads included, so the first thing it
-shows is its sign-in screen. Nobody has been invited yet, so nobody holds a
-password: the screen says so and opens its API token form — paste
-`$CREWLET_API_TOKEN_FOUNDER` and it is exchanged for a one-hour session. The
-browser keeps the session's cookie and never the token: it is sent once, in a
-header, and the page holds it nowhere afterwards. When the hour is up the
-dashboard sends you back to sign in, and then to the screen you were on.
+shows is its sign-in screen. People sign in with a login and a password, and
+nobody has one yet — nobody has been invited — so the screen says so and opens
+its **API token** form (on a deployment somebody has been invited to, it is
+behind **Use an API token instead**). Paste `$CREWLET_API_TOKEN_FOUNDER`: it is
+exchanged for a one-hour session, and the browser keeps the session's cookie
+and never the token, which is sent once, in a header, and held nowhere
+afterwards.
+
+**Invite yourself.** Open **Settings › People & access**: a callout says nobody
+has been invited yet. Press **Invite person** and fill in
+
+- **your email address** — what the invitation is held against;
+- **the seat** — yours, the human seat `company.yaml` declares with the handle
+  `founder` (listed under the name you gave it), so you act as that seat from
+  your first sign-in;
+- **the grants** — tick all eleven for yourself (the founder token holds them
+  all, and nobody can confer a grant they do not hold). Keep `people:manage`,
+  or nobody after you can be invited except with the token again.
+
+The link it shows is the credential and is shown **once** — copy it now. The
+engine sends no mail; for anybody else you invite, getting it to them is
+yours.
+
+**Open the link** (this browser is fine). It is the dashboard's invitation
+screen: it names who the invitation is for, who sent it and the seat it binds,
+and asks for a login — it proposes one from your address, dotted like
+`jane.doe`, the name your changes are recorded under — your name, and a
+password of at least twelve characters (`api.auth.min_password_length` raises
+that). Redeeming it signs you in. The secret after the `.` never leaves the
+page in a URL: the link carries it in the fragment, which no browser sends to a
+server, and the screen sends it in a header and a body instead.
+
+This walkthrough's `crewlet.yaml` says `totp: optional`, so a password alone
+signs you in here. **Leave that line out on a deployment reached off
+loopback** — unset, a second factor is required, and the session a redemption
+or a password sign-in opens for somebody holding none may only enrol one: the
+dashboard shows a key to type into an authenticator app (and the
+`otpauth://` address for one that takes it), takes the first code the app
+shows, and shows the **recovery codes once**. See [A required second factor
+is enrolled before anything
+else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
+
+From now on the sign-in screen takes your login or address and your password.
+**Your name at the end of the page bar** is the menu for your session: your
+seat, your second factor, a new set of recovery codes, and signing out — here,
+or everywhere at once. A gesture that changes who may do what, or how somebody
+proves who they are, asks you to confirm your password first, in one dialog,
+and then carries on. The founder token stays: it is what a pipeline uses, and
+the way back in when nobody who can sign in is available — a machine
+credential, not how people should be signing in. Everybody after you arrives
+the same way, invited from **People & access** by whoever holds
+`people:manage`.
+
+**From a shell instead**, `crewlet iam invite` issues the same invitation
+through the running node, authenticating with `CREWLET_API_TOKEN` like every
+command that talks to one, and prints its link once:
+
+```bash
+export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+crewlet iam invite you@example.com -seat founder \
+  -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run
+```
+
+```
+invitation 0192f4c8-…
+http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
+
+expires 2026-06-21 12:00
+This link is shown once and cannot be read back: what the estate keeps is a hash of the secret after the id. Send it to them yourself — this engine never sends mail.
+```
+
+## 5. Watch the first turn
 
 It lands on **Home**, which is what a person opening this wants first: how the
 company is (who is working, what waits on you, the work in progress and
@@ -465,30 +531,17 @@ hundredth — and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
-**Bind your token to your seat** and the personal screens become yours. The
-binding lives in the engine's identity directory rather than in either config
-file: your token acts under the login `token:founder`, so enrol that login as a
-machine and bind it to the human seat above by its handle, `founder`:
-
-```bash
-export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # what `crewlet iam` authenticates with
-crewlet iam create -kind machine -login token:founder   # prints the new row's id
-crewlet iam bind <that id> founder
-```
-
-Both commands take `people:manage`, which is why the token above carries it.
-
-**My work** and the **Inbox** then answer for that person, and every rule that
-asks "do you lead this" is asked about your seat. My work is one tab per claim
+**My work** and the **Inbox** answer for you — the person bound to the founder
+seat — and every rule that asks "do you lead this" is asked about your seat. My work is one tab per claim
 on somebody's attention — what they hold, the order somebody put it in, the
 questions waiting on them and the ones they are waiting on — with every count
 on the strip, and a band above it naming whose day is on screen. The **Queue**
 is the work list narrowed to that person: the same Filter, Display and scope
 controls, opening grouped by when each task is due; read in priority order, its
 rows are reordered by dragging them. A question put to them is answered on its
-row in **Asked of me**. Until then the dashboard says so rather than guessing —
-an unbound token is an ordinary state, not a fault, and its day is the one kept
-under its own login. See [Humans in the Org
+row in **Asked of me**. Signed in with the API token instead, the dashboard says
+so rather than guessing — an unbound token is an ordinary state, not a fault,
+and its day is the one kept under its own login. See [Humans in the Org
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
@@ -506,72 +559,6 @@ your seat when you are bound to one and under your own login when you are not,
 filed in the project on screen or your team's, and where neither says, in the
 project you pick from the list it offers; an action the authority table would
 refuse you says why on its row instead.
-
-### When people sign in rather than share a token
-
-People always sign in with a login and a password — there is no setting that
-turns it on — and the deployment's token is for the first sign-in, pipelines
-and break-glass. `api.auth.totp` says whether a second factor is asked for too:
-unset it is `required`, and validation accepts `optional` only on a deployment a
-browser reaches on loopback, or with `accept_insecure: true` said out loud.
-
-**The first person is invited with the token you already have.** `crewlet iam
-invite` issues an invitation through the running node, authenticating with
-`CREWLET_API_TOKEN` like every command that talks to one — the founder token
-carries `people:manage`, which issuing takes — and prints its link **once**:
-
-```bash
-export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
-crewlet iam invite you@example.com -seat founder \
-  -grants state:read,audit:read,config:read,config:write,work:write,knowledge:write,people:manage
-```
-
-```
-invitation 0192f4c8-…
-http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
-
-expires 2026-06-21 12:00
-This link is shown once and cannot be read back: what the estate keeps is a hash of the secret after the id. Send it to them yourself — this engine never sends mail.
-```
-
-An invitation confers exactly the grants listed, never more than whoever
-issued it holds, and `-seat` binds the person it creates to that human seat —
-one nobody holds, so if you bound `token:founder` to it above, run `crewlet iam
-unbind` on that row first: a seat has one holder, and now it is you.
-
-**Open the link.** It is the dashboard's invitation screen: it names who the
-invitation is for, who sent it and the seat it binds, and asks for a login — it
-proposes one from your address, dotted like `jane.doe`, the name your changes
-are recorded under — your name, and a password of at least twelve characters
-(`api.auth.min_password_length` raises that). Redeeming it signs you in.
-The secret after the `.` never leaves the page in a URL: the link carries it in
-the fragment, which no browser sends to a server, and the screen sends it in a
-header and a body instead. Opening the link spends nothing, and a spent or
-withdrawn one says so.
-
-**Where a second factor is required**, the session the redemption opens may
-only enrol one, and the dashboard asks for it before anything else opens: it
-shows a key to type into your authenticator app (and the `otpauth://` address
-for one that takes it), takes the first code the app shows, and shows your
-**recovery codes once** — copy or download them then, because nothing reads
-them back. The same holds for every password sign-in until somebody has
-enrolled, so everybody you invite meets this screen too. See [A required second
-factor is enrolled before anything
-else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
-
-From then on the dashboard's sign-in screen takes your login or address and
-your password, and the code from your app when it asks. **Your name at the end
-of the page bar** is the menu for your session: your seat, your second factor,
-a new set of recovery codes, and signing out — here, or everywhere at once. A
-gesture that changes how somebody proves who they are asks you to confirm your
-password first, in one dialog, and then carries on with what you asked.
-
-Everybody after the first arrives the same way, invited by whoever holds
-`people:manage` — with a token of their own, which `crewlet iam token -login`
-mints, or the deployment's. A Tier A token stays — it is what a pipeline uses,
-and the way back in when nobody who can sign in is available — but it is a
-machine credential rather than a person, and it is not how people should be
-signing in.
 
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:

@@ -192,6 +192,11 @@ var contract = []Entry{
 	{"MemoryOverview", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverviewSeat", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 
+	// identity.ts
+	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+	{"TOKEN_WITHHELD_GRANTS", ReadLiteral,
+		"internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},
 	{"HealthAlarms", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},

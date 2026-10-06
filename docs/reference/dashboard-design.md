@@ -749,7 +749,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
 | `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(needs `config:write`)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) |
-| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
+| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile; a person's says who holds the seat, or that nobody does with an Invite for a `people:manage` holder. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs `audit:read`)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -765,7 +765,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by a `config:write` holder), and what is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
-| `#/settings/people` | **People & access** — the identity directory read-only: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the directory's own report (`/iam/check`), every human seat with whoever holds it (`/iam/seats`), and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`). Never a value *(needs `people:manage` or `audit:read`)*. No tail: a person's page is their seat | |
+| `#/settings/people` | **People & access** — the identity directory: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's own report (`/iam/check`), every human seat with whoever holds it (`/iam/seats`), and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`) *(needs `people:manage` or `audit:read`)*. A `people:manage` holder also invites, creates service accounts and mints their tokens, cancels invitations, and changes, suspends, resets, signs out and removes people; an invitation's link, a reset link and a token are shown once and never read back. No tail: a person's page is their seat | `person=` (the opened row) |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(needs `config:read`)* | |
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry is a push every reader gets. Two things on it take `config:read`, and each says so in its own place: the servers' status (`mcp_servers_status`), and which seats hold a server's tools, which is the pushed org's `tool_sources` and reaches only a reader holding that grant. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs `config:read`; the edit `config:write`)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
@@ -2417,6 +2417,14 @@ holds every link to a seat to a tab its profile has. The Work tab counts the
 seat's open work — the engine's `total_hint`, the same answer the Overview's
 card and the Work tab read.
 
+**A person's seat says who holds it.** The chart cannot: the identity directory
+binds a person to a human seat. So above the tabs a person's profile states the
+holder's login and, short of active, their stage — or **Nobody holds this
+seat**, with **Invite** opening the invitation dialog with this seat chosen, for
+a reader holding `people:manage`. The answer is `GET /iam/seats`, which takes
+`people:manage` or `audit:read`, so it is asked only of a reader holding one;
+anybody else sees the profile as it was.
+
 **Three actions, in the page bar, each a write control held with its reason**
 for a reader who cannot make it:
 
@@ -2891,6 +2899,15 @@ under your own login:
 | Anonymous | Sign in to make changes — every change is recorded under your name. |
 | Somebody the engine does not make this change for | This engine does not make this change for you. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
+
+**The one screen that draws its writes for one grant only is People &
+access.** Its readers are administrators (`people:manage`) and auditors
+(`audit:read`), and an auditor reads it as a record: a dozen controls on every
+row, each disabled with the same "needs `people:manage`", is noise on exactly
+the screen they came to read, and never news — the one grant that would enable
+them is the one the screen's own note names. So its controls are drawn for a
+`people:manage` holder and left out for everybody else, and the engine refuses
+whatever reaches it all the same.
 
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
@@ -5525,7 +5542,7 @@ policies every executor is given verbatim — read from the org projection, so a
 reader holding `state:read` can open it, as they can Tools & MCP. It is
 edited in the org builder (**Edit in org**).
 
-**People & access** is the identity directory, read-only, over the routes
+**People & access** is the identity directory, over the routes
 `/iam` serves to a reader holding `people:manage` or `audit:read`: **People**
 is every person in the directory (`/iam/people`) — their login, stage and
 grants, and the seat the directory binds them to — with their
@@ -5540,11 +5557,48 @@ Tier A labels joined to the directory rows holding their logins
 and the row says so — a label mistyped on either side otherwise looks bound
 until the token presses something. The directory's own report (`/iam/check`)
 names a company nobody can administer, an active person with no credential, a
-binding whose seat is gone and a grant this node's ceiling withholds. The
-screen edits nothing: a person is invited, changed and removed through `/iam`
-(or `crewlet iam`), and a token is declared in Tier A
-(`api.auth.tokens`) and changes at a restart. **It never holds a value** —
-not a token's, not a password's, not a second factor's.
+binding whose seat is gone and a grant this node's ceiling withholds.
+**Invitations** is every invitation nobody has redeemed and that is still good
+(`/iam/invitations`) — address, seat, grants, who sent it, when it expires —
+and **Show expired and redeemed** asks for every one the estate still holds.
+
+**A `people:manage` holder writes the directory from here**, and an
+`audit:read`-only reader keeps the read view with no control in it (see
+[A write control is never hidden](#a-write-control-is-never-hidden) for why
+this screen is the exception):
+
+- **Invite person** — an address, a human seat nobody holds (or none) and the
+  grants, each grant the reader does not hold disabled with why, since nobody
+  confers what they do not hold. The link comes back **once**, with its expiry
+  and the sentence that it is the credential: it works once and the engine keeps
+  only a hash of its secret. Opening it is where the person chooses a login and
+  a password.
+- **New service account** — a machine: a login in the colon grammar
+  (`ci:release`), a name and grants — and then **Mint its token**: a label, a
+  lifetime and grants out of the account's own (`secrets:read` and
+  `people:manage` disabled, since no token carries them), the value shown once.
+- **Cancel** on an invitation nobody redeemed: its link stops working at once
+  and the address is free again.
+- On an **opened row** — **Edit login, seat and grants** (one `PATCH` carrying
+  only what changed; the seat offered among the vacant ones and their own),
+  **Suspend** / **Reactivate**, and for a person **Issue password reset link**
+  (shown once; the outstanding link is listed among their credentials),
+  **Reset second factor** (when they hold one) and **End all sessions** — or,
+  for a machine, **Mint token** — and **Remove**, confirmed by typing their
+  login, since it cannot be undone. Each credential row has **Revoke**.
+
+Every one of these is one `/iam` write (`lib/iamWrite.ts`): a `403
+step_up_required` opens the step-up dialog and the same request is replayed; a
+create carries a fresh uuid7 `Idempotency-Key`, kept for the retry an unknown
+answer asks for — **Try again** sends the key the engine handed back, so it
+lands once — while a token's mint and a reset link read no key and a retry
+issues another; a refusal is the engine's sentence with the grants that would
+admit; a `202` says the change is recorded and this node is catching up; and
+every list the write moved is read again. Where `/health` says
+`identity: unclaimed`, a callout says nobody has been invited yet and offers
+**Invite person**. A token is still declared in Tier A (`api.auth.tokens`) and
+changes at a restart. **It never reads a value back** — not a token's, not a
+password's, not a second factor's.
 
 **Integrations** is a grid of **tiles, one per tool** — Slack, Mattermost,
 Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the

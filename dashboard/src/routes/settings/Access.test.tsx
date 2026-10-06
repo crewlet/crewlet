@@ -1,5 +1,6 @@
 /**
- * People & access draws the identity directory from both ends, read-only.
+ * People & access draws the identity directory from both ends — what it
+ * WRITES is `AccessWrites.test.tsx`'s.
  *
  * The invariants, in the order they cost when they go: the whole directory is
  * drawn, not its first page — a directory cut at a page is a company that
@@ -9,10 +10,10 @@
  * document is told so rather than shown seats nobody can reach.
  */
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
+import { INVITATION_WORDS, PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -85,6 +86,22 @@ const CHECK = {
   bindings_unchecked: 0,
 };
 
+const OPEN_INVITATIONS = {
+  invitations: [
+    { id: "inv-1", email: "sam@example.com", seat: "sam", grants: ["state:read"], state: "open" },
+    { id: "inv-2", sealed: true, grants: [], state: "open" },
+  ],
+  next: "",
+};
+
+const ALL_INVITATIONS = {
+  invitations: [
+    ...OPEN_INVITATIONS.invitations,
+    { id: "inv-3", email: "old@example.com", grants: [], state: "redeemed", person: "p-old" },
+  ],
+  next: "",
+};
+
 function json(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status,
@@ -109,6 +126,10 @@ function stubIam(override: (url: URL) => Response | null = () => null) {
         return Promise.resolve(json(200, TOKENS));
       case "/iam/check":
         return Promise.resolve(json(200, CHECK));
+      case "/iam/invitations":
+        return Promise.resolve(
+          json(200, url.searchParams.get("all") === "true" ? ALL_INVITATIONS : OPEN_INVITATIONS),
+        );
       case "/iam/credentials":
         return Promise.resolve(
           json(200, {
@@ -184,7 +205,8 @@ test("every page of the directory is drawn, walked by its cursor", async () => {
 test("a row this node cannot open is drawn as sealed", async () => {
   stubIam();
   mount();
-  expect(await screen.findByText("sealed")).toBeTruthy();
+  // THE PERSON'S ROW, and the sealed invitation's address beside it.
+  expect((await screen.findAllByText("sealed")).length).toBe(2);
 });
 
 // FROM BOTH ENDS: the seat with whoever holds it, and each of this node's
@@ -287,4 +309,22 @@ test("an opened person shows the credentials and sessions read for them", async 
   expect(screen.getByText("Signed in")).toBeTruthy();
   const credentials = asked.find((u) => u.pathname === "/iam/credentials");
   expect(credentials?.searchParams.get("person")).toBe("p-ana");
+});
+
+// THE INVITATIONS NOBODY REDEEMED, and — asked — every one the estate holds:
+// a sealed address is a state, and a redeemed one says so rather than its
+// deadline. Mutation: drop `all=true` from the toggle's read and the redeemed
+// row never arrives.
+test("the open invitations are listed, and the toggle asks for every state", async () => {
+  const asked = stubIam();
+  mount();
+  expect(await screen.findByText("sam@example.com")).toBeTruthy();
+  expect(screen.getAllByText("sealed").length).toBeGreaterThan(0);
+  expect(screen.queryByText("old@example.com")).toBeNull();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));
+  const row = (await screen.findByText("old@example.com")).closest(".grid-row") as HTMLElement;
+  expect(within(row).getByText(INVITATION_WORDS.redeemed!.label)).toBeTruthy();
+  expect(
+    asked.some((u) => u.pathname === "/iam/invitations" && u.searchParams.get("all") === "true"),
+  ).toBe(true);
 });

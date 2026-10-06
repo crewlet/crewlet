@@ -41,25 +41,16 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
+import type { GRANTS } from "~/contract/identity.ts";
 
 /**
  * A capability a principal carries — the engine's `iam.Grant` vocabulary,
  * which the `viewer` answer reports in `grants`. A closed union so a section
  * naming a grant the engine does not have is a compile error rather than a
- * lock nobody can open.
+ * lock nobody can open — drawn from `contract/identity.ts`, the one list a gate
+ * holds against the engine's.
  */
-export type Grant =
-  | "state:read"
-  | "audit:read"
-  | "config:read"
-  | "secrets:read"
-  | "work:write"
-  | "knowledge:write"
-  | "config:write"
-  | "secrets:write"
-  | "fleet:operate"
-  | "people:manage"
-  | "sandbox:run";
+export type Grant = (typeof GRANTS)[number];
 
 /** The workspaces, which are the sidebar's navigation rows. */
 export type Workspace =
