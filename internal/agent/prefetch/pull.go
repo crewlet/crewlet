@@ -2,6 +2,7 @@ package prefetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,27 +36,37 @@ import (
 // NO FALLBACK TO RECENCY, matching the block: episode recall's whole claim is
 // "this resembles what you are doing now", the three most recent turns carry
 // no such claim, and an executor told they are similar work treats them as
-// precedent. A company with no embeddings gets (nil, nil) and the caller says
-// so — which is a different sentence from "you have done nothing like this".
+// precedent.
+//
+// THREE ANSWERS, never two: hits (none is "nothing resembles this"),
+// [ErrNoSimilarity] for a company with no embeddings, and an error wrapping
+// [ErrSimilarityFailed] for a search that could not run — an embedder that
+// refused or did not answer inside [EmbedBudget], or an episode store that
+// could not be read. The last two used to be one: every embed failure
+// answered "no embeddings are configured", which sent a model away from a
+// search that would have answered on the next call.
 func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error) {
-	if f == nil || f.src.Episodes == nil || seat == nil {
-		return nil, nil
+	if f == nil || f.src.Episodes == nil || seat == nil || seat.Handle() == "" {
+		return nil, fmt.Errorf("%w: this node holds no episode store for the seat", ErrSimilarityFailed)
 	}
 	handle := seat.Handle()
-	if handle == "" || strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil, nil
 	}
 	embedCtx, cancel := context.WithTimeout(ctx, EmbedBudget)
-	vector, ok := f.embed(embedCtx, text)
+	vector, err := f.embed(embedCtx, text)
 	cancel()
-	if !ok {
+	if errors.Is(err, learning.ErrNoEmbeddings) {
 		return nil, ErrNoSimilarity
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: embedding the query: %w", ErrSimilarityFailed, err)
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
 		Handle: handle, Embedding: vector.Values, Model: vector.Model, Limit: limit,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("prefetch: recall episodes for %s: %w", handle, err)
+		return nil, fmt.Errorf("%w: reading %s's episodes: %w", ErrSimilarityFailed, handle, err)
 	}
 	return hits, nil
 }
@@ -87,7 +98,7 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 	// task is about, written after recon, and the whole of what the filter
 	// and the vector are judged against here.
 	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint, Senders: senders}
-	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request))
+	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request, nil))
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -95,11 +106,17 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 }
 
 // ErrNoSimilarity reports that this company configured no embeddings, so a
-// similarity search cannot run at all.
+// similarity search cannot run at all. It wraps [learning.ErrNoEmbeddings],
+// which is what a caller that does not import this package tests for.
 //
 // Its own error rather than an empty result, because the two send a model to
 // opposite places: "nothing resembles this" is an answer it should act on, and
-// "this deployment cannot search by meaning" is a reason to fall back to a
+// "this company cannot search by meaning" is a reason to fall back to a
 // conversation filter it can still use.
-var ErrNoSimilarity = fmt.Errorf("prefetch: no embeddings are configured, so " +
-	"a similarity search cannot run")
+var ErrNoSimilarity = fmt.Errorf("prefetch: a similarity search cannot run: %w", learning.ErrNoEmbeddings)
+
+// ErrSimilarityFailed reports a similarity search that could have run and did
+// not: the embedder refused or did not answer in time, or the store could not
+// be read. Distinct from [ErrNoSimilarity] because it is not how the company
+// is set up — the same call may answer a moment later.
+var ErrSimilarityFailed = errors.New("prefetch: the similarity search could not run")

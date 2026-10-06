@@ -263,6 +263,36 @@ func (e SkillUsed) SummaryFor(actor string) string {
 	return lead(actor, "used skill '"+e.SkillName+"' ("+string(e.SourceKind)+")")
 }
 
+// EmbedOutcome is what became of the one vector a turn's similarity searches
+// rank by — the personal-memory candidates' similarity half and episode
+// recall ([PrefetchSummary.TurnEmbedding]).
+//
+// A named string so a value from a newer peer is a value rather than a
+// panic; [EmbedOutcome.Valid] says whether this build knows it.
+type EmbedOutcome string
+
+const (
+	// EmbedEmbedded is a vector had, so the searches ranked by it — an
+	// empty block is then "nothing similar".
+	EmbedEmbedded EmbedOutcome = "embedded"
+	// EmbedFailed is an embedder that was asked and did not answer with a
+	// vector inside the turn's budget, or refused: the similarity halves
+	// did not run, so an empty episode block says nothing about the seat's
+	// past work.
+	EmbedFailed EmbedOutcome = "failed"
+	// EmbedUnconfigured is a company that configures no embeddings.
+	EmbedUnconfigured EmbedOutcome = "unconfigured"
+)
+
+// Valid reports whether this build knows the outcome.
+func (o EmbedOutcome) Valid() bool {
+	switch o {
+	case EmbedEmbedded, EmbedFailed, EmbedUnconfigured:
+		return true
+	}
+	return false
+}
+
 // PrefetchSummary fires once per turn, after the seven context blocks the
 // executor's prompt is built from resolve, recording hit and rendered size for
 // each of them.
@@ -351,6 +381,14 @@ type PrefetchSummary struct {
 	// "empty because gated" from "the filter selected nothing". Such a turn
 	// searches later instead, with the executor's own search_knowledge call.
 	TriggerRequiresRecon bool `json:"trigger_requires_recon"`
+	// TurnEmbedding is what became of the vector the personal-memory and
+	// episode-recall searches rank by — see [EmbedOutcome]. It is the field
+	// that tells "the embedder failed, so nothing was searched" from
+	// "searched, and nothing was similar": both leave the episode block
+	// empty. Absent where no search asked for a vector — a thin trigger,
+	// an empty ask, a seat with neither store — and on an older peer's
+	// summary.
+	TurnEmbedding EmbedOutcome `json:"turn_embedding,omitempty"`
 }
 
 // EventType is the "prefetch_summary" wire type.

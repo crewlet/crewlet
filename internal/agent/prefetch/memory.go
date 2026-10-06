@@ -373,27 +373,29 @@ func jsonArray(text string) string {
 	return text[start : end+1]
 }
 
-// embed turns text into a vector, or reports that it cannot.
-//
-// A company with no embeddings — a nil seam, or one answering
-// [learning.ErrNoEmbeddings] because the engine's current epoch has none — is
-// how that company is set up, and is not logged; a provider that was asked
-// and failed is.
-func (f *Fetcher) embed(ctx context.Context, text string) (learning.Vector, bool) {
+// embed turns text into a vector, or says why it cannot — and the two reasons
+// are different answers: an error wrapping [learning.ErrNoEmbeddings] is a
+// company with none (a nil seam, or the engine's current epoch configuring
+// none), which is how that company is set up and is not logged; any other is
+// an embedder that was asked and did not give a usable vector, which is.
+func (f *Fetcher) embed(ctx context.Context, text string) (learning.Vector, error) {
 	if f.src.Embed == nil {
-		return learning.Vector{}, false
+		return learning.Vector{}, learning.ErrNoEmbeddings
 	}
 	vector, err := f.src.Embed(ctx, text)
-	if errors.Is(err, learning.ErrNoEmbeddings) {
-		return learning.Vector{}, false
+	switch {
+	case errors.Is(err, learning.ErrNoEmbeddings):
+		return learning.Vector{}, err
+	case err == nil && (len(vector.Values) == 0 || vector.Model == ""):
+		// A vector with no model is one no recall can compare: it names no
+		// space, and every stored vector is filtered on its space.
+		err = errors.New("prefetch: the embedder answered without a vector or the model it came from")
 	}
-	if err != nil || len(vector.Values) == 0 || vector.Model == "" {
-		if err != nil {
-			log.WarnContext(ctx, "prefetch_embedding_failed", "error", err.Error())
-		}
-		return learning.Vector{}, false
+	if err != nil {
+		log.WarnContext(ctx, "prefetch_embedding_failed", "error", err.Error())
+		return learning.Vector{}, err
 	}
-	return vector, true
+	return vector, nil
 }
 
 // subjectLabel renders a counterparty as the filter and the profile block

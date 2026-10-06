@@ -275,7 +275,7 @@ func (t *queryEpisodes) defaultLimit() int {
 // opposite places, and the second one has a fallback it can still use.
 func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, error) {
 	if t.recall == nil {
-		return nil, errNoSimilarity
+		return nil, errNoRecall
 	}
 	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
 	if err != nil {
@@ -307,6 +307,10 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		found []learning.Episode
 		err   error
 		scope string
+		// ranked is how the answer is ordered, which is what its header
+		// has to say: a similarity search is MOST SIMILAR first, and
+		// headed "most recent" it read as the seat's latest work.
+		ranked = "most recent"
 	)
 	switch query := strings.TrimSpace(argString(args, "query")); {
 	case query != "":
@@ -320,7 +324,10 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 			want = clampInt(limit*outcomeOverfetch, 1, maxEpisodeLimit)
 		}
 		found, err = t.similar(ctx, turn, query, want)
-		scope = fmt.Sprintf(" like %s", clip(query))
+		if err != nil {
+			return refused(tools.RefusalUnavailable, similarityRefusal(err)), nil
+		}
+		scope, ranked = fmt.Sprintf(" like %s", clip(query)), "most similar"
 	case argString(args, "conversation") != "":
 		conversation := strings.TrimSpace(argString(args, "conversation"))
 		found, err = t.episodes.ForConversation(ctx, handle, conversation, limit)
@@ -341,7 +348,7 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Your %d most recent turns%s:\n\n", len(found), scope)
+	fmt.Fprintf(&b, "Your %d %s turns%s:\n\n", len(found), ranked, scope)
 	for _, entry := range t.render(ctx, turn, found) {
 		b.WriteString(entry)
 	}
@@ -759,10 +766,30 @@ func clampInt(v, lo, hi int) int { //nolint:unparam // see the doc comment
 // so one that matches none costs a single wider search rather than a scan.
 const outcomeOverfetch = 4
 
-// errNoSimilarity is what a deployment with no embeddings answers a `query`
-// with. Its own sentinel so the tool can say which of two very different
-// things happened.
-var errNoSimilarity = errors.New("no embeddings are configured on this deployment")
+// errNoRecall is a registry built with no similarity search at all
+// ([Deps.Recall] nil) — never a company setting, since the engine always
+// wires the prefetch's.
+var errNoRecall = errors.New("no similarity search is wired into this registry")
+
+// similarityRefusal says which of THREE things stopped a `query`, because
+// each sends a model somewhere different: a company with no embeddings will
+// never search by meaning, so the model should stop asking; a search that
+// failed — an embedder that refused or did not answer in time, a store that
+// could not be read — may answer if asked again; and a registry with no
+// search wired is neither. They were one sentence, "no embeddings are
+// configured", which every embedder timeout told a model on a company that
+// has them.
+func similarityRefusal(err error) string {
+	const fallback = " Pass `conversation` to read one thread's turns, or neither argument for your most recent ones — neither needs it."
+	switch {
+	case errors.Is(err, learning.ErrNoEmbeddings):
+		return "This company configures no embeddings, so your turns cannot be searched by meaning." + fallback
+	case errors.Is(err, errNoRecall):
+		return "Searching your turns by meaning is not available here." + fallback
+	default:
+		return fmt.Sprintf("Searching your turns by meaning failed this time (%v); calling again may answer.", err) + fallback
+	}
+}
 
 // keepOutcome filters recalled turns by how they ended, preserving order.
 //

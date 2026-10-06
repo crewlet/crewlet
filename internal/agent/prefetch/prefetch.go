@@ -5,6 +5,7 @@ package prefetch
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -117,6 +119,13 @@ type Blocks struct {
 	// OnboardingHint renders only for a seat that has not completed
 	// onboarding for its current org chain.
 	OnboardingHint string
+
+	// TurnEmbedding is what became of the turn's one vector: embedded,
+	// failed, or a company with no embeddings — "" where no search asked for
+	// it. Carried out for the reason [Blocks.ThreadContextRead] is: an
+	// episode block that is empty because the embedder failed and one that
+	// is empty because nothing was similar are the same empty string.
+	TurnEmbedding types.EmbedOutcome
 
 	// ThreadContext is the chat thread this turn was woken in, as it stood
 	// at turn start. Empty for every trigger that is not a chat thread
@@ -256,20 +265,34 @@ const EmbedBudget = search.QueryEmbedBudget
 // search asks for it.
 type turnVector func() (learning.Vector, bool)
 
-// vectorFor embeds r's ask once, for every search in the turn that wants it.
+// vectorFor embeds r's ask once, for every search in the turn that wants it,
+// and writes what became of it to outcome (nil for a caller that has no
+// summary to report it on) — see [Blocks.TurnEmbedding].
 //
 // ONCE, because the memory and episode searches are judged against the same
 // text: embedding it for each was two billed round trips for one vector. And
 // LAZILY, so a turn whose searches are all gated — a thin trigger, an empty
-// ask, a seat with no diary and no episode store — embeds nothing at all.
-func (f *Fetcher) vectorFor(ctx context.Context, r Request) turnVector {
+// ask, a seat with no diary and no episode store — embeds nothing at all, and
+// its outcome stays unset.
+func (f *Fetcher) vectorFor(ctx context.Context, r Request, outcome *types.EmbedOutcome) turnVector {
 	return sync.OnceValues(func() (learning.Vector, bool) {
 		if !r.judgeable() {
 			return learning.Vector{}, false
 		}
 		bounded, cancel := context.WithTimeout(ctx, EmbedBudget)
 		defer cancel()
-		return f.embed(bounded, r.Ask)
+		vector, err := f.embed(bounded, r.Ask)
+		if outcome != nil {
+			switch {
+			case err == nil:
+				*outcome = types.EmbedEmbedded
+			case errors.Is(err, learning.ErrNoEmbeddings):
+				*outcome = types.EmbedUnconfigured
+			default:
+				*outcome = types.EmbedFailed
+			}
+		}
+		return vector, err == nil
 	})
 }
 
@@ -433,8 +456,11 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 			*into = render()
 		})
 	}
-	// ONE VECTOR FOR THE TURN, shared by the two searches that rank by it.
-	vector := f.vectorFor(ctx, r)
+	// ONE VECTOR FOR THE TURN, shared by the two searches that rank by it,
+	// and what became of it — written by whichever search asked first, read
+	// once both have finished.
+	var embedded types.EmbedOutcome
+	vector := f.vectorFor(ctx, r, &embedded)
 	run(&blocks.PersonalMemory, func() string { return f.personalMemory(ctx, r, vector) })
 	// Its own goroutine, like the skills block, because it reports a count
 	// alongside its prose.
@@ -463,6 +489,7 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks.ThreadContextStoppedShort = block.stoppedShort
 	})
 	wg.Wait()
+	blocks.TurnEmbedding = embedded
 	return blocks
 }
 

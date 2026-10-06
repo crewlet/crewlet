@@ -2,12 +2,14 @@ package prefetch_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 )
@@ -186,5 +188,81 @@ func TestTheMemoryReFilterIsToldWhoIsAsking(t *testing.T) {
 	prompts := model.prompts()
 	if len(prompts) != 1 || !strings.Contains(prompts[0], "Current sender: Miles") {
 		t.Fatalf("the re-filter was not told who is asking:\n%v", prompts)
+	}
+}
+
+// THE PULL TELLS A FAILED SEARCH FROM A COMPANY WITH NO EMBEDDINGS. Every
+// embed failure answered ErrNoSimilarity — "no embeddings are configured" —
+// so a model on a company that has them was told to stop searching by
+// meaning because its provider timed out once.
+func TestRecallEpisodesTellsAFailedSearchFromNoEmbeddings(t *testing.T) {
+	t.Parallel()
+	_, seat := company(t)
+	hits := episodes{hits: []learning.Hit{{Episode: learning.Episode{TaskSummary: "a past turn"}}}}
+	failing := func(context.Context, string) (learning.Vector, error) {
+		return learning.Vector{}, errors.New("503 from the embeddings provider")
+	}
+	unconfigured := func(context.Context, string) (learning.Vector, error) {
+		return learning.Vector{}, learning.ErrNoEmbeddings
+	}
+	for _, tc := range []struct {
+		name   string
+		src    prefetch.Sources
+		none   bool // the company configures no embeddings
+		failed bool // the search could have run and did not
+	}{
+		{name: "no embed seam at all", src: prefetch.Sources{Episodes: hits}, none: true},
+		{name: "an epoch with no embeddings", src: prefetch.Sources{Episodes: hits, Embed: unconfigured}, none: true},
+		{name: "an embedder that failed", src: prefetch.Sources{Episodes: hits, Embed: failing}, failed: true},
+		{name: "a store that could not be read", failed: true, src: prefetch.Sources{
+			Episodes: episodes{err: errors.New("database is locked")}, Embed: embeds}},
+		{name: "a search that ran", src: prefetch.Sources{Episodes: hits, Embed: embeds}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := prefetch.New(tc.src).RecallEpisodes(t.Context(), seat, "the deploy freeze", 3)
+			if none := errors.Is(err, learning.ErrNoEmbeddings); none != tc.none ||
+				errors.Is(err, prefetch.ErrNoSimilarity) != tc.none {
+				t.Fatalf("err = %v: reads as no embeddings %v, want %v", err, none, tc.none)
+			}
+			if failed := errors.Is(err, prefetch.ErrSimilarityFailed); failed != tc.failed {
+				t.Fatalf("err = %v: reads as a failed search %v, want %v", err, failed, tc.failed)
+			}
+			if !tc.none && !tc.failed && (err != nil || len(got) != 1) {
+				t.Fatalf("RecallEpisodes = %v, %v; want the hit", got, err)
+			}
+		})
+	}
+}
+
+// THE TURN SAYS WHAT BECAME OF ITS VECTOR. An episode block left empty by a
+// failed embed and one left empty by nothing similar are the same empty
+// string, so the summary carries which it was — and nothing at all where no
+// search asked for a vector.
+func TestTheTurnSaysWhatBecameOfItsVector(t *testing.T) {
+	t.Parallel()
+	hits := episodes{hits: []learning.Hit{{Episode: learning.Episode{TaskSummary: "a past turn"}}}}
+	failing := func(context.Context, string) (learning.Vector, error) {
+		return learning.Vector{}, errors.New("503 from the embeddings provider")
+	}
+	thin := request(t)
+	thin.RequiresRecon = true
+	for _, tc := range []struct {
+		name string
+		src  prefetch.Sources
+		r    prefetch.Request
+		want types.EmbedOutcome
+	}{
+		{"embedded", prefetch.Sources{Episodes: hits, Embed: embeds}, request(t), types.EmbedEmbedded},
+		{"failed", prefetch.Sources{Episodes: hits, Embed: failing}, request(t), types.EmbedFailed},
+		{"unconfigured", prefetch.Sources{Episodes: hits}, request(t), types.EmbedUnconfigured},
+		{"not asked for on a thin trigger", prefetch.Sources{Episodes: hits, Embed: embeds}, thin, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := fetch(t, tc.src, tc.r).TurnEmbedding; got != tc.want {
+				t.Fatalf("turn embedding = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

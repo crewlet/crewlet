@@ -235,6 +235,10 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		ThreadContextRead:         b.ThreadContextRead,
 		ThreadContextStoppedShort: b.ThreadContextStoppedShort,
 		TriggerRequiresRecon:      r.RequiresRecon,
+		// AND THE FACT THE EPISODE BLOCK CANNOT CARRY: an empty block is
+		// both "nothing similar" and "the embedder failed, so nothing was
+		// searched".
+		TurnEmbedding: b.TurnEmbedding,
 	}, tracing.TraceOf(ctx))
 	if ev == nil {
 		return

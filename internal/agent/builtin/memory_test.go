@@ -343,20 +343,65 @@ func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 	}
 }
 
-// "Nothing resembles this" and "this deployment cannot search by meaning" send
-// a model to opposite places: the second has a fallback it can still use, so
-// it must not read as the first.
-func TestQueryEpisodesSaysWhenItCannotSearchByMeaning(t *testing.T) {
+// "Nothing resembles this" and "this company cannot search by meaning" send
+// a model to opposite places, and so does a search that FAILED, which may
+// answer if asked again: each says which it is. They were one sentence, "no
+// embeddings are configured", which every embedder timeout told a model on a
+// company that has them.
+func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 	t.Parallel()
-	tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}},
-		builtin.QueryEpisodesTool)
-
-	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "anything"})
-	if !res.Failed {
-		t.Fatalf("a query with no recall configured reported success: %q", res.Output)
+	for _, tc := range []struct {
+		name    string
+		recall  builtin.Recaller
+		want    string
+		wantNot string
+	}{
+		{
+			name:   "a company with no embeddings",
+			recall: &fakeRecall{err: fmt.Errorf("prefetch: a similarity search cannot run: %w", learning.ErrNoEmbeddings)},
+			want:   "configures no embeddings", wantNot: "again",
+		},
+		{
+			name:   "an embedder that did not answer",
+			recall: &fakeRecall{err: errors.New("prefetch: the similarity search could not run: context deadline exceeded")},
+			want:   "failed this time", wantNot: "no embeddings",
+		},
+		{
+			name: "a registry with no search wired",
+			want: "not available here", wantNot: "no embeddings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			deps := builtin.Deps{Episodes: &countingEpisodes{}}
+			if tc.recall != nil {
+				deps.Recall = tc.recall
+			}
+			tool := registered(t, deps, builtin.QueryEpisodesTool)
+			res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "anything"})
+			if !res.Failed {
+				t.Fatalf("a search that could not run reported success: %q", res.Output)
+			}
+			if !strings.Contains(res.Output, tc.want) || strings.Contains(res.Output, tc.wantNot) {
+				t.Errorf("refusal = %q, want it to say %q and not %q", res.Output, tc.want, tc.wantNot)
+			}
+			if !strings.Contains(res.Output, "`conversation`") {
+				t.Errorf("the refusal does not name the path that still works: %q", res.Output)
+			}
+		})
 	}
-	if !strings.Contains(res.Output, "embeddings") {
-		t.Errorf("the refusal does not say why: %q", res.Output)
+}
+
+// A SIMILARITY ANSWER SAYS IT IS RANKED BY SIMILARITY. It was headed "your N
+// most recent turns", so a model read the closest match as its latest work.
+func TestQueryEpisodesHeadsASimilaritySearchAsMostSimilar(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{hits: []learning.Hit{{Episode: learning.Episode{TaskSummary: "a past turn"}}}}
+	tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}, Recall: recall},
+		builtin.QueryEpisodesTool)
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "deploys"})
+	if !strings.HasPrefix(res.Output, "Your 1 most similar turns like deploys") {
+		t.Fatalf("output = %q, want it headed as a similarity ranking", res.Output)
 	}
 }
 
