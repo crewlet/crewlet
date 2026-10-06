@@ -116,7 +116,21 @@ const liveRefreshBudget = DefaultPollInterval
 // liveIdle is how long a reading nobody asks about is kept. Ten of the
 // dashboard's polls: a viewer who looked away for a moment comes back to the
 // same reading, and one who left costs nothing for long.
+//
+// A PROPERTY OF THE READINGS, NOT OF THE TRAFFIC: [LiveFeeds] sweeps on its
+// own clock ([liveSweep]). The sweep used to run inside the next request to
+// reach this node's readings, which on a quiet node may never come — and in a
+// fleet the owner is not told when a launch it was read for stops (the node
+// serving the dashboard reads the run's record first, answers `not_running`
+// itself and never asks the owner again), so every reading a person had been
+// watching stayed in memory until the node stopped.
 const liveIdle = 30 * time.Second
+
+// liveSweep is how often the readings nobody has asked about for [liveIdle]
+// are looked for: a third of it, so a reading is let go between liveIdle and
+// four thirds of it after its last request. A finer sweep would buy a few
+// seconds of a reading's memory for a walk of every reading each time.
+const liveSweep = liveIdle / 3
 
 // liveHold is how much of a reading's settled text the owner keeps: twice what
 // a viewer holds, because a viewer up to [MaxRunTextBytes] behind is answered
@@ -128,9 +142,12 @@ const liveHold = 2 * MaxRunTextBytes
 type LiveFeeds struct {
 	manager func() *Manager
 	now     func() time.Time
-	// base bounds every read; it ends when the node does, or at Stop.
+	// base bounds every read and the sweep; it ends when the node does, or
+	// at Stop.
 	base context.Context
 	end  context.CancelFunc
+	// swept is closed once the sweep has returned.
+	swept chan struct{}
 
 	mu    sync.Mutex
 	feeds map[feedKey]*liveFeed
@@ -148,18 +165,63 @@ type LiveFeedsOptions struct {
 	Now func() time.Time
 }
 
-// NewLiveFeeds builds a node's readings, every read of which ends with ctx.
+// NewLiveFeeds builds a node's readings and starts their sweep, every read of
+// which ends with ctx — and the sweep with it, or at [LiveFeeds.Stop].
 func NewLiveFeeds(ctx context.Context, opts LiveFeedsOptions) *LiveFeeds {
+	return startLiveFeeds(ctx, opts, nil)
+}
+
+// startLiveFeeds is [NewLiveFeeds] with the sweep's tick: every [liveSweep]
+// when ticks is nil, or whenever a test sends one.
+func startLiveFeeds(ctx context.Context, opts LiveFeedsOptions, ticks <-chan time.Time) *LiveFeeds {
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
 	base, end := context.WithCancel(ctx)
-	return &LiveFeeds{manager: opts.Manager, now: now, base: base, end: end, feeds: map[feedKey]*liveFeed{}}
+	fs := &LiveFeeds{
+		manager: opts.Manager, now: now, base: base, end: end,
+		swept: make(chan struct{}), feeds: map[feedKey]*liveFeed{},
+	}
+	go fs.sweep(ticks)
+	return fs
 }
 
-// Stop ends every reading and every read in flight, for a node that stops
-// answering before its context ends.
+// sweep drops, on every tick, the readings nobody has asked about for
+// [liveIdle], until the readings end.
+func (fs *LiveFeeds) sweep(ticks <-chan time.Time) {
+	defer close(fs.swept)
+	if ticks == nil {
+		ticker := time.NewTicker(liveSweep)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
+	for {
+		select {
+		case <-fs.base.Done():
+			return
+		case <-ticks:
+			fs.dropIdle()
+		}
+	}
+}
+
+// dropIdle lets go of every reading unused for longer than [liveIdle].
+func (fs *LiveFeeds) dropIdle() {
+	now := fs.now()
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	for key, feed := range fs.feeds {
+		if now.Sub(feed.used()) > liveIdle {
+			feed.stop()
+			delete(fs.feeds, key)
+		}
+	}
+}
+
+// Stop ends every reading, every read in flight and the sweep, and waits for
+// the sweep to return — for a node that stops answering before its context
+// ends. Safe to call more than once.
 //
 // A read runs under the node's context rather than a request's, because it
 // must outlive the request that started it ([liveFeed.current]). A request
@@ -167,6 +229,7 @@ func NewLiveFeeds(ctx context.Context, opts LiveFeedsOptions) *LiveFeeds {
 // than reading a box this node is letting go of.
 func (fs *LiveFeeds) Stop() {
 	fs.end()
+	<-fs.swept
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	for key, feed := range fs.feeds {
@@ -206,24 +269,22 @@ func (fs *LiveFeeds) Answer(ctx context.Context, run PendingRun, cursor *TailCur
 	return snap.cursored(*cursor), nil
 }
 
-// feed is the reading of one launch, made on its first request. Readings
-// nobody has asked about for [liveIdle] are dropped on the way.
+// feed is the reading of one launch, made on its first request and kept for as
+// long as somebody keeps asking ([LiveFeeds.sweep]).
 func (fs *LiveFeeds) feed(run PendingRun) *liveFeed {
 	now := fs.now()
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	for key, feed := range fs.feeds {
-		if now.Sub(feed.used()) > liveIdle {
-			feed.stop()
-			delete(fs.feeds, key)
-		}
-	}
 	key := feedKey{run.TurnID, run.LaunchID}
 	feed, ok := fs.feeds[key]
 	if !ok {
 		ctx, cancel := context.WithCancel(fs.base)
 		feed = &liveFeed{feeds: fs, run: run, ctx: ctx, cancel: cancel, lastUsed: now}
-		fs.feeds[key] = feed
+		// NOT KEPT once the readings have ended: its read fails on the
+		// ended context, and with the sweep gone nothing would let it go.
+		if fs.base.Err() == nil {
+			fs.feeds[key] = feed
+		}
 	}
 	feed.touch(now)
 	return feed

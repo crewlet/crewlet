@@ -384,8 +384,9 @@ func TestAPeekNeverWakesAPausedBox(t *testing.T) {
 
 // A LAUNCH THAT STOPPED IS LET GO, on the owner's own read as on a peer's
 // answer: nobody asks about it again, so its reading — up to [liveHold] of
-// text — is dropped by the request that learned it stopped, not kept until
-// some later request's idle sweep, which on a quiet node never comes.
+// text — is dropped by the request that learned it stopped rather than a
+// sweep later ([TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock] is the owner
+// that is never asked again).
 //
 // Mutation: drop either Forget, and that path's reading stays.
 func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
@@ -430,11 +431,117 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 	}
 }
 
+// A READING NOBODY ASKS ABOUT IS LET GO ON ITS OWN CLOCK, with no request to
+// prompt it. In a fleet the owner is never told a launch stopped: the node
+// serving the dashboard reads the run's record, answers `not_running` itself
+// and never asks the owner again — and a viewer who closes the tab asks
+// nobody anything. The sweep used to run inside the next request to reach the
+// owner's readings, so on a quiet owner every reading somebody had watched
+// stayed in memory until the node stopped.
+//
+// Mutation: sweep only inside a request again (drop the tick's drop), and the
+// owner keeps the reading however long nobody asks.
+func TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock(t *testing.T) {
+	t.Parallel()
+	rig := newTailRig(t)
+	rig.runner.Say(SourceTranscript, "working\n")
+	clock := &stepClock{at: time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)}
+	ticks := make(chan time.Time)
+	owner := startLiveFeeds(t.Context(), LiveFeedsOptions{
+		Manager: func() *Manager { return rig.manager }, Now: clock.now,
+	}, ticks)
+	t.Cleanup(owner.Stop)
+	rig.serveWith(t, boxOwner, rig.client(t), owner)
+	asker := rig.reader(t, everyBuildServes)
+
+	if got := rig.tail(t, asker, &TailCursor{}); got.Outcome != TailRunning {
+		t.Fatalf("answer = %+v; want a tail", got)
+	}
+	if err := rig.pending.SetStatus(t.Context(), "t1", StatusAwaiting, Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rig.tail(t, asker, &TailCursor{}); got.Outcome != TailNotRunning {
+		t.Fatalf("answer = %+v; want not_running", got)
+	}
+	if readings(owner) != 1 {
+		t.Fatalf("the owner holds %d readings; the asker answered not_running without asking it, "+
+			"so want the one it was asked for", readings(owner))
+	}
+
+	// Within liveIdle of the last request, a tick keeps it.
+	clock.advance(liveIdle)
+	sweepOnce(ticks, clock.now())
+	if readings(owner) != 1 {
+		t.Fatalf("a reading asked about %v ago was dropped; want it kept for %v", liveIdle, liveIdle)
+	}
+	// Past it, the next tick lets it go — and nothing else had to ask.
+	clock.advance(time.Second)
+	sweepOnce(ticks, clock.now())
+	eventually(t, func() bool { return readings(owner) == 0 }, "the owner kept a reading nobody "+
+		"has asked about for longer than liveIdle")
+}
+
+// sweepOnce hands a node's sweep one tick and waits for the sweep it starts to
+// have run: the sweep takes ticks one at a time, so a second tick is taken only
+// once the first one's sweep is over.
+func sweepOnce(ticks chan<- time.Time, at time.Time) {
+	ticks <- at
+	ticks <- at
+}
+
+// stepClock is a clock a case moves by hand, read from more than one goroutine.
+type stepClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *stepClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *stepClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
+// STOP ENDS THE SWEEP and waits for it, so the goroutine is gone when Stop
+// returns — and a second Stop, which a node's teardown and a case's cleanup can
+// both make, returns too.
+//
+// Mutation: leave the sweep running past the readings' end, and Stop never
+// returns.
+func TestStopEndsTheSweep(t *testing.T) {
+	t.Parallel()
+	ticks := make(chan time.Time)
+	feeds := startLiveFeeds(t.Context(), LiveFeedsOptions{}, ticks)
+	stopped := make(chan struct{})
+	go func() {
+		feeds.Stop()
+		feeds.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return: the sweep did not end")
+	}
+	select {
+	case ticks <- time.Now():
+		t.Fatal("a stopped node's sweep took a tick")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 // A NODE THAT STOPPED READS NO BOX. Its readings end before its seats are
 // released and the boxes stop being its to read, and a request that lands in
-// between is told the read failed rather than starting one.
+// between is told the read failed rather than starting one — and leaves no
+// reading behind, since the sweep that would let it go has ended too.
 //
-// Mutation: leave the readings' context running at Stop, and the box is read.
+// Mutation: leave the readings' context running at Stop, and the box is read;
+// keep what a request after Stop makes, and the node holds a reading for ever.
 func TestAStoppedNodeReadsNoBox(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
@@ -447,6 +554,9 @@ func TestAStoppedNodeReadsNoBox(t *testing.T) {
 	}
 	if rig.runner.Reads() != 0 {
 		t.Errorf("a stopped node read the box %d times", rig.runner.Reads())
+	}
+	if readings(feeds) != 0 {
+		t.Errorf("a stopped node kept %d readings a request made after it stopped", readings(feeds))
 	}
 }
 
