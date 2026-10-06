@@ -501,9 +501,11 @@ than adapt:
 
 - **At the apply.** A revision whose `dimensions` differs from the width this
   store already holds is rejected, with an error naming both. Changing the
-  width means re-embedding what is stored, which is a decision for an operator
-  who is watching rather than a silent divergence discovered at the first
-  recall weeks later.
+  width is a restart, which is a decision for an operator who is watching
+  rather than a silent divergence discovered at the first recall weeks later:
+  after it the knowledge corpus re-embeds itself, while diary and episode
+  vectors written at the old width are not re-embedded and are reached by
+  recency alone.
 - **On every call.** A vector that comes back at the wrong width is refused
   rather than stored — on every call and not just the first, because a
   gateway or aggregator can move models mid-deployment.
