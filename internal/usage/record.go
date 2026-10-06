@@ -184,9 +184,13 @@ func (s Subject) validateShared() error {
 // unreadable envelope — which the framework treats as a STOP of the whole
 // applier rather than a deferral of one record. So every kind a later build
 // added stopped every node still on this one, which is the opposite of what
-// [Kind] promised. Below the day, the subject is then this build's reading of
-// fields it does not know and is only a label: the deferred record keeps its
-// whole payload, and the build that can read it re-derives the rest.
+// [Kind] promised. Below the day this build cannot read the subject's fields at
+// all, so the record is filed under the identity its writer stated
+// ([RecordEnvelope.SubjectID]) — which is NOT a label: on this compacted
+// domain a deferred record supersedes whatever was retained under its
+// subject, so a subject composed from the fields this build does know would
+// make every object of the new kind on one day one object. The deferred
+// record keeps its whole payload, and the build that can read it applies it.
 //
 // AT OR BELOW [RecordVersion] AN UNKNOWN KIND IS A WRITER FAULT rather than a
 // newer build, because a version this build reads is one whose kinds it knows.
@@ -243,7 +247,7 @@ func (s Subject) ScopePath() string {
 
 // RecordEnvelope is the half EVERY build can read, for ever.
 //
-// Its SEVEN keys are reserved at the top level of the format for its life: a
+// Its EIGHT keys are reserved at the top level of the format for its life: a
 // later version may add fields beside them and may never repurpose one.
 type RecordEnvelope struct {
 	// V is the record version.
@@ -255,6 +259,20 @@ type RecordEnvelope struct {
 
 	// Subject is the object this record is about.
 	Subject Subject `json:"subject"`
+
+	// SubjectID is the object's identity below its kind as its WRITER
+	// composed it — [Subject.ID] — written on every record, and the identity
+	// a build reads for a kind it does not know ([RecordEnvelope.Wire]).
+	//
+	// THE SUBJECT IS THE SUPERSEDE KEY, not a label: this domain replays
+	// compacted, and a deferred record is retained under its subject with
+	// whatever an earlier one held there deleted first. A kind a later build
+	// adds is keyed on fields this one cannot decode, so composed here from
+	// what it can, every object of that kind on one (node, day) was ONE
+	// subject — and the second retained deleted the first, a day nothing
+	// re-derives once yesterday has passed. The writer's own composition is
+	// the one every build can read verbatim.
+	SubjectID string `json:"subject_id,omitempty"`
 
 	// CreatedAt is the writer's own clock. Reported, never ordered on.
 	CreatedAt time.Time `json:"created_at,omitzero"`
@@ -268,6 +286,41 @@ type RecordEnvelope struct {
 	// Scope is the object's path, carried rather than derived so a newer
 	// build's wider scope is readable by this one.
 	Scope statelog.ScopeSet `json:"scope"`
+}
+
+// Wire is the subject the framework files this record under: the one its
+// kind's own fields compose when this build knows the kind, and the one its
+// writer composed ([RecordEnvelope.SubjectID]) when it does not.
+func (e RecordEnvelope) Wire() statelog.Subject {
+	if !e.Subject.Kind.Valid() {
+		return statelog.Subject{Kind: string(e.Subject.Kind), ID: e.SubjectID}
+	}
+	return e.Subject.Wire()
+}
+
+// validateSubjectID holds the writer's identity to the subject it names.
+//
+// FOR A KIND THIS BUILD KNOWS, the two must be one: a record whose stated
+// identity names another object than its fields is a writer fault, and filed
+// under either it would supersede the wrong row. FOR ONE IT DOES NOT, the
+// identity is required — every build that can write a kind this one lacks
+// writes it — and must begin with the subject's own node and day, which is
+// all this build can check and what keeps a record in its writer's own
+// namespace.
+func (e RecordEnvelope) validateSubjectID() error {
+	if e.Subject.Kind.Valid() {
+		if e.SubjectID != "" && e.SubjectID != e.Subject.ID() {
+			return fmt.Errorf("usage: the record on %s states its identity as %q", e.Subject, e.SubjectID)
+		}
+		return nil
+	}
+	prefix := coord.DocumentKey(e.Subject.Node, e.Subject.Day) + coord.KeySeparator
+	if !strings.HasPrefix(e.SubjectID, prefix) || len(e.SubjectID) == len(prefix) {
+		return fmt.Errorf("usage: the %s record of a newer build states its identity as %q, "+
+			"which does not name an object under its own node and day — every build "+
+			"that writes a kind this one lacks states it", e.Subject.Kind, e.SubjectID)
+	}
+	return nil
 }
 
 // Record is one node's day for one object.
@@ -358,7 +411,7 @@ type Fire struct {
 // what it does not. LISTED RATHER THAN REFLECTED, for the vector record's
 // reason: the list is the format's own reserved set.
 var knownKeys = []string{
-	"v", "op_id", "subject", "created_at", "gen", "writer", "scope",
+	"v", "op_id", "subject", "subject_id", "created_at", "gen", "writer", "scope",
 	"handle", "role", "tokens", "turns", "reads", "reads_elided", "fires",
 }
 
@@ -374,6 +427,9 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 			"told apart from a newer build's", env.V)
 	}
 	if err := env.Subject.validateFor(env.V); err != nil {
+		return RecordEnvelope{}, err
+	}
+	if err := env.validateSubjectID(); err != nil {
 		return RecordEnvelope{}, err
 	}
 	if env.Scope.Empty() {
@@ -498,6 +554,8 @@ func (r Record) Encode() ([]byte, error) {
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
 	}
+	// THE IDENTITY, written on every record — see [RecordEnvelope.SubjectID].
+	r.SubjectID = r.Subject.ID()
 	if r.Scope.Empty() {
 		r.Scope = statelog.ScopeSet{Paths: []string{r.Subject.ScopePath()}}
 	}
