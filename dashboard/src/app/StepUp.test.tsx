@@ -200,7 +200,56 @@ describe("a gesture that needs a fresher proof", () => {
     expect(screen.getByText(/confirmed who you are recently/)).toBeDefined();
   });
 
-  test("a wrong password is the engine's own sentence, and the dialog stays for another try", async () => {
+  // A WRONG PASSWORD OR CODE IS A CONFIRMATION REFUSED, not a sign-in: the
+  // engine's one refusal reads "Those sign-in details were not accepted", which
+  // the dialog showed verbatim, and its text asked for the password alone of
+  // somebody it also asked a code of. The CONTROL is a person holding no
+  // authenticator, asked for the password and told the password was wrong.
+  // Mutation: show the engine's sentence, or ask for the password alone.
+  test.each([
+    [
+      "holds an authenticator",
+      [{ method: "totp", revoked: false }],
+      "000000",
+      /password and a code from your authenticator app/,
+      "That password or code was not accepted. Check both and confirm again.",
+    ],
+    [
+      "holds none (the control)",
+      [{ method: "password", revoked: false }],
+      "",
+      /Enter your password to carry on/,
+      "That password was not accepted. Check it and confirm again.",
+    ],
+  ])(
+    "a person who %s is asked for, and refused, in a confirmation's words",
+    async (_, credentials, code, asks, refused) => {
+      engine({
+        "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
+        "/iam/credentials": [{ status: 200, body: { credentials } }],
+        "/auth/step-up": [
+          {
+            status: 401,
+            body: {
+              error: "sign_in_refused",
+              message: "Those sign-in details were not accepted. Check them and try again.",
+            },
+          },
+        ],
+      });
+      mount();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByRole("dialog", { name: "Confirm it is you" });
+      await waitFor(() => expect(screen.getByText(asks)).toBeDefined());
+      fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a password" } });
+      if (code) fireEvent.change(screen.getByLabelText(/^Code/), { target: { value: code } });
+      fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+      await waitFor(() => expect(alerts()).toContain(refused));
+      expect(alerts().join(" ")).not.toMatch(/sign-in details/);
+    },
+  );
+
+  test("a wrong password stays for another try, and sends nothing again", async () => {
     const sent = engine({
       "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
       "/auth/step-up": [
@@ -217,9 +266,7 @@ describe("a gesture that needs a fresher proof", () => {
     await refuseAndConfirm("wrong horse battery staple");
 
     await waitFor(() =>
-      expect(alerts()).toContain(
-        "Those sign-in details were not accepted. Check them and try again.",
-      ),
+      expect(alerts()).toContain("That password was not accepted. Check it and confirm again."),
     );
     expect(screen.getByRole("dialog", { name: "Confirm it is you" })).toBeDefined();
     // NOTHING WAS SENT AGAIN, and the need to sign in was not raised: a

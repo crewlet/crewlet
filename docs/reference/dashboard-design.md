@@ -1847,8 +1847,11 @@ one confirmer the app installed (`app/StepUp.tsx`), which opens a single
 "Confirm it is you" dialog however many requests were refused at once, posts
 the password — and a code where the person holds a second factor, which the
 dialog reads from their own credentials (`GET /iam/credentials`) so the code is
-asked for rather than offered as optional — to `POST /auth/step-up`, and on
-success replays each refused request exactly once. While it asks, a dialog
+asked for rather than offered as optional, and its text asks for both — to
+`POST /auth/step-up`, and on success replays each refused request exactly once.
+A wrong password or code is the engine's one sign-in refusal, said as a
+confirmation refused ("That password or code was not accepted") rather than
+as the sign-in form's "sign-in details", and the dialog stays for another try. While it asks, a dialog
 whose write it holds says it is waiting for the person (`lib/waiting.ts`) —
 its button "Waiting for you", its close "Waiting for you to confirm who you
 are." — rather than for the engine, which has nothing in hand. Cancelled, each request fails with the refusal it had. A refusal of

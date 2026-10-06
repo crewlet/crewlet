@@ -36,7 +36,7 @@ import { Button, Callout, FormField, Input, Modal, Text } from "@crewlethq/ui";
 import { ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { refusalText } from "~/lib/refusal.ts";
 import { useRest } from "~/lib/useRest.ts";
-import { auth, currentSessionNeed, rest, setStepUpConfirmer } from "~/protocol/index.ts";
+import { auth, currentSessionNeed, rest, RestError, setStepUpConfirmer } from "~/protocol/index.ts";
 
 /**
  * Whether this person holds an authenticator app — the second factor the
@@ -104,6 +104,7 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
 
   async function confirm() {
     if (busy || !ready) return;
+    const withCode = code.trim() !== "";
     setBusy(true);
     setRefusal(null);
     try {
@@ -118,7 +119,18 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
         return;
       }
       setCode("");
-      setRefusal(refusalText(err));
+      // A CONFIRMATION, NOT A SIGN-IN: the engine answers a wrong password
+      // and a wrong code with the sign-in's one refusal ("Those sign-in
+      // details were not accepted"), worded for a form this person is not
+      // on. Said here as the confirmation it was — still one sentence for
+      // either, since which of the two was wrong is not the engine's to say.
+      setRefusal(
+        err instanceof RestError && err.code === "sign_in_refused"
+          ? withCode || needsCode
+            ? "That password or code was not accepted. Check both and confirm again."
+            : "That password was not accepted. Check it and confirm again."
+          : refusalText(err),
+      );
     } finally {
       setBusy(false);
     }
@@ -147,8 +159,9 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
       }
     >
       <Text as="p" variant="body">
-        This change needs you to have confirmed who you are recently. Enter your password to carry
-        on: what you were doing is kept, and sent again once you have.
+        This change needs you to have confirmed who you are recently. Enter your password
+        {needsCode ? " and a code from your authenticator app" : ""} to carry on: what you were
+        doing is kept, and sent again once you have.
       </Text>
       <FormField label="Password">
         {(field) => (
