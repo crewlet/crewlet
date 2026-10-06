@@ -38,8 +38,10 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 // hand-maintained one is exactly what drifts, and it would drift towards
 // claiming the server answers more than it does.
 //
-// BOTH CALL SHAPES: the `useQuery` hook a screen renders from, and the direct
-// `socket.query` a pager or an action uses. Read by [clientsource.Calls], so a
+// EVERY CALL SHAPE: the `useQuery` hook a screen renders from, the
+// `useSearchQuery` hook every ranked search is asked through (it applies the
+// search bound before `useQuery`), and the direct `socket.query` a pager or an
+// action uses. Read by [clientsource.Calls], so a
 // call a formatter wrapped across lines, one with type arguments and one
 // inside markup are the calls they are. The sweep this replaced was a regular
 // expression whose name class once could not match `a2a_channels` and whose
@@ -51,11 +53,12 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 // A kind handed over in anything but a string literal is invisible here —
 // [clientsource.Calls] can read nothing else — and that is safe only because
 // the dashboard refuses one: `app/source.test.ts`'s "every read names its
-// question" requires a literal at every `useQuery(` and `query(` call, bare or
-// as a method, which is every call Calls is asked for below.
+// question" requires a literal at every `useQuery(`, `useSearchQuery(` and
+// `query(` call, bare or as a method, which is every call Calls is asked for
+// below.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
-	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "query")
+	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "useSearchQuery", "query")
 	if err != nil {
 		// FAILS rather than skips. The dashboard source is committed, so it
 		// is always in a checkout — and a skip here is indistinguishable

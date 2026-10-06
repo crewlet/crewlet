@@ -41,8 +41,10 @@ import {
   CompassGlyph,
 } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
+import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { targetLabel } from "~/lib/work.ts";
@@ -1044,7 +1046,9 @@ function AssignToSeatDialog({
   );
   const [reason, setReason] = useState("");
   const q = term.trim();
-  const search = useQuery(
+  // THE BOUND IS THE HOOK'S: a pasted description past it is not sent, and
+  // the list says why rather than "No task matches" (`useSearchQuery`).
+  const search = useSearchQuery(
     "work_search",
     { q, mode: "hybrid", limit: ASSIGN_SEARCH },
     { enabled: q.length >= ASSIGN_MIN_TERM },
@@ -1053,7 +1057,9 @@ function AssignToSeatDialog({
   const read = useQuery("work_item", chosen ? { id: chosen.key } : undefined, {
     enabled: chosen !== null,
   });
-  const hits = q.length >= ASSIGN_MIN_TERM ? (search.data?.hits ?? []) : [];
+  // A REFUSED SEARCH LISTS NOTHING: `useQuery` keeps its last answer across
+  // a failure, which here is the hits of a term the box no longer holds.
+  const hits = q.length >= ASSIGN_MIN_TERM && !search.error ? (search.data?.hits ?? []) : [];
   const options = useMemo(() => assignOptions(hits, handle, nameOf), [hits, handle, nameOf]);
   const task = read.data && read.data.task.key === chosen?.key ? read.data.task : null;
   const version = task ? task.version : null;
@@ -1151,11 +1157,16 @@ function AssignToSeatDialog({
                 onOpenChange={setListOpen}
                 options={options}
                 emptyMessage={
-                  search.loading
-                    ? "Searching…"
-                    : search.data && !search.data.available
-                      ? "This node is still indexing the tracker — try again in a moment"
-                      : "No task matches"
+                  search.tooLong ??
+                  (search.error ? (
+                    <QueryState error={search.error} detail={search.detail} loading={false} />
+                  ) : search.loading ? (
+                    "Searching…"
+                  ) : search.data && !search.data.available ? (
+                    "This node is still indexing the tracker — try again in a moment"
+                  ) : (
+                    "No task matches"
+                  ))
                 }
                 onCommit={(option) => {
                   const hit = hits.find((h) => h.key === option.value);

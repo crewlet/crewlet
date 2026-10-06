@@ -76,9 +76,9 @@ import { QueryState } from "~/components/common.tsx";
 import { StatusBadge, TypeIcon } from "~/components/work.tsx";
 import { Button, Callout, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
 import { Segmented } from "~/ui/primitives.tsx";
-import { SEARCH_MODES, asSearchMode, modeLabel, searchTooLong, servedNote } from "~/lib/search.ts";
+import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { plainText } from "~/lib/markdown.ts";
@@ -114,13 +114,9 @@ export function WorkSearch() {
   const mode = asSearchMode(modeRaw);
   const [typed, setTyped] = useState(q);
   // A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the screen says why in
-  // place of the results — see `searchTooLong`.
-  const tooLong = searchTooLong(q);
-  const hits = useQuery(
-    "work_search",
-    { q, mode },
-    { enabled: q.trim() !== "" && tooLong === null },
-  );
+  // place of the results — see `useSearchQuery`.
+  const hits = useSearchQuery("work_search", { q, mode }, { enabled: q.trim() !== "" });
+  const tooLong = hits.tooLong;
   const served = servedNote(hits.data);
   usePageCoverage(undefined);
 

@@ -75,6 +75,7 @@ import {
 import { useNavigator, useRoute } from "../router.tsx";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
@@ -213,7 +214,7 @@ export function CommandPalette({
     (scope === "all" || scope === "tasks") &&
     term.length >= SEARCH_MIN &&
     tooLong === null;
-  const tasks = useQuery(
+  const tasks = useSearchQuery(
     "work_search",
     { q: term, mode: "hybrid", limit: TASK_HITS },
     { enabled: wantsTasks },
@@ -223,7 +224,7 @@ export function CommandPalette({
     (scope === "all" || scope === "pages") &&
     term.length >= SEARCH_MIN &&
     tooLong === null;
-  const pages = useQuery("knowledge", { q: term }, { enabled: wantsPages });
+  const pages = useSearchQuery("knowledge", { q: term }, { enabled: wantsPages });
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = picking ? pickTerm : term;
   const wantsNames =

@@ -31,6 +31,7 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   Button,
+  Callout,
   Checkbox,
   FormField,
   IconButton,
@@ -50,8 +51,10 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
@@ -557,12 +560,16 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
   const write = useAct("update_work_item");
   const [q, setQ] = useState("");
   const [chosen, setChosen] = useState<{ key: string; title: string } | null>(null);
-  const search = useQuery(
+  // THE BOUND IS THE HOOK'S: a phrase past it is not sent, and the list's
+  // place says why (`useSearchQuery`).
+  const search = useSearchQuery(
     "work_search",
     { q: q.trim(), mode: "hybrid", limit: 8 },
     { enabled: q.trim().length >= 2 },
   );
-  const hits = (search.data?.hits ?? []).filter((h) => h.key !== item);
+  // A REFUSED SEARCH LISTS NOTHING: `useQuery` keeps its last answer across a
+  // failure, which here is the hits of a term the box no longer holds.
+  const hits = search.error ? [] : (search.data?.hits ?? []).filter((h) => h.key !== item);
   const blocked = chosen ? undefined : "Choose a task first.";
   const submit = async () => {
     // THE BUTTON'S OWN GATE: the dialog is a form its search field submits
@@ -608,22 +615,28 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
         >
           <Input id="composer-link-q" value={q} onChange={(event) => setQ(event.target.value)} />
         </FormField>
-        <PickList
-          label="Tasks"
-          items={hits.map((h) => ({ id: h.key, title: h.title, meta: h.key }))}
-          chosen={chosen?.key ?? ""}
-          onChoose={(id) => {
-            const hit = hits.find((h) => h.key === id);
-            if (hit) setChosen({ key: hit.key, title: hit.title });
-          }}
-          empty={
-            q.trim().length < 2
-              ? "Type two characters to search."
-              : search.loading
-                ? "Searching…"
-                : "No task matches."
-          }
-        />
+        {search.tooLong ? (
+          <Callout variant="warning">{search.tooLong}</Callout>
+        ) : search.error ? (
+          <QueryState error={search.error} detail={search.detail} loading={false} />
+        ) : (
+          <PickList
+            label="Tasks"
+            items={hits.map((h) => ({ id: h.key, title: h.title, meta: h.key }))}
+            chosen={chosen?.key ?? ""}
+            onChoose={(id) => {
+              const hit = hits.find((h) => h.key === id);
+              if (hit) setChosen({ key: hit.key, title: hit.title });
+            }}
+            empty={
+              q.trim().length < 2
+                ? "Type two characters to search."
+                : search.loading
+                  ? "Searching…"
+                  : "No task matches."
+            }
+          />
+        )}
         <RefusalNote write={write} />
       </div>
     </Modal>

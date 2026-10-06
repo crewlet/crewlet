@@ -2497,9 +2497,15 @@ a pasted passage) asks neither search nor the answer, and the lead says so,
 naming its size and the limit, where the answer would be: sent, all three
 would be refused, and a list that lost its tasks and pages with nothing saying
 why reads as nothing matching. The work search and the knowledge screen do the
-same with a phrase in their address. The bound is `SEARCH_QUERY_MAX` in the
-contract, held to the engine's by a Go gate, and no search box carries a
-`maxLength` — that is the same cut, made by the browser on a paste.
+same with a phrase in their address, and so do the two pickers that find a
+task — handing one over and linking one — in place of their list. Every
+`work_search` and `knowledge` read is asked through one hook,
+`useSearchQuery` (`lib/useSearchQuery.ts`), which applies the bound, says why
+and holds no answer from a shorter phrase under one it never sent; a source
+test fails on a ranked search asked any other way, so a new picker cannot skip
+it. The bound is `SEARCH_QUERY_MAX` in the contract, held to the engine's by a
+Go gate, and no search box carries a `maxLength` — that is the same cut, made
+by the browser on a paste.
 
 ### The answer, and when it spends tokens
 
