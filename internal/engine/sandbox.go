@@ -1504,7 +1504,10 @@ func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part
 	// tally is open while a run is collected — the condensation happens
 	// between two of them, on whichever node collects — so it is in the
 	// turn's cost on every rollup and not on its work item (ADR-0022).
-	use := auxspend.Use{Stage: types.AuxStageTurn, TurnID: run.TurnID, WorkKey: run.WorkKey}
+	// UnitOfWork, never the raw field, as every other record of a collected
+	// run files it: a row an older build parked carries no work key, and its
+	// unit is then the derived turn id.
+	use := auxspend.Use{Stage: types.AuxStageTurn, TurnID: run.TurnID, WorkKey: run.UnitOfWork()}
 	res, err := r.engine.seatCompactor(company, run.AgentHandle, use).Fit(ctx, runPartKind(part), text,
 		budget-len(note)-1)
 	if err != nil {
