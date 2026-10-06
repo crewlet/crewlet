@@ -18,7 +18,9 @@
  *  - **refused** — the engine said no, in its own words, with the grants that
  *    would have admitted the caller where the refusal named them, and the steps
  *    of an edit that had already landed (`landed`) where it was refused part
- *    way.
+ *    way. A `409 stale` is marked `stale`: the thing the gesture was about has
+ *    moved on — an invitation redeemed meanwhile — so the same request is
+ *    refused the same however often it is sent.
  *
  * A `403 step_up_required` is not among them: `protocol/rest.ts` asks the
  * person to confirm who they are and REPLAYS the same request, key included, so
@@ -54,7 +56,15 @@ export type IamAnswer =
       key: string;
       text: string;
     }
-  | { kind: "refused"; text: string };
+  | {
+      kind: "refused";
+      text: string;
+      /**
+       * `409 stale`: what the gesture was about has moved on, so sending it
+       * again is refused again — a dialog offers only a way out.
+       */
+      stale: boolean;
+    };
 
 export interface IamRequest {
   method: "POST" | "PATCH" | "DELETE";
@@ -98,7 +108,9 @@ export async function iamWrite(req: IamRequest): Promise<IamAnswer> {
 
 /** What a failed request means: a refusal, or an outcome nobody knows. */
 function refusalOf(err: unknown, sent: string): IamAnswer {
-  if (!(err instanceof RestError)) return { kind: "refused", text: refusalText(err) };
+  if (!(err instanceof RestError)) {
+    return { kind: "refused", text: refusalText(err), stale: false };
+  }
   // WHAT AN EDIT HAD ALREADY CHANGED when a later step was refused or went
   // unconfirmed — said either way, or a half-landed edit reads as one that
   // changed nothing.
@@ -127,7 +139,11 @@ function refusalOf(err: unknown, sent: string): IamAnswer {
   if (err.code === "unauthorized" && err.grants.length > 0) {
     parts.push(`Any one of ${err.grants.join(", ")} would admit you.`);
   }
-  return { kind: "refused", text: parts.join(" ") + changed };
+  return {
+    kind: "refused",
+    text: parts.join(" ") + changed,
+    stale: err.status === 409 && err.code === "stale",
+  };
 }
 
 /** The engine's own sentence, capitalised, or "". */

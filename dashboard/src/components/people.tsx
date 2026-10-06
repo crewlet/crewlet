@@ -448,6 +448,11 @@ export function ConfirmDialog({
   const [typed, setTyped] = useState("");
   const waiting = useWaiting();
   const ready = !typeToConfirm || typed.trim() === typeToConfirm;
+  // REFUSED AS STALE, what this was about has moved on — an invitation
+  // redeemed in the meantime — and the same request is refused the same
+  // however often it is pressed. So the dialog offers only a way out: it kept
+  // its dismissal and an enabled confirm that sent the same 409 again.
+  const stale = write.answer?.kind === "refused" && write.answer.stale;
   return (
     <Modal
       open
@@ -457,20 +462,26 @@ export function ConfirmDialog({
       dismissable={!write.busy}
       closeDisabledReason={waiting.reason}
       stackBody
-      onSubmit={() => ready && onConfirm()}
+      onSubmit={() => ready && !stale && onConfirm()}
       footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={write.busy}>
-            {dismiss}
+        stale ? (
+          <Button variant="primary" onClick={onClose}>
+            Close
           </Button>
-          <Button
-            type="submit"
-            variant={danger ? "danger" : "primary"}
-            disabled={write.busy || !ready}
-          >
-            {pressLabel(write, confirm, "Working", waiting.asked)}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={write.busy}>
+              {dismiss}
+            </Button>
+            <Button
+              type="submit"
+              variant={danger ? "danger" : "primary"}
+              disabled={write.busy || !ready}
+            >
+              {pressLabel(write, confirm, "Working", waiting.asked)}
+            </Button>
+          </>
+        )
       }
     >
       <div className="t-body">{children}</div>

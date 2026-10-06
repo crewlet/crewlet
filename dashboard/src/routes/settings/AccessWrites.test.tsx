@@ -373,6 +373,36 @@ test("the cancel dialog's dismissal is not a second Cancel", async () => {
   expect(within(dialog).queryByRole("button", { name: "Cancel" })).toBeNull();
 });
 
+// AN INVITATION REDEEMED MEANWHILE IS REFUSED AS STALE, AND THE DIALOG OFFERS
+// ONLY A WAY OUT. It kept "Keep it" and an enabled "Cancel invitation" that
+// sent the same request to the same 409. The CONTROL is the sentence, which
+// still says why. Mutation: draw the confirm on a stale refusal and it is
+// offered again.
+test("a stale refusal leaves the cancel dialog only a way out", async () => {
+  const eng = engine({
+    "DELETE /iam/invitations/inv-1": [
+      json(409, {
+        error: "stale",
+        message: "That changed since you read it.",
+        detail: "this invitation has already been redeemed",
+      }),
+    ],
+  });
+  mount();
+  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel invitation" }));
+  await settle();
+  expect(within(dialog).getByRole("alert").textContent).toMatch(/already been redeemed/);
+  expect(within(dialog).queryByRole("button", { name: "Cancel invitation" })).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "Keep it" })).toBeNull();
+  // THE FOOTER'S, beside the modal's own close in its header.
+  fireEvent.click(within(dialog).getAllByRole("button", { name: "Close" }).at(-1)!);
+  expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
+  expect(eng.writes()).toHaveLength(1);
+});
+
 // A STALE PROOF IS CONFIRMED AND THE SAME REQUEST REPLAYED, key included.
 test("a step-up refusal is confirmed and the same cancellation replayed", async () => {
   const confirmer = vi.fn(async () => true);
