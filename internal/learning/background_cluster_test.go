@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/store"
@@ -128,7 +128,7 @@ type recordingModels struct {
 	asked []string
 }
 
-func (m *recordingModels) Head(role *org.Role, _ phase.Phase) (chain.Member, error) {
+func (m *recordingModels) Auxiliary(role *org.Role, _ auxspend.Use) (chain.Member, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	name := ""

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -70,6 +71,9 @@ type segmentCharge struct {
 	// carry is what a parked segment charged to nothing hands on to the
 	// segment that finishes the turn; nil otherwise.
 	carry *execstate.Uncharged
+	// aux is the segment's attribution for the auxiliary calls its charge
+	// makes — the card's rewrite.
+	aux auxspend.Use
 }
 
 // native reports a charge this engine's own tracker takes: one on a native
@@ -108,7 +112,8 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		own.Turns = 1
 	}
 	total := addUncharged(own, t.uncharged)
-	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed)}
+	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed),
+		aux: t.aux()}
 	if item == nil {
 		if res.Suspended {
 			charge.carry = unchargedOf(total)
@@ -210,7 +215,7 @@ func (e *Engine) recordTurnSpend(ctx context.Context, charge segmentCharge) {
 		// there is nowhere to charge.
 		return
 	}
-	fit := e.seatCompactor(e.Company(), charge.record.Seat)
+	fit := e.seatCompactor(e.Company(), charge.record.Seat, charge.aux)
 	charge.record.Summary = turnCard(ctx, fit, charge.record.Summary)
 	charge.record.Review = turnCard(ctx, fit, charge.record.Review)
 	e.chargeSegment(ctx, halves.as(builtin.Actor{

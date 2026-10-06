@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -61,10 +63,11 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	}
 
 	// EVERY WORKER RESOLVES ITS MODEL THROUGH THIS, so auxiliary spend is
-	// charged against the same fleet counter a turn is. Wrapping the seam
-	// rather than each call site is what makes a worker added later charge
-	// without anyone remembering to — see learningbudget.go.
-	models := e.meteredModelsFor(c)
+	// charged against the same fleet counter a turn is and recorded in the
+	// spend history beside it. Wrapping the seam rather than each call site
+	// is what makes a worker added later charge and record without anyone
+	// remembering to — see auxiliary.go.
+	models := e.auxiliaryFor(c)
 	if models == nil {
 		// A COMPANY WITH NO MODELS is a valid one (see nomodels.go), and the
 		// workers that call a model are waiting for a provider rather than
@@ -544,7 +547,7 @@ func (e *Engine) clusteringPass(c *Company) *learning.Synthesizer {
 	}
 	opts := synthesizerOptions(cfg)
 	opts.Episodes = learning.NewEpisodes(db)
-	built, err := learning.NewSynthesizer(e.meteredModelsFor(c), learning.NewSkills(db), opts)
+	built, err := learning.NewSynthesizer(e.auxiliaryFor(c), learning.NewSkills(db), opts)
 	if err != nil {
 		log.Warn("skill_clustering_unavailable", "error", err,
 			"detail", "scheduler_enabled is on but no clustering pass could be "+
@@ -659,7 +662,8 @@ func hours(n int) time.Duration {
 // compaction entirely — see the caller for why a delete-only pass is worse
 // than no pass.
 func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
-	if c.Models == nil {
+	seam := e.auxiliaryFor(c)
+	if seam == nil {
 		return nil
 	}
 	if !anySeatHasAuxiliary(c) {
@@ -670,7 +674,10 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 		if seat == nil {
 			return "", fmt.Errorf("engine: compaction for %q: this revision has no such role", role)
 		}
-		member, err := e.meteredModelsFor(c).Head(seat, phase.Auxiliary)
+		// A BACKGROUND PASS, on no turn: the lifecycle worker compacts a
+		// seat's old episodes on its own schedule.
+		member, err := seam.Auxiliary(seat, auxspend.Use{Stage: types.AuxStageBackground,
+			Purpose: types.AuxEpisodeCompaction})
 		if err != nil {
 			return "", fmt.Errorf("engine: compaction for %q: %w", role, err)
 		}
@@ -714,7 +721,9 @@ func (e *Engine) episodeFit(c *Company) learning.FitFunc {
 		if field == learning.FieldOutcome {
 			kind = compact.KindOutcome
 		}
-		res, err := fitter.For(seat).Fit(ctx, kind, text, budget)
+		// The background stage, as the summary it feeds is.
+		res, err := fitter.For(seat, auxspend.Use{Stage: types.AuxStageBackground}).
+			Fit(ctx, kind, text, budget)
 		if err != nil {
 			return "", err
 		}

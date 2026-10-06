@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -483,6 +484,26 @@ func TestRefreshMemoryTellsTheFilterWhoIsAsking(t *testing.T) {
 	}
 }
 
+// THE RE-FILTER IS THE TURN'S OWN SPEND: its model call runs mid-turn for the
+// turn's work, so it is filed under the turn's attribution — its run, its unit
+// of work and the tally its work item is charged from — exactly as the
+// turn-start filter is. Handed nothing, the seam would refuse it and the tool
+// would recall nothing at all.
+func TestRefreshMemoryFilesTheFilterUnderTheTurn(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{}
+	tool := registered(t, builtin.Deps{Diary: &countingDiary{}, Recall: recall},
+		builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+	turn.AuxSpend = auxspend.NewTally()
+	callFor(t, tool, turn, map[string]any{"context_hint": "the deploy freeze"})
+	want := auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1", WorkKey: "wk-1",
+		Tally: turn.AuxSpend}
+	if recall.aux != want {
+		t.Fatalf("the re-filter was filed as %+v, want the turn's %+v", recall.aux, want)
+	}
+}
+
 // The cap, and the idempotency that makes it fair. The filter is an auxiliary
 // model call, so a model that re-hints every round spends a completion per
 // round for answers that converge after the second — but charging a REPEAT
@@ -693,6 +714,7 @@ type fakeRecall struct {
 	text    string
 	hint    string
 	senders []learning.Subject
+	aux     auxspend.Use
 	limit   int
 	// memoryCalls counts what the ledger's cache is there to avoid.
 	memoryCalls int
@@ -707,9 +729,9 @@ func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string,
 }
 
 func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string,
-	senders []learning.Subject,
+	senders []learning.Subject, aux auxspend.Use,
 ) ([]learning.DiaryEntry, error) {
-	f.hint, f.senders = hint, senders
+	f.hint, f.senders, f.aux = hint, senders, aux
 	f.memoryCalls++
 	if f.err != nil {
 		return nil, f.err

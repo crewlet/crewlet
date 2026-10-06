@@ -8,8 +8,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -50,7 +51,7 @@ type models struct {
 	err      error
 }
 
-func (m models) Head(*org.Role, phase.Phase) (chain.Member, error) {
+func (m models) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
 	if m.err != nil {
 		return chain.Member{}, m.err
 	}
@@ -372,21 +373,30 @@ func TestOmittedNamesSizeAndIdentityNeverContent(t *testing.T) {
 	}
 }
 
-// A BOUND COMPACTOR CHARGES ITS SEAT: the seat it was bound to is the one the
-// model seam is asked for.
-func TestABoundCompactorAsksForItsOwnSeat(t *testing.T) {
+// A BOUND COMPACTOR CHARGES ITS SEAT, UNDER ITS ATTRIBUTION: the seat it was
+// bound to is the one the model seam is asked for, and the rewrite is filed
+// under the stage and turn its caller bound and the purpose of its kind — so a
+// turn's ledger rewrite is that turn's cost, and a reader can tell a thread's
+// condensing from a coding report's.
+func TestABoundCompactorAsksForItsOwnSeatUnderItsAttribution(t *testing.T) {
 	t.Parallel()
-	var asked []*org.Role
+	var asked []seatUse
 	m := &model{answer: short}
 	seen := seatModels{provider: m, seen: &asked}
 	writer := &org.Role{Name: "Writer"}
-	_, err := compact.New(seen, compact.NewCache()).For(writer).Fit(context.Background(),
+	tally := auxspend.NewTally()
+	bound := auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1", WorkKey: "wk-1", Tally: tally}
+	_, err := compact.New(seen, compact.NewCache()).For(writer, bound).Fit(context.Background(),
 		compact.KindArgument, strings.Repeat("r", 300), 50)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 1 || asked[0] != writer {
+	if len(asked) != 1 || asked[0].role != writer {
 		t.Fatalf("the rewrite was resolved for %v, not the bound seat", asked)
+	}
+	want := bound.For(types.AuxCondense("argument"))
+	if asked[0].use != want {
+		t.Errorf("the rewrite was filed as %+v, want %+v", asked[0].use, want)
 	}
 	var zero compact.Bound
 	if _, err := zero.Fit(context.Background(), compact.KindArgument, strings.Repeat("r", 300), 50); !errors.Is(err, compact.ErrUnavailable) {
@@ -394,15 +404,35 @@ func TestABoundCompactorAsksForItsOwnSeat(t *testing.T) {
 	}
 }
 
-type seatModels struct {
-	provider llm.Provider
-	seen     *[]*org.Role
+// EVERY KIND HAS A PURPOSE THE CATALOGUE PUBLISHES, AND NO PURPOSE NAMES A KIND
+// THAT IS GONE. The catalogue keeps its own copy of these kinds because it
+// cannot import this package; a kind added here and not there would file its
+// rewrites under a purpose the seam refuses, and every one would fail.
+func TestEveryKindIsACondensePurposeTheCatalogueKnows(t *testing.T) {
+	t.Parallel()
+	for _, k := range compact.Kinds {
+		if !types.AuxCondense(string(k)).Valid() {
+			t.Errorf("kind %q has no purpose in the event catalogue", k)
+		}
+	}
+	for _, kind := range types.AuxCondenseKinds() {
+		if !compact.Kind(kind).Valid() {
+			t.Errorf("the catalogue names condense_%s, which is no kind this package has", kind)
+		}
+	}
 }
 
-func (m seatModels) Head(role *org.Role, ph phase.Phase) (chain.Member, error) {
-	if ph != phase.Auxiliary {
-		return chain.Member{}, errors.New("a rewrite runs on the auxiliary chain")
-	}
-	*m.seen = append(*m.seen, role)
+type seatUse struct {
+	role *org.Role
+	use  auxspend.Use
+}
+
+type seatModels struct {
+	provider llm.Provider
+	seen     *[]seatUse
+}
+
+func (m seatModels) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error) {
+	*m.seen = append(*m.seen, seatUse{role: role, use: use})
 	return chain.Member{Key: "aux", Provider: m.provider}, nil
 }

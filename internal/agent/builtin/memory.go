@@ -360,7 +360,8 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 // at most [compact.Parallel] at once, the compactor's own bound on how many
 // rewrites one caller opens against a seat's provider.
 func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
-	fit := t.compact.For(turn.Seat)
+	// Each rewrite is the turn's own cost, filed under its run.
+	fit := t.compact.For(turn.Seat, turn.Aux())
 	out := make([]string, len(found))
 	var group errgroup.Group
 	group.SetLimit(compact.Parallel)
@@ -536,7 +537,9 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	for _, sender := range turn.Senders {
 		senders = append(senders, learning.SubjectOf(sender))
 	}
-	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint, senders)
+	// THE TURN'S OWN SPEND: the re-filter runs mid-turn for its work, so its
+	// call is part of the turn's cost and its work item's.
+	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint, senders, turn.Aux())
 	if err != nil {
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
 	}

@@ -42,8 +42,10 @@
 // # Cost
 //
 // Every rewrite is a completion on the seat's own auxiliary chain, resolved
-// through the same metered seam every learning worker uses, so it is charged
-// to the seat's token windows like any other auxiliary call. Three things keep
+// through the same seam every learning worker uses, so it is charged to the
+// seat's token windows like any other auxiliary call and recorded beside them
+// as `auxiliary_spend` under the purpose `condense_<kind>` — in the turn's cost
+// when the caller bound a turn's attribution ([Compactor.For]). Three things keep
 // that bounded: text that already fits is returned without a call; a result
 // is cached by its input, so a block re-rendered on every round pays once per
 // turn rather than once per round; and an input is split into at most
@@ -64,7 +66,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -74,10 +77,13 @@ import (
 var log = logging.Get("compact")
 
 // Models is the seat-model seam a compaction resolves its model through: the
-// metered phase registry the learning workers and the prefetch already use,
-// so a rewrite is charged exactly as any other auxiliary call is.
+// engine's ONE auxiliary seam the learning workers and the prefetch also use,
+// so a rewrite is charged and recorded exactly as any other auxiliary call
+// is. A rewrite states its attribution there like every other call: the
+// stage and the turn its caller bound ([Compactor.For]), and the purpose
+// `condense_<kind>` this package derives from what the text is.
 type Models interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error)
 }
 
 const (
@@ -221,6 +227,15 @@ type Request struct {
 	// windows it is charged to.
 	Seat *org.Role
 
+	// Use is whose cost the rewrite is — its stage, the turn it serves and,
+	// inside a turn, the turn's tally — as the caller states it. The
+	// purpose is this package's to set, from Kind: `condense_<kind>`
+	// (types.AuxCondense), so a rewrite of a chat thread and one of a
+	// coding run's report are told apart on every breakdown. The event
+	// catalogue keeps its own copy of the kinds, and this package's suite
+	// holds the two equal in both directions.
+	Use auxspend.Use
+
 	// Kind says what the text is.
 	Kind Kind
 
@@ -310,26 +325,32 @@ func New(models Models, cache *Cache) *Compactor {
 	return &Compactor{models: models, cache: cache, timeout: CallTimeout}
 }
 
-// For binds the compactor to one seat, which is the shape a caller inside a
-// turn holds: every rewrite it asks for is that seat's.
-func (c *Compactor) For(seat *org.Role) Bound { return Bound{c: c, seat: seat} }
+// For binds the compactor to one seat and one attribution, which is the shape
+// a caller inside a turn holds: every rewrite it asks for is that seat's, and
+// that stage's and turn's cost — explicitly, because an ambient attribution
+// would charge a rewrite to whichever turn last wrote it.
+func (c *Compactor) For(seat *org.Role, use auxspend.Use) Bound {
+	return Bound{c: c, seat: seat, use: use}
+}
 
-// Bound is a compactor bound to one seat. Its zero value — and one bound
-// from a nil compactor — rewrites nothing.
+// Bound is a compactor bound to one seat and one attribution. Its zero value —
+// and one bound from a nil compactor — rewrites nothing.
 type Bound struct {
 	c    *Compactor
 	seat *org.Role
+	use  auxspend.Use
 }
 
 // Fit is [Compactor.Fit] for the bound seat.
 func (b Bound) Fit(ctx context.Context, kind Kind, text string, budget int) (Result, error) {
-	return b.c.Fit(ctx, Request{Seat: b.seat, Kind: kind, Text: text, Budget: budget})
+	return b.c.Fit(ctx, Request{Seat: b.seat, Use: b.use, Kind: kind, Text: text, Budget: budget})
 }
 
 // Focused is [Compactor.Fit] for the bound seat with a question the text is
 // read to answer — a [KindSource] document.
 func (b Bound) Focused(ctx context.Context, kind Kind, text string, budget int, focus string) (Result, error) {
-	return b.c.Fit(ctx, Request{Seat: b.seat, Kind: kind, Text: text, Budget: budget, Focus: focus})
+	return b.c.Fit(ctx, Request{Seat: b.seat, Use: b.use, Kind: kind, Text: text,
+		Budget: budget, Focus: focus})
 }
 
 // Omitted is how a caller renders a text it could neither carry nor rewrite:
@@ -375,7 +396,7 @@ func (c *Compactor) Fit(ctx context.Context, req Request) (Result, error) {
 	if text, ok := c.cache.Get(key); ok {
 		return Result{Text: text, Compacted: true, From: from}, nil
 	}
-	member, err := c.models.Head(req.Seat, phase.Auxiliary)
+	member, err := c.models.Auxiliary(req.Seat, req.Use.For(types.AuxCondense(string(req.Kind))))
 	if err != nil {
 		return Result{From: from}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}

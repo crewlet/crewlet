@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -50,14 +50,18 @@ type PersistDecider struct {
 	newID     func() string
 }
 
-// Models resolves the model one seat's auxiliary work runs on.
+// Models resolves the model one seat's auxiliary work runs on: the engine's
+// ONE auxiliary seam, which resolves the seat's auxiliary chain head off the
+// phase registry — so "which model does reflection use" is still decided in one
+// place, the one the config validator checks — and records and charges every
+// completion made through what it hands back.
 //
-// One method, and deliberately the phase registry's own signature so
-// *phase.Registry satisfies it as written: an adapter in the engine's wiring
-// would be a second place for "which model does reflection use" to be
-// decided, and the answer has to be the same one the config validator checks.
+// EVERY CALL STATES ITS ATTRIBUTION — a stage, a purpose, the turn it learns
+// from ([Turn.Reflecting] for a reflection worker) — because the seam files
+// the spend under it, and an ambient one would charge a worker's call to
+// whichever turn last wrote it.
 type Models interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error)
 }
 
 // DiaryStore is the seat's diary, as much of it as the decider touches.
@@ -264,7 +268,7 @@ func (d *PersistDecider) Reflect(ctx context.Context, t Turn) ([]events.Payload,
 // still reports what was concluded before the failure, so a caller can tell a
 // LONG that failed to land from a turn with nothing in it.
 func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
-	member, err := d.models.Head(t.Role, phase.Auxiliary)
+	member, err := d.models.Auxiliary(t.Role, t.Reflecting(types.AuxPersistDecider))
 	if err != nil {
 		return Decision{Tier: types.PersistNOOP}, fmt.Errorf("learning: no auxiliary model: %w", err)
 	}

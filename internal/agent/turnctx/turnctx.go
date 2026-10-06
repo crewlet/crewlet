@@ -52,6 +52,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -60,9 +61,9 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion. The two things it POINTS AT that change
-// are [Turn.Written] and [Turn.Calls], each of which only ever grows and
-// authorizes nothing.
+// decision downstream a suggestion. The three things it POINTS AT that change
+// are [Turn.Written], [Turn.Calls] and [Turn.AuxSpend], each of which only
+// ever grows and authorizes nothing.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -249,11 +250,42 @@ type Turn struct {
 	// Calls is what this run has called so far, which a derived operation
 	// id reads its repeat count from — see [CallLog].
 	//
-	// One of the two parts of a turn that change, and only by growing: the
+	// One of the parts of a turn that change, and only by growing: the
 	// tool surface appends each call it made, and nothing can rewrite or
 	// drop an entry, so no authorization decision reads it and nothing a
 	// model says reaches it but the calls it actually made.
 	Calls *CallLog
+
+	// AuxSpend is what this turn SEGMENT's auxiliary calls have cost so far
+	// — its turn-start context, every rewrite its ledgers, its judge's
+	// evidence and its tools asked for, a worker's answer condensed for it —
+	// which the segment's charge to its work item adds at the end
+	// (ADR-0022). Every call reaches it through [Turn.Aux], the attribution
+	// the auxiliary seam files the call under.
+	//
+	// The last part of a turn that changes, and like the other two only by
+	// growing: the seam adds what a call cost after it returned, and nothing
+	// reads it to decide anything but the charge. Nil outside a turn, which
+	// tallies nothing.
+	AuxSpend *auxspend.Tally
+}
+
+// Aux is the attribution an auxiliary call made for this turn states: the
+// TURN stage — part of the turn's cost and charged to its work item — this
+// run, its unit of work and the segment's tally, with the call's own purpose
+// added by the caller ([auxspend.Use.For]).
+//
+// AN ARGUMENT, never the context, for this package's own reason: a rewrite
+// started by a goroutine that outlives the turn would otherwise be charged to
+// whichever turn last wrote the context. Nil — a tool surface built outside a
+// turn — is the turn stage with no run, which files the call on the seat's day
+// alone.
+func (t *Turn) Aux() auxspend.Use {
+	if t == nil {
+		return auxspend.Use{Stage: types.AuxStageTurn}
+	}
+	return auxspend.Use{Stage: types.AuxStageTurn, TurnID: t.RunID, WorkKey: t.WorkKey,
+		Tally: t.AuxSpend}
 }
 
 // InPhase derives the Turn a phase session's tools see: this one, naming the

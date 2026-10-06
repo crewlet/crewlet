@@ -152,11 +152,17 @@ func (p turnPart) keep(n int) any {
 // reliably the last two. A turn ends with its final review phase, then
 // `agent_turn_completed` and `turn_completed` — and then the REFLECTION PASS,
 // which publishes after them: an episode, a persist decision, a counterparty
-// profile, a synthesized, refined or promoted skill, and its own sentinel,
-// each of them a model call that also files its own auxiliary
-// `agent_phase_completed`. Two would be swallowed by that tail on any turn
-// with learning enabled, and the review phase — the one a reader who came for
-// "how did it end" wants beside the words — would go with them.
+// profile, a synthesized, refined or promoted skill and its own sentinel, at
+// most seven rows; and beside them what that pass's model calls cost, as
+// `auxiliary_spend` records of the reflection stage, stamped at their last
+// call and so inside the tail — one per purpose per model, so four or five
+// with the conversation ledger's own rewrite. (The turn's IN-turn auxiliary
+// records are stamped at their own last call, which is the turn-start
+// context or a mid-turn rewrite, so they sort among the opening rows rather
+// than here.) About fifteen rows, then, behind the ending a reader came for:
+// two would be swallowed by that tail on any turn with learning enabled, and
+// the review phase — the one a reader who came for "how did it end" wants
+// beside the words — would go with them.
 //
 // Twenty clears that with headroom while staying small enough that the second
 // read is a seek rather than a scan. The recovered rows replace nothing: a cut

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -601,7 +602,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// A resumed Execute loop can exhaust its rounds like any other,
 			// and it is the phase most likely to: it comes back mid-task with
 			// its budget already partly spent.
-			Judge:     e.judgeFor(company, in.Turn.Handle()),
+			Judge:     e.judgeFor(company, in.Turn.Handle(), tel.aux()),
 			Remaining: e.remainingFor(company, in.Turn.Handle()),
 			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
 			// more than a fresh turn does: this loop was parked across a
@@ -681,6 +682,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
 	e.publishTurnCompleted(ctx, tel, spend, res, err)
 	e.recordTurnSpend(ctx, charge)
+	e.auxSpend.FlushTurn(ctx, in.Run.TurnID)
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
 		// stop while the run was out, and the turn ended at its first
@@ -1457,7 +1459,7 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 // budget is the record's and the label rides it.
 type runCondenser struct{ engine *Engine }
 
-func (r runCondenser) Condense(ctx context.Context, handle string, part sandbox.RunPart,
+func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part sandbox.RunPart,
 	text string, budget int) (string, error) {
 	company := r.engine.Company()
 	if company == nil {
@@ -1468,7 +1470,14 @@ func (r runCondenser) Condense(ctx context.Context, handle string, part sandbox.
 		kind = compact.KindToolError
 	}
 	note := compact.Result{Compacted: true, From: len(text)}.Note()
-	res, err := r.engine.seatCompactor(company, handle).Fit(ctx, kind, text, budget-len(note)-1)
+	// THE TURN'S OWN COST, filed under the run the report belongs to: the
+	// resumed segment reads it as the coding run's answer. No segment's
+	// tally is open while a run is collected — the condensation happens
+	// between two of them, on whichever node collects — so it is in the
+	// turn's cost on every rollup and not on its work item (ADR-0022).
+	use := auxspend.Use{Stage: types.AuxStageTurn, TurnID: run.TurnID, WorkKey: run.WorkKey}
+	res, err := r.engine.seatCompactor(company, run.AgentHandle, use).Fit(ctx, kind, text,
+		budget-len(note)-1)
 	if err != nil {
 		return "", err
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -85,8 +86,13 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 // not apply — has nothing to judge "party to the task" by without them, and a
 // re-filter built without them was a filter that could not tell the person
 // asking from anybody else.
+//
+// AND WITH THE TURN'S ATTRIBUTION (aux): the filter's call is the turn's own
+// cost, spent mid-turn on its behalf, so it is filed under the turn and its
+// tally like the turn-start filter's — a re-filter attributed to nothing would
+// be refused by the seam, and the tool would find nothing it could recall.
 func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string,
-	senders []learning.Subject,
+	senders []learning.Subject, aux auxspend.Use,
 ) ([]learning.DiaryEntry, error) {
 	if f == nil || f.src.Diary == nil || seat == nil || agentID == "" {
 		return nil, nil
@@ -97,7 +103,8 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 	// THE HINT IS THE ASK: it is the executor's own account of what the
 	// task is about, written after recon, and the whole of what the filter
 	// and the vector are judged against here.
-	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint, Senders: senders}
+	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint, Senders: senders,
+		Aux: aux}
 	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request, nil))
 	if len(candidates) == 0 {
 		return nil, nil

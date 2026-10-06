@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -225,8 +225,14 @@ type Request struct {
 	// relevance.
 	RequiresRecon bool
 
-	// TurnID identifies the turn, for the auxiliary calls' telemetry.
-	TurnID string
+	// Aux is the turn's attribution for every auxiliary call this request
+	// makes — the memory filter, the knowledge query, the episode summary
+	// and the compactions behind the thread and episode blocks: the turn
+	// stage, the run and its work key, and the turn's tally its work item
+	// is charged from. Each call adds its own purpose. It replaced a TurnID
+	// this package was handed "for the auxiliary calls' telemetry" and read
+	// nowhere, which is what those calls' spend reached.
+	Aux auxspend.Use
 
 	// Thread is the chat thread this turn was woken in, when it was woken
 	// in one. The zero value is the ordinary case — a webhook, a scheduled
@@ -296,14 +302,13 @@ func (f *Fetcher) vectorFor(ctx context.Context, r Request, outcome *types.Embed
 	})
 }
 
-// Models resolves the model a seat's auxiliary work runs on.
-//
-// The phase registry's own signature, so *phase.Registry satisfies it as
-// written — the same seam the learning workers take, and for the same
-// reason: an adapter here would be a second place deciding which model
-// answers a seat's cheap questions.
+// Models resolves the model a seat's auxiliary work runs on: the engine's ONE
+// auxiliary seam, the same one the learning workers take — which resolves the
+// seat's auxiliary chain off the phase registry, so the answer to "which model
+// answers a seat's cheap questions" is decided in one place — and which records
+// and charges every completion under the attribution each call states.
 type Models interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error)
 }
 
 // Diary is the seat's own memory, as much of it as this package reads.
@@ -548,16 +553,20 @@ func recoverSkills(into *string, ids *[]string) {
 	}
 }
 
-// auxCall runs one auxiliary completion for a seat.
+// auxCall runs one auxiliary completion for the request's seat, filed under
+// the request's attribution and the caller's purpose.
 //
 // ONE PLACE, so the timeout, the temperature and the "no tools" rule are the
 // same for all three callers. A tool on the surface invites a model to call
 // it and answer nothing, and there is no tool any of these passes could use.
-func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user string, maxTokens int) (string, bool) {
+func (f *Fetcher) auxCall(ctx context.Context, r Request, purpose types.AuxPurpose,
+	system, user string, maxTokens int,
+) (string, bool) {
 	if f.src.Models == nil {
 		return "", false
 	}
-	member, err := f.src.Models.Head(seat, phase.Auxiliary)
+	seat := r.Seat
+	member, err := f.src.Models.Auxiliary(seat, r.Aux.For(purpose))
 	if err != nil {
 		log.DebugContext(ctx, "prefetch_no_auxiliary_model", "seat", seat.Handle(), "error", err)
 		return "", false

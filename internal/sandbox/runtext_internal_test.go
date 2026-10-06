@@ -11,7 +11,10 @@ import (
 )
 
 type condenseCall struct {
+	// handle and turn are the run's: a rewrite is a model call the engine
+	// charges to the seat and files under the turn the run belongs to.
 	handle string
+	turn   string
 	part   RunPart
 	bytes  int
 	budget int
@@ -22,8 +25,8 @@ type fakeCondenser struct {
 	answer func(part RunPart, text string, budget int) (string, error)
 }
 
-func (f *fakeCondenser) Condense(_ context.Context, handle string, part RunPart, text string, budget int) (string, error) {
-	f.calls = append(f.calls, condenseCall{handle, part, len(text), budget})
+func (f *fakeCondenser) Condense(_ context.Context, run PendingRun, part RunPart, text string, budget int) (string, error) {
+	f.calls = append(f.calls, condenseCall{run.AgentHandle, run.TurnID, part, len(text), budget})
 	return f.answer(part, text, budget)
 }
 
@@ -63,8 +66,8 @@ func TestARunsAccountPastTheRecordIsCondensedNotCut(t *testing.T) {
 		t.Errorf("the rewrites were not carried: %q / %q", got.Text, got.Error)
 	}
 	want := []condenseCall{
-		{"dev", PartReport, len(long.Text), MaxRunTextBytes},
-		{"dev", PartFailure, len(long.Error), MaxRunTextBytes},
+		{"dev", "t1", PartReport, len(long.Text), MaxRunTextBytes},
+		{"dev", "t1", PartFailure, len(long.Error), MaxRunTextBytes},
 	}
 	if len(condenser.calls) != 2 || condenser.calls[0] != want[0] || condenser.calls[1] != want[1] {
 		t.Errorf("condense calls = %+v, want %+v", condenser.calls, want)

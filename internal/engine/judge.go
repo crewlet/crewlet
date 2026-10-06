@@ -3,6 +3,7 @@ package engine
 import (
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 )
 
 // The round-cap extension judge, wired.
@@ -25,7 +26,11 @@ import (
 // configured for the seat, or a turn on a build with no epoch — and
 // extension.Consider already reads a nil judge as "do not ask", which is the
 // same rescue this would otherwise have to invent.
-func (e *Engine) judgeFor(c *Company, handle string) extension.Judge {
+//
+// use is the turn's attribution, which the judge's evidence rewrites are filed
+// under: the judgement is the turn's, so condensing what it reads is too. The
+// judge's own call is a phase of the turn, metered by the turn's meter.
+func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension.Judge {
 	if c == nil || c.Org == nil || c.Models == nil {
 		return nil
 	}
@@ -49,7 +54,7 @@ func (e *Engine) judgeFor(c *Company, handle string) extension.Judge {
 	// document in a call, an error page, a long task — is rewritten for
 	// the judge rather than cut or carried whole.
 	judge := extension.NewLLMJudge(member.Provider, member.Key).
-		WithCompactor(e.seatCompactor(c, handle))
+		WithCompactor(e.seatCompactor(c, handle, use))
 	if judge == nil {
 		return nil
 	}

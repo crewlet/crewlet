@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -86,6 +87,15 @@ func (t Turn) WorkKey() string {
 		return t.Event.TurnID
 	}
 	return ""
+}
+
+// Reflecting is the attribution a reflection worker states for its model call
+// on this turn: the REFLECTION stage — the seat's learning after the turn,
+// counted on the seat's day and drawn beside the turn, never in its cost or on
+// its work item — the turn it learns from, and the worker's own purpose.
+func (t Turn) Reflecting(purpose types.AuxPurpose) auxspend.Use {
+	return auxspend.Use{Stage: types.AuxStageReflection, Purpose: purpose,
+		TurnID: t.Event.TurnID, WorkKey: t.WorkKey()}
 }
 
 // Ask is what the turn was ASKED, in the trigger's own words: its
@@ -623,10 +633,13 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		}
 	}
 
-	// The trailing sentinel. The auxiliary phase events workers emit keep
-	// the seat rendering as WORKING for as long as they are the newest
-	// event for that role; this is what flips it back to idle when the
-	// pass is over.
+	// The trailing sentinel: what closes the pass on the turn's record —
+	// the live view extends the seat's last turn to it, and the Turn
+	// screen's Reflection lane ends at it. What each worker's model calls
+	// cost is not here and moves no seat: the auxiliary seam records it as
+	// `auxiliary_spend` of the reflection stage, which no state machine
+	// reads, because a spend record that drove the seat would reopen the
+	// turn it names.
 	r.publish(ctx, turn, types.ReflectionCompleted{
 		Agent: tc.Agent, AgentHandle: tc.AgentHandle, RoleName: tc.RoleName,
 		TurnID: tc.TurnID, WorkKey: turn.WorkKey(),

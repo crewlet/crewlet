@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -70,13 +71,41 @@ func (a *aux) calls() int {
 	return len(a.asked)
 }
 
-type models struct{ provider llm.Provider }
+// models is the auxiliary seam, recording the attribution each call states
+// when uses is set.
+type models struct {
+	provider llm.Provider
+	uses     *useLog
+}
 
-func (m models) Head(*org.Role, phase.Phase) (chain.Member, error) {
+func (m models) Auxiliary(_ *org.Role, use auxspend.Use) (chain.Member, error) {
+	m.uses.add(use)
 	if m.provider == nil {
 		return chain.Member{}, errors.New("no auxiliary model")
 	}
 	return chain.Member{Key: "aux", Provider: m.provider}, nil
+}
+
+// useLog is every attribution the seam was handed. A POINTER, because the
+// fake is a value in struct literals throughout.
+type useLog struct {
+	mu   sync.Mutex
+	uses []auxspend.Use
+}
+
+func (l *useLog) add(u auxspend.Use) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.uses = append(l.uses, u)
+}
+
+func (l *useLog) all() []auxspend.Use {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.uses)
 }
 
 type diary struct {
@@ -247,14 +276,19 @@ const triageScaffold = "## Triage — decide BEFORE replying\n\"@PM open a ticke
 // theAsk is what the fixture turn was asked.
 const theAsk = "fix the login redirect loop on staging"
 
+// turnAux is the fixture turn's attribution: the turn stage, its run, its
+// unit of work and its tally.
+var turnAux = auxspend.Use{Stage: types.AuxStageTurn, TurnID: "turn-1", WorkKey: "wk-1",
+	Tally: auxspend.NewTally()}
+
 func request(t *testing.T) prefetch.Request {
 	t.Helper()
 	o, seat := company(t)
 	return prefetch.Request{
 		Seat: seat, AgentID: "agent-1", Org: o,
-		Task:   triageScaffold + "\n\n**Message:** " + theAsk,
-		Ask:    theAsk,
-		TurnID: "turn-1",
+		Task: triageScaffold + "\n\n**Message:** " + theAsk,
+		Ask:  theAsk,
+		Aux:  turnAux,
 		Senders: []learning.Subject{
 			{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
 		},
@@ -1019,6 +1053,51 @@ func TestTheEpisodeSummaryIsOptionalAndFailsSoft(t *testing.T) {
 	}, request(t)).EpisodeRecall
 	if !strings.Contains(failed, "redirect loop") {
 		t.Fatalf("a failed summary lost the block: %q", failed)
+	}
+}
+
+// EVERY TURN-START CALL IS THE TURN'S OWN, under its own purpose: the seam
+// files each call's spend under the attribution it is handed, so a call
+// handed the turn's identity without its purpose — or one handed none — is
+// spend that every breakdown shows against the wrong line or refuses
+// outright. The memory filter, the knowledge query, the episode summary and
+// the rewrite of a long account each name themselves and carry the run, its
+// work key and its tally.
+func TestEveryTurnStartCallIsFiledUnderTheTurnAndItsPurpose(t *testing.T) {
+	t.Parallel()
+	uses := &useLog{}
+	long := strings.Repeat("the deploy log said ", 200)
+	model := &aux{answers: []string{"[0]"}}
+	seam := models{provider: model, uses: uses}
+	fetch(t, prefetch.Sources{
+		Diary:     diary{recent: []learning.DiaryEntry{memory("m1", "always use semantic commits")}},
+		Knowledge: &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}},
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary: "fixed a redirect loop on staging", PlanSummary: long}}}},
+		Embed:             embeds,
+		SummarizeEpisodes: true,
+		Models:            seam,
+		Compact:           compact.New(seam, compact.NewCache()),
+	}, request(t))
+
+	seen := map[types.AuxPurpose]bool{}
+	for _, use := range uses.all() {
+		if err := use.Validate(); err != nil {
+			t.Errorf("a turn-start call states an attribution the seam refuses: %v", err)
+		}
+		if use.Stage != types.AuxStageTurn || use.TurnID != "turn-1" || use.WorkKey != "wk-1" ||
+			use.Tally != turnAux.Tally {
+			t.Errorf("%s was filed as %+v, want the turn's own attribution", use.Purpose, use)
+		}
+		seen[use.Purpose] = true
+	}
+	for _, want := range []types.AuxPurpose{
+		types.AuxMemoryFilter, types.AuxKnowledgeQuery, types.AuxEpisodeSummary,
+		types.AuxCondense(string(compact.KindOutcome)),
+	} {
+		if !seen[want] {
+			t.Errorf("no call was filed under %s (saw %v)", want, seen)
+		}
 	}
 }
 

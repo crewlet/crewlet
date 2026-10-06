@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -241,7 +240,7 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 	existing Profile,
 ) (map[string]any, error) {
-	member, err := p.models.Head(t.Role, phase.Auxiliary)
+	member, err := p.models.Auxiliary(t.Role, t.Reflecting(types.AuxCounterpartyProfiler))
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model: %w", err)
 	}

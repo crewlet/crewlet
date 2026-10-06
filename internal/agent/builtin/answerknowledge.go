@@ -11,10 +11,11 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -48,15 +49,24 @@ import (
 //
 // # What it spends, and against what
 //
-// The AUXILIARY model of the person's own seat, resolved the way every
-// auxiliary pass resolves one — so a company that pointed its cheap work at a
-// small model answers questions on it too — and charged to the COMPANY's
-// windows alone: a person has no seat budget (`token_budget` is on the company
-// and on roles that run turns), so the company's day, week and month are what
-// an answer is judged against. It is GATED before the call — a company whose
-// window has no room is refused `budget_exhausted` and spends nothing — and
-// CHARGED after, because an answer's size is known only from its reply (see
-// [coord.Budgets.PostChargeOrg]).
+// The AUXILIARY model of the person's own seat, resolved through the engine's
+// one auxiliary seam like every auxiliary pass — so a company that pointed its
+// cheap work at a small model answers questions on it too — under the
+// OPERATOR stage, which the seam charges to the COMPANY's windows alone: a
+// person has no seat budget (`token_budget` is on the company and on roles
+// that run turns), so the company's day, week and month are what an answer is
+// judged against. It is GATED here before the call — a company whose window
+// has no room is refused `budget_exhausted` and spends nothing — and CHARGED by
+// the seam after, because an answer's size is known only from its reply (see
+// [coord.Budgets.PostChargeOrg]). The seam also RECORDS it, as
+// `auxiliary_spend` for the person, so the company's spend history holds what
+// its people's questions cost — the answer, and every source condensed for it,
+// each under its own purpose.
+//
+// ONE CHARGE SITE, the seam's. The answer used to charge its own completion and
+// wrap the condensing calls in a second charger of its own, so two copies of
+// "record what a person's question cost" existed beside the seam every other
+// auxiliary call went through — and neither reached an event.
 //
 // # Cached, and on what
 //
@@ -139,9 +149,11 @@ const (
 	AnswerSourceTask = "task"
 )
 
-// AnswerModels resolves the model an answer runs on.
+// AnswerModels resolves the model an answer runs on: the engine's auxiliary
+// seam, which charges and records every completion made through what it hands
+// back under the attribution the call states — here always the operator stage.
 type AnswerModels interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error)
 }
 
 // BudgetRefusal is the company window that turns an answer away.
@@ -156,14 +168,13 @@ type BudgetRefusal struct {
 	Used, Limit int
 }
 
-// AnswerBudget gates and charges an answer against the company's windows.
+// AnswerBudget gates an answer against the company's windows. The CHARGE is
+// not here: the auxiliary seam [AnswerModels] resolves through makes it, for
+// every call an answer makes.
 type AnswerBudget interface {
 	// Refusing reports the company window with no room left, if any.
 	// THREE-VALUED: an unreadable counter is an error, never "room".
 	Refusing(ctx context.Context) (BudgetRefusal, bool, error)
-	// Charge records what an answer cost. Called after the model answered,
-	// on a context that outlives the caller's.
-	Charge(ctx context.Context, tokens int) error
 }
 
 // TaskReader reads one work item whole, for the description an answer is
@@ -176,13 +187,13 @@ type TaskReader interface {
 // AnswerDeps are what answering needs beyond the search seams the operator
 // surface already has.
 type AnswerDeps struct {
-	// Models resolves the person's seat's auxiliary model. Nil omits the
-	// tool.
+	// Models resolves the person's seat's auxiliary model through the
+	// seam that charges and records it. Nil omits the tool.
 	Models AnswerModels
 
-	// Budget is the company's windows. Nil omits the tool: an answer that
-	// could spend tokens against no counter at all is the one shape this
-	// is built to refuse.
+	// Budget is the company's windows, as the gate reads them. Nil omits
+	// the tool: an answer that could spend tokens against no counter at
+	// all is the one shape this is built to refuse.
 	Budget AnswerBudget
 
 	// Corpus is where this node's knowledge corpus is applied through, and
@@ -196,7 +207,8 @@ type AnswerDeps struct {
 
 	// Rewrites is the cache a source condensed for a question is kept in,
 	// so the same question at the same corpus pays for each rewrite once.
-	// Nil keeps none; every rewrite is still charged through Budget.
+	// Nil keeps none; every rewrite is still charged and recorded by the
+	// seam Models resolves through.
 	Rewrites *compact.Cache
 }
 
@@ -364,7 +376,10 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return jsonResult(answer)
 	}
 
-	member, err := t.deps.Models.Head(role, phase.Auxiliary)
+	// THE OPERATOR STAGE, which the seam charges to the company's windows
+	// and records for the person — whatever becomes of the answer, since
+	// the tokens are spent at the vendor the moment it replies.
+	member, err := t.deps.Models.Auxiliary(role, answerUse.For(types.AuxAnswerKnowledge))
 	if err != nil {
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("No model is configured "+
 			"to answer with (%v). Nothing was spent.", err)), nil
@@ -381,20 +396,6 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Temperature: llm.Temp(answerTemperature),
 		MaxTokens:   AnswerMaxTokens,
 	})
-	if completion != nil {
-		// CHARGED WHATEVER BECOMES OF THE ANSWER: the tokens are spent at
-		// the vendor the moment it replies, and on a context that
-		// outlives the caller's, because a person closing the palette
-		// between the reply and the write is spend the counter would
-		// otherwise never hear about.
-		if spent := completion.TotalTokens(); spent > 0 {
-			if chargeErr := t.deps.Budget.Charge(context.WithoutCancel(ctx), spent); chargeErr != nil {
-				log.WarnContext(ctx, "knowledge_answer_spend_uncounted", "seat", actor.Seat,
-					"tokens", spent, "model", completion.Model, "error", chargeErr.Error(),
-					"detail", "the company's counter now understates its spend")
-			}
-		}
-	}
 	if err != nil || completion == nil {
 		reason := "it answered nothing"
 		if err != nil {
@@ -521,8 +522,9 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 
 // condense makes every source fit [AnswerSourceBytes]: a source within it is
 // handed over whole, and one past it is REWRITTEN for the question by the
-// asker's auxiliary model — charged to the company, like the answer — and
-// marked as a rewrite.
+// asker's auxiliary model — through the same seam as the answer, under the
+// operator stage, so it is charged to the company and recorded for the person
+// like the answer is — and marked as a rewrite.
 //
 // A SOURCE THAT CANNOT BE CONDENSED IS DROPPED, from the excerpts and from the
 // list of sources alike. It is neither cut, which would hand the model the
@@ -532,8 +534,7 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 func (t *answerKnowledge) condense(ctx context.Context, question string, asker *org.Role,
 	sources []AnswerSource, excerpts []prompts.KnowledgeSource,
 ) ([]AnswerSource, []prompts.KnowledgeSource) {
-	fit := compact.New(chargedModels{models: t.deps.Models, budget: t.deps.Budget},
-		t.deps.Rewrites).For(asker)
+	fit := compact.New(t.deps.Models, t.deps.Rewrites).For(asker, answerUse)
 	keep := make([]bool, len(excerpts))
 	var group errgroup.Group
 	group.SetLimit(compact.Parallel)
@@ -612,46 +613,11 @@ func snippetOnly(snippet string) string {
 	return SnippetOnly + snippet
 }
 
-// chargedModels is the asker's model seam with every completion charged to
-// the company's windows — the seam a condensing call resolves through, so a
-// source rewritten for an answer is spend the counter hears about exactly as
-// the answer is.
-type chargedModels struct {
-	models AnswerModels
-	budget AnswerBudget
-}
-
-func (m chargedModels) Head(role *org.Role, ph phase.Phase) (chain.Member, error) {
-	member, err := m.models.Head(role, ph)
-	if err != nil || m.budget == nil {
-		return member, err
-	}
-	member.Provider = chargedProvider{inner: member.Provider, budget: m.budget}
-	return member, nil
-}
-
-type chargedProvider struct {
-	inner  llm.Provider
-	budget AnswerBudget
-}
-
-func (p chargedProvider) Model() string { return p.inner.Model() }
-
-func (p chargedProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	completion, err := p.inner.Complete(ctx, req)
-	if completion != nil {
-		if spent := completion.TotalTokens(); spent > 0 {
-			// On a context that outlives the caller's, for the answer's
-			// own reason: the tokens are spent at the vendor already.
-			if chargeErr := p.budget.Charge(context.WithoutCancel(ctx), spent); chargeErr != nil {
-				log.WarnContext(ctx, "knowledge_answer_spend_uncounted", "tokens", spent,
-					"model", completion.Model, "error", chargeErr.Error(),
-					"detail", "the company's counter now understates its spend")
-			}
-		}
-	}
-	return completion, err
-}
+// answerUse is the attribution every call an answer makes states: the
+// OPERATOR stage — a person's spend, on the company's windows alone — with no
+// turn, since none exists. Each call adds its own purpose: the answer
+// [types.AuxAnswerKnowledge], a condensed source `condense_source`.
+var answerUse = auxspend.Use{Stage: types.AuxStageOperator}
 
 // budgetSentence says which window is out and when it comes back.
 func budgetSentence(r BudgetRefusal) string {

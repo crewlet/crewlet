@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -168,7 +169,8 @@ type Dispatcher struct {
 
 	// Rewriter is the seat's compactor, which rewrites a tool-call payload
 	// past the ledger's budget before the conversation entry is written —
-	// see [ledger.SessionInput.Fitted].
+	// see [ledger.SessionInput.Fitted] — bound to the attribution the
+	// dispatcher files those rewrites under.
 	//
 	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s
 	// reason: the auxiliary chain is the company's, and a live apply
@@ -176,7 +178,7 @@ type Dispatcher struct {
 	// answer for a dispatcher with no model to rewrite with: the row is the
 	// store's only record of the turn, and a fragment written into it is a
 	// fragment for ever.
-	Rewriter func(handle string) ledgerfit.Fitter
+	Rewriter func(handle string, use auxspend.Use) ledgerfit.Fitter
 
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
@@ -1432,7 +1434,15 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		// context rather than a detached one, because the turn's work is
 		// done and an entry written a moment later with the payload whole
 		// is better than a dispatcher held behind a slow provider.
-		in.Fitted = ledgerfit.Fit(ctx, d.Rewriter(handle), ledger.SessionPieces(in))
+		//
+		// THE REFLECTION STAGE: the entry is the seat's own account of the
+		// turn, written for its next turn on the thread once this one is
+		// over — what the seat remembers, never what the work cost — so
+		// it is counted on the seat's day and kept off the turn's total
+		// and its work item, beside the reflection workers.
+		in.Fitted = ledgerfit.Fit(ctx, d.Rewriter(handle, auxspend.Use{
+			Stage: types.AuxStageReflection, TurnID: runID, WorkKey: workKey,
+		}), ledger.SessionPieces(in))
 	}
 	entry := ledger.BuildSession(in)
 	if res.LastReview != nil {

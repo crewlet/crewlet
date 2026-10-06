@@ -10,8 +10,8 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
-	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The four blocks with no auxiliary judgement in them — plus one optional
@@ -99,7 +99,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		return ""
 	}
 
-	raw := joinBullets(f.renderEpisodes(ctx, r.Seat, hits))
+	raw := joinBullets(f.renderEpisodes(ctx, r, hits))
 	if raw == "" || !f.src.SummarizeEpisodes {
 		return raw
 	}
@@ -111,7 +111,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 	// memory filter's reason: the summary keeps "what bears on doing
 	// similar work again", and an integration's triage scaffolding is the
 	// same on every turn of its surface, so it bears on nothing.
-	summary, ok := f.auxCall(ctx, r.Seat, recallSummarySystemPrompt,
+	summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
 		"Current task:\n"+r.Ask+
 			"\n\nPast turns by this agent:\n"+raw+
 			"\n\nBriefing:", f.summaryTokens())
@@ -134,8 +134,8 @@ func (f *Fetcher) summaryTokens() int {
 // a turn start is waiting on all of them — and each condensing bounded by
 // [AuxTimeout], the bound every other auxiliary call at a turn start is held
 // to.
-func (f *Fetcher) renderEpisodes(ctx context.Context, seat *org.Role, hits []learning.Hit) []string {
-	fit := f.src.Compact.For(seat)
+func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning.Hit) []string {
+	fit := f.src.Compact.For(r.Seat, r.Aux)
 	bullets := make([]string, len(hits))
 	var wg sync.WaitGroup
 	for i, hit := range hits {

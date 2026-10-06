@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 )
 
@@ -207,7 +208,7 @@ func (f *Fetcher) recentMemories(ctx context.Context, r Request) []learning.Diar
 
 // filterMemories asks the auxiliary model which candidates bear on the task.
 func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []learning.DiaryEntry) []learning.DiaryEntry {
-	answer, ok := f.auxCall(ctx, r.Seat, memoryFilterSystemPrompt,
+	answer, ok := f.auxCall(ctx, r, types.AuxMemoryFilter, memoryFilterSystemPrompt,
 		memoryFilterPrompt(r, candidates), memoryFilterTokens)
 	if !ok {
 		return nil

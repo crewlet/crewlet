@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -573,6 +574,15 @@ type Engine struct {
 	// right across an apply that did not touch it, and a turn running
 	// across that apply re-renders its ledger against the same payloads.
 	rewrites *compact.Cache
+
+	// auxSpend is this node's auxiliary-spend ledger: every auxiliary
+	// completion the seam sees, coalesced and published as
+	// `auxiliary_spend` — see auxiliary.go and internal/auxspend.
+	//
+	// On the engine for the cache's reason, and more strongly: a bucket
+	// is spend already made, and a ledger that came with an epoch would
+	// drop whatever the apply that replaced it had not flushed.
+	auxSpend *auxspend.Ledger
 }
 
 // Options configure an engine.
@@ -815,7 +825,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		profile:  opts.Bootstrap.Profile(nodeID),
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
-		rewrites:            compact.NewCache(),
+		rewrites: compact.NewCache(),
+		// ON THE NODE'S OWN QUEUE, which on a node without `data` is the
+		// publish its custody hands to a data node — so a stateless node's
+		// auxiliary spend reaches the history like its phases do.
+		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              newSteerDesk(),
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
@@ -1353,7 +1367,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		}
 	}
 	if d.Rewriter == nil {
-		d.Rewriter = func(handle string) ledgerfit.Fitter { return e.seatCompactor(e.Company(), handle) }
+		d.Rewriter = func(handle string, use auxspend.Use) ledgerfit.Fitter {
+			return e.seatCompactor(e.Company(), handle, use)
+		}
 	}
 	if d.Park == nil {
 		d.Park = e.park
@@ -1441,6 +1457,11 @@ func (e *Engine) Start(ctx context.Context) error {
 	// nothing about the company's budget. Detached, like everything else
 	// here — see [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
+	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
+	// it and on their cadence (auxspend.FlushInterval). Calls made before
+	// it — an apply's first passes — wait in their buckets for its first
+	// tick, and [Engine.teardown] flushes whatever is left.
+	e.auxSpend.Run(context.WithoutCancel(ctx))
 	// AFTER the host is running, and detached from the caller's context
 	// like the host itself. Before it, every watched duty reads as not
 	// live and the watchdog stands down for the life of the process —
@@ -1708,6 +1729,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	// credentials, and one left behind outlives the engine that vouched
 	// for it.
 	e.stopSharedServers(ctx)
+	// THE LAST AUXILIARY SPEND, once every producer of it has stopped —
+	// the turns and reflections with the seats, the learning passes and
+	// the sandbox's condensations above, a person's question with the HTTP
+	// surface before the teardown began — and BEFORE the custody flush
+	// below, which is what carries a node without `data` its records.
+	e.stopAuxSpend(ctx)
 	// AFTER EVERY SEAT AND LOOP THAT PUBLISHES, so the last events they
 	// published are in the buffer, and BEFORE the broker closes under the
 	// last batch.
@@ -1992,7 +2019,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// thin trigger whose turn-start search was skipped — is served by the
 	// executor calling search_knowledge over the same seam, on a query it
 	// writes once it knows what the task needs.
-	blocks := e.prefetchFor(ctx, company, req, task)
+	blocks := e.prefetchFor(ctx, company, req, task, tel.aux())
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
@@ -2015,7 +2042,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// BOUNDED AT RENDER, never at write. The stored row is the only copy
 		// of the turn; what a prompt shows is a display decision, and this
 		// one keeps the newest entries whole and condenses the rest.
-		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History),
+		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History, tel.aux()),
 		Publisher:    e.backends.Queue,
 		Turn:         turnIdentity,
 		AgentRun:     agentRun,
@@ -2028,7 +2055,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// The round-cap extension judge, from the same pinned epoch. It
 		// was never supplied, so every exhaustion rescued with "no_judge"
 		// and the extension mechanism was inert.
-		Judge: e.judgeFor(company, req.Handle),
+		Judge: e.judgeFor(company, req.Handle, tel.aux()),
 		// The seat's headroom, for a sub-agent spawn. Three-valued on
 		// purpose: nil is "no ceiling configured", and a FAILED read
 		// refuses the spawn rather than granting it no ceiling.
@@ -2061,6 +2088,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// AND CHARGED LIKE ANY OTHER ENDING: the run happened, on the
 		// item it names, and a task's turn count is its attempts.
 		e.recordTurnSpend(ctx, tel.chargeFor(runner.Spend{}, turn.Result{}, err, time.Now().UTC()))
+		// Its context was gathered, at a cost — see [Ledger.FlushTurn].
+		e.auxSpend.FlushTurn(ctx, req.RunID)
 		return turn.Result{}, err
 	}
 
@@ -2118,6 +2147,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// AND CHARGED to the work item it was on, after the record of the turn
 	// exists — see turnspend.go.
 	e.recordTurnSpend(ctx, charge)
+	// AND WHAT ITS AUXILIARY CALLS COST, published now rather than at the
+	// ledger's next interval, so a reader opening the turn as it ends reads
+	// its context and its rewrites beside its phases. After the charge,
+	// whose card rewrite is the segment's last auxiliary call.
+	e.auxSpend.FlushTurn(ctx, req.RunID)
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes

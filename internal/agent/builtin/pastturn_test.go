@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -34,6 +35,7 @@ type rewriter struct {
 	mu     sync.Mutex
 	answer string
 	asked  []string
+	uses   []auxspend.Use
 }
 
 func (r *rewriter) Model() string { return "aux-small" }
@@ -49,7 +51,10 @@ func (r *rewriter) Complete(_ context.Context, req llm.Request) (*llm.Completion
 	return &llm.Completion{Model: "aux-small", Content: r.answer}, nil
 }
 
-func (r *rewriter) Head(*org.Role, phase.Phase) (chain.Member, error) {
+func (r *rewriter) Auxiliary(_ *org.Role, use auxspend.Use) (chain.Member, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.uses = append(r.uses, use)
 	return chain.Member{Key: "aux", Provider: r}, nil
 }
 
@@ -108,6 +113,14 @@ func TestQueryEpisodesCondensesALongAccount(t *testing.T) {
 	}
 	if asked := model.prompts(); len(asked) != 1 || !strings.Contains(asked[0], "and the fix was the cache key.") {
 		t.Fatalf("the rewrite was not shown the whole account: %d calls", len(asked))
+	}
+	// THE REWRITE IS THE TURN'S OWN SPEND, named for what it rewrote: the
+	// seat asked for its past turns mid-turn, so the condensation is part
+	// of this turn's cost — filed under its run and its unit of work.
+	want := auxspend.Use{Stage: types.AuxStageTurn, Purpose: types.AuxCondense(string(compact.KindOutcome)),
+		TurnID: "run-1", WorkKey: "wk-1"}
+	if len(model.uses) != 1 || model.uses[0] != want {
+		t.Fatalf("the rewrite was filed as %+v, want %+v", model.uses, want)
 	}
 }
 

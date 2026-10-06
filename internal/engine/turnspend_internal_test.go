@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -337,7 +338,7 @@ type cardModels struct {
 	err    error
 }
 
-func (m cardModels) Head(*org.Role, phase.Phase) (chain.Member, error) {
+func (m cardModels) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
 	if m.err != nil {
 		return chain.Member{}, m.err
 	}
@@ -361,7 +362,8 @@ func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
 		t.Errorf("a short account was altered: %q", got)
 	}
 	long := strings.Repeat("The turn investigated the flaky test and ", 40) + "opened !42."
-	fit := compact.New(cardModels{answer: "Fixed the flaky test; opened !42."}, compact.NewCache()).For(seat)
+	fit := compact.New(cardModels{answer: "Fixed the flaky test; opened !42."}, compact.NewCache()).
+		For(seat, auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"})
 	if got := turnCard(t.Context(), fit, long); got != condensedCard+"Fixed the flaky test; opened !42." {
 		t.Errorf("a long account was not rewritten and marked: %q", got)
 	}

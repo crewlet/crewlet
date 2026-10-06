@@ -33,10 +33,11 @@ func init() {
 type Phase string
 
 // The phases a turn can report. PhaseOnboarding, PhaseExecute and PhaseReview
-// are the legs of the turn itself, in the order they run; PhaseSubagent,
-// PhaseAuxiliary and PhaseJudge are nested calls made under one of those, and
-// never appear without a host phase around them. PhaseSandbox is a detached
-// coding run the executor launched, published once when the run is collected.
+// are the legs of the turn itself, in the order they run; PhaseSubagent and
+// PhaseJudge are nested calls made under one of those, and never appear
+// without a host phase around them. PhaseSandbox is a detached coding run the
+// executor launched, published once when the run is collected. PhaseAuxiliary
+// is the odd one out: no phase record carries it — see its own comment.
 //
 // The retired `plan` value has NO CONSTANT here, and that is not an oversight:
 // Phase is a plain string precisely so a value this build does not produce
@@ -49,8 +50,14 @@ const (
 	PhaseExecute    Phase = "execute"
 	PhaseReview     Phase = "review"
 	PhaseSubagent   Phase = "subagent"
-	// PhaseAuxiliary is a learning worker's own LLM call, nested under a host
-	// phase; PhaseJudge is the round-cap extension judge.
+	// PhaseAuxiliary is the band a seat's AUXILIARY model spend is drawn
+	// in, and NO AgentPhaseCompleted carries it: that spend is recorded as
+	// [AuxiliarySpend], a type no state machine reads, because a phase
+	// record drives the live seat state and a reflection call stamped after
+	// its turn ended would have reopened the turn. The value is what the
+	// spend rollups file those records under (their purpose as the worker),
+	// so a reader written for the band reads them. PhaseJudge is the
+	// round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
 	PhaseJudge     Phase = "judge"
 	// PhaseSandbox is the coding run itself: what a detached run_sandbox
@@ -594,10 +601,10 @@ type AgentPhaseCompleted struct {
 	// Absent on every other phase, and on a nested phase an older peer
 	// published.
 	HostRound int `json:"host_round,omitempty"`
-	// Worker names the worker behind this call: the learning worker on a
-	// PhaseAuxiliary event, the delegate template on a PhaseSubagent one.
-	// Empty on every other phase, and on an ad-hoc delegation that named
-	// no template.
+	// Worker names the worker behind this call: the delegate template on
+	// a PhaseSubagent event. Empty on every other phase, and on an ad-hoc
+	// delegation that named no template. (The rollups put an
+	// [AuxiliarySpend]'s purpose in the same slot of the auxiliary band.)
 	Worker string `json:"worker"`
 	// TaskID is a delegated task's own id, as the parent wrote it. Set
 	// only on PhaseSubagent, and it is what pairs this phase record with

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -132,7 +133,9 @@ type Recaller interface {
 
 	// RecallMemories re-runs the personal-memory relevance filter against a
 	// hint, returning what it picked. senders are who triggered the turn —
-	// what the filter's per-subject rule is judged against.
+	// what the filter's per-subject rule is judged against — and aux the
+	// turn's attribution, which the filter's model call is filed and charged
+	// under ([turnctx.Turn.Aux]).
 	RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string,
-		senders []learning.Subject) ([]learning.DiaryEntry, error)
+		senders []learning.Subject, aux auxspend.Use) ([]learning.DiaryEntry, error)
 }

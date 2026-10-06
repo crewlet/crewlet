@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -189,7 +188,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		return nil, nil
 	}
 
-	member, err := r.models.Head(t.Role, phase.Auxiliary)
+	member, err := r.models.Auxiliary(t.Role, t.Reflecting(types.AuxSkillRefiner))
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model for skill refinement: %w", err)
 	}

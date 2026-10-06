@@ -239,9 +239,11 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 			ExtensionStep:   te.ExtensionRoundStep,
 			ExtensionOn:     te.ExtensionEnabled.Or(true),
 		},
-		Budget:  in.Budget,
-		Judge:   in.Judge,
-		Compact: in.Compact.For(role),
+		Budget: in.Budget,
+		Judge:  in.Judge,
+		// BOUND TO THE TURN'S ATTRIBUTION, so every rewrite the runner, its
+		// ledgers and its delegate workers ask for is this turn's cost.
+		Compact: in.Compact.For(role, in.Turn.Context.Aux()),
 		// Threaded from the caller rather than resolved here, because
 		// whether this node holds the seat is a fact about its leases and
 		// not about the configuration — the same reason reg is a

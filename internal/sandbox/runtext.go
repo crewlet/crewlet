@@ -98,9 +98,11 @@ func (p RunPart) Valid() bool { return p == PartReport || p == PartFailure }
 // engine's.
 //
 // The answer carries its own label saying it was condensed. An error means no
-// rewrite could be had, and the caller's fallback stands.
+// rewrite could be had, and the caller's fallback stands. It is handed the
+// RUN, not just its seat, because a rewrite is a model call the engine files
+// under the turn the run belongs to.
 type Condenser interface {
-	Condense(ctx context.Context, handle string, part RunPart, text string, budget int) (string, error)
+	Condense(ctx context.Context, run PendingRun, part RunPart, text string, budget int) (string, error)
 }
 
 // fitResult holds the report and the failure detail of a collected run to
@@ -121,7 +123,7 @@ func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart,
 		return text
 	}
 	if c.condense != nil {
-		rewritten, err := c.condense.Condense(ctx, run.AgentHandle, part, text, MaxRunTextBytes)
+		rewritten, err := c.condense.Condense(ctx, run, part, text, MaxRunTextBytes)
 		if err == nil && len(rewritten) <= MaxRunTextBytes {
 			return rewritten
 		}

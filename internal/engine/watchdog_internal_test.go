@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // watchdogCompanyDoc is the smallest company that builds an epoch.
@@ -121,16 +123,16 @@ func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
 // was thrashing.
 func TestTheEngineSuppliesAnExtensionJudge(t *testing.T) {
 	e := watchdogEngine(t)
-	if got := e.judgeFor(e.Company(), "ceo"); got == nil {
+	if got := e.judgeFor(e.Company(), "ceo", auxspend.Use{Stage: types.AuxStageTurn}); got == nil {
 		t.Error("no judge for a seat whose company configures a model")
 	}
 	// A handle that is not a seat in this company has no chain to resolve
 	// and no judge — an ordinary answer, which Consider reads as "do not
 	// ask" rather than as a failure.
-	if got := e.judgeFor(e.Company(), "nobody"); got != nil {
+	if got := e.judgeFor(e.Company(), "nobody", auxspend.Use{Stage: types.AuxStageTurn}); got != nil {
 		t.Error("a judge for a handle that is not a seat")
 	}
-	if got := e.judgeFor(nil, "ceo"); got != nil {
+	if got := e.judgeFor(nil, "ceo", auxspend.Use{Stage: types.AuxStageTurn}); got != nil {
 		t.Error("a judge built from no epoch")
 	}
 }

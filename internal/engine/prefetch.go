@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -40,13 +41,14 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
-		// METERED, like every other completion made on a seat's behalf.
-		// The memory filter, the knowledge query and the episode summary
-		// each send a full prompt on EVERY turn, and resolved off the bare
-		// registry that spend reached no counter: a seat at its ceiling
-		// kept paying for its turn-start context and the window an
-		// operator reads understated it. See learningbudget.go.
-		Models: e.meteredModelsFor(company),
+		// THROUGH THE AUXILIARY SEAM, like every other completion made on
+		// a seat's behalf. The memory filter, the knowledge query and the
+		// episode summary each send a full prompt on EVERY turn, and
+		// resolved off the bare registry that spend reached no counter and
+		// no record: a seat at its ceiling kept paying for its turn-start
+		// context and every figure an operator reads understated it. See
+		// auxiliary.go.
+		Models: e.auxiliaryFor(company),
 		// The same seam, as a compactor: the middle of a long chat thread
 		// is condensed rather than dropped, on the seat's own aux chain.
 		Compact: e.compactorFor(company),
@@ -92,7 +94,7 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 // else a turn is built from: a prefetch resolved against a revision the turn
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
-	task string,
+	task string, aux auxspend.Use,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -101,14 +103,12 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	agentID, _ := company.Org.AgentIDFor(seat)
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
-		// THE RUN, not the unit of work. Every phase record of this turn
-		// is filed under the run, so a prefetch summary carrying the work
-		// key would sit under an id no phase shares — invisible to the
-		// turn view and to `GET /events?turn_id=`. And the prefetcher's
-		// own per-turn cache is keyed on it: a retry keyed on the work
-		// key would inherit the FAILED attempt's frozen context blocks
-		// rather than assembling its own. See ADR-0017.
-		Task: task, TurnID: req.RunID,
+		// THE TURN'S ATTRIBUTION, which names the RUN, not the unit of
+		// work: every phase record of this turn is filed under the run,
+		// so an auxiliary record carrying only the work key would sit
+		// under an id no phase shares — invisible to the turn view and to
+		// `GET /events?turn_id=`. See ADR-0017.
+		Task: task, Aux: aux,
 		// WHAT IT WAS ASKED, which every relevance judgement is made
 		// against while the executor is handed the task — see
 		// [prefetch.Request.Ask] and [turnAsk].

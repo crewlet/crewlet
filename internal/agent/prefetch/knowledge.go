@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -219,7 +220,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 // engineer), and a query writer handed the brief is handed those as candidate
 // search terms beside the one sentence the turn is about.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
-	answer, ok := f.auxCall(ctx, r.Seat, knowledgeQuerySystemPrompt,
+	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
 		"Task the agent is about to work on:\n\""+r.Ask+
 			"\"\n\nKnowledge-base search query:", knowledgeQueryTokens)
 	if !ok {

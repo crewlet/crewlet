@@ -4,11 +4,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // answerEngine is an engine holding one epoch and an in-memory fleet, which is
@@ -21,22 +25,34 @@ func answerEngine(t *testing.T, c *Company) (*Engine, *coordmem.Fleet) {
 	return e, fleet
 }
 
-// A PERSON'S ANSWER IS THE COMPANY'S SPEND, and nobody's seat's. It reaches
-// the company's day, week and month — so the next turn is judged against room
-// the answer already used — and no seat's counter, nor any new scope, because
-// a person has no seat budget and a row for them would be one no ceiling can
-// ever judge.
+// A PERSON'S ANSWER IS THE COMPANY'S SPEND, and nobody's seat's. Resolved
+// through the seam on the operator stage, it reaches the company's day, week
+// and month — so the next turn is judged against room the answer already used
+// — and no seat's counter, nor any new scope, because a person has no seat
+// budget and a row for them would be one no ceiling can ever judge. Even when
+// the seat the person's credential is bound to runs as an agent.
 func TestAnAnswerIsChargedToTheOrgWindow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 50}}
-	e, fleet := answerEngine(t, meteredCompany(config.TokenBudget{Day: ceiling(1000)}, lead))
-	budget := AnswerBudget(e)
-	if budget == nil {
+	c := meteredCompany(config.TokenBudget{Day: ceiling(1000)}, lead)
+	registry, err := phase.NewRegistry([]phase.Entry{{Key: "cheap",
+		Provider: &answeringProvider{in: 400, out: 20}}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = registry
+	e, fleet := answerEngine(t, c)
+	if AnswerBudget(e) == nil {
 		t.Fatal("no answer budget with a fleet to count on")
 	}
-	if err := budget.Charge(ctx, 420); err != nil {
-		t.Fatalf("Charge: %v", err)
+	member, err := AnswerModels(e).Auxiliary(lead, auxspend.Use{Stage: types.AuxStageOperator,
+		Purpose: types.AuxAnswerKnowledge})
+	if err != nil {
+		t.Fatalf("Auxiliary: %v", err)
+	}
+	if _, err := member.Provider.Complete(ctx, llm.Request{}); err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
 	windows := coord.WindowsAt(time.Now(), time.UTC)
 	rows, err := fleet.Usage(ctx, windows)

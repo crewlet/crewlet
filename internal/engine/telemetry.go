@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -124,6 +125,21 @@ type turnTelemetry struct {
 	launchID            string
 	jobInput, jobOutput int
 	uncharged           *execstate.Uncharged
+
+	// auxSpent is what this segment's in-turn auxiliary calls have cost —
+	// its turn-start context, every rewrite its ledgers, its judge's
+	// evidence and its tools asked for — shared with every tool call and
+	// delegate worker through the turn context ([turnctx.Turn.AuxSpend]),
+	// and fresh for each segment, since each segment is charged what IT
+	// spent (turnspend.go).
+	auxSpent *auxspend.Tally
+}
+
+// aux is the attribution this segment's in-turn auxiliary calls state: the one
+// its tools read off the turn context, derived by the turn context's own rule
+// so the engine's calls and the tools' cannot be filed differently.
+func (t turnTelemetry) aux() auxspend.Use {
+	return (&turnctx.Turn{RunID: t.runID, WorkKey: t.workKey, AuxSpend: t.auxSpent}).Aux()
 }
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
@@ -213,6 +229,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
 	t.written = &turnctx.Written{}
+	t.auxSpent = auxspend.NewTally()
 	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
 		TurnID: t.runID, WorkKey: t.workKey, WorkSince: t.workSince,
 	}, t.startedAt)
@@ -298,6 +315,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
 			Written:       t.written,
+			// AND THE SEGMENT'S AUXILIARY TALLY, which every in-turn
+			// auxiliary call adds to through the turn's attribution.
+			AuxSpend: t.auxSpent,
 		},
 	}
 }
@@ -736,6 +756,9 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// judges the whole turn rather than its second half.
 	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
 	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany)
+	// A FRESH TALLY, never the parked one's: what the segments before this
+	// one spent on auxiliary calls is in what they charged or carried.
+	t.auxSpent = auxspend.NewTally()
 	// THE SEGMENT, for its charge: the job it collected and what that job
 	// cost, and what the segments before it spent that nothing paid for.
 	t.resumed, t.launchID = true, in.Run.LaunchID

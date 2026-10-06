@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -285,7 +285,8 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 		return nil, nil
 	}
 
-	member, err := p.models.Head(unit.Lead, phase.Auxiliary)
+	member, err := p.models.Auxiliary(unit.Lead, auxspend.Use{Stage: types.AuxStageBackground,
+		Purpose: types.AuxSkillPromotion})
 	if err != nil {
 		return nil, fmt.Errorf("no auxiliary model for promotion: %w", err)
 	}

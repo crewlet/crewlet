@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The thread so far: what was already said where this turn was woken.
@@ -200,7 +199,7 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 	if !ok {
 		return threadBlock{text: UnreadableThreadHint}
 	}
-	return f.renderThread(ctx, r.Seat, transcript, r.Thread.Backend)
+	return f.renderThread(ctx, r, transcript, r.Thread.Backend)
 }
 
 // renderThread bounds and renders what came back.
@@ -226,7 +225,7 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 //
 // This is the rule [ledger.RenderHistory] implements, applied to the one block
 // whose items are somebody else's prose.
-func (f *Fetcher) renderThread(ctx context.Context, seat *org.Role, read notify.Transcript, backend string) threadBlock {
+func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
 	// rootSlot says the read carried a root at all; rootShown says it
 	// rendered as a message rather than as its stand-in. The two are apart
@@ -286,7 +285,7 @@ func (f *Fetcher) renderThread(ctx context.Context, seat *org.Role, read notify.
 	// and only left out, and counted, where no rewrite can be had.
 	condensed := ""
 	if len(middle) > 0 {
-		res, err := f.src.Compact.For(seat).Fit(ctx, compact.KindThread,
+		res, err := f.src.Compact.For(r.Seat, r.Aux).Fit(ctx, compact.KindThread,
 			strings.Join(middle, "\n"), threadMaxChars/threadEarlierShare)
 		switch {
 		case err == nil && !res.Compacted:
@@ -300,7 +299,7 @@ func (f *Fetcher) renderThread(ctx context.Context, seat *org.Role, read notify.
 		case err == nil:
 			condensed = res.Text
 		default:
-			log.DebugContext(ctx, "prefetch_thread_not_condensed", "seat", seat.Handle(),
+			log.DebugContext(ctx, "prefetch_thread_not_condensed", "seat", r.Seat.Handle(),
 				"messages", len(middle), "error", err.Error())
 			dropped += len(middle)
 		}
