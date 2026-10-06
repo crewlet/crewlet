@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +148,63 @@ func TestQueryEpisodesRendersACompactedRowAsItsPattern(t *testing.T) {
 	} {
 		if !strings.Contains(res.Output, want) {
 			t.Fatalf("output =\n%s\nmissing %q", res.Output, want)
+		}
+	}
+}
+
+// timedRewriter is an auxiliary model that records how long each rewrite was
+// given before its deadline.
+type timedRewriter struct {
+	mu   sync.Mutex
+	left []time.Duration
+}
+
+func (r *timedRewriter) Model() string { return "aux-small" }
+
+func (r *timedRewriter) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	left := time.Duration(-1)
+	if deadline, ok := ctx.Deadline(); ok {
+		left = time.Until(deadline)
+	}
+	r.left = append(r.left, left)
+	return &llm.Completion{Model: "aux-small", Content: "the account, condensed"}, nil
+}
+
+func (r *timedRewriter) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
+	return chain.Member{Key: "aux", Provider: r}, nil
+}
+
+// EVERY REWRITE THE TOOL MAKES IS HELD TO THE BLOCK'S DEADLINE. The turn-start
+// block bounded each account's rewrite and the tool bounded none, so a slow
+// auxiliary provider held a tool call for the compactor's own minute, and its
+// retry, per account — several minutes of a turn's wall clock for an answer
+// the size note would have given at once.
+func TestQueryEpisodesHoldsEveryRewriteToTheBlocksDeadline(t *testing.T) {
+	t.Parallel()
+	model := &timedRewriter{}
+	long := strings.Repeat("the deploy log said ", 200)
+	rows := make([]learning.Episode, 5)
+	for i := range rows {
+		rows[i] = learning.Episode{Kind: learning.KindRaw, StartedAt: whenever,
+			TaskSummary: "Message from Ana", PlanSummary: strconv.Itoa(i) + " " + long}
+	}
+	tool := registered(t, builtin.Deps{
+		Episodes: fixedEpisodes{rows: rows},
+		Compact:  compact.New(model, compact.NewCache()),
+	}, builtin.QueryEpisodesTool)
+	callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{})
+
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.left) != len(rows) {
+		t.Fatalf("%d rewrites for %d long accounts", len(model.left), len(rows))
+	}
+	for i, left := range model.left {
+		if left <= 0 || left > learning.EpisodeRewriteTimeout {
+			t.Errorf("rewrite %d was given %v, want at most the block's %v", i, left,
+				learning.EpisodeRewriteTimeout)
 		}
 	}
 }

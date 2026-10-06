@@ -99,27 +99,50 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		return ""
 	}
 
-	raw := joinBullets(f.renderEpisodes(ctx, r, hits))
-	if raw == "" || !f.src.SummarizeEpisodes {
-		return raw
+	// WHICH PATH PAYS WHICH CALL. With the summary on, its model reads the
+	// recalled accounts WHOLE — up to [summaryAccountBytes] each, which
+	// almost every account is under — and its one briefing replaces them, so
+	// condensing them to a reader's [learning.EpisodeAccountBytes] first was
+	// up to three rewrites spent on text the summary threw away, and a
+	// summary written from rewrites instead of from the accounts. The raw
+	// bullets, each account condensed past that reader's bound, are rendered
+	// only where they are what the seat is shown: the summary off, or a
+	// summary that did not answer.
+	if f.src.SummarizeEpisodes && f.src.Models != nil {
+		whole := joinBullets(f.renderEpisodes(ctx, r, hits, summaryAccountBytes))
+		if whole == "" {
+			return ""
+		}
+		// THE SUMMARY IS OPTIONAL AND ITS FAILURE IS FREE: the raw
+		// bullets are a usable block, so a model that is slow or
+		// unreachable costs verbosity rather than the block.
+		//
+		// JUDGED AGAINST WHAT THE TURN WAS ASKED ([Request.Ask]), for the
+		// memory filter's reason: the summary keeps "what bears on doing
+		// similar work again", and an integration's triage scaffolding
+		// is the same on every turn of its surface, so it bears on
+		// nothing.
+		summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
+			"Current task:\n"+r.Ask+
+				"\n\nPast turns by this agent:\n"+whole+
+				"\n\nBriefing:", f.summaryTokens())
+		if ok && strings.TrimSpace(summary) != "" {
+			return summary
+		}
 	}
-	// THE SUMMARY IS OPTIONAL AND ITS FAILURE IS FREE: the raw bullets are
-	// already a usable block, so a model that is slow or unreachable costs
-	// verbosity rather than the block.
-	//
-	// JUDGED AGAINST WHAT THE TURN WAS ASKED ([Request.Ask]), for the
-	// memory filter's reason: the summary keeps "what bears on doing
-	// similar work again", and an integration's triage scaffolding is the
-	// same on every turn of its surface, so it bears on nothing.
-	summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
-		"Current task:\n"+r.Ask+
-			"\n\nPast turns by this agent:\n"+raw+
-			"\n\nBriefing:", f.summaryTokens())
-	if !ok || strings.TrimSpace(summary) == "" {
-		return raw
-	}
-	return summary
+	return joinBullets(f.renderEpisodes(ctx, r, hits, learning.EpisodeAccountBytes))
 }
+
+// summaryAccountBytes bounds one recalled account as the episode summary's
+// input, where [learning.EpisodeAccountBytes] bounds one as the block a seat
+// reads.
+//
+// ONE AUXILIARY CALL'S INPUT ROOM, shared by the turns recalled: a third of
+// [compact.ChunkBytes] — the most one auxiliary completion is handed, about
+// sixteen thousand tokens — so the three accounts together fit one call, and
+// only an account past about twenty-one kilobytes, a final answer pages long,
+// is condensed before the summary reads it.
+const summaryAccountBytes = compact.ChunkBytes / recallHits
 
 // summaryTokens is the operator's cap on the episode summary, or the default.
 func (f *Fetcher) summaryTokens() int {
@@ -130,19 +153,19 @@ func (f *Fetcher) summaryTokens() int {
 }
 
 // renderEpisodes renders the recalled turns, each one's account condensed
-// where it is long — concurrently, since each condensing is a model call and
-// a turn start is waiting on all of them — and each condensing bounded by
-// [AuxTimeout], the bound every other auxiliary call at a turn start is held
-// to.
-func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning.Hit) []string {
+// where it is past accountBytes — concurrently, since each condensing is a
+// model call and a turn start is waiting on all of them, and each bounded by
+// [learning.EpisodeRewriteTimeout], the one deadline every rewrite of a past
+// turn's account is held to.
+func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning.Hit,
+	accountBytes int,
+) []string {
 	fit := f.src.Compact.For(r.Seat, r.Aux)
 	bullets := make([]string, len(hits))
 	var wg sync.WaitGroup
 	for i, hit := range hits {
 		wg.Go(func() {
-			bounded, cancel := context.WithTimeout(ctx, AuxTimeout)
-			defer cancel()
-			bullets[i] = renderEpisode(bounded, fit, hit)
+			bullets[i] = renderEpisode(ctx, fit, hit, accountBytes)
 		})
 	}
 	wg.Wait()
@@ -158,10 +181,10 @@ func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning
 // what the turn did ([learning.EpisodeAccount]) rides beside it. The tool
 // sequence rides along because it is the cheapest possible answer to "how did
 // I do this last time".
-func renderEpisode(ctx context.Context, fit compact.Bound, hit learning.Hit) string {
+func renderEpisode(ctx context.Context, fit compact.Bound, hit learning.Hit, accountBytes int) string {
 	ep := hit.Episode
 	label := collapse(ep.TaskSummary)
-	account := learning.EpisodeAccount(ctx, ep, fit)
+	account := learning.EpisodeAccount(ctx, ep, fit, accountBytes)
 	if label == "" && account == "" {
 		return ""
 	}

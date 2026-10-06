@@ -390,7 +390,11 @@ func unsearchedNote(n int) string {
 // render renders each recalled turn, condensing the long accounts
 // concurrently — each is a model call, and a model is waiting on the answer —
 // at most [compact.Parallel] at once, the compactor's own bound on how many
-// rewrites one caller opens against a seat's provider.
+// rewrites one caller opens against a seat's provider. Each rewrite is held to
+// [learning.EpisodeRewriteTimeout], the turn-start block's own deadline, and
+// one that misses it names the account by its size — so the answer waits at
+// most ⌈turns / Parallel⌉ of those, where it used to wait out the compactor's
+// minute, and its retry, per account.
 func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
 	// Each rewrite is the turn's own cost, filed under its run.
 	fit := t.compact.For(turn.Seat, turn.Aux())
@@ -439,7 +443,7 @@ func renderPastTurn(ctx context.Context, fit compact.Bound, ep learning.Episode)
 	if ep.ReviewOutcome != "" {
 		fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
 	}
-	if account := learning.EpisodeAccount(ctx, ep, fit); account != "" {
+	if account := learning.EpisodeAccount(ctx, ep, fit, learning.EpisodeAccountBytes); account != "" {
 		fmt.Fprintf(&b, "    what it did: %s\n", account)
 	}
 	return b.String()

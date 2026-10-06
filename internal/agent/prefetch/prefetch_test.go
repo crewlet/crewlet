@@ -1078,6 +1078,47 @@ func TestTheEpisodeSummaryIsOptionalAndFailsSoft(t *testing.T) {
 	}
 }
 
+// THE SUMMARY READS THE ACCOUNTS WHOLE, AND NOTHING CONDENSES THEM FIRST. With
+// the summary on, its briefing replaces the bullets, so condensing each long
+// account to the reader's 600 bytes before it was up to three rewrites spent
+// on text the summary threw away — and a summary written from rewrites. The
+// accounts are condensed only where the bullets are what the seat is shown: a
+// summary that did not answer.
+func TestTheEpisodeSummaryReadsTheAccountsWholeAndPaysNoRewrite(t *testing.T) {
+	t.Parallel()
+	long := "OPENING-" + strings.Repeat("the deploy log said ", 200) + "and the fix was the cache key."
+	hits := episodes{hits: []learning.Hit{{Episode: learning.Episode{
+		TaskSummary: "Message from Ana: Slack message", PlanSummary: long}}}}
+
+	model := &aux{answers: []string{"- fixed the cache key that broke staging"}}
+	seam := models{provider: model}
+	got := fetch(t, prefetch.Sources{Episodes: hits, Embed: embeds, SummarizeEpisodes: true,
+		Models: seam, Compact: compact.New(seam, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	if got != "- fixed the cache key that broke staging" {
+		t.Fatalf("recall = %q, want the summary", got)
+	}
+	prompts := model.prompts()
+	if len(prompts) != 1 {
+		t.Fatalf("the summary path made %d auxiliary calls, want the summary alone", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "OPENING-") || !strings.Contains(prompts[0], "and the fix was the cache key.") {
+		t.Fatalf("the summary was not shown the account whole:\n%s", prompts[0])
+	}
+
+	// A summary that does not answer leaves the bullets, and THOSE are
+	// condensed: they are what the seat reads.
+	failing := &aux{err: errors.New("503")}
+	rewriter := &aux{answers: []string{"fixed the cache key"}}
+	got = fetch(t, prefetch.Sources{Episodes: hits, Embed: embeds, SummarizeEpisodes: true,
+		Models:  models{provider: failing},
+		Compact: compact.New(models{provider: rewriter}, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	if !strings.Contains(got, "What it did: fixed the cache key") || strings.Contains(got, "OPENING-") {
+		t.Fatalf("after a failed summary, recall = %q, want the condensed bullet", got)
+	}
+}
+
 // EVERY TURN-START CALL IS THE TURN'S OWN, under its own purpose: the seam
 // files each call's spend under the attribution it is handed, so a call
 // handed the turn's identity without its purpose — or one handed none — is
@@ -1088,7 +1129,9 @@ func TestTheEpisodeSummaryIsOptionalAndFailsSoft(t *testing.T) {
 func TestEveryTurnStartCallIsFiledUnderTheTurnAndItsPurpose(t *testing.T) {
 	t.Parallel()
 	uses := &useLog{}
-	long := strings.Repeat("the deploy log said ", 200)
+	// PAST THE SUMMARY'S OWN INPUT BOUND, so even with the summary on the
+	// account is rewritten before the summary reads it.
+	long := strings.Repeat("the deploy log said ", 1200)
 	model := &aux{answers: []string{"[0]"}}
 	seam := models{provider: model, uses: uses}
 	fetch(t, prefetch.Sources{
