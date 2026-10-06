@@ -60,7 +60,7 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, MonitorGlyph, ShieldUserGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { ConfirmDialog, GrantTags, MintTokenDialog } from "~/components/people.tsx";
+import { ConfirmDialog, endedWord, GrantTags, MintTokenDialog } from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -650,7 +650,7 @@ function Tokens({
               cell: (c) =>
                 c.revoked ? (
                   <Tag size="sm" variant="neutral">
-                    {c.revoked_at ? "Revoked" : "Expired"}
+                    {endedWord(c, now)}
                   </Tag>
                 ) : (
                   <Tag size="sm" variant="success">

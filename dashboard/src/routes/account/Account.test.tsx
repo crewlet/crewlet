@@ -445,6 +445,28 @@ describe("personal access tokens", () => {
     expect(mint.body).toMatchObject({ label: "laptop", grants: ["state:read", "work:write"] });
   });
 
+  // A TOKEN A COUNTER ENDED — a password change, signing out everywhere —
+  // carries no `revoked_at`, and the engine lists it revoked: it was revoked,
+  // not aged out. The CONTROL is a token past its own deadline.
+  test("a token a counter ended reads revoked, and only one past its deadline expired", async () => {
+    engine({
+      credentials: [
+        {
+          ...TOKEN,
+          id: "c-ended",
+          label: "ended",
+          revoked: true,
+          expires_at: "2099-01-01T00:00:00Z",
+        },
+        { ...TOKEN, id: "c-old", label: "old", revoked: true, expires_at: "2020-01-01T00:00:00Z" },
+      ],
+    });
+    mount();
+    expect(await screen.findByText("Revoked")).toBeDefined();
+    expect(screen.getAllByText("Revoked")).toHaveLength(1);
+    expect(screen.getAllByText("Expired")).toHaveLength(1);
+  });
+
   test("a token is revoked by its id, naming nobody", async () => {
     const engineIs = engine({
       writes: { "DELETE /iam/credentials/c-tok": () => json(200, { revoked: true }) },

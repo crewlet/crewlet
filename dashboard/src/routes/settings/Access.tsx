@@ -90,6 +90,7 @@ import { QueryState } from "~/components/common.tsx";
 import {
   canManagePeople,
   ConfirmDialog,
+  endedWord,
   GrantTags,
   InviteDialog,
   MintTokenDialog,
@@ -151,7 +152,11 @@ export interface CredentialRow {
   created_at?: string;
   expires_at?: string;
   revoked_at?: string;
-  /** Revoked OR expired, as the engine judged it at the read. */
+  /**
+   * Revoked, expired, or ended by a counter — a machine token its owner's
+   * revocation epoch or a restore moved past — as the engine judged it at
+   * the read.
+   */
   revoked: boolean;
   /** What a machine token was minted carrying. */
   grants?: string[] | null;
@@ -1307,7 +1312,7 @@ function Principal({
               cell: (c) =>
                 c.revoked ? (
                   <Tag size="sm" variant="neutral">
-                    {c.revoked_at ? "Revoked" : "Expired"}
+                    {endedWord(c, now)}
                   </Tag>
                 ) : (
                   <Tag size="sm" variant="success">

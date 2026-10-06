@@ -30,13 +30,26 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import { GRANTS, TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { rest } from "~/protocol/index.ts";
 
 /** The grant every directory write is decided on. */
 export const PEOPLE_MANAGE = "people:manage";
+
+/**
+ * The word for a credential the engine reports `revoked`: EXPIRED only past
+ * its own deadline with nobody's revocation stamped on it. A token ended by a
+ * counter — its owner changing their password or signing out everywhere, or a
+ * restore — carries neither stamp, and it was revoked rather than aged out.
+ */
+export function endedWord(
+  c: { revoked_at?: string; expires_at?: string },
+  now: number,
+): "Revoked" | "Expired" {
+  return !c.revoked_at && c.expires_at && tsKey(c.expires_at) <= now ? "Expired" : "Revoked";
+}
 
 /** Whether a reader's grants reach the directory's writes. */
 export function canManagePeople(grants: readonly string[]): boolean {
