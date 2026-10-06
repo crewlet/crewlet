@@ -342,6 +342,16 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	}
 	var factor factorUse
 	if holdsSecondFactor(held) {
+		if in.Code == "" {
+			// ASKED FOR, as the sign-in asks, and released as neither a
+			// success nor a failure for the sign-in's reason: the password
+			// proved itself. Checked as a code it was refused as a wrong
+			// one, and a person whose password was right read that it was
+			// not.
+			httpjson.Fail(w, http.StatusUnauthorized,
+				httpjson.CodeSecondFactorRequired)
+			return
+		}
 		attempt.Method = types.FailSecondFactor
 		var factored bool
 		if factor, factored = s.proveSecondFactor(w, r, adm, attempt, held,
