@@ -315,7 +315,22 @@ export function FrameReadings({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * The frame, and the one thing only the frame does: DIAL THE SOCKET.
+ *
+ * The socket is made at boot and lives for the tab (`main.tsx`), and it is
+ * started here because the frame is the one part of this dashboard that needs
+ * a session. Started at boot, every signed-out page — the sign-in, an
+ * invitation's, a reset link's — dialled `/ws/stream` once and read its
+ * refusal and the degraded-mode snapshot: three `401`s in the console of a page
+ * that needs nobody. A sign-in dials on its own (`reconnect`); this is a
+ * no-op on a socket already dialling, and on one a refusal stopped.
+ */
 export function Shell({ children }: { children: ReactNode }) {
+  const { socket } = useClient();
+  useEffect(() => {
+    socket.start();
+  }, [socket]);
   return (
     <FrameReadings>
       <Frame>{children}</Frame>

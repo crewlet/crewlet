@@ -1762,7 +1762,11 @@ Both of these shipped wrong once, and neither is visible in a URL.
 Four routes draw no sidebar and no page header — `#/login`,
 `#/invite/{id}.{secret}`, `#/reset/{id}.{secret}` and `#/enrol` (`FRAMELESS` in
 `app/nav.ts`): a frame whose every row is locked is a frame showing a person
-what they cannot open.
+what they cannot open. **And they dial nothing that needs a session**: the
+socket is made at boot and dialled by the frame (`app/Shell.tsx`) or by a
+sign-in, so a browser that opens one of these four sends no handshake, no
+refusal probe and no degraded-mode snapshot. The sign-in asks
+`GET /auth/session` once, to say whose session the browser already holds.
 
 **The session cookie is the browser's only credential.** The dashboard keeps
 no token anywhere — not in storage, not in a URL — and every REST call and the

@@ -4,7 +4,10 @@
  * The socket is created BEFORE React mounts and lives for the life of the tab:
  * it is the application's one connection, it re-hydrates the whole projection
  * on every reconnect, and a transport owned by a component tree is a transport
- * that reconnects whenever somebody refactors a provider.
+ * that reconnects whenever somebody refactors a provider. It is DIALLED by the
+ * frame (`app/Shell.tsx`) — or by a sign-in — and not here: a page outside the
+ * frame needs no session, and dialling from boot sent each of them a refused
+ * handshake and two refused reads.
  */
 
 // THE DESIGN SYSTEM, ABOVE EVERY MODULE IMPORT. An import statement is
@@ -59,7 +62,6 @@ const socket = new LiveSocket(store);
 // The session idles out after twelve hours with no request, and the socket is
 // not one: a tab that only listens keeps it alive here (`protocol/keepalive.ts`).
 new SessionKeepAlive(socket).start();
-socket.start();
 
 const host = document.getElementById("root");
 if (!host) throw new Error("no #root in the shell");

@@ -70,6 +70,39 @@ afterEach(() => {
   location.hash = "#/";
 });
 
+// A PAGE THAT NEEDS NO SESSION ASKS NOTHING THAT DOES. The socket was dialled
+// at boot, so the sign-in, an invitation's and a reset link's page each sent a
+// refused handshake, a refused probe of it and a refused degraded-mode
+// snapshot — console errors on a page that needs nobody. The frame dials it
+// now. The CONTROL is a screen in the frame, which does. Mutation: dial at boot
+// again, or not from the frame, and one side goes red.
+describe("the socket", () => {
+  test.each([
+    ["the sign-in", "#/login", 0],
+    ["an invitation's page", "#/invite/abc.def", 0],
+    ["a reset link's page", "#/reset/abc.def", 0],
+    ["a screen in the frame (the control)", "#/inbox", 1],
+  ])("%s dials it %d times", async (_, hash, dials) => {
+    const dialled: string[] = [];
+    Object.defineProperty(globalThis, "WebSocket", {
+      writable: true,
+      value: class extends InertWebSocket {
+        constructor(url: string) {
+          super();
+          dialled.push(url);
+        }
+      },
+    });
+    mount(hash);
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+    expect(dialled).toHaveLength(dials);
+    const asked = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(asked.filter((url) => /\/(ws|stream)\//.test(url))).toHaveLength(0);
+  });
+});
+
 describe("a session the engine does not accept", () => {
   test("sends the reader to sign in, carrying where they were", async () => {
     mount("#/work?view=board");
@@ -97,7 +130,7 @@ describe("a session the engine does not accept", () => {
   });
 
   test("a need recorded before anything mounted is followed when it does", async () => {
-    // THE SOCKET STARTS BEFORE REACT, so its refusal probe can answer first.
+    // A REFUSAL CAN ANSWER BEFORE THE ROUTE'S FOLLOWER HAS MOUNTED.
     needSession("sign_in");
     mount("#/inbox");
     await waitFor(() => expect(location.hash).toBe(loginFor("#/inbox")));
