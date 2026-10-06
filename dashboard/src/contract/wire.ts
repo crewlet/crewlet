@@ -69,6 +69,18 @@ export const QUERY_TIMEOUT_MS = 10_000;
 export const COLLEAGUE_QUERY_MAX = 200;
 
 /**
+ * The longest phrase the engine's two ranked searches take — `work_search`,
+ * `knowledge` and the `answer_knowledge` question — in UTF-8 bytes.
+ *
+ * EXACTLY THE ENGINE'S OWN (`knowledge.MaxQueryBytes`), held there by
+ * `internal/api/queries`'s search gate: the engine refuses a longer phrase as
+ * `bad_params` rather than cutting it, so a screen sends nothing past it and
+ * says why — a search box that silently lost its results to a refusal reads as
+ * a company with nothing written down.
+ */
+export const SEARCH_QUERY_MAX = 400;
+
+/**
  * What a seat is doing: the ONE seat-state vocabulary, served on every
  * `agents` row as `activity` and computed by the engine alone
  * (`internal/api/livestate/activity.go`) from the seat's turn, its coding

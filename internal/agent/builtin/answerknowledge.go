@@ -85,15 +85,6 @@ const (
 	// at most.
 	AnswerCacheEntries = 256
 
-	// AnswerQuestionMax bounds the question, in bytes, and a longer one is
-	// REFUSED naming the limit, never cut.
-	//
-	// The question IS the search text, so it takes the search's own cap
-	// ([searchQueryMax]): a longer one reaches no ranker usefully. It used
-	// to be cut to fit, silently — so the answer a person read was to a
-	// question they had not quite asked, and nothing said so.
-	AnswerQuestionMax = searchQueryMax
-
 	// AnswerPageSources and AnswerTaskSources are how many pages and work
 	// items one answer is written from.
 	//
@@ -274,7 +265,7 @@ func (t *answerKnowledge) Parameters() map[string]any {
 			"q": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("The question, in plain words. At most %d "+
-					"bytes.", AnswerQuestionMax),
+					"bytes.", knowledge.MaxQueryBytes),
 			},
 		},
 		"required": []any{"q"},
@@ -305,12 +296,16 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if question == "" {
 		return failed(AnswerKnowledgeTool + " needs `q` — the question, in plain words."), nil
 	}
-	if len(question) > AnswerQuestionMax {
-		// REFUSED, NOT CUT: an answer to the first four hundred bytes of
-		// a question is an answer to a different question.
+	if knowledge.CheckQuery(question) != nil {
+		// REFUSED, NOT CUT. The question IS the search text, so it takes
+		// the search's own bound ([knowledge.MaxQueryBytes]) — a longer one
+		// reaches no ranker usefully — and an answer to the first four
+		// hundred bytes of a question is an answer to a different one. It
+		// used to be cut to fit, silently, so the answer a person read was
+		// to a question they had not quite asked and nothing said so.
 		return failed(fmt.Sprintf("The question is %d bytes and %s takes at most %d. "+
 			"Ask it in a sentence or two — the search reads keywords, not a document.",
-			len(question), AnswerKnowledgeTool, AnswerQuestionMax)), nil
+			len(question), AnswerKnowledgeTool, knowledge.MaxQueryBytes)), nil
 	}
 
 	company := t.org()

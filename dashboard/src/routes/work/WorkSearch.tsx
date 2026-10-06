@@ -76,7 +76,7 @@ import { QueryState } from "~/components/common.tsx";
 import { StatusBadge, TypeIcon } from "~/components/work.tsx";
 import { Button, Callout, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
 import { Segmented } from "~/ui/primitives.tsx";
-import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
+import { SEARCH_MODES, asSearchMode, modeLabel, searchTooLong, servedNote } from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -113,7 +113,14 @@ export function WorkSearch() {
   const [modeRaw, setMode] = useParam("mode", "hybrid", "filter");
   const mode = asSearchMode(modeRaw);
   const [typed, setTyped] = useState(q);
-  const hits = useQuery("work_search", { q, mode }, { enabled: q.trim() !== "" });
+  // A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the screen says why in
+  // place of the results — see `searchTooLong`.
+  const tooLong = searchTooLong(q);
+  const hits = useQuery(
+    "work_search",
+    { q, mode },
+    { enabled: q.trim() !== "" && tooLong === null },
+  );
   const served = servedNote(hits.data);
   usePageCoverage(undefined);
 
@@ -189,6 +196,8 @@ export function WorkSearch() {
           title="Type what you half remember"
           description="Finds the tasks most about a phrase — by its words, by what it means, or both — across titles, descriptions and comments. The board's filters answer which tasks are in a state; this answers which are about something."
         />
+      ) : tooLong ? (
+        <Callout variant="warning">{tooLong}</Callout>
       ) : hits.data && !hits.data.available ? (
         // NOT AN EMPTY RESULT. See the file head: this node has the items and
         // not yet the index, and a reader told "no matches" acts on it.
@@ -203,6 +212,7 @@ export function WorkSearch() {
       ) : (
         <QueryState
           error={hits.error}
+          detail={hits.detail}
           loading={hits.loading}
           empty={
             rows.length

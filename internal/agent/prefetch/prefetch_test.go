@@ -750,6 +750,27 @@ func TestAKnowledgeSearchThatNeverRanSaysItCouldNotSearch(t *testing.T) {
 	}
 }
 
+// A QUERY THE MODEL WROTE PAST THE SEARCH'S BOUND IS NOT SEARCHED, and the
+// block says the search did not run. Every surface holds a query to that
+// bound, so the model that ignored "2-8 keywords" is not the one caller that
+// slips a paragraph past it — and a query cut to fit would search on wherever
+// the cut fell.
+func TestAQueryPastTheBoundIsNotSearched(t *testing.T) {
+	t.Parallel()
+	pages := &searcher{hits: []knowledge.Hit{{Title: "Staging runbook"}}}
+	got := fetch(t, prefetch.Sources{
+		Knowledge: pages,
+		Models: models{provider: &aux{answers: []string{
+			strings.Repeat("staging ", knowledge.MaxQueryBytes/8+1)}}},
+	}, request(t)).RelevantKnowledge
+	if got != prefetch.UnsearchedKnowledgeHint {
+		t.Fatalf("an over-long query rendered %q, want %q", got, prefetch.UnsearchedKnowledgeHint)
+	}
+	if asked := pages.asked(); len(asked) != 0 {
+		t.Fatalf("an over-long query was searched: %+v", asked)
+	}
+}
+
 // A chatty model prefixes an explanation or wraps the query in quotes, and
 // both would be searched verbatim — a quoted query matches nothing.
 func TestAChattyQueryIsReducedToItsFirstRealLine(t *testing.T) {

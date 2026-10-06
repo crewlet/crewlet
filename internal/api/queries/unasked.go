@@ -79,6 +79,9 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, badParams("mode", p.String("mode"), modeNames())
 	}
+	if err = searchTextRefusal(text); err != nil {
+		return nil, err
+	}
 	answer, err := s.WorkSearch.Search(ctx, tracker.SearchQuery{
 		Text: text, Limit: p.Int("limit", DefaultSearchLimit), Mode: mode,
 	})

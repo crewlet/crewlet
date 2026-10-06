@@ -22,6 +22,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { BugGlyph } from "@crewlethq/icons/glyphs";
+import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -123,6 +124,22 @@ test("an in-progress hit is not marked done", async () => {
   expect(within(row).getByText("In progress")).toBeTruthy();
   expect(within(row).getByText("Bug")).toBeTruthy();
   expect(row.textContent).not.toContain("Done");
+});
+
+// A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the screen says why in
+// place of the results: sent, it is refused as `bad_params`, and a refusal
+// drawn as "the screen's bug" tells a person nothing they can change.
+test("a phrase past the search bound is not asked, and the screen says why", async () => {
+  const asked: Record<string, unknown>[] = [];
+  location.hash = `#/work/search?q=${"p".repeat(SEARCH_QUERY_MAX + 1)}`;
+  mount([hit({})], {}, asked);
+  expect(
+    await screen.findByText(
+      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+    ),
+  ).toBeTruthy();
+  expect(asked).toEqual([]);
+  expect(screen.queryByText("Authentication rework")).toBeNull();
 });
 
 // THE MODE REACHES THE WIRE. Hybrid, Keyword and Meaning are the engine's

@@ -162,6 +162,19 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	if query == "" {
 		return knowledgeBlock{}
 	}
+	if err := knowledge.CheckQuery(query); err != nil {
+		// A QUERY THE MODEL WROTE PAST THE SEARCH'S BOUND is not searched
+		// — the bound every surface holds a query to, so a model that
+		// ignored "2-8 keywords" and wrote a paragraph is not the one
+		// caller that slips one past it — and never cut to fit, which
+		// would search on wherever the cut fell. The block says the search
+		// did not run, because it did not; the seat searches with a
+		// focused query of its own once it knows what the task needs.
+		log.WarnContext(ctx, "prefetch_knowledge_query_refused", "error", err.Error(),
+			"detail", "the auxiliary model wrote a search query past the bound; "+
+				"the knowledge block says the search did not run")
+		return knowledgeBlock{text: UnsearchedKnowledgeHint}
+	}
 	answer := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
 		// AUTO-DRAFTS HIDDEN. Those pages are unreviewed proposals a

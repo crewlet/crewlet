@@ -47,7 +47,13 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
 import { plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { modeLabel, resolveSearchMode, searchCoverageNote, servedNote } from "~/lib/search.ts";
+import {
+  modeLabel,
+  resolveSearchMode,
+  searchCoverageNote,
+  searchTooLong,
+  servedNote,
+} from "~/lib/search.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -83,7 +89,14 @@ export function Knowledge() {
   const settled = modeRaw !== "" || probe.data !== null || probe.error !== null;
   // Searching is a real request, so it runs on submit — the phrase is in the
   // address — rather than on every keystroke.
-  const asked = useQuery("knowledge", { q: phrase, mode }, { enabled: phrase !== "" && settled });
+  // A PHRASE PAST THE ENGINE'S BOUND IS NOT SENT, and the results say why —
+  // see `searchTooLong`.
+  const tooLong = searchTooLong(phrase);
+  const asked = useQuery(
+    "knowledge",
+    { q: phrase, mode },
+    { enabled: phrase !== "" && settled && tooLong === null },
+  );
   const search = { ...asked, loading: asked.loading || (phrase !== "" && !settled) };
   const answer = phrase ? search.data : probe.data;
 
@@ -97,7 +110,9 @@ export function Knowledge() {
         ) : undefined}
       </PageActions>
       {answer?.available === false && <Unavailable answer={answer} />}
-      {phrase ? (
+      {phrase && tooLong ? (
+        <Callout variant="warning">{tooLong}</Callout>
+      ) : phrase ? (
         <Results phrase={phrase} search={search} />
       ) : (
         <KnowledgeHome backend={probe.data?.backend ?? ""} />

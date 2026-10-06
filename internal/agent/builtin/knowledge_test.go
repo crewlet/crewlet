@@ -183,7 +183,7 @@ func TestALongQueryIsRefusedNotCut(t *testing.T) {
 	}
 	// AT the limit is a query, not a refusal.
 	if res, _ := tool.CallForTurn(context.Background(), searchTurn(),
-		map[string]any{"query": strings.Repeat("z", searchQueryMax)}); res.Failed {
+		map[string]any{"query": strings.Repeat("z", knowledge.MaxQueryBytes)}); res.Failed {
 		t.Fatalf("a query at the limit was refused: %q", res.Output)
 	}
 }

@@ -67,6 +67,18 @@ turn-start prefetch. Computing a query's vector is bounded at **two seconds** �
 twice the one-second budget of the scan itself — so a slow provider costs a
 search its meaning half rather than holding the person who asked.
 
+**A query is at most 400 bytes**, on every surface that takes one: a seat's
+`search_knowledge`, `search_work_items` and `answer_knowledge`, the operator's
+tools, the API's `knowledge` and `work_search` (`bad_params`, naming the size
+and the limit) and the dashboard, which sends nothing past it and says why. A
+longer one is **refused, never cut** — a query is a question, and a search on
+its first part answers another one; past four hundred bytes it is a pasted
+thread, which no ranker turns into a better search. This is the opposite of
+what the corpus does with a long page, and deliberately: a source is embedded
+as its opening because one vector stands for one source, while a query never
+goes through that cut, and need not: every model this build knows takes at
+least 2 032 bytes an input.
+
 **A mode asked for is not always a mode served, and every answer says which.**
 It carries `served_mode` (the ranking the hits actually came from), `modes`
 (what this backend can serve as asked, right now), `degraded` (why those differ

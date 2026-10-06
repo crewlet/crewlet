@@ -2492,7 +2492,14 @@ once as the palette opens, before a term can be typed, so they never contend
 with the three. A term longer than the engine resolves to a colleague (200
 bytes — a pasted log line) is not sent to `colleague`, and the chart's own
 matching answers it; the cap is `COLLEAGUE_QUERY_MAX` in the contract, held to
-the engine's by a Go gate.
+the engine's by a Go gate. A term past the engine's search bound (400 bytes —
+a pasted passage) asks neither search nor the answer, and the lead says so,
+naming its size and the limit, where the answer would be: sent, all three
+would be refused, and a list that lost its tasks and pages with nothing saying
+why reads as nothing matching. The work search and the knowledge screen do the
+same with a phrase in their address. The bound is `SEARCH_QUERY_MAX` in the
+contract, held to the engine's by a Go gate, and no search box carries a
+`maxLength` — that is the same cut, made by the browser on a paste.
 
 ### The answer, and when it spends tokens
 
@@ -2502,6 +2509,8 @@ by `answer_knowledge` as the person asking. Every answer is a model call
 charged to the company's budget windows, so it is asked only when:
 
 - the scope is All or Pages;
+- the question is within the search bound (400 bytes), since it is the search
+  text and one past it is refused;
 - typing has paused for **800 ms** (a typist's gap is 150–250 ms, so this is a
   question finished rather than one being typed);
 - this browser may ask: a token bound to a person, on an engine that answers;

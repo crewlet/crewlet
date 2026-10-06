@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -66,8 +67,9 @@ func (t *searchWorkItems) Parameters() map[string]any {
 		"properties": map[string]any{
 			"text": map[string]any{
 				"type": "string",
-				"description": "What the work is about, in plain words. Not a " +
-					"query language and not a key.",
+				"description": fmt.Sprintf("What the work is about, in plain words "+
+					"— at most %d bytes. Not a query language and not a key.",
+					knowledge.MaxQueryBytes),
 			},
 			"limit": map[string]any{
 				"type": "integer",
@@ -97,6 +99,16 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if text == "" {
 		return failed("search_work_items needs `text` — what the work is " +
 			"about, in plain words."), nil
+	}
+	if knowledge.CheckQuery(text) != nil {
+		// REFUSED, NOT CUT, at the bound both ranked searches share
+		// ([knowledge.MaxQueryBytes]). The search behind this refuses it
+		// too, but as an error the model would read as the tracker
+		// failing; this says what to send instead.
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return failed(fmt.Sprintf("search_work_items' `text` is %d bytes and takes at "+
+			"most %d — say what the work is about in a phrase, not the task or a "+
+			"pasted thread.", len(text), knowledge.MaxQueryBytes)), nil
 	}
 	// HYBRID, the default, and not a parameter: a seat searching for work
 	// wants whatever finds it, and a mode is a choice a person makes while

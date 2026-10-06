@@ -23,17 +23,6 @@ const SearchKnowledgeTool = "search_knowledge"
 // is what the seam asks a backend for when nobody says.
 const searchHits = 6
 
-// searchQueryMax bounds the query a model may send, in bytes, and a longer
-// one is REFUSED naming the limit.
-//
-// A query reaches a backend's own query language through the seam, and a
-// model that pasted a whole thread in would search on prose no ranker can
-// use. Four hundred bytes is a long sentence and several keywords. It used to
-// be cut to fit, unmarked — and the tool then echoed the cut query back as
-// though it were the one the model wrote, so a search on the wrong words read
-// as a search that found nothing.
-const searchQueryMax = 400
-
 // KnowledgeSearcher is query-time search over the team knowledge base, as
 // this tool needs it.
 //
@@ -127,13 +116,18 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("search_knowledge needs a `query`: a few keywords describing " +
 			"what you are looking for."), nil
 	}
-	if len(query) > searchQueryMax {
-		// REFUSED, NOT CUT: a search on the first four hundred bytes of a
-		// query is a different search, and the model would read its
-		// results as the answer to the one it asked.
+	if knowledge.CheckQuery(query) != nil {
+		// REFUSED, NOT CUT, at the bound every search surface shares
+		// ([knowledge.MaxQueryBytes]): a search on the first four hundred
+		// bytes of a query is a different search, and the model would read
+		// its results as the answer to the one it asked. It used to be cut
+		// to fit, unmarked — and the tool then echoed the cut query back as
+		// though it were the one the model wrote, so a search on the wrong
+		// words read as a search that found nothing.
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
 		return failed(fmt.Sprintf("search_knowledge's `query` is %d bytes and takes at "+
 			"most %d — send 2-8 keywords or key phrases, identifiers verbatim, not the "+
-			"task or a pasted thread.", len(query), searchQueryMax)), nil
+			"task or a pasted thread.", len(query), knowledge.MaxQueryBytes)), nil
 	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
 	// [searchKnowledge.org]. Reading the turn unconditionally made this

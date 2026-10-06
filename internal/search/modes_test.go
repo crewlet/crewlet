@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -265,6 +266,38 @@ func TestAProbeWithAProviderDegradesNothing(t *testing.T) {
 	}
 	if got := p.embed.calls.Load(); got != 0 {
 		t.Errorf("the probe made %d provider calls, want none", got)
+	}
+}
+
+// A QUERY PAST THE BOUND IS REFUSED BEFORE ANYTHING RUNS — no scan, no scatter
+// to the peers and no provider call for its vector — and one at the bound, or
+// one carried there by whitespace a searcher never reads, is a search.
+//
+// The fan-out is the one path every native search of either kind takes, from
+// whichever surface or peer it came, so a surface that forgot the rule cannot
+// put a pasted thread in front of the ranker or the provider.
+func TestAQueryPastTheBoundIsRefusedBeforeAnythingRuns(t *testing.T) {
+	t.Parallel()
+	p := newProvider()
+	local := &recordingScan{slice: bothHalves("n1", search.Everything())}
+	fan := &search.FanOut{Self: "n1", Local: local, Vectors: search.NewQueryVectors(p.read)}
+
+	long := strings.Repeat("z", knowledge.MaxQueryBytes+1)
+	if _, err := fan.Search(t.Context(), search.FanQuery{Text: long, Limit: 10}); !errors.Is(err, knowledge.ErrQueryTooLong) {
+		t.Fatalf("a %d-byte query answered %v, want ErrQueryTooLong", len(long), err)
+	}
+	if n := len(local.queries()); n != 0 || p.embed.calls.Load() != 0 {
+		t.Fatalf("a refused query still ran: %d scans, %d provider calls", n, p.embed.calls.Load())
+	}
+
+	for _, at := range []string{
+		strings.Repeat("z", knowledge.MaxQueryBytes),
+		"  \n" + strings.Repeat("z", knowledge.MaxQueryBytes) + "\t ",
+	} {
+		answer, err := fan.Search(t.Context(), search.FanQuery{Text: at, Limit: 10})
+		if err != nil || answer.Served != knowledge.ModeHybrid {
+			t.Fatalf("a query at the bound answered %q, %v — want a hybrid search", answer.Served, err)
+		}
 	}
 }
 
