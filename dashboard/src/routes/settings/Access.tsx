@@ -113,6 +113,7 @@ import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { auth, rest } from "~/protocol/index.ts";
@@ -559,7 +560,7 @@ export function PeopleAndAccess() {
   // WHO IS READING, by the id the session names — never the login, which a
   // rename moves to somebody else: a gesture on the reader's own row signs
   // them out, and the panel names that row in the third person.
-  const reader = useRest("/auth/session", (signal) => auth.session(signal)).data?.person;
+  const reader = useFrameSession().answer?.person;
 
   return (
     <>

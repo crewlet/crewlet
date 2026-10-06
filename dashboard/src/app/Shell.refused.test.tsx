@@ -192,6 +192,13 @@ test("a session without state:read dials nothing and is told what would open the
   expect(inbox.querySelector("[title='Needs state:read']")).not.toBeNull();
   expect(dial).not.toHaveBeenCalled();
   expect(sent.some((s) => s.path === "/stream/snapshot" || s.path === "/ws/stream")).toBe(false);
+  // ASKED ONCE: the frame records its own no-access from the read, and read it
+  // again straight after for having recorded it. Mutation: re-read on the
+  // frame's own refusal and the session is asked twice on landing.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  expect(sent.filter((s) => s.path === "/auth/session")).toHaveLength(1);
 });
 
 // AND THE GRANT IS NOTICED: the tab kept refusing after an administrator gave

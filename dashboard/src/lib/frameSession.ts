@@ -9,7 +9,9 @@
  * live socket. It used to be asked three times over — by the frame before
  * dialling, by the user block, and by the refusal panel — so a signed-out load
  * of `/dashboard` sent two at once and a third from the sign-in it was routed
- * to.
+ * to. A screen that needs who is reading — the Account, Home's greeting for an
+ * unbound reader, People & access marking the reader's own row — reads THIS,
+ * never a read of its own, and the Account re-reads it through [reload].
  *
  * # The socket is dialled only for a session that may read the company
  *
@@ -38,7 +40,7 @@ import {
 } from "react";
 import type { Grant } from "~/app/nav.ts";
 import { takeSession } from "./session.ts";
-import { useRest } from "./useRest.ts";
+import { useRest, type RestResult } from "./useRest.ts";
 import { auth, type RestError, type SessionAnswer } from "~/protocol/index.ts";
 
 /**
@@ -69,6 +71,10 @@ export interface FrameSession {
   answer: SessionAnswer | null;
   /** Why the latest read did not answer: a `401` is nobody, anything else says nothing. */
   error: RestError | null;
+  /** The read's state as `QueryState` renders it — for the Account, which draws it. */
+  code: RestResult<SessionAnswer>["code"];
+  refusal: RestResult<SessionAnswer>["refusal"];
+  loading: boolean;
   /** The session holds no [LIVE_VIEW_GRANT]: nothing is dialled, and it is asked again. */
   noAccess: boolean;
   /** Ask again now, quietly. */
@@ -101,9 +107,10 @@ export function SessionReading({ children }: { children: ReactNode }) {
     const timer = setInterval(() => void reload(), NO_ACCESS_RECHECK_MS);
     return () => clearInterval(timer);
   }, [noAccess, reload]);
+  const { error, code, refusal, loading } = read;
   const value = useMemo(
-    () => ({ answer, error: read.error, noAccess, reload }),
-    [answer, read.error, noAccess, reload],
+    () => ({ answer, error, code, refusal, loading, noAccess, reload }),
+    [answer, error, code, refusal, loading, noAccess, reload],
   );
   return createElement(Reading.Provider, { value }, children);
 }

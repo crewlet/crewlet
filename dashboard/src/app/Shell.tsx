@@ -375,10 +375,12 @@ function Frame({ children }: { children: ReactNode }) {
   // an open socket closes it, and the session read before it still holds the
   // grant — so the panel said "you hold state:read" beside the engine's "the
   // live socket needs state:read", and nothing would ever notice the grant
-  // coming back.
+  // coming back. NEVER THE FRAME'S OWN [NO_ACCESS]: that is recorded FROM the
+  // read this would repeat, so every no-access landing read the session twice
+  // in a row — and a third time after a socket refusal it answered.
   const { reload: readSessionAgain } = session;
   useEffect(() => {
-    if (accessRefused !== null) void readSessionAgain();
+    if (accessRefused !== null && accessRefused !== NO_ACCESS) void readSessionAgain();
   }, [accessRefused, readSessionAgain]);
   // A ZONE OR A DATE FORMAT CHANGED IN THE PREFERENCES REPAINTS EVERY
   // TIMESTAMP. The formatters read the preference when they are called, so

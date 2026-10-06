@@ -19,6 +19,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -167,7 +168,9 @@ function mount(viewer: Record<string, unknown> = AUDITOR) {
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
         <Router>
-          <PeopleAndAccess />
+          <SessionReading>
+            <PeopleAndAccess />
+          </SessionReading>
         </Router>
       </ViewerProvider>
     </ClientContext.Provider>,

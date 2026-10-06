@@ -21,6 +21,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, setStepUpConfirmer, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -218,7 +219,9 @@ function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
       <ViewerProvider>
         <Router>
           <ToastProvider>
-            <PeopleAndAccess />
+            <SessionReading>
+              <PeopleAndAccess />
+            </SessionReading>
           </ToastProvider>
         </Router>
       </ViewerProvider>

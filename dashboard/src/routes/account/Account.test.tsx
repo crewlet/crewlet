@@ -24,6 +24,7 @@ import { fmtDateTime } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 import {
   currentSessionNeed,
   LiveSocket,
@@ -178,7 +179,9 @@ function mount() {
       <Router>
         <ToastProvider>
           <LayerHost>
-            <Account />
+            <SessionReading>
+              <Account />
+            </SessionReading>
           </LayerHost>
         </ToastProvider>
       </Router>
@@ -218,6 +221,10 @@ describe("a person's own page", () => {
     expect(credentialReads.length).toBeGreaterThan(0);
     for (const read of credentialReads) expect(read.query.has("person")).toBe(false);
     expect(engineIs.reads("/iam/people/p-1").length).toBeGreaterThan(0);
+    // WHO THIS IS IS THE FRAME'S ONE READ: the page asked again for itself,
+    // and again on every focus beside the frame. Mutation: read it here too
+    // and it is asked twice.
+    expect(engineIs.reads("/auth/session")).toHaveLength(1);
   });
 
   // THE CONTROL is the other live session, which IS offered a named sign-out;

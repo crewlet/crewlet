@@ -80,6 +80,7 @@ import { goSignIn } from "~/lib/session.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { auth, rest, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import type { CredentialRow, DirectoryRow, SessionRow } from "~/routes/settings/Access.tsx";
@@ -101,10 +102,12 @@ export function tierATokenOf(login: string): string {
 }
 
 export function Account() {
-  const session = useRest("/auth/session", (signal) => auth.session(signal), READ);
-  const { reload } = session;
-  const sessionMoved = useCallback(() => reload({ quiet: true }), [reload]);
-  const answer = session.data;
+  // THE FRAME'S READ of who this is (`lib/frameSession.ts`), re-read through
+  // it after every gesture: a read of its own was a second answer to the one
+  // question, asked again on every focus beside the frame's.
+  const session = useFrameSession();
+  const sessionMoved = session.reload;
+  const answer = session.answer;
   return (
     <>
       <PageNote>

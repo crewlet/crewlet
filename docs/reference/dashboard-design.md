@@ -1790,8 +1790,9 @@ one of these four, or opens `/dashboard` signed out, sends no handshake, no
 refusal probe and no degraded-mode snapshot on its way to the sign-in.
 
 **The frame asks who this is once, before anything else** — `GET
-/auth/session` (`lib/frameSession.ts`), which the sidebar's user block and the
-refusal panel read too, where each used to ask for itself — and **dials only
+/auth/session` (`lib/frameSession.ts`), which the sidebar's user block, the
+refusal panel, the Account, Home's greeting and People & access read too,
+where each used to ask for itself — and **dials only
 for a session holding `state:read`**, the grant the engine refuses the
 socket's handshake without. A `401` is nobody, and the sign-in follows with
 nothing dialled; a read that failed on anything else says nothing about the
@@ -5613,7 +5614,8 @@ into swapping for somebody else's.
   (`POST /auth/logout/{lineage}`), and **Sign out everywhere** asks first —
   here and in the user menu, which closes to ask — saying it ends every
   personal access token too, which it does. Every gesture on the page
-  reads `/auth/session` again before the lists, because one the engine asked a
+  reads `/auth/session` again — the frame's read, through its reload — before
+  the lists, because one the engine asked a
   step-up for replaced this browser's session under a new lineage, and a mark
   read before it would offer this browser a named sign-out.
 - **Personal access tokens** — the tokens that act as the reader, each with
@@ -6449,7 +6451,8 @@ brings that carries a design-system rule.
   their seat is gone, or `state:read` was withdrawn: the socket STOPS (no
   reconnect, no REST fallback, both of which the same decision would refuse)
   and every screen but the Account, which reads no socket, is replaced by one
-  panel saying who they are (`GET /auth/session`, asked again on the refusal),
+  panel saying who they are (`GET /auth/session`, asked again on the refusal —
+  an engine's, never the frame's own no-access, which that read recorded),
   what they hold and why, with the *Account*, a *Try again* for after an
   administrator has acted — or, where the session no longer holds
   `state:read`, the no-access panel, which asks again on its own and dials once
