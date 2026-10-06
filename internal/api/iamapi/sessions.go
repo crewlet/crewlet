@@ -77,7 +77,7 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	reason := reasonOr(r.URL.Query().Get("reason"),
-		"every session was ended through /iam")
+		byCaller(r.Context(), "every session ended"))
 	op, ok := s.opIDFor(w, r, "sessions-revoke", nil)
 	if !ok {
 		return

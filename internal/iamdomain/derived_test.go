@@ -103,7 +103,7 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 	create := iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Omar Ops", Email: "omar@example.com", Login: "omar.ops",
-		OpID: key, Reason: "created through /iam/people",
+		OpID: key, Reason: "created by jane.doe",
 	}
 	if err := rig.enrol(create); err != nil {
 		t.Fatalf("the create: %v", err)

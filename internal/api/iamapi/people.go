@@ -210,7 +210,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		Stage: iam.StageActive,
 		Name:  in.Name, Email: in.Email, Login: in.Login, Seat: in.Seat,
 		Grants: in.Grants,
-		OpID:   published, Reason: reasonOr(in.Reason, "created through /iam/people"),
+		OpID:   published, Reason: reasonOr(in.Reason, byCaller(r.Context(), "created")),
 	})
 	// THE ID ONLY BESIDE A CREATE THAT MAY HAVE LANDED: a refused one
 	// created nobody, and naming the person it would have made reads as
@@ -371,7 +371,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	// THE ANSWER'S OPERATION IS THE KEY a retry sends back; every record
 	// below is published under op.id, a step of it bound to this request.
 	opID := op.key
-	reason := reasonOr(in.Reason, "changed through /iam/people")
+	reason := reasonOr(in.Reason, byCaller(r.Context(), "changed"))
 	after, touchesGrants := in.grantsOn(held.Grants)
 	if touchesGrants {
 		// THE RECORD'S OWN CONFERRAL RULE, asked before anything lands:
@@ -438,8 +438,8 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	if in.Stage != nil {
 		// THE STAGE'S OWN DEFAULT, because a suspension's reason is what
 		// every session it ends is listed as ended by: the edit's
-		// "changed through /iam/people" said nothing about why.
-		staged := reasonOr(in.Reason, string(*in.Stage)+" through /iam/people")
+		// "changed by …" said nothing about why.
+		staged := reasonOr(in.Reason, byCaller(r.Context(), stageDone(*in.Stage)))
 		if !step("stage")(writer.SetStage(r.Context(), id, *in.Stage,
 			statelog.StepOpID(op.id, "stage"), staged)) {
 			return
@@ -498,7 +498,7 @@ func (s *Service) DeletePerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	reason := reasonOr(r.URL.Query().Get("reason"), "removed through /iam/people")
+	reason := reasonOr(r.URL.Query().Get("reason"), byCaller(r.Context(), "removed"))
 	op, ok := s.opIDFor(w, r, "people-remove", nil)
 	if !ok {
 		return
@@ -646,11 +646,37 @@ type writtenView struct {
 // reasonOr is the caller's reason, or the surface's own.
 //
 // NEVER EMPTY. Every row in the trail carries one, and a blank reason is the
-// field an investigation most wants and least often finds — so the default
-// names the surface, which is at least true.
+// field an investigation most wants and least often finds.
 func reasonOr(given, fallback string) string {
 	if trimmed := strings.TrimSpace(given); trimmed != "" {
 		return trimmed
 	}
 	return fallback
+}
+
+// byCaller is a gesture's own reason: what was done, in words, and the login
+// of whoever did it — "suspended by jane.doe".
+//
+// IN WORDS, because a reason is read by people: it is the Detail of the
+// identity trail and, for a gesture that moves the revocation epoch, what
+// every session it ends is listed as ended by. It used to name the ROUTE
+// ("suspended through /iam/people"), which told an administrator reading a
+// person's sessions an API path and not who suspended them — the session row
+// has no author column of its own to say it. The LOGIN rather than the
+// author name a record carries ([iam.ActorFor]), which for a bound person is
+// a seat handle: a login is the name the directory lists a person under.
+func byCaller(ctx context.Context, done string) string {
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved || principal.Login == "" {
+		return done
+	}
+	return done + " by " + principal.Login
+}
+
+// stageDone is what moving somebody to a stage did, as a reason says it.
+func stageDone(stage iam.Stage) string {
+	if stage == iam.StageActive {
+		return "reactivated"
+	}
+	return string(stage)
 }

@@ -165,7 +165,7 @@ func (s *Service) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reason := reasonOr(r.URL.Query().Get("reason"),
-		"cancelled through /iam/invitations")
+		byCaller(r.Context(), "cancelled"))
 	cancelled, err := writer.CancelInvitation(r.Context(), id, op.id, reason)
 	var redeemed *iamdomain.InvitationRedeemed
 	switch {

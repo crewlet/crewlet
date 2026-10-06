@@ -99,7 +99,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		// publishes the issue under; the answer hands back the scoped key,
 		// whose seed a retry reproduces — see [Service.createKey].
 		OpID:   seed,
-		Reason: reasonOr(in.Reason, "invited through /iam"),
+		Reason: reasonOr(in.Reason, byCaller(r.Context(), "invited")),
 	})
 	invited, id := issued.Result, issued.ID
 	if err != nil || !landed(invited) {

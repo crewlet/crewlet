@@ -804,7 +804,12 @@ and a machine's is coloned (`ci:release`, or `token:<id>` to bind a Tier A
 token), at most 64 characters either way, checked on a create and on a rename
 alike — and so is a `kind` other
 than `person` or `machine`, since a seat belongs to the company document and
-the engine is the node. A value outside a bound is `400` too: a `reason` longer than 256
+the engine is the node. A write's `reason` is optional, and without one the
+record says what was done and by whose login, in words — `suspended by
+jane.doe`, `every session ended by jane.doe`, `invited by jane.doe` — which is
+the trail's detail and, for a suspension or ending somebody's sessions, what
+each session it ends is listed as ended by. A value outside a bound is `400`
+too: a `reason` longer than 256
 bytes (it is rendered into the authentication trail beside the op, so it
 names which cause fired rather than narrating), and a machine given
 `secrets:read` or `people:manage` — by a create, or by an edit that adds one —

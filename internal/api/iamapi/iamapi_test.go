@@ -337,8 +337,8 @@ type fakeWriter struct {
 	// identity is every identity change the surface asked for.
 	identity []iamdomain.IdentityEdit
 
-	// stageReason is the reason the last stage change carried.
-	stageReason string
+	// reasons is the reason the last call of each kind carried.
+	reasons map[string]string
 
 	// held is the credential set a SetCredentials call's Apply is run
 	// against, the way the real decide runs it against the snapshot.
@@ -385,6 +385,14 @@ func (w *fakeWriter) op(what, opID string) {
 	w.ops[what] = append(w.ops[what], opID)
 }
 
+// reason records the reason one call carried.
+func (w *fakeWriter) reason(what, why string) {
+	if w.reasons == nil {
+		w.reasons = map[string]string{}
+	}
+	w.reasons[what] = why
+}
+
 func (w *fakeWriter) did(what string) (statelog.Result, error) {
 	w.calls = append(w.calls, what)
 	if w.err != nil {
@@ -411,6 +419,7 @@ func (w *fakeWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
 	statelog.Result, error) {
 
 	w.enrolled = in
+	w.reason("enrol", in.Reason)
 	w.op("enrol", in.OpID)
 	return w.did("enrol")
 }
@@ -419,6 +428,7 @@ func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) 
 	statelog.Result, error) {
 
 	w.updated = in
+	w.reason("update", in.Reason)
 	w.op("update", in.OpID)
 	if w.document != nil && in.Apply != nil {
 		// THE DECIDE'S OWN ROUND, against the document a case set: a
@@ -436,7 +446,7 @@ func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) 
 func (w *fakeWriter) SetStage(_ context.Context, _ string, _ iam.Stage,
 	opID, reason string) (statelog.Result, error) {
 
-	w.stageReason = reason
+	w.reason("stage", reason)
 	w.op("stage", opID)
 	return w.did("stage")
 }
@@ -488,6 +498,7 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 	iamdomain.InviteIssued, error) {
 
 	w.invited = in
+	w.reason("invite", in.Reason)
 	w.op("invite", in.OpID)
 	result, err := w.did("invite")
 	// THE REAL DERIVATION, under a fixture key: the id is the operation's,
@@ -510,9 +521,10 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 		ExpiresAt: in.ExpiresAt}, err
 }
 
-func (w *fakeWriter) CancelInvitation(_ context.Context, _, opID, _ string) (
+func (w *fakeWriter) CancelInvitation(_ context.Context, _, opID, reason string) (
 	statelog.Result, error) {
 
+	w.reason("cancel", reason)
 	w.op("cancel", opID)
 	return w.did("cancel")
 }
@@ -530,9 +542,10 @@ func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
 	return nil
 }
 
-func (w *fakeWriter) Revoke(_ context.Context, _, opID, _ string) (
+func (w *fakeWriter) Revoke(_ context.Context, _, opID, reason string) (
 	statelog.Result, error) {
 
+	w.reason("revoke", reason)
 	w.op("revoke", opID)
 	return w.did("revoke")
 }
@@ -544,9 +557,10 @@ func (w *fakeWriter) InvalidateAll(_ context.Context, opID, _ string) (
 	return w.did("invalidate")
 }
 
-func (w *fakeWriter) Remove(_ context.Context, _, opID, _ string) (
+func (w *fakeWriter) Remove(_ context.Context, _, opID, reason string) (
 	statelog.Result, error) {
 
+	w.reason("remove", reason)
 	w.op("remove", opID)
 	return w.did("remove")
 }
@@ -1398,32 +1412,53 @@ func TestACreateWhoseSeatIsTakenCreatesNobody(t *testing.T) {
 	}
 }
 
-// A STAGE CHANGE SAYS WHICH STAGE, WHERE ITS CALLER GAVE NO REASON.
+// A GESTURE'S OWN REASON SAYS WHAT WAS DONE AND BY WHOM, IN WORDS.
 //
-// A suspension moves the person's revocation epoch, and every session it ends
-// is listed as ended by the reason its record carries — which was the edit's
-// "changed through /iam/people", saying nothing about a suspension. The
-// CONTROL is a reason the caller gave, which is carried as given. Mutation:
-// pass the edit's reason to the stage change.
-func TestAStageChangeSaysWhichStage(t *testing.T) {
+// Where its caller gave no reason, each write recorded the ROUTE it came
+// through — "suspended through /iam/people", "every session was ended through
+// /iam" — and that is what the identity trail's Detail and every session a
+// suspension or a revocation ends were shown as. A stage change names its
+// stage, since a suspension's reason is what every session it ends is listed
+// as ended by. The CONTROL is a reason the caller gave, which is carried as
+// given. Mutation: name the route again and every default case goes red; pass
+// the edit's reason to the stage change and the stage cases do.
+func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, given, want string
+		name, method, target string
+		body                 map[string]any
+		call, want           string
 	}{
-		{"no reason given", "", "suspended through /iam/people"},
-		{"a reason given (the control)", "left the company", "left the company"},
+		{"a create", http.MethodPost, "/iam/people", map[string]any{
+			"login": "dana.sre", "email": "dana@example.com"},
+			"enrol", "created by alice.admin"},
+		{"an edit", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"name": "Bob"}, "update", "changed by alice.admin"},
+		{"a suspension", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"stage": "suspended"}, "stage", "suspended by alice.admin"},
+		{"a reactivation", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"stage": "active"}, "stage", "reactivated by alice.admin"},
+		{"a suspension with a reason (the control)", http.MethodPatch,
+			"/iam/people/" + bob.String(), map[string]any{"stage": "suspended",
+				"reason": "left the company"}, "stage", "left the company"},
+		{"a removal", http.MethodDelete, "/iam/people/" + bob.String(), nil,
+			"remove", "removed by alice.admin"},
+		{"ending every session", http.MethodDelete,
+			"/iam/people/" + bob.String() + "/sessions", nil,
+			"revoke", "every session ended by alice.admin"},
+		{"an invitation", http.MethodPost, "/iam/invitations",
+			map[string]any{"email": "dana@example.com"}, "invite",
+			"invited by alice.admin"},
+		{"a cancellation", http.MethodDelete, "/iam/invitations/inv-1", nil,
+			"cancel", "cancelled by alice.admin"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t)
-			body := map[string]any{"stage": "suspended"}
-			if tc.given != "" {
-				body["reason"] = tc.given
-			}
-			got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(), body)
-			if got.status != http.StatusOK || r.writer.stageReason != tc.want {
+			got := r.as(administrator(), tc.method, tc.target, tc.body)
+			if got.status >= http.StatusBadRequest || r.writer.reasons[tc.call] != tc.want {
 				t.Errorf("answered %d (%v) with the reason %q, want %q", got.status,
-					got.body, r.writer.stageReason, tc.want)
+					got.body, r.writer.reasons[tc.call], tc.want)
 			}
 		})
 	}
