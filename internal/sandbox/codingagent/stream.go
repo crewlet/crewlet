@@ -178,8 +178,8 @@ func (t *transcriptLines) take() []string {
 // recognised and redacted.
 //
 // Every credential shape the redaction pass knows fits on one line except a
-// private key, whose block runs from its BEGIN line to an END line at most
-// [redact.MaxKeyBlockBytes] after it. A window opening inside such a block
+// private key, whose block runs at most [redact.MaxKeyBlockBytes] past its
+// BEGIN line. A window opening inside such a block
 // would show its base64 body with no BEGIN for the rule to anchor on; with
 // this much read before the window, any key that reaches into it is read
 // whole and redacted as one — and the bound is the redaction's own, so the two

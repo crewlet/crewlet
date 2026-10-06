@@ -1,6 +1,7 @@
 package redact_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -134,10 +135,219 @@ func TestAHeaderWithNoKeyKeepsTheLinesBeforeTheNextKey(t *testing.T) {
 	}
 }
 
+// grepOfTheBeginLine is a run's transcript in which a grep matched the BEGIN
+// line, and the run then went on with other work.
+const grepOfTheBeginLine = "[tool] bash: grep -rn BEGIN certs\n" +
+	"certs/a.pem:1:-----BEGIN RSA PRIVATE KEY-----\n" +
+	"[tool] bash: go test ./...\n" +
+	"ok  \tpkg\t0.1s\n" +
+	"FAIL\tother\t0.2s\n"
+
+// grepOfBothArmours is the same transcript once a later grep matched the END.
+const grepOfBothArmours = grepOfTheBeginLine +
+	"[tool] bash: grep -rn END certs\n" +
+	"certs/a.pem:27:-----END RSA PRIVATE KEY-----\n" +
+	"[tool] bash: done\n"
+
+// AN END CLOSES ONLY A BLOCK OF KEY: everything between it and its BEGIN has to
+// be a key's — headers, a blank line, base64 at the encoder's width — or the
+// END closes nothing. The rule paired an END with any BEGIN within 64 KiB
+// before it, whatever lay between, so a grep's match for the BEGIN line and a
+// later one for the END took every line of the run between them — the test
+// run, its failure — out of the record and the live view alike.
+//
+// Mutation: pair an END with the BEGIN before it without reading what is
+// between, and the transcript between the two greps is one marker.
+func TestAnEndClosesOnlyABlockOfKey(t *testing.T) {
+	for name, text := range map[string]string{
+		"a grep's two matches, a run between":   grepOfBothArmours,
+		"one command naming both armours":       "grep -e '-----BEGIN RSA PRIVATE KEY-----' -e '-----END RSA PRIVATE KEY-----' key.pem\n",
+		"a placeholder between the armours":     "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+		"a sentence between the armours":        "-----BEGIN PRIVATE KEY-----\nyour key goes here\n-----END PRIVATE KEY-----\n",
+		"the armours one after the other":       "a.pem:1:-----BEGIN RSA PRIVATE KEY-----\na.pem:27:-----END RSA PRIVATE KEY-----\n",
+		"prose between, then a key-shaped line": "-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + keyLine + "\n-----END RSA PRIVATE KEY-----\n",
+	} {
+		if got := redact.Secrets(text); got != text {
+			t.Errorf("%s: Secrets =\n%s\nwant it unchanged", name, got)
+		}
+	}
+}
+
+// keyForm is one wrapping a key reaches text in, and what the text redacts to.
+type keyForm struct{ text, want string }
+
+// wrappedKeys is a key in every wrapping it reaches a transcript in, closed by
+// its END: each is one marker, with the wrapping around it kept.
+func wrappedKeys() map[string]keyForm {
+	m := redact.Marker + "private-key]"
+	numbered := func(from int, lines ...string) string {
+		var b strings.Builder
+		for i, line := range lines {
+			fmt.Fprintf(&b, "%6d\u2192%s\n", from+i, line)
+		}
+		return b.String()
+	}
+	return map[string]keyForm{
+		"plain": {
+			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(3) + "u1SU1Lf=\n-----END RSA PRIVATE KEY-----\nnext\n",
+			m + "\nnext\n",
+		},
+		"a reader's line numbers, across a number's width": {
+			numbered(8, "-----BEGIN RSA PRIVATE KEY-----", keyLine, keyLine, keyLine, "u1SU1Lf=",
+				"-----END RSA PRIVATE KEY-----", "next"),
+			"     8\u2192" + m + "\n    14\u2192next\n",
+		},
+		"a grep's match and context lines": {
+			"a.pem:1:-----BEGIN RSA PRIVATE KEY-----\na.pem-2-" + keyLine + "\na.pem-3-" + keyLine +
+				"\na.pem-4-u1SU1Lf=\na.pem-5------END RSA PRIVATE KEY-----\nb.pem:9:other\n",
+			"a.pem:1:" + m + "\nb.pem:9:other\n",
+		},
+		"a log's timestamps, the first line with its message": {
+			"2026-10-06T09:00:00.120Z loaded key: -----BEGIN RSA PRIVATE KEY-----\n" +
+				"2026-10-06T09:00:00.121Z " + keyLine + "\n2026-10-06T09:00:00.121Z " + keyLine +
+				"\n2026-10-06T09:00:00.122Z -----END RSA PRIVATE KEY-----\n2026-10-06T09:00:01.000Z started\n",
+			"2026-10-06T09:00:00.120Z loaded key: " + m + "\n2026-10-06T09:00:01.000Z started\n",
+		},
+		"a diff": {
+			"+-----BEGIN RSA PRIVATE KEY-----\n+" + keyLine + "\n+" + keyLine + "\n+u1SU1Lf=\n+-----END RSA PRIVATE KEY-----\n context\n",
+			"+" + m + "\n context\n",
+		},
+		"escaped in a JSON string": {
+			`{"private_key": "-----BEGIN PRIVATE KEY-----\n` + keyLine + `\n` + keyLine +
+				`\nu1SU1Lf=\n-----END PRIVATE KEY-----\n", "client_email": "svc@example.com"}` + "\n",
+			`{"private_key": "` + m + `\n", "client_email": "svc@example.com"}` + "\n",
+		},
+		"escaped twice": {
+			`"{\"key\": \"-----BEGIN PRIVATE KEY-----\\n` + keyLine + `\\n` + keyLine +
+				`\\n-----END PRIVATE KEY-----\\n\"}"` + "\n",
+			`"{\"key\": \"` + m + `\\n\"}"` + "\n",
+		},
+		"a quoted scalar broken across lines, its breaks kept": {
+			"key: \"-----BEGIN RSA PRIVATE KEY-----\\n\n  " + keyLine + "\\n\n  " + keyLine +
+				"\\n\n  u1SU1Lf=\\n\n  -----END RSA PRIVATE KEY-----\\n\"\nnext: 1\n",
+			"key: \"" + m + "\\n\"\nnext: 1\n",
+		},
+		"a string concatenated across lines": {
+			"const key = \"-----BEGIN RSA PRIVATE KEY-----\\n\" +\n\t\"" + keyLine + "\\n\" +\n\t\"" +
+				keyLine + "\\n\" +\n\t\"u1SU1Lf=\\n\" +\n\t\"-----END RSA PRIVATE KEY-----\\n\"\nnext\n",
+			"const key = \"" + m + "\\n\"\nnext\n",
+		},
+		"the same, read with line numbers": {
+			numbered(12, "const key = \"-----BEGIN RSA PRIVATE KEY-----\\n\" +", "\t\""+keyLine+"\\n\" +",
+				"\t\""+keyLine+"\\n\" +", "\t\"-----END RSA PRIVATE KEY-----\\n\"", "next"),
+			"    12\u2192const key = \"" + m + "\\n\"\n    16\u2192next\n",
+		},
+		"a line echoed into a file at a time": {
+			"echo \"-----BEGIN RSA PRIVATE KEY-----\" >> key.pem\necho \"" + keyLine + "\" >> key.pem\necho \"" +
+				keyLine + "\" >> key.pem\necho \"-----END RSA PRIVATE KEY-----\" >> key.pem\nchmod 600 key.pem\n",
+			"echo \"" + m + "\" >> key.pem\nchmod 600 key.pem\n",
+		},
+		"a shell's trace of printf, each line quoted": {
+			"+ printf '%s\\n' '-----BEGIN RSA PRIVATE KEY-----' '" + keyLine + "' '" + keyLine +
+				"' 'u1SU1Lf=' '-----END RSA PRIVATE KEY-----'\n+ next\n",
+			"+ printf '%s\\n' '" + m + "'\n+ next\n",
+		},
+		"on one line": {
+			"KEY=-----BEGIN RSA PRIVATE KEY----- " + keyLine + " " + keyLine + " u1SU1Lf= -----END RSA PRIVATE KEY----- set\n",
+			"KEY=" + m + " set\n",
+		},
+		"encrypted, read with line numbers": {
+			numbered(1, "-----BEGIN RSA PRIVATE KEY-----", "Proc-Type: 4,ENCRYPTED",
+				"DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF", "", keyLine, keyLine,
+				"-----END RSA PRIVATE KEY-----"),
+			"     1\u2192" + m + "\n",
+		},
+		"OpenSSH": {
+			"-----BEGIN OPENSSH PRIVATE KEY-----\n" + strings.Repeat(sshLine+"\n", 5) + "AAAEBm9uZQ==\n" +
+				"-----END OPENSSH PRIVATE KEY-----\n",
+			m + "\n",
+		},
+	}
+}
+
+// A KEY IS READ IN EVERY WRAPPING IT REACHES A TRANSCRIPT IN, now that an END
+// closes only a block of key: a reader's line numbers, a grep's context lines,
+// a log's timestamps, a diff, a JSON string escaped once or twice, a string
+// concatenated across lines, a line echoed at a time, the whole key on one
+// line. Each is one marker, with the wrapping around it kept.
+//
+// Mutation: drop the per-line prefix ([prefixOK] taking nothing but
+// punctuation), and every prefixed form survives in clear.
+func TestAKeyIsReadInEveryWrapping(t *testing.T) {
+	for name, form := range wrappedKeys() {
+		got := redact.Secrets(form.text)
+		if strings.Contains(got, keyLine) || strings.Contains(got, sshLine) || strings.Contains(got, "DEK-Info") {
+			t.Errorf("%s: key material survived:\n%s", name, got)
+			continue
+		}
+		if got != form.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
+		}
+		// AND WITH NO END: the same block, cut where its END would be,
+		// is read by the same structure — its body taken, its wrapping
+		// left.
+		cut := form.text[:strings.Index(form.text, "-----END")]
+		if strings.Contains(redact.Secrets(cut), keyLine) {
+			t.Errorf("%s with no END: key material survived:\n%s", name, redact.Secrets(cut))
+		}
+	}
+}
+
+// terminatedKeys is a key whose END was never written and whose body's last
+// line ends in the text around it: the quote that closes the string it was
+// written into, or the mark of a cut.
+func terminatedKeys() map[string]keyForm {
+	m := redact.Marker + "private-key]"
+	short := keyLine[:30]
+	return map[string]keyForm{
+		"a closing quote after a full line": {
+			`{"private_key": "-----BEGIN PRIVATE KEY-----\n` + keyLine + `\n` + keyLine + `"}`,
+			`{"private_key": "` + m + `"}`,
+		},
+		"a closing quote after a short last line": {
+			`{"private_key": "-----BEGIN PRIVATE KEY-----\n` + keyLine + `\n` + keyLine + `\nabcd1234=="}`,
+			`{"private_key": "` + m + `"}`,
+		},
+		"a closing quote on a real line": {
+			"{\"private_key\": \"-----BEGIN PRIVATE KEY-----\n" + keyLine + "\n" + keyLine + "\"}",
+			"{\"private_key\": \"" + m + "\"}",
+		},
+		"a body of one line, Ed25519's": {
+			`"-----BEGIN PRIVATE KEY-----\n` + keyLine + `"`,
+			`"` + m + `"`,
+		},
+		"a cut's mark": {
+			"-----BEGIN PRIVATE KEY-----\n" + keyLine + "\n" + short + "\u2026",
+			m + "\u2026",
+		},
+	}
+}
+
+// A KEY WITH NO END WHOSE LAST LINE ENDS IN THE TEXT AROUND IT is still a key.
+// Its body line counted only when the WHOLE line was base64, so the line that
+// carried the closing quote of the string the key was written into — or the
+// mark of a cut — was left in clear, and a body of one line (an Ed25519 key's
+// whole body) was not redacted at all.
+//
+// Mutation: read a body line as all-or-nothing again, and every one of these
+// shows a line of the key.
+func TestAKeyWhoseLastLineEndsInTheTextAroundItIsRedacted(t *testing.T) {
+	for name, form := range terminatedKeys() {
+		got := redact.Secrets(form.text)
+		if strings.Contains(got, keyLine) || strings.Contains(got, keyLine[:30]) {
+			t.Errorf("%s: key material survived: %q", name, got)
+			continue
+		}
+		if got != form.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
+		}
+	}
+}
+
 // keyFixtures are the texts the idempotence and the settling cases run over:
 // every private-key shape above, beside the shapes that are not keys.
 func keyFixtures() map[string]string {
-	return map[string]string{
+	fixtures := map[string]string{
 		"closed key": "start\n-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(8) +
 			"-----END RSA PRIVATE KEY-----\ndone\n",
 		"unclosed key": "start\n-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(8) + "abc=\npanic\n",
@@ -153,7 +363,15 @@ func keyFixtures() map[string]string {
 		"tokens":         "token sk-" + strings.Repeat("q", 40) + "\nAKIA" + strings.Repeat("Q", 16) + "\n",
 		"key after a password": "password:\n-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) +
 			"-----END RSA PRIVATE KEY-----\ntail\n",
+		"grep of both armours": grepOfBothArmours,
 	}
+	for name, form := range wrappedKeys() {
+		fixtures["wrapped: "+name] = form.text
+	}
+	for name, form := range terminatedKeys() {
+		fixtures["terminated: "+name] = form.text + "\n"
+	}
+	return fixtures
 }
 
 // IDEMPOTENT over every key shape too: a marker matches nothing, so a second
@@ -217,7 +435,8 @@ func TestNoSecretIsShownBeforeItsShapeIsSettled(t *testing.T) {
 	for name, text := range keyFixtures() {
 		_, steps := settle(text, []int{1})
 		for _, shown := range steps {
-			if strings.Contains(shown, keyLine) || strings.Contains(shown, "hunter2") ||
+			if strings.Contains(shown, keyLine) || strings.Contains(shown, sshLine) ||
+				strings.Contains(shown, keyLine[:30]) || strings.Contains(shown, "hunter2") ||
 				strings.Contains(shown, "swordfish") {
 				t.Errorf("%s: shown before the text was whole: %q", name, shown)
 				break
@@ -226,22 +445,41 @@ func TestNoSecretIsShownBeforeItsShapeIsSettled(t *testing.T) {
 	}
 }
 
-// A HEADER NO END FOLLOWS IS HELD ONLY AS FAR AS AN END COULD STILL CLOSE IT:
-// past [redact.MaxKeyBlockBytes] the lines after it are settled again, so a
-// grep for the armour does not stop a live view for the rest of the run.
-func TestAHeaderNoEndFollowsIsHeldOnlyAsFarAsAnEndCouldClose(t *testing.T) {
+// A HEADER WITH NO KEY UNDER IT IS HELD ONLY UNTIL A LINE THAT IS NOT A KEY'S:
+// an END after that closes nothing, so nothing after it can change how the
+// header redacts. It used to be held until 64 KiB had been written after it,
+// over ordinary lines and all — the rest of the run, on a live view, for a
+// grep of the armour line.
+//
+// Mutation: hold an open BEGIN as far as an END could be paired with it at
+// any distance, and the line after the header is never shown.
+func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 	header := "x:-----BEGIN RSA PRIVATE KEY-----\n"
-	if got := redact.Settled(header + "line\n"); got != 0 {
-		t.Fatalf("Settled = %d; want the header held while an END could still close it", got)
+	for name, c := range map[string]struct {
+		text string
+		want int
+	}{
+		"a header alone, its next line not written yet": {header, 0},
+		"a header and a line that is not a key's":       {header + "line\n", len(header + "line\n")},
+		"a header and a body line, the next to come":    {header + keyLine + "\n", 0},
+		"a header and a body that is over": {header + pemBody(2) + "the run went on\n",
+			len(header + pemBody(2) + "the run went on\n")},
+		// One word after a body could be its short last line, which an END
+		// may still follow.
+		"a header, a body and a word": {header + pemBody(2) + "line\n", 0},
+		"a header and a closed block": {header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n",
+			len(header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n")},
+		"a grep's match and its next result": {grepOfTheBeginLine, len(grepOfTheBeginLine)},
+	} {
+		if got := redact.Settled(c.text); got != c.want {
+			t.Errorf("%s: Settled = %d of %d; want %d", name, got, len(c.text), c.want)
+		}
 	}
-	long := header + strings.Repeat("line\n", redact.MaxKeyBlockBytes/5+1)
+	// A body-looking stream with no END is held no further than a key could
+	// run: past [redact.MaxKeyBlockBytes] it is settled again.
+	long := header + strings.Repeat(keyLine+"\n", redact.MaxKeyBlockBytes/len(keyLine)+2) + "line\n"
 	if got := redact.Settled(long); got != len(long) {
-		t.Fatalf("Settled = %d of %d; want everything settled once no END could close the header",
-			got, len(long))
-	}
-	closed := header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n"
-	if got := redact.Settled(closed); got != len(closed) {
-		t.Fatalf("Settled = %d of %d; want a closed block settled at once", got, len(closed))
+		t.Errorf("Settled = %d of %d; want everything settled once no key could still be read", got, len(long))
 	}
 }
 
