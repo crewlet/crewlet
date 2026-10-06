@@ -66,15 +66,15 @@ segment's last calls, and the records are the fleet's, read at query time. The
 card is rewritten after that decision, so its call is tallied on its own and
 added as the charge is written.
 
-Two auxiliary stages are deliberately NOT on the item. **Reflection** — the
-learning workers after the turn and the conversation ledger's account of it —
-is what the seat remembers, not what the work cost, so a task's cost does not
-depend on how much its seat had to remember; and the condensation of a
-collected coding run's report, which the coordinator makes **between two
-segments**, on whichever node collects, where no segment's tally is open. Both
-are in the seat's day and the company's history; the second is also in the
-turn's own cost wherever the history draws it, so it is the one in-turn call a
-task's spend is short of.
+Two kinds of auxiliary call are deliberately NOT on the item. The
+**reflection** stage — the learning workers after the turn and the conversation
+ledger's account of it — is what the seat remembers, not what the work cost, so
+a task's cost does not depend on how much its seat had to remember; and the
+condensation of a collected coding run's report, a `turn`-stage call the
+coordinator makes **between two segments**, on whichever node collects, where
+no segment's tally is open. Both are in the seat's day and the company's
+history; the second is also in the turn's own cost wherever the history draws
+it, so it is the one in-turn call a task's spend is short of.
 
 ## What this does not decide
 
