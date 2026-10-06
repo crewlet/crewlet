@@ -294,7 +294,7 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 		// A STAGE THAT IS NOT `active` refuses every credential acting for
 		// them, and one that is admits them again.
 		a.moved.Seats = true
-		if err := a.movedPerson(ctx, tx, id); err != nil {
+		if err = a.movedPerson(ctx, tx, id); err != nil {
 			return int(written), err
 		}
 	}

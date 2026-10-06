@@ -904,8 +904,8 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 		if !stage.MayAct() {
 			// A STAGE THAT MAY NOT ACT ENDS WHAT THEY HOLD, at the next
 			// epoch — see [StatusChange.Epoch].
-			current, err := epochOf(ctx, tx, personID)
-			if err != nil {
+			var current uint64
+			if current, err = epochOf(ctx, tx, personID); err != nil {
 				return err
 			}
 			change.Epoch = current + 1
