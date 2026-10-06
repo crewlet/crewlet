@@ -758,6 +758,8 @@ credential:
 | | **A route whose secret is unset has nothing to verify with, so it fails closed**: `503` + `Retry-After`, never an accepted delivery. The sender retries and the delivery flows once the secret is configured — a deployment that has not set one is stalled, not damaged, and nothing unsigned is ever recorded, published, or shown on the dashboard |
 | `/otlp/*`, `/mcp/*` | The signed per-run token in the path *is* the credential. Both are reached from inside a sandbox, where the API's own token must never go |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a credential cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
+| `/auth/config`, `/auth/login`, `/auth/invite/*`, `/auth/reset/*` | A login cannot require a login: these are how somebody obtains a credential, and an invitation's link and a password reset link are each the credential. Exact paths plus the two prefixes, never `/auth/` — the same surface ends sessions and enrols second factors. The sign-in throttle and the origin check stand in for the guard |
+| `/auth/logout` | Signing out of this session clears the cookie whatever the node can read, and verifies every bearer it ends itself. Signing out everywhere and ending a named session stay guarded |
 
 `/ws/stream` follows the same rule as every other route: the session cookie a
 signed-in browser sends on its own — a browser cannot set a header on a
