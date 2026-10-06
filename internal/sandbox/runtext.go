@@ -144,10 +144,10 @@ const MaxQuestionBytes = 16 << 10
 // THEY ARE SCRAPED FROM THE WHOLE REPORT, by a pattern with no count to it, so
 // a report that pasted a list of pull requests — or a run that wrote one URL
 // on every line of a 30 MiB file — handed the record one entry per match. A
-// pull-request URL is sixty to two hundred bytes, so 16 KiB lists a hundred
-// or more, past what any one run delivers; the refs are deduplicated first,
-// and what does not fit is COUNTED on the record and in the resumed
-// executor's text rather than dropped unsaid.
+// pull-request URL is typically under a hundred bytes, so 16 KiB lists more
+// than a hundred and sixty of them, past what any one run delivers; the refs
+// are deduplicated first, and what does not fit is COUNTED on the record and
+// in the resumed executor's text rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
 // Condenser rewrites a piece of a collected run's account that is past
@@ -254,12 +254,13 @@ func boundRefs(refs []string) ([]string, int) {
 //
 // THE END GETS THE LARGER SHARE, because it is where the run's conclusion and
 // what broke sit — the reason the failure detail keeps its end too
-// ([wholeLines]). The START is kept as well, because it is the run's plan, its
-// clone and its first exploration of the code, which a log cut to its end
-// loses entirely: a reader of a long run then cannot see what it set out to
-// do. 64 KiB is about two hundred of OpenCode's transcript lines — a tool line
-// is a name and at most 160 bytes of what it ran — which is that opening with
-// room to spare; the rest of [MaxRunTextBytes] is the end.
+// ([wholeLines]). The START is kept as well, because it is the run's plan and
+// its first exploration of the code, which a log cut to its end loses
+// entirely: a reader of a long run then cannot see what it set out to do.
+// 64 KiB is some 370 tool lines at their longest — a tool line is the tool's
+// name and at most 160 bytes of what it ran, never its output — and more at
+// their usual length, which is that opening with room to spare; the rest of
+// [MaxRunTextBytes] is the end.
 const (
 	transcriptHeadBytes = 64 << 10
 	transcriptTailBytes = MaxRunTextBytes - transcriptHeadBytes
