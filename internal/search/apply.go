@@ -92,8 +92,8 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_vectors
 			(source, source_id, container, search_shard, model, dim,
-			 source_rev, text_sha, embedding, embedded_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 source_rev, text_sha, title, embedding, embedded_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		-- THE SHARD IS ABSENT FROM THE UPDATE on purpose: it is a pure
 		-- function of the two conflict columns, so an existing row's
 		-- bucket cannot change. See [Indexer.upsertOne] for what
@@ -104,13 +104,14 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 			dim         = excluded.dim,
 			source_rev  = excluded.source_rev,
 			text_sha    = excluded.text_sha,
+			title       = excluded.title,
 			embedding   = excluded.embedding,
 			embedded_at = excluded.embedded_at,
 			version     = excluded.version
 		WHERE excluded.version > kb_vectors.version`,
 		string(vec.Subject.Source), vec.Subject.ID, container,
 		ShardOf(string(vec.Subject.Source), vec.Subject.ID), vec.Model, vec.Dim,
-		int64(vec.SourceRev), vec.TextSHA, vec.Embedding,
+		int64(vec.SourceRev), vec.TextSHA, vec.Title, vec.Embedding,
 		store.EncodeTime(vec.CreatedAt), version)
 	if err != nil {
 		return 0, fmt.Errorf("search: write the vector for %s at %s: %w",

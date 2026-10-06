@@ -48,6 +48,9 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		statement string
 		args      []any
 	}
+	of := func(statement string, args []any) registration {
+		return registration{statement, args}
+	}
 	reassign, reassignArgs := search.ReassignStatement(search.RolloutRange{
 		Source: search.SourcePage, From: "s00100", To: "s00400",
 	}, search.IndexHead{Generation: generation, Model: model, Dim: dim})
@@ -58,14 +61,15 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		"the embedding spaces an operator reads": {`
 			SELECT model, dim, COUNT(*) FROM kb_vectors
 			WHERE embedding IS NOT NULL GROUP BY model, dim`, nil},
-		"the embed duty's anti-join": {`
-			SELECT t.id FROM tracker_tasks t
-			LEFT JOIN kb_vectors v ON v.source = 'task' AND v.source_id = t.id
-			WHERE t.removed_at IS NULL
-			  AND (v.source_id IS NULL OR v.source_rev <> t.version
-			       OR v.model <> ? OR v.dim <> ?)
-			ORDER BY t.updated_at LIMIT ?`,
-			[]any{model, dim, 100}},
+		// THE EMBED DUTY'S OWN STATEMENTS, as its corpora run them — the
+		// copy of the task selection this list carried had already drifted
+		// from it by two columns and a predicate.
+		"the embed duty's task selection":   of(search.TaskSelection(model, dim, 100)),
+		"the embed duty's task withdrawals": of(search.TaskWithdrawals(100)),
+		"the embed duty's task coverage":    of(search.TaskCoverageCount(model, dim)),
+		"the embed duty's page selection":   of(search.PageSelection(model, dim, 100)),
+		"the embed duty's page withdrawals": of(search.PageWithdrawals(100)),
+		"the embed duty's page coverage":    of(search.PageCoverageCount(model, dim)),
 		"the embed duty's read of the vectors it restamps": {
 			search.StoredVectorStatement, []any{"page", "s00001", model, dim}},
 		"the index duty's count of the space": {search.SpaceCountStatement,

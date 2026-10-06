@@ -344,6 +344,19 @@ type VectorRecord struct {
 	// ([Embedder.restamp]).
 	TextSHA string `json:"text_sha,omitempty"`
 
+	// Title is the source's title as it stood when this vector was
+	// computed or restamped — the first thing its text embeds — which is
+	// how the duty notices a page renamed or retitled without a save
+	// ([PageCorpus]): nothing else a page carries moves when only its title
+	// does, short of the log version every comment moves too.
+	//
+	// ADDITIVE, at the version an embed has always been written at. A build
+	// that predates it decodes the key into [VectorRecord.Extra], carries
+	// it through a relay, and writes its rows without it — which costs that
+	// build nothing, since it never reads it — and a record from such a
+	// build lands here with no title, read once as a title that moved.
+	Title string `json:"title,omitempty"`
+
 	// Embedding is the vector as PACKED LITTLE-ENDIAN FLOAT32, which is
 	// byte-for-byte what the column holds and what `vector1bit(?)`
 	// consumes.
@@ -378,7 +391,7 @@ type VectorRecord struct {
 // well as in its field, and re-encoded twice.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"container", "model", "dim", "source_rev", "text_sha", "embedding",
+	"container", "model", "dim", "source_rev", "text_sha", "title", "embedding",
 	"index", "reassign", "measure",
 }
 

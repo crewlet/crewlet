@@ -338,9 +338,17 @@ record, and a project move takes the container a scoped search filters on with
 it. Only a changed title or body is embedded again.
 
 Both source kinds are covered: the tracker's work items and the knowledge
-base's published pages. A **rename does not re-embed a page** — the vector is
-stored against the page's own edit number rather than the log version a rename
-also stamps.
+base's published pages. **A page is selected again exactly when what its vector
+was computed from moved**: its body (the page's own edit number, which a save
+moves), its title (which a rename or a retitle moves, and which is the first
+thing the vector embeds), or its container (which a rename across containers
+moves, and which every scoped semantic search filters on). A renamed or
+retitled page is embedded again; a page moved to another container under the
+same title keeps its text, so its vector is restamped under the new container
+with no provider call — and a scoped search finds it where it now lives, as
+the keyword half already did. A comment, a watcher change or a re-parent moves
+none of the three and costs nothing, which is why the selection does not key
+on the page's log version, which all of them stamp.
 
 Those requests are the **whole company's**, not each corpus's, and they are
 handed out **round robin** between the two, one request at a time. With both

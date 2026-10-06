@@ -20,20 +20,103 @@ import (
 // the selection is the same single anti-join [TaskCorpus] uses, and the seam
 // the duty was built around costs nothing to fill.
 //
-// # A page's version is its edit number, not the log's
+// # A page is selected when what its vector was computed from moved — exactly
 //
-// `pages_heads` carries both, and the one stored beside a vector has to be the
-// one that moves when the BODY moves. `version` is the composed log version and
-// is stamped by a rename too; `edit_version` is the page's own monotonic edit
-// number, which is what a save increments and a rename deliberately does not.
-// Keyed on the log version, every rename in the company would re-embed a page
-// whose text nobody touched — a provider bill for a title change.
+// A vector stands for a page's TITLE and the opening of its BODY, filed under
+// its CONTAINER, and those three move on three different paths: a save moves
+// the body and the page's own edit number, `edit_version`; a rename moves the
+// title and — across containers — the container, and a retitle moves the
+// displayed title, and neither stamps the edit number. So the selection asks
+// all three, each against what the vector row says it was computed from: the
+// edit number it stores as `source_rev`, the title it stores as `title`, and
+// the container it is filed under.
+//
+// Keyed on the edit number alone it was blind to the other two: a renamed
+// page kept a vector of its old title, and a page moved to another container
+// kept answering scoped semantic searches from the one it left — returned
+// inside a knowledge scope it had been moved out of, missing from the one it
+// had been moved into — while the lexical half, which keys on the log
+// version, had already moved it.
+//
+// NOT THE LOG VERSION, MAX(version, scoped_through), which the lexical index
+// keys on and which would also catch all three: every comment, watcher change
+// and child re-parent stamps it too, so every one of those would select the
+// page and publish a ~17 KB vector record for a text nobody touched. Exact
+// costs one column on the vector row; the broad key costs a record per
+// comment, for ever.
+//
+// AND WHAT IS SELECTED WITHOUT A NEW TEXT IS RESTAMPED: a move to another
+// container keeps the title and the body, so the digest the stored vector
+// carries is still the text's, and the vector is republished under the new
+// container with no provider call ([Embedder.Tick]). A rename to another title
+// is a new text, and is embedded.
 
 // PageCorpus embeds the knowledge base's published pages.
 type PageCorpus struct{ DB store.ReplicatedReader }
 
 // Source implements [Corpus].
 func (PageCorpus) Source() Source { return SourcePage }
+
+// pageSelectionStatement: the published pages whose vector in the asked space
+// is missing or was computed from another body, title or container, oldest
+// first, each with the opening of its body and the digest of the vector it has
+// there. Bound: the body's read length, the space twice, the limit.
+const pageSelectionStatement = `
+	SELECT p.id, p.container, p.edit_version, p.title,
+	       substr(p.body, 1, ?),
+	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
+	FROM pages_heads p
+	LEFT JOIN kb_vectors v
+	  ON v.source = 'page' AND v.source_id = p.id
+	WHERE p.status = 'published' AND p.trashed_at IS NULL
+	  AND (v.source_id IS NULL
+	       OR v.source_rev <> p.edit_version
+	       OR v.title <> p.title
+	       OR v.container <> p.container
+	       OR v.model <> ? OR v.dim <> ?)
+	ORDER BY p.updated_at
+	LIMIT ?`
+
+// pageWithdrawalsStatement: the vectors of pages trashed, unpublished or
+// purged. Bound: the limit.
+const pageWithdrawalsStatement = `
+	SELECT v.source_id
+	FROM kb_vectors v
+	LEFT JOIN pages_heads p
+	  ON p.id = v.source_id AND p.status = 'published'
+	 AND p.trashed_at IS NULL
+	WHERE v.source = 'page' AND p.id IS NULL
+	LIMIT ?`
+
+// pageCoverageStatement: [pageSelectionStatement]'s predicate, inverted and
+// counted. Bound: the space.
+const pageCoverageStatement = `
+	SELECT COUNT(*),
+	       COUNT(CASE WHEN v.source_id IS NOT NULL
+	                   AND v.source_rev = p.edit_version
+	                   AND v.title = p.title
+	                   AND v.container = p.container
+	                   AND v.model = ? AND v.dim = ?
+	                  THEN 1 END)
+	FROM pages_heads p
+	LEFT JOIN kb_vectors v
+	  ON v.source = 'page' AND v.source_id = p.id
+	WHERE p.status = 'published' AND p.trashed_at IS NULL`
+
+// pageSelection, pageWithdrawals and pageCoverageCount are the three
+// statements this corpus runs, each with its arguments â one place, so the
+// plan gate explains what runs rather than a copy.
+func pageSelection(model string, dim, limit int) (string, []any) {
+	return pageSelectionStatement, []any{embedReadChars, model, dim, model, dim, limit}
+}
+
+func pageWithdrawals(limit int) (string, []any) {
+	return pageWithdrawalsStatement, []any{limit}
+}
+
+func pageCoverageCount(model string, dim int) (string, []any) {
+	return pageCoverageStatement, []any{model, dim}
+}
 
 // Stale implements [Corpus].
 //
@@ -45,19 +128,8 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 	var stale []Document
 	var gone []string
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT p.id, p.container, p.edit_version, p.title,
-			       substr(p.body, 1, ?),
-			       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
-			FROM pages_heads p
-			LEFT JOIN kb_vectors v
-			  ON v.source = 'page' AND v.source_id = p.id
-			WHERE p.status = 'published' AND p.trashed_at IS NULL
-			  AND (v.source_id IS NULL
-			       OR v.source_rev <> p.edit_version
-			       OR v.model <> ? OR v.dim <> ?)
-			ORDER BY p.updated_at
-			LIMIT ?`, embedReadChars, model, dim, model, dim, limit)
+		statement, args := pageSelection(model, dim, limit)
+		rows, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return err
 		}
@@ -83,14 +155,8 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		// took down stays findable by meaning for ever — nothing else
 		// will ever select it, because the selection above is driven by
 		// the rows that remain.
-		dead, err := tx.QueryContext(ctx, `
-			SELECT v.source_id
-			FROM kb_vectors v
-			LEFT JOIN pages_heads p
-			  ON p.id = v.source_id AND p.status = 'published'
-			 AND p.trashed_at IS NULL
-			WHERE v.source = 'page' AND p.id IS NULL
-			LIMIT ?`, limit)
+		statement, args = pageWithdrawals(limit)
+		dead, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return err
 		}
@@ -115,21 +181,14 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 // ONE STATEMENT and the same predicate as [PageCorpus.Stale], inverted, for
 // the reason [TaskCorpus.Coverage] gives: a coverage number derived from a
 // second idea of what "current" means disagrees with the backlog the duty is
-// working through.
+// working through — and here a page renamed or moved is NOT covered until its
+// vector says so, because until then it is searched by meaning under a title
+// or a container it no longer has.
 func (c PageCorpus) Coverage(ctx context.Context, model string, dim int) (int, int, error) {
 	var current, total int
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT COUNT(*),
-			       COUNT(CASE WHEN v.source_id IS NOT NULL
-			                   AND v.source_rev = p.edit_version
-			                   AND v.model = ? AND v.dim = ?
-			                  THEN 1 END)
-			FROM pages_heads p
-			LEFT JOIN kb_vectors v
-			  ON v.source = 'page' AND v.source_id = p.id
-			WHERE p.status = 'published' AND p.trashed_at IS NULL`,
-			model, dim).Scan(&total, &current)
+		statement, args := pageCoverageCount(model, dim)
+		return tx.QueryRowContext(ctx, statement, args...).Scan(&total, &current)
 	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("search: count the page corpus's vector "+

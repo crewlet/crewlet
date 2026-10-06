@@ -1136,6 +1136,7 @@ func (e *Embedder) publishPacked(ctx context.Context, source Source, dim int, p 
 		Dim:       dim,
 		SourceRev: p.doc.Version,
 		TextSHA:   p.sha,
+		Title:     p.doc.Title,
 		Embedding: packed,
 	}
 	return e.append(ctx, subject, rec)
@@ -1235,10 +1236,20 @@ func (e *Embedder) append(ctx context.Context, subject Subject, rec VectorRecord
 // says, a retry of the same work carries the same id and is collapsed; a
 // genuinely newer vector for the same source carries a different one, because
 // the source version and the text digest are both in it.
+//
+// AND THE CONTAINER AND THE TITLE, because a page's restamp moves neither of
+// the other two: a page moved to another container keeps its edit number and
+// its text, so without them its restamp carried the very id of the embed it
+// replaces and the broker collapsed it — dropped with an acknowledgement, the
+// vector left filed where the page no longer is. A page moved and moved back
+// inside the broker's window repeats an id that window still holds; its rows
+// then lag the page until the window passes, when the next tick selects it
+// again and the restamp lands.
 func opIDFor(rec VectorRecord) string {
 	parts := []string{
 		rec.Subject.String(), string(rec.Op), rec.Model,
 		fmt.Sprint(rec.Dim), fmt.Sprint(rec.SourceRev), rec.TextSHA,
+		rec.Container, rec.Title,
 	}
 	// AN INDEX RECORD IS NAMED BY WHAT IT INSTALLS, or two trainings inside
 	// the broker's duplicate window — an index and the verdict that replaces
@@ -1304,29 +1315,93 @@ func pack(v []float32, dim int) ([]byte, error) {
 // ONE STATEMENT, because `tracker_tasks` and `kb_vectors` are both in the
 // replicated estate: the selection is an anti-join between the rows and their
 // own vectors, and there is no second read to keep in step.
+//
+// A TASK IS KEYED ON ITS VERSION, which every task record moves — a status, an
+// assignee, a label, a move to another project as well as an edit of its text.
+// That selects more than the text needs, and it is still the right key: what
+// is selected without a change of text is restamped rather than embedded
+// ([Embedder.Tick]), at the same one record a re-embed cost before, and it
+// carries the new project with it. Nothing on the task row moves only when the
+// embedded text does — `body_version` moves with the body and not the title —
+// and a key that did would be one the tracker's applier maintains: a change
+// to identity-claimed rows, across a rolling upgrade, for what a restamp
+// inside this domain already gives.
 type TaskCorpus struct{ DB store.ReplicatedReader }
 
 // Source implements [Corpus].
 func (TaskCorpus) Source() Source { return SourceTask }
+
+// TaskSelection is the statement [TaskCorpus.Stale] selects stale tasks with,
+// and its arguments; [TaskWithdrawals] and [TaskCoverageCount] are the other
+// two it runs.
+//
+// EXPORTED FOR THE TRACKER'S INDEX GATE, which plans every statement that reads
+// `tracker_tasks` against the indexes the tracker declares
+// (internal/tracker's TestEveryIndexServesARegisteredQuery). A copy written
+// for the gate certifies a statement nothing runs, which is how an index on a
+// column nothing ever wrote was kept for this duty's "selection" while the
+// selection the duty does run was certified by nothing.
+func TaskSelection(model string, dim, limit int) (string, []any) {
+	return taskSelectionStatement, []any{embedReadChars, model, dim, model, dim, limit}
+}
+
+// taskSelectionStatement: the tasks with no current vector in the asked space,
+// oldest first, each with the opening of its body and the digest of the vector
+// it has there.
+const taskSelectionStatement = `
+	SELECT t.id, t.project_key, t.version, t.title,
+	       substr(COALESCE(json_extract(t.document, '$.body'), ''), 1, ?),
+	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
+	FROM tracker_tasks t
+	LEFT JOIN kb_vectors v
+	  ON v.source = 'task' AND v.source_id = t.id
+	WHERE t.removed_at IS NULL
+	  AND (v.source_id IS NULL
+	       OR v.source_rev <> t.version
+	       OR v.model <> ? OR v.dim <> ?)
+	ORDER BY t.updated_at
+	LIMIT ?`
+
+// TaskWithdrawals is the statement [TaskCorpus.Stale] finds the vectors of
+// removed or purged tasks with, and its arguments. See [TaskSelection].
+func TaskWithdrawals(limit int) (string, []any) {
+	return taskWithdrawalsStatement, []any{limit}
+}
+
+const taskWithdrawalsStatement = `
+	SELECT v.source_id
+	FROM kb_vectors v
+	LEFT JOIN tracker_tasks t
+	  ON t.id = v.source_id AND t.removed_at IS NULL
+	WHERE v.source = 'task' AND t.id IS NULL
+	LIMIT ?`
+
+// TaskCoverageCount is the statement [TaskCorpus.Coverage] counts with, and
+// its arguments. See [TaskSelection].
+func TaskCoverageCount(model string, dim int) (string, []any) {
+	return taskCoverageStatement, []any{model, dim}
+}
+
+// taskCoverageStatement: [taskSelectionStatement]'s predicate, inverted and
+// counted.
+const taskCoverageStatement = `
+	SELECT COUNT(*),
+	       COUNT(CASE WHEN v.source_id IS NOT NULL
+	                   AND v.source_rev = t.version
+	                   AND v.model = ? AND v.dim = ?
+	                  THEN 1 END)
+	FROM tracker_tasks t
+	LEFT JOIN kb_vectors v
+	  ON v.source = 'task' AND v.source_id = t.id
+	WHERE t.removed_at IS NULL`
 
 // Stale implements [Corpus].
 func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
 	var stale []Document
 	var gone []string
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT t.id, t.project_key, t.version, t.title,
-			       substr(COALESCE(json_extract(t.document, '$.body'), ''), 1, ?),
-			       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
-			FROM tracker_tasks t
-			LEFT JOIN kb_vectors v
-			  ON v.source = 'task' AND v.source_id = t.id
-			WHERE t.removed_at IS NULL
-			  AND (v.source_id IS NULL
-			       OR v.source_rev <> t.version
-			       OR v.model <> ? OR v.dim <> ?)
-			ORDER BY t.updated_at
-			LIMIT ?`, embedReadChars, model, dim, model, dim, limit)
+		statement, args := TaskSelection(model, dim, limit)
+		rows, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return err
 		}
@@ -1351,13 +1426,8 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		// or purged. Without it a deleted task stays findable by meaning
 		// for ever — the row it came from is gone, so nothing else will
 		// ever select it.
-		dead, err := tx.QueryContext(ctx, `
-			SELECT v.source_id
-			FROM kb_vectors v
-			LEFT JOIN tracker_tasks t
-			  ON t.id = v.source_id AND t.removed_at IS NULL
-			WHERE v.source = 'task' AND t.id IS NULL
-			LIMIT ?`, limit)
+		statement, args = TaskWithdrawals(limit)
+		dead, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return err
 		}
@@ -1390,16 +1460,8 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 func (c TaskCorpus) Coverage(ctx context.Context, model string, dim int) (int, int, error) {
 	var current, total int
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT COUNT(*),
-			       COUNT(CASE WHEN v.source_id IS NOT NULL
-			                   AND v.source_rev = t.version
-			                   AND v.model = ? AND v.dim = ?
-			                  THEN 1 END)
-			FROM tracker_tasks t
-			LEFT JOIN kb_vectors v
-			  ON v.source = 'task' AND v.source_id = t.id
-			WHERE t.removed_at IS NULL`, model, dim).Scan(&total, &current)
+		statement, args := TaskCoverageCount(model, dim)
+		return tx.QueryRowContext(ctx, statement, args...).Scan(&total, &current)
 	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("search: count the task corpus's vector "+
