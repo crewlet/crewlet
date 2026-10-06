@@ -1374,6 +1374,72 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	})
 }
 
+// AN ONBOARDING PASS THE BUDGET REFUSES ENDS THE TURN THERE.
+//
+// The cap leaves room for the turn-start prefetch's knowledge query and half
+// of the onboarding pass's first round, so that round is billed and refused —
+// and, counted, it leaves the window past its ceiling, so every later call of
+// the turn is certain to be refused. The turn used to log the refusal as an
+// onboarding failure and enter its loop anyway, where the executor's first
+// round was billed and refused in turn. It ends on the onboarding's refusal
+// now, published as budget_exhausted like a refusal inside the loop, with no
+// executor phase opened and no executor call made.
+func TestAnOnboardingRefusalEndsTheTurnBeforeTheExecutor(t *testing.T) {
+	t.Parallel()
+	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
+	limit := aux + round/2
+	n := startWith(t, func(doc string) string {
+		return doc + fmt.Sprintf("\ntoken_budget: {day: %d}\n", limit)
+	})
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
+	})
+	n.wake(t, "ceo", "How did the week go?")
+
+	stored := func(eventType string) []*events.Event {
+		rows, err := n.engine.Backends().Store.Events().List(t.Context(),
+			store.ListQuery{Type: eventType, Limit: 50})
+		if err != nil {
+			return nil
+		}
+		var out []*events.Event
+		for _, row := range rows {
+			full, err := n.engine.Backends().Store.Events().ByID(t.Context(), row.ID)
+			if err != nil {
+				return nil
+			}
+			var ev events.Event
+			if err := json.Unmarshal(full.Payload, &ev); err != nil {
+				t.Fatalf("decode a stored %s: %v", eventType, err)
+			}
+			out = append(out, &ev)
+		}
+		return out
+	}
+	// The completion is published after every phase event of the turn, so
+	// once it is stored an executor phase that opened would be too.
+	waitFor(t, "the turn to end on the budget", func() bool {
+		return len(stored("budget_exhausted")) > 0 && len(stored("agent_turn_completed")) > 0
+	})
+
+	var phases []string
+	for _, ev := range stored("agent_phase_started") {
+		if started, ok := events.DataAs[*types.AgentPhaseStarted](ev); ok {
+			phases = append(phases, string(started.Phase))
+		}
+	}
+	if !slices.Contains(phases, "onboarding") {
+		t.Fatalf("phases opened = %v, want the onboarding pass the budget refused", phases)
+	}
+	if slices.Contains(phases, "execute") {
+		t.Errorf("phases opened = %v: the turn entered its loop after the budget had "+
+			"already refused it", phases)
+	}
+	if calls := n.model.seen(); slices.Contains(calls, "execute") {
+		t.Errorf("the executor called the model after the onboarding pass was refused: %v", calls)
+	}
+}
+
 // The trace a wake starts must reach the events the turn it caused writes —
 // through the broker, the dispatcher, the turn engine and the publish listener
 // — or `GET /events/trace/{id}` answers with the wake alone and the dashboard's

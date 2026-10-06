@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -2111,17 +2113,36 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// A failure here does NOT fail the turn: the seat is un-onboarded, which
 	// is the state it was already in, and refusing to work over it would
 	// make a knowledge base that is briefly unreachable stop the company.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if ran, err := r.Onboard(ctx); err != nil {
+	//
+	// EXCEPT A BUDGET REFUSAL, which ends the turn here, as the refusal it
+	// is. Its refused round is counted, so the window it named reads past
+	// its ceiling and every later call of the turn is certain to be
+	// refused: entering the loop paid for nothing (the meter stops the
+	// executor's first round before it is made), and it put an executor
+	// phase on the record that never ran a round. Ended here, the turn is
+	// published as budget_exhausted naming the onboarding's refusal, and the
+	// dispatch parks the seat until the window turns over, exactly as a
+	// refusal inside the loop does.
+	var res turn.Result
+	ran, onboardErr := r.Onboard(ctx)
+	refused := errors.Is(onboardErr, toolloop.ErrBudgetExhausted)
+	switch {
+	case refused:
+		log.InfoContext(ctx, "onboarding_pass_refused", "handle", req.Handle,
+			"error", onboardErr, "detail", "the budget refused the onboarding pass; "+
+				"the turn ends on the refusal and the seat retries once its window has room")
+		err = fmt.Errorf("turn: onboarding: %w", onboardErr)
+	case onboardErr != nil:
 		log.WarnContext(ctx, "onboarding_pass_failed", "handle", req.Handle,
-			"error", err, "detail", "the seat stays un-onboarded and retries "+
+			"error", onboardErr, "detail", "the seat stays un-onboarded and retries "+
 				"next turn; the turn continues")
-	} else if ran {
+	case ran:
 		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
-
-	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
-		turnInputFor(req, reply))
+	if !refused {
+		res, err = turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
+			turnInputFor(req, reply))
+	}
 	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
 	// a note, and one offered from here on is answered `closed`.
 	closeSteer(ctx)
