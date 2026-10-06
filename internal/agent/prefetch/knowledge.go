@@ -152,10 +152,10 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	}
 	if !r.judgeable() {
 		// The trigger is a pointer, or asked nothing, so there is nothing
-		// worth searching on yet: a query built from "PR #42 got a comment" matches the
-		// wrong pages or none. The hint says to look again once the seat
-		// knows what the task needs, which is exactly what the executor's
-		// search_knowledge tool is for.
+		// worth searching on yet: a query built from "PR #42 got a
+		// comment" matches the wrong pages or none. The hint says to look
+		// again once the seat knows what the task needs, which is exactly
+		// what the executor's search_knowledge tool is for.
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	query := f.knowledgeQuery(ctx, r)
