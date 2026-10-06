@@ -5686,7 +5686,12 @@ this screen is the exception):
   (shown once; the outstanding link is listed among their credentials),
   **Reset second factor** (when they hold one) and **End all sessions** — or,
   for a machine, **Mint token** — and **Remove**, confirmed by typing their
-  login, since it cannot be undone. Each credential row has **Revoke**.
+  login, since it cannot be undone. Each credential row has **Revoke**. On the
+  reader's OWN row — the person `GET /auth/session` names, by id — every
+  gesture that ends their sessions says first that it is them and signs this
+  browser out at once, and **Suspend** and **Remove** add, where `GET
+  /iam/check` counts nobody else active holding `people:manage`, that
+  afterwards only this node's API token could administer people.
 
 Every one of these is one `/iam` write (`lib/iamWrite.ts`): a `403
 step_up_required` opens the step-up dialog and the same request is replayed; a

@@ -73,6 +73,7 @@ import {
   Checkbox,
   EMPTY_VALUE,
   EmptyValue,
+  InlineCode,
   Modal,
   Skeleton,
   StatCard,
@@ -504,6 +505,10 @@ export function PeopleAndAccess() {
   const tokenRows = useMemo(() => tokens.data ?? [], [tokens.data]);
   const boundTokens = tokenRows.filter((t) => t.seat).length;
   const openedRow = people.find((p) => p.id === opened) ?? null;
+  // WHO IS READING, by the id the session names — never the login, which a
+  // rename moves to somebody else: a gesture on the reader's own row signs
+  // them out, and the panel names that row in the third person.
+  const reader = useRest("/auth/session", (signal) => auth.session(signal)).data?.person;
 
   return (
     <>
@@ -685,7 +690,14 @@ export function PeopleAndAccess() {
           </Card>
 
           {openedRow && (
-            <Principal row={openedRow} manages={manages} held={viewer.grants} onChanged={refresh} />
+            <Principal
+              row={openedRow}
+              you={openedRow.id === reader}
+              administrators={check.data?.people_with_people_manage}
+              manages={manages}
+              held={viewer.grants}
+              onChanged={refresh}
+            />
           )}
 
           <Invitations
@@ -1159,11 +1171,17 @@ type PersonGesture =
  */
 function Principal({
   row,
+  you,
+  administrators,
   manages,
   held,
   onChanged,
 }: {
   row: DirectoryRow;
+  /** Whether this row is the person reading it. */
+  you: boolean;
+  /** How many active people `GET /iam/check` counts holding `people:manage`. */
+  administrators: number | undefined;
   manages: boolean;
   held: readonly string[];
   onChanged: () => void;
@@ -1188,6 +1206,9 @@ function Principal({
   const live = (credentials.data ?? []).filter((c) => !c.revoked);
   const holdsFactor = live.some((c) => c.method === "totp" || c.method === "recovery");
   const suspended = row.stage === "suspended";
+  // THE ONE ADMINISTRATOR LEFT, by the engine's own count — active, enrolled,
+  // holding `people:manage` — which the reader, signed in, is among.
+  const alone = you && canManagePeople(row.grants ?? []) && administrators === 1;
   const { reload: reloadCredentials } = credentials;
   const { reload: reloadSessions } = sessions;
   const changed = () => {
@@ -1274,7 +1295,9 @@ function Principal({
       )}
       {(gesture === "suspend" || gesture === "reactivate") && (
         <PersonWrite
-          title={gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${who}?`}
+          title={
+            gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${you ? "yourself" : who}?`
+          }
           confirm={gesture === "reactivate" ? "Reactivate" : "Suspend"}
           danger={gesture === "suspend"}
           request={{
@@ -1285,6 +1308,7 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
+          {gesture === "suspend" && you && <OnYourself alone={alone} />}
           {/* WHAT THIS PERSON HOLDS, said: a seat they do not hold is not
               withheld, and the sessions a suspension ends stay ended. */}
           {gesture === "reactivate"
@@ -1301,6 +1325,7 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
+          {you && <OnYourself />}
           Their authenticator app and recovery codes stop working, and every session and token they
           hold ends. <AfterFactorReset />
         </PersonWrite>
@@ -1314,13 +1339,14 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
+          {you && <OnYourself />}
           They are signed out everywhere, and every personal access token they minted stops working
           too.
         </PersonWrite>
       )}
       {gesture === "remove" && (
         <PersonWrite
-          title={`Remove ${who}?`}
+          title={`Remove ${you ? "yourself" : who}?`}
           confirm="Remove"
           danger
           typeToConfirm={row.login || row.id}
@@ -1328,6 +1354,7 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
+          {you && <OnYourself alone={alone} />}
           Their row, credentials and sessions are deleted, {row.seat ? "their seat is freed, " : ""}
           and every sealed value of theirs is erased. This cannot be undone: to bring them back,
           invite them again. The trail keeps what they did.
@@ -1517,6 +1544,30 @@ function AfterFactorReset() {
       return <>They sign in with their password alone until they set up a new one.</>;
   }
   return null;
+}
+
+/**
+ * What a gesture on the reader's OWN row says first: that it is them, and that
+ * it signs this browser out at once — and, where it stops them administering
+ * and nobody else could, that only a Tier A token could afterwards.
+ *
+ * The panel names a row by its person, in the third person, and a person
+ * suspending "Jane Doe" from Jane Doe's own session was told none of it.
+ */
+function OnYourself({ alone = false }: { alone?: boolean }) {
+  return (
+    <Callout variant="warning" title="This is you">
+      It signs you out of this browser at once.
+      {alone && (
+        <>
+          {" "}
+          Nobody else active holds <InlineCode>people:manage</InlineCode>, so afterwards nobody
+          could administer people except through this node&rsquo;s API token (
+          <InlineCode>api.auth.tokens</InlineCode>).
+        </>
+      )}
+    </Callout>
+  );
 }
 
 /** One confirmed write about a principal: the dialog, the request, the answer. */

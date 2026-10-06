@@ -116,6 +116,10 @@ function json(status: number, payload: unknown): Response {
  */
 /** What `GET /auth/config` says of a second factor, for a case that reads it. */
 let secondFactor = "required";
+/** Whose session `GET /auth/session` names, or null for none read. */
+let reader: string | null = null;
+/** How many active people `GET /iam/check` counts holding `people:manage`. */
+let administrators = 1;
 
 function engine(writes: Record<string, Response[]> = {}, directory: () => unknown = () => PEOPLE) {
   const sent: Sent[] = [];
@@ -139,6 +143,9 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
     switch (url.pathname) {
       case "/auth/config":
         return Promise.resolve(json(200, { min_password_length: 12, second_factor: secondFactor }));
+      case "/auth/session":
+        if (reader) return Promise.resolve(json(200, { person: reader, login: "ana.admin" }));
+        break;
       case "/iam/people":
         return Promise.resolve(json(200, directory()));
       case "/iam/invitations":
@@ -162,7 +169,11 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
         return Promise.resolve(json(200, { tokens: [] }));
       case "/iam/check":
         return Promise.resolve(
-          json(200, { findings: [], people_with_people_manage: 1, bindings_unchecked: 0 }),
+          json(200, {
+            findings: [],
+            people_with_people_manage: administrators,
+            bindings_unchecked: 0,
+          }),
         );
       case "/iam/credentials":
         return Promise.resolve(
@@ -220,6 +231,8 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/settings/access";
   secondFactor = "required";
+  reader = null;
+  administrators = 1;
 });
 
 afterEach(() => {
@@ -813,6 +826,54 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   expect(removal?.path).toBe("/iam/people/p-bo");
   expect(revocation?.path).toBe("/iam/credentials/c-totp");
   expect(revocation?.query.get("person")).toBe("p-bo");
+});
+
+// A GESTURE ON THE READER'S OWN ROW SAYS IT IS THEM and that it signs them out
+// at once; the one administrator left suspending or removing themselves is
+// told that only a Tier A token could administer people afterwards. The
+// CONTROLS: a second administrator takes that sentence away, and somebody
+// else's row says neither. Mutation: compare the row with anything but the
+// session's person, or drop the count, and one side goes red.
+test("suspending or removing yourself says it is you, and when nobody else administers", async () => {
+  const ana = {
+    id: "p-ana",
+    kind: "person",
+    stage: "active",
+    login: "ana.admin",
+    name: "Ana Admin",
+    grants: ADMIN.grants,
+  };
+  const directory = () => ({ people: [...PEOPLE.people, ana], next: "" });
+  reader = "p-ana";
+  engine({}, directory);
+  location.hash = "#/settings/access?person=p-ana";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
+  const suspend = await screen.findByRole("dialog", { name: "Suspend yourself?" });
+  expect(within(suspend).getByText("This is you")).toBeTruthy();
+  expect(await within(suspend).findByText(/Nobody else active holds/)).toBeTruthy();
+  fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+  const remove = await screen.findByRole("dialog", { name: "Remove yourself?" });
+  expect(within(remove).getByText(/Nobody else active holds/)).toBeTruthy();
+  cleanup();
+
+  administrators = 2;
+  engine({}, directory);
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+  const another = await screen.findByRole("dialog", { name: "Remove yourself?" });
+  await settle();
+  expect(within(another).getByText("This is you")).toBeTruthy();
+  expect(within(another).queryByText(/Nobody else active holds/)).toBeNull();
+  cleanup();
+
+  location.hash = "#/settings/access?person=p-bo";
+  engine({}, directory);
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
+  const theirs = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
+  expect(within(theirs).queryByText("This is you")).toBeNull();
 });
 
 // A SERVICE ACCOUNT IS A KEYED CREATE OF A MACHINE, offered neither grant a
