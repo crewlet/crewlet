@@ -164,11 +164,11 @@ export function UserBlock({
   const [everywhere, setEverywhere] = useState(false);
   const session = useSessionAnswer(!viewer.anonymous, viewer.login);
   const who = whoLine(viewer, seatName, session);
-  const resolved = !viewer.loading && !viewer.anonymous;
-  const person = resolved && !viewer.unbound;
+  const answered = !viewer.loading && !viewer.anonymous;
+  const person = answered && !viewer.unbound;
   // WHO THIS IS IS SETTLED by the viewer, or by the session while the viewer
   // has not answered (see [whoLine]).
-  const known = resolved || (!viewer.anonymous && session !== null);
+  const resolved = answered || (!viewer.anonymous && session !== null);
   const account = accountOf(viewer, session);
 
   const identity = (
@@ -179,10 +179,10 @@ export function UserBlock({
           nobody, or for an answer still out, is not the reader and is not
           ringed. */}
       <SeatAvatar
-        name={known ? who.name || "?" : "?"}
+        name={resolved ? who.name || "?" : "?"}
         size="sm"
         kind="human"
-        ring={known ? "brand" : undefined}
+        ring={resolved ? "brand" : undefined}
         decorative
       />
       <span className="user-block-text">
