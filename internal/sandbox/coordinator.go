@@ -97,6 +97,11 @@ type ResumeRequest struct {
 	// no run at all, so on this request its cost was reported nowhere.
 	DeliveredRefs []string
 
+	// DeliveredRefsElided is how many more refs the run reported than
+	// DeliveredRefs lists ([MaxDeliveredRefBytes]), for the resumed phase's
+	// record to say so too.
+	DeliveredRefsElided int
+
 	// InputTokens and OutputTokens are what the job this resume collected
 	// cost, for the resumed segment's charge to the turn's work item
 	// (ADR-0022): that segment is the job's, so it pays for it.
@@ -625,8 +630,8 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
-		DeliveredRefs: result.DeliveredRefs,
-		InputTokens:   result.InputTokens, OutputTokens: result.OutputTokens,
+		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 	})
 	return err
 }
@@ -699,8 +704,11 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 // either way: see [ResumeRequest.InputTokens].
 type runOutcome struct {
 	DeliveredRefs []string
-	InputTokens   int
-	OutputTokens  int
+	// DeliveredRefsElided is how many more the run reported than its
+	// record lists — see [MaxDeliveredRefBytes].
+	DeliveredRefsElided int
+	InputTokens         int
+	OutputTokens        int
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
@@ -882,7 +890,10 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		SandboxID:                     run.SandboxID,
 		CostUSD:                       result.CostUSD,
 		DeliveredRefs:                 result.DeliveredRefs,
-		ConversationKey:               run.Conversation(),
+		// How many more it reported than the record lists, said rather
+		// than dropped — see [MaxDeliveredRefBytes].
+		DeliveredRefsElided: result.DeliveredRefsElided,
+		ConversationKey:     run.Conversation(),
 	}
 	if !facts.StartedAt.IsZero() {
 		rec.StartedAt = facts.StartedAt.UTC()
@@ -1385,8 +1396,8 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// path below like every other failed resume.
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
-		DeliveredRefs: outcome.DeliveredRefs,
-		InputTokens:   outcome.InputTokens, OutputTokens: outcome.OutputTokens,
+		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
+		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
@@ -2218,7 +2229,14 @@ func resumeText(result Result) string {
 	}
 	lines := []string{"The sandbox coding run " + status + "."}
 	if len(result.DeliveredRefs) > 0 {
-		lines = append(lines, "Delivered: "+strings.Join(result.DeliveredRefs, ", "))
+		delivered := "Delivered: " + strings.Join(result.DeliveredRefs, ", ")
+		if result.DeliveredRefsElided > 0 {
+			// SAID, so the executor does not report a short list as all of
+			// it: the rest are in the report it reads below.
+			delivered += fmt.Sprintf(" (and %d more its report names, not listed here)",
+				result.DeliveredRefsElided)
+		}
+		lines = append(lines, delivered)
 	}
 	switch {
 	case result.Text != "":

@@ -251,6 +251,10 @@ type RunRecord struct {
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string
 
+	// RefsElided is how many more the run reported than DeliveredRefs lists,
+	// which the coordinator bounds — said on the record rather than dropped.
+	RefsElided int
+
 	// LaunchID is the job this resume collected — the pending-run row's
 	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
 	// more than once, so it is what tells one collected run's record from

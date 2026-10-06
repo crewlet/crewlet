@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/redact"
@@ -20,11 +21,21 @@ import (
 // the resumed executor's too, as the tool result it reads), and an event over
 // the queue's 8 MiB [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes]
 // is refused — so an unbounded report does not arrive long, it does not arrive
-// at all. 256 KiB of text is at most 1.5 MiB once JSON has escaped it (a
-// control byte becomes six), and three of them are still well inside the
-// ceiling. It was 100 000 RUNES, which is anything from 100 KB to 400 KB on the
-// wire depending on the script the output was written in: a bound on the wrong
-// unit for the only limit that matters.
+// at all, and it takes the run's only spend record with it. It was 100 000
+// RUNES, which is anything from 100 KB to 400 KB on the wire depending on the
+// script the output was written in: a bound on the wrong unit for the only
+// limit that matters.
+//
+// THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
+// text is the report, the failure detail and the transcript (each at most
+// this), the question in its notes ([MaxQuestionBytes]) and the delivered
+// refs ([MaxDeliveredRefBytes]); everything else on it is identifiers and
+// counts, a few KiB. JSON can grow text six-fold — a control byte becomes
+// \u00XX, `<`, `>` and `&` become \u003c and its kin, an invalid byte becomes
+// \ufffd — so the worst case is (3 × 256 + 16 + 16) KiB × 6, about 4.7 MiB,
+// with the ceiling's other 3 MiB to spare. A field added to the record that
+// carries text a box wrote needs its own bound and a line here, or this
+// promise is no longer one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
 // failure detail are what the resumed executor acts on — what to tell the
@@ -100,10 +111,44 @@ const (
 	// PartFailure is [Result.Error]: why the run did not finish — its exit
 	// status, its CLI's own error, and what it printed to stderr.
 	PartFailure RunPart = "failure"
+	// PartQuestion is [Result.Question]: what the run stopped to ask a
+	// person.
+	PartQuestion RunPart = "question"
 )
 
+// RunParts is every part a [Condenser] can be asked about.
+var RunParts = []RunPart{PartReport, PartFailure, PartQuestion}
+
 // Valid reports whether the part is one this package names.
-func (p RunPart) Valid() bool { return p == PartReport || p == PartFailure }
+func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
+
+// MaxQuestionBytes bounds the question a run parks on.
+//
+// SIZED TO WHERE IT TRAVELS, and it travels further than anything else a run
+// writes: it is the note on the run's phase record, a field of the park's
+// announcement, a field of the run's coordination row — read and written whole
+// on every status flip and every listing of active runs for as long as it
+// waits — the banner a person answers it from, the operator's `answer_run`
+// reply, and the resumed executor's answer text, which re-sends it on every
+// later round of the turn. 16 KiB is about four thousand tokens: a page of
+// prose, room for a question, its context and its options with plenty to
+// spare. A question longer than a page is the report put in the wrong place —
+// the report has 256 KiB of its own — and the shim's own route already stops
+// near 128 KiB, the most one argument can carry. Past it the question is
+// condensed by the seat's auxiliary model, never cut.
+const MaxQuestionBytes = 16 << 10
+
+// MaxDeliveredRefBytes bounds the branches and pull requests a run's record
+// lists as delivered.
+//
+// THEY ARE SCRAPED FROM THE WHOLE REPORT, by a pattern with no count to it, so
+// a report that pasted a list of pull requests — or a run that wrote one URL
+// on every line of a 30 MiB file — handed the record one entry per match. A
+// pull-request URL is sixty to two hundred bytes, so 16 KiB lists a hundred
+// or more, past what any one run delivers; the refs are deduplicated first,
+// and what does not fit is COUNTED on the record and in the resumed
+// executor's text rather than dropped unsaid.
+const MaxDeliveredRefBytes = 16 << 10
 
 // Condenser rewrites a piece of a collected run's account that is past
 // [MaxRunTextBytes] into at most budget bytes, on the seat's own auxiliary
@@ -134,11 +179,75 @@ type Condenser interface {
 // publish an unbounded transcript, and the record carrying the run's only
 // spend would be refused whole.
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
-	result.Text = c.fitPart(ctx, run, PartReport, result.Text)
-	result.Error = c.fitPart(ctx, run, PartFailure, result.Error)
+	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes)
+	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes)
 	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
 		boundTranscript(result.Transcript)
+	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
+	if result.NeedsInput {
+		result = c.fitQuestion(ctx, run, result)
+	}
 	return result
+}
+
+// fitQuestion holds a question to [MaxQuestionBytes]: condensed past it, and
+// where no model can condense it, whole lines from its start — a question is
+// read from the top, like a report — with the rest said.
+//
+// A QUESTION NO LINE OF WHICH FITS IS NOT ASKED. Its first line alone is past
+// the bound, so whole lines leave nobody anything to answer, and a fragment
+// of it read as the question is a question the agent never asked. The run is
+// not parked on it: it resumes as not succeeded, saying why, and the executor
+// can ask the coding agent again for a question a person can read.
+func (c *Coordinator) fitQuestion(ctx context.Context, run PendingRun, result Result) Result {
+	question := result.Question
+	if len(question) <= MaxQuestionBytes {
+		return result
+	}
+	if rewritten, ok := c.condensed(ctx, run, PartQuestion, question, MaxQuestionBytes); ok {
+		result.Question = rewritten
+		return result
+	}
+	if first, _, _ := strings.Cut(question, "\n"); len(first)+1 <= MaxQuestionBytes {
+		result.Question = wholeLines(PartQuestion, question, MaxQuestionBytes)
+		return result
+	}
+	refusal := fmt.Sprintf("the question the coding agent asked is %s with no line break in its "+
+		"first %d KiB, past what a question carries, and no model could condense it, so nobody "+
+		"was asked it", kib(len(question)), MaxQuestionBytes>>10)
+	log.WarnContext(ctx, "sandbox_question_not_asked", "turn_id", run.TurnID,
+		"launch_id", run.LaunchID, "bytes", len(question))
+	result.NeedsInput, result.Question, result.AskTo = false, "", ""
+	result.Success = false
+	if result.Error == "" {
+		result.Error = refusal
+	} else {
+		result.Error = refusal + ":\n" + result.Error
+	}
+	return result
+}
+
+// boundRefs is a run's delivered refs, deduplicated in the order they were
+// found and held to [MaxDeliveredRefBytes], with how many did not fit.
+//
+// WHOLE REFS ONLY: a ref is an identifier, and a shortened URL names nothing.
+func boundRefs(refs []string) ([]string, int) {
+	seen := make(map[string]bool, len(refs))
+	var kept []string
+	size, left := 0, 0
+	for _, ref := range refs {
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		if size+len(ref) > MaxDeliveredRefBytes {
+			left++
+			continue
+		}
+		size += len(ref)
+		kept = append(kept, ref)
+	}
+	return kept, left
 }
 
 // The two halves of a long transcript a run's record keeps, in whole lines.
@@ -254,30 +363,41 @@ func elidedNote(whole, partial, bytes int) string {
 // kib is a size as a reader says it, in KiB rounded up.
 func kib(n int) string { return fmt.Sprintf("%d KiB", (n+1023)/1024) }
 
-func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart, text string) string {
-	if len(text) <= MaxRunTextBytes {
+func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart, text string, budget int) string {
+	if len(text) <= budget {
 		return text
 	}
-	if c.condense != nil {
-		rewritten, err := c.condense.Condense(ctx, run, part, text, MaxRunTextBytes)
-		if err == nil && len(rewritten) <= MaxRunTextBytes {
-			return rewritten
-		}
-		detail := "the rewrite came back past the bound"
-		if err != nil {
-			detail = err.Error()
-		}
-		log.WarnContext(ctx, "sandbox_run_text_not_condensed", "turn_id", run.TurnID,
-			"launch_id", run.LaunchID, "part", string(part), "bytes", len(text), "error", detail)
+	if rewritten, ok := c.condensed(ctx, run, part, text, budget); ok {
+		return rewritten
 	}
-	return wholeLines(part, text, MaxRunTextBytes)
+	return wholeLines(part, text, budget)
+}
+
+// condensed is the seat's auxiliary model's rewrite of a piece past its
+// budget, or false — said in the log — where none could be had.
+func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPart, text string, budget int) (string, bool) {
+	if c.condense == nil {
+		return "", false
+	}
+	rewritten, err := c.condense.Condense(ctx, run, part, text, budget)
+	if err == nil && len(rewritten) <= budget {
+		return rewritten, true
+	}
+	detail := "the rewrite came back past the bound"
+	if err != nil {
+		detail = err.Error()
+	}
+	log.WarnContext(ctx, "sandbox_run_text_not_condensed", "turn_id", run.TurnID,
+		"launch_id", run.LaunchID, "part", string(part), "bytes", len(text), "error", detail)
+	return "", false
 }
 
 // wholeLines is a piece that could not be condensed, held to budget by
 // leaving WHOLE LINES out and saying how many — never by cutting one.
 //
-// From the END of a report, because a report is written to be read from the
-// top and its summary is where it starts; from the START of a failure, because
+// From the END of a report (and of a question), because each is written to be
+// read from the top and its point is where it starts; from the START of a
+// failure, because
 // its conclusion — the line naming what broke — is the last thing a process
 // prints, after everything that led to it. The note stands where
 // the left-out lines were and is not counted against the budget, for the
@@ -287,24 +407,24 @@ func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart,
 func wholeLines(part RunPart, text string, budget int) string {
 	lines := strings.SplitAfter(text, "\n")
 	kept, size := 0, 0
-	if part == PartReport {
+	if part != PartFailure {
 		for kept < len(lines) && size+len(lines[kept]) <= budget {
 			size += len(lines[kept])
 			kept++
 		}
 		left := lines[kept:]
-		return strings.Join(lines[:kept], "") + omittedLines(left, "later")
+		return strings.Join(lines[:kept], "") + omittedLines(left, "later", budget)
 	}
 	for kept < len(lines) && size+len(lines[len(lines)-1-kept]) <= budget {
 		size += len(lines[len(lines)-1-kept])
 		kept++
 	}
 	left := lines[:len(lines)-kept]
-	return omittedLines(left, "earlier") + strings.Join(lines[len(lines)-kept:], "")
+	return omittedLines(left, "earlier", budget) + strings.Join(lines[len(lines)-kept:], "")
 }
 
 // omittedLines is the note standing where whole lines were left out.
-func omittedLines(left []string, which string) string {
+func omittedLines(left []string, which string, budget int) string {
 	if len(left) == 0 {
 		return ""
 	}
@@ -313,8 +433,8 @@ func omittedLines(left []string, which string) string {
 		n += len(line)
 	}
 	note := fmt.Sprintf("(%d %s line(s), %d KiB, not shown: past the %d KiB a run's record "+
-		"carries, and no model could condense them)", len(left), which, (n+1023)/1024,
-		MaxRunTextBytes>>10)
+		"carries for it, and no model could condense them)", len(left), which, (n+1023)/1024,
+		budget>>10)
 	if which == "later" {
 		return "\n" + note
 	}

@@ -736,6 +736,13 @@ type AgentPhaseCompleted struct {
 	// parked on a question never had — its cost was reported nowhere.
 	CostUSD       float64  `json:"cost_usd"`
 	DeliveredRefs []string `json:"delivered_refs,omitempty"`
+	// DeliveredRefsElided is how many more refs the run reported than
+	// DeliveredRefs lists: refs are scraped from the whole report by a
+	// pattern with no count to it, and the record lists them up to a bound,
+	// deduplicated, counting the rest here rather than dropping them unsaid.
+	// ADDITIVE: zero on a record that lists them all and on an older build's,
+	// which listed every match; an older reader ignores it.
+	DeliveredRefsElided int `json:"delivered_refs_elided,omitempty"`
 	// ActivityTranscript is a coding run's own account of what it did —
 	// what it said, its tool calls and what they ran, or its stderr where
 	// the CLI streams nothing better — on the PhaseSandbox record only.

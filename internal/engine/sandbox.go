@@ -366,6 +366,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Success:       req.Success,
 		Trigger:       req.Trigger,
 		DeliveredRefs: req.DeliveredRefs,
+		RefsElided:    req.DeliveredRefsElided,
 		InputTokens:   req.InputTokens,
 		OutputTokens:  req.OutputTokens,
 	})
@@ -447,6 +448,10 @@ type resumeInput struct {
 	// clarification: nothing was collected. The run's cost is on its own
 	// `sandbox` phase record — see [sandbox.ResumeRequest.DeliveredRefs].
 	DeliveredRefs []string
+
+	// RefsElided is how many more the run reported than DeliveredRefs
+	// lists — see [sandbox.ResumeRequest.DeliveredRefsElided].
+	RefsElided int
 
 	// InputTokens and OutputTokens are the resumed job's tokens, which this
 	// segment's charge to the turn's work item includes — see
@@ -639,6 +644,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 					SandboxID:     in.Run.SandboxID,
 					LaunchID:      in.Run.LaunchID,
 					DeliveredRefs: in.DeliveredRefs,
+					RefsElided:    in.RefsElided,
 				},
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An
 				// agent-mode executor called them over the bridge, possibly
@@ -1427,8 +1433,8 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},
-		// A report or failure past what the run's record carries is
-		// condensed by the seat's auxiliary model rather than cut.
+		// A report, a failure or a question past what the run's record
+		// carries is condensed by the seat's auxiliary model rather than cut.
 		Condense: runCondenser{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
@@ -1465,10 +1471,6 @@ func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part
 	if company == nil {
 		return "", compact.ErrUnavailable
 	}
-	kind := compact.KindReport
-	if part == sandbox.PartFailure {
-		kind = compact.KindToolError
-	}
 	note := compact.Result{Compacted: true, From: len(text)}.Note()
 	// THE TURN'S OWN COST, filed under the run the report belongs to: the
 	// resumed segment reads it as the coding run's answer. No segment's
@@ -1476,12 +1478,26 @@ func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part
 	// between two of them, on whichever node collects — so it is in the
 	// turn's cost on every rollup and not on its work item (ADR-0022).
 	use := auxspend.Use{Stage: types.AuxStageTurn, TurnID: run.TurnID, WorkKey: run.WorkKey}
-	res, err := r.engine.seatCompactor(company, run.AgentHandle, use).Fit(ctx, kind, text,
+	res, err := r.engine.seatCompactor(company, run.AgentHandle, use).Fit(ctx, runPartKind(part), text,
 		budget-len(note)-1)
 	if err != nil {
 		return "", err
 	}
 	return note + "\n" + res.Text, nil
+}
+
+// runPartKind is what the compactor is told a piece of a run's account IS,
+// which decides what its rewrite must keep: a report its findings, a failure
+// its cause, a question the question and its options.
+func runPartKind(part sandbox.RunPart) compact.Kind {
+	switch part {
+	case sandbox.PartFailure:
+		return compact.KindToolError
+	case sandbox.PartQuestion:
+		return compact.KindQuestion
+	default:
+		return compact.KindReport
+	}
 }
 
 // startSandboxWaiter starts the completion poll, once the node exists and a

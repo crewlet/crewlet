@@ -212,8 +212,12 @@ type Result struct {
 	// DeliveredRefs are the branches and pull requests the run produced —
 	// what the delivery gate judges a coding turn on.
 	DeliveredRefs []string
-	ChangedFiles  []string
-	Commands      []string
+
+	// DeliveredRefsElided is how many more refs the run reported than its
+	// record lists ([MaxDeliveredRefBytes]). Set by the coordinator.
+	DeliveredRefsElided int
+	ChangedFiles        []string
+	Commands            []string
 
 	Error string
 
