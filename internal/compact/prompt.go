@@ -66,6 +66,11 @@ var kindBriefs = map[Kind]string{
 	KindReport: "The text is the report a coding agent wrote about a coding task it finished. " +
 		"Keep what it changed and where, what it delivered (branches, pull requests, " +
 		"commits), what it tested and how, what failed, and what it says is left to do.",
+	KindQuestion: "The text is a QUESTION a coding agent stopped to ask a person before it " +
+		"could finish its task; the person answers it, and the agent's work resumes on that " +
+		"answer. Keep the question itself as a question, every option it offers and what " +
+		"each one means, what it has already tried or ruled out, and what it needs decided — " +
+		"so the person can answer it without asking anything back.",
 }
 
 // systemPrompt is one rewrite's instructions.

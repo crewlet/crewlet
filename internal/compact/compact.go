@@ -209,11 +209,14 @@ const (
 	KindOutcome Kind = "outcome"
 	// KindReport is a coding agent's report on the run it finished.
 	KindReport Kind = "report"
+	// KindQuestion is a question a coding agent stopped to ask a person,
+	// which that person answers and the agent's work resumes on.
+	KindQuestion Kind = "question"
 )
 
 // Kinds is every kind this build has instructions for.
 var Kinds = []Kind{KindConversation, KindThread, KindArgument, KindToolError,
-	KindProduced, KindSource, KindTask, KindAnswer, KindOutcome, KindReport}
+	KindProduced, KindSource, KindTask, KindAnswer, KindOutcome, KindReport, KindQuestion}
 
 // Valid reports whether this build knows the kind.
 func (k Kind) Valid() bool {
