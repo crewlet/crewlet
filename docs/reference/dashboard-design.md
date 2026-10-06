@@ -1829,8 +1829,10 @@ whole credential in the fragment, which no browser sends to a server, and the
 screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
 the view, the body on the redemption — never in a request URL. The view names
 who it is for, who sent it and the seat it binds; the form proposes the login
-the engine suggested, states the password length `/auth/config` asks for and
-takes the password twice — a slip in the only copy is an account nobody can
+the engine suggested — held to the login grammar, and said under the field,
+before anything is posted — says which session it signs out when the browser
+is already signed in as somebody, states the password length `/auth/config`
+asks for and takes the password twice — a slip in the only copy is an account nobody can
 sign in to, and the way back is an administrator's reset link. A
 spent, withdrawn or mistyped link is one screen (`410`), and a login or address
 somebody else holds is the engine's own sentence (`409`) over the form as
@@ -5659,7 +5661,8 @@ this screen is the exception):
   only a hash of its secret. Opening it is where the person chooses a login and
   a password.
 - **New service account** — a machine: a login in the colon grammar
-  (`ci:release`), a name and grants — and then **Mint its token**: a label, a
+  (`ci:release`, checked under the field before anything is posted, as an
+  edit's login is against its holder's grammar), a name and grants — and then **Mint its token**: a label, a
   lifetime and grants out of the account's own (`secrets:read` and
   `people:manage` disabled, since no token carries them, and one the reader
   does not hold left unticked and disabled, since the engine refuses a token
