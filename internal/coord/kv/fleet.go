@@ -502,8 +502,11 @@ type FleetConfig struct {
 	// while a straggler finishes writing to it.
 	RateWindow time.Duration
 
-	// ClaimTTL is how long a webhook delivery stays claimed.
-	ClaimTTL time.Duration
+	// MaxClaimTTL is the longest claim the claims bucket holds, and so its
+	// age — see [coord.MaxClaimTTL], which is what every deployment passes.
+	// Each claim lapses at its own deadline, carried in the record; the
+	// age only reaps what has lapsed, and caps what a claim may ask for.
+	MaxClaimTTL time.Duration
 
 	// LedgerRetention is how long a turn completion is remembered.
 	LedgerRetention time.Duration
@@ -571,7 +574,7 @@ func (c *FleetConfig) normalize() error {
 		name  string
 		value time.Duration
 	}{
-		{"RateWindow", c.RateWindow}, {"ClaimTTL", c.ClaimTTL},
+		{"RateWindow", c.RateWindow}, {"MaxClaimTTL", c.MaxClaimTTL},
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
 		{"RebaseRetention", c.RebaseRetention},
@@ -650,7 +653,19 @@ type FleetStore struct {
 
 	rateWindow time.Duration
 	freshness  time.Duration
+
+	// maxClaim is the longest claim [FleetStore.Claim] accepts: the claims
+	// bucket's age IN FORCE once [raiseAge] has had its say, never this
+	// node's config — a peer may have created the bucket older, and that
+	// age is what the bucket honours. Zero is a bucket with no age, which
+	// reaps nothing and so caps nothing.
+	maxClaim time.Duration
 }
+
+// claimsDescription is the claims bucket's, written once because the bucket
+// is both opened and, when an earlier build made it younger, raised.
+const claimsDescription = "Crewlet inbound-delivery claims; each record carries its own " +
+	"deadline, and the bucket age is only ever raised to cover the longest claim"
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
@@ -714,9 +729,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
 			cfg.RateWindow * rateBucketFactor},
-		{&store.claims, claimsSuffix,
-			"Crewlet inbound-delivery claims; the bucket TTL is the dedupe window",
-			cfg.ClaimTTL},
+		{&store.claims, claimsSuffix, claimsDescription, cfg.MaxClaimTTL},
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
 			cfg.LedgerRetention},
@@ -768,8 +781,27 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		}
 	}
 
+	// THE CLAIMS BUCKET'S AGE IS A CEILING, NOT A PREFERENCE: every claim
+	// carries its own deadline and the age only reaps what has lapsed, so a
+	// bucket an earlier build created younger than the longest claim reaps
+	// a live one early — and a Mattermost post a reconnecting seat replays
+	// is then delivered twice. Raised, never lowered; see [raiseAge].
+	claims, err := raiseAge(ctx, js, cfg.Clustered, store.claims, jetstream.KeyValueConfig{
+		Bucket: cfg.BucketPrefix + claimsSuffix, Description: claimsDescription,
+		TTL: cfg.MaxClaimTTL, Replicas: cfg.Replicas,
+	}, "delivery claim")
+	if err != nil {
+		return nil, err
+	}
+	store.claims = claims
+	facts, err := readBucket(ctx, claims)
+	if err != nil {
+		return nil, err
+	}
+	store.maxClaim = facts.age
+
 	log.DebugContext(ctx, "coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
-		"rate_window", cfg.RateWindow, "claim_ttl", cfg.ClaimTTL,
+		"rate_window", cfg.RateWindow, "max_claim_ttl", store.maxClaim,
 		"ledger_retention", cfg.LedgerRetention, "cooldown_max", cfg.CooldownMax,
 		"budget_retention", cfg.BudgetRetention,
 		"status_freshness", cfg.StatusFreshness)
@@ -899,18 +931,91 @@ func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, n
 	if ttl <= 0 {
 		return false, errors.New("coord/kv: a claim needs a positive ttl")
 	}
+	// REFUSED, never clamped: the bucket keeps a record for its age and no
+	// longer, so a longer claim would lapse early and let through the very
+	// duplicate it was sized to stop.
+	if f.maxClaim > 0 && ttl > f.maxClaim {
+		return false, fmt.Errorf("coord/kv: a %v claim exceeds the claims bucket's age %v: %w",
+			ttl, f.maxClaim, coord.ErrTTLTooLong)
+	}
 	encoded := encodeKey(key)
-	// Create is the whole mechanism: it fails when the key exists, so the
-	// FIRST caller wins and every other gets ErrKeyExists. Expiry is the
-	// bucket's, which means the server decides when a claim lapses and no
-	// node compares its own clock to a peer's deadline.
-	if _, err := f.create(ctx, f.claims, encoded, []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
-		if errors.Is(err, jetstream.ErrKeyExists) {
+	value := mustEncodeClaim(claimRecord{At: now.UTC(), Until: now.Add(ttl).UTC()})
+	for range claimAttempts {
+		// Create is the mechanism: it fails when the key exists, so the
+		// FIRST caller wins and every other gets ErrKeyExists.
+		_, err := f.create(ctx, f.claims, encoded, value)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, jetstream.ErrKeyExists) {
+			return false, unavailable("claim the delivery", err)
+		}
+		// AND A KEY THAT EXISTS IS NOT YET A CLAIM THAT HOLDS. The bucket's
+		// age is the LONGEST claim's, so a shorter one is judged by the
+		// deadline its record carries — which is what lets a webhook's
+		// five-minute claim and a socket's thirty-minute one share a
+		// bucket, each lapsing when its own caller said.
+		entry, err := f.get(ctx, f.claims, encoded)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			// Reaped or released since the create lost: ask again.
+			continue
+		case err != nil:
+			return false, unavailable("read the delivery claim", err)
+		}
+		held, dated := decodeClaim(entry.Value())
+		if !dated {
+			// A value this build cannot read is a claim it cannot date,
+			// and EXISTENCE was the whole rule of any build that wrote
+			// one: held, until the bucket reaps it.
 			return false, nil
 		}
-		return false, unavailable("claim the delivery", err)
+		if held.Until.After(now) {
+			return false, nil
+		}
+		// LAPSED: take it over at the revision just read, so two callers
+		// finding the same lapsed claim cannot both win it.
+		_, err = f.claims.Update(ctx, encoded, value, entry.Revision())
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue
+		default:
+			return false, unavailable("take over the lapsed delivery claim", err)
+		}
 	}
-	return true, nil
+	// Every round had a winner and it was somebody else — which is
+	// unknown rather than "claimed": the contract fails open on an error.
+	return false, contended("claim", key)
+}
+
+// claimAttempts bounds the create/read/take-over rounds of one claim. Each
+// lost round means another caller moved the key in between, and three such
+// rounds on one delivery id is a store under contention rather than a race
+// another round would settle.
+const claimAttempts = 3
+
+// claimRecord is one delivery claim: when it was taken and when it lapses.
+type claimRecord struct {
+	At    time.Time `json:"at"`
+	Until time.Time `json:"until"`
+}
+
+// decodeClaim reads a claim record, reporting false for a value that names no
+// deadline — an earlier build's bare timestamp, or bytes nothing wrote.
+func decodeClaim(raw []byte) (claimRecord, bool) {
+	var record claimRecord
+	if json.Unmarshal(raw, &record) != nil || record.Until.IsZero() {
+		return claimRecord{}, false
+	}
+	return record, true
+}
+
+func mustEncodeClaim(record claimRecord) []byte {
+	// Two times cannot fail to encode.
+	raw, _ := json.Marshal(record)
+	return raw
 }
 
 // Release drops a claim.

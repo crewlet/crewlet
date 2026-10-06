@@ -264,6 +264,42 @@ var claimCases = []fleetCase{{
 		}
 	},
 }, {
+	// EACH CLAIM LAPSES AT ITS OWN TTL. A webhook claims for five minutes
+	// and a Mattermost socket for thirty, in one store; a backend that
+	// held every claim for its bucket's age swallowed a webhook replay for
+	// the socket's window, and one that held every claim for the shortest
+	// let a reconnecting seat deliver a post twice.
+	name: "a claim lapses at its own ttl and can then be taken again once",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		if !h.claim("mattermost|alice|p1", time.Minute, at) {
+			h.t.Fatal("the first claim was refused")
+		}
+		if h.claim("mattermost|alice|p1", time.Minute, at.Add(59*time.Second)) {
+			h.t.Fatal("a claim was taken again inside its own ttl")
+		}
+		later := at.Add(time.Minute + time.Second)
+		if !h.claim("mattermost|alice|p1", time.Minute, later) {
+			h.t.Fatal("a claim past its own ttl could not be taken again")
+		}
+		if h.claim("mattermost|alice|p1", time.Minute, later) {
+			h.t.Fatal("a lapsed claim was taken over by two callers")
+		}
+	},
+}, {
+	// REFUSED, never clamped: a claim the store cannot keep for as long as
+	// it was asked lets through the duplicate it was sized to stop.
+	name: "a claim longer than the store can keep is refused",
+	fn: func(h *fleetHarness) {
+		won, err := h.f.Claim(h.ctx, "gitlab|forever", 1000*time.Hour, h.now())
+		if !errors.Is(err, coord.ErrTTLTooLong) {
+			h.t.Fatalf("Claim(1000h) = (%v, %v), want an error wrapping coord.ErrTTLTooLong", won, err)
+		}
+		if won {
+			h.t.Fatal("a refused claim reported a win")
+		}
+	},
+}, {
 	name: "releasing a claim nobody made is not an error",
 	fn: func(h *fleetHarness) {
 		if err := h.f.Release(h.ctx, "never|claimed"); err != nil {

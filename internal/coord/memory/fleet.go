@@ -157,6 +157,13 @@ func (f *Fleet) Claim(_ context.Context, key string, ttl time.Duration, now time
 	if ttl <= 0 {
 		return false, errors.New("coord/memory: a claim needs a positive ttl")
 	}
+	// REFUSED as the KV backend refuses it, whose claims bucket keeps a
+	// record for coord.MaxClaimTTL and no longer: a twin that honoured any
+	// ttl would certify a dedupe window production cannot keep.
+	if ttl > coord.MaxClaimTTL {
+		return false, fmt.Errorf("coord/memory: a %v claim exceeds coord.MaxClaimTTL (%v): %w",
+			ttl, coord.MaxClaimTTL, coord.ErrTTLTooLong)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 

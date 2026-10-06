@@ -615,9 +615,10 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 // create-else-observe handling of a peer that won the race, and the same
 // refusal of a bucket replicated below what this node is configured for.
 //
-// # The one value this store still applies to a bucket that exists
+// # The one value this store applies to a bucket that exists
 //
-// Adoption is the rule everywhere else because every other difference is a
+// Adoption is the rule everywhere else — bar the delivery claims, whose bucket
+// is raised by the same [raiseAge] for the same reason — because every other difference is a
 // PREFERENCE, and the node that booted last does not get to redefine one. This
 // bucket's age is not a preference: it is the CEILING on the TTLs the bucket
 // can honour, so a bucket created by a build with a shorter ceiling reaps a
@@ -638,13 +639,28 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", name, err)
 	}
+	return raiseAge(ctx, js, cfg.Clustered, bucket, want, "duty lease")
+}
+
+// raiseAge raises a bucket's age to want.TTL when it is younger, and never
+// lowers it — the ONE value this store applies to a bucket that already
+// exists, and only to the buckets whose records each carry a deadline of their
+// own (the duty leases, the delivery claims). On those the age is not a
+// preference but the CEILING on the deadlines the bucket can honour, so a
+// bucket an earlier build created younger reaps a live record early; and an
+// age longer than any one record's deadline costs nothing, because no record
+// is judged by the age. `holds` names what the bucket keeps, for the error and
+// the log.
+func raiseAge(ctx context.Context, js jetstream.JetStream, clustered bool,
+	bucket jetstream.KeyValue, want jetstream.KeyValueConfig, holds string) (jetstream.KeyValue, error) {
+
 	facts, err := readBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	// An age of zero is no age at all, which already outlives every duty:
+	// An age of zero is no age at all, which already outlives every record:
 	// raising it would SHORTEN it.
-	if facts.age == 0 || facts.age >= coord.MaxDutyTTL {
+	if facts.age == 0 || facts.age >= want.TTL {
 		return bucket, nil
 	}
 	// THE REPLICA COUNT IN FORCE, never this node's. openBucket has already
@@ -659,10 +675,10 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 	// neither, so it ran under nats.go's undeclared five-second default
 	// while its siblings had minutes.
 	writeCtx, cancelWrite := context.WithTimeout(ctx,
-		jsprovision.Clustered(cfg.Clustered).Budget())
+		jsprovision.Clustered(clustered).Budget())
 	defer cancelWrite()
 	var updated jetstream.KeyValue
-	err = jsprovision.Place(writeCtx, jsprovision.Clustered(cfg.Clustered).AskTerm(),
+	err = jsprovision.Place(writeCtx, jsprovision.Clustered(clustered).AskTerm(),
 		func(ctx context.Context) error {
 			var e error
 			updated, e = js.UpdateKeyValue(ctx, want)
@@ -670,10 +686,10 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 		}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: raise the age of %s from %v to %v so it can hold a "+
-			"duty lease for its full TTL: %w", name, facts.age, coord.MaxDutyTTL, err)
+			"%s for its full TTL: %w", want.Bucket, facts.age, want.TTL, holds, err)
 	}
-	log.InfoContext(ctx, "coord_kv_duty_bucket_age_raised", "bucket", name,
-		"from", facts.age, "to", coord.MaxDutyTTL)
+	log.InfoContext(ctx, "coord_kv_bucket_age_raised", "bucket", want.Bucket,
+		"holds", holds, "from", facts.age, "to", want.TTL)
 	return updated, nil
 }
 

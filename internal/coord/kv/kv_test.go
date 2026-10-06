@@ -471,7 +471,7 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		RateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
@@ -1158,7 +1158,7 @@ func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
-		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		RateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,

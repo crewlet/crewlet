@@ -82,6 +82,23 @@ const (
 	// minutes later vanishes into a claim nothing will clear.
 	ClaimTTL = 5 * time.Minute
 
+	// MaxClaimTTL is the longest TTL a [Claims] claim may ask for, and so
+	// the claims bucket's age: a backend that expires a claim by its
+	// bucket can only keep one for as long as the bucket keeps records, and
+	// each claim shorter than that lapses at its own deadline. A claim
+	// asking for more is refused with [ErrTTLTooLong] rather than clamped,
+	// because a clamped dedupe window lets through the very duplicate it
+	// was sized to stop.
+	//
+	// THIRTY MINUTES, set by the longest claim anybody takes: the
+	// Mattermost socket's (mattermost.ClaimTTL), which must outlive the
+	// window a reconnecting seat replays — mattermost.MaxBackfill, fifteen
+	// minutes — plus the reconnect backoff ceiling and clock margin, and is
+	// twice the window. This package cannot import that one, so its own
+	// tests hold the two together. Longer costs only records nobody reads
+	// again: every claim key names one delivery.
+	MaxClaimTTL = 30 * time.Minute
+
 	// LedgerRetention is how long a turn completion is remembered. It has
 	// to outlast both the queue's redelivery horizon and the scheduler's
 	// catchup window: a record deleted while a tick could still evaluate
@@ -262,6 +279,12 @@ type Claims interface {
 	// PROCESS the delivery. A third-party app's push suppressed because the
 	// store blinked is a wake that never happens, and nothing else will
 	// notice; a duplicated wake is a turn the completion ledger collapses.
+	//
+	// The claim lapses at now+ttl, judged against the `now` the NEXT
+	// caller passes, so two callers sharing one key share one window
+	// whatever else the store keeps. A ttl beyond [MaxClaimTTL] — or beyond
+	// a backend's own ceiling where that is shorter — is an error wrapping
+	// [ErrTTLTooLong], never a silent clamp.
 	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 
 	// Release drops a claim, so a deliberate replay of the same delivery
