@@ -889,7 +889,10 @@ enrol one**:
   presents the new factor. They are issued **only beside an authenticator
   app**: held alone, recovery codes are a second factor of their own, and a
   person who asked for a set with no app would have every later sign-in
-  demand a code that only those ten single-use codes answer.
+  demand a code that only those ten single-use codes answer. For the same
+  reason revoking a person's last authenticator app
+  (`DELETE /iam/credentials/{id}`) revokes their recovery codes with it, as
+  the second-factor reset clears both.
 - A restricted session enrols **only while its person holds no second
   factor**, decided in the snapshot the factor would land on. Its proof is a
   password alone, and fresh enough for the enrolment's window, so without this

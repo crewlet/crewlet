@@ -3,6 +3,7 @@ package iamapi
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -356,8 +357,10 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		authz.EnvelopeRefusal(w, r, proof, proved)
 		return
 	}
-	found := false
-	var method iamdomain.CredentialMethod
+	// ended is every credential the revocation withdrew: the one named, and
+	// the recovery codes when it was the last authenticator they stand in
+	// for.
+	var ended []iamdomain.Credential
 	const reason = "a credential was revoked"
 	op, ok := s.opIDFor(w, r, "credentials-revoke", nil)
 	if !ok {
@@ -369,7 +372,7 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			// RESET PER RUN: the decide may run again against a fresh
 			// snapshot, and the verdict is the last run's.
-			found, method = false, ""
+			ended = nil
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
 				if c.ID != id || !c.RevokedAt.IsZero() {
@@ -385,8 +388,22 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 					return nil, errProofRefused
 				}
 				c.RevokedAt = now
-				found, method = true, c.Method
+				ended = append(ended, c)
 				out = append(out, c)
+			}
+			// THE LAST AUTHENTICATOR TAKES ITS RECOVERY CODES WITH IT, as
+			// the second-factor reset takes both: codes stand in for an
+			// authenticator, and held alone they are a second factor every
+			// sign-in asks for with ten single-use answers and no way to
+			// make more — the state the recovery route refuses to create.
+			if len(ended) == 1 && ended[0].Method == iamdomain.MethodTOTP &&
+				!slices.ContainsFunc(out, liveOf(iamdomain.MethodTOTP)) {
+				for i := range out {
+					if liveOf(iamdomain.MethodRecovery)(out[i]) {
+						out[i].RevokedAt = now
+						ended = append(ended, out[i])
+					}
+				}
 			}
 			return out, nil
 		},
@@ -417,7 +434,7 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !found {
+	if len(ended) == 0 {
 		// THE WRITE STILL LANDED, carrying the set unchanged, and the
 		// answer says so rather than reporting a 404: the revocation
 		// was idempotent and a caller retrying after a timeout must not
@@ -429,14 +446,23 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	log.InfoContext(r.Context(), "iam_credential_revoked",
-		"person", person, "credential", id)
-	s.audit.Emit(r.Context(), types.IAMCredentialRevoked{
-		Credential: id, Kind: types.CredentialKind(method), Owner: person,
-		By: callerName(r.Context()), OperatorID: callerOperator(r.Context()),
-		Reason: reason,
-	})
+	for _, c := range ended {
+		log.InfoContext(r.Context(), "iam_credential_revoked",
+			"person", person, "credential", c.ID)
+		s.audit.Emit(r.Context(), types.IAMCredentialRevoked{
+			Credential: c.ID, Kind: types.CredentialKind(c.Method), Owner: person,
+			By: callerName(r.Context()), OperatorID: callerOperator(r.Context()),
+			Reason: reason,
+		})
+	}
 	s.answerWrite(w, r, opID, revoked, nil, map[string]any{"id": id})
+}
+
+// liveOf matches a credential of one method that nothing has revoked.
+func liveOf(method iamdomain.CredentialMethod) func(iamdomain.Credential) bool {
+	return func(c iamdomain.Credential) bool {
+		return c.Method == method && c.RevokedAt.IsZero()
+	}
 }
 
 // errProofRefused is a revocation's snapshot finding the credential it names is
