@@ -111,7 +111,9 @@ func (s OutputSource) Valid() bool {
 //
 // The cursor fields are ADDITIVE and absent from a window: an asker on an
 // older build reads the five fields it always read, and a window from an older
-// owner reads, here, as a window.
+// owner reads, here, as a window. On a cursor answer the ones a reader
+// compares against what it holds — Epoch, Start, End and Digest — are ALWAYS
+// present.
 type Output struct {
 	// Text is the output, REDACTED — the box's environment holds the
 	// seat's credentials, and this reaches a screen. In a window, the last
@@ -147,8 +149,16 @@ type Output struct {
 	// Start and End are the offsets of Text's first byte and of the byte
 	// after its last, in the epoch's text (UTF-8 bytes). End is what the
 	// asker holds through once it has this answer — its next offset.
-	Start int64 `json:"start,omitempty"`
-	End   int64 `json:"end,omitempty"`
+	//
+	// POINTERS, set on every cursor answer and nil on a window, because
+	// ZERO IS AN OFFSET: a reading that has settled nothing yet answers at
+	// end 0 and is followed from start 0, and `omitempty` on a plain integer
+	// folded both into "absent". A screen comparing a delta's start with
+	// what it held through then compared a missing field with 0, threw a
+	// valid delta away and asked for a reset; a REST caller told to send
+	// `end` back had no `end` to send.
+	Start *int64 `json:"start,omitempty"`
+	End   *int64 `json:"end,omitempty"`
 	// Digest covers the window an asker holding through End holds; it goes
 	// back on the next request, beside End.
 	Digest string `json:"digest,omitempty"`

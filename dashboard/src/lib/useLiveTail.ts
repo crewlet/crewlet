@@ -97,8 +97,6 @@ export function foldTail(view: LiveView, answer: SandboxTailAnswer): LiveView {
   const kept: SandboxTailAnswer = out ? { ...answer, output: { ...out, text: "" } } : answer;
   const next: LiveView = { ...view, answer: kept, final: answer.outcome === "not_running" };
   if (answer.outcome !== "tail" || !out) return next;
-  next.front = out.front ?? false;
-  next.held = out.held ?? 0;
   if (!out.cursor) {
     // A WINDOW, from an owner that reads no cursor: it replaces.
     return {
@@ -109,9 +107,16 @@ export function foldTail(view: LiveView, answer: SandboxTailAnswer): LiveView {
       end: 0,
       digest: "",
       dropped: 0,
+      front: false,
+      held: 0,
       windowBytes: out.window_bytes ?? 8 << 10,
     };
   }
+  next.front = out.front ?? false;
+  next.held = out.held ?? 0;
+  // `start` IS ALWAYS A NUMBER on a cursor answer, 0 included: compared with
+  // an offset left out at 0, a delta from the start of a reading that had
+  // settled nothing read as one that did not follow.
   const follows =
     !out.reset && view.mode === "cursor" && out.epoch === view.epoch && out.start === view.end;
   if (!out.reset && !follows) {
@@ -122,10 +127,10 @@ export function foldTail(view: LiveView, answer: SandboxTailAnswer): LiveView {
     ...next,
     text: trimmed.text,
     mode: "cursor",
-    epoch: out.epoch ?? "",
-    end: out.end ?? 0,
-    digest: out.digest ?? "",
-    dropped: (follows ? view.dropped : (out.start ?? 0)) + trimmed.dropped,
+    epoch: out.epoch,
+    end: out.end,
+    digest: out.digest,
+    dropped: (follows ? view.dropped : out.start) + trimmed.dropped,
     windowBytes: out.window_bytes ?? LIVE_OUTPUT_MAX_BYTES,
   };
 }

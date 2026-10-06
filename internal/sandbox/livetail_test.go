@@ -165,15 +165,18 @@ func (h *held) take(t *testing.T, a TailAnswer) *Output {
 		t.Fatalf("answer = %+v; want a cursor-shaped tail", a)
 	}
 	out := a.Output
+	if out.Start == nil || out.End == nil {
+		t.Fatalf("a cursor answer without its offsets: start %v, end %v", out.Start, out.End)
+	}
 	if out.Reset {
 		h.text = out.Text
 	} else {
-		if out.Start != h.cursor.Offset {
-			t.Fatalf("a delta starts at %d; the viewer holds through %d", out.Start, h.cursor.Offset)
+		if *out.Start != h.cursor.Offset {
+			t.Fatalf("a delta starts at %d; the viewer holds through %d", *out.Start, h.cursor.Offset)
 		}
 		h.text += out.Text
 	}
-	h.cursor = TailCursor{Epoch: out.Epoch, Offset: out.End, Digest: out.Digest}
+	h.cursor = TailCursor{Epoch: out.Epoch, Offset: *out.End, Digest: out.Digest}
 	return out
 }
 
@@ -490,6 +493,63 @@ func TestAViewerIsSentOnlyWhatItLacks(t *testing.T) {
 	}
 }
 
+// A CURSOR ANSWER ALWAYS STATES ITS OFFSETS, zero included, as the wire
+// carries it. A reading that has settled nothing yet answers at end 0 and is
+// followed from start 0; with the offsets dropped as empty, a screen compared a
+// missing start with the 0 it held through, threw the delta away and asked for
+// a reset a poll later — and a REST caller told to send `end` back had none. A
+// window carries no cursor field at all.
+//
+// Mutation: tag the offsets `omitempty` on plain integers again, and the
+// answers at zero carry neither.
+func TestACursorAnswerAlwaysStatesItsOffsets(t *testing.T) {
+	t.Parallel()
+	rig := newTailRig(t)
+	rig.serve(t, boxOwner)
+	reader := rig.reader(t, everyBuildServes)
+	wire := func(a TailAnswer) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back struct {
+			Output map[string]any `json:"output"`
+		}
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		return back.Output
+	}
+
+	var view held
+	first := rig.tail(t, reader, &view.cursor)
+	view.take(t, first)
+	next := rig.tail(t, reader, &view.cursor)
+	view.take(t, next)
+	if next.Output.Reset {
+		t.Fatalf("a cursor at the reading's end 0 was answered %+v; want a delta", next.Output)
+	}
+	for name, answer := range map[string]TailAnswer{"the reset at 0": first, "the delta from 0": next} {
+		out := wire(answer)
+		for _, key := range []string{"epoch", "start", "end", "digest"} {
+			if _, present := out[key]; !present {
+				t.Errorf("%s carries no %q on the wire: %v", name, key, out)
+			}
+		}
+		if out["start"] != float64(0) || out["end"] != float64(0) {
+			t.Errorf("%s = start %v, end %v; want both 0", name, out["start"], out["end"])
+		}
+	}
+
+	window := wire(rig.tail(t, reader, nil))
+	for _, key := range []string{"cursor", "epoch", "start", "end", "digest", "reset"} {
+		if _, present := window[key]; present {
+			t.Errorf("a window carries the cursor field %q: %v", key, window)
+		}
+	}
+}
+
 // waitPastReuse moves a node's readings past [LiveReuse], so the next request
 // reads the box rather than being answered from the last read.
 func waitPastReuse(feeds *LiveFeeds) {
@@ -666,9 +726,9 @@ func TestAViewerTooFarBehindIsReset(t *testing.T) {
 	waitPastReuse(feeds)
 	got := view.take(t, rig.tail(t, reader, &view.cursor))
 	if !got.Reset || len(got.Text) > MaxRunTextBytes || !strings.HasPrefix(got.Text, "xxx") ||
-		strings.Contains(got.Text, "start") || !got.Cut || got.Start == 0 {
+		strings.Contains(got.Text, "start") || !got.Cut || *got.Start == 0 {
 		t.Errorf("a viewer far behind = reset %v, %d bytes from %d, cut %v; want the last %d in whole lines",
-			got.Reset, len(got.Text), got.Start, got.Cut, MaxRunTextBytes)
+			got.Reset, len(got.Text), *got.Start, got.Cut, MaxRunTextBytes)
 	}
 }
 

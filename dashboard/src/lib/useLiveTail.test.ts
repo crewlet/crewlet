@@ -8,24 +8,24 @@
 
 import { describe, expect, test } from "vitest";
 import { LIVE_OUTPUT_MAX_BYTES } from "~/contract/sandbox.ts";
-import type { SandboxOutput, SandboxTailAnswer } from "~/protocol/index.ts";
+import type { SandboxOutput, SandboxTailAnswer, SandboxWindow } from "~/protocol/index.ts";
 import { EMPTY_VIEW, cursorParams, foldTail, trimFront, type LiveView } from "./useLiveTail.ts";
 import { utf8Bytes } from "./format.ts";
 
-function tail(output: Partial<SandboxOutput>): SandboxTailAnswer {
-  return {
-    outcome: "tail",
-    turn_id: "t",
-    launch_id: "L",
-    output: {
-      text: "",
-      source: "transcript",
-      cut: false,
-      as_of: "2026-10-06T09:00:00Z",
-      finished: false,
-      ...output,
-    },
-  };
+function answered(output: SandboxOutput): SandboxTailAnswer {
+  return { outcome: "tail", turn_id: "t", launch_id: "L", output };
+}
+
+/** A window, from an owner that reads no cursor. */
+function tail(output: Partial<SandboxWindow>): SandboxTailAnswer {
+  return answered({
+    text: "",
+    source: "transcript",
+    cut: false,
+    as_of: "2026-10-06T09:00:00Z",
+    finished: false,
+    ...output,
+  });
 }
 
 /** A cursor answer: a reset carrying `text` from `start`, or a delta after it. */
@@ -35,8 +35,12 @@ function cursored(
   reset: boolean,
   epoch = "transcript@0",
 ): SandboxTailAnswer {
-  return tail({
+  return answered({
     text,
+    source: "transcript",
+    cut: false,
+    as_of: "2026-10-06T09:00:00Z",
+    finished: false,
     cursor: true,
     reset,
     epoch,
@@ -65,6 +69,43 @@ describe("a live view", () => {
       digest: "d8",
     });
     expect(view.dropped).toBe(0);
+  });
+
+  // A DELTA FROM ZERO FOLLOWS A VIEW HOLDING THROUGH ZERO — the answers a run
+  // that has settled nothing yet is sent, read off the wire as the engine
+  // writes them (`sandbox.TestACursorAnswerAlwaysStatesItsOffsets` holds the
+  // engine to `start` and `end` being there at 0). An offset left out at 0
+  // compared as absent, and the first output a run wrote was thrown away and
+  // asked for again a poll later.
+  test("follows a reading from offset zero", () => {
+    const wire = (output: string): SandboxTailAnswer =>
+      JSON.parse(
+        `{"outcome":"tail","turn_id":"t","launch_id":"L","node":"n2","output":${output}}`,
+      ) as SandboxTailAnswer;
+    let view = foldTail(
+      EMPTY_VIEW,
+      wire(
+        `{"text":"","source":"none","cut":false,"as_of":"2026-10-06T09:00:00Z","finished":false,` +
+          `"window_bytes":262144,"cursor":true,"epoch":"stderr@0","start":0,"end":0,` +
+          `"digest":"e3b0c44298fc1c149afbf4c8996fb924","reset":true}`,
+      ),
+    );
+    expect(cursorParams(view)).toEqual({
+      cursor: true,
+      epoch: "stderr@0",
+      after: 0,
+      digest: "e3b0c44298fc1c149afbf4c8996fb924",
+    });
+    view = foldTail(
+      view,
+      wire(
+        `{"text":"cloning\\n","source":"stderr","cut":false,"as_of":"2026-10-06T09:00:03Z",` +
+          `"finished":false,"window_bytes":262144,"cursor":true,"epoch":"stderr@0","start":0,` +
+          `"end":8,"digest":"d8"}`,
+      ),
+    );
+    expect(view.text).toBe("cloning\n");
+    expect(cursorParams(view)).toEqual({ cursor: true, epoch: "stderr@0", after: 8, digest: "d8" });
   });
 
   // A RESET REPLACES what the view held, and says where it begins.

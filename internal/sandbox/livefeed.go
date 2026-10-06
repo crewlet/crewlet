@@ -420,24 +420,29 @@ func (s liveSnapshot) digestAt(at int64) (string, bool) {
 }
 
 // cursored answers a viewer holding through c: what it lacks, or a RESET.
+// Both offsets are set whichever it is — see [Output.Start].
 func (s liveSnapshot) cursored(c TailCursor) Output {
 	out := Output{
 		Source: s.source, AsOf: s.asOf, Finished: s.done, Cursor: true,
-		Epoch: s.origin, End: s.end, Front: s.front, Held: s.held, WindowBytes: MaxRunTextBytes,
+		Epoch: s.origin, End: offset(s.end), Front: s.front, Held: s.held, WindowBytes: MaxRunTextBytes,
 	}
 	out.Digest, _ = s.digestAt(s.end)
 	if digest, ok := s.digestAt(c.Offset); ok && c.Epoch == s.origin && c.Digest == digest &&
 		s.end-c.Offset <= MaxRunTextBytes {
-		out.Start = c.Offset
+		out.Start = offset(c.Offset)
 		out.Text = s.text[c.Offset-s.base:]
 		return out
 	}
 	out.Reset = true
 	text, at := KeepEnd(s.text, MaxRunTextBytes)
-	out.Text, out.Start = text, s.base+int64(at)
-	out.Cut = out.Start > 0 || s.front
+	start := s.base + int64(at)
+	out.Text, out.Start = text, offset(start)
+	out.Cut = start > 0 || s.front
 	return out
 }
+
+// offset is an [Output] offset, which a cursor answer always states.
+func offset(n int64) *int64 { return &n }
 
 // window answers an asker that reads no cursor: the last [MaxLiveOutputBytes]
 // in whole lines, replaced on every poll — the shape every asker read before

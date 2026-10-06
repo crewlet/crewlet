@@ -3180,17 +3180,13 @@ export interface TurnAnswer {
 
 /**
  * What a running coding run has said, read from its box by the node that owns
- * it (`sandbox.Output`), redacted by the engine — in one of two shapes.
- *
- * A WINDOW, for a request that asked by no cursor or an owner that reads none:
- * the last `window_bytes` (8 KiB) in whole lines, replacing what was shown. Or,
- * with `cursor` set, what the asker LACKS: the text after the offset it holds
- * through (`start`), or on `reset` the last `window_bytes` (256 KiB, what the
- * record will hold) in whole lines, which replaces what it held. Offsets are
- * UTF-8 bytes of the reading named `epoch`; `end` and `digest` go back on the
- * next request.
+ * it (`sandbox.Output`), redacted by the engine — in one of two shapes, told
+ * apart by `cursor`.
  */
-export interface SandboxOutput {
+export type SandboxOutput = SandboxWindow | SandboxCursorAnswer;
+
+/** What both shapes of a live output carry. */
+interface SandboxOutputBase {
   text: string;
   /** Which of the job's two accounts of itself this is. */
   source: "transcript" | "stderr" | "none";
@@ -3203,12 +3199,35 @@ export interface SandboxOutput {
   /** The most this shape carries, so a caption says the bound from the answer.
    *  Absent from an older owner's window, which was 8 KiB. */
   window_bytes?: number;
-  /** Cursor-shaped: the owner read the asker's cursor. Absent on a window. */
-  cursor?: boolean;
-  epoch?: string;
-  start?: number;
-  end?: number;
-  digest?: string;
+}
+
+/**
+ * A WINDOW, for a request that asked by no cursor or an owner that reads none:
+ * the last `window_bytes` (8 KiB) in whole lines, replacing what was shown. It
+ * carries no cursor field at all.
+ */
+export interface SandboxWindow extends SandboxOutputBase {
+  cursor?: undefined;
+}
+
+/**
+ * What a CURSOR lacks: the text after the offset the asker holds through
+ * (`start`), or on `reset` the last `window_bytes` (256 KiB, what the record
+ * will hold) in whole lines, which replaces what it held. Offsets are UTF-8
+ * bytes of the reading named `epoch`; `end` and `digest` go back on the next
+ * request.
+ *
+ * `epoch`, `start`, `end` and `digest` are ALWAYS PRESENT here, 0 included —
+ * a reading that has settled nothing yet answers at end 0 and is followed from
+ * start 0, and an offset the engine left out at 0 once read as absent, so a
+ * delta from 0 was taken for one that did not follow and thrown away.
+ */
+export interface SandboxCursorAnswer extends SandboxOutputBase {
+  cursor: true;
+  epoch: string;
+  start: number;
+  end: number;
+  digest: string;
   /** The text replaces what the asker holds rather than following it. */
   reset?: boolean;
   /** The owner's reading began after the job's own start. */
