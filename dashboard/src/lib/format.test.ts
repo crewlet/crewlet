@@ -126,15 +126,26 @@ describe("relative time", () => {
     // — a forward clock and a backward one changing shape at different points
     // would be two clocks on one screen.
     expect(inTime("2026-01-20T12:00:00Z", now)).toBe("in 19d");
-    expect(inTime("2026-01-31T11:00:00Z", now)).toBe("in 29d");
+    expect(inTime("2026-01-30T12:00:00Z", now)).toBe("in 29d");
     expect(inTime("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
   });
 
+  // A FORWARD READING ROUNDS TO THE NEAREST UNIT. Floored, it dropped what was
+  // left of its last unit: an invitation good for seven days read "in 6d" the
+  // second it was issued. Mutation: floor again and the first two read a day
+  // and an hour short.
+  test("a forward reading is the nearest unit, not the one below it", () => {
+    expect(inTime("2026-01-08T11:59:59Z", now)).toBe("in 7d");
+    expect(inTime("2026-01-01T13:59:00Z", now)).toBe("in 2h");
+    expect(inTime("2026-01-04T00:00:00Z", now)).toBe("in 3d");
+    expect(inTime("2026-01-01T12:04:20Z", now)).toBe("in 4m");
+  });
+
   // A SERIES IS READ ROW AGAINST ROW. Rounded to one unit, a schedule every
-  // twenty minutes listed the fires at 13:20 and 13:40 both as "in 1h" — the
-  // one list whose point is the spacing between its rows.
+  // ten minutes lists the fires at 13:10 and 13:20 both as "in 1h" — the one
+  // list whose point is the spacing between its rows.
   test("an exact forward reading tells apart two instants twenty minutes apart", () => {
-    expect(inTime("2026-01-01T13:20:00Z", now)).toBe(inTime("2026-01-01T13:40:00Z", now));
+    expect(inTime("2026-01-01T13:10:00Z", now)).toBe(inTime("2026-01-01T13:20:00Z", now));
     expect(inTimeExact("2026-01-01T13:20:00Z", now)).toBe("in 1h 20m");
     expect(inTimeExact("2026-01-01T13:40:00Z", now)).toBe("in 1h 40m");
     // A whole hour says no minutes, and under an hour it is `inTime`'s own.
