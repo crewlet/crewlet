@@ -146,6 +146,95 @@ func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 	}
 }
 
+// THE COORDINATOR'S OWN PREFIX FITS THE ROOM A RUNNER LEAVES IT. A runner
+// composes its failure to MaxFailureBytes; the coordinator may then put the
+// sentence saying nobody was asked the question in front of it, and what it
+// gets must still be what one condensation reads — or the compactor refuses
+// it before any model is asked. The refusal at its longest, a question as
+// long as a box file can be, with its separator, leaves most of the reserve
+// for what redaction can add where the pieces join.
+func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
+	t.Parallel()
+	prefix := len(questionRefusal(MaxFileBytes)) + len(":\n")
+	if prefix > failureReserve/2 {
+		t.Errorf("the question's refusal takes %d of the %d-byte reserve; want at most half", prefix, failureReserve)
+	}
+	if MaxFailureBytes+failureReserve != MaxCondenseBytes {
+		t.Errorf("MaxFailureBytes %d + reserve %d != what one condensation reads, %d",
+			MaxFailureBytes, failureReserve, MaxCondenseBytes)
+	}
+
+	// End to end: the longest failure a runner composes, a question
+	// nobody can be asked (no model condenses it), and the failure the
+	// condenser is then handed.
+	condenser := &fakeCondenser{answer: func(part RunPart, _ string, _ int) (string, error) {
+		if part == PartQuestion {
+			return "", errors.New("no rewrite of the question could be had")
+		}
+		return "(condensed)", nil
+	}}
+	c := &Coordinator{condense: condenser}
+	failure := lines("stderr", MaxFailureBytes/48)
+	failure += strings.Repeat("e", MaxFailureBytes-len(failure))
+	got := c.fitResult(t.Context(), PendingRun{}, Result{
+		Error: failure, NeedsInput: true, Question: strings.Repeat("q", MaxQuestionBytes+1),
+	})
+	if got.NeedsInput {
+		t.Fatal("a question no line of which fits, with no model to condense it, was asked")
+	}
+	var handed int
+	for _, call := range condenser.calls {
+		if call.part == PartFailure {
+			handed = call.bytes
+		}
+	}
+	if handed == 0 || handed > MaxCondenseBytes {
+		t.Errorf("the condenser was handed a %d-byte failure; want one inside the %d it reads",
+			handed, MaxCondenseBytes)
+	}
+}
+
+// A FAILURE PAST WHAT ONE CONDENSATION READS IS BROUGHT INSIDE IT, NOT GIVEN UP
+// ON. Nothing outside this package keeps a runner's promise for it, and a
+// CLI's own error can be as long as the file it was read from — handed over
+// whole, the compactor refuses it before a model is asked, and the resumed
+// executor reads the uncondensed fallback although a model was configured. The
+// failure keeps its start and its end in whole lines, says what it left out
+// inside the bound, and THAT is condensed.
+//
+// Mutation: hand the condenser the failure as it came, and it is past what a
+// condensation reads.
+func TestAFailurePastWhatACondensationReadsIsBroughtInsideIt(t *testing.T) {
+	t.Parallel()
+	var shown string
+	condenser := &fakeCondenser{answer: func(_ RunPart, text string, _ int) (string, error) {
+		shown = text
+		return "(condensed)", nil
+	}}
+	c := &Coordinator{condense: condenser}
+	const opening = "the coding agent exited with status 1:\n"
+	failure := opening + lines("cli error", 3*MaxCondenseBytes/48) + "FATAL: the last line"
+	got := c.fitResult(t.Context(), PendingRun{}, Result{Error: failure})
+	if got.Error != "(condensed)" {
+		t.Fatalf("the failure was not condensed: %.120q", got.Error)
+	}
+	if len(shown) > MaxCondenseBytes {
+		t.Fatalf("the condenser was shown %d bytes, past the %d it reads", len(shown), MaxCondenseBytes)
+	}
+	if !strings.HasPrefix(shown, opening) || !strings.HasSuffix(shown, "FATAL: the last line") ||
+		!strings.Contains(shown, "intervening line(s)") || !strings.Contains(shown, "one condensation reads") {
+		t.Errorf("the condenser was shown %.120q … %q; want the start, the end and a note between",
+			shown, shown[max(0, len(shown)-60):])
+	}
+
+	// No model: the fallback is taken from the whole failure, one note.
+	plain := (&Coordinator{}).fitResult(t.Context(), PendingRun{}, Result{Error: failure})
+	if n := strings.Count(plain.Error, "not shown:"); n != 1 || len(plain.Error) > MaxRunTextBytes+1024 {
+		t.Errorf("the uncondensed failure carries %d notes in %d bytes; want one, inside the record",
+			n, len(plain.Error))
+	}
+}
+
 // A single line past the whole budget leaves nothing to keep, and the note
 // says so rather than showing a fragment of it.
 func TestALineLongerThanTheRecordIsLeftOutWhole(t *testing.T) {

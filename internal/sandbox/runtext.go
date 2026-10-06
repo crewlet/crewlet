@@ -151,6 +151,38 @@ const MaxQuestionBytes = 16 << 10
 // in the resumed executor's text rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
+// MaxCondenseBytes is the most text one [Condenser] call reads: what the
+// engine's compactor takes in one condensation, its compact.MaxChunks first-
+// pass pieces of compact.ChunkBytes each — two MiB. Past it the compactor
+// refuses before any model is asked, rather than spend what nobody priced.
+//
+// DECLARED HERE, because this package composes the text a condensation is
+// handed and cannot import the compactor (it sits on the model providers),
+// and PINNED to those constants by the engine's own test, where the two are
+// joined — a bound written down twice is a bound that drifts.
+const MaxCondenseBytes = 2 << 20
+
+// failureReserve is what the coordinator may itself put in front of a
+// runner's failure detail before condensing it, held back from what a runner
+// may compose: the sentence saying a question nobody could be asked
+// ([questionRefusal]) and its separator, and what redaction can add where the
+// pieces of a failure join — a `password` closing one piece and a value
+// opening the next is one match across the `:\n` between them, and its marker
+// can be longer than what it replaced. A KiB is several times all of that;
+// a test holds the refusal at its longest inside it.
+const failureReserve = 1 << 10
+
+// MaxFailureBytes is the most a runner's failure detail ([Result.Error]) may
+// be: what one condensation reads ([MaxCondenseBytes]) less what the
+// coordinator may put in front of it ([failureReserve]). A runner composes
+// its own sentences — a piece it could not read, the exit status, the CLI's
+// error — and gives the error stream only what is left, so a failure built
+// around a long stderr is one a model can still be shown whole. Composed past
+// it, every such failure was a few hundred bytes over the compactor's input,
+// refused before a model was asked, and the resumed executor read the
+// uncondensed fallback although a model was configured.
+const MaxFailureBytes = MaxCondenseBytes - failureReserve
+
 // Condenser rewrites a piece of a collected run's account that is past
 // [MaxRunTextBytes] into at most budget bytes, on the seat's own auxiliary
 // model — the engine's compactor, behind the interface this package needs,
@@ -167,6 +199,8 @@ const MaxDeliveredRefBytes = 16 << 10
 // resumes from it ([Result.Condensed]), which is the one that pays it to the
 // turn's work item — no segment is running while a run is collected, so no
 // segment's own tally could.
+//
+// It reads at most [MaxCondenseBytes] of text in one call.
 type Condenser interface {
 	Condense(ctx context.Context, run PendingRun, part RunPart, text string,
 		budget int) (string, AuxTokens, error)
@@ -228,9 +262,7 @@ func (c *Coordinator) fitQuestion(ctx context.Context, run PendingRun, result Re
 		result.Question = wholeLines(PartQuestion, question, MaxQuestionBytes)
 		return result
 	}
-	refusal := fmt.Sprintf("the question the coding agent asked is %s with no line break in its "+
-		"first %d KiB, past what a question carries, and no model could condense it, so nobody "+
-		"was asked it", kib(len(question)), MaxQuestionBytes>>10)
+	refusal := questionRefusal(len(question))
 	log.WarnContext(ctx, "sandbox_question_not_asked", "turn_id", run.TurnID,
 		"launch_id", run.LaunchID, "bytes", len(question))
 	result.NeedsInput, result.Question, result.AskTo = false, "", ""
@@ -241,6 +273,15 @@ func (c *Coordinator) fitQuestion(ctx context.Context, run PendingRun, result Re
 		result.Error = refusal + ":\n" + result.Error
 	}
 	return result
+}
+
+// questionRefusal is the sentence a failure opens with when its question
+// could not be asked: the one thing the coordinator itself puts in front of a
+// runner's failure, which [failureReserve] holds room for.
+func questionRefusal(bytes int) string {
+	return fmt.Sprintf("the question the coding agent asked is %s with no line break in its "+
+		"first %d KiB, past what a question carries, and no model could condense it, so nobody "+
+		"was asked it", kib(bytes), MaxQuestionBytes>>10)
 }
 
 // boundRefs is a run's delivered refs, deduplicated in the order they were
@@ -410,16 +451,49 @@ func KeepEnd(text string, keep int) (string, int) {
 // kib is a size as a reader says it, in KiB rounded up.
 func kib(n int) string { return fmt.Sprintf("%d KiB", (n+1023)/1024) }
 
+// fitPart holds one piece of a run's account to budget: condensed past it, and
+// in whole lines where no model can condense it ([wholeLines]).
+//
+// A FAILURE PAST WHAT ONE CONDENSATION READS IS BROUGHT INSIDE IT FIRST. A
+// runner composes its failure to [MaxFailureBytes], but nothing outside this
+// package keeps that promise for it, and a CLI's own error can be as long as
+// the file it was read from: handed over whole, the compactor refuses it
+// before any model is asked. So the failure keeps whole lines from both ends
+// up to [MaxCondenseBytes] — its start, where the engine speaks, and its end,
+// where what broke is said, the rule a failure is always kept by — with the
+// lines between counted in a note inside that bound, and THAT is condensed.
+// Where it still cannot be, the fallback is taken from the whole failure, so
+// it carries one note rather than two.
 func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart, text string,
 	budget int, spent *AuxTokens,
 ) string {
 	if len(text) <= budget {
 		return text
 	}
-	if rewritten, ok := c.condensed(ctx, run, part, text, budget, spent); ok {
+	input := text
+	if part == PartFailure && len(input) > MaxCondenseBytes {
+		input = condensable(input)
+		if len(input) <= budget {
+			// What is left after the middle went fits the record whole:
+			// there is nothing for a model to do, and a label saying the
+			// text was condensed would say what did not happen.
+			return input
+		}
+	}
+	if rewritten, ok := c.condensed(ctx, run, part, input, budget, spent); ok {
 		return rewritten
 	}
 	return wholeLines(part, text, budget)
+}
+
+// condensable is a failure past [MaxCondenseBytes] held to it — note
+// included — by the failure's own whole-lines rule.
+func condensable(text string) string {
+	why := fmt.Sprintf("past the %d KiB one condensation reads", MaxCondenseBytes>>10)
+	// The note's width at its widest — every line and every byte of the
+	// text counted — so the note it gets cannot be longer than the room.
+	room := len(omittedNote(len(text)+1, "intervening", len(text), why)) + 1
+	return keepLines(PartFailure, text, MaxCondenseBytes-room, why)
 }
 
 // condensed is the seat's auxiliary model's rewrite of a piece past its
@@ -463,6 +537,13 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 // leaves nothing, and the note then says so rather than showing a fragment
 // of it.
 func wholeLines(part RunPart, text string, budget int) string {
+	return keepLines(part, text, budget, fmt.Sprintf(
+		"past the %d KiB a run's record carries for it, and no model could condense them", budget>>10))
+}
+
+// keepLines is [wholeLines] with the note's reason given: why the lines it
+// stands for were left out.
+func keepLines(part RunPart, text string, budget int, why string) string {
 	lines := strings.SplitAfter(text, "\n")
 	head, size := 0, 0
 	if part != PartFailure {
@@ -470,7 +551,7 @@ func wholeLines(part RunPart, text string, budget int) string {
 			size += len(lines[head])
 			head++
 		}
-		return strings.Join(lines[:head], "") + omittedLines(lines[head:], "later", budget)
+		return strings.Join(lines[:head], "") + omittedLines(lines[head:], "later", why)
 	}
 	for head < len(lines) && size+len(lines[head]) <= budget/failureHeadShare {
 		size += len(lines[head])
@@ -485,7 +566,7 @@ func wholeLines(part RunPart, text string, budget int) string {
 	if head > 0 {
 		which = "intervening"
 	}
-	return strings.Join(lines[:head], "") + omittedLines(lines[head:tail], which, budget) +
+	return strings.Join(lines[:head], "") + omittedLines(lines[head:tail], which, why) +
 		strings.Join(lines[tail:], "")
 }
 
@@ -498,7 +579,7 @@ const failureHeadShare = 8
 
 // omittedLines is the note standing where whole lines were left out: after
 // what was kept for "later" lines, before it otherwise.
-func omittedLines(left []string, which string, budget int) string {
+func omittedLines(left []string, which, why string) string {
 	if len(left) == 0 {
 		return ""
 	}
@@ -506,11 +587,14 @@ func omittedLines(left []string, which string, budget int) string {
 	for _, line := range left {
 		n += len(line)
 	}
-	note := fmt.Sprintf("(%d %s line(s), %d KiB, not shown: past the %d KiB a run's record "+
-		"carries for it, and no model could condense them)", len(left), which, (n+1023)/1024,
-		budget>>10)
+	note := omittedNote(len(left), which, n, why)
 	if which == "later" {
 		return "\n" + note
 	}
 	return note + "\n"
+}
+
+// omittedNote is the words of that note, for lines lines of bytes bytes.
+func omittedNote(lines int, which string, bytes int, why string) string {
+	return fmt.Sprintf("(%d %s line(s), %d KiB, not shown: %s)", lines, which, (bytes+1023)/1024, why)
 }

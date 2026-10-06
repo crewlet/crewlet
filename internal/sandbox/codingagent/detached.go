@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 
@@ -308,12 +309,19 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 //
 // The error stream becomes the failure's detail, which the resumed executor
 // acts on and which the coordinator condenses past the record's bound — and
-// one condensation reads at most compact.MaxChunks × compact.ChunkBytes, two
-// MiB (pinned to those constants by a test). A longer read is text no model
-// could be shown and no record could carry, so it is not read; what was left
-// unread is said by size where it was. From the END, because a process's
+// the whole failure a runner composes is held to what one condensation can
+// take beside the coordinator's own prefix ([sandbox.MaxFailureBytes]). A
+// longer read is text no model could be shown, so it is not read; what was
+// left unread is said by size where it was. From the END, because a process's
 // conclusion — the line naming what broke — is the last thing it prints.
-const stderrKeep = 2 << 20
+//
+// THIS IS THE READ, NOT WHAT THE FAILURE CARRIES OF IT. The failure opens with
+// the engine's own sentences — a piece it could not read, the exit status, the
+// CLI's error — and the error stream gets what is left of the bound after
+// them ([failureDetail]). Read to the bound and carried whole behind them, as
+// it was, a failure built around a long stderr was always a few hundred bytes
+// past what the compactor reads, refused before a model was asked.
+const stderrKeep = sandbox.MaxFailureBytes
 
 // Collect reads the finished job's result out of the box.
 //
@@ -377,13 +385,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	stderr, unread := streamEnd(errTail, stderrKeep)
 	stderr = strings.TrimSpace(stderr)
-	if unread > 0 && stderr != "" {
-		stderr = fmt.Sprintf("(the error stream's first %s were not read: a run's failure is read "+
-			"from its end, and %s is the most of it a condensation can take)\n%s",
-			humanSize(unread), humanSize(stderrKeep), stderr)
-	}
-	if result.Transcript == "" {
+	if result.Transcript == "" && stderr != "" {
 		result.Transcript = stderr
+		if unread > 0 {
+			result.Transcript = unreadNote(unread, false) + "\n" + stderr
+		}
 	}
 
 	codeText, refusal, err := readWhole(ctx, box, paths.ExitCode(), "its exit status")
@@ -409,6 +415,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, refusal)
 	}
 	findings := strings.TrimSpace(findingsText)
+	// What the failure says after any piece that could not be read: the
+	// CLI's own account where the run reported something, and where it
+	// produced nothing at all, the exit status, the CLI's error and the
+	// error stream.
+	var said []string
+	errStream := ""
 	switch {
 	case findings != "":
 		result.Text = findings
@@ -419,6 +431,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			result.Success = true
 			result.Error = ""
 		}
+		said = append(said, result.Error)
 	case !result.Success && strings.TrimSpace(result.Text) == "":
 		// No report AND nothing parsed: the job produced nothing. Surface
 		// the exit status, the CLI's own error and the stderr — ALL THREE,
@@ -426,19 +439,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// than a silent stall. The CLI's error used to be REPLACED by the
 		// stderr whenever the stderr held anything at all, so a run that
 		// hit its turn cap and printed one warning reported the warning.
-		var detail []string
 		if crashed {
-			detail = append(detail, "the coding agent exited with status "+code)
+			said = append(said, "the coding agent exited with status "+code)
 		}
-		if parsed := strings.TrimSpace(result.Error); parsed != "" {
-			detail = append(detail, parsed)
-		}
-		if stderr != "" {
-			detail = append(detail, stderr)
-		}
-		if len(detail) > 0 {
-			result.Error = strings.Join(detail, ":\n")
-		}
+		said = append(said, result.Error)
+		errStream = stderr
+	default:
+		said = append(said, result.Error)
 	}
 
 	result, refusal, err = r.overlayAsk(ctx, box, result)
@@ -454,12 +461,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// reason is the first thing its failure says, because it is the one
 		// a reader cannot find anywhere else.
 		result.Success = false
-		parts := refused
-		if e := strings.TrimSpace(result.Error); e != "" {
-			parts = append(parts, e)
-		}
-		result.Error = strings.Join(parts, ":\n")
 	}
+	result.Error = failureDetail(append(refused, said...), errStream, unread)
 
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
@@ -468,6 +471,61 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// after redacting it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
+}
+
+// failureDetail composes a run's failure: the engine's own sentences in the
+// order given — a piece it could not read, the exit status, the CLI's error —
+// then as much of the error stream's END as is left of
+// [sandbox.MaxFailureBytes] after them, with what was not shown of it said by
+// size. unread is how much of the stream's start the read itself left.
+//
+// HELD TO THE BOUND AS A WHOLE, because the whole failure is what the
+// coordinator condenses, and the compactor refuses one past what it reads
+// before any model is asked. The sentences are taken as they are — they are
+// what nobody can find anywhere else — and only the error stream gives way.
+// Each piece is redacted before it is measured: a marker can be longer than
+// the credential it replaces, and a piece measured unredacted would grow past
+// its share afterwards.
+func failureDetail(sentences []string, errStream string, unread int64) string {
+	var parts []string
+	for _, s := range sentences {
+		if s = strings.TrimSpace(redact.Secrets(s)); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if errStream == "" {
+		return strings.Join(parts, ":\n")
+	}
+	used := len(strings.Join(parts, ":\n"))
+	if len(parts) > 0 {
+		used += len(":\n")
+	}
+	// The note's widest form, so the one it gets always fits the room.
+	room := sandbox.MaxFailureBytes - used - (len(unreadNote(math.MaxInt64, false)) + len("\n"))
+	kept, at := "", len(errStream)
+	if room > 0 {
+		kept, at = sandbox.KeepEnd(errStream, room)
+	}
+	if left := unread + int64(at); left > 0 {
+		if kept == "" {
+			kept = unreadNote(left, true)
+		} else {
+			kept = unreadNote(left, false) + "\n" + kept
+		}
+	}
+	return strings.Join(append(parts, kept), ":\n")
+}
+
+// unreadNote is the line standing where the start of the error stream was
+// left out of a failure: none says nothing of it was shown at all.
+func unreadNote(unread int64, none bool) string {
+	if none {
+		return fmt.Sprintf("(the error stream, %s, is not shown: the engine's own account of the "+
+			"run fills what one condensation can take)", humanSize(unread))
+	}
+	return fmt.Sprintf("(the error stream's first %s were not read: a run's failure is read from "+
+		"its end, as much of it as one condensation can take beside the engine's own account)",
+		humanSize(unread))
 }
 
 // decodeStream reads one event stream through a fresh decoder.

@@ -1,6 +1,7 @@
 package codingagent_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -200,8 +201,94 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	if !strings.Contains(res.Error, "were not read: a run's failure is read from its end") {
 		t.Errorf("the unread start is not said: %.300q", res.Error)
 	}
-	if len(res.Error) > 2<<20+1024 {
+	if len(res.Error) > sandbox.MaxFailureBytes {
 		t.Errorf("the failure is %d bytes, past what a condensation can take", len(res.Error))
+	}
+}
+
+// THE WHOLE FAILURE IS WHAT ONE CONDENSATION CAN TAKE, not the error stream
+// inside it. The failure opens with the engine's own sentences — a piece it
+// could not read, the exit status, the CLI's error — and the error stream used
+// to be read to the compactor's whole input and carried behind them, so every
+// failure built around a long stderr was a few hundred bytes over what the
+// compactor reads, refused before a model was asked, and the resumed executor
+// read the uncondensed fallback although a model was configured.
+//
+// Every sentence a failure can open with, at once, in front of the longest
+// error stream: the failure fits ([sandbox.MaxFailureBytes], which leaves the
+// coordinator its own prefix), keeps every sentence and the stream's last
+// line, and says what it left out of the stream.
+//
+// Mutation: carry the error stream as it was read, and the failure is past
+// the bound.
+func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	cliError := strings.Repeat("the provider answered 529: overloaded, retrying\n", 400)
+	result, err := json.Marshal(map[string]any{"type": "result", "subtype": "error_during_execution",
+		"is_error": true, "errors": []string{cliError}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Put(p.Result(), string(result))
+	b.Put(p.Ask(), strings.Repeat("q", sandbox.MaxFileBytes+1)) // a piece that cannot be read
+	b.Put(p.Err(), strings.Repeat(strings.Repeat("e", 99)+"\n", 3<<20/100)+"FATAL: the last line")
+	b.Put(p.ExitCode(), "1")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(res.Error) > sandbox.MaxFailureBytes {
+		t.Fatalf("the failure is %d bytes, %d past the %d one condensation takes beside the "+
+			"coordinator's own prefix", len(res.Error), len(res.Error)-sandbox.MaxFailureBytes,
+			sandbox.MaxFailureBytes)
+	}
+	for _, want := range []string{
+		"the question the coding agent recorded", // the refused piece, first
+		"the coding agent exited with status 1",
+		"error_during_execution: the provider answered 529",
+		"were not read: a run's failure is read from its end",
+	} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("the failure lost %q: %.400q", want, res.Error)
+		}
+	}
+	if !strings.HasPrefix(res.Error, "the question the coding agent recorded") {
+		t.Errorf("the failure opens %.120q; want the piece that could not be read first", res.Error)
+	}
+	if !strings.HasSuffix(res.Error, "FATAL: the last line") {
+		t.Errorf("the failure lost the error stream's last line: …%q", tailOf(res.Error, 80))
+	}
+}
+
+// A FAILURE WHOSE OWN SENTENCES FILL THE BOUND SAYS THE ERROR STREAM WAS NOT
+// SHOWN, rather than showing a fragment of it or nothing at all: the CLI's
+// error is taken as it is — it is what nobody can find elsewhere — and the
+// coordinator holds the whole to what a condensation reads.
+func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	result, err := json.Marshal(map[string]any{"type": "result", "subtype": "error_during_execution",
+		"is_error": true, "errors": []string{strings.Repeat("x", sandbox.MaxFailureBytes)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Put(p.Result(), string(result))
+	b.Put(p.Err(), "a warning\nthe last line")
+	b.Put(p.ExitCode(), "1")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.HasSuffix(res.Error, "(the error stream, 23 bytes, is not shown: the engine's own "+
+		"account of the run fills what one condensation can take)") {
+		t.Errorf("the failure ends …%q; want the error stream said, not shown", tailOf(res.Error, 160))
 	}
 }
 

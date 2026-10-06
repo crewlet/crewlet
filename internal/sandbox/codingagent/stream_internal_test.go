@@ -5,20 +5,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
-
-// THE ERROR STREAM IS READ TO WHAT A CONDENSATION CAN TAKE, and that figure is
-// compaction's own: a read past it is text no model could be shown, and a
-// bound written down twice is a bound that drifts.
-func TestTheErrorStreamIsReadToWhatACondensationCanTake(t *testing.T) {
-	t.Parallel()
-	if want := compact.MaxChunks * compact.ChunkBytes; stderrKeep != want {
-		t.Errorf("stderrKeep = %d; want compact.MaxChunks × compact.ChunkBytes = %d", stderrKeep, want)
-	}
-}
 
 // A KEY THAT BEGAN BEFORE THE WINDOW IS STILL REDACTED. A private key is the
 // one credential shape that spans lines, and a window opening inside its block
