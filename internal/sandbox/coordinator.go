@@ -2149,6 +2149,14 @@ func resumeText(result Result) string {
 	switch {
 	case result.Text != "":
 		lines = append(lines, "\n"+result.Text)
+		// WHY, BESIDE WHAT IT SAID. A run that wrote a report and still did
+		// not succeed — it crashed after writing it, its question or its
+		// result could not be read, its CLI reported an error after an
+		// answer — used to hand the executor its report alone under "did
+		// NOT fully succeed", with the reason nowhere it could read it.
+		if !result.Success && result.Error != "" && result.Error != result.Text {
+			lines = append(lines, "\nWhy it did not succeed: "+result.Error)
+		}
 	case result.Error != "":
 		lines = append(lines, "\nError: "+result.Error)
 	}
