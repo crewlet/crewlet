@@ -381,11 +381,28 @@ func (f *Fleet) run(ctx context.Context, s *seatSocket) {
 			_ = socket.Close()
 			continue
 		}
-		attempt = 0
+		// THE BACKOFF RESETS ONLY AFTER A CONNECTION THAT STAYED UP.
+		// Mattermost closes without a close frame, so a server that
+		// accepts a socket and hangs up on sight looks exactly like an
+		// ordinary drop — and resetting on every accepted socket retried
+		// such a server at the one-second floor for ever, each retry a
+		// backfill walking every channel the seat is in.
+		opened := time.Now()
 		f.pump(ctx, s, socket)
 		_ = socket.Close()
+		if time.Since(opened) >= stableConnection {
+			attempt = 0
+		}
 	}
 }
+
+// stableConnection is how long a socket must have stayed up for the next drop
+// to be treated as a fresh one, with the backoff back at its floor.
+//
+// A MINUTE: twice the heartbeat, so a connection that lived through at least
+// one ping round trip has proved the server keeps it — while a server that
+// hangs up at once, or after its first frame, keeps climbing the backoff.
+const stableConnection = time.Minute
 
 // delay is the backoff for an attempt, jittered.
 func (f *Fleet) delay(attempt int) time.Duration {
@@ -513,7 +530,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) error {
 	// with every post the other channels deliver, so without holding it
 	// here the next replay would start past whatever this one could not
 	// read, and those posts would be lost for good.
-	channels, err := f.channels(ctx, s)
+	channels, complete, err := f.channels(ctx, s)
 	if err != nil {
 		log.WarnContext(ctx, "mattermost_backfill_channels_unavailable",
 			"handle", s.seat.Handle, "error", err.Error())
@@ -521,7 +538,6 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) error {
 		return nil
 	}
 	var replayed int
-	complete := true
 	for _, ch := range channels {
 		posts, err := s.client.PostsSince(ctx, ch.ID, since)
 		if err != nil {
@@ -531,6 +547,15 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) error {
 			continue
 		}
 		for _, p := range posts {
+			// CREATED IN THE GAP, not merely touched in it. `since=`
+			// is UPDATE-based: a reaction touches a post and deleting
+			// a reply touches its thread root, so the read hands back
+			// posts the seat already answered, and replaying them
+			// woke it to answer again. The live socket delivers only
+			// what was posted, and the replay delivers no more.
+			if p.CreateAt <= since.UnixMilli() {
+				continue
+			}
 			if err := f.deliver(ctx, s, map[string]any{
 				"event": "posted", "post": postMap(p),
 				"channel_type": ch.Type, "channel_name": ch.Name,
@@ -578,13 +603,15 @@ func (f *Fleet) floor(ctx context.Context, s *seatSocket) (time.Time, bool) {
 }
 
 // channels is the seat's work list: every channel it could have been spoken
-// to in, across every team it belongs to.
-func (f *Fleet) channels(ctx context.Context, s *seatSocket) ([]Channel, error) {
+// to in, across every team it belongs to — and whether that is every team's,
+// since a team that could not be listed is a gap the replay still owes.
+func (f *Fleet) channels(ctx context.Context, s *seatSocket) ([]Channel, bool, error) {
 	teams, err := s.client.Teams(ctx, s.seat.UserID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var out []Channel
+	complete := true
 	for _, team := range teams {
 		channels, err := s.client.Channels(ctx, s.seat.UserID, team.ID)
 		if err != nil {
@@ -592,11 +619,12 @@ func (f *Fleet) channels(ctx context.Context, s *seatSocket) ([]Channel, error) 
 			// three teams should still hear two of them.
 			log.WarnContext(ctx, "mattermost_team_channels_unavailable",
 				"handle", s.seat.Handle, "team", team.ID, "error", err.Error())
+			complete = false
 			continue
 		}
 		out = append(out, channels...)
 	}
-	return out, nil
+	return out, complete, nil
 }
 
 // deliver claims one post fleet-wide, republishes it onto the raw-webhook

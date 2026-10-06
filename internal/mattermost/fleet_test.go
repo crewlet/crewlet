@@ -370,7 +370,10 @@ func TestADuplicatePostIsPublishedOnce(t *testing.T) {
 // itself — and the cursor it resumes from is the SERVER's clock.
 func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 	s := newServer(t)
-	serverNow := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	// THE SERVER'S CLOCK READS A MINUTE BEFORE THE POSTS, so the first
+	// connect's anchor sits behind them and the gap holds what was
+	// created after the drop — as a real gap does.
+	serverNow := time.UnixMilli(1718003000000).UTC().Add(-time.Minute)
 	var backfilled atomic.Int32
 	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", serverNow.Format(http.TimeFormat))
@@ -648,10 +651,15 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 	f.Add(t.Context(), seat, client(t, s))
 	defer f.Stop()
 
+	backfills := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(cursors)
+	}
 	waitFor(t, 1, func() int { return len(rec.posts()) })
 	sockets[0].Close() // the first drop: backfill hands back an OLDER post
 
-	waitFor(t, 2, func() int { return len(rec.posts()) })
+	waitFor(t, 1, backfills)
 	sockets[1].Close() // the second drop: the cursor must not have regressed
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -676,6 +684,13 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 			t.Fatalf("backfill %d resumed from %s, want the newest seen (%s)", i, c, want)
 		}
 	}
+	// AND THE OLDER POST IS NOT REPLAYED AT ALL. The read is update-based,
+	// so a post created before the gap comes back only because something
+	// touched it — a reaction, a deleted reply — and replaying it woke the
+	// seat to answer a message it had answered already.
+	if ids := strings.Join(rec.ids(), ","); ids != "p1" {
+		t.Fatalf("published %q, want only the live post — g1 was created before the gap", ids)
+	}
 }
 
 // A seat in three teams should still hear two of them: one team's channel
@@ -692,7 +707,7 @@ func TestOneUnreadableTeamDoesNotLoseTheRest(t *testing.T) {
 				"posts": map[string]any{"g1": map[string]any{
 					"id": "g1", "channel_id": "C2", "user_id": "u-ana",
 					"message":   "from the healthy team",
-					"create_at": float64(serverNow.Add(-time.Minute).UnixMilli()),
+					"create_at": float64(serverNow.Add(time.Minute).UnixMilli()),
 				}},
 			})
 		case strings.Contains(r.URL.Path, "/teams/broken/channels"):

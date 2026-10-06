@@ -611,7 +611,7 @@ those conversations have moved on. A wider gap is logged with the amount
 skipped rather than silently truncated:
 
 ```
-mattermost_backfill_window_exceeded handle=engineer skipped_seconds=3612.4 window_seconds=900.0
+mattermost_backfill_window_exceeded handle=engineer gap=1h0m12.4s window=15m0s
 ```
 
 Reconnect backoff is capped at 5 minutes and jittered by up to a quarter of

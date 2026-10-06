@@ -427,3 +427,37 @@ func TestAReplayThatStopsPartWayOwesWhatItHadNotQueued(t *testing.T) {
 		t.Fatalf("published %q, want every post once — c included", got)
 	}
 }
+
+// A SERVER THAT HANGS UP ON SIGHT IS BACKED OFF, not retried at the floor.
+//
+// Mattermost closes without a close frame, so a socket the server accepts and
+// drops at once looks exactly like an ordinary disconnect. The backoff used to
+// reset on every accepted socket, so such a server was dialled at the floor
+// for ever — each retry a backfill walking every channel the seat is in. It
+// resets only after a connection that stayed up.
+//
+// Mutation: reset the backoff after every connect, and the seat dials the
+// server at the floor dozens of times inside the window below.
+func TestAServerThatHangsUpOnSightIsBackedOff(t *testing.T) {
+	var dials atomic.Int32
+	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
+		Publisher: &recorder{}, Claims: coordmemory.NewFleet(),
+		Backoff: []time.Duration{time.Millisecond, 250 * time.Millisecond},
+		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+			dials.Add(1)
+			hungUp := newSocket()
+			hungUp.Close()
+			return hungUp, nil
+		},
+	})
+	f.Add(t.Context(), seat, client(t, newServer(t)))
+	defer f.Stop()
+
+	time.Sleep(400 * time.Millisecond)
+	// At most: the first connect, one at the 1 ms floor, then one per
+	// 250 ms (jittered by up to a quarter) — four inside the window.
+	if n := dials.Load(); n > 5 {
+		t.Fatalf("%d connects in 400ms to a server that hangs up at once, want the backoff "+
+			"to climb rather than reset", n)
+	}
+}
