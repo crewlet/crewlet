@@ -637,13 +637,17 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	return nil
 }
 
-// AnyPerson reports whether this estate holds anybody at all — whether a
-// person or a machine is enrolled.
+// AnyPerson reports whether this estate holds a PERSON — whether anybody who
+// signs in with a password is enrolled.
 //
 // WHAT IT IS FOR is `/health`'s `identity`: a fresh deployment's identity
 // estate is empty, and an operator looking at one, or a dashboard whose
 // sign-in form nobody can use yet, needs to be told the next step is to
 // invite the first person rather than left looking at a sign-in that fails.
+// A MACHINE does not count: a service account, or the row binding a Tier A
+// token to a seat, signs nobody in with a password, so an estate holding only
+// those is still waiting for its first person — counted, it read as claimed
+// and the sign-in page hid the way in behind a form nobody could use.
 // It is a COUNT rather than a listing precisely because it is asked by an
 // unauthenticated route — the answer is one bit, and a roster is what it must
 // never become.
@@ -675,9 +679,10 @@ func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS(SELECT 1 FROM iam_people)`).
+			SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind = ?)`,
+			string(iam.KindPerson)).
 			Scan(&held); err != nil {
-			return fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
+			return fmt.Errorf("iamdomain: read whether a person is enrolled: %w", err)
 		}
 		if held {
 			return nil

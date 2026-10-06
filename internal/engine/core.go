@@ -394,8 +394,9 @@ func (e *Engine) IAM() *iamdomain.Reader {
 	return c.iamReader
 }
 
-// AnyPerson reports whether this company has anybody enrolled — `/health`'s
-// `identity` and the boot's `iam_unclaimed` line — with "nobody" PROVED
+// AnyPerson reports whether this company has a person enrolled — `/health`'s
+// `identity` and the boot's `iam_unclaimed` line; a service account alone
+// leaves it waiting for its first person — with "nobody" PROVED
 // against the identity log's end, which is read first
 // ([iamdomain.Reader.AnyPerson]).
 //

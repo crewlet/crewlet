@@ -132,7 +132,7 @@ func announceUnclaimed(ctx context.Context, anybody func(context.Context) (bool,
 		return
 	}
 	logging.Get("cli").Warn("iam_unclaimed",
-		"detail", "this company has nobody in it; invite its first person "+
+		"detail", "this company has no person in it; invite its first person "+
 			"with `crewlet iam invite <address> -grants <grants>` and "+
 			apiTokenEnv+" set to one of api.auth.tokens, then send them the "+
 			"link it prints")

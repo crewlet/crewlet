@@ -441,10 +441,11 @@ the first redemption is special:
   again; `crewlet iam check` names a company in that state as
   `no_people_manage_holder`.
 - **The node says the company is waiting for it.** `GET /health` answers
-  `identity: unclaimed` while nobody is enrolled (`ready` once anybody is, and
-  `unknown` where this node cannot read the estate — never folded into
-  `unclaimed`), and a node that boots on an empty estate logs `iam_unclaimed`
-  naming the command above. Neither ever moves `status`.
+  `identity: unclaimed` while no person is enrolled (`ready` once one is — a
+  service account alone does not count, since it signs nobody in with a
+  password — and `unknown` where this node cannot read the estate, never
+  folded into `unclaimed`), and a node that boots with no person in its estate
+  logs `iam_unclaimed` naming the command above. Neither ever moves `status`.
 - **After that, the token is the way back in, not the way people arrive.** Once
   somebody holds `people:manage`, invitations come from them; the token stays
   the break-glass credential for the day nobody who can invite is reachable.
