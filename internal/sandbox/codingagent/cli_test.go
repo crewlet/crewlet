@@ -21,8 +21,10 @@ func opencode() codingagent.CLI { return codingagent.OpenCode{} }
 func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 	cmd := claude().Command(sandbox.RunRequest{Brief: "fix the flake"}, codingagent.Paths{}, "")
 	for _, want := range []string{
-		"claude -p ",                          // headless
-		"--output-format json",                // parseable
+		"claude -p ", // headless
+		// A STREAM, so a run says what it is doing while it does it; and
+		// --verbose, without which print mode refuses stream-json.
+		"--output-format stream-json --verbose",
 		"--permission-mode bypassPermissions", // a prompt would hang a headless run
 		"'fix the flake'",                     // the brief, quoted
 	} {
@@ -78,6 +80,7 @@ func TestABriefCannotEscapeItsQuoting(t *testing.T) {
 
 func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	res := claude().Parse(`{
+		"type": "result",
 		"result": "Fixed it. Opened https://github.com/acme/api/pull/7",
 		"subtype": "success",
 		"is_error": false,
@@ -108,7 +111,7 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 // engine provider reports in.
 func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
 	res := claude().Parse(`{
-		"result": "done", "subtype": "success",
+		"type": "result", "result": "done", "subtype": "success",
 		"usage": {"input_tokens": 40, "cache_read_input_tokens": 9000,
 			"cache_creation_input_tokens": 1500, "output_tokens": 300}
 	}`)
@@ -123,22 +126,34 @@ func TestTheClaudeParserCountsTheCachedPrompt(t *testing.T) {
 	}
 }
 
-// A run that hit its turn cap sets no is_error but did not finish.
+// A run that hit its turn cap sets no is_error but did not finish — and an
+// error result carries no `result` text, so what it says is how it ended.
 func TestARunThatHitItsCapIsNotASuccess(t *testing.T) {
-	res := claude().Parse(`{"result":"ran out of turns","subtype":"error_max_turns","is_error":false}`)
+	res := claude().Parse(`{"type":"result","subtype":"error_max_turns","is_error":false,"num_turns":30}`)
 	if res.Success {
 		t.Fatal("a run that exhausted its turns read as success")
 	}
-	if res.Error == "" {
-		t.Fatal("the failure says nothing")
+	if res.Error != "error_max_turns" {
+		t.Fatalf("the failure says %q; want how the run ended", res.Error)
 	}
 }
 
-// The CLI sometimes prints a banner before its JSON, and the object is always
-// last because it is what the CLI prints when it is done.
+// A run whose model call failed is a SUCCESS subtype carrying is_error, and
+// its result text is the failure.
+func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
+	res := claude().Parse(`{"type":"result","subtype":"success","is_error":true,` +
+		`"result":"API Error: 529 overloaded"}`)
+	if res.Success || res.Error != "API Error: 529 overloaded" {
+		t.Fatalf("Parse = success %v, error %q; want the failure it reported", res.Success, res.Error)
+	}
+}
+
+// An older build's `json` layout put the CLI's whole stdout in the result
+// file, where a banner could come before the object — and a run such a build
+// launched may be collected by this one, so the object is still found last.
 func TestTheClaudeParserFindsTheEnvelopeAfterABanner(t *testing.T) {
 	res := claude().Parse("Welcome to Claude Code\nchecking for updates…\n" +
-		`{"result":"done","subtype":"success"}`)
+		`{"type":"result","result":"done","subtype":"success"}`)
 	if !res.Success || res.Text != "done" {
 		t.Fatalf("the envelope after a banner was missed: %+v", res)
 	}
@@ -164,7 +179,7 @@ func TestEmptyClaudeOutputIsAFailure(t *testing.T) {
 
 // claude-code exits cleanly, so the done marker is the signal.
 func TestClaudeRelisOnTheDoneMarker(t *testing.T) {
-	if claude().Finished(`{"result":"done","subtype":"success"}`) {
+	if claude().Finished(`{"type":"result","result":"done","subtype":"success"}`) {
 		t.Fatal("claude-code claimed a streamed terminal signal it does not emit")
 	}
 }

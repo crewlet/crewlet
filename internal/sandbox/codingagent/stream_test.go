@@ -215,7 +215,7 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Result(), `{"result":"Opened https://github.com/acme/api/pull/3","subtype":"success",`+
+	b.Put(p.Result(), `{"type":"result","result":"Opened https://github.com/acme/api/pull/3","subtype":"success",`+
 		`"usage":{"input_tokens":100,"output_tokens":50}}`)
 	b.Put(p.Findings(), strings.Repeat("r", sandbox.MaxFileBytes+1))
 	b.Put(p.Err(), "a warning")

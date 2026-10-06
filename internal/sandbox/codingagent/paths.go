@@ -52,8 +52,15 @@ func PathsFor(box sandbox.Sandbox) Paths {
 // Outside the checkout, so a `git clean` in the brief cannot wipe them.
 func (p Paths) WorkDir() string { return p.Home + "/.crewlet" }
 
-// Result is where the agent's stdout is redirected.
+// Result is where the agent's RESULT is read from whole: its stdout, for a
+// CLI whose stdout is its result or its event stream; the stream's last line,
+// copied there after exit, for one that keeps its stream apart ([Output]).
 func (p Paths) Result() string { return p.WorkDir() + "/result.json" }
+
+// Stream is where a CLI that keeps its event stream apart from its result
+// sends its stdout — a file that grows with every tool call the run makes,
+// read as a stream and from its end, never whole.
+func (p Paths) Stream() string { return p.WorkDir() + "/stream.jsonl" }
 
 // Err is where its stderr goes — the transcript's fallback source.
 func (p Paths) Err() string { return p.WorkDir() + "/err.log" }

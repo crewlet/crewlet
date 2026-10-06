@@ -516,11 +516,12 @@ func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string) s
 //
 // The view shows the last [sandbox.MaxLiveOutputBytes] of the transcript, and
 // one transcript line stands for one event whose raw size is dominated by
-// what the event echoes — a tool's whole output on a stream that carries it,
-// tens of KiB for a file read or a long command. A mebibyte of stream is the
-// last few dozen such events whole, which is a screen of activity; it is one
-// ranged read per peek, where a peek used to read and decode the whole stream
-// and was refused outright once it passed 32 MiB.
+// what the event echoes — a tool's whole output on a stream that carries it
+// (Claude Code's carries it twice: the result block, and the CLI's own copy
+// beside it), tens of KiB for a file read or a long command. A mebibyte of
+// stream is the last dozen or more such events whole, which is a screen of
+// activity; it is one ranged read per peek, where a peek used to read and
+// decode the whole stream and was refused outright once it passed 32 MiB.
 const peekWindow = 1 << 20
 
 // Peek reads what the job has said about itself so far, for a person watching

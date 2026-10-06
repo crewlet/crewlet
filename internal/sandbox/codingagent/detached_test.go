@@ -32,7 +32,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	p := codingagent.PathsFor(b)
 	for _, path := range []string{
-		p.WorkDir(), p.Result(), p.Err(), p.Done(), p.ExitCode(),
+		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
@@ -82,7 +82,8 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	script := lastBackground(t, b)
 	for _, want := range []string{
 		"< /dev/null", // a headless agent must never block on input
-		p.Result(),    // stdout is the parseable output
+		p.Stream(),    // stdout is the event stream
+		p.Result(),    // its last line is the result
 		p.Err(),       // stderr is the transcript fallback
 		p.ExitCode(),  // the crash explanation
 		p.Done(),      // the completion signal
@@ -146,7 +147,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	if cleared == "" {
 		t.Fatal("the prior run's artefacts were never cleared")
 	}
-	for _, want := range []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask()} {
+	for _, want := range []string{p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask()} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
 		}
@@ -257,7 +258,7 @@ func TestTheFindingsFileIsTheResultCarrierOfRecord(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Result(), `{"result":"streamed summary","subtype":"success"}`)
+	b.Put(p.Result(), `{"type":"result","result":"streamed summary","subtype":"success"}`)
 	b.Put(p.Findings(), "Outcome: succeeded\nOpened https://github.com/acme/api/pull/42")
 	b.Put(p.ExitCode(), "0")
 
@@ -313,21 +314,24 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 	}
 }
 
-// The transcript is the observability surface for an agent that emits no
-// telemetry of its own.
-func TestTheTranscriptFallsBackToStderr(t *testing.T) {
+// THE ERROR STREAM IS THE TRANSCRIPT ONLY WHERE THE STREAM SAYS NOTHING — a
+// CLI that never got as far as streaming, which says why on stderr. (It used
+// to be the whole of Claude Code's transcript, on a fabricated premise: under
+// `--output-format json` in print mode that CLI writes nothing to stderr, so
+// the case certified a narration no real run produced.)
+func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Result(), `{"result":"done","subtype":"success"}`)
-	b.Put(p.Err(), "cloning…\nrunning tests…")
+	b.Put(p.Err(), "error: unknown option '--output-formt'")
+	b.Put(p.ExitCode(), "1")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.Contains(res.Transcript, "running tests") {
-		t.Fatalf("transcript = %q", res.Transcript)
+	if res.Transcript != "error: unknown option '--output-formt'" {
+		t.Fatalf("transcript = %q; want what the CLI said before it could stream", res.Transcript)
 	}
 }
 
@@ -470,7 +474,8 @@ func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Result(), `{"type":"result","subtype":"error_max_turns","is_error":true,"error":"reached the turn limit"}`)
+	b.Put(p.Result(), `{"type":"result","subtype":"error_max_turns","is_error":false,`+
+		`"errors":["Reached maximum number of turns (30)"]}`)
 	b.Put(p.Err(), "warning: a deprecated flag")
 	b.Put(p.ExitCode(), "0")
 
@@ -478,7 +483,7 @@ func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if res.Error != "reached the turn limit:\nwarning: a deprecated flag" {
+	if res.Error != "error_max_turns: Reached maximum number of turns (30):\nwarning: a deprecated flag" {
 		t.Errorf("failure = %q, want the CLI's error and then the stderr", res.Error)
 	}
 }
@@ -600,8 +605,9 @@ func TestPeekTailsTheParsedTranscriptAndRedacts(t *testing.T) {
 	}
 }
 
-// An agent that writes nothing parseable until it exits shows its stderr, and
-// one that has written nothing at all says so rather than failing.
+// A RUN THAT HAS STREAMED NOTHING shows its error stream — what a CLI that
+// failed to start says — and one that has written nothing at all says so
+// rather than failing.
 func TestPeekFallsBackToStderrAndThenToNothing(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.NewClaudeCode()
@@ -613,9 +619,9 @@ func TestPeekFallsBackToStderrAndThenToNothing(t *testing.T) {
 		t.Errorf("an empty box peeked %+v, %v; want source none and no text", out, err)
 	}
 
-	b.Put(p.Err(), "cloning github.com/acme/api\n")
+	b.Put(p.Err(), "Error: Invalid API key · Please run /login\n")
 	out, err = runner.Peek(t.Context(), b, sandbox.RunHandle{})
-	if err != nil || out.Source != sandbox.SourceStderr || out.Text != "cloning github.com/acme/api" {
+	if err != nil || out.Source != sandbox.SourceStderr || out.Text != "Error: Invalid API key · Please run /login" {
 		t.Errorf("a box with only stderr peeked %+v, %v; want its stderr", out, err)
 	}
 
