@@ -2590,7 +2590,12 @@ read, never the stored list's length, which still names a task they finished
 until their next reorder — and who set them, and pinned views, for the person,
 whoever leads them and a `fleet:operate` holder, and withheld with that sentence
 for anybody else; their open
-work; and About.
+work; and About. On your own seat the whole page speaks to you, not only its
+day — the holder line says "Held by you, as `jane.doe`", the work card "Nothing
+open is assigned to you", the Work tab "What you mean to do first" and "Waiting
+on your answer" — and **Message** is held, saying it is your own seat, because
+a message files an ask of the seat that only you could answer. **Assign task**
+stays: taking a task yourself is a hand-off like any other.
 
 **Turns** is the seat's own turns (`turns{seat}`, an `audit:read` question like
 every turn read — a reader without it is shown the engine's refusal naming

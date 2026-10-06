@@ -93,7 +93,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { canManagePeople, InviteDialog, type HumanSeat } from "~/components/people.tsx";
 import { rest } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { HoldWrites, menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -104,6 +104,7 @@ import {
   HUMAN_TABS,
   TAB_LABELS,
   findSeat,
+  isOwnSeat,
   liveRow,
   pillWord,
   sentence,
@@ -119,6 +120,7 @@ const WORK_PAGE = 50;
 
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
+  const viewer = useViewer();
   const org = useOrg();
   const agents = useAgents();
   const now = useNow();
@@ -253,7 +255,18 @@ export function SeatScreen({ handle }: { handle: string }) {
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
         <span className={paused ? "page-action-folds" : undefined}>
-          <MessageSeatButton handle={seat.handle} />
+          {/* NOT TO YOURSELF: a message files an ask of the seat, and on
+              your own seat that is a question only you could answer. Held,
+              never hidden, as every write is. */}
+          <HoldWrites
+            reason={
+              isOwnSeat(viewer, seat.handle)
+                ? "This is your own seat — a message here would ask yourself."
+                : null
+            }
+          >
+            <MessageSeatButton handle={seat.handle} />
+          </HoldWrites>
         </span>
         <span className="page-action-folds">
           <AssignToSeatButton
@@ -429,7 +442,8 @@ function Holder({ handle }: { handle: string }) {
     <div className="prof-notices">
       {row.holder ? (
         <Callout variant="neutral">
-          Held by <code className="inline">{row.holder.login || row.holder.person}</code>
+          Held by {isOwnSeat(viewer, handle) && "you, as "}
+          <code className="inline">{row.holder.login || row.holder.person}</code>
           {row.holder.stage && row.holder.stage !== "active" ? ` (${row.holder.stage})` : ""}.
         </Callout>
       ) : (

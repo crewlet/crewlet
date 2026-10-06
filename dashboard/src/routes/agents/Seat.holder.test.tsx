@@ -102,13 +102,20 @@ const ANSWERS: Record<string, unknown> = {
   turns: { turns: [], next: null },
 };
 
-async function mount(handle: string, grants: string[]) {
+/** The seat the reader holds: Ana's own unless a test names another. */
+async function mount(handle: string, grants: string[], as = "ana") {
   const store = new Store();
+  store.setConnected(true);
   const socket = new LiveSocket(store);
+  const viewer = {
+    login: as === "ana" ? "ana.lee" : `${as}.reader`,
+    grants,
+    handle: as,
+    owner: as,
+    acts: ["create_work_item", "update_work_item"],
+  };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    what === "viewer"
-      ? Promise.resolve({ login: "ana.lee", grants, handle: "ana", owner: "ana", acts: [] })
-      : Promise.resolve(ANSWERS[what] ?? {});
+    what === "viewer" ? Promise.resolve(viewer) : Promise.resolve(ANSWERS[what] ?? {});
   store.applyOrg(COMPANY as never);
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -166,9 +173,31 @@ test("an auditor reads the fact and is offered no invitation", async () => {
 test("a held seat names its holder and their stage", async () => {
   location.hash = "#/agents/seats/ana";
   engine();
+  await mount("ana", ["state:read", "audit:read"], "sam");
+  const note = (await screen.findByText("ana.lee")).closest(".crewlet-callout") as HTMLElement;
+  expect(note.textContent).toMatch(/^Held by ana\.lee \(suspended\)/);
+  expect(screen.getByText("Nothing open is assigned to them")).toBeDefined();
+  const message = screen.getByRole("button", { name: /^Message/ });
+  expect(message.getAttribute("aria-disabled")).not.toBe("true");
+});
+
+// YOUR OWN SEAT SPEAKS TO YOU, the whole page and not only its day: "Your day
+// … waiting on you" sat beside "Held by jane.doe" and "Nothing open is
+// assigned to them", and the header offered to Message yourself — an ask only
+// you could answer. The CONTROL is the same seat read by somebody else, above.
+// Mutation: compare the seat with anybody but the reader's own and every line
+// here goes red.
+test("the holder reading their own seat is spoken to, and is not offered to message it", async () => {
+  location.hash = "#/agents/seats/ana";
+  engine();
   await mount("ana", ["state:read", "audit:read"]);
   const note = (await screen.findByText("ana.lee")).closest(".crewlet-callout") as HTMLElement;
-  expect(note.textContent).toMatch(/Held by ana\.lee \(suspended\)/);
+  expect(note.textContent).toMatch(/^Held by you, as ana\.lee \(suspended\)/);
+  expect(screen.getByText("Nothing open is assigned to you")).toBeDefined();
+  expect(screen.queryByText("Nothing open is assigned to them")).toBeNull();
+  const message = screen.getByRole("button", { name: /^Message/ });
+  expect(message.getAttribute("aria-disabled")).toBe("true");
+  expect(message.getAttribute("title")).toMatch(/your own seat/);
 });
 
 // THE READ IS ASKED ONLY OF A READER IT ANSWERS: anybody else would be handed

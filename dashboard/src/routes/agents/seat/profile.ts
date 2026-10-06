@@ -98,8 +98,21 @@ export function mayReadRecord(
   handle: string,
 ): boolean {
   if (viewer.operatesFleet) return true;
-  if (viewer.handle !== "" && viewer.handle === handle) return true;
+  if (isOwnSeat(viewer, handle)) return true;
   return leadsInLine(index, viewer.handle, handle) !== false;
+}
+
+/**
+ * Whether the reader is the person this seat is held by — the seat the
+ * identity directory binds them to — and so whether the page speaks to them.
+ *
+ * ONE ANSWER FOR THE WHOLE PAGE: the overview said "Your day … waiting on
+ * you" while the callout above it said "Held by jane.doe" and the work card
+ * beside it "Nothing open is assigned to them", because each asked for
+ * itself, or did not ask.
+ */
+export function isOwnSeat(viewer: Pick<ViewerState, "handle">, handle: string): boolean {
+  return viewer.handle !== "" && viewer.handle === handle;
 }
 
 /**

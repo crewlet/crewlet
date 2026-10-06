@@ -1170,9 +1170,10 @@ test("a person's Priorities tile counts what is still open, as the Work tab does
   expect(tile("Priorities").textContent).toContain("set by CTO");
   expect(screen.queryByText("Queue")).toBeNull();
 
-  // THE WORK TAB'S BLOCK SAYS THE SAME NUMBER, from the same answer.
+  // THE WORK TAB'S BLOCK SAYS THE SAME NUMBER, from the same answer — and,
+  // this being Jane's own seat, says so to her.
   fireEvent.click(screen.getByRole("tab", { name: /Work/ }));
-  const block = (await screen.findByText("What they mean to do first")).closest(
+  const block = (await screen.findByText("What you mean to do first")).closest(
     ".crewlet-card__header",
   ) as HTMLElement;
   expect(block.querySelector(".crewlet-count")?.textContent).toBe("2");
