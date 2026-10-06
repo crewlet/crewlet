@@ -201,6 +201,56 @@ func TestEveryDeadResetLinkIsOneRefusal(t *testing.T) {
 	}
 }
 
+// A LINK THIS NODE CANNOT VOUCH FOR IS NO DEAD LINK.
+//
+// On a node behind the identity log, or holding a record it could not apply,
+// a link issued through a peer is a row it does not hold, and the screen
+// answered it the 410 that tells its holder to ask for another — counting them
+// as a guesser. Every link that does not open there is a 503 instead, nothing
+// counted: an id it does not hold, and a real id with a wrong secret alike, so
+// the two still answer the same and say nothing about which ids exist. A link
+// that opens is served. The CONTROLS are the live link's 200, and the same
+// dead links answered 410 by a node that vouches ([TestEveryDeadResetLinkIsOneRefusal]).
+// Mutation: drop the vouch from the view and the unknown id is a counted 410.
+func TestALinkThisNodeCannotVouchForIsNoDeadLink(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		id     func(string) string
+		secret func(string) string
+		status int
+	}{
+		{name: "a live link (the control)", status: http.StatusOK},
+		{name: "an id these rows do not hold", status: http.StatusServiceUnavailable,
+			id: func(string) string { return uuid.Must(uuid.NewV7()).String() }},
+		{name: "a secret that is not the link's", status: http.StatusServiceUnavailable,
+			secret: func(string) string { return "not-the-links-secret" }},
+	} {
+		r, h := passwordRig(t)
+		r.estate.linksUnvouched = true
+		id, secret := withResetLink(t, r.estate, nil)
+		if tc.id != nil {
+			id = tc.id(id)
+		}
+		if tc.secret != nil {
+			secret = tc.secret(secret)
+		}
+		rec := viewReset(t, h, id, secret)
+		if rec.Code != tc.status {
+			t.Errorf("%s: the view answered %d, want %d: %s", tc.name, rec.Code,
+				tc.status, rec.Body)
+			continue
+		}
+		if tc.status == http.StatusServiceUnavailable &&
+			codeOf(t, rec) != string(httpjson.CodeIdentityUnavailable) {
+			t.Errorf("%s: answered %s, want identity_unavailable", tc.name, rec.Body)
+		}
+		if _, failures := r.audit.snapshot(); len(failures) != 0 {
+			t.Errorf("%s: counted %v on a node that could not say", tc.name, failures)
+		}
+	}
+}
+
 // A WEAK PASSWORD FROM A LIVE LINK IS 422, and spends nothing. Mutation: drop
 // the floor from the spend and the weak password is set.
 func TestAWeakPasswordFromAResetLinkIsRefused(t *testing.T) {

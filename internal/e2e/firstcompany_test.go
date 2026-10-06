@@ -170,7 +170,7 @@ func signInUnbound(t *testing.T, n *node, b *browser) {
 			"screen on %s", link, deploymentURL)
 	}
 	settle(t, "this node to apply the invitation", func() (bool, string) {
-		row, err := n.engine.IAM().InvitationByID(t.Context(), id)
+		row, err := n.engine.InvitationByID(t.Context(), id)
 		return err == nil && row.ID == id, ""
 	})
 	status, redeemed := b.send(n, http.MethodPost, auth.AuthInvitePrefix+id, map[string]any{

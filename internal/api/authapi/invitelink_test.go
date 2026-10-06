@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -50,9 +52,60 @@ func (d issuedInvitation) InvitationByID(ctx context.Context, id string) (
 	iamdomain.InvitationRow, error) {
 
 	if id != d.id {
-		return iamdomain.InvitationRow{}, nil
+		return iamdomain.InvitationRow{Vouched: true}, nil
 	}
 	return d.sealedInvitation.InvitationByID(ctx, id)
+}
+
+// unvouchedInvitation is [issuedInvitation] on a node whose rows cannot vouch
+// for what they answer ([iamdomain.InvitationRow.Vouched]).
+type unvouchedInvitation struct{ issuedInvitation }
+
+func (d unvouchedInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := d.issuedInvitation.InvitationByID(ctx, id)
+	row.Vouched = false
+	return row, err
+}
+
+// AN INVITATION THIS NODE CANNOT VOUCH FOR IS NO DEAD LINK, for the reset
+// link's reason ([TestALinkThisNodeCannotVouchForIsNoDeadLink]): an id these
+// rows do not hold and a real id with a wrong secret are both 503 and neither
+// is counted, while the live link is served — the CONTROL. Mutation: drop the
+// vouch from the view and the unknown id is a counted 410.
+func TestAnInvitationThisNodeCannotVouchForIsNoDeadLink(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, id, secret string
+		status           int
+	}{
+		{"the live link (the control)", invitationID, invitationSecret, http.StatusOK},
+		{"an id these rows do not hold", uuid.Must(uuid.NewV7()).String(),
+			invitationSecret, http.StatusServiceUnavailable},
+		{"a secret that is not the link's", invitationID, "not-the-links-secret",
+			http.StatusServiceUnavailable},
+	} {
+		audit := &recordingAudit{}
+		mux := http.NewServeMux()
+		buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+			o.Directory = unvouchedInvitation{issuedInvitation{id: invitationID}}
+			o.Sealer = stubSealer{address: "dana@example.com"}
+			o.Audit = audit
+		}).Routes(mux)
+		req := httptest.NewRequest(http.MethodGet, "/auth/invite/"+tc.id, nil)
+		req.Header.Set(secretHeader, tc.secret)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != tc.status {
+			t.Errorf("%s: the view answered %d, want %d: %s", tc.name, rec.Code,
+				tc.status, rec.Body)
+			continue
+		}
+		if _, failures := audit.snapshot(); len(failures) != 0 {
+			t.Errorf("%s: counted %v on a node that could not say", tc.name, failures)
+		}
+	}
 }
 
 // A GET ON AN INVITE RENDERS AND NEVER SPENDS.

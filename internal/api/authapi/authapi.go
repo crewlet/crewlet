@@ -157,7 +157,9 @@ type Directory interface {
 
 	// InvitationByID resolves one invitation, on the same three answers:
 	// the zero value for one nobody issued, and an error for a node that
-	// could not tell.
+	// could not tell — with whether this node's rows VOUCH for it
+	// ([iamdomain.InvitationRow.Vouched]): only where they do is a link
+	// they do not hold, or cannot admit, a dead one.
 	//
 	// BY ITS OWN ID and never by address, because the id is what the link
 	// carries and an address lookup here would be a way to ask whether
@@ -179,8 +181,10 @@ type Directory interface {
 		owner string, live bool, err error)
 
 	// ResetByID resolves one password reset link by its credential id, on
-	// the same three answers — the zero value for an id that is no link.
-	// BY ITS OWN ID, for [Directory.InvitationByID]'s reason.
+	// the same three answers — the zero value for an id that is no link —
+	// with whether this node's rows vouch for it, as
+	// [Directory.InvitationByID] does. BY ITS OWN ID, for
+	// [Directory.InvitationByID]'s reason.
 	ResetByID(ctx context.Context, id string) (iamdomain.ResetRow, error)
 
 	// Person answers one directory row by id, or [iamdomain.ErrNotFound]:

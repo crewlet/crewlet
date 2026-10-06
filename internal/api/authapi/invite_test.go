@@ -53,6 +53,7 @@ func (liveInvitation) InvitationByID(context.Context, string) (iamdomain.Invitat
 		ID: invitationID, Blind: "email:dana@example.com", InvitedBy: "founder",
 		ExpiresAt: clock.Add(time.Hour),
 		Verifier:  iamdomain.InvitationVerifier(invitationSecret),
+		Vouched:   true,
 	}, nil
 }
 

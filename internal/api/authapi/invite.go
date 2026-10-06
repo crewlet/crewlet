@@ -415,6 +415,10 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 		return iamdomain.InvitationRow{}, false
 	}
 	switch {
+	case (held.ID == "" || !held.Admits(secret) || held.Spent(s.now())) &&
+		!held.Vouched:
+		s.unvouched(w, r, "invitation", id)
+		return iamdomain.InvitationRow{}, false
 	case held.ID == "" || !held.Admits(secret):
 		s.refuseInvitation(w, r, adm, false)
 		return iamdomain.InvitationRow{}, false

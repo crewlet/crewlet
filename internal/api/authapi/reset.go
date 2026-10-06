@@ -183,9 +183,27 @@ func (s *Service) presentedReset(w http.ResponseWriter, r *http.Request,
 	if held.Opens(secret, s.now()) {
 		return held, true
 	}
+	if !held.Vouched {
+		s.unvouched(w, r, "reset", id)
+		return iamdomain.ResetRow{}, false
+	}
 	proved := held.ID != "" && credential.VerifyReset(held.Verifier, held.ID, secret)
 	s.refuseReset(w, r, adm, proved)
 	return iamdomain.ResetRow{}, false
+}
+
+// unvouched is the answer to a link that does not open on rows that cannot
+// vouch for it ([iamdomain.ResetRow.Vouched]): 503, because it may be a link
+// issued in a record this node has not applied, which answered as dead told
+// its holder to ask for another and counted them as a guesser. EVERY LINK
+// THAT DOES NOT OPEN HERE, never only an id these rows lack: one 410 for an id
+// nobody issued and another answer for a real id with a wrong secret would
+// say which ids exist, which the one 410 is for. Nothing is counted, as
+// nothing is for any 503.
+func (s *Service) unvouched(w http.ResponseWriter, r *http.Request, link, id string) {
+	log.InfoContext(r.Context(), "api_link_unvouched", "link", link, "id", id)
+	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
+		auth.RetryIdentity(iamdomain.ErrNotCurrent))
 }
 
 // refuseReset is every 410 a reset link answers, in the same bytes — a failed

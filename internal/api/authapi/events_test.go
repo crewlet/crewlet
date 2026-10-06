@@ -128,6 +128,10 @@ type estate struct {
 	// that has not applied this estate's writes reads a reset link from.
 	behindResets []iamdomain.Credential
 
+	// linksUnvouched is a node whose rows cannot vouch for the reset links
+	// they answer ([iamdomain.ResetRow.Vouched]).
+	linksUnvouched bool
+
 	// nameSealed is the person's sealed name, or empty for a row that holds
 	// none.
 	nameSealed string
@@ -329,6 +333,7 @@ func (e *estate) ResetByID(_ context.Context, id string) (iamdomain.ResetRow, er
 	if row.ID != "" {
 		row.PersonID, row.Login = e.person.ID, e.person.Login
 	}
+	row.Vouched = !e.linksUnvouched
 	return row, nil
 }
 

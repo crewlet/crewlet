@@ -137,16 +137,19 @@ func (stubDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sigh
 	return iamdomain.Sighting{}, nil
 }
 
+// InvitationByID answers nobody issued it, on rows that vouch for that — as a
+// node holding the whole identity log does.
 func (stubDirectory) InvitationByID(context.Context, string) (iamdomain.InvitationRow, error) {
-	return iamdomain.InvitationRow{}, nil
+	return iamdomain.InvitationRow{Vouched: true}, nil
 }
 
 func (stubDirectory) SessionStanding(context.Context, string, time.Time) (string, bool, error) {
 	return "", false, nil
 }
 
+// ResetByID is [stubDirectory.InvitationByID] for a reset link.
 func (stubDirectory) ResetByID(context.Context, string) (iamdomain.ResetRow, error) {
-	return iamdomain.ResetRow{}, nil
+	return iamdomain.ResetRow{Vouched: true}, nil
 }
 
 func (stubDirectory) Person(_ context.Context, id string) (iamdomain.PersonRow, error) {

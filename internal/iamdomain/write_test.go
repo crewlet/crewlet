@@ -715,6 +715,27 @@ func testCipher(t *testing.T, ring secrets.Keyring) secrets.Cipher {
 // a node that has drained the log is proved against.
 func (r *writeRig) end(ctx context.Context) (uint64, error) { return r.log.End(ctx) }
 
+// resetRow asks [iamdomain.Reader.ResetByID] as the engine does: against the
+// log's end, read first.
+func (r *writeRig) resetRow(t *testing.T, id string) (iamdomain.ResetRow, error) {
+	t.Helper()
+	end, err := r.end(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	return r.reader(t).ResetByID(t.Context(), id, end)
+}
+
+// invitationRow is [writeRig.resetRow] for [iamdomain.Reader.InvitationByID].
+func (r *writeRig) invitationRow(t *testing.T, id string) (iamdomain.InvitationRow, error) {
+	t.Helper()
+	end, err := r.end(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	return r.reader(t).InvitationByID(t.Context(), id, end)
+}
+
 // anybody asks [iamdomain.Reader.AnyPerson] as the engine does: against the
 // log's end, read first.
 func (r *writeRig) anybody(t *testing.T) (bool, error) {

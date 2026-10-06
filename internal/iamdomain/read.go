@@ -722,6 +722,20 @@ func provedAbsent(ctx context.Context, tx *sql.Tx, end uint64, what string) erro
 	return nil
 }
 
+// vouches is [provedAbsent]'s proof as a reading: whether these rows hold every
+// record the log held at end and retain none, and an error only where that
+// could not be read.
+func vouches(ctx context.Context, tx *sql.Tx, end uint64) (bool, error) {
+	switch err := provedAbsent(ctx, tx, end, "a link"); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrNotCurrent):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // ErrNotCurrent reports a snapshot of the identity estate that cannot vouch for
 // an absence: it has not applied every record the log held when the question
 // was asked, whether because it is behind or because it RETAINED one.
@@ -871,6 +885,10 @@ type InvitationRow struct {
 
 	// Seat is the seat redeeming this binds, or empty — [Invitation.Seat].
 	Seat string
+
+	// Vouched is [ResetRow.Vouched], for [Reader.InvitationByID]: false on a
+	// listing, which does not ask.
+	Vouched bool
 }
 
 // Admits reports whether a secret presented with this invitation's id is the
@@ -911,20 +929,26 @@ func (i InvitationRow) Spent(now time.Time) bool {
 
 // InvitationByID resolves one invitation, on this file's three answers: the
 // zero value for one nobody issued, and an error for a node that could not
-// tell.
-func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, error) {
+// tell — with whether these rows vouch for it at end, the identity log's last
+// sequence read BEFORE this snapshot ([ResetRow.Vouched], [CoversLog]).
+func (r *Reader) InvitationByID(ctx context.Context, id string, end uint64) (
+	InvitationRow, error) {
+
 	if id == "" {
-		return InvitationRow{}, nil
+		return InvitationRow{Vouched: true}, nil
 	}
 	var out InvitationRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var err error
 		out, err = scanInvitation(tx.QueryRowContext(ctx, `
 			SELECT `+invitationColumns+` FROM iam_invites WHERE id = ?`, id).Scan)
-		if errors.Is(err, sql.ErrNoRows) {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			out = InvitationRow{}
-			return nil
+		case err != nil:
+			return err
 		}
+		out.Vouched, err = vouches(ctx, tx, end)
 		return err
 	})
 	if err != nil {
@@ -955,6 +979,16 @@ type ResetRow struct {
 	// its person suspended, signed out everywhere or their sessions ended by
 	// an administrator, or the company's invalidated after a restore.
 	Ended bool
+
+	// Vouched is whether the rows this was read from held every record the
+	// identity log held when it was asked, and retain none they could not
+	// apply ([CoversLog]). Only where they do is a link they do not hold, or
+	// hold but cannot open, one that does not open: on a node behind the
+	// log, or holding a record it could not apply — a newer build's, one
+	// signed under a keyring key it was not restarted with — it may be a link
+	// issued in a record this node has not applied, and answered as dead it
+	// told its holder to ask for another and counted them as a guesser.
+	Vouched bool
 }
 
 // Opens reports whether a secret presented with this link's id is the link's,
@@ -996,10 +1030,14 @@ var ResetStages = []iam.Stage{iam.StageInvited, iam.StageEnrolling, iam.StageAct
 
 // ResetByID resolves one reset link by its credential id, on this file's three
 // answers: the zero value for an id that is not a reset link this estate
-// holds, and an error for a node that could not tell.
-func (r *Reader) ResetByID(ctx context.Context, id string) (ResetRow, error) {
+// holds, and an error for a node that could not read — with whether these
+// rows vouch for what they hold at end, the identity log's last sequence read
+// BEFORE this snapshot ([ResetRow.Vouched], [CoversLog]).
+func (r *Reader) ResetByID(ctx context.Context, id string, end uint64) (
+	ResetRow, error) {
+
 	if id == "" {
-		return ResetRow{}, nil
+		return ResetRow{Vouched: true}, nil
 	}
 	var out ResetRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -1019,9 +1057,13 @@ func (r *Reader) ResetByID(ctx context.Context, id string) (ResetRow, error) {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			out = ResetRow{}
-			return nil
+			out.Vouched, err = vouches(ctx, tx, end)
+			return err
 		case err != nil:
 			return fmt.Errorf("iamdomain: read a reset link: %w", err)
+		}
+		if out.Vouched, err = vouches(ctx, tx, end); err != nil {
+			return err
 		}
 		held, err := DecodeCredential(document)
 		if err != nil {

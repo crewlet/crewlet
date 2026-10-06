@@ -48,7 +48,7 @@ func TestACancelledInvitationOpensNothingAndFreesItsAddress(t *testing.T) {
 				t.Fatalf("cancel: (%+v, %v)", result, err)
 			}
 			rig.drain()
-			row, err := rig.reader(t).InvitationByID(t.Context(), first.ID)
+			row, err := rig.invitationRow(t, first.ID)
 			if err != nil {
 				t.Fatal(err)
 			}

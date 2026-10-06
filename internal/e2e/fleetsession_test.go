@@ -167,7 +167,7 @@ func signIn(t *testing.T, n *node, b *browser) {
 	// once it has applied the invitation, and a redemption before that is
 	// refused as a link nobody issued.
 	settle(t, "member "+n.id+" to apply the invitation", func() (bool, string) {
-		row, err := n.engine.IAM().InvitationByID(t.Context(), id)
+		row, err := n.engine.InvitationByID(t.Context(), id)
 		return err == nil && row.ID == id, ""
 	})
 

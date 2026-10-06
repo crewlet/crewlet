@@ -111,7 +111,7 @@ func TestAPasswordSetIsOneRecordThatEndsEveryTokenAndLink(t *testing.T) {
 	if len(passwords) != 1 || passwords[0] != "argon-new" {
 		t.Errorf("the person's passwords are %v, want the new one alone", passwords)
 	}
-	row, err := rig.reader(t).ResetByID(t.Context(), link)
+	row, err := rig.resetRow(t, link)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
 	}
 	opens := func() bool {
 		t.Helper()
-		row, err := rig.reader(t).ResetByID(t.Context(), link)
+		row, err := rig.resetRow(t, link)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -247,7 +247,7 @@ func TestAResetLinkEndsWithItsPersonsSessionsAndTokens(t *testing.T) {
 				t.Fatalf("the gesture: %v", err)
 			}
 			rig.drain()
-			row, err := rig.reader(t).ResetByID(t.Context(), link)
+			row, err := rig.resetRow(t, link)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -265,7 +265,7 @@ func TestAResetLinkEndsWithItsPersonsSessionsAndTokens(t *testing.T) {
 			}
 
 			after, fresh := issueReset(t, rig, person)
-			row, err = rig.reader(t).ResetByID(t.Context(), after)
+			row, err = rig.resetRow(t, after)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,6 +274,56 @@ func TestAResetLinkEndsWithItsPersonsSessionsAndTokens(t *testing.T) {
 					"control: %+v", row)
 			}
 		})
+	}
+}
+
+// A LINK THESE ROWS DO NOT HOLD IS DEAD ONLY WHERE THEY HOLD THE WHOLE LOG.
+//
+// The reset link's lookup and the invitation's answered the zero row for any
+// id they did not hold, and the screens answered that `410` — the link is no
+// longer valid, ask for a new one — and counted the holder as a guesser. On a
+// node behind the log, or holding a record it could not apply, a link issued
+// through a peer is exactly such an id. Each lookup now says whether the rows
+// vouch for what they answer at the log's end, read first: they do at the end
+// they have applied — the CONTROL — and do not at an end past it, for the link
+// they hold and the id they do not alike. Mutation: answer Vouched true
+// without the proof and the case past the end reads vouched.
+func TestALinkTheseRowsDoNotHoldIsDeadOnlyWhereTheyHoldTheLog(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := tokenOwner(t, rig, "jane.doe")
+	link, _ := issueReset(t, rig, person)
+	end, err := rig.end(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := uuid.Must(uuid.NewV7()).String()
+	for _, tc := range []struct {
+		name string
+		end  uint64
+		want bool
+	}{
+		{"at the end these rows applied (the control)", end, true},
+		{"at an end past it", end + 1, false},
+	} {
+		for _, id := range []string{link, unknown} {
+			row, err := rig.reader(t).ResetByID(t.Context(), id, tc.end)
+			if err != nil {
+				t.Fatalf("%s: ResetByID(%s): %v", tc.name, id, err)
+			}
+			if row.Vouched != tc.want {
+				t.Errorf("%s: the reset lookup of %s vouched %v, want %v",
+					tc.name, id, row.Vouched, tc.want)
+			}
+			invitation, err := rig.reader(t).InvitationByID(t.Context(), id, tc.end)
+			if err != nil {
+				t.Fatalf("%s: InvitationByID(%s): %v", tc.name, id, err)
+			}
+			if invitation.Vouched != tc.want {
+				t.Errorf("%s: the invitation lookup of %s vouched %v, want %v",
+					tc.name, id, invitation.Vouched, tc.want)
+			}
+		}
 	}
 }
 
@@ -303,7 +353,7 @@ func TestAResetLinkIsNoBearer(t *testing.T) {
 		t.Errorf("a reset link presented as a bearer answered %q (%s)",
 			got.Answer, got.Detail)
 	}
-	row, err := rig.reader(t).ResetByID(t.Context(), link)
+	row, err := rig.resetRow(t, link)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +363,7 @@ func TestAResetLinkIsNoBearer(t *testing.T) {
 	if row.Opens(secret, brokerAt.Add(credential.ResetLinkLifetime+time.Second)) {
 		t.Error("a link opened past its day")
 	}
-	if tokenRow, _ := rig.reader(t).ResetByID(t.Context(), token.ID); tokenRow.ID != "" {
+	if tokenRow, _ := rig.resetRow(t, token.ID); tokenRow.ID != "" {
 		t.Errorf("a machine token resolved as a reset link: %+v", tokenRow)
 	}
 }

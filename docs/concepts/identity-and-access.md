@@ -848,7 +848,14 @@ link fails to open — an id that is no link, a secret that is not the id's, a
 link spent, revoked, ended or aged out, a person the reset no longer reaches — is
 **one `410 reset_spent`** in the same bytes, counted as a failed attempt (method
 `reset`) only where the link did not prove itself. It meets no curve: it names
-nobody until it opens, and its secret is 256 bits of `crypto/rand`.
+nobody until it opens, and its secret is 256 bits of `crypto/rand`. A `410`
+is said only by a node whose identity rows **vouch** for it — that hold every
+record the identity log does and retain none they could not apply. One behind
+the log, or holding a record signed under a keyring key it was not restarted
+with, may be missing a link issued through a peer, so it answers every link
+that does not open there `503 identity_unavailable`, counting nothing — an id
+it does not hold and a wrong secret alike, so the two still say nothing about
+which ids exist. An invitation's link is answered the same way.
 
 **Spending it is one record, and it signs nobody in.** The new password, the
 link spent with every other the person held, and their revocation epoch moved
