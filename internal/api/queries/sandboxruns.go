@@ -81,15 +81,16 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 	}
 	q := sandbox.TailQuery{TurnID: turnID, LaunchID: launchID}
 	if p.Bool("cursor", false) {
-		after := 0
+		var after int64
 		if p.Has("after") {
-			if after = p.Int("after", -1); after < 0 {
+			var whole bool
+			if after, whole = p.WholeInt("after"); !whole || after < 0 {
 				return nil, fmt.Errorf("%w: sandbox_tail's after is the byte offset the asker "+
 					"holds through, a whole number of zero or more", ErrBadParams)
 			}
 		}
 		q.Cursor = &sandbox.TailCursor{
-			Epoch: p.String("epoch"), Offset: int64(after), Digest: p.String("digest"),
+			Epoch: p.String("epoch"), Offset: after, Digest: p.String("digest"),
 		}
 	}
 	return s.SandboxTail.Tail(ctx, q)

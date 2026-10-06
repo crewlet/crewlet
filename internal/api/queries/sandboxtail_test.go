@@ -83,6 +83,11 @@ func TestACursorIsAskedForExplicitly(t *testing.T) {
 		*q.Cursor != (sandbox.TailCursor{}) {
 		t.Errorf("a cursor holding nothing = %+v; want the empty cursor", q.Cursor)
 	}
+	// A socket frame's numbers are float64s; a whole one is the offset.
+	if q := ask(map[string]any{"turn_id": "t1", "launch_id": "l1", "cursor": true, "after": float64(4096)}); q.Cursor == nil ||
+		q.Cursor.Offset != 4096 {
+		t.Errorf("a socket frame's whole offset = %+v; want 4096", q.Cursor)
+	}
 	// Over REST every value is a string, the flag included.
 	rest := queries.FromQuery(url.Values{
 		"turn_id": {"t1"}, "launch_id": {"l1"}, "cursor": {"true"},
@@ -96,11 +101,43 @@ func TestACursorIsAskedForExplicitly(t *testing.T) {
 		t.Errorf("a REST cursor = %+v; want %+v", got, want)
 	}
 
-	for _, after := range []any{"-1", "the end", float64(-3)} {
+	// A socket frame's number is a float64, and one with a fraction names no
+	// byte: read as the whole number below it, it was a different request
+	// answered as though it were the one asked.
+	for _, after := range []any{"-1", "the end", float64(-3), 12.5, "12.5", 1e300, true} {
 		_, err := r.Answer(t.Context(), "sandbox_tail",
 			map[string]any{"turn_id": "t1", "launch_id": "l1", "cursor": true, "after": after}, "operator")
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("after=%v = %v; want a bad-params refusal naming the offset", after, err)
 		}
+	}
+}
+
+// A WHOLE NUMBER IS READ EXACTLY OR NOT AT ALL: a socket frame's number with a
+// fraction, or one past int64 (whose conversion Go leaves to the platform), is
+// no whole number — never the nearest one.
+func TestAWholeNumberIsReadExactlyOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		value any
+		want  int64
+		whole bool
+	}{
+		"a frame's whole number": {value: float64(4096), want: 4096, whole: true},
+		"a query string's":       {value: "4096", want: 4096, whole: true},
+		"the least int64":        {value: float64(-(1 << 63)), want: -(1 << 63), whole: true},
+		"a fraction":             {value: 12.5},
+		"the first past int64":   {value: float64(1 << 63)},
+		"a string's fraction":    {value: "12.5"},
+		"padded":                 {value: " 12"},
+		"not a number":           {value: true},
+	} {
+		got, whole := queries.FromMap(map[string]any{"n": c.value}).WholeInt("n")
+		if whole != c.whole || got != c.want {
+			t.Errorf("%s: WholeInt(%v) = %d, %v; want %d, %v", name, c.value, got, whole, c.want, c.whole)
+		}
+	}
+	if _, whole := queries.FromMap(nil).WholeInt("n"); whole {
+		t.Error("an absent key read as a whole number")
 	}
 }
