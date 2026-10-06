@@ -303,20 +303,41 @@ type CredentialRow struct {
 	// what it can do, re-cut to its owner's own grants on every request.
 	// Empty on every other method.
 	Grants []iam.Grant
+
+	// Superseded marks a machine token a COUNTER ended rather than its own
+	// row: its owner's revocation epoch, or the company's session
+	// generation, moved past the value it was minted at — the comparison
+	// [credential.CheckToken] refuses it on. Neither writes `revoked_at`: a
+	// password change, "sign out everywhere" and an administrator ending
+	// somebody's sessions all move the epoch, so a listing that read the
+	// row alone reported every token they ended as in use.
+	Superseded bool
 }
 
-// Revoked reports a credential that has been withdrawn or has aged out.
+// Revoked reports a credential that has been withdrawn, has aged out, or was
+// ended by a counter ([CredentialRow.Superseded]).
 func (c CredentialRow) Revoked(now time.Time) bool {
-	return !c.RevokedAt.IsZero() ||
+	return !c.RevokedAt.IsZero() || c.Superseded ||
 		(!c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt))
 }
 
 // Credentials lists what one person proves themselves with.
+//
+// THE COUNTERS ARE READ IN THE SNAPSHOT THE ROWS ARE, so a token is reported
+// ended by exactly what ended it at that instant ([CredentialRow.Superseded]).
 func (r *Reader) Credentials(ctx context.Context, personID string) (
 	[]CredentialRow, error) {
 
 	var out []CredentialRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		epoch, err := epochOf(ctx, tx, personID)
+		if err != nil {
+			return err
+		}
+		generation, err := generationOf(ctx, tx)
+		if err != nil {
+			return err
+		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, person_id, method, created_at, expires_at, revoked_at,
 			       document
@@ -347,6 +368,8 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 			if held, err := DecodeCredential(document); err == nil {
 				row.Label = held.Label
 				row.Grants = held.Grants
+				row.Superseded = row.Method == MethodToken &&
+					(epoch > held.Epoch || generation > held.Generation)
 			}
 			out = append(out, row)
 		}
@@ -445,12 +468,32 @@ type SessionRecord struct {
 	// [Session.EnrolmentOnly] — which an administrator reading somebody's
 	// sessions needs told apart from a whole one.
 	EnrolmentOnly bool
+
+	// Superseded marks a session a COUNTER ended rather than its own row:
+	// opened before the company's last invalidation, or at a revocation
+	// epoch its person has since moved past ([sessionSuperseded]). Neither
+	// writes `ended_at` — a password change, "sign out everywhere" and an
+	// administrator ending somebody's sessions all move the epoch — so a
+	// listing that read the row alone reported every one of them live.
+	Superseded bool
 }
 
-// Live reports a session that has not ended and has not aged out.
+// Live reports a session nothing has ended: not ended, not past its absolute
+// deadline, and not superseded.
+//
+// THE ONE READING: the listing reports it and [Reader.SessionStanding] decides
+// a named sign-out by it, so a screen never offers to end a session the engine
+// would answer was already over.
 func (s SessionRecord) Live(now time.Time) bool {
-	return s.EndedAt.IsZero() &&
+	return s.EndedAt.IsZero() && !s.Superseded &&
 		(s.ExpiresAt.IsZero() || now.Before(s.ExpiresAt))
+}
+
+// sessionSuperseded is whether a counter has ended a session: it opened (at
+// start) before the company's last invalidation, or carries a revocation epoch
+// below its person's current one.
+func sessionSuperseded(start, epoch, invalidated, current uint64) bool {
+	return start < invalidated || epoch < current
 }
 
 // Sessions lists one person's sessions, newest first.
@@ -459,13 +502,25 @@ func (s SessionRecord) Live(now time.Time) bool {
 // sentence an investigation is looking for and a listing that showed only the
 // live ones could never carry it. The row is kept until the sweep
 // collects it for exactly that reason.
+//
+// THE COUNTERS ARE READ IN THE SNAPSHOT THE ROWS ARE, so a session is
+// reported ended by exactly what ended it at that instant
+// ([SessionRecord.Superseded]).
 func (r *Reader) Sessions(ctx context.Context, personID string) (
 	[]SessionRecord, error) {
 
 	var out []SessionRecord
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		invalidated, err := readInvalidated(ctx, tx)
+		if err != nil {
+			return err
+		}
+		current, err := epochOf(ctx, tx, personID)
+		if err != nil {
+			return err
+		}
 		rows, err := tx.QueryContext(ctx, `
-			SELECT lineage, person_id, epoch, created_at,
+			SELECT lineage, person_id, epoch, start_position, created_at,
 			       absolute_expires_at, ended_at, ended_reason, document
 			FROM iam_sessions WHERE person_id = ?
 			ORDER BY created_at DESC`, personID)
@@ -478,13 +533,14 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 			var (
 				row     SessionRecord
 				epoch   int64
+				start   int64
 				created int64
 				expires int64
 				ended   int64
 				doc     []byte
 			)
-			if err := rows.Scan(&row.Lineage, &row.PersonID, &epoch, &created,
-				&expires, &ended, &row.EndedWhy, &doc); err != nil {
+			if err := rows.Scan(&row.Lineage, &row.PersonID, &epoch, &start,
+				&created, &expires, &ended, &row.EndedWhy, &doc); err != nil {
 				return fmt.Errorf("iamdomain: scan a session: %w", err)
 			}
 			// A DOCUMENT THIS BUILD CANNOT OPEN is listed without the
@@ -495,6 +551,8 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 				row.EnrolmentOnly = held.EnrolmentOnly
 			}
 			row.Epoch = uint64(epoch)
+			row.Superseded = sessionSuperseded(uint64(start), row.Epoch,
+				invalidated, current)
 			row.CreatedAt = fromMillis(created)
 			row.ExpiresAt = fromMillis(expires)
 			row.EndedAt = fromMillis(ended)

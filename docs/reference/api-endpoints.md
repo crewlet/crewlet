@@ -725,6 +725,14 @@ because "who can reach this company, and how" is the audit question — and it
 opens nothing that changes it, because a grant that could end a session is a
 grant that can lock a company out of its own engine.
 
+**A listing says what still works.** A session's `live` and a credential's
+`revoked` are the reading the request guard makes: a session or a machine token
+ended by its person's revocation epoch — a password change, signing out
+everywhere, an administrator ending their sessions — or by
+`POST /iam/invalidate-all` is listed ended, although neither gesture writes an
+`ended_at` or a `revoked_at` on it, and a named sign-out of a session listed
+live finds it live.
+
 #### Every write answers three ways
 
 `applied` is `200` (`201` on the two routes that hand back what they created)

@@ -1095,10 +1095,10 @@ func fromMillis(ms int64) time.Time {
 // Because ending a session is a claim that it was live until now. Asked only
 // for the owner, a named sign-out closed and announced a session a record had
 // already ended — revoked, invalidated, past its absolute deadline — naming
-// the caller as the one who ended it. Live is one reading of the row: not
-// ended, not past its absolute deadline, not opened before the company's last
-// invalidation, and at its person's current revocation epoch. An absent row is
-// never live.
+// the caller as the one who ended it. Live is [SessionRecord.Live], the
+// reading the listing reports: not ended, not past its absolute deadline, not
+// opened before the company's last invalidation, and at its person's current
+// revocation epoch. An absent row is never live.
 //
 // # And an absent row is PROVED against the log's end, or not said
 //
@@ -1140,19 +1140,18 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 		if err != nil {
 			return err
 		}
-		switch {
-		case ended != 0,
-			expires > 0 && expires <= now.UnixMilli(),
-			// A SESSION OPENED BEFORE THE COMPANY'S LAST INVALIDATION
-			// carries the generation that invalidation ended.
-			invalidated > 0 && uint64(start) < invalidated:
-			return nil
-		}
 		current, err := epochOf(ctx, tx, owner)
 		if err != nil {
 			return err
 		}
-		live = uint64(epoch) >= current
+		// THE LISTING'S OWN READING ([SessionRecord.Live]), so the
+		// sessions a screen offers to end are the ones this answers live.
+		live = SessionRecord{
+			EndedAt:   fromMillis(ended),
+			ExpiresAt: fromMillis(expires),
+			Superseded: sessionSuperseded(uint64(start), uint64(epoch),
+				invalidated, current),
+		}.Live(now)
 		return nil
 	})
 	if err != nil {
