@@ -185,11 +185,19 @@ export function GrantPicker({
  * with nothing ticked used to go out with no word, and its person landed on a
  * dashboard that could show them nothing.
  */
-export function ReachNote({ grants }: { grants: readonly string[] }) {
+export function ReachNote({
+  grants,
+  you = false,
+}: {
+  grants: readonly string[];
+  /** The grants are the reader's own, and the note speaks to them. */
+  you?: boolean;
+}) {
   if (grants.includes("state:read")) return null;
   return (
     <Callout variant="warning">
-      Without <span className="mono">state:read</span> they can open nothing but their own Account:
+      Without <span className="mono">state:read</span>{" "}
+      {you ? "you can open nothing but your own" : "they can open nothing but their own"} Account:
       every other screen reads the company&apos;s live state, which needs it.
     </Callout>
   );

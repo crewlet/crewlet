@@ -118,7 +118,7 @@ import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { auth, rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
-import { EditPersonDialog, ServiceAccountDialog } from "./AccessDialogs.tsx";
+import { EditPersonDialog, OnYourself, ServiceAccountDialog } from "./AccessDialogs.tsx";
 
 // ---------------------------------------------------------------------------
 // The wire, as internal/api/iamapi writes it
@@ -1342,7 +1342,14 @@ function Principal({
         </div>
       )}
       {gesture === "edit" && (
-        <EditPersonDialog row={row} held={held} onClose={close} onDone={changed} />
+        <EditPersonDialog
+          row={row}
+          held={held}
+          you={you}
+          alone={alone}
+          onClose={close}
+          onDone={changed}
+        />
       )}
       {gesture === "mint" && (
         <MintTokenDialog owner={row} held={held} onClose={close} onDone={changed} />
@@ -1638,33 +1645,6 @@ function AfterFactorReset({ you }: { you: boolean }) {
         : "They sign in with their password alone until they set up a new one.";
   }
   return null;
-}
-
-/**
- * What a gesture on the reader's OWN row says first: that it is them, and that
- * it signs this browser out at once — and, where it stops them administering
- * and nobody else could, that only a Tier A token could afterwards.
- *
- * The panel names a row by its person, in the third person, and a person
- * suspending "Jane Doe" from Jane Doe's own session was told none of it. AND
- * THE WHOLE DIALOG SPEAKS TO THEM there, not only this callout and the title:
- * a body saying "Jane Doe may not act while suspended" under "This is you"
- * read as two people.
- */
-function OnYourself({ alone = false }: { alone?: boolean }) {
-  return (
-    <Callout variant="warning" title="This is you">
-      It signs you out of this browser at once.
-      {alone && (
-        <>
-          {" "}
-          Nobody else active holds <InlineCode>people:manage</InlineCode>, so afterwards nobody
-          could administer people except through this node&rsquo;s API token (
-          <InlineCode>api.auth.tokens</InlineCode>).
-        </>
-      )}
-    </Callout>
-  );
 }
 
 /** One confirmed write about a principal: the dialog, the request, the answer. */

@@ -5754,7 +5754,11 @@ this screen is the exception):
   browser out at once, and speaks to them throughout, its title and body
   alike ("You may not act while suspended"), and **Suspend** and **Remove** add, where `GET
   /iam/check` counts nobody else active holding `people:manage`, that
-  afterwards only this node's API token could administer people.
+  afterwards only this node's API token could administer people. **Edit**
+  speaks to them too, and an edit unticking their own `people:manage` says it
+  is them, that they stop administering people once it saves, and the same
+  sentence where nobody else would be left — the engine refuses no one taking
+  away a grant, the last administrator's own included.
 
 Every one of these is one `/iam` write (`lib/iamWrite.ts`): a `403
 step_up_required` opens the step-up dialog and the same request is replayed; a

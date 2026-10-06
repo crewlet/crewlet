@@ -9,7 +9,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, FormField, Input, Modal, Select, Text } from "@crewlethq/ui";
+import { Button, Callout, FormField, InlineCode, Input, Modal, Select, Text } from "@crewlethq/ui";
 import { PencilGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import {
   GrantPicker,
@@ -171,6 +171,40 @@ export function ServiceAccountDialog({
 }
 
 /**
+ * What a gesture on the reader's OWN row says first: that it is them, and what
+ * it does to them — `what`, by default that it signs this browser out at once —
+ * and, where it stops them administering and nobody else could, that only a
+ * Tier A token could afterwards.
+ *
+ * The panel names a row by its person, in the third person, and a person
+ * suspending "Jane Doe" from Jane Doe's own session was told none of it. AND
+ * THE WHOLE DIALOG SPEAKS TO THEM there, not only this callout and the title:
+ * a body saying "Jane Doe may not act while suspended" under "This is you"
+ * read as two people.
+ */
+export function OnYourself({
+  alone = false,
+  what = "It signs you out of this browser at once.",
+}: {
+  alone?: boolean;
+  what?: string;
+}) {
+  return (
+    <Callout variant="warning" title="This is you">
+      {what}
+      {alone && (
+        <>
+          {" "}
+          Nobody else active holds <InlineCode>people:manage</InlineCode>, so afterwards nobody
+          could administer people except through this node&rsquo;s API token (
+          <InlineCode>api.auth.tokens</InlineCode>).
+        </>
+      )}
+    </Callout>
+  );
+}
+
+/**
  * Change somebody's login, seat or grants — one `PATCH`, carrying only what
  * changed. The engine moves the login and the seat in one record before the
  * grants, and a refusal part way names what had already landed.
@@ -192,11 +226,17 @@ export function ServiceAccountDialog({
 export function EditPersonDialog({
   row: live,
   held,
+  you = false,
+  alone = false,
   onClose,
   onDone,
 }: {
   row: EditableRow;
   held: readonly string[];
+  /** Whether this row is the person reading it. */
+  you?: boolean;
+  /** Whether they are the one active administrator left (`OnYourself`). */
+  alone?: boolean;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -295,7 +335,9 @@ export function EditPersonDialog({
         helper={
           row.kind === "machine"
             ? "Words joined by colons, such as ci:release."
-            : "Words joined by dots, such as jane.doe. Their changes are recorded under it while they hold no seat."
+            : you
+              ? "Words joined by dots, such as jane.doe. Your changes are recorded under it while you hold no seat."
+              : "Words joined by dots, such as jane.doe. Their changes are recorded under it while they hold no seat."
         }
         error={tried ? (loginWrong ?? undefined) : undefined}
       >
@@ -341,7 +383,16 @@ export function EditPersonDialog({
             : undefined
         }
       />
-      {row.kind !== "machine" && <ReachNote grants={grants} />}
+      {row.kind !== "machine" && <ReachNote grants={grants} you={you} />}
+      {/* TAKING YOUR OWN people:manage stops you administering once it saves —
+          and where nobody else active holds it, anybody but a Tier A token. It
+          was the one gesture on your own row that said neither. */}
+      {you && removed.includes("people:manage") && (
+        <OnYourself
+          alone={alone}
+          what="Without people:manage you stop administering people once this saves."
+        />
+      )}
       <IamOutcome answer={write.answer} />
     </Modal>
   );

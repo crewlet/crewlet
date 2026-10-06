@@ -969,6 +969,48 @@ test("removing the open person closes their panel and says they were removed", a
   expect(screen.queryByRole("dialog", { name: "Remove Bo Lang?" })).toBeNull();
 });
 
+// TAKING YOUR OWN people:manage IN AN EDIT SAYS IT IS YOU, and when nobody
+// else administers, as a suspension and a removal do: the only administrator
+// could untick it on their own row with no word, and the engine has no
+// last-administrator guard — afterwards only a Tier A token administers
+// people. The dialog speaks to them throughout. The CONTROLS: the same edit
+// keeping the grant says nothing, and with a second administrator the
+// sentence about nobody else goes. Mutation: drop `you` or `alone` from the
+// edit and a line here goes red.
+test("taking your own people:manage in an edit says it is you, and when nobody else administers", async () => {
+  const ana = {
+    id: "p-ana",
+    kind: "person",
+    stage: "active",
+    login: "ana.admin",
+    name: "Ana Admin",
+    grants: ADMIN.grants,
+  };
+  const directory = () => ({ people: [...PEOPLE.people, ana], next: "" });
+  reader = "p-ana";
+  for (const [count, nobodyElse] of [
+    [1, true],
+    [2, false],
+  ] as const) {
+    administrators = count;
+    engine({}, directory);
+    location.hash = "#/settings/access?person=p-ana";
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+    const edit = await screen.findByRole("dialog", { name: "Edit Ana Admin" });
+    await settle();
+    expect(within(edit).queryByText("This is you")).toBeNull();
+    expect(within(edit).getByText(/Your changes are recorded under it/)).toBeTruthy();
+    fireEvent.click(within(edit).getByRole("checkbox", { name: "people:manage" }));
+    expect(within(edit).getByText("This is you")).toBeTruthy();
+    expect(within(edit).getByText(/you stop administering people/)).toBeTruthy();
+    expect(within(edit).queryByText(/Nobody else active holds/) !== null).toBe(nobodyElse);
+    fireEvent.click(within(edit).getByRole("checkbox", { name: "state:read" }));
+    expect(within(edit).getByText(/you can open nothing but your own/)).toBeTruthy();
+    cleanup();
+  }
+});
+
 // A GESTURE ON THE READER'S OWN ROW SAYS IT IS THEM and that it signs them out
 // at once, and the whole dialog speaks to them; the one administrator left
 // suspending or removing themselves is told that only a Tier A token could
