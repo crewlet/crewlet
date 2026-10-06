@@ -109,6 +109,10 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// key would inherit the FAILED attempt's frozen context blocks
 		// rather than assembling its own. See ADR-0017.
 		Task: task, TurnID: req.RunID,
+		// WHAT IT WAS ASKED, which every relevance judgement is made
+		// against while the executor is handed the task — see
+		// [prefetch.Request.Ask] and [turnAsk].
+		Ask: turnAsk(req.Ask()),
 		// OFF THE ASK, which for a coalesced conversation is the merged
 		// digest and for everything else is the partition itself. One
 		// shape rather than two: the merge is where a conversation's
@@ -236,6 +240,61 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		return
 	}
 	e.publishEvent(ctx, ev, seat.Name)
+}
+
+// turnAsk is what a turn was ASKED — [prefetch.Request.Ask] — read off its
+// trigger events, in order, one paragraph each.
+//
+// DescribeTrigger's job, without the wrapping. That function renders each
+// event's [events.Briefer], which for a notification is the integration's
+// prompt: the message behind triage guidance, reply instructions and the ids
+// to act on, identical on every turn of the surface. This renders, per event:
+//
+//   - a notification: its SUBJECT and its SALIENT body — the raw message, or a
+//     coalesced burst's messages attributed to their senders with the copies a
+//     source re-sent left out (notify's mergedSalient). The subject is part of
+//     what was sent rather than of the wrapping: an issue's key and title, an
+//     email's subject, the surface a chat message came from — and on a
+//     tracker comment the only place the topic is named at all;
+//   - a scheduled task: its [types.TaskAssigned.Ask], the brief without the
+//     run id the scheduler mints for every fire;
+//   - anything else that states an ask (a colleague's question, their
+//     answer): its brief, which is already the ask itself and names who
+//     asked — the one sender a turn woken by a colleague has;
+//   - an event from a build that predates its typed payload: the body in its
+//     free-form bag, as DescribeTrigger reads it.
+//
+// An event with none of those contributes nothing — not its type name, which
+// DescribeTrigger hands the executor so it is never given a blank ask, and
+// which here would be a word every such turn is judged against.
+func turnAsk(evs []*events.Event) string {
+	var parts []string
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if text := strings.TrimSpace(eventAsk(ev)); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// eventAsk is one trigger event's part of [turnAsk].
+func eventAsk(ev *events.Event) string {
+	if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
+		return strings.TrimSpace(strings.TrimSpace(n.Subject) + "\n\n" +
+			strings.TrimSpace(salientBody(n)))
+	}
+	if asker, ok := ev.Data.(interface{ Ask() string }); ok {
+		return asker.Ask()
+	}
+	if brief, ok := ev.Data.(events.Briefer); ok {
+		if b := strings.TrimSpace(brief.Brief()); b != "" {
+			return b
+		}
+	}
+	return payloadBody(ev)
 }
 
 // requiresRecon reports that ANY constituent of the trigger is a bare

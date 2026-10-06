@@ -95,6 +95,23 @@ func (e TaskAssigned) Brief() string {
 	return strings.TrimSpace(b.String())
 }
 
+// Ask is the assigned work as a relevance judgement reads it: the [Brief]
+// without the task id.
+//
+// The id is in the brief so the seat can write a result back under it; it is
+// no part of WHAT was asked, and the scheduler — the one producer — mints a
+// fresh one for every fire. Judged against, it is a run of random characters
+// that makes two fires of one schedule unalike, which is the opposite of
+// what "similar prior work" is for.
+func (e TaskAssigned) Ask() string {
+	var b strings.Builder
+	if e.Schedule != "" {
+		b.WriteString("Scheduled work: " + e.Schedule + "\n\n")
+	}
+	b.WriteString(e.Description)
+	return strings.TrimSpace(b.String())
+}
+
 // SummaryFor names the task id when there is one; a task with no id is real
 // enough to report, it just cannot be linked to.
 func (e TaskAssigned) SummaryFor(actor string) string {

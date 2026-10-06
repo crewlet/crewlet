@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/search"
 )
 
 var log = logging.Get("agent.prefetch")
@@ -177,9 +178,30 @@ type Request struct {
 	// Org is the company, for the knowledge search's read scope.
 	Org *org.Organization
 
-	// Task is the trigger as the turn describes it — what everything here
-	// is judged relevant AGAINST.
+	// Task is the trigger as the turn describes it to its executor: the
+	// integration's prompt — triage guidance, how to reply, which ids to
+	// act on — wrapped around what was asked. It is what the executor is
+	// handed, and nothing here judges relevance against it.
 	Task string
+
+	// Ask is what the turn was ASKED, without that wrapping: each
+	// notification's subject and salient body (a coalesced burst's
+	// messages, attributed to their senders), a colleague's question, a
+	// schedule's task. It is what every relevance judgement here is made
+	// against — the ONE vector the turn embeds for the memory and episode
+	// searches, the memory filter, the knowledge-query writer and the
+	// episode summary.
+	//
+	// NOT THE TASK, because the wrapping is what the task is mostly made
+	// of on the commonest wake. A chat message reaches the executor behind
+	// about 1.5 kB of triage scaffolding that is byte-identical on every
+	// turn of that surface: embedded, it dominates the vector, so every
+	// chat turn looked alike; read by the knowledge-query writer, its
+	// worked examples ("@PM open a ticket for @SWE") became search terms;
+	// and read by the memory filter, the roles those examples name read as
+	// people the task involves. An empty Ask is a trigger with nothing in
+	// it to judge — the searches treat it as a thin trigger.
+	Ask string
 
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke. Several on a coalesced trigger, and every one of them gets a
@@ -188,8 +210,8 @@ type Request struct {
 	Senders []learning.Subject
 
 	// RequiresRecon says the trigger is a POINTER rather than the
-	// context — a webhook naming a thing that changed. It gates the two
-	// searches that judge relevance against the trigger text, because
+	// context — a webhook naming a thing that changed. It gates the three
+	// searches that judge relevance against what was asked, because
 	// filtering against a bare pointer returns noise wearing the shape of
 	// relevance.
 	RequiresRecon bool
@@ -206,6 +228,49 @@ type Request struct {
 	// notification layer already answers, free to disagree with the
 	// working indicator and the reply target about which thread this is.
 	Thread notify.Thread
+}
+
+// judgeable says there is something to judge relevance against: the trigger
+// is not a pointer, and it asked something.
+//
+// THE THIN-TRIGGER GATE, in one place, so the three searches behind it — the
+// memory filter and its similarity half, the knowledge query, episode recall —
+// can never disagree about which turns they skip.
+func (r Request) judgeable() bool {
+	return !r.RequiresRecon && strings.TrimSpace(r.Ask) != ""
+}
+
+// EmbedBudget bounds embedding the text a similarity search is run against:
+// a turn's ask at turn start, and the hint or query a pull tool passes.
+//
+// [search.QueryEmbedBudget], BY REFERENCE rather than a copy of its figure,
+// because that budget is stated for exactly these readers — "a person typing
+// or a turn starting" — and a tool call has a model waiting on it the same
+// way. What it costs on a slow provider is the similarity half of one turn;
+// what it buys is a turn start that a provider having a bad minute does not
+// hold up by the provider's own fifteen seconds. One text is ONE call at most, however long:
+// a long ask is pooled from pieces sent in one batch.
+const EmbedBudget = search.QueryEmbedBudget
+
+// turnVector is the turn's one vector, computed at most once and only when a
+// search asks for it.
+type turnVector func() (learning.Vector, bool)
+
+// vectorFor embeds r's ask once, for every search in the turn that wants it.
+//
+// ONCE, because the memory and episode searches are judged against the same
+// text: embedding it for each was two billed round trips for one vector. And
+// LAZILY, so a turn whose searches are all gated — a thin trigger, an empty
+// ask, a seat with no diary and no episode store — embeds nothing at all.
+func (f *Fetcher) vectorFor(ctx context.Context, r Request) turnVector {
+	return sync.OnceValues(func() (learning.Vector, bool) {
+		if !r.judgeable() {
+			return learning.Vector{}, false
+		}
+		bounded, cancel := context.WithTimeout(ctx, EmbedBudget)
+		defer cancel()
+		return f.embed(bounded, r.Ask)
+	})
 }
 
 // Models resolves the model a seat's auxiliary work runs on.
@@ -368,7 +433,9 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 			*into = render()
 		})
 	}
-	run(&blocks.PersonalMemory, func() string { return f.personalMemory(ctx, r) })
+	// ONE VECTOR FOR THE TURN, shared by the two searches that rank by it.
+	vector := f.vectorFor(ctx, r)
+	run(&blocks.PersonalMemory, func() string { return f.personalMemory(ctx, r, vector) })
 	// Its own goroutine, like the skills block, because it reports a count
 	// alongside its prose.
 	wg.Go(func() {
@@ -377,7 +444,7 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks.RelevantKnowledge = read.text
 		blocks.RelevantKnowledgePages, blocks.RelevantKnowledgeQuery = read.pages, read.query
 	})
-	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
+	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r, vector) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
 	// Its own goroutine rather than a run(), because it is the one block that
 	// reports something back besides its prose.

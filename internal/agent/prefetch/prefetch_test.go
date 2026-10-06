@@ -238,12 +238,21 @@ func company(t *testing.T) (*org.Organization, *org.Role) {
 	return o, o.Role("Tech Lead")
 }
 
+// triageScaffold stands in for the guidance an integration's prompt wraps
+// around a message before the executor sees it — the part of the task no
+// relevance judgement may read.
+const triageScaffold = "## Triage — decide BEFORE replying\n\"@PM open a ticket for @SWE\" → addressee = PM"
+
+// theAsk is what the fixture turn was asked.
+const theAsk = "fix the login redirect loop on staging"
+
 func request(t *testing.T) prefetch.Request {
 	t.Helper()
 	o, seat := company(t)
 	return prefetch.Request{
 		Seat: seat, AgentID: "agent-1", Org: o,
-		Task:   "fix the login redirect loop on staging",
+		Task:   triageScaffold + "\n\n**Message:** " + theAsk,
+		Ask:    theAsk,
 		TurnID: "turn-1",
 		Senders: []learning.Subject{
 			{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},

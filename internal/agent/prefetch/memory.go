@@ -119,23 +119,29 @@ EXCLUDE only when none of the three apply — a per-subject preference about som
 If nothing applies, return [].`
 
 // personalMemory renders the block.
-func (f *Fetcher) personalMemory(ctx context.Context, r Request) string {
+func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVector) string {
 	if f.src.Diary == nil || r.AgentID == "" || strings.TrimSpace(r.Task) == "" {
 		return ""
 	}
-	candidates := f.memoryCandidates(ctx, r)
+	if !r.judgeable() {
+		// THE THIN-TRIGGER GATE, and it gates BOTH halves of the pool. The
+		// trigger is a pointer — "PR #42 got a comment" — or asked
+		// nothing, so asking a model which memories bear on it spends a
+		// call to judge relevance against a sentence with no content, and
+		// a vector of it is a similarity search keyed on nothing. Only the
+		// cheap recency read runs, so the hint renders only for a seat that
+		// has memories to look through again — which is worth doing
+		// precisely because recon will make the trigger real.
+		if len(f.recentMemories(ctx, r)) == 0 {
+			return ""
+		}
+		return EmptyMemoryHint
+	}
+	candidates := f.memoryCandidates(ctx, r, vector)
 	if len(candidates) == 0 {
 		// Nothing stored. The hint would be a lie: there is no filter to
 		// re-run and nothing for it to find.
 		return ""
-	}
-	if r.RequiresRecon {
-		// THE THIN-TRIGGER GATE. The task is a pointer — "PR #42 got a
-		// comment" — so asking a model which memories bear on it spends
-		// a call to judge relevance against a sentence with no content.
-		// The hint says looking again later is worth it, which is true
-		// precisely because recon will make the trigger real.
-		return EmptyMemoryHint
 	}
 	selected := f.filterMemories(ctx, r, candidates)
 	if len(selected) == 0 {
@@ -154,7 +160,10 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request) string {
 // the point: similarity alone misses a standing rule that matches no
 // particular task, and recency alone misses the one relevant memory written
 // six months ago.
-func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.DiaryEntry {
+//
+// The similarity half ranks against the turn's ONE vector, the embedding of
+// what it was asked — shared with episode recall rather than computed again.
+func (f *Fetcher) memoryCandidates(ctx context.Context, r Request, vector turnVector) []learning.DiaryEntry {
 	now := f.now()
 	var (
 		out  []learning.DiaryEntry
@@ -168,9 +177,9 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 		out = append(out, entry)
 	}
 
-	if vector, ok := f.embed(ctx, r.Task); ok {
+	if v, ok := vector(); ok {
 		hits, err := f.src.Diary.Recall(ctx, r.AgentID, learning.RecallQuery{
-			Handle: r.AgentID, Embedding: vector.Values, Model: vector.Model,
+			Handle: r.AgentID, Embedding: v.Values, Model: v.Model,
 			Limit: memoryVectorLimit,
 		}, now)
 		if err != nil {
@@ -180,14 +189,20 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 			add(hit.Entry)
 		}
 	}
-	recent, err := f.src.Diary.Recent(ctx, r.AgentID, now, memoryRecencyLimit)
-	if err != nil {
-		log.WarnContext(ctx, "memory_recent_failed", "agent_id", r.AgentID, "error", err.Error())
-	}
-	for _, entry := range recent {
+	for _, entry := range f.recentMemories(ctx, r) {
 		add(entry)
 	}
 	return out
+}
+
+// recentMemories is the recency half of the pool: the seat's newest live
+// notes, a database read with no embedding and no model call.
+func (f *Fetcher) recentMemories(ctx context.Context, r Request) []learning.DiaryEntry {
+	recent, err := f.src.Diary.Recent(ctx, r.AgentID, f.now(), memoryRecencyLimit)
+	if err != nil {
+		log.WarnContext(ctx, "memory_recent_failed", "agent_id", r.AgentID, "error", err.Error())
+	}
+	return recent
 }
 
 // filterMemories asks the auxiliary model which candidates bear on the task.
@@ -239,9 +254,18 @@ func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
 }
 
 // memoryFilterPrompt renders the task, the sender and the numbered pool.
+//
+// THE TASK IS WHAT THE TURN WAS ASKED ([Request.Ask]), not the brief the
+// executor is handed. The brief wraps a chat message in triage guidance whose
+// worked examples name roles and people ("@PM open a ticket for @SWE"), and
+// the filter's rule 3 admits a per-subject memory about anyone "named in the
+// task body" — so read against the brief, a preference about the PM was
+// relevant to every chat turn the scaffolding was wrapped around. What the
+// brief adds that the filter needs is the surface, and the ask carries it in
+// the notification's subject ("Slack message", an issue's key and title).
 func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 	var b strings.Builder
-	b.WriteString("Agent's current task:\n" + r.Task + "\n")
+	b.WriteString("Agent's current task:\n" + r.Ask + "\n")
 	// THE SENDER, STRUCTURED. Without it the filter has only whatever
 	// platform ids appear in the task body to reason from, and rule 3 —
 	// the one hard subject filter — becomes unenforceable: it cannot tell

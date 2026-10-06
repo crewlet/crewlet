@@ -12,8 +12,8 @@ import (
 // The PULL side of the same two searches the turn-start prefetch pushes.
 //
 // Both blocks this file exposes are the prefetch's own, re-run on demand: the
-// vector recall behind `## Relevant prior work`, and the auxiliary relevance
-// filter behind `## What you have learned`. They are here rather than
+// vector recall behind `## Similar prior work`, and the auxiliary relevance
+// filter behind `## Personal memory`. They are here rather than
 // reimplemented in a builtin because a second implementation of "which of this
 // seat's memories bear on this text" is a second answer to it, and the two
 // would drift in exactly the direction nobody looks — the tool would quietly
@@ -45,7 +45,9 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 	if handle == "" || strings.TrimSpace(text) == "" {
 		return nil, nil
 	}
-	vector, ok := f.embed(ctx, text)
+	embedCtx, cancel := context.WithTimeout(ctx, EmbedBudget)
+	vector, ok := f.embed(embedCtx, text)
+	cancel()
 	if !ok {
 		return nil, ErrNoSimilarity
 	}
@@ -73,8 +75,11 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 	if strings.TrimSpace(hint) == "" {
 		return nil, nil
 	}
-	request := Request{Seat: seat, AgentID: agentID, Task: hint}
-	candidates := f.memoryCandidates(ctx, request)
+	// THE HINT IS THE ASK: it is the executor's own account of what the
+	// task is about, written after recon, and the whole of what the filter
+	// and the vector are judged against here.
+	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint}
+	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request))
 	if len(candidates) == 0 {
 		return nil, nil
 	}

@@ -63,7 +63,7 @@ Output format (strict):
 If none of the past turns would help with the current task, output nothing at all.`
 
 // episodeRecall renders similar prior work.
-func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
+func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVector) string {
 	if f.src.Episodes == nil || r.Seat == nil || strings.TrimSpace(r.Task) == "" {
 		return ""
 	}
@@ -71,13 +71,13 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	if handle == "" {
 		return ""
 	}
-	if r.RequiresRecon {
+	if !r.judgeable() {
 		// Same gate as memory and knowledge, and the same reason: a
 		// similarity search against a pointer returns the seat's most
 		// recent work rather than its most relevant.
 		return EmptyRecallHint
 	}
-	vector, ok := f.embed(ctx, r.Task)
+	v, ok := vector()
 	if !ok {
 		// NO FALLBACK TO RECENCY. Episode recall's whole claim is "this
 		// resembles what you are doing now"; the three most recent turns
@@ -86,7 +86,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		return ""
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector.Values, Model: vector.Model, Limit: recallHits,
+		Handle: handle, Embedding: v.Values, Model: v.Model, Limit: recallHits,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "episode_recall_failed", "seat", handle, "error", err.Error())
@@ -107,8 +107,13 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	// THE SUMMARY IS OPTIONAL AND ITS FAILURE IS FREE: the raw bullets are
 	// already a usable block, so a model that is slow or unreachable costs
 	// verbosity rather than the block.
+	//
+	// JUDGED AGAINST WHAT THE TURN WAS ASKED ([Request.Ask]), for the
+	// memory filter's reason: the summary keeps "what bears on doing
+	// similar work again", and an integration's triage scaffolding is the
+	// same on every turn of its surface, so it bears on nothing.
 	summary, ok := f.auxCall(ctx, r.Seat, recallSummarySystemPrompt,
-		"Current task:\n"+r.Task+
+		"Current task:\n"+r.Ask+
 			"\n\nPast turns by this agent:\n"+raw+
 			"\n\nBriefing:", f.summaryTokens())
 	if !ok || strings.TrimSpace(summary) == "" {

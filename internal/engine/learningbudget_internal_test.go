@@ -372,7 +372,8 @@ func TestThePrefetchsAuxiliaryCompletionsAreCharged(t *testing.T) {
 	src := e.prefetchSources(c)
 	src.Knowledge = searchableKnowledge{}
 	prefetch.New(src).Fetch(ctx, prefetch.Request{
-		Seat: seat, Org: c.Org, Task: "ship the release", TurnID: "run-1",
+		Seat: seat, Org: c.Org, Task: "ship the release", Ask: "ship the release",
+		TurnID: "run-1",
 	})
 	if provider.calls != 1 {
 		t.Fatalf("the auxiliary model was called %d times, want the one knowledge "+

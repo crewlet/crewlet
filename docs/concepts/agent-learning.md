@@ -223,7 +223,7 @@ The prefetch filters against the **salient inbound message** — the raw message
 1. **Context-thin triggers** ("yes", "+1", a thread reply with little semantic content) — the salient message itself is thin, so the filter has nothing to match on and the block ends up empty. When that happens *and* the agent has memory rows, the block renders the gate-path hint line nudging the seat to refresh after recon.
 2. **Richer triggers** can produce a non-empty block, but the entries the trigger-time filter chose may not be the most relevant once the executor has read the thread / fetched the ticket / queried knowledge and learned what the conversation is *actually* about.
 
-The `refresh_memory(context_hint=…)` builtin fixes both. The `refresh_memory` line of the bundled `retrieval-research` [Tool Skill](tool-skills.md) (`examples/tool-skills/retrieval-research.md`) tells the executor to call refresh after any tool call that materially changed its understanding of the conversation — *even when the initial block already had entries*, not only as an escape hatch from the empty case. The tool re-runs the filter with the executor's enriched `context_hint` appended to the original task and returns the freshly-rendered digest as the tool result. Bounded by:
+The `refresh_memory(context_hint=…)` builtin fixes both. The `refresh_memory` line of the bundled `retrieval-research` [Tool Skill](tool-skills.md) (`examples/tool-skills/retrieval-research.md`) tells the executor to call refresh after any tool call that materially changed its understanding of the conversation — *even when the initial block already had entries*, not only as an escape hatch from the empty case. The tool re-runs the filter — and the similarity half of its pool — against the executor's `context_hint` alone, which is its own account of what the task is about once recon has made it real, and returns the freshly-rendered digest as the tool result. Bounded by:
 
 - **Per-turn cap** — `learning.personal_memory.max_refreshes_per_turn` (default 3). A hint beyond the cap is refused with the count spent, so the model learns the shape of the limit and stops trying instead of silently no-op'ing. A hint whose filter call *failed* still spends its slot — otherwise a failing call is retryable without bound, which is the same unbounded spend the cap exists to stop — but retrying that same hint is allowed and does re-run the filter.
 - **Idempotency cache** — a repeat of a hint already used this turn (case- and whitespace-normalised) is answered from the ledger without a fresh auxiliary call, including when the answer was "nothing bears on this". A repeat is free *because it is answered from here*, not merely uncharged: re-running the filter for free would leave the cap bounding nothing, since a model alternating two hints could spend a completion per round forever. What is cached is the **filtered rows**, not the rendered text, so a repeat asking for a larger `limit` gets the extra notes rather than the first call's rendering.
@@ -247,7 +247,7 @@ The shipped design takes the opposite stance: **a knowledge-base page is a knowl
 For each turn:
 
 1. The searcher gate runs: `Searcher.CanSearch(seat, org)`, a cheap, no-I/O check that a search could return anything (the role has accessible containers, or its own backend credentials for an unscoped search). When it says no, the aux-LLM query-generation call is skipped entirely.
-2. The role's auxiliary model (`role.llm_auxiliary`) turns the task description into a short plain-text keyword query (the user prompt ends `Knowledge-base search query:`). Scope is **not** the aux model's job — the searcher derives it internally from the org-wide `knowledge.*` list via [accessible containers](knowledge-system.md#accessible-containers). There is no per-unit/role union: a unit's `space` is integration identity (webhook routing + write home), not read scope.
+2. The role's auxiliary model (`role.llm_auxiliary`) turns what the turn was asked — [its ask](#salient-body-sourcing), not the integration's wrapping, whose worked examples would otherwise become search terms — into a short plain-text keyword query (the user prompt ends `Knowledge-base search query:`). Scope is **not** the aux model's job — the searcher derives it internally from the org-wide `knowledge.*` list via [accessible containers](knowledge-system.md#accessible-containers). There is no per-unit/role union: a unit's `space` is integration identity (webhook routing + write home), not read scope.
 3. The searcher runs the query as the agent's own backend user (the seat's own Confluence credential from its `mcp_env`, falling back to the org-level token) as a CQL `text ~ "..."` clause narrowed by `space IN (...)`. The backend enforces page permissions natively, so restricted pages the agent cannot see never appear; unreviewed [auto-drafts](#5-synthesizer-skill-induction) are excluded by the query's default ancestor exclusion (`knowledge.AutoDraftedParent`, "Auto-Drafted Skills").
 
 ### Flow
@@ -256,7 +256,7 @@ For each turn:
 flowchart TD
     A["turn start"] --> B{"Searcher.CanSearch(seat, org)?"}
     B -->|no| SKIP["skip — no aux call"]
-    B -->|yes| C["aux-LLM generates a keyword query (role.llm_auxiliary)<br/>in: task text · out: a short plain-text query,<br/>e.g. 'hotfix deploy rollback'"]
+    B -->|yes| C["aux-LLM generates a keyword query (role.llm_auxiliary)<br/>in: the turn's ask · out: a short plain-text query,<br/>e.g. 'hotfix deploy rollback'"]
     C --> D["Searcher.Search(knowledge.Query)<br/>scope derived internally: Confluence CQL,<br/>read scope from the org, agent's own backend auth"]
     D --> E["render bullets: one per hit, title + snippet"]
     E --> F["bake into the executor prompt's '## Relevant knowledge' block<br/>(frozen at turn start)"]
@@ -313,7 +313,7 @@ The gate skips the aux call when the trigger is a pointer. It is **pure logic �
 
 The signal lives at the notification builder because the builder *decides* whether to emit a recon directive — classifying from `event.type` downstream would duplicate that decision and let the two drift. A raw token-count heuristic doesn't work here: a webhook `task_description` is *long* (title + event metadata + multi-step "How to Handle This" boilerplate) but *thin on substance* — length would wrongly classify it as rich.
 
-Personal memory still does its cheap diary recency list on a thin trigger (a DB read, no LLM) so it can render the hint only when the agent actually has memory rows to refresh — the vector half of the hybrid would key on a bare pointer that has nothing substantive to match, so it's skipped alongside the aux filter. Relevant knowledge skips the query generation and live knowledge-base search entirely — it only needs `CanSearch` to confirm a search could return anything (so the search-tool nudge is actionable) before rendering the hint. Episode recall skips the vector query outright and renders its hint unconditionally: unlike a diary list or an accessible-spaces check, the only way to know whether an agent *has* matching past episodes is the vector query the gate exists to skip — so the hint is phrased conditionally ("if this task resembles something you have done before…") to read correctly even for an agent with no episodes.
+Personal memory still does its cheap diary recency list on a thin trigger (a DB read, no LLM) so it can render the hint only when the agent actually has memory rows to refresh — the vector half of the hybrid would key on a bare pointer that has nothing substantive to match, so it's skipped alongside the aux filter, and nothing is embedded. A trigger whose [ask](#salient-body-sourcing) is empty — a chat message with nothing but an attachment — is gated the same way, because there is equally nothing to judge relevance against; `trigger_requires_recon` stays the builder's flag and reads false for it. Relevant knowledge skips the query generation and live knowledge-base search entirely — it only needs `CanSearch` to confirm a search could return anything (so the search-tool nudge is actionable) before rendering the hint. Episode recall skips the vector query outright and renders its hint unconditionally: unlike a diary list or an accessible-spaces check, the only way to know whether an agent *has* matching past episodes is the vector query the gate exists to skip — so the hint is phrased conditionally ("if this task resembles something you have done before…") to read correctly even for an agent with no episodes.
 
 **Observability.** The summary's `trigger_requires_recon` records the gate decision once per turn. Without it, a gated prefetch and a filter that ran-and-found-nothing look identical in telemetry (both report a false `*_hit` and a zero selection count); with it, an operator seeing an empty `## Relevant knowledge` block can tell the prefetch was *gated* (the trigger was a pointer) rather than *broken*. The event's summary line surfaces it in the trace view: the count of blocks that hit out of seven (`prefetch: N/7 hits`), marked as a thin trigger with its filters gated when the gate fired. The denominator is the length of the engine's own block list rather than a literal, so a block added without one reads as "7/6" rather than going unnoticed.
 
@@ -329,33 +329,21 @@ The second is the conversation ledger. A pointer-shaped trigger is very often a 
 
 The relevance prefetches, the counterparty profiler, the PersistDecider, and `refresh_memory` all reason about *what the sender said*. None of them want the notification builder's scaffolding.
 
-A source's `notify.Prompt` builds the **enriched body**: for a Slack message, about 1.5k characters of `## Triage` instructions front-loaded *before* the actual message. That enriched body becomes the turn's task text (the executor needs the triage contract). But a relevance filter keyed on a leading slice of it never reaches the message: it filters against boilerplate that is byte-identical on every Slack turn.
+A source's `notify.Prompt` builds the **enriched body**: for a Slack message, about 1.5k characters of `## Triage` instructions front-loaded *before* the actual message. That enriched body becomes the turn's task text (the executor needs the triage contract). But a relevance judgement made against it is made mostly against boilerplate that is byte-identical on every Slack turn — embedded, it dominates the vector, so every chat turn looks alike; and its worked examples ("@PM open a ticket for @SWE") read to a model as roles and people the task involves, and as search terms.
 
 So the raw message rides separately. The notification's `SalientBody` carries the inbound body verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message, and the merged notification's own `salient_body` is the same messages joined chronologically with sender attribution (`Alice: …`).
 
-Which surfaces actually read the salient half, today:
+**The turn's ask.** At turn start the engine derives, from the trigger, **what the turn was asked** (`prefetch.Request.Ask`) beside the task the executor is handed: each notification's subject and salient body (the subject is part of what was sent — an issue's key and title, the surface a chat message came from, and on a tracker comment the only place the topic is named), a coalesced burst's merged salient body, a colleague's question with who asked, and a schedule's task without the run id the scheduler mints for every fire. Every relevance judgement is made against it:
 
 | Surface | Reads |
 |---|---|
 | Counterparty profiler / PersistDecider | `InboundInteraction.body` — the salient text, one entry per constituent |
-| `## Personal memory` prefetch | the turn's task text → aux filter prompt |
-| `## Relevant knowledge` prefetch | the turn's task text → aux-LLM query generation + knowledge-base search |
-| `## Similar prior work` (episode recall) | the turn's task text → vector query |
-| `refresh_memory` | the turn's task text as the base the `context_hint` is appended to |
+| `## Personal memory` prefetch | the turn's ask → the similarity half's vector, and the aux filter prompt |
+| `## Relevant knowledge` prefetch | the turn's ask → aux-LLM query generation + knowledge-base search |
+| `## Similar prior work` (episode recall) | the turn's ask → the vector query, and the episode summary prompt |
+| `refresh_memory` | its `context_hint`, which is the executor's own account of the task after recon |
 
-**Known gap — the four relevance surfaces read the ENRICHED task, not the
-salient text.** `prefetch.Request.Task` is the trigger as the turn describes
-it, which for a chat surface carries the third-party app's triage scaffolding in front
-of the message, and for a coalesced conversation is the whole digest. It is
-neither stripped nor bounded, so a filter prompt and an embedding query both
-receive the scaffolding, and a busy thread's digest can be arbitrarily long.
-Coalescing bounds the *count* of constituents (`notification_coalesce_max_batch`,
-at most 100) but nothing bounds their length. Routing these four through the
-salient text, with a length bound chosen against the embedding backend's own
-input limit, is the fix; it is a behaviour change to what every relevance
-judgement is made against, so it is called out here rather than done quietly.
-
-Without this, a stored memory that perfectly answered a question went unused: the filter only ever saw the triage boilerplate, so it could not see the question.
+The ask is embedded **once** a turn, shared by the memory and episode searches, under a two-second budget (`prefetch.EmbedBudget`, the knowledge search's own `QueryEmbedBudget`, stated for "a turn starting"), and **whole**: an ask longer than the embedding model's input — a long task description, a busy thread's digest — is split between words and its pieces' vectors pooled into one, in one request. Nothing is embedded on a thin trigger, or for an ask with nothing in it, which the searches treat as a thin trigger. The executor's own task text is unchanged.
 
 ---
 

@@ -150,9 +150,9 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	}); ok && builder.Building(ctx) {
 		return knowledgeBlock{text: BuildingKnowledgeHint}
 	}
-	if r.RequiresRecon {
-		// The trigger is a pointer, so there is nothing worth searching
-		// on yet: a query built from "PR #42 got a comment" matches the
+	if !r.judgeable() {
+		// The trigger is a pointer, or asked nothing, so there is nothing
+		// worth searching on yet: a query built from "PR #42 got a comment" matches the
 		// wrong pages or none. The hint says to look again once the seat
 		// knows what the task needs, which is exactly what the executor's
 		// search_knowledge tool is for.
@@ -212,9 +212,15 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.
+//
+// WRITTEN FROM WHAT THE TURN WAS ASKED ([Request.Ask]), not from the brief the
+// executor is handed: the brief wraps a chat message in triage guidance with
+// worked examples of its own (a new hire welcomed, a ticket opened for an
+// engineer), and a query writer handed the brief is handed those as candidate
+// search terms beside the one sentence the turn is about.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r.Seat, knowledgeQuerySystemPrompt,
-		"Task the agent is about to work on:\n\""+r.Task+
+		"Task the agent is about to work on:\n\""+r.Ask+
 			"\"\n\nKnowledge-base search query:", knowledgeQueryTokens)
 	if !ok {
 		return ""
