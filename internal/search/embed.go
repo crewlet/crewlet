@@ -87,8 +87,12 @@ const (
 	//   - ISOLATION. A refused request is split until the input it refuses
 	//     is alone, which costs at most 1 + 2·log₂128 = 15 requests for one
 	//     input among 128; with two corpora behind, each is guaranteed 16,
-	//     so a refusal is isolated inside the tick it is met in rather than
-	//     re-met, half-isolated, by every tick after it.
+	//     and its share of the tick's sources besides ([tickRequests.room]),
+	//     so a refusal is isolated inside the tick it is met in. Where a
+	//     corpus's share is smaller — three corpora or more — the isolation
+	//     takes more than one tick, and each tick resumes it where the last
+	//     one stopped ([Refusals.suspend]) rather than meeting it again from
+	//     the whole request.
 	//
 	// It is also what bounds the tick's provider wall clock: every request
 	// is held to its own ceiling (embeddings.BatchTimeout), and a request
@@ -645,12 +649,19 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 //
 // Round robin IS a reserved share plus the redistribution of what nobody used,
 // expressed as one rule rather than two. With every corpus behind, each gets
-// ⌊budget/N⌋ requests — of [EmbedRequestsPerTick], and of the sources
-// [EmbedSourcesPerTick] allows — and the remainder goes to the ones at the
-// front, an advantage bounded by a single request. With any of them caught up
-// or empty, its turn is skipped and the rest take the requests it did not
-// need, so the ceilings are still spent in full and a corpus with nothing to
-// do wastes nothing.
+// ⌊budget/N⌋ of [EmbedRequestsPerTick]'s requests, and the remainder goes to
+// the ones at the front, an advantage bounded by a single request. With any of
+// them caught up or empty, its turn is skipped and the rest take the requests
+// it did not need, so the ceilings are still spent in full and a corpus with
+// nothing to do wastes nothing.
+//
+// THE SOURCES NEED A RESERVATION OF THEIR OWN, because turns do not spend
+// them evenly: an accepted request takes up to [EmbedBatch] and a refused one
+// none, so one corpus isolating a refusal and its neighbour embedding full
+// requests take the same turns while only the neighbour drains the ceiling.
+// Each corpus that can still work therefore holds ⌊[EmbedSourcesPerTick]/N⌋
+// of them in reserve ([tickRequests.room]), released the moment it has nothing
+// left to do.
 //
 // The two alternatives, and what each costs:
 //
@@ -660,12 +671,12 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 //     entire task backlog. Equal shares bound a corpus's worst-case staleness
 //     by ITS OWN size, which is the property a founder searching the wiki
 //     actually has to be able to reason about.
-//   - A ROTATING START INDEX fixes the starvation too, and needs memory across
-//     ticks that this duty does not have: the engine rebuilds it every tick
-//     because the provider and model are re-read on every config apply. It
-//     also makes each corpus's progress bursty — a whole tick for one, then a
-//     whole tick for the other — for identical throughput and a worse
-//     worst-case latency on both.
+//   - A ROTATING START INDEX fixes the starvation too, and makes each
+//     corpus's progress bursty — a whole tick for one, then a whole tick for
+//     the other — for identical throughput and a worse worst-case latency on
+//     both. It would also be one more thing kept across ticks, which the
+//     engine rebuilds this duty for on every one, beside the only memory
+//     that has to be there ([Refusals]).
 func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	dim := e.deps.Embedder.Width()
 	published := 0
@@ -805,6 +816,9 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 				e.deps.Refusals.forget(q.source, id)
 			}
 		}
+		// THE ISOLATION THE LAST TICK DID NOT FINISH goes first, where
+		// it stopped ([Refusals.suspend]).
+		q.resume(e.deps.Refusals.resume(q.source))
 		if held := refused.held.Len(); held > 0 || len(refused.retry) > 0 {
 			e.deps.Logger.DebugContext(ctx, "search_embed_inputs_held",
 				"source", string(q.source), "held", held,
@@ -846,7 +860,17 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 
 	limits := e.deps.Embedder.Limits()
 	limits.BatchInputs = min(limits.BatchInputs, EmbedBatch)
-	t := tickRequests{requests: EmbedRequestsPerTick, sources: EmbedSourcesPerTick}
+	t := tickRequests{
+		requests: EmbedRequestsPerTick, sources: EmbedSourcesPerTick,
+		share: EmbedSourcesPerTick / max(1, len(queues)),
+	}
+	// WHAT EACH CORPUS'S ISOLATION HAS NOT REACHED is kept for its next
+	// tick, however this one ends ([Refusals.suspend]).
+	defer func() {
+		for _, q := range queues {
+			e.deps.Refusals.suspend(q.source, q.split)
+		}
+	}()
 	for t.sources > 0 {
 		// ONE PASS OVER THE CORPORA, ONE TURN EACH: a run of restamps, or
 		// one request. A pass that hands out nothing means no corpus has
@@ -855,15 +879,16 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 		// one selection per corpus and stop.
 		spent := false
 		for _, q := range queues {
-			if t.sources == 0 {
-				break
+			room := t.room(q, queues)
+			if room == 0 {
+				continue
 			}
 			if len(q.restamps) > 0 {
 				// A RESTAMP TURN costs no request, so it is taken
 				// whatever the provider answered this tick; it costs
 				// records, so it is a turn in the same round robin.
 				spent = true
-				n, err := e.restamp(ctx, q, dim, &t)
+				n, err := e.restamp(ctx, q, dim, room, &t)
 				published += n
 				switch {
 				case errors.Is(err, errStoredUnreadable):
@@ -877,7 +902,7 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			if !t.open() {
 				continue
 			}
-			group, err := q.next(limits, t.sources)
+			group, err := q.next(limits, room)
 			if err != nil {
 				// UNREACHABLE: every text is cut inside the model's
 				// own bound ([Embedder.inputBound]) and the limits were
@@ -932,6 +957,10 @@ type tickRequests struct {
 	// and [EmbedSourcesPerTick].
 	requests, sources int
 
+	// share is each corpus's reserved part of the sources: the ceiling
+	// divided between the corpora ([tickRequests.room]).
+	share int
+
 	// accepted and refused count the requests the provider embedded and
 	// refused, and refusedAlone the refused ones that carried one input.
 	accepted, refused, refusedAlone int
@@ -944,6 +973,40 @@ type tickRequests struct {
 // open reports whether the tick may send another request.
 func (t *tickRequests) open() bool {
 	return !t.stopped && t.requests > 0 && t.sources > 0
+}
+
+// room is how many of the tick's sources q may still take: what is left,
+// less what every OTHER corpus that can still work has not yet used of its
+// share.
+//
+// # Why the sources are reserved, and the requests are not
+//
+// The requests are divided by turns — one each, round robin — and that alone
+// shares them, because every turn costs one. The sources are not spent by
+// turns: an accepted request spends up to [EmbedBatch] of them and a refused
+// one spends none, so a corpus isolating a refused input — sending halves that
+// are refused, which publish nothing — and a neighbour embedding full requests
+// of short sources take the same turns while only the neighbour drains the
+// shared ceiling. Shared first come, the neighbour emptied it in eight turns,
+// the round robin ended at the ceiling, and the isolation was cut off seven
+// halves deep, the input it was closing on never sent alone; the next tick
+// selected it first again and met the same end, so that corpus embedded
+// nothing for as long as its neighbour's backlog lasted — the starvation the
+// round robin exists to prevent, arriving through the other ceiling.
+//
+// So each corpus that can still work holds ⌊sources / N⌋ in reserve, and a
+// neighbour takes only what a corpus has no work for: the reservation goes
+// the moment the corpus has nothing left it may do ([corpusQueue.canWork]),
+// which within a tick never comes back. The remainder of the division, and
+// the share of a corpus with nothing to do, are anybody's.
+func (t *tickRequests) room(q *corpusQueue, queues []*corpusQueue) int {
+	reserved := 0
+	for _, other := range queues {
+		if other != q && other.canWork(t) {
+			reserved += max(0, t.share-other.used)
+		}
+	}
+	return max(0, t.sources-reserved)
 }
 
 // inputBound is how many bytes of a source this duty sends: [EmbedInputBytes],
@@ -996,7 +1059,7 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 				e.deps.Refusals.forget(q.source, p.doc.ID)
 			}
 		}
-		return e.publishAll(ctx, q.source, dim, group, vectors, t)
+		return e.publishAll(ctx, q, dim, group, vectors, t)
 	case errors.Is(err, embeddings.ErrRefused) && len(group) > 1:
 		// SPLIT, AND THE HALVES GO FIRST: the corpus's next turns send
 		// them before anything else it holds, so the input the provider
@@ -1039,7 +1102,8 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 }
 
 // publishAll publishes a record per vector an accepted request returned.
-func (e *Embedder) publishAll(ctx context.Context, source Source, dim int, group []pending, vectors [][]float32, t *tickRequests) (int, error) {
+func (e *Embedder) publishAll(ctx context.Context, q *corpusQueue, dim int, group []pending, vectors [][]float32, t *tickRequests) (int, error) {
+	source := q.source
 	published := 0
 	for i, vector := range vectors {
 		p := group[i]
@@ -1079,6 +1143,7 @@ func (e *Embedder) publishAll(ctx context.Context, source Source, dim int, group
 		}
 		published++
 		t.sources--
+		q.used++
 	}
 	return published, nil
 }
@@ -1118,8 +1183,8 @@ func (e *Embedder) publish(ctx context.Context, source Source, dim int, p pendin
 // separate transaction from the selection, a vector paired with the
 // selection's digest could be a newer one written in between — a record
 // asserting a text for a vector computed from another.
-func (e *Embedder) restamp(ctx context.Context, q *corpusQueue, dim int, t *tickRequests) (int, error) {
-	run := q.restamps[:min(len(q.restamps), EmbedBatch, t.sources)]
+func (e *Embedder) restamp(ctx context.Context, q *corpusQueue, dim, room int, t *tickRequests) (int, error) {
+	run := q.restamps[:min(len(q.restamps), EmbedBatch, room)]
 	q.restamps = q.restamps[len(run):]
 	stored, err := e.storedVectors(ctx, q.source, run, dim)
 	if err != nil {
@@ -1147,6 +1212,7 @@ func (e *Embedder) restamp(ctx context.Context, q *corpusQueue, dim int, t *tick
 		}
 		published++
 		t.sources--
+		q.used++
 	}
 	return published, nil
 }

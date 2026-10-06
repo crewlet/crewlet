@@ -1000,6 +1000,102 @@ func TestAnIdleCorpusGivesItsShareToTheRest(t *testing.T) {
 	}
 }
 
+// A NEIGHBOUR SPENDING THE SOURCES CANNOT CUT A CORPUS'S ISOLATION OFF.
+//
+// A refused request publishes nothing and so spends none of the tick's
+// sources, while a neighbour's accepted requests of short sources spend 128
+// each. Shared first come, the neighbour emptied the ceiling in eight turns,
+// the round robin ended with it, and a corpus isolating a refused input was cut
+// off seven halves deep — every tick, since the input stayed its oldest stale
+// source: measured, a wiki whose oldest page the provider refused embedded
+// nothing for as long as the tracker's backlog lasted. Each corpus holds its
+// share of the sources while it can work, so the isolation finishes inside the
+// tick it is met in and every neighbour of the refused page is embedded.
+func TestANeighbourSpendingTheSourcesCannotCutAnIsolationOff(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	tasks := &scriptedCorpus{source: search.SourceTask, backlog: -1}
+	pages := &scriptedCorpus{source: search.SourcePage, backlog: search.EmbedBatch}
+	h.embedder.refuse("page document 00000")
+
+	published, err := h.dutyOver(tasks, pages).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.refusals.Len(); got != 1 {
+		t.Fatalf("%d input(s) refused alone in the tick the refusal was met in, "+
+			"want the one page — its isolation was cut off by the tasks "+
+			"spending the tick's sources", got)
+	}
+	pagesEmbedded := 0
+	for _, request := range h.embedder.sent() {
+		if strings.HasPrefix(request[0], "page ") && !slices.ContainsFunc(request,
+			func(text string) bool { return strings.Contains(text, "page document 00000") }) {
+			pagesEmbedded += len(request)
+		}
+	}
+	if pagesEmbedded != search.EmbedBatch-1 {
+		t.Fatalf("%d of the refused page's %d neighbours were embedded", pagesEmbedded,
+			search.EmbedBatch-1)
+	}
+	if published != search.EmbedSourcesPerTick {
+		t.Fatalf("the tick published %d, want the whole ceiling — what the pages "+
+			"did not need goes back to the tasks", published)
+	}
+}
+
+// AN ISOLATION A TICK CANNOT FINISH IS RESUMED BY THE NEXT.
+//
+// Isolating one input among 128 takes up to fifteen requests, and a tick's 32
+// divided between five corpora is six or seven apiece: a refused input in the
+// last of them was never reached alone in one tick. The halves a tick did not
+// reach were thrown away with it, and the next tick began again at 128 — the
+// same six requests, the same end, for ever. Kept, the next tick resumes where
+// the last one stopped.
+func TestAnIsolationATickCannotFinishIsResumedByTheNext(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.blank = true
+	var corpora []search.Corpus
+	for i := range 5 {
+		corpora = append(corpora, &scriptedCorpus{
+			source: search.Source(fmt.Sprintf("kind%d", i)), backlog: -1})
+	}
+	h.embedder.refuse("kind4 document 00000")
+	duty := h.dutyOver(corpora...)
+
+	if _, err := duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	firstTick := h.embedder.callsPerSource()["kind4"]
+	if calls := firstTick; calls >= 1+7 {
+		t.Fatalf("setup: the last corpus had %d requests in one tick, enough to "+
+			"isolate its refused input without resuming anything", calls)
+	}
+	if got := h.refusals.Len(); got != 0 {
+		t.Fatalf("setup: the input was isolated in the first tick (%d refusal(s))", got)
+	}
+	if _, err := duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.refusals.Len(); got != 1 {
+		t.Fatalf("%d input(s) refused alone after two ticks, want the one — an "+
+			"isolation started again at 128 every tick never ends", got)
+	}
+	// AND IT RESUMED RATHER THAN STARTED AGAIN: the second tick's first
+	// request for that corpus was a half, never the whole 128.
+	var kind4 [][]string
+	for _, request := range h.embedder.sent() {
+		if strings.HasPrefix(request[0], "kind4 ") {
+			kind4 = append(kind4, request)
+		}
+	}
+	if len(kind4) <= firstTick || len(kind4[firstTick]) == search.EmbedBatch {
+		t.Fatalf("the second tick's requests for the corpus began %v, want the "+
+			"half the first tick did not reach", kind4[firstTick:])
+	}
+}
+
 // AN UNREADABLE CORPUS COSTS ITSELF AND NOT THE TICK.
 //
 // This is the same starvation arriving as an error rather than as a backlog:

@@ -32,10 +32,22 @@ import (
 // which part of it, and only a smaller request can tell: a request of n inputs
 // is split into halves, sent on the corpus's next turns before anything else it
 // holds, and so on down to the one input still refused alone — at most
-// 1 + 2·log₂n requests, fifteen for a full request of 128, which fits the
-// share of a tick's requests each of two corpora is guaranteed. Every half that
-// is accepted publishes its vectors as it goes, so a refused input costs its
-// own vector and never its neighbours'. A refusal that was really the request's
+// 1 + 2·log₂n requests, fifteen for a full request of 128. Every half that is
+// accepted publishes its vectors as it goes, so a refused input costs its own
+// vector and never its neighbours'.
+//
+// AND THE ISOLATION OUTLIVES THE TICK IT STARTED IN. Fifteen requests fit the
+// sixteen each of two corpora is guaranteed, but not the ten of three, nor a
+// tick whose source ceiling a neighbour spends first — and an isolation cut
+// off at the end of a tick used to be thrown away with the tick, while the
+// input it was closing on stayed the oldest stale source and opened the next
+// tick's first request: the same 128, the same halves, the same end, every
+// tick. So the halves a tick did not reach are kept ([Refusals.suspend]) and
+// the corpus's next tick sends them first, where the last one stopped
+// ([corpusQueue.resume]) — an isolation takes as many ticks as its requests
+// need and never starts again. Each corpus also holds its share of the tick's
+// SOURCES in reserve while it can work ([tickRequests.room]), so a neighbour
+// embedding full requests cannot spend the ceiling out from under it. A refusal that was really the request's
 // size or a setting the server rejects whatever the inputs are surfaces the
 // same way and is told apart by the same means: halves that succeed blame no
 // input at all, and halves that all fail end in a log line naming every input
@@ -113,6 +125,72 @@ type corpusQueue struct {
 
 	// waiting is everything else the selection returned, oldest first.
 	waiting []pending
+
+	// used is how many of the tick's sources the corpus has spent — a
+	// record published for each, embedded or restamped — which is what its
+	// reserved share is measured against ([tickRequests.room]).
+	used int
+}
+
+// canWork reports whether q has anything left this tick may do: a restamp,
+// which costs no request, or a request while the tick may still send one.
+//
+// Within a tick it never turns true again once false: restamps and waiting
+// sources only shrink, a split only grows from a request the corpus sent, and
+// a tick that may not send stays that way.
+func (q *corpusQueue) canWork(t *tickRequests) bool {
+	return len(q.restamps) > 0 || (t.open() && q.hasRequests())
+}
+
+// hasRequests reports whether q holds a source a request would carry.
+func (q *corpusQueue) hasRequests() bool {
+	for len(q.waiting) > 0 && q.waiting[0].text == "" {
+		q.waiting = q.waiting[1:]
+	}
+	return len(q.split) > 0 || len(q.waiting) > 0
+}
+
+// resume puts back the isolation the corpus's last tick did not finish: each
+// remembered group, rebuilt from the sources this tick's selection returned
+// that still carry the text they were suspended with, sent ahead of anything
+// else and in the order the last tick would have sent them.
+//
+// A member the selection did not return — embedded since, removed, rewritten,
+// or now held — is simply not in the group; a group left empty is dropped.
+func (q *corpusQueue) resume(groups [][]frontierKey) {
+	if len(groups) == 0 {
+		return
+	}
+	at := make(map[frontierKey]int, len(q.waiting))
+	for i, p := range q.waiting {
+		if !p.alone {
+			at[frontierKey{id: p.doc.ID, sha: p.sha}] = i
+		}
+	}
+	taken := map[int]bool{}
+	var split [][]pending
+	for _, keys := range groups {
+		var group []pending
+		for _, k := range keys {
+			if i, ok := at[k]; ok && !taken[i] {
+				taken[i] = true
+				group = append(group, q.waiting[i])
+			}
+		}
+		if len(group) > 0 {
+			split = append(split, group)
+		}
+	}
+	if len(split) == 0 {
+		return
+	}
+	waiting := q.waiting[:0:0]
+	for i, p := range q.waiting {
+		if !taken[i] {
+			waiting = append(waiting, p)
+		}
+	}
+	q.split, q.waiting = append(split, q.split...), waiting
 }
 
 // next is the corpus's next request — the longest run of its oldest sources
@@ -129,9 +207,16 @@ func (q *corpusQueue) next(limits embeddings.Limits, room int) ([]pending, error
 	if len(q.split) > 0 {
 		group := q.split[0]
 		q.split = q.split[1:]
-		// A HALF LARGER THAN THE ROOM LEFT is sent at the room's size:
-		// what does not fit is selected again next tick.
-		return group[:min(len(group), room)], nil
+		if len(group) > room {
+			// A HALF LARGER THAN THE ROOM LEFT is sent at the room's
+			// size, and what does not fit stays at the front of the
+			// split — still a suspect, so it is part of the isolation
+			// the next tick resumes rather than a source sent again
+			// with neighbours it may be refused beside.
+			q.split = append([][]pending{group[room:]}, q.split...)
+			group = group[:room]
+		}
+		return group, nil
 	}
 	for len(q.waiting) > 0 && q.waiting[0].text == "" {
 		q.waiting = q.waiting[1:]
@@ -176,7 +261,8 @@ func halves(group []pending) ([]pending, []pending) {
 }
 
 // Refusals is what a provider has refused ALONE, held across the ticks of the
-// duty that met it — see the section above [pending] for what it buys.
+// duty that met it — see the section above [pending] for what it buys — and
+// the isolation each corpus's last tick did not finish ([Refusals.suspend]).
 //
 // ONE ENTRY A SOURCE, for the text it was refused as: a source has one text at
 // a time, so an entry for what it used to say is replaced, never kept beside
@@ -196,6 +282,18 @@ func halves(group []pending) ([]pending, []pending) {
 type Refusals struct {
 	mu sync.Mutex
 	at map[refusalID]refusal
+
+	// frontier is each corpus's isolation still under way when its last
+	// tick ended: the groups it split a refused request into and did not
+	// reach, in the order it would have sent them ([Refusals.suspend]).
+	frontier map[Source][][]frontierKey
+}
+
+// frontierKey is one source of a suspended isolation: its id and the digest
+// of the text it was being isolated as — so a source rewritten since is a new
+// input and goes back among its neighbours rather than into the isolation.
+type frontierKey struct {
+	id, sha string
 }
 
 // refusalID is the source one refusal is about.
@@ -216,7 +314,39 @@ type refusal struct {
 }
 
 // NewRefusals is an empty memory, for one provider configuration.
-func NewRefusals() *Refusals { return &Refusals{at: map[refusalID]refusal{}} }
+func NewRefusals() *Refusals {
+	return &Refusals{at: map[refusalID]refusal{}, frontier: map[Source][][]frontierKey{}}
+}
+
+// suspend keeps what source's isolation has not reached at the end of a tick —
+// the split groups still to be sent — for the next tick to resume, replacing
+// whatever was kept before: at most one isolation is under way a corpus,
+// since its halves go before anything else it holds, so this is at most one
+// request's sources.
+func (r *Refusals) suspend(source Source, split [][]pending) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(split) == 0 {
+		delete(r.frontier, source)
+		return
+	}
+	groups := make([][]frontierKey, 0, len(split))
+	for _, group := range split {
+		keys := make([]frontierKey, len(group))
+		for i, p := range group {
+			keys[i] = frontierKey{id: p.doc.ID, sha: p.sha}
+		}
+		groups = append(groups, keys)
+	}
+	r.frontier[source] = groups
+}
+
+// resume is what source's last tick suspended ([Refusals.suspend]).
+func (r *Refusals) resume(source Source) [][]frontierKey {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.frontier[source])
+}
 
 // refusalPlan is what the memory says about one corpus for one tick: every
 // refusal it holds of that corpus, which of them the selection passes over,

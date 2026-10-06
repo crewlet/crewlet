@@ -377,8 +377,8 @@ on the page's log version, which all of them stamp.
 
 Those requests are the **whole company's**, not each corpus's, and they are
 handed out **round robin** between the two, one request at a time. With both
-behind, each gets half a tick's requests and half its sources; with one caught
-up, the other takes them all. So a tracker being cold-filled — or written to
+behind, each gets half a tick's requests and holds half its sources in reserve
+while it has work; with one caught up, the other takes them all. So a tracker being cold-filled — or written to
 faster than 1 024 items a minute — **cannot stop the wiki being embedded**,
 which is the failure the division exists to prevent: a corpus that is never
 reached is not slow, it is permanently unsearchable by meaning, and the
@@ -407,9 +407,14 @@ and a search's query vector to its own two-second budget.
 **A source the provider refuses costs only itself.** A refusal (HTTP 400, 413
 or 422) says the request is unacceptable and not which input, so a refused
 request is split in halves, sent ahead of everything else, until the input it
-refuses is alone — at most fifteen requests for one input among 128, inside the
-share of a tick each corpus is guaranteed — and every half it accepts on the way
-is embedded as it goes. The input refused alone is logged as
+refuses is alone — at most fifteen requests for one input among 128 — and every
+half it accepts on the way is embedded as it goes. With the two corpora, each
+is guaranteed sixteen of a tick's requests and half of its sources, so a
+neighbour embedding a backlog of short items cannot spend the tick out from
+under the isolation and it finishes inside the tick it is met in. Where it
+cannot — more corpora, or a model that takes few inputs a request — the halves
+a tick did not reach are kept, and the next tick resumes the isolation where
+it stopped rather than starting again from the whole request. The input refused alone is logged as
 `search_embed_input_refused`, naming the source, the model, the bytes it was
 sent and the per-input bound the model's limits assume (a refusal inside that
 bound means `max_input_tokens` is declared wider than the endpoint enforces, or
