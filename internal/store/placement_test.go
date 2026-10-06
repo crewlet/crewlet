@@ -166,6 +166,16 @@ var nodeEstatePlacements = []placement{
 		Why:   "The party index over the rows above, and it goes where they go.",
 	},
 	{
+		Table: "usage_held",
+		Why: "A person's day THIS node derived from its own event log and is " +
+			"holding back until every node applying the usage log reads the " +
+			"record. Each node publishes only its own days, so a hold is a fact " +
+			"about this node's own pending publishes; the day every node agrees " +
+			"on is the replicated usage domain's, which a held row has not " +
+			"reached yet. Persisted because no process derives a day older than " +
+			"yesterday again.",
+	},
+	{
 		Table: "conversation_sessions",
 		Why: "What a seat already said in one thread, recorded by the node " +
 			"that ran the turn. Read back only by that seat's next turn on " +

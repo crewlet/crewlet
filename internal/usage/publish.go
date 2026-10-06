@@ -49,16 +49,18 @@ import (
 // A [KindPerson] record is version 2, and a node on a build from before the
 // kind does not defer it: its envelope refused a kind it did not know, which
 // is a STOP of its whole usage applier rather than a deferral of one record.
-// So a person's record is HELD — kept in memory, never published — until every
+// So a person's record is HELD — kept back, never published — until every
 // node applying the log reads version 2 ([PublisherDeps.Readers], the trim's
 // own counted set), and published by the first tick that finds them all
 // reading it — however many days later, back to the history's horizon. The
 // seats' and schedules' records of the same day go out as usual: they are
 // version 1, which every build reads.
 //
-// IN MEMORY, which is the hold's one cost: a node restarted while it holds a
-// day older than yesterday does not derive that day again, so the day is on
-// the counter and the live window and never reaches the named windows.
+// KEPT IN THE NODE'S OWN STORE as well as in memory ([Store]'s holds), and
+// read back by a process's first tick: no process derives a day older than
+// yesterday again, so a hold kept in memory alone was lost with the process —
+// a node restarted during a rolling upgrade left every such day on the counter
+// and the live window and out of the named windows for good.
 //
 // # And at boot
 //
@@ -75,6 +77,12 @@ import (
 type Store interface {
 	UsageMark(ctx context.Context, w store.UsageWindow) (store.UsageMark, error)
 	UsageForDay(ctx context.Context, w store.UsageWindow) (store.UsageDay, error)
+
+	// The records a person's day is held as until every reader reads them
+	// — see "A person's day waits for every reader".
+	HoldUsage(ctx context.Context, h store.UsageHeld, at time.Time) error
+	HeldUsage(ctx context.Context) ([]store.UsageHeld, error)
+	ReleaseUsage(ctx context.Context, day, subject string) error
 }
 
 // Log is the domain's write authority, as the publisher uses it. Satisfied
@@ -131,11 +139,19 @@ type Publisher struct {
 	// published for each object, keyed by the object's subject.
 	published map[string]string
 
-	// held is each person's record this process derived and has not
+	// held is each person's record this node derived and has not
 	// published, because a node applying the log does not read it yet —
 	// keyed as published is, so a newer derivation of a person's day
-	// replaces the one it held.
+	// replaces the one it held. Mirrored in the store, which is what a new
+	// process reads it back from ([Publisher.recall]).
 	held map[string]Record
+
+	// recalled says the store's holds have been read into held. Until they
+	// have, a tick reads them again rather than hold or release anything:
+	// a hold released from memory alone would leave its stored copy to be
+	// published a second time by the next process, and one replaced in
+	// memory by a newer derivation would be overwritten by the stale copy.
+	recalled bool
 }
 
 // NewPublisher builds a node's publisher, refusing a dependency set that
@@ -209,16 +225,21 @@ func (p *Publisher) Flush(ctx context.Context) error {
 	// windows whenever a rolling upgrade outlasted a day. Past the horizon
 	// the applier would expire it on arrival anyway.
 	floor := today.Shift(-HorizonDays).Label
+	if err := p.recall(ctx, floor); err != nil {
+		return err
+	}
+	var failed error
 	for key := range p.held {
 		if day, _, _ := strings.Cut(key, "\x00"); day < floor {
-			delete(p.held, key)
+			if err := p.unhold(ctx, key); err != nil {
+				failed = err
+			}
 		}
 	}
 
 	// THE GATE IS READ ONCE A TICK, and only on a tick that has a person's
 	// record to send — a fleet whose people ask nothing pays nothing for it.
 	gate := &personGate{p: p}
-	var failed error
 	for _, day := range days {
 		if err := p.flushDay(ctx, day, gate); err != nil {
 			failed = err
@@ -279,10 +300,84 @@ func (p *Publisher) release(ctx context.Context, gate *personGate) error {
 			failed = err
 		}
 		if sent {
-			delete(p.held, key)
+			if err := p.unhold(ctx, key); err != nil {
+				failed = err
+			}
 		}
 	}
 	return failed
+}
+
+// recall reads the store's holds into memory, once a process — what a hold a
+// previous process made is published from. A record this process already
+// holds is newer than the stored copy and is kept. A failed read is the tick's
+// error, and the next tick reads again.
+func (p *Publisher) recall(ctx context.Context, floor string) error {
+	if p.recalled {
+		return nil
+	}
+	held, err := p.deps.Store.HeldUsage(ctx)
+	if err != nil {
+		return fmt.Errorf("usage: read the person days this node holds: %w", err)
+	}
+	for _, h := range held {
+		key := h.Day + "\x00" + h.Subject
+		if _, newer := p.held[key]; newer {
+			continue
+		}
+		rec, err := Decode(h.Record)
+		if err != nil {
+			// A STORED HOLD THIS BUILD CANNOT READ is one a newer build
+			// of this node wrote before it was rolled back. It is said,
+			// and left in place rather than dropped — it is the only
+			// copy of that day's spend, and the newer build publishes it
+			// when it runs here again — until its day is past the
+			// history's horizon, where the applier would expire it on
+			// arrival anyway.
+			if h.Day >= floor {
+				p.deps.Logger.WarnContext(ctx, "usage_held_unreadable", "day", h.Day,
+					"subject", h.Subject, "err", err,
+					"detail", "the held record stays in the store and is not published")
+				continue
+			}
+			if err := p.deps.Store.ReleaseUsage(ctx, h.Day, h.Subject); err != nil {
+				return err
+			}
+			continue
+		}
+		p.held[key] = rec
+	}
+	p.recalled = true
+	return nil
+}
+
+// hold keeps a person's record held, in memory and in the store, so a restart
+// before every reader reads it does not lose it.
+func (p *Publisher) hold(ctx context.Context, day string, rec Record) error {
+	p.held[day+"\x00"+rec.Subject.String()] = rec
+	body, err := rec.Encode()
+	if err != nil {
+		return fmt.Errorf("usage: encode the held record on %s: %w", rec.Subject, err)
+	}
+	return p.deps.Store.HoldUsage(ctx, store.UsageHeld{
+		Day: day, Subject: rec.Subject.String(), Record: body,
+	}, p.deps.Now())
+}
+
+// unhold forgets a held record — published, or no longer held back — from
+// memory and from the store. Kept in memory when the store could not forget
+// it, so a later tick tries again rather than leave the stored copy for the
+// next process to publish a second time.
+func (p *Publisher) unhold(ctx context.Context, key string) error {
+	if _, held := p.held[key]; !held {
+		return nil
+	}
+	day, subject, _ := strings.Cut(key, "\x00")
+	if err := p.deps.Store.ReleaseUsage(ctx, day, subject); err != nil {
+		return err
+	}
+	delete(p.held, key)
+	return nil
 }
 
 // flushDay re-derives one day if it moved and publishes each object that
@@ -314,19 +409,27 @@ func (p *Publisher) flushDay(ctx context.Context, day period.Window, gate *perso
 				continue
 			}
 			if !gate.readable(ctx) {
-				// HELD, AND THE DAY STILL SETTLES: the record waits in
-				// memory for the gate, so an unchanged day is not
-				// re-derived every tick while a node is on an older build.
+				// HELD, AND THE DAY STILL SETTLES: the record waits for
+				// the gate, so an unchanged day is not re-derived every
+				// tick while a node is on an older build.
 				if _, already := p.held[key]; !already {
 					p.deps.Logger.InfoContext(ctx, "usage_person_held",
 						"subject", rec.Subject.String(), "reason", gate.reason,
 						"detail", "published once every node applying the usage log "+
 							"reads it; the company's counter already holds this spend")
 				}
-				p.held[key] = rec
+				if err := p.hold(ctx, day.Label, rec); err != nil {
+					// HELD IN MEMORY ALL THE SAME, and the day not
+					// settled, so the next tick derives it again and
+					// tries the store again.
+					failed, settled = err, false
+				}
 				continue
 			}
-			delete(p.held, key)
+			if err := p.unhold(ctx, key); err != nil {
+				failed, settled = err, false
+				continue
+			}
 		}
 		sent, err := p.publish(ctx, day.Label, rec)
 		if err != nil {

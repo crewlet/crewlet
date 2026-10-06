@@ -181,10 +181,10 @@ agent seat, so the per-seat breakdowns draw it as the person's row
 domain's person record, which a node publishes only once every node applying
 the usage log runs a build that reads it; during a rolling upgrade from one
 that does not, a person's spend is on the live window and the counter, and
-joins the named windows when the last node is upgraded. The node holds those
-days in memory until then, so a node restarted mid-upgrade publishes again only
-today and yesterday — an older held day stays on the counter and out of the
-named windows.
+joins the named windows when the last node is upgraded. The node keeps those
+days in its own store until then (`usage_held`), so a node restarted
+mid-upgrade still publishes a held day older than yesterday — a day no process
+derives again — once every node reads it.
 
 **Coalesced, a flush behind.** A node's ledger keeps one record per (stage,
 seat or person, turn, purpose, model, provider entry, company day) and

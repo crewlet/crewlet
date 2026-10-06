@@ -299,3 +299,101 @@ func TestAPersonsDayHeldPastYesterdayIsStillPublished(t *testing.T) {
 		t.Fatalf("a person's day held three days was published as %+v, want her 420", rows)
 	}
 }
+
+// A HOLD SURVIVES THE PROCESS. A day older than yesterday is never derived
+// again, by this process or the next, so a person's day held in memory alone
+// was lost with a restart during the rolling upgrade — on the counter and the
+// live window, never in the named windows, with nothing to say so. The hold is
+// kept in the node's own store, and a new publisher over that store publishes
+// it once every reader reads it, without the day being derived again; once
+// published, nothing is held.
+//
+// Mutation: keep the hold in memory alone, and the rebuilt publisher publishes
+// nothing for the 23rd.
+func TestAPersonsHeldDaySurvivesARestart(t *testing.T) {
+	t.Parallel()
+	own := openStore(t)
+	day1 := time.Date(2026, 9, 23, 12, 0, 0, 0, santiago)
+	(&events{t: t, db: own}).personAsked(day1.Add(-time.Minute), "maya", "Founder", 400, 20)
+
+	gate := &fixedReaders{readers: map[string]int{"node-a": 2, "node-old": 1}}
+	build := func(now time.Time) *usage.Publisher {
+		t.Helper()
+		p, err := usage.NewPublisher(usage.PublisherDeps{
+			Store: own, Log: &loopback{t: t, into: own, node: "node-a"}, NodeID: "node-a",
+			Zone:    func() *time.Location { return santiago },
+			Now:     func() time.Time { return now },
+			Readers: gate.read,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if err := build(day1).Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	held, err := own.HeldUsage(t.Context())
+	if err != nil || len(held) != 1 || held[0].Day != "2026-09-23" {
+		t.Fatalf("held = %+v (%v), want maya's day kept in the store", held, err)
+	}
+
+	// THE PROCESS IS GONE, and its successor starts three days on, when the
+	// 23rd is no longer a day anybody derives — and every reader is upgraded.
+	gate.readers = map[string]int{"node-a": 2}
+	if err := build(day1.Add(72 * time.Hour)).Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := usage.PersonSpend(t.Context(), own.Replicated(),
+		usage.PersonQuery{From: "2026-09-23", To: "2026-09-23"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Person != "maya" || rows[0].Total != 420 {
+		t.Fatalf("after a restart, maya's held day was published as %+v, want her 420", rows)
+	}
+	if held, err := own.HeldUsage(t.Context()); err != nil || len(held) != 0 {
+		t.Fatalf("held after the release = %+v (%v), want nothing", held, err)
+	}
+}
+
+// A STORED HOLD THIS BUILD CANNOT READ — one a newer build of this node wrote
+// before it was rolled back — is the only copy of that day's spend, so it is
+// left in the store for the build that wrote it; only once its day is past the
+// history's horizon, where the applier would expire it on arrival, is it let
+// go. Without that, a table empty outside an upgrade would keep it for the life
+// of the node.
+//
+// Mutation: drop the horizon check, and the recent row is deleted; drop the
+// release, and the ancient one is kept.
+func TestAnUnreadableHoldIsKeptUntilItsDayLeavesTheHistory(t *testing.T) {
+	t.Parallel()
+	own := openStore(t)
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, santiago)
+	for _, day := range []string{"2026-01-04", "2026-09-21"} {
+		if err := own.HoldUsage(t.Context(), store.UsageHeld{Day: day,
+			Subject: "person.node-a." + day + ".maya", Record: []byte(`{"v":99}`)},
+			now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := usage.NewPublisher(usage.PublisherDeps{
+		Store: own, Log: &loopback{t: t, into: own, node: "node-a"}, NodeID: "node-a",
+		Zone: func() *time.Location { return santiago },
+		Now:  func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	held, err := own.HeldUsage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(held) != 1 || held[0].Day != "2026-09-21" {
+		t.Fatalf("held = %+v, want only the 21st kept: the 4th of January is past "+
+			"the history's horizon", held)
+	}
+}

@@ -63,6 +63,12 @@ func (oneSeatDay) UsageMark(context.Context, store.UsageWindow) (store.UsageMark
 	return store.UsageMark{Events: 1, LastEvent: 1}, nil
 }
 
+// The holds: none. This node's day holds no person, and the suite's publisher
+// has no older reader to wait for, so nothing is ever held back.
+func (oneSeatDay) HoldUsage(context.Context, store.UsageHeld, time.Time) error { return nil }
+func (oneSeatDay) HeldUsage(context.Context) ([]store.UsageHeld, error)        { return nil, nil }
+func (oneSeatDay) ReleaseUsage(context.Context, string, string) error          { return nil }
+
 func (oneSeatDay) UsageForDay(context.Context, store.UsageWindow) (store.UsageDay, error) {
 	return store.UsageDay{Seats: []store.UsageSeat{{
 		AgentID: "suite-seat", Handle: "dev", Role: "Dev",

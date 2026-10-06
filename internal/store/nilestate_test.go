@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -98,6 +99,17 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		"UsageForDay": func(t *testing.T) {
 			_, err := d.UsageForDay(ctx, store.UsageWindow{})
 			wantErrNoEstate(t, err)
+		},
+		"HoldUsage": func(t *testing.T) {
+			wantErrNoEstate(t, d.HoldUsage(ctx, store.UsageHeld{Day: "2026-09-23",
+				Subject: "person.n.2026-09-23.maya", Record: []byte("{}")}, time.Now()))
+		},
+		"HeldUsage": func(t *testing.T) {
+			_, err := d.HeldUsage(ctx)
+			wantErrNoEstate(t, err)
+		},
+		"ReleaseUsage": func(t *testing.T) {
+			wantErrNoEstate(t, d.ReleaseUsage(ctx, "2026-09-23", "person.n.2026-09-23.maya"))
 		},
 		"Backup": func(t *testing.T) {
 			_, err := d.Backup(ctx, t.TempDir()+"/copy.db")
