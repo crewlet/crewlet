@@ -1128,8 +1128,15 @@ Each entry names its `actor` and `actor_kind`, and — where there is one —
 machine token acting as its owner, `session:<lineage>` for one of their
 browser sessions, a Tier A token's own login. A token acts as its owner, so
 `actor` is the owner either way, and `operator_id` is what tells their token's
-gesture from their own. It is absent from an entry the sign-in surface or a
-duty wrote: the node acts on nobody's credential.
+gesture from their own. A gesture a person makes through the sign-in surface
+— signing in or out, spending a second factor, redeeming an invitation,
+setting a password from a reset link, enrolling their own authenticator — is
+theirs: the node writes it down under its own authority, and the entry names
+the person as `actor` and the session it opened or closed as `operator_id`
+(their login, where it came through no session yet). An entry the engine
+decided for itself — a sweep, a re-seal, a password re-hashed at the current
+cost — names the node and no `operator_id`: the node acts on nobody's
+credential.
 
 An entry about somebody names them by `person`, their id, and by `login`, the
 login their row holds when the trail is read — absent once they are removed,

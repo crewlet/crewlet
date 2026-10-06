@@ -118,6 +118,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
@@ -236,6 +238,21 @@ type Writer interface {
 func landed(result statelog.Result) bool {
 	return result.Outcome == statelog.OutcomeApplied ||
 		result.Outcome == statelog.OutcomePending
+}
+
+// madeBy is who made a gesture this surface writes down before they are
+// anybody's principal — signing in, a second factor, a reset link, a
+// redemption: the person their credential resolved to, and the session the
+// gesture opened or closed, where it has one, as the credential it came
+// through. What [Service.behalf] authors its records as.
+func madeBy(person iamdomain.Sighting, lineage string) iam.Principal {
+	id, _ := uuid.Parse(person.ID)
+	p := iam.Principal{ID: id, Kind: person.Kind, Login: person.Login,
+		Seat: person.Seat}
+	if lineage != "" {
+		p.Via = iam.SessionName(lineage)
+	}
+	return p
 }
 
 // errText is an error's message, or empty — so a log line carries the field
@@ -428,6 +445,15 @@ type Options struct {
 	Directory Directory
 	Writer    Writer
 
+	// Behalf is Writer's authority writing on a person's behalf: what it
+	// publishes names them as its author. REQUIRED. Every gesture a person
+	// makes through this surface — signing in and out, a second factor's
+	// spend, an invitation's redemption, a reset link, enrolling their own
+	// authenticator — is written through it, so the identity trail names
+	// who made it rather than the node that wrote it down; see
+	// [iamdomain.Writer.For].
+	Behalf func(person iam.Principal) Writer
+
 	// Seats is the organisation this node runs, which an invitation's view
 	// names its seat from. Optional: with none, the view names the seat by
 	// the handle the invitation holds and nothing more.
@@ -504,6 +530,7 @@ type Service struct {
 	boot      *config.Bootstrap
 	directory Directory
 	writer    Writer
+	behalf    func(person iam.Principal) Writer
 	seats     session.Chart
 	signer    *session.Signer
 	hasher    *credential.Hasher
@@ -546,6 +573,7 @@ func New(opts Options) (*Service, error) {
 		{"Bootstrap", opts.Bootstrap == nil},
 		{"Directory", opts.Directory == nil},
 		{"Writer", opts.Writer == nil},
+		{"Behalf", opts.Behalf == nil},
 		{"Signer", opts.Signer == nil},
 		{"Hasher", opts.Hasher == nil},
 		{"Throttle", opts.Throttle == nil},
@@ -566,6 +594,7 @@ func New(opts Options) (*Service, error) {
 	}
 	s := &Service{
 		boot: opts.Bootstrap, directory: opts.Directory, writer: opts.Writer,
+		behalf: opts.Behalf,
 		signer: opts.Signer, hasher: opts.Hasher, throttle: opts.Throttle,
 		blinder: opts.Blinder,
 		// THE GUARD'S READING OF A BEARER'S SUBJECT, built from the same

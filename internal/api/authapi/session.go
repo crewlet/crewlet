@@ -272,8 +272,8 @@ func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 	// published. A second sign-out is a second close of a closed session,
 	// which changes nothing.
 	opID := statelog.NewOpID(s.now(), "logout")
-	closed, err := s.writer.CloseSession(r.Context(), lineage, bearer.Person,
-		"signed out", opID)
+	closed, err := s.signingOut(r, lineage).CloseSession(r.Context(), lineage,
+		bearer.Person, "signed out", opID)
 	switch {
 	case removed(err):
 		// THEIR PERSON WAS REMOVED, and every session of theirs with them.
@@ -302,6 +302,20 @@ func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 		})
 	}
 	log.InfoContext(r.Context(), "api_sign_out", "lineage", lineage)
+}
+
+// signingOut is who a sign-out of one session is written as: the person
+// signing out, where the guard resolved them through that very session — the
+// cookie this deployment issues — and the node otherwise. The route is
+// unguarded and reads every bearer itself, so a second cookie under the other
+// name, or a node that could not read who holds this one, has nobody the
+// guard vouched for to name.
+func (s *Service) signingOut(r *http.Request, lineage string) Writer {
+	principal, resolution := iam.From(r.Context())
+	if resolution == iam.Resolved && principal.Via == iam.SessionName(lineage) {
+		return s.behalf(principal)
+	}
+	return s.writer
 }
 
 // callerName is the name a row about this request records as its author, or
@@ -347,7 +361,7 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	// checked against.
 	person := subjectOf(r, principal)
 	opID := statelog.NewOpID(s.now(), "logout-all")
-	revoked, err := s.writer.Revoke(r.Context(), person, opID,
+	revoked, err := s.behalf(principal).Revoke(r.Context(), person, opID,
 		"signed out everywhere")
 	switch {
 	case removed(err):
@@ -517,7 +531,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	// lineage, the close of a session older than an hour carried an id the
 	// ledger could not vouch for.
 	opID := statelog.NewOpID(s.now(), "logout-one")
-	closed, err := s.writer.CloseSession(r.Context(), lineage, owner,
+	closed, err := s.behalf(principal).CloseSession(r.Context(), lineage, owner,
 		"signed out from another session", opID)
 	switch {
 	case removed(err):

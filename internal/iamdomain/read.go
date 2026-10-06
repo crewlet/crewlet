@@ -943,6 +943,10 @@ type ResetRow struct {
 	Kind     iam.Kind
 	Stage    iam.Stage
 
+	// Seat is the seat the person is bound to, or empty: the spend is
+	// theirs, and its record names them as everything else they do does.
+	Seat string
+
 	Verifier  string
 	ExpiresAt time.Time
 	RevokedAt time.Time
@@ -1001,12 +1005,12 @@ func (r *Reader) ResetByID(ctx context.Context, id string) (ResetRow, error) {
 		)
 		err := tx.QueryRowContext(ctx, `
 			SELECT c.person_id, c.verifier, c.expires_at, c.revoked_at,
-			       p.login, p.kind, p.stage
+			       p.login, p.kind, p.stage, p.seat_id
 			  FROM iam_credentials c
 			  JOIN iam_people p ON p.id = c.person_id
 			 WHERE c.id = ? AND c.method = ?`, id, string(MethodReset)).
 			Scan(&out.PersonID, &verifier, &expires, &revoked,
-				&out.Login, &kind, &stage)
+				&out.Login, &kind, &stage, &out.Seat)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			out = ResetRow{}

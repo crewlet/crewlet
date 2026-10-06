@@ -169,7 +169,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := s.now().Add(tokenLifetime)
 	opID := sessionOpID(lineage)
-	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
+	opened, err := s.behalf(principal).OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: subject,
 		AbsoluteExpiresAt: expires,
 		OpID:              opID,

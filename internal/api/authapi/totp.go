@@ -179,7 +179,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	// again is a new enrolment of the same seed. It was `totp:<person>:<id>`,
 	// which carries no instant and read as minted at the epoch.
 	opID := statelog.NewOpID(s.now(), "totp-enrol")
-	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
+	stored, err := s.behalf(principal).SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			// IN THE SNAPSHOT THE FACTOR LANDS ON, never from a read
@@ -386,7 +386,7 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	// A FRESH OPERATION PER SET, for the enrolment's reason: a retry mints
 	// a fresh set, which is a new operation replacing whichever landed.
 	opID := statelog.NewOpID(s.now(), "recovery-codes")
-	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
+	stored, err := s.behalf(principal).SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			// IN THE SNAPSHOT THE CODES LAND ON, for the enrolment's

@@ -88,6 +88,12 @@ func buildWith(t *testing.T, b config.Bootstrap,
 	if replace != nil {
 		replace(&opts)
 	}
+	if opts.Behalf == nil {
+		// THE CASE'S OWN WRITER, whoever a gesture is made by: a case about
+		// who a record names as its author sets one of its own.
+		writer := opts.Writer
+		opts.Behalf = func(iam.Principal) authapi.Writer { return writer }
+	}
 	svc, err := authapi.New(opts)
 	if err != nil {
 		t.Fatalf("authapi.New: %v", err)

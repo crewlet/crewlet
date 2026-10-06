@@ -235,7 +235,11 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enrolled, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
+	// AUTHORED AS THE PERSON IT CREATES, who redeemed the link, under the
+	// node's authority, which is what a redemption is enrolled with.
+	redeemer := s.behalf(madeBy(iamdomain.Sighting{ID: person,
+		Kind: iam.KindPerson, Login: in.Login, Seat: held.Seat}, ""))
+	enrolled, err := redeemer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: in.Name, Email: email, Login: in.Login,
 		Credentials: []iamdomain.Credential{{

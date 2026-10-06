@@ -664,13 +664,14 @@ var errFactorSpent = errors.New("authapi: this second factor was already spent")
 // verdict this call cannot prove is its own, and a session opened on either
 // could be a session on a code that still works or on one somebody else
 // spent. The caller reads that off the result ([built]).
-func (s *Service) spendSecondFactor(ctx context.Context, person string,
+func (s *Service) spendSecondFactor(ctx context.Context, person iamdomain.Sighting,
 	use factorUse) (factorUse, statelog.Result, error) {
 
 	remaining := use.remaining
 	opID := statelog.NewOpID(s.now(), "second-factor")
-	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
-		PersonID: person,
+	// AUTHORED AS THE PERSON WHOSE CODE IT IS, through no session yet.
+	result, err := s.behalf(madeBy(person, "")).SetCredentials(ctx, iamdomain.CredentialSet{
+		PersonID: person.ID,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			spent := true
 			out := make([]iamdomain.Credential, 0, len(held))
@@ -791,7 +792,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		s.refuseSecondFactor(w, r, adm, attempt, held, curve, "second factor mismatch")
 		return factorUse{}, false
 	}
-	use, spend, err := s.spendSecondFactor(r.Context(), held.ID, use)
+	use, spend, err := s.spendSecondFactor(r.Context(), held, use)
 	switch {
 	case errors.Is(err, errFactorSpent):
 		s.refuseSecondFactor(w, r, adm, attempt, held, curve,
@@ -1023,8 +1024,8 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// a step-up to be the same close: closing a closed session changes
 		// nothing, and a step-up asked again is a new gesture.
 		closeOp := statelog.StepOpID(lineage.String(), "close-replaced")
-		closed, closeErr := s.writer.CloseSession(r.Context(), how.replaces,
-			held.ID, because, closeOp)
+		closed, closeErr := s.behalf(madeBy(held, how.replaces)).CloseSession(
+			r.Context(), how.replaces, held.ID, because, closeOp)
 		if closeErr != nil {
 			if removed(closeErr) {
 				s.personRemoved(w, r, how)
@@ -1042,7 +1043,9 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	restricted := s.enrolmentOnly(how)
-	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
+	// THE PERSON SIGNING IN IS THE AUTHOR, through the session it opens;
+	// the replaced one's close above came through that session.
+	opened, err := s.behalf(madeBy(held, lineage.String())).OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
 		// EVERY PATH HERE IS A PROOF — a password and its second factor,

@@ -120,7 +120,10 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 	// answers — which is also what a retry of a spend whose answer was lost
 	// meets, while the password the first attempt set works.
 	opID := statelog.NewOpID(s.now(), "password-reset")
-	set, err := s.writer.SetPassword(r.Context(), iamdomain.PasswordSet{
+	// AUTHORED AS THE PERSON WHOSE LINK IT IS: the link is their proof.
+	holder := s.behalf(madeBy(iamdomain.Sighting{ID: held.PersonID,
+		Kind: held.Kind, Login: held.Login, Seat: held.Seat}, ""))
+	set, err := holder.SetPassword(r.Context(), iamdomain.PasswordSet{
 		PersonID: held.PersonID, Verifier: verifier,
 		// THE LINK AGAIN, IN THE RECORD'S OWN SNAPSHOT: one spent by
 		// another tab, revoked by an administrator or its person

@@ -198,8 +198,13 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 		// routes do with it is create people and open sessions, both of
 		// which are the deployment's to do on somebody's behalf — a
 		// person cannot author their own enrolment, because they do not
-		// exist until it lands.
-		Writer:   writer,
+		// exist until it lands. It is the AUTHOR only of what the engine
+		// decides for itself: a password re-hashed at this build's cost.
+		Writer: writer,
+		// AND THAT WRITER WRITING FOR A PERSON, for every gesture a person
+		// makes through these routes: the node only writes it down, and
+		// the trail names who made it — see [iamdomain.Writer.For].
+		Behalf:   func(person iam.Principal) authapi.Writer { return writer.For(person) },
 		Signer:   signer,
 		Hasher:   credential.NewHasher(credential.Default(), credential.VerifyCap()),
 		Throttle: throttle,

@@ -180,7 +180,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// whose own snapshot reads what the first left — the verifier it
 	// verified is gone if the first landed.
 	opID := statelog.NewOpID(s.now(), "password-change")
-	changed, err := s.writer.SetPassword(r.Context(), iamdomain.PasswordSet{
+	changed, err := s.behalf(principal).SetPassword(r.Context(), iamdomain.PasswordSet{
 		PersonID: held.ID, Verifier: fresh,
 		Check: func(p iamdomain.Person) error {
 			for _, c := range p.Credentials {
