@@ -399,10 +399,14 @@ providers:
                                         #   passes validation and fails at a seat's
                                         #   first turn — `crewlet llm doctor` names it
 
-  embeddings:                           # optional — similarity search for the
+  embeddings:                           # optional — the semantic half of a native
+                                        #   knowledge search (the company's pages and
+                                        #   work items, embedded once for the fleet)
+                                        #   and similarity search for the
                                         #   agent-learning subsystem (agent_diary
                                         #   candidate selection AND episode recall).
-                                        #   Omit it and both fall back to recency;
+                                        #   Omit it and search is keyword only and
+                                        #   both recalls fall back to recency;
                                         #   nothing else changes.
     type: openai                        # openai | openai-compatible
     model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
@@ -428,6 +432,16 @@ providers:
                                         #   REFUSED with `dimensions` unset rather
                                         #   than given a guess — name a known model
                                         #   or state the width yourself
+  # max_input_tokens: 512               # THE MODEL'S LIMITS, in tokens, and unset
+  # max_batch_inputs: 32                #   takes the ones its vendor documents.
+  # max_batch_tokens: 16384             #   Required where none is documented — a
+                                        #   model this build does not know, and the
+                                        #   request limits of gemini-embedding-001
+                                        #   and embed-v4.0, whose OpenAI-compatible
+                                        #   endpoints document none. A stated value
+                                        #   may only LOWER a documented one (a
+                                        #   gateway that accepts less); raising one
+                                        #   is refused naming the field
 ```
 
 **The width belongs to the model.** `text-embedding-3-large` emits 3072,
@@ -436,6 +450,43 @@ providers:
 emits. There is no global default, because a number that was right for one
 model is silently wrong for the next — and a model this build does not know is
 refused rather than guessed at, naming both ways to fix it.
+
+**So do its limits.** How many tokens one input may hold, how many inputs one
+request may carry and how many tokens one request may carry in all are facts
+about the model, and the engine carries what each vendor documents for the
+endpoint it calls:
+
+| Model | Tokens an input | Inputs a request | Tokens a request |
+|---|---|---|---|
+| `text-embedding-3-large`, `text-embedding-3-small` | 8 192 | 2 048 | 300 000 |
+| `gemini-embedding-001` | 2 048 | *state it* | *state it* |
+| `embed-v4.0` | 128 000 | *state it* | *state it* |
+
+Google's and Cohere's OpenAI-compatible endpoints document no limit per
+request — Cohere's native API takes 96 texts a call, but that is a different
+endpoint's — so those two are refused until `max_batch_inputs` and
+`max_batch_tokens` are stated, and a model this build does not know states all
+three, exactly as it states its width. A stated limit may only *lower* a
+documented one, for a gateway or proxy in front of the model that accepts less;
+raising one is refused, naming the field, because the provider would refuse
+what the engine then sends.
+
+**Upgrading a company that needs them.** A stored company naming
+`gemini-embedding-001`, `embed-v4.0` or a model this build does not know, and
+stating none of these, is refused when the new build applies it — on boot too,
+where `crewlet config import` of the corrected file is the way through — exactly
+as a model with no known width is. A build older than these fields refuses a
+revision that carries them and keeps serving the configuration it has, so in a
+fleet, state them once every node runs a build that knows them.
+
+The engine counts **bytes** against those token limits rather than shipping a
+tokenizer per vendor: every tokenizer these models use emits at most one token
+per byte of the text it is given, plus the few special tokens a server wraps an
+input in (none for OpenAI, whose count is the input's own; sixteen are set
+aside for every other model). So an input of 8 192 bytes is always inside
+OpenAI's 8 192-token window, whatever language it is in — at the price that
+ordinary prose, three to four bytes a token, is held to about a quarter of the
+window.
 
 **The width is a contract with the store, not with the model.** Vectors of
 two different widths cannot be compared, so a row written at the wrong one is

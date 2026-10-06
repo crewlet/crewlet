@@ -586,6 +586,30 @@
             "null"
           ]
         },
+        "max_batch_inputs": {
+          "description": "Most inputs one request may carry; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_batch_tokens": {
+          "description": "Most tokens one request may carry, summed over its inputs; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_input_tokens": {
+          "description": "Most tokens one input may hold; 0 takes the named model's documented window. Required for a model this build does not know; may only lower a documented one.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "model": {
           "description": "Embedding model id.",
           "type": [
@@ -1779,7 +1803,7 @@
       "properties": {
         "embeddings": {
           "$ref": "#/$defs/EmbeddingProvider",
-          "description": "Embedding provider for diary and episode recall."
+          "description": "Embedding provider for semantic knowledge search and for diary and episode recall."
         },
         "llm": {
           "additionalProperties": {

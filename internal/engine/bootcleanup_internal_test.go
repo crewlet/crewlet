@@ -38,7 +38,8 @@ import (
 // bootCleanupCompany fails at the FIRST step after the native start.
 //
 // Its embeddings model is a `${VAR}` nothing sets, which validates (the width
-// is stated, so nothing has to be looked up in the model table) and then
+// and the limits are stated, so nothing has to be looked up in the model
+// table) and then
 // resolves to the empty string when `equip` builds the provider — the step
 // immediately after [Engine.startNative] has succeeded. A config-driven
 // failure rather than a broken broker verb, because the point of this case is
@@ -56,6 +57,9 @@ providers:
     type: openai
     model: "${CREWLET_TEST_EMBEDDING_MODEL_NOBODY_SETS}"
     dimensions: 768
+    max_input_tokens: 512
+    max_batch_inputs: 32
+    max_batch_tokens: 16384
     api_key: "${K}"
 roles:
   - name: CEO
