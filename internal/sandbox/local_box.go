@@ -674,9 +674,11 @@ func (b *containerBox) ReadTail(ctx context.Context, path string, n int) (FileTa
 // ONLY ABSENCE IS EMPTY. A file that exists and cannot be opened is an error,
 // because the reader of a stream decides what the run did from what it reads,
 // and an unreadable event log answered as an empty one is a run that "said
-// nothing" — which a collection settles as a run that produced nothing.
+// nothing" — which a collection settles as a run that produced nothing. So is
+// anything that is not a regular file ([openHostRegular]), for all three
+// reads alike.
 func openHostFile(target, path string) (io.ReadCloser, error) {
-	f, err := os.Open(target)
+	f, err := openHostRegular(target)
 	switch {
 	case absent(err):
 		return io.NopCloser(strings.NewReader("")), nil
@@ -693,7 +695,7 @@ func openHostFile(target, path string) (io.ReadCloser, error) {
 // more than was asked for. Whatever arrived inside the window is counted into
 // the size, so Data never claims to be more of the file than the file was.
 func readHostTail(target, path string, n int) (FileTail, error) {
-	f, err := os.Open(target)
+	f, err := openHostRegular(target)
 	switch {
 	case absent(err):
 		return FileTail{}, nil
@@ -727,7 +729,7 @@ func readHostTail(target, path string, n int) (FileTail, error) {
 // nothing; a remote box's envd answers the same failure as an error, which
 // is what a collection retries and a person can act on.
 func readHostFile(target, path string) ([]byte, error) {
-	f, err := os.Open(target)
+	f, err := openHostRegular(target)
 	switch {
 	case absent(err):
 		// Empty-on-missing IS the contract here: the detached runner
