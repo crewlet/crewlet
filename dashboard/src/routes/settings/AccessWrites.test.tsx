@@ -111,9 +111,10 @@ function json(status: number, payload: unknown): Response {
 
 /**
  * `/iam` answering its reads, every write recorded and answered from `writes`
- * — a queue per `METHOD /path`, the last answer repeating.
+ * — a queue per `METHOD /path`, the last answer repeating — and the directory
+ * read from `directory` at each read, so a test can move it between two.
  */
-function engine(writes: Record<string, Response[]> = {}) {
+function engine(writes: Record<string, Response[]> = {}, directory: () => unknown = () => PEOPLE) {
   const sent: Sent[] = [];
   const queues = new Map<string, Response[]>(Object.entries(writes).map(([k, v]) => [k, [...v]]));
   const spy = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -134,7 +135,7 @@ function engine(writes: Record<string, Response[]> = {}) {
     }
     switch (url.pathname) {
       case "/iam/people":
-        return Promise.resolve(json(200, PEOPLE));
+        return Promise.resolve(json(200, directory()));
       case "/iam/invitations":
         return Promise.resolve(json(200, INVITATIONS));
       case "/iam/seats":
@@ -428,6 +429,38 @@ test("an edit refused part way reads the directory again", async () => {
     /What did change: the login and seat\./,
   );
   expect(eng.reads("/iam/people")).toBeGreaterThan(before);
+});
+
+// AN EDIT SENDS WHAT ITS EDITOR CHANGED, measured against the row it opened
+// on: while the dialog is open another administrator strips Bo's state:read
+// and binds him to a seat, the directory is read again as the tab comes back,
+// and a login change saved after it sends the login alone — never the grant
+// and the seat the dialog opened with, which would undo both. Mutation:
+// measure against the live row and the save sends `grants` and `seat` too.
+test("an edit sends what its editor changed, whatever the directory read since", async () => {
+  let people: unknown = PEOPLE;
+  const eng = engine(
+    { "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })] },
+    () => people,
+  );
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  people = {
+    ...PEOPLE,
+    people: PEOPLE.people.map((p) => (p.id === "p-bo" ? { ...p, grants: [], seat: "sam" } : p)),
+  };
+  const before = eng.reads("/iam/people");
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await settle();
+  expect(eng.reads("/iam/people")).toBeGreaterThan(before);
+  fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "bo.lange" } });
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ login: "bo.lange" }]);
 });
 
 // AN EDIT MAY TAKE AWAY A GRANT THE EDITOR DOES NOT HOLD, as the engine

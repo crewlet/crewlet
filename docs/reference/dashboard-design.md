@@ -5582,7 +5582,10 @@ this screen is the exception):
 - **Cancel** on an invitation nobody redeemed: its link stops working at once
   and the address is free again.
 - On an **opened row** — **Edit login, seat and grants** (one `PATCH` carrying
-  only what changed; the seat offered among the vacant ones and their own; a
+  only what changed since the dialog opened — measured against that row and
+  not the directory's minute-by-minute re-read, so a field left alone never
+  puts back what another administrator changed meanwhile; the seat offered
+  among the vacant ones and their own; a
   grant the person already holds may be unticked whoever edits, since the
   engine checks only what an edit adds, while one neither holds stays
   disabled),

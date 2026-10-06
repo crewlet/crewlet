@@ -295,9 +295,17 @@ export function MintTokenDialog({
  * Change somebody's login, seat or grants — one `PATCH`, carrying only what
  * changed. The engine moves the login and the seat in one record before the
  * grants, and a refusal part way names what had already landed.
+ *
+ * WHAT CHANGED IS MEASURED AGAINST THE ROW THE DIALOG OPENED ON, never the
+ * live one: the directory is read again every minute and when the tab comes
+ * back, and the fields hold what the dialog opened with, so measured against
+ * a newer row a field nobody touched reads as an edit — and sending it puts
+ * back a grant, a seat or a login another administrator has just changed.
+ * After a refusal part way, what landed is sent again equal to what the
+ * engine holds, and the engine skips it.
  */
 export function EditPersonDialog({
-  row,
+  row: live,
   held,
   onClose,
   onDone,
@@ -309,6 +317,7 @@ export function EditPersonDialog({
 }) {
   const write = useIamGesture();
   const seats = useUnheldSeats();
+  const [row] = useState(live);
   const [login, setLogin] = useState(row.login ?? "");
   const [seat, setSeat] = useState(row.seat ?? NO_SEAT);
   const [grants, setGrants] = useState<string[]>(row.grants ?? []);
@@ -318,12 +327,14 @@ export function EditPersonDialog({
   // compromised colleague's config:write needs nobody to hold config:write.
   const conferrable = useMemo(() => [...held, ...(row.grants ?? [])], [held, row.grants]);
   // THEIR OWN SEAT STAYS OFFERED beside the vacant ones: nobody else holds it,
-  // but it is held, so the vacancies list leaves it out.
+  // but it is held, so the vacancies list leaves it out. The seat they hold
+  // NOW, which the vacancies are read beside — an edit that landed its seat
+  // part way holds the new one, and the one it left is vacant again.
   const options = useMemo(() => {
     const vacant = seats.data ?? [];
-    const own = row.seat && !vacant.some((s) => s.handle === row.seat);
-    return seatOptions(own ? [{ handle: row.seat!, name: row.seat! }, ...vacant] : vacant);
-  }, [seats.data, row.seat]);
+    const own = live.seat && !vacant.some((s) => s.handle === live.seat);
+    return seatOptions(own ? [{ handle: live.seat!, name: live.seat! }, ...vacant] : vacant);
+  }, [seats.data, live.seat]);
 
   const before = new Set(row.grants ?? []);
   const grantsMoved = grants.length !== before.size || grants.some((g) => !before.has(g));
