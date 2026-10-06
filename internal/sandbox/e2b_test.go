@@ -896,8 +896,8 @@ func TestE2BConnectToAVanishedBoxFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.Connect(context.Background(), "sbx-gone"); err == nil {
-		t.Fatal("connecting to a vanished box succeeded")
+	if _, err := provider.Connect(context.Background(), "sbx-gone"); !errors.Is(err, sandbox.ErrBoxGone) {
+		t.Fatalf("connecting to a vanished box = %v; want ErrBoxGone", err)
 	}
 	if _, err := provider.Attach(context.Background(), "sbx-gone"); !errors.Is(err, sandbox.ErrBoxGone) {
 		t.Fatalf("attaching to a vanished box = %v; want ErrBoxGone", err)

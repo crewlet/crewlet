@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 // errBoxGoneMidRead is a collection whose box is GONE — the provider reclaimed
@@ -244,17 +247,67 @@ func TestACollectionWhoseBoxIsGoneIsSettledAtOnce(t *testing.T) {
 }
 
 // EVERY BACKEND SAYS A GONE BOX IS GONE, so the coordinator can tell one from
-// a box it merely could not reach.
-func TestAVanishedBoxIsGoneOnTheFake(t *testing.T) {
+// a box it merely could not reach: a gone box is settled at once, an
+// unreachable one retried for the poll's window. The fake, the engine host
+// and E2B — the remote backend, and the one a box is most often reclaimed
+// from — each on its own Connect and Attach.
+//
+// AND ONLY A GONE BOX: E2B's control plane failing (a 5xx) is a box that could
+// not be reached this time, and settling it at once would destroy a run whose
+// box is still there.
+//
+// Mutation: drop the boxGone wrap from E2B's Connect, and a reclaimed box is
+// retried for a minute before it is settled.
+func TestEveryBackendSaysAVanishedBoxIsGone(t *testing.T) {
 	t.Parallel()
-	provider := NewFakeProvider()
-	if _, err := provider.Connect(t.Context(), "never-made"); !errors.Is(err, ErrBoxGone) {
-		t.Errorf("Connect to a box that does not exist = %v; want ErrBoxGone", err)
+	type backend struct {
+		name     string
+		provider Provider
+		id       string
 	}
-	local := newDirect(t)
-	if _, err := local.Connect(t.Context(), "0123456789abcdef"); !errors.Is(err, ErrBoxGone) {
-		t.Errorf("a local Connect to a missing box directory = %v; want ErrBoxGone", err)
+	backends := []backend{
+		{"fake", NewFakeProvider(), "never-made"},
+		{"local", newDirect(t), "0123456789abcdef"},
 	}
+	for _, status := range []int{http.StatusNotFound, http.StatusGone} {
+		backends = append(backends, backend{fmt.Sprintf("e2b %d", status), e2bAnswering(t, status), "sbx-gone"})
+	}
+	for _, b := range backends {
+		if _, err := b.provider.Connect(t.Context(), b.id); !errors.Is(err, ErrBoxGone) {
+			t.Errorf("%s: Connect to a box that does not exist = %v; want ErrBoxGone", b.name, err)
+		}
+		if _, err := b.provider.Attach(t.Context(), b.id); !errors.Is(err, ErrBoxGone) {
+			t.Errorf("%s: Attach to a box that does not exist = %v; want ErrBoxGone", b.name, err)
+		}
+	}
+
+	failing := e2bAnswering(t, http.StatusServiceUnavailable)
+	if _, err := failing.Connect(t.Context(), "sbx1"); err == nil || errors.Is(err, ErrBoxGone) {
+		t.Errorf("Connect while E2B's control plane fails = %v; want an error that is not ErrBoxGone", err)
+	}
+	if _, err := failing.Attach(t.Context(), "sbx1"); err == nil || errors.Is(err, ErrBoxGone) {
+		t.Errorf("Attach while E2B's control plane fails = %v; want an error that is not ErrBoxGone", err)
+	}
+}
+
+// e2bAnswering is an E2B provider whose control plane answers every request
+// with status.
+func e2bAnswering(t *testing.T, status int) *E2BProvider {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = fmt.Fprintf(w, `{"code": %d, "message": "%s"}`, status, http.StatusText(status))
+	}))
+	t.Cleanup(server.Close)
+	provider, err := NewE2B(E2BOptions{
+		APIKey: "k", Domain: "test.invalid",
+		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return provider
 }
 
 // callCount is how many charges the accountant was asked for.
