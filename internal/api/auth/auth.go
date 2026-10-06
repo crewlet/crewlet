@@ -626,18 +626,27 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			//
 			// COUNTED HERE AND ONLY HERE: this is the one arm where a
 			// refused credential decided something. See audit.go.
-			g.refused(r)
-			log.Warn("api_auth_failed",
-				"route", path,
-				"reason", "missing_or_invalid_bearer",
-				// The candidate value is NEVER logged: a rejected token
-				// is still a credential, and a log is a place it would
-				// outlive the request.
-				// THE RESOLVED CLIENT, not the peer. Behind a
-				// proxy every line would otherwise name the
-				// proxy, which is the one address that tells an
-				// operator nothing about who is guessing.
-				"remote", g.Client(r))
+			if g.refused(r) {
+				log.Warn("api_auth_failed",
+					"route", path,
+					"reason", "credential_refused",
+					// The candidate value is NEVER logged: a rejected
+					// token is still a credential, and a log is a place
+					// it would outlive the request.
+					// THE RESOLVED CLIENT, not the peer. Behind a
+					// proxy every line would otherwise name the
+					// proxy, which is the one address that tells an
+					// operator nothing about who is guessing.
+					"remote", g.Client(r))
+			} else {
+				// NOTHING PRESENTED IS NOBODY, NOT A FAILURE: a signed-out
+				// tab, an invitation's page and a probe all ask without
+				// a credential, and a WARN for each was a thousand lines
+				// an hour from one browser, burying the ones that are
+				// somebody's credential turned away.
+				log.Debug("api_auth_anonymous", "route", path,
+					"remote", g.Client(r))
+			}
 			// THE SAME REFUSAL ENVELOPE EVERY OTHER SURFACE
 			// ANSWERS WITH. This was a hand-written JSON literal
 			// and a hand-set header pair — the shape that drifts,

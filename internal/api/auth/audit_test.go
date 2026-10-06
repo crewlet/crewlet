@@ -268,6 +268,37 @@ func TestATierATokenRefusedByARouteIsAWarnLine(t *testing.T) {
 	}
 }
 
+// A REQUEST THAT PRESENTED NOTHING IS NO FAILED ATTEMPT, IN THE LOG EITHER.
+//
+// A signed-out tab, an invitation's page and a probe ask a guarded route with
+// no credential, and every one was a WARN `api_auth_failed`: a thousand lines
+// an hour from one open browser, burying the lines that are somebody's
+// credential turned away. Both are 401; only the refused credential is a WARN
+// line — the CONTROL. NOT PARALLEL, for the log sink's reason above.
+// Mutation: warn on every unresolved request and the anonymous one logs too.
+func TestARequestThatPresentedNothingIsNoFailedAttemptInTheLog(t *testing.T) {
+	var out syncBuffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
+	g := tierA(t, newAuditTrail(t))
+	failed := func() int { return strings.Count(out.String(), "api_auth_failed") }
+	if code := call(g, answering(http.StatusOK), "/agents", ""); code != http.StatusUnauthorized {
+		t.Fatalf("an anonymous request answered %d, want 401", code)
+	}
+	if got := failed(); got != 0 {
+		t.Errorf("a request presenting nothing logged %d failed attempts:\n%s",
+			got, out.String())
+	}
+	if code := call(g, answering(http.StatusOK), "/agents", "not-a-token"); code != http.StatusUnauthorized {
+		t.Fatalf("a wrong bearer answered %d, want 401", code)
+	}
+	if got := failed(); got != 1 || !strings.Contains(out.String(), "level=WARN") {
+		t.Errorf("a refused bearer logged %d failed attempts, want one WARN:\n%s",
+			got, out.String())
+	}
+}
+
 // syncBuffer is a log sink a case reads while the guard writes to it.
 type syncBuffer struct {
 	mu  sync.Mutex

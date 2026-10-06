@@ -870,8 +870,9 @@ permitted as request headers, and a preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
-Failed attempts log `api_auth_failed` at WARNING (never the candidate token
-value); successes log `api_auth_ok` at DEBUG with `actor` (who a write would
+A credential presented and refused logs `api_auth_failed` at WARNING (never
+the candidate token value), while a request that presented none — a signed-out
+tab, an invitation's page — logs `api_auth_anonymous` at DEBUG; successes log `api_auth_ok` at DEBUG with `actor` (who a write would
 be attributed to), `operator_id` (the credential it came through) and `route`.
 Every write this surface logs — `config_revision_written`, `secret_written`,
 `backup_taken`, `retention_gate` and the rest — carries the same pair as `by`
