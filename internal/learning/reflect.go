@@ -290,6 +290,10 @@ type Worker interface {
 type Reflector struct {
 	pub queue.Publisher
 
+	// spend publishes what a pass's model calls cost before its sentinel
+	// does — see [SpendFlusher]. Nil publishes nothing early.
+	spend SpendFlusher
+
 	// live is the epoch-scoped half, swapped whole by Reconfigure and
 	// never mutated — the same rule the engine's own epoch follows.
 	live atomic.Pointer[reflectorEpoch]
@@ -320,7 +324,22 @@ type reflectorEpoch struct {
 // the way out is what keeps an unreachable counter from also being free.
 type BudgetGate func(ctx context.Context, seat *org.Role) (bool, error)
 
-// NewReflector builds a dispatcher over an org and a publisher.
+// SpendFlusher publishes what one turn's auxiliary calls have cost on this node
+// so far — the node's auxiliary-spend ledger ([auxspend.Ledger.FlushTurn]),
+// declared here by its one caller.
+//
+// A PASS'S SENTINEL FOLLOWS ITS COST. The Turn screen asks for the turn again
+// when the sentinel lands, and draws the Reflection lane from the reflection
+// stage's spend records; left to the ledger's timer, those landed up to a
+// flush interval after the sentinel, and a page that had already asked never
+// showed them.
+type SpendFlusher interface {
+	FlushTurn(ctx context.Context, turnID string)
+}
+
+// NewReflector builds a dispatcher over an org and a publisher. spend is the
+// node's auxiliary-spend ledger, flushed for the turn before a pass's sentinel;
+// nil flushes nothing early.
 //
 // An EMPTY worker list is allowed: a company may wire the dispatcher before
 // wiring any worker, and every pass then short-circuits on the no-workers
@@ -328,7 +347,9 @@ type BudgetGate func(ctx context.Context, seat *org.Role) (bool, error)
 // an optional worker without checking it, and the alternative to refusing it
 // here is a nil dereference on the first completed turn, which is a stack
 // trace naming this package for a mistake made in the engine's wiring.
-func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker, budget BudgetGate) (*Reflector, error) {
+func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker, budget BudgetGate,
+	spend SpendFlusher,
+) (*Reflector, error) {
 	if o == nil {
 		return nil, fmt.Errorf("learning: reflection needs an organization to resolve seats against")
 	}
@@ -338,7 +359,7 @@ func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker, bu
 	if err := validateWorkers(workers); err != nil {
 		return nil, err
 	}
-	r := &Reflector{pub: pub, seen: newRecentTurns(ReflectSeen)}
+	r := &Reflector{pub: pub, spend: spend, seen: newRecentTurns(ReflectSeen)}
 	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers), budget: budget})
 	return r, nil
 }
@@ -592,7 +613,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		// learn from and a turn reflection never reached look identical
 		// on every surface otherwise, and the second is a bug while the
 		// first is the gate working.
-		r.publish(ctx, turn, types.ReflectionCompleted{
+		r.closePass(ctx, turn, types.ReflectionCompleted{
 			Agent: tc.Agent, AgentHandle: tc.AgentHandle, RoleName: tc.RoleName,
 			TurnID: tc.TurnID, WorkKey: turn.WorkKey(),
 			WorkersRun: 0, ReviewOutcome: tc.ReviewOutcome,
@@ -640,12 +661,22 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// `auxiliary_spend` of the reflection stage, which no state machine
 	// reads, because a spend record that drove the seat would reopen the
 	// turn it names.
-	r.publish(ctx, turn, types.ReflectionCompleted{
+	r.closePass(ctx, turn, types.ReflectionCompleted{
 		Agent: tc.Agent, AgentHandle: tc.AgentHandle, RoleName: tc.RoleName,
 		TurnID: tc.TurnID, WorkKey: turn.WorkKey(),
 		WorkersRun: len(out.Ran), ReviewOutcome: tc.ReviewOutcome,
 	})
 	return out
+}
+
+// closePass publishes a pass's sentinel AFTER what the pass's model calls cost
+// ([SpendFlusher]): a reader that asks for the turn again when the sentinel
+// lands reads the Reflection lane whole.
+func (r *Reflector) closePass(ctx context.Context, t Turn, sentinel types.ReflectionCompleted) {
+	if r.spend != nil {
+		r.spend.FlushTurn(ctx, t.Event.TurnID)
+	}
+	r.publish(ctx, t, sentinel)
 }
 
 // dispatch runs one worker, converting a panic into an error.

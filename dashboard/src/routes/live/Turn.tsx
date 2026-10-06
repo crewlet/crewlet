@@ -146,9 +146,17 @@ import {
   type Story,
 } from "~/lib/turnstory.ts";
 import { TURN_STOP } from "~/contract/turnbands.ts";
-import { useAgents, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useAgents, useConnection, useEvents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { seatOnTurn, UNSETTLED } from "~/lib/turns.ts";
-import type { EventRecord, LiveCall, TurnRow, TurnStage, WorkItemRef } from "~/protocol/index.ts";
+import type {
+  EventEnvelope,
+  EventRecord,
+  FeedRow,
+  LiveCall,
+  TurnRow,
+  TurnStage,
+  WorkItemRef,
+} from "~/protocol/index.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -170,6 +178,23 @@ function field(event: EventRecord | undefined, key: string): unknown {
 function str(event: EventRecord | undefined, key: string): string {
   const v = field(event, key);
   return typeof v === "string" ? v : "";
+}
+
+/**
+ * The id of the newest `reflection_completed` for this turn the feed holds, or
+ * "" for none — the push that says the turn's reflection pass is over.
+ *
+ * OFF THE PUSHED ENVELOPE'S PAYLOAD: a feed row the snapshot seeded carries
+ * none, and that is the right answer for it — a sentinel that landed before
+ * this page asked is already in the answer it got.
+ */
+export function reflectionSentinel(feed: readonly FeedRow[], turnId: string): string {
+  if (turnId === "") return "";
+  for (const row of feed) {
+    if (row.type !== "reflection_completed") continue;
+    if ((row as EventEnvelope).payload?.turn_id === turnId) return row.id;
+  }
+  return "";
 }
 
 /**
@@ -414,19 +439,27 @@ export function useTurnView(turnId: string): TurnView {
   const liveCall = seatRow?.live_call?.turn_id === turnId ? seatRow.live_call : null;
 
   // THE ANSWER IS ASKED AGAIN when this turn moves on the stream: a phase of
-  // it lands, or its seat's stage changes. The `turn` query is answered once,
-  // and what the phases do not carry — a coding run's announcement, a note's
-  // `agent_turn_steered`, the reflection pass — arrives only in its answer.
+  // it lands, its seat's stage changes, or its reflection pass's sentinel
+  // lands. The `turn` query is answered once, and what the phases do not
+  // carry — a coding run's announcement, a note's `agent_turn_steered`, what
+  // the auxiliary model spent, the reflection pass — arrives only in its
+  // answer. The engine publishes a turn's in-turn spend before its end and a
+  // pass's spend before its sentinel, so those two moments read them whole.
   const landed = useMemo(
     () => phaseEvents.filter((ev) => fromPhaseEvent(ev)?.turnId === turnId).length,
     [phaseEvents, turnId],
   );
-  const moved = useRef({ landed, stage });
+  const feed = useEvents();
+  const reflected = useMemo(() => reflectionSentinel(feed, turnId), [feed, turnId]);
+  const moved = useRef({ landed, stage, reflected });
   useEffect(() => {
-    if (moved.current.landed === landed && moved.current.stage === stage) return;
-    moved.current = { landed, stage };
+    const was = moved.current;
+    moved.current = { landed, stage, reflected };
+    // A sentinel that LEFT the feed's ring is no news about this turn.
+    const sentinel = reflected !== "" && reflected !== was.reflected;
+    if (was.landed === landed && was.stage === stage && !sentinel) return;
     refetch();
-  }, [landed, stage, refetch]);
+  }, [landed, stage, reflected, refetch]);
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
 

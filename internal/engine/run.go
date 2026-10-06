@@ -1375,6 +1375,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 			return e.seatCompactor(e.Company(), handle, use)
 		}
 	}
+	if d.FlushSpend == nil {
+		d.FlushSpend = e.auxSpend.FlushTurn
+	}
 	if d.Park == nil {
 		d.Park = e.park
 	}
@@ -2088,12 +2091,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// (ADR-0017), and the learning dispatcher marks a unit of work
 		// spent only on a settled outcome, which the empty decision of a
 		// turn that never reached its loop is not.
-		e.publishTurnCompleted(ctx, tel, runner.Spend{}, turn.Result{}, err)
-		// AND CHARGED LIKE ANY OTHER ENDING: the run happened, on the
-		// item it names, and a task's turn count is its attempts.
-		e.recordTurnSpend(ctx, tel.chargeFor(runner.Spend{}, turn.Result{}, err, time.Now().UTC()))
-		// Its context was gathered, at a cost — see [Ledger.FlushTurn].
-		e.auxSpend.FlushTurn(ctx, req.RunID)
+		//
+		// AND CHARGED LIKE ANY OTHER ENDING: the run happened, on the item
+		// it names, and a task's turn count is its attempts. Its context was
+		// gathered, at a cost, which is on the stream before its end — see
+		// [Engine.endSegment].
+		e.endSegment(ctx, tel, runner.Spend{}, turn.Result{}, err,
+			tel.chargeFor(runner.Spend{}, turn.Result{}, err, time.Now().UTC()))
 		return turn.Result{}, err
 	}
 
@@ -2167,15 +2171,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
-	e.publishTurnCompleted(ctx, tel, spend, res, err)
-	// AND CHARGED to the work item it was on, after the record of the turn
-	// exists — see turnspend.go.
-	e.recordTurnSpend(ctx, charge)
-	// AND WHAT ITS AUXILIARY CALLS COST, published now rather than at the
-	// ledger's next interval, so a reader opening the turn as it ends reads
-	// its context and its rewrites beside its phases. After the charge,
-	// whose card rewrite is the segment's last auxiliary call.
-	e.auxSpend.FlushTurn(ctx, req.RunID)
+	//
+	// AFTER WHAT ITS AUXILIARY CALLS COST — its card's rewrite the last of
+	// them — so a reader that asks for the turn as it ends reads its context
+	// and its rewrites beside its phases; and CHARGED to the work item it
+	// was on after the record of its end exists. See [Engine.endSegment].
+	e.endSegment(ctx, tel, spend, res, err, charge)
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes

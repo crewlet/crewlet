@@ -265,8 +265,10 @@ func (e *Engine) attachReflection(_ context.Context, c *Company) error {
 	if c == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
+	// THE NODE'S LEDGER, flushed for a turn before its pass's sentinel: the
+	// pass runs here, so what its workers' calls cost is in this ledger.
 	reflector, err := learning.NewReflector(c.Org, e.backends.Queue,
-		e.buildReflectionWorkers(c), e.learningBudget(c))
+		e.buildReflectionWorkers(c), e.learningBudget(c), e.auxSpend)
 	if err != nil {
 		return fmt.Errorf("engine: build the reflect dispatcher: %w", err)
 	}

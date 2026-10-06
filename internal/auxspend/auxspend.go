@@ -30,8 +30,9 @@
 //
 // A [Ledger] holds a bucket per (stage, seat or person, turn, purpose, model,
 // provider entry, company day) and publishes each as one record when it
-// flushes — every [FlushInterval], at a turn's end for that turn's buckets, and
-// at the node's stop. A compaction of seventy rewrites is one record; an
+// flushes — every [FlushInterval]; for one turn's buckets, before the turn's
+// end and before its reflection pass's sentinel are published; and at the
+// node's stop. A compaction of seventy rewrites is one record; an
 // ordinary turn's prefetch is one per call it made, which is what it always
 // was. The DAY IS IN THE KEY, so a bucket closes at midnight on the company's
 // clock rather than straddling it, and the record is stamped with its last

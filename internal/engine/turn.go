@@ -180,6 +180,14 @@ type Dispatcher struct {
 	// fragment for ever.
 	Rewriter func(handle string, use auxspend.Use) ledgerfit.Fitter
 
+	// FlushSpend publishes what a run's auxiliary calls have cost on this
+	// node so far ([auxspend.Ledger.FlushTurn]) — called once the
+	// conversation entry's rewrites are made, which happen after the turn's
+	// end and beside its reflection pass, so their records reach the
+	// rollups and the turn's page then rather than a flush interval later.
+	// Nil leaves them to the ledger's timer.
+	FlushSpend func(ctx context.Context, runID string)
+
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
 }
@@ -1443,6 +1451,9 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		in.Fitted = ledgerfit.Fit(ctx, d.Rewriter(handle, auxspend.Use{
 			Stage: types.AuxStageReflection, TurnID: runID, WorkKey: workKey,
 		}), ledger.SessionPieces(in))
+		if d.FlushSpend != nil {
+			d.FlushSpend(ctx, runID)
+		}
 	}
 	entry := ledger.BuildSession(in)
 	if res.LastReview != nil {

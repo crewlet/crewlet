@@ -24,9 +24,10 @@ const (
 	// meter's own refreshes. A named window then trails the counter by at
 	// most two cadences — this flush, and the usage publisher's tick that
 	// derives the day the record landed in. A turn's own buckets are
-	// flushed as it ends ([Ledger.FlushTurn]), so a turn's page does not
-	// wait for the timer; the timer is what every other stage relies on,
-	// and the safety net under a turn whose end never flushed.
+	// flushed before its end and before its reflection pass's sentinel
+	// ([Ledger.FlushTurn]), so a turn's page does not wait for the timer;
+	// the timer is what the background and operator stages rely on, and
+	// the safety net under a flush that was refused.
 	FlushInterval = 15 * time.Second
 
 	// MaxPending bounds the sealed records a ledger keeps for a retry after
@@ -204,9 +205,12 @@ func (l *Ledger) Flush(ctx context.Context) {
 	l.flush(ctx, func(key) bool { return true }, true)
 }
 
-// FlushTurn publishes one turn's buckets now — called as the turn ends, so the
-// turn's page reads what its context and its rewrites cost when it reads the
-// turn, rather than a flush interval later.
+// FlushTurn publishes one turn's buckets now, of every stage — called before a
+// turn segment publishes its end, before its reflection pass publishes its
+// sentinel, and once its conversation entry's rewrites are made. The turn's
+// page asks for the turn again at the first two, so each record is on the
+// stream before the event that makes a reader ask, rather than a flush
+// interval after it.
 func (l *Ledger) FlushTurn(ctx context.Context, turnID string) {
 	if turnID == "" {
 		return

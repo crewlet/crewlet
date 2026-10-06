@@ -188,8 +188,11 @@ named windows.
 
 **Coalesced, a flush behind.** A node's ledger keeps one record per (stage,
 seat or person, turn, purpose, model, provider entry, company day) and
-publishes it every **15 seconds** — and a turn's own records as the turn ends,
-so its page reads what its context cost when it reads the turn. A compaction of
+publishes it every **15 seconds** — and a turn's own records before the turn's
+end is published, and its reflection pass's before that pass's
+`reflection_completed`, so a Turn page open while the turn ends asks for it again
+at each of those moments and reads what its context, its rewrites and its
+learning cost. A compaction of
 seventy rewrites is one record of seventy calls. So the live window trails the
 counter by up to one flush, and a named window by up to two (the flush, and the
 usage publisher's own tick). Every figure's **calls** are provider calls — a

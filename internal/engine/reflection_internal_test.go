@@ -47,7 +47,7 @@ func holderOn(t *testing.T, q *memory.Queue) (*Engine, *reflectProbe) {
 	t.Helper()
 	c := companyFor(t, reflectingCompany)
 	probe := &reflectProbe{}
-	r, err := learning.NewReflector(c.Org, q, []learning.Worker{probe}, nil)
+	r, err := learning.NewReflector(c.Org, q, []learning.Worker{probe}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

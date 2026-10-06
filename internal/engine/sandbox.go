@@ -710,9 +710,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// charge after the completion — see turnspend.go.
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
-	e.publishTurnCompleted(ctx, tel, spend, res, err)
-	e.recordTurnSpend(ctx, charge)
-	e.auxSpend.FlushTurn(ctx, in.Run.TurnID)
+	e.endSegment(ctx, tel, spend, res, err, charge)
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
 		// stop while the run was out, and the turn ended at its first

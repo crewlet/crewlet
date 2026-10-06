@@ -211,13 +211,49 @@ type turnRecorder interface {
 	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
 }
 
-// recordTurnSpend publishes a segment's charge to its native work item.
+// endSegment closes one segment of a turn, in the order its readers rely on:
+// its card fitted, its in-turn auxiliary records published, its end published,
+// and its charge written to its task.
 //
-// TELEMETRY NEVER FAILS THE WORK, so this returns nothing, on the terms
-// [Engine.publishTurnCompleted] states: the turn has finished and its result is
-// already the caller's answer. A charge that could not be written is logged
-// naming the item and the segment — the spend is still on the seat's counters
-// and in the usage domain; what is lost is the task's share of it.
+// THE END FOLLOWS ITS COST. A reader holding the turn open asks for it again
+// when the turn ends — the Turn screen refetches on the seat leaving the turn —
+// so every in-turn record has to be on the stream before the completion, or
+// that read misses what the turn's context and its rewrites cost and the
+// page's tokens disagree with the turn list's for the same turn, with nothing
+// asking again. The card's rewrite is the segment's LAST auxiliary call, so it
+// is made first ([Engine.cardsFor]), and the ledger's records of the segment
+// are flushed after it ([auxspend.Ledger.FlushTurn]).
+//
+// THE CHARGE IS WRITTEN AFTER THE END, as it always was: the task's turn row
+// links to the turn, and it should not name a turn whose record says it is
+// still running. Neither order costs the seat anything — the turn's frame
+// holds it until this returns, whatever this does first.
+//
+// ONE FUNCTION for every way a segment ends — a turn that broke before its
+// first phase, a turn that ran, a resumed segment — so the three cannot drift
+// into different orders.
+func (e *Engine) endSegment(ctx context.Context, tel turnTelemetry, spend runner.Spend,
+	res turn.Result, err error, charge segmentCharge,
+) {
+	ready := e.cardsFor(ctx, charge)
+	e.auxSpend.FlushTurn(ctx, tel.runID)
+	e.publishTurnCompleted(ctx, tel, spend, res, err)
+	e.recordTurnSpend(ctx, ready)
+}
+
+// cardedCharge is a segment's charge readied for its write: its card fitted
+// and the writer it goes to, both decided once by [Engine.cardsFor].
+type cardedCharge struct {
+	segmentCharge
+	// write is the tracker write the charge goes through; nil where there
+	// is nothing to charge — no native item, or no writer on this node.
+	write turnRecorder
+}
+
+// cardsFor readies a segment's charge: on a native item this node can write
+// to, its card fitted to the task's turn list ([Engine.withCards]) and the
+// writer it goes through; otherwise a charge with nothing to write, and no
+// rewrite paid for a card nothing will show.
 //
 // # Through the router, as every tool's write is
 //
@@ -227,9 +263,9 @@ type turnRecorder interface {
 // exactly the topology where seats run apart from the estate, every turn's
 // charge to the task that woke it was dropped without a word, and a task's
 // spend read zero however much was spent on it.
-func (e *Engine) recordTurnSpend(ctx context.Context, charge segmentCharge) {
+func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharge {
 	if !charge.native() {
-		return
+		return cardedCharge{segmentCharge: charge}
 	}
 	halves, ok := e.trackerHalves()
 	if !ok {
@@ -237,13 +273,27 @@ func (e *Engine) recordTurnSpend(ctx context.Context, charge segmentCharge) {
 		// company that moved its tracker off the engine while the turn ran,
 		// or a data node in a maintenance mode, which publishes nothing:
 		// there is nowhere to charge.
-		return
+		return cardedCharge{segmentCharge: charge}
 	}
 	charge = e.withCards(ctx, charge)
-	e.chargeSegment(ctx, halves.as(builtin.Actor{
+	return cardedCharge{segmentCharge: charge, write: halves.as(builtin.Actor{
 		Handle: charge.record.Seat, Kind: tracker.AuthorAgent,
 		TurnID: charge.record.TurnID,
-	}), charge)
+	})}
+}
+
+// recordTurnSpend writes a segment's readied charge to its native work item.
+//
+// TELEMETRY NEVER FAILS THE WORK, so this returns nothing, on the terms
+// [Engine.publishTurnCompleted] states: the turn has finished and its result is
+// already the caller's answer. A charge that could not be written is logged
+// naming the item and the segment — the spend is still on the seat's counters
+// and in the usage domain; what is lost is the task's share of it.
+func (e *Engine) recordTurnSpend(ctx context.Context, charge cardedCharge) {
+	if charge.write == nil {
+		return
+	}
+	e.chargeSegment(ctx, charge.write, charge.segmentCharge)
 }
 
 // withCards fits the segment's summary and review to its task's card and adds

@@ -4866,9 +4866,12 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
   its span on the Timeline.
 - **The answer is the fleet's.** A node that did not answer the turn read is
   named above the tabs; the answer is asked again whenever one of the turn's
-  phases lands on the stream or its seat's stage changes, because what the
-  phases do not carry — a run's announcement, a note's outcome, the
-  reflection — arrives only in the answer.
+  phases lands on the stream, its seat's stage changes, or its reflection
+  pass's `reflection_completed` lands, because what the phases do not carry —
+  a run's announcement, a note's outcome, what the auxiliary model spent, the
+  reflection — arrives only in the answer. The engine publishes a turn's
+  in-turn `auxiliary_spend` before its end and a pass's before its sentinel,
+  so the asks at those two moments read them.
 
 
 ## Coding runs, agent-to-agent, traces and the event log
