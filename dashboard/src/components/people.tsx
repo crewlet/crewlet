@@ -484,6 +484,12 @@ export function ConfirmDialog({
   // however often it is pressed. So the dialog offers only a way out: it kept
   // its dismissal and an enabled confirm that sent the same 409 again.
   const stale = write.answer?.kind === "refused" && write.answer.stale;
+  // AND DONE IS DONE, a 202 included: the gesture is recorded and this node
+  // has yet to apply it, which the outcome says. Its dismissal read as undoing
+  // a cancellation already durable ("Keep it"), and the confirm sent the same
+  // gesture again under a new key.
+  const done = write.answer?.kind === "done";
+  const settled = stale || done;
   return (
     <Modal
       open
@@ -493,11 +499,11 @@ export function ConfirmDialog({
       dismissable={!write.busy}
       closeDisabledReason={waiting.reason}
       stackBody
-      onSubmit={() => ready && !stale && onConfirm()}
+      onSubmit={() => ready && !settled && onConfirm()}
       footer={
-        stale ? (
+        settled ? (
           <Button variant="primary" onClick={onClose}>
-            Close
+            {done ? "Done" : "Close"}
           </Button>
         ) : (
           <>

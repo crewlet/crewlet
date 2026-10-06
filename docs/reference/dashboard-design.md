@@ -5760,8 +5760,9 @@ create carries a fresh uuid7 `Idempotency-Key`, kept for the retry an unknown
 answer asks for — **Try again** sends the key the engine handed back, so it
 lands once — while a token's mint and a reset link read no key and a retry
 issues another; a refusal is the engine's sentence with the grants that would
-admit; a `202` says the change is recorded and this node is catching up; and
-after every answer — a refusal part way and an unknown one included, since
+admit; a `202` says the change is recorded and this node is catching up, and
+— like a stale refusal — leaves the dialog only **Done**, because the gesture
+is over and pressing it again would send it again; and after every answer — a refusal part way and an unknown one included, since
 either may have changed something — the lists the write touches are read
 again. Where `/health` says
 `identity: unclaimed`, a callout says nobody has joined yet and what comes

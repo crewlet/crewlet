@@ -462,6 +462,41 @@ test("a stale refusal leaves the cancel dialog only a way out", async () => {
   expect(eng.writes()).toHaveLength(1);
 });
 
+// A GESTURE RECORDED AND NOT YET APPLIED HERE (202) IS DONE, AND THE DIALOG
+// OFFERS ONLY A WAY OUT. It kept "Keep it", which read as undoing a
+// cancellation already durable, beside an enabled "Cancel invitation" that sent
+// a second DELETE under a new key; and the edit kept Save, which sent the same
+// change again. The CONTROL is the outcome, which says it is recorded.
+// Mutation: draw the confirm or Save on a pending answer and it is offered
+// again.
+test("a write recorded but not yet applied here leaves its dialog only Done", async () => {
+  const eng = engine({
+    "DELETE /iam/invitations/inv-1": [json(202, { outcome: "pending", op_id: "k" })],
+    "PATCH /iam/people/p-bo": [json(202, { id: "p-bo", outcome: "pending", op_id: "k" })],
+  });
+  mount();
+  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
+  const cancel = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
+  fireEvent.click(within(cancel).getByRole("button", { name: "Cancel invitation" }));
+  await settle();
+  expect(within(cancel).getByRole("status").textContent).toMatch(/^Recorded\./);
+  expect(within(cancel).queryByRole("button", { name: "Cancel invitation" })).toBeNull();
+  expect(within(cancel).queryByRole("button", { name: "Keep it" })).toBeNull();
+  fireEvent.click(within(cancel).getByRole("button", { name: "Done" }));
+  expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
+
+  location.hash = "#/settings/access?person=p-bo";
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "work:write" }));
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(within(edit).getByRole("status").textContent).toMatch(/^Recorded\./);
+  expect(within(edit).queryByRole("button", { name: "Save" })).toBeNull();
+  expect(eng.writes()).toHaveLength(2);
+});
+
 // A STALE PROOF IS CONFIRMED AND THE SAME REQUEST REPLAYED, key included.
 test("a step-up refusal is confirmed and the same cancellation replayed", async () => {
   const confirmer = vi.fn(async () => true);

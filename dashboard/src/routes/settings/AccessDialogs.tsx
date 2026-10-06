@@ -241,9 +241,13 @@ export function EditPersonDialog({
   };
   const nothing = Object.keys(change).length === 0;
 
+  // DONE IS DONE, a 202 included — see `ConfirmDialog`: Save sent the same
+  // change again under a new key.
+  const done = write.answer?.kind === "done";
+
   async function submit() {
     setTried(true);
-    if (nothing || login.trim() === "" || loginWrong) return;
+    if (done || nothing || login.trim() === "" || loginWrong) return;
     const answer = await write.run({
       method: "PATCH",
       path: `/iam/people/${encodeURIComponent(row.id)}`,
@@ -266,18 +270,24 @@ export function EditPersonDialog({
       stackBody
       onSubmit={() => void submit()}
       footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={write.busy}>
-            {write.answer?.kind === "done" ? "Done" : "Cancel"}
+        done ? (
+          <Button variant="primary" onClick={onClose}>
+            Done
           </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={write.busy || nothing || login.trim() === ""}
-          >
-            {pressLabel(write, "Save", "Saving", waiting.asked)}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={write.busy}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={write.busy || nothing || login.trim() === ""}
+            >
+              {pressLabel(write, "Save", "Saving", waiting.asked)}
+            </Button>
+          </>
+        )
       }
     >
       <FormField
