@@ -3,9 +3,20 @@
 //
 // Both supported CLIs run headless in a box and follow the same shape: a
 // background process redirects its output to a file and drops a done marker,
-// Poll checks that marker, Collect reads and parses the file, and an ask
-// overlay surfaces a mid-run clarification. This package owns that plumbing so
-// each runner supplies only its CLI invocation and its output parser.
+// Poll checks that marker (and, for a CLI that can finish without exiting,
+// the end of its stream), Collect decodes the stream and reads the result,
+// and an ask overlay surfaces a mid-run clarification. This package owns that
+// plumbing so each runner supplies only what is its own: its invocation, its
+// config, where its output lands, and how its stream and result are read.
+//
+// # A run's output is read as a stream
+//
+// A run's event stream and its error stream grow with the run, so neither is
+// ever read whole: the stream is decoded a line at a time in bounded memory
+// and the error stream is read from its end, while the files meant to be
+// read whole (the report, the question, the result line) are, and one too
+// large degrades only itself. See stream.go for the reasons, and what each
+// used to cost.
 //
 // It touches only the [sandbox.Sandbox] interface, so the in-process fake is a
 // faithful substitute and every runner is testable without a real CLI.

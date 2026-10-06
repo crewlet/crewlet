@@ -108,6 +108,18 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
+// Output is this CLI's layout under `--output-format json`: one JSON object,
+// printed when the run ends, which IS the result — so stdout is read whole and
+// there is no event stream to decode. It exits cleanly, so the done marker is
+// its only completion signal.
+func (ClaudeCode) Output(paths Paths) Output {
+	return Output{Stdout: paths.Result(), Result: paths.Result()}
+}
+
+// Events is never asked of this layout ([Output.Events] is unset); it decodes
+// nothing.
+func (ClaudeCode) Events() Decoder { return lineFunc(func([]byte) {}) }
+
 // Finished is false: this CLI exits cleanly, so the done marker is the signal.
 func (ClaudeCode) Finished(string) bool { return false }
 

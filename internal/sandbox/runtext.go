@@ -42,15 +42,25 @@ const MaxRunTextBytes = 256 << 10
 //
 // It bounds what a box can cost the engine's memory: every file read back is
 // one the coding agent wrote, inside a box it can run any command in, and the
-// host's own process is what holds it. 32 MiB is far past any report or log a
-// run produces honestly, and is what one compaction can still be asked about
-// many times over.
+// host's own process is what holds it. 32 MiB is far past any report or
+// question a run writes honestly, and is what one compaction can still be
+// asked about many times over.
 //
-// THE REFUSAL IS THE POINT. A reader that stops at its cap reports a clean
-// end of file, so a file of exactly the cap cannot be told from one that was
-// clipped there — and the files read back are a run's report and its stderr,
-// which is precisely the content nothing downstream can sanity-check. A
-// silently halved report reads as a finished one.
+// THE REFUSAL IS THE POINT, FOR A FILE MEANT TO BE READ WHOLE. A reader that
+// stops at its cap reports a clean end of file, so a file of exactly the cap
+// cannot be told from one that was clipped there — and what ReadFile reads is
+// a run's report, its question, its result line and its markers, precisely
+// the content nothing downstream can sanity-check. A silently halved report
+// reads as a finished one.
+//
+// IT DOES NOT GOVERN A RUN'S MACHINE STREAMS. Its stdout event log and its
+// stderr grow with the run, and the engine keeps a bounded share of each in
+// the end (a transcript of [MaxRunTextBytes], a failure from the end of the
+// error stream), so refusing them whole refused a run for the size of its own
+// log: a poll that could not read stdout never reached its liveness probe, and
+// a collection that could not read it lost a result the report file held.
+// Those are read as streams ([Sandbox.OpenFile]) or from their end
+// ([Sandbox.ReadTail]), and nothing there is refused for its size.
 const MaxFileBytes = 32 << 20
 
 // ErrFileTooLarge is [Sandbox.ReadFile]'s answer for a file past
