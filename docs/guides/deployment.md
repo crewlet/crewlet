@@ -742,7 +742,7 @@ api:
   auth:
     max_grants: [...]        # THE CEILING, required once port is set
     tokens: [{id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}",
-              grants: [...]}]   # at least one, on every backend
+              grants: [...]}]   # at least one
 secrets:
   active_key_id: k1          # REQUIRED on EVERY node, serving or not
   keys: [{id: k1, material: "${CREWLET_SECRET_KEY_K1}"}]

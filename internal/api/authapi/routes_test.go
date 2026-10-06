@@ -215,8 +215,6 @@ func pathOf(pattern string) string {
 // the same whoever is named in it.
 func TestAnOversizedSignInIsAnsweredRatherThanDropped(t *testing.T) {
 	t.Parallel()
-	// A PASSWORD DEPLOYMENT, or the sign-in route answers that it serves
-	// none before it reads a byte.
 	b := bootstrapFor(t)
 	mux := http.NewServeMux()
 	build(t, b).Routes(mux)

@@ -144,9 +144,9 @@ var unguardedPrefixes = []string{
 // The dependency runs that way round because authapi already imports this
 // package for the guard, and the reverse would be a cycle.
 const (
-	// PathAuthConfig is the posture read: which backend, the password
-	// floor, whether a second factor is required. No user list and no
-	// count of people — see authapi.
+	// PathAuthConfig is the posture read: the password floor and whether a
+	// second factor is required. No user list and no count of people — see
+	// authapi.
 	PathAuthConfig = "/auth/config"
 
 	// PathAuthLogin is the sign-in itself.
