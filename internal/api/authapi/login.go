@@ -1057,10 +1057,16 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// session that may only enrol one — see [Service.enrolmentOnly].
 		EnrolmentOnly: restricted,
 		OpID:          sessionOpID(lineage),
-		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because
-		// nothing in this answer reads the row: the bearer carries the
-		// position and every node validates against its own applier.
-		NoWait: true,
+		// A SIGN-IN IS THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT,
+		// because nothing in this answer reads the row: the bearer carries
+		// the position and every node validates against its own applier.
+		// A REPLACEMENT WAITS, as every other write here does: a step-up,
+		// a password change or an enrolment is made from a page listing
+		// this person's sessions, which reads them again at once — and
+		// read before the start applied, the list held the session the
+		// gesture ended and not the one it opened, so it said this
+		// browser was signed in nowhere.
+		NoWait: how.replaces == "",
 	})
 	if err != nil {
 		if removed(err) {

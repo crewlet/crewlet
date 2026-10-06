@@ -228,3 +228,41 @@ func TestAStepUpWithoutTheCodeItsPersonHoldsAsksForIt(t *testing.T) {
 		})
 	}
 }
+
+// A SESSION THAT REPLACES ANOTHER IS OPENED ON THIS NODE BEFORE IT IS ANSWERED.
+//
+// A sign-in opens its session without waiting for this node to apply it,
+// since nothing reads the row before the bearer does. A step-up, a password
+// change and an enrolment are made from a page that lists the person's
+// sessions and reads them again at once — and read before the start applied,
+// the list held the session the gesture ended and not the one it opened, so
+// the page said this browser was signed in nowhere. The CONTROL is the
+// sign-in, which still does not wait. Mutation: open every session without
+// waiting and the step-up's does too.
+func TestASessionThatReplacesAnotherWaitsForThisNode(t *testing.T) {
+	t.Parallel()
+	signIn := newSignInRig(t)
+	if rec := signIn.signIn(t, "jane.doe", password, appCode(t, clock)); rec.Code != http.StatusOK {
+		t.Fatalf("the sign-in answered %d (%s)", rec.Code, rec.Body)
+	}
+	stepUp := newStepUpRig(t, session.RowValid)
+	if rec := stepUp.stepUp(t); rec.Code != http.StatusOK {
+		t.Fatalf("the step-up answered %d (%s)", rec.Code, rec.Body)
+	}
+	for _, tc := range []struct {
+		name   string
+		rig    *signInRig
+		noWait bool
+	}{
+		{"a sign-in (the control)", signIn, true},
+		{"a step-up", stepUp.signInRig, false},
+	} {
+		tc.rig.estate.mu.Lock()
+		starts := slices.Clone(tc.rig.estate.starts)
+		tc.rig.estate.mu.Unlock()
+		if len(starts) != 1 || starts[0].NoWait != tc.noWait {
+			t.Errorf("%s opened %+v, want one session with NoWait %v", tc.name,
+				starts, tc.noWait)
+		}
+	}
+}

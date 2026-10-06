@@ -1144,7 +1144,9 @@ type SessionStart struct {
 	// NoWait asks for the answer the broker's acknowledgement already
 	// establishes, rather than waiting for this node's applier.
 	//
-	// THE ONE PLACE IN THIS ESTATE IT IS CORRECT, and the reason is that
+	// A SIGN-IN IS THE ONE PLACE IN THIS ESTATE IT IS CORRECT — never a
+	// session that replaces another, which is opened from a page that
+	// lists them — and the reason is that
 	// the bearer minted from this record carries its POSITION: every node
 	// validates against its own applier, and a node below that position
 	// serves reads on the signature and the epoch alone
