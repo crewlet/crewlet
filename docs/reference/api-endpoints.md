@@ -3117,8 +3117,10 @@ upgrade, naming the grant — and every push kind is received only by a socket
 whose caller holds the grant that kind's question takes: `event` needs
 `audit:read` (it is an `events` row, carrying every phase's prompt and
 response), and every other company kind `state:read`. The snapshot is built for
-the same audience. When the socket's credential is decided again and its grants
-have changed, a fresh snapshot is sent for the new audience; one that finds
+the same audience. When the socket's credential is decided again and it
+resolves somebody else — another login, another seat or none, other grants —
+the socket closes `1013`, and the reconnect's handshake builds the snapshot for
+the new audience while the client asks who it is again; one that finds
 `state:read` gone closes the socket `4403` — see [Close codes](#close-codes).
 
 #### Pushes
@@ -3463,8 +3465,8 @@ Each answer does one thing:
 | The session ended, expired or was revoked; the token is no longer accepted | `4401` | Re-dial with the credential the browser holds now; if the handshake answers `401`, sign in. |
 | The person resolves but their seat is gone from the chart, or they no longer hold `state:read` | `4403` | Stop reconnecting and show why: the credential is fine, what it may do is not. |
 | This node will not vouch for the credential now: it could not read what decides it, an identity move named nobody, or the seat answers to another handle | `1013` | The standard's *try again later*: reconnect on a backoff. The handshake decides — and answers `503 identity_unavailable` with a `Retry-After` for as long as the node cannot say, before any snapshot is built. |
-| Resolved with different grants | *(no close)* | Nothing — the socket's pushes follow the new grants, and a fresh `snapshot` built for them replaces what the screen was showing. |
-| Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect from the record that narrowed it. |
+| Resolved as somebody else: renamed, bound to another seat or to none, given or refused a grant | `1013` | Reconnect, and ask who you are again (`viewer`): the handshake builds the snapshot for the new grants, and a screen that named the old login or seat — "your day" on a seat no longer yours — is redrawn as the new one. |
+| Resolved as the same login, seat and grants | *(no close)* | Nothing — and later questions are asked as the principal just resolved. |
 
 **A node behind its identity log** hears no record it has not applied, so
 inside the stall grace its open sockets are served on their last decision, as

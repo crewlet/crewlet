@@ -428,8 +428,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	defer svc.listeners.add(l)()
 	var deciding sync.WaitGroup
 	deciding.Go(func() {
-		keepDecided(ctx, conn, client, l, cred, svc.seatOf, svc.now, svc.Snapshot,
-			seats.recheck)
+		keepDecided(ctx, conn, l, cred, svc.seatOf, svc.now, seats.recheck)
 	})
 	defer deciding.Wait()
 

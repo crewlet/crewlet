@@ -279,14 +279,6 @@ func GrantFor(kind Kind) (iam.Grant, bool) {
 	return grant, gated
 }
 
-// same reports whether two audiences carry the same grants, in any order.
-func (a Audience) same(b Audience) bool {
-	x, y := slices.Clone(a.grants), slices.Clone(b.grants)
-	slices.Sort(x)
-	slices.Sort(y)
-	return slices.Equal(slices.Compact(x), slices.Compact(y))
-}
-
 // Envelope is one server-to-client frame.
 //
 // ID, What and Error are omitted on a push and present on a query answer, which
@@ -419,9 +411,9 @@ type Client struct {
 	posture FramePosture
 
 	// audience is what this client may receive. Set at [NewClient] from
-	// the principal the socket was opened as, and moved by
-	// [Client.SetAudience] when deciding the credential again finds the
-	// grants changed.
+	// the principal the socket was opened as, and never moved: a decision
+	// that finds the grants changed closes the socket, and the reconnect is
+	// a new client.
 	audience Audience
 
 	// seat is the seat this client asked to be a recipient for, empty
@@ -465,16 +457,6 @@ func (c *Client) Audience() Audience {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.audience
-}
-
-// SetAudience moves this client to a, reporting whether that changed what it
-// carries.
-func (c *Client) SetAudience(a Audience) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	changed := !c.audience.same(a)
-	c.audience = a
-	return changed
 }
 
 // Out is the channel a transport reads frames from. Closed by [Client.Close].
