@@ -26,16 +26,23 @@ import (
 // every note without a vector of the current model is filled by the node
 // holding its seat ([Diary.Unembedded], [Diary.FillEmbeddings]).
 //
-// # A filled note travels by being re-filed
+// # A filled note travels because setting its vector stamps it
 //
-// The memory changelog carries a diary row when it is INSERTED: its watermark
-// is the table's rowid, and an UPDATE leaves a row where it was, behind the
-// watermark, so a vector set in place would stay on this node — and the seat's
-// next holder would recall from a copy that has none. So a fill moves the row
-// to the end of the table in the same statement that sets its vector, and the
-// watermark carries it like a new one. The receiving end is the other half:
-// a peer that already holds the vectorless row takes the carried vector over
-// it rather than skipping a row it has (internal/learning/memsync).
+// The memory changelog carries a diary row once its CHANGE SEQUENCE — a number
+// the row takes when it is inserted — passes the watermark the last carry
+// left. An update in place that took no new number would leave the row behind
+// that watermark, so a vector set on it would stay on this node, and the
+// seat's next holder would recall from a copy that has none. So the table
+// stamps a row with a fresh sequence whenever its vector is set (a trigger,
+// node migration 0041), in the statement that sets it, and the watermark
+// carries the filled note like a new one. The receiving end is the
+// other half: a peer that already holds the vectorless row takes the carried
+// vector over it rather than skipping a row it has (internal/learning/memsync).
+//
+// It used to MOVE the row instead — `rowid = max(rowid) + 1` — and the rowid
+// is the one number here that is reused: with the newest note deleted by the
+// trim or the expiry, the next insert or fill took a rowid at or below the
+// watermark and was never carried at all.
 
 // DiaryEmbedBudget bounds embedding one note as it is written.
 //
@@ -117,11 +124,12 @@ type DiaryFill struct {
 
 // FillEmbeddings stores vectors on notes, and reports how many it stored.
 //
-// EACH NOTE IS RE-FILED AT THE END OF THE TABLE in the statement that sets its
-// vector, so the memory changelog's insert watermark carries it to the seat's
-// next holder — see the file comment. A note that already holds a vector of
-// the same model is left alone (and not counted): two passes, or a pass racing
-// the note's own write, fill it once.
+// EACH NOTE TAKES A FRESH CHANGE SEQUENCE in the statement that sets its
+// vector — the table's own trigger stamps it — so the memory changelog's
+// watermark carries it to the seat's next holder; see the file comment. A note
+// that already holds a vector of the same model at this width is left alone
+// (and not counted, and not stamped): two passes, or a pass racing the note's
+// own write, fill it once.
 //
 // ONE TRANSACTION, and the vector rule is the writers' own
 // ([encodeVectorColumns]): a vector of the wrong width fails the whole fill —
@@ -145,8 +153,7 @@ func (d *Diary) FillEmbeddings(ctx context.Context, fills []DiaryFill) (int, err
 			}
 			res, err := tx.ExecContext(ctx, `
 				UPDATE agent_diary
-				   SET embedding = ?, embedding_model = ?,
-				       rowid = (SELECT max(rowid) FROM agent_diary) + 1
+				   SET embedding = ?, embedding_model = ?
 				 WHERE id = ?
 				   AND (embedding IS NULL OR embedding_model IS NULL
 				        OR embedding_model <> ? OR length(embedding) <> ?)`,

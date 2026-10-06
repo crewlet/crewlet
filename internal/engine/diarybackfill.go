@@ -33,8 +33,8 @@ import (
 // repairs. So a pass fills only seats this node HOLDS, and only once the seat
 // may start a turn ([seat.Host.MayStart]) — which is after its acquisition
 // hydrated its memory, so the pass fills the rows the seat actually has. A
-// filled note is re-filed at the end of its table, which is what carries it to
-// the next holder (see learning.Diary.FillEmbeddings).
+// filled note takes a fresh change sequence, which is what carries it to the
+// next holder (see learning.Diary.FillEmbeddings).
 //
 // # Its own loop, beside the memory sync rather than inside it
 //

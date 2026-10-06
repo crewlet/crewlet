@@ -277,7 +277,7 @@ func TestTheWatermarkOnlyCarriesWhatIsNew(t *testing.T) {
 	}
 
 	// A table whose rows are rewritten in place carries whole, because a
-	// watermark over the rowid cannot see an update.
+	// watermark over an insert sequence cannot see an update.
 	profiles := tables[2]
 	if profiles.name != "counterparty_profiles" || !profiles.wholeEachCycle {
 		t.Fatalf("fixture drifted: tables[2] is %s", profiles.name)

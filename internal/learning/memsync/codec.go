@@ -81,18 +81,22 @@ type Row struct {
 
 // export reads a seat's rows for one table.
 //
-// after bounds an incremental read on the table's rowid — see
-// table.wholeEachCycle for which tables use it and why. It returns the
-// highest rowid it saw, so the caller can advance its watermark.
+// after bounds an incremental read on the table's watermark column — see
+// table.wholeEachCycle for which tables take one and table.watermark for
+// which column it is. It returns the highest value of that column it saw, so
+// the caller can advance its watermark; a wholeEachCycle table is read whole
+// and what it returns is unused.
 func export(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64) ([]Row, int64, error) {
 	where := t.seatCol + " = ?"
 	args := []any{seat.value(t)}
+	order := "rowid"
 	if !t.wholeEachCycle {
-		where += " AND rowid > ?"
+		order = t.watermark
+		where += " AND " + order + " > ?"
 		args = append(args, after)
 	}
-	query := "SELECT rowid, " + strings.Join(t.columns, ", ") +
-		" FROM " + t.name + " WHERE " + where + " ORDER BY rowid"
+	query := "SELECT " + order + ", " + strings.Join(t.columns, ", ") +
+		" FROM " + t.name + " WHERE " + where + " ORDER BY " + order
 
 	sqlRows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -103,10 +107,10 @@ func export(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64)
 	high := after
 	var out []Row
 	for sqlRows.Next() {
-		var rowid int64
+		var mark int64
 		cells := make([]any, len(t.columns))
 		into := make([]any, 0, len(t.columns)+1)
-		into = append(into, &rowid)
+		into = append(into, &mark)
 		for i := range cells {
 			into = append(into, &cells[i])
 		}
@@ -118,8 +122,8 @@ func export(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64)
 			values[column] = encodeCell(t, column, cells[i])
 		}
 		out = append(out, Row{Table: t.name, Values: values})
-		if rowid > high {
-			high = rowid
+		if mark > high {
+			high = mark
 		}
 	}
 	if err := sqlRows.Err(); err != nil {

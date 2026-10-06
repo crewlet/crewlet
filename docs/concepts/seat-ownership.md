@@ -231,15 +231,25 @@ row it is. An append-only row — a diary entry, an episode, a skill version, a
 ledger entry — is immutable once written, so the carried copy is discarded and
 the local row stands, with one exception: a diary note's **vector**, which the
 holder fills after the insert for a note written without one or under a model
-the company has since left. The holder re-files a filled note at the end of its
-table so the changelog carries it like a new row, and a node already holding
-the note takes the carried vector over a stored one of no model, another model
-or another width — never the reverse, so a stale copy replayed later cannot
-erase a filled vector. A small mutable row — a counterparty profile, a skill's
-state and use count, an onboarding marker — is one whose *update is the
-content*, so the carried copy wins. That is safe rather than merely
-convenient: a seat is held by one node at a time, so the changelog's latest
-value for a subject is by construction the value its current owner wrote.
+the company has since left. Setting the vector stamps the note with a fresh
+change sequence, so the changelog carries it like a new row, and a node already
+holding the note takes the carried vector over a stored one of no model,
+another model or another width — never the reverse, so a stale copy replayed
+later cannot erase a filled vector. A small mutable row — a counterparty
+profile, a skill's state and use count, an onboarding marker — is one whose
+*update is the content*, so the carried copy wins. That is safe rather than
+merely convenient: a seat is held by one node at a time, so the changelog's
+latest value for a subject is by construction the value its current owner
+wrote.
+
+What is new is found by that **change sequence**: one counter per node, which
+every inserted diary note, episode and skill version — and every vector set on
+a note — is stamped from, and which only ever increases. Each cycle carries a
+seat's rows past the highest value the last cycle published. It is not the
+row's rowid, because these tables are keyed on text and a rowid is handed out
+again once the newest row is deleted: after the diary's expiry or its trim took
+the newest note, the next note took the same rowid, below what had already been
+published, and was never carried while the node held the seat.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
