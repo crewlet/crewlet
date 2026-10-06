@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -417,14 +418,41 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// a real but partial rollup — waiting for "a tokens frame" would assert
 	// against whichever phases happened to be done, which is a coin flip
 	// (measured: two rows instead of three, one run in three).
-	waitFor(t, "the spend rollup for the whole turn", func() bool {
+	//
+	// EACH OF THE TURN'S PHASES BY NAME, never a count of rows: the rollup
+	// also draws the AUXILIARY model's spend under its own band, and a count
+	// that said "three" read the turn-start context's records — which the
+	// rollup now holds — as a turn with a phase too many.
+	phasesOf := func() map[string]bool {
+		have := map[string]bool{}
 		r := frames.lastRollup(t)
 		if r == nil {
-			return false
+			return have
 		}
-		phases, _ := r["by_phase"].([]any)
-		return len(phases) == 3 // onboarding, execute, review
+		rows, _ := r["by_phase"].([]any)
+		for _, row := range rows {
+			if m, ok := row.(map[string]any); ok {
+				name, _ := m["phase"].(string)
+				have[name] = true
+			}
+		}
+		return have
+	}
+	waitFor(t, "the spend rollup for the whole turn", func() bool {
+		have := phasesOf()
+		return have["onboarding"] && have["execute"] && have["review"]
 	})
+	// AND WHAT ITS CONTEXT COST. The turn-start passes are the turn's own
+	// auxiliary records, flushed as the turn ends, so the rollup draws them
+	// under the Auxiliary band — where they reached no spend figure at all
+	// before, while the counter was charged for them.
+	if slices.ContainsFunc(n.model.seen(), func(call string) bool {
+		return call == "aux:memory" || call == "aux:knowledge" || call == "aux:recall"
+	}) {
+		waitFor(t, "the turn's auxiliary spend in the rollup", func() bool {
+			return phasesOf()["auxiliary"]
+		})
+	}
 	cancel()
 
 	// --- what the model was actually asked ---------------------------- //
@@ -578,9 +606,22 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Errorf("the rollup reports %v tokens for a turn that ran three "+
 			"phases", totals["total_tokens"])
 	}
-	if n, _ := totals["calls"].(float64); n != 3 {
-		t.Errorf("the rollup counted %v calls, want one per phase "+
-			"(onboarding, execute, review)", totals["calls"])
+	// THE TURN'S PHASES, apart from the auxiliary band: the rollup also holds
+	// what the auxiliary model spent — the turn-start context, and the
+	// reflection's calls once the ledger flushes them — which no phase record
+	// carries, so every comparison with the phase records below is made over
+	// the phases' own rows.
+	phaseTotals := map[string]float64{}
+	byPhase, _ := rollup["by_phase"].([]any)
+	for _, raw := range byPhase {
+		row, _ := raw.(map[string]any)
+		if row["phase"] == tokens.PhaseAuxiliary {
+			continue
+		}
+		for _, key := range []string{"calls", "cache_read_tokens", "cache_write_tokens"} {
+			v, _ := row[key].(float64)
+			phaseTotals[key] += v
+		}
 	}
 
 	// --- and what the store kept -------------------------------------- //
@@ -619,6 +660,18 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	records := frames.phaseRecords(t)
 	if len(records) == 0 {
 		t.Fatal("no phase record reached the socket with its payload")
+	}
+	// ONE CALL PER PROVIDER CALL: a phase's rounds, as every spend figure
+	// counts them (node/0040).
+	var wantCalls int
+	for _, rec := range records {
+		rounds, _ := rec["rounds"].([]any)
+		used, _ := rec["rounds_used"].(float64)
+		wantCalls += tokens.PhaseCalls(len(rounds), int(used))
+	}
+	if got := phaseTotals["calls"]; got != float64(wantCalls) {
+		t.Errorf("the rollup counted %v calls over the turn's phases, want the %d "+
+			"provider calls their records state", got, wantCalls)
 	}
 	for _, rec := range records {
 		ms, ok := rec["duration_ms"].(float64)
@@ -695,13 +748,13 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Fatalf("the phase records carry %v cached / %v written tokens; the "+
 			"provider reported both on every round", cacheRead, cacheWrite)
 	}
-	if got, _ := totals["cache_read_tokens"].(float64); got != cacheRead {
-		t.Errorf("the live rollup counts %v cached tokens, want the records' %v",
-			got, cacheRead)
+	if got := phaseTotals["cache_read_tokens"]; got != cacheRead {
+		t.Errorf("the live rollup counts %v cached tokens over the phases, want the "+
+			"records' %v", got, cacheRead)
 	}
-	if got, _ := totals["cache_write_tokens"].(float64); got != cacheWrite {
-		t.Errorf("the live rollup counts %v cache-written tokens, want the "+
-			"records' %v", got, cacheWrite)
+	if got := phaseTotals["cache_write_tokens"]; got != cacheWrite {
+		t.Errorf("the live rollup counts %v cache-written tokens over the phases, "+
+			"want the records' %v", got, cacheWrite)
 	}
 	stored, err := n.engine.Backends().Store.Events().PhaseTokens(t.Context(),
 		store.PhaseTokenQuery{SinceDays: 1})
@@ -710,6 +763,10 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	}
 	var storedRead, storedWrite int
 	for _, r := range stored {
+		if r.Phase == tokens.PhaseAuxiliary {
+			// The auxiliary model's records, held to their own cases.
+			continue
+		}
 		storedRead += r.CacheReadTokens
 		storedWrite += r.CacheWriteTokens
 		if !keys[r.ProviderKey] {
