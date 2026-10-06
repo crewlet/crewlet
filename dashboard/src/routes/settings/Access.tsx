@@ -79,6 +79,7 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  useToast,
 } from "@crewlethq/ui";
 import {
   KeyGlyph,
@@ -447,6 +448,7 @@ export function PeopleAndAccess() {
   const viewer = useViewer();
   const health = useEngineHealth();
   const manages = canManagePeople(viewer.grants);
+  const toast = useToast();
   const [opened, setOpened] = useParam("person", "");
   const [opening, setOpening] = useState<Opening>(null);
   const [allInvitations, setAllInvitations] = useState(false);
@@ -716,6 +718,14 @@ export function PeopleAndAccess() {
               manages={manages}
               held={viewer.grants}
               onChanged={refresh}
+              onRemoved={(who) => {
+                // THE PANEL CLOSES ON ITS OWN REMOVAL, with what happened said:
+                // left open, the re-read directory no longer held the row and
+                // the panel turned into the note for a link naming nobody,
+                // a raw id included, right after the reader's own action.
+                toast.ok(`${who} was removed`);
+                setOpened("");
+              }}
             />
           )}
 
@@ -1195,6 +1205,7 @@ function Principal({
   manages,
   held,
   onChanged,
+  onRemoved,
 }: {
   row: DirectoryRow;
   /** Whether this row is the person reading it. */
@@ -1204,6 +1215,8 @@ function Principal({
   manages: boolean;
   held: readonly string[];
   onChanged: () => void;
+  /** The row's removal landed, named as the panel names it. */
+  onRemoved: (who: string) => void;
 }) {
   const now = useNow();
   const id = encodeURIComponent(row.id);
@@ -1379,6 +1392,7 @@ function Principal({
           request={{ method: "DELETE", path: `/iam/people/${id}` }}
           onClose={close}
           onDone={changed}
+          onLanded={() => onRemoved(who)}
         >
           {you && <OnYourself alone={alone} />}
           {you
@@ -1617,6 +1631,7 @@ function PersonWrite({
   request,
   onClose,
   onDone,
+  onLanded,
   children,
 }: {
   title: string;
@@ -1626,6 +1641,8 @@ function PersonWrite({
   request: Parameters<ReturnType<typeof useIamGesture>["run"]>[0];
   onClose: () => void;
   onDone: () => void;
+  /** The write landed — applied here, or durable and not yet applied. */
+  onLanded?: () => void;
   children: React.ReactNode;
 }) {
   const write = useIamGesture();
@@ -1641,6 +1658,7 @@ function PersonWrite({
         const answer = await write.run(request);
         if (!answer) return;
         onDone();
+        if (answer.kind === "done") onLanded?.();
         if (answer.kind === "done" && !answer.pending) onClose();
       }}
     >

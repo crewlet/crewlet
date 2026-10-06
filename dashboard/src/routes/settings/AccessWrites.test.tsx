@@ -14,6 +14,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { ToastProvider } from "@crewlethq/ui";
 import { PeopleAndAccess } from "./Access.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -212,7 +213,9 @@ function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
         <Router>
-          <PeopleAndAccess />
+          <ToastProvider>
+            <PeopleAndAccess />
+          </ToastProvider>
         </Router>
       </ViewerProvider>
     </ClientContext.Provider>,
@@ -801,6 +804,12 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   expect(within(shown).queryByRole("button", { name: "Cancel" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
+  fireEvent.click(await screen.findByRole("button", { name: "Revoke Authenticator app" }));
+  const revoke = await screen.findByRole("dialog", { name: /Revoke this authenticator app/ });
+  fireEvent.click(within(revoke).getByRole("button", { name: "Revoke" }));
+  await settle();
+
+  // LAST, because a removal closes the panel it was made from.
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
   const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
   const confirm = within(remove).getByRole("button", { name: "Remove" });
@@ -814,18 +823,43 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   fireEvent.click(confirm);
   await settle();
 
-  fireEvent.click(await screen.findByRole("button", { name: "Revoke Authenticator app" }));
-  const revoke = await screen.findByRole("dialog", { name: /Revoke this authenticator app/ });
-  fireEvent.click(within(revoke).getByRole("button", { name: "Revoke" }));
-  await settle();
-
-  const [reset, removal, revocation] = eng.writes();
+  const [reset, revocation, removal] = eng.writes();
   expect(reset?.path).toBe("/iam/people/p-bo/password-reset");
   expect(reset?.key).toBeNull();
-  expect(removal?.method).toBe("DELETE");
-  expect(removal?.path).toBe("/iam/people/p-bo");
   expect(revocation?.path).toBe("/iam/credentials/c-totp");
   expect(revocation?.query.get("person")).toBe("p-bo");
+  expect(removal?.method).toBe("DELETE");
+  expect(removal?.path).toBe("/iam/people/p-bo");
+});
+
+// A REMOVAL CLOSES THE PANEL IT WAS MADE FROM, and says what it did: left
+// open, the directory read again no longer held the row, so the panel turned
+// into the note for a link naming nobody — "Nobody in the directory has this
+// id", a raw id beside it — right after the reader's own action. The CONTROL
+// is that note itself, which a link to somebody since removed still draws
+// (`Access.test.tsx`). Mutation: drop the panel's removal callback and the
+// note, the id and the `person=` parameter all stay.
+test("removing the open person closes their panel and says they were removed", async () => {
+  let removed = false;
+  engine(
+    { "DELETE /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })] },
+    () => (removed ? { people: PEOPLE.people.filter((p) => p.id !== "p-bo"), next: "" } : PEOPLE),
+  );
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+  const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
+  fireEvent.change(within(remove).getByLabelText("Type bo.lang to confirm"), {
+    target: { value: "bo.lang" },
+  });
+  removed = true;
+  fireEvent.click(within(remove).getByRole("button", { name: "Remove" }));
+  await settle();
+  expect((await screen.findAllByText("Bo Lang was removed")).length).toBeGreaterThan(0);
+  expect(location.hash).toBe("#/settings/access");
+  expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
+  expect(screen.queryByText("p-bo")).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "Remove Bo Lang?" })).toBeNull();
 });
 
 // A GESTURE ON THE READER'S OWN ROW SAYS IT IS THEM and that it signs them out
