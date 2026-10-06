@@ -715,8 +715,8 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
-	rig.waiter.reapExpiredPauses(t.Context(), rig.manager,
-		[]PendingRun{withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second))})
+	rig.waiter.reapOne(t.Context(), rig.manager,
+		withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second)))
 
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
 		t.Fatalf("the reaper destroyed %v underneath a resume that had already claimed the run", killed)
@@ -810,7 +810,7 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		ClaimDuty: func(context.Context) (bool, error) { return false, nil },
+		ClaimDuty: func(context.Context) (bool, error) { return false, nil }, DutyTTL: time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -834,7 +834,7 @@ func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		ClaimDuty: func(context.Context) (bool, error) {
+		DutyTTL: time.Minute, ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
 	})

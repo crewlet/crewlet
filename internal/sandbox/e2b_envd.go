@@ -389,8 +389,9 @@ const maxEnvdFrame = 32 << 20
 // deadline (see [envdClient]), and a /files call was the one envd exchange
 // with no idle reader either, so a box whose envd accepted the connection and
 // then said nothing held the caller for as long as the caller's context lived
-// — which for the completion poll is the life of the process, with every other
-// box's keepalive queued behind it toward its TTL.
+// — which for a collection or a live reading is as long as its delivery or
+// its viewer lasts. (The completion poll bounds each box's poll as a whole
+// besides, and polls no box behind another — see [MaxConcurrentPolls].)
 //
 // MEASURED BETWEEN BYTES, not over the call, for the reason
 // [e2bStreamIdleTimeout] gives: a large read on a slow link legitimately takes

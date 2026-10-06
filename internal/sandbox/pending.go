@@ -714,7 +714,7 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 // park is the one state whose box is deliberately held for an open-ended human
 // wait, the completion poll skips it so nothing refreshes its keepalive, and
 // no tail is coming to settle it. Reading the missing stamp as "no snapshot"
-// is what made such a box invisible to [Waiter.reapExpiredPauses] for good.
+// is what made such a box invisible to the reaper ([pauseExpired]) for good.
 //
 // THE FALLBACK IS THE ROW'S OWN LAST WRITE, because on a parked row that write
 // IS the park — the one write that has to land for the run to be parked at all

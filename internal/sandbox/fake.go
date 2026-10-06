@@ -234,6 +234,11 @@ type FakeProvider struct {
 	// KillErr, when set, fails every Kill after recording it, standing in
 	// for a provider that could not be reached to reclaim a box.
 	KillErr error
+	// AttachFunc, when set, is called by every Attach before it answers,
+	// WITHOUT the provider's lock, and a non-nil answer fails the Attach —
+	// a control plane that is slow to answer, or does not, for one box
+	// while it answers for the rest.
+	AttachFunc func(ctx context.Context, sandboxID string) error
 }
 
 var _ Provider = (*FakeProvider)(nil)
@@ -284,6 +289,14 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 // stricter of the two real answers, so a reader certified here is one that
 // copes with a box it may not read.
 func (p *FakeProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
+	p.mu.Lock()
+	attach := p.AttachFunc
+	p.mu.Unlock()
+	if attach != nil {
+		if err := attach(ctx, sandboxID); err != nil {
+			return nil, err
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	box, ok := p.boxes[sandboxID]
@@ -345,6 +358,11 @@ type FakeRunner struct {
 	// PollErr, when set, fails every Poll — the transient case the waiter
 	// must retry rather than treat as completion.
 	PollErr error
+	// PollFunc, when set, answers every Poll in place of the queued state,
+	// and is called WITHOUT the runner's lock — so one box's poll can be
+	// held while another's runs, as a real runner's are, rather than every
+	// poll queueing behind the fake's own mutex.
+	PollFunc func(ctx context.Context, box Sandbox) (bool, error)
 	// CollectErr, when set, fails every Collect.
 	CollectErr error
 	// CollectFunc, when set, is called by every Collect with its context,
@@ -413,8 +431,14 @@ func (r *FakeRunner) Handed() []RunHandle {
 // Poll reports done only once [FakeRunner.Finish] has been called.
 func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.handed = append(r.handed, handle)
+	poll := r.PollFunc
+	r.mu.Unlock()
+	if poll != nil {
+		return poll(ctx, box)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.PollErr != nil {
 		return false, r.PollErr
 	}

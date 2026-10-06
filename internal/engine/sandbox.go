@@ -1572,6 +1572,10 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
 		ClaimDuty: sandbox.DutyFunc(duty),
+		// The lease each claim takes, which bounds every poll the claim
+		// authorises: a poll outlives the pass that started it, and must
+		// not outlive the duty, past which a peer may poll the same box.
+		DutyTTL: waiterDutyTTL(interval),
 	})
 	if err != nil {
 		return err
