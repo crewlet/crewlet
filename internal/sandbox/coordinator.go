@@ -598,15 +598,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 
 	result, err := c.collect(ctx, run)
 	if err != nil {
-		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID, "error", err.Error())
-		// The job is OVER even though collection failed. Free the seat and
-		// settle the row whatever the cleanup manages: both are network
-		// calls that can fail on their own, and neither failing is a reason
-		// to leave a seat parked on a run that is finished.
-		c.settleFailed(ctx, run, types.SandboxFailureCollect,
-			"the coding job finished but its box could not be read back, so its "+
-				"result is lost; the work it pushed, if any, is on its branch")
-		return nil
+		return c.collectFailed(ctx, run, err)
 	}
 
 	// Carried on the claimed row from here, so that handing the claim back
@@ -637,6 +629,67 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		InputTokens:   result.InputTokens, OutputTokens: result.OutputTokens,
 	})
 	return err
+}
+
+// collectFailed answers a collection that could not read its box back: AGAIN,
+// within a bound, and then the run is given up.
+//
+// IT IS SAFE TO ASK AGAIN, which the claim protocol is what proves. Nothing
+// the tail writes happens before a collection succeeds — the charge, the phase
+// record, the park and the resume all follow it — so a failed collection has
+// changed nothing but the claim, and handing that back ([Coordinator.unclaim])
+// leaves the run exactly as the completion found it: running, its box kept
+// alive by the poll, its turn suspended. The completion is then NAK'd and
+// comes back on the queue's backoff, here or on the seat's next owner, and the
+// poll fires a fresh one on its next tick; whichever claims first collects.
+// Settling on the first failure used to destroy the turn — and its charge and
+// its record — over one transport blip, or over the drain whose cancellation
+// was the failure.
+//
+// THE BOUND IS THE WAITER'S OWN, so the engine has one answer to "how long
+// may a box be unreachable": at least [MinConnectFailures] attempts spanning
+// [ConnectGiveUp], counted on the job's record so a retry on another node, or
+// after a restart, does not start a fresh allowance. Past it the run is
+// settled as unreachable, as it always was.
+//
+// A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
+// box its provider reclaimed, and by the time the poll gives a vanished box up
+// it has already waited out that same window.
+func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
+	now := c.now()
+	facts := run.LaunchFacts()
+	attempts := facts.CollectFailures + 1
+	since := facts.CollectFailingSince
+	if since.IsZero() {
+		since = now
+	}
+	gone := errors.Is(cause, ErrBoxGone)
+	if gone || (attempts >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp) {
+		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
+			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
+			"box_gone", gone, "error", cause.Error())
+		// The job is OVER even though collection failed. Free the seat and
+		// settle the row whatever the cleanup manages: both are network
+		// calls that can fail on their own, and neither failing is a
+		// reason to leave a seat parked on a run that is finished.
+		c.settleFailed(ctx, run, types.SandboxFailureCollect,
+			"the coding job finished but its box could not be read back, so its "+
+				"result is lost; the work it pushed, if any, is on its branch")
+		return nil
+	}
+	log.WarnContext(ctx, "sandbox_collect_retried", "turn_id", run.TurnID,
+		"attempt", attempts, "failing_for_s", now.Sub(since).Seconds(), "error", cause.Error(),
+		"detail", "the box could not be read back; the claim is handed back and the "+
+			"collection is retried until it has failed for the poll's give-up window")
+	// COUNTED: the claim did not move the seat's holding count — running and
+	// resumed both hold it — and handing it back to running leaves it there.
+	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, now); err != nil {
+		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
+		// did not go back, so the run has been ended and announced, and a
+		// redelivered completion would find nothing to claim.
+		return nil
+	}
+	return fmt.Errorf("sandbox: collecting %s (attempt %d): %w", run.TurnID, attempts, cause)
 }
 
 // runOutcome is what a finished run reported about itself, for the resumed
@@ -1598,12 +1651,23 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // this answer — a retry keeps it, so the delivery comes back, and an ending
 // drops it, because there is nothing left to come back to.
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
+	return c.unclaimAt(ctx, run, counted, detail, time.Time{})
+}
+
+// unclaimAt is [Coordinator.unclaim] for a claim handed back because the
+// collection it was taken for failed at collectFailedAt — which the release
+// counts onto the job's record ([Release.CollectFailedAt]); zero is any other
+// hand-back.
+func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
+	collectFailedAt time.Time,
+) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged,
-		Published: run.LaunchFacts().Published, Fence: fenceOf(run),
+		Published: run.LaunchFacts().Published, CollectFailedAt: collectFailedAt,
+		Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:
@@ -1670,15 +1734,16 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 	c.announceFailure(ctx, run, reason, detail)
 }
 
-// The three sentences a stranded claim reaches an operator's board with.
+// The four sentences a stranded claim reaches an operator's board with.
 //
 // One per caller rather than one shared line, because what an operator does
 // about them differs: a question that was never announced is one nobody saw, a
 // question announced but not recorded is one somebody may be composing an
 // answer to that will never be matched, and a resume that could not be given
-// back is work a box had already finished. All three name the coordination
-// store, because a claim that could not be handed back is what brought every
-// one of them here.
+// back is work a box had already finished, and so is a collection that could
+// not read its box back and could not hand the claim back either. All four
+// name the coordination store, because a claim that could not be handed back
+// is what brought every one of them here.
 const (
 	parkUnannouncedDetail = "the coding run stopped to ask a person a question, but neither the " +
 		"question could be announced nor the run's own claim given back to the " +
@@ -1694,6 +1759,10 @@ const (
 		"re-entered, and the run's claim could not be given back to the coordination " +
 		"store for another attempt, so the turn cannot be continued; the work it pushed, " +
 		"if any, is on its branch"
+
+	collectUnrevertedDetail = "the coding job finished but its box could not be read back, and " +
+		"the run's claim could not be given back to the coordination store for another " +
+		"attempt, so its result is lost; the work it pushed, if any, is on its branch"
 )
 
 // reportStopped tells the engine one suspended turn has stopped.

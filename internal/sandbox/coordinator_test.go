@@ -1045,7 +1045,7 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 		want   string
 	}{
 		{"the box cannot be read back", func(r *coordRig) {
-			r.runner.CollectErr = errors.New("the box died mid-read")
+			r.runner.CollectErr = errBoxGoneMidRead
 		}, types.SandboxFailureCollect},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1119,7 +1119,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
 			rig.runner.Finish(Result{Success: true})
-			rig.runner.CollectErr = errors.New("the box died mid-read")
+			rig.runner.CollectErr = errBoxGoneMidRead
 			payload, ev := rig.completion("t1")
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 				t.Fatalf("OnCompleted: %v", err)
@@ -1374,7 +1374,7 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	}
 	coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -1436,14 +1436,14 @@ func TestAFinishedTurnTearsTheBoxDown(t *testing.T) {
 	rig.finished("t1")
 }
 
-// A collect that fails means the job is over regardless: the seat must not be
-// left parked on a run that finished.
+// A collect whose box is gone means the job is over regardless: the seat must
+// not be left parked on a run that finished.
 func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -1471,7 +1471,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	}
 	coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

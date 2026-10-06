@@ -143,6 +143,12 @@ type Release struct {
 	// the same way and for the same reason. See [LaunchRecord.Published].
 	Published bool
 
+	// CollectFailedAt, when set, is the instant a collection of this job
+	// could not read its box back: the release counts it onto the job's
+	// record ([LaunchRecord.CollectFailures]), dating the run of failures
+	// from the first. Zero for a release that is not a failed collection.
+	CollectFailedAt time.Time
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -1157,6 +1163,23 @@ type LaunchRecord struct {
 	// RELEASE ([Release.Published]), the one write through which a retry
 	// reaches the publish again.
 	Published bool `json:"published,omitempty"`
+
+	// CollectFailures is how many collections of this job could not read
+	// its box back, and CollectFailingSince when the first of them did —
+	// the run of failures [Coordinator.OnCompleted] bounds before it gives
+	// the job up as unreachable (see [Coordinator.collectFailed]).
+	//
+	// ON THE JOB'S RECORD for the reason Published is: each failure hands
+	// the claim back, and the retry that follows may run on another node or
+	// after a restart, so a count held in memory would grant every node a
+	// fresh allowance. WRITTEN BY THE RELEASE ([Release.CollectFailedAt]),
+	// the one write through which a retry reaches the collection again.
+	// An older build that knows the record but not these two drops them
+	// on its own rewrite, which only restarts the allowance; it cannot
+	// extend it past one more window, since the build that counts is the
+	// one that retries.
+	CollectFailures     int       `json:"collect_failures,omitempty"`
+	CollectFailingSince time.Time `json:"collect_failing_since,omitzero"`
 }
 
 // LaunchFacts is the [LaunchRecord] of the job this row holds now, and the

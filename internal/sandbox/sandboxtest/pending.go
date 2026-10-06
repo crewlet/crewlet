@@ -72,6 +72,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseGoesBackOnlyToAClaimableStatus", testAReleaseGoesBackOnlyToAClaimableStatus},
 		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
+		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -911,6 +912,38 @@ func testAReleaseRecordsTheClaimsCharge(t *testing.T, s sandbox.PendingStore) {
 	mustReleaseCharged(t, s, claimed)
 	if got := mustClaim(t, s, "t1"); !got.Charged {
 		t.Error("the retry's claim came back without the charge the first attempt made")
+	}
+}
+
+func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.PendingStore) {
+	// THE BOUND ON A COLLECTION'S RETRIES LIVES ON THE JOB'S RECORD, in the
+	// write that reopens the run to the retry: a count kept in memory would
+	// grant every node, and every restart, a fresh allowance.
+	mustLaunched(t, s, run("t1"))
+	first := base.Add(3 * time.Second)
+	for i, at := range []time.Time{first, first.Add(40 * time.Second)} {
+		release := releaseOf(mustClaim(t, s, "t1"))
+		release.CollectFailedAt = at
+		if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
+			t.Fatalf("release %d: released=%v err=%v", i, released, err)
+		}
+	}
+	facts := mustGet(t, s, "t1").LaunchFacts()
+	if facts.CollectFailures != 2 || !facts.CollectFailingSince.Equal(first) {
+		t.Errorf("the job's record = %d failures since %v; want 2 since the first, %v",
+			facts.CollectFailures, facts.CollectFailingSince, first)
+	}
+
+	// A release that is not a failed collection counts nothing.
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1").LaunchFacts().CollectFailures; got != 2 {
+		t.Errorf("an ordinary hand-back moved the count to %d", got)
+	}
+
+	// And the next launch is a new job, with an allowance of its own.
+	mustBeginLaunch(t, s, run("t1"))
+	if got := mustGet(t, s, "t1").LaunchFacts(); got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
+		t.Errorf("a new launch inherited the last job's failed collections: %+v", got)
 	}
 }
 

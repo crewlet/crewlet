@@ -205,14 +205,22 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
-		if release.Published {
+		if release.Published || !release.CollectFailedAt.IsZero() {
 			// Onto THIS job's record, starting one where the row carries
 			// none of its own: a row an older build launched has no record,
 			// and one it relaunched carries the previous job's.
 			if run.Launch.ID != run.LaunchID {
 				run.Launch = LaunchRecord{ID: run.LaunchID}
 			}
+		}
+		if release.Published {
 			run.Launch.Published = true
+		}
+		if at := release.CollectFailedAt; !at.IsZero() {
+			run.Launch.CollectFailures++
+			if run.Launch.CollectFailingSince.IsZero() {
+				run.Launch.CollectFailingSince = at.UTC()
+			}
 		}
 		return true
 	})

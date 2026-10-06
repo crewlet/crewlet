@@ -550,9 +550,16 @@ func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) 
 	if err != nil {
 		return nil, err
 	}
-	if info, err := os.Stat(layout.root); err != nil || !info.IsDir() {
-		return nil, localErrorf("local sandbox %q is gone (its box directory %s no longer "+
-			"exists) — the engine host was rebuilt, or the box was reaped", sandboxID, layout.root)
+	info, err := os.Stat(layout.root)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir()):
+		return nil, boxGone{localErrorf("local sandbox %q is gone (its box directory %s no longer "+
+			"exists) — the engine host was rebuilt, or the box was reaped", sandboxID, layout.root)}
+	case err != nil:
+		// NOT "gone": a directory that could not be inspected may well
+		// still hold a running job, and answering it as gone would settle
+		// a run whose box is merely unreadable for the moment.
+		return nil, localErrorf("local sandbox %q could not be inspected at %s: %v", sandboxID, layout.root, err)
 	}
 	// Rebuild the credential map from the box's own record, so a reconnected
 	// teardown still writes a refreshed login back.

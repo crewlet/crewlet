@@ -25,6 +25,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -379,6 +380,21 @@ type ExecOptions struct {
 	Cwd        string
 	TimeoutSec float64
 }
+
+// ErrBoxGone is a [Provider.Connect] that found the box DEFINITIVELY not
+// there — reclaimed by its provider, reaped, its directory removed — as
+// against one that merely could not be reached. The difference decides
+// whether asking again can help: a collection that cannot reach a box is
+// retried, and one whose box is gone is settled at once.
+var ErrBoxGone = errors.New("sandbox: the box is gone")
+
+// boxGone is a backend's own sentence saying a box no longer exists, which is
+// also [ErrBoxGone] — the sentence is what a person reads, the sentinel what
+// a caller acts on.
+type boxGone struct{ err error }
+
+func (g boxGone) Error() string   { return g.err.Error() }
+func (g boxGone) Unwrap() []error { return []error{g.err, ErrBoxGone} }
 
 // Provider mints sandboxes. Configured under providers.sandbox and swapped
 // wholesale on an apply, mirroring the LLM providers beside it.

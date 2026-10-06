@@ -266,11 +266,11 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.Vanished[sandboxID] {
-		return nil, fmt.Errorf("sandbox %q is gone", sandboxID)
+		return nil, boxGone{fmt.Errorf("sandbox %q is gone", sandboxID)}
 	}
 	box, ok := p.boxes[sandboxID]
 	if !ok {
-		return nil, fmt.Errorf("sandbox %q is gone", sandboxID)
+		return nil, boxGone{fmt.Errorf("sandbox %q is gone", sandboxID)}
 	}
 	// Connect auto-resumes, matching every real backend.
 	box.mu.Lock()

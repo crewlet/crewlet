@@ -170,7 +170,7 @@ func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, e
 	if err != nil {
 		var apiErr *E2BError
 		if errors.As(err, &apiErr) && apiErr.Gone() {
-			return nil, fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)
+			return nil, boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
 		}
 		return nil, fmt.Errorf("e2b: sandbox %s could not be connected to: %w", sandboxID, err)
 	}
