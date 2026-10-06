@@ -73,6 +73,7 @@ import {
   Checkbox,
   EMPTY_VALUE,
   EmptyValue,
+  Modal,
   Skeleton,
   StatCard,
   StatGroup,
@@ -92,6 +93,7 @@ import {
   ConfirmDialog,
   endedWord,
   GrantTags,
+  IamOutcome,
   InviteDialog,
   MintTokenDialog,
   ShownOnce,
@@ -1527,20 +1529,28 @@ function ResetLink({
   if (issued) {
     const url = typeof issued.url === "string" ? issued.url : "";
     const expires = typeof issued.expires_at === "string" ? issued.expires_at : "";
+    // DONE ALONE, as an invitation's link is: the link exists, and a Cancel
+    // beside it read as a way to take it back, which closing does not do.
     return (
-      <ConfirmDialog
+      <Modal
+        open
+        size="sm"
         title={`Password reset link for ${who}`}
-        confirm="Done"
-        write={write}
         onClose={onClose}
-        onConfirm={onClose}
+        stackBody
+        footer={
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        }
       >
         <ShownOnce label="Reset link" value={url}>
           This link sets a new password for {who} once, and expires {fmtDateTime(expires)}. It is
           shown only now — send it to them yourself. Setting the password ends every session and
           token they hold; they sign in afterwards, with their second factor if they hold one.
         </ShownOnce>
-      </ConfirmDialog>
+        <IamOutcome answer={write.answer} />
+      </Modal>
     );
   }
   return (

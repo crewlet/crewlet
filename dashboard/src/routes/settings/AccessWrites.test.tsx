@@ -615,6 +615,9 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   fireEvent.click(within(issue).getByRole("button", { name: "Issue link" }));
   await settle();
   expect(screen.getByText("https://crewlet.example.com/dashboard#/reset/c-reset.s")).toBeTruthy();
+  // DONE ALONE: the link exists, and a Cancel read as a way to take it back.
+  const shown = screen.getByRole("dialog", { name: /Password reset link for/ });
+  expect(within(shown).queryByRole("button", { name: "Cancel" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
