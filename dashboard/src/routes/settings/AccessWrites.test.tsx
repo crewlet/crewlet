@@ -395,7 +395,7 @@ test("an opened person's edit sends what changed, and suspending sends the stage
   fireEvent.click(within(suspend).getByRole("button", { name: "Suspend" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { grants: ["state:read", "work:write"] },
+    { add_grants: ["work:write"] },
     { stage: "suspended" },
   ]);
   for (const w of eng.writes()) expect(w.key).toMatch(UUID7);
@@ -463,9 +463,43 @@ test("an edit sends what its editor changed, whatever the directory read since",
   expect(eng.writes().map((w) => w.body)).toEqual([{ login: "bo.lange" }]);
 });
 
+// A GRANT CHANGE IS WHAT ITS EDITOR TICKED AND UNTICKED, which the engine
+// applies to what the person holds when it decides: while the dialog is open
+// another administrator strips Bo's state:read and gives him audit:read, the
+// directory is read again as the tab comes back, and ticking work:write sends
+// that tick alone — never the whole list, which would hand state:read back and
+// take audit:read away, and which the engine would accept, since only an
+// addition needs the editor to hold the grant. Mutation: send `grants` whole
+// and the save carries state:read without audit:read.
+test("a grant change sends the ticks alone, whatever another administrator changed", async () => {
+  let people: unknown = PEOPLE;
+  const eng = engine(
+    { "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })] },
+    () => people,
+  );
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  people = {
+    ...PEOPLE,
+    people: PEOPLE.people.map((p) => (p.id === "p-bo" ? { ...p, grants: ["audit:read"] } : p)),
+  };
+  const before = eng.reads("/iam/people");
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await settle();
+  expect(eng.reads("/iam/people")).toBeGreaterThan(before);
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "work:write" }));
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ add_grants: ["work:write"] }]);
+});
+
 // AN EDIT MAY TAKE AWAY A GRANT THE EDITOR DOES NOT HOLD, as the engine
 // allows (it checks only what an edit adds): Di's secrets:write is enabled
-// and unticking it sends the grants without it. The CONTROL is a grant
+// and unticking it sends its removal. The CONTROL is a grant
 // neither of them holds — secrets:read stays locked here, as it does in the
 // invitation, which confers from nothing. Mutation: hand the picker the
 // viewer's grants alone and secrets:write is locked ticked.
@@ -487,7 +521,7 @@ test("an edit takes away a grant the editor does not hold, and adds none", async
   fireEvent.click(held);
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
-  expect(eng.writes().map((w) => w.body)).toEqual([{ grants: ["state:read"] }]);
+  expect(eng.writes().map((w) => w.body)).toEqual([{ remove_grants: ["secrets:write"] }]);
 });
 
 // A TOKEN STARTS FROM WHAT ITS MINTER MAY CONFER: the account's sandbox:run,

@@ -5636,9 +5636,12 @@ this screen is the exception):
   and the address is free again.
 - On an **opened row** — **Edit login, seat and grants** (one `PATCH` carrying
   only what changed since the dialog opened — measured against that row and
-  not the directory's minute-by-minute re-read, so a field left alone never
-  puts back what another administrator changed meanwhile; the seat offered
-  among the vacant ones and their own; a
+  not the directory's minute-by-minute re-read, so a login or a seat left alone
+  never puts back what another administrator changed meanwhile — and the
+  grants as what was ticked and unticked, `add_grants` and `remove_grants`,
+  which the engine applies to what the person holds when it decides, so a
+  grant left alone stays as another administrator left it whichever others
+  are ticked; the seat offered among the vacant ones and their own; a
   grant the person already holds may be unticked whoever edits, since the
   engine checks only what an edit adds, while one neither holds stays
   disabled),

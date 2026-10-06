@@ -852,10 +852,20 @@ refused first, it is refused with nothing landed. The record states the login
 and the seat the person holds from now on, so the old ones are free the moment
 it lands; `seat: ""` unbinds.
 
+**Grants are the whole set or a change to it, never both.** `grants` replaces
+what the person holds — what `crewlet iam grant` sends, stating it outright.
+`add_grants` and `remove_grants` are applied to what they hold **when the
+record is decided**, which is what an editor working from an earlier read
+means: sent whole, the grants that editor never touched are the ones the read
+held, so a grant another administrator took away meanwhile would come back and
+one they gave would go — and nothing would refuse it, since only an addition
+needs the caller to hold the grant. The dashboard's edit sends the change.
+
 **Everything the surface can judge alone is refused before the first record**:
 a `login` of `""` (a login is never cleared, only changed), a `stage` this
-build cannot name, a `reason` past 256 bytes, and `grants` the caller may not
-confer (`403`). What only a later record can decide — a grant the caller's own
+build cannot name, a `reason` past 256 bytes, `grants` beside `add_grants` or
+`remove_grants`, a name in either that is no grant or that is in both (`400`),
+and grants the caller may not confer (`403`). What only a later record can decide — a grant the caller's own
 row stopped letting them confer a moment ago — is refused by that record, and
 the steps before it have landed. So a refusal met after the first record
 carries `landed`, the fields whose change was made (`identity`, `stage`), and a

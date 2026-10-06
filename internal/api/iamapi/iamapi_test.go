@@ -1218,6 +1218,85 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 	}
 }
 
+// A CHANGE TO SOMEBODY'S GRANTS LEAVES THE ONES IT DOES NOT NAME AS THEY ARE
+// WHEN IT LANDS.
+//
+// An editor works from a read, and another administrator may change the same
+// person before the edit lands. Bob's row is read holding state:read; by the
+// time the document is decided another administrator has stripped it in one
+// case and given him audit:read in the other. Adding people:manage leaves the
+// strip standing, and removing state:read leaves the new audit:read — where
+// the whole set the editor's read implied would hand state:read back and take
+// audit:read away, and nothing refuses either, since only an addition needs
+// the caller to hold the grant. Mutation: apply the change to the row read
+// before the decide rather than to the document it is handed, and both go red.
+func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		decided []iam.Grant
+		body    map[string]any
+		want    []iam.Grant
+	}{
+		"a grant stripped meanwhile stays stripped": {
+			decided: nil,
+			body:    map[string]any{"add_grants": []string{"people:manage"}},
+			want:    []iam.Grant{iam.GrantPeopleManage},
+		},
+		"a grant given meanwhile stays given": {
+			decided: []iam.Grant{iam.GrantStateRead, iam.GrantAuditRead},
+			body:    map[string]any{"remove_grants": []string{"state:read"}},
+			want:    []iam.Grant{iam.GrantAuditRead},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.document = &iamdomain.Person{V: iamdomain.DocumentVersion,
+				Kind: iam.KindPerson, Stage: iam.StageActive, Grants: tc.decided}
+			got := r.as(administrator(), http.MethodPatch,
+				"/iam/people/"+bob.String(), tc.body)
+			if got.status != http.StatusOK {
+				t.Fatalf("status %d (body %v)", got.status, got.body)
+			}
+			if !slices.Equal(r.writer.document.Grants, tc.want) {
+				t.Errorf("the document holds %v, want %v", r.writer.document.Grants,
+					tc.want)
+			}
+		})
+	}
+
+	// AND A BODY THAT CANNOT SAY WHICH IT MEANS IS REFUSED BEFORE ANY RECORD:
+	// both shapes at once, a grant both added and removed, a name that is no
+	// grant (removed as nothing, it would be a typo answered 200) — and an
+	// addition the caller may not confer is refused there too.
+	for name, tc := range map[string]struct {
+		body   map[string]any
+		status int
+	}{
+		"the whole set and a change": {map[string]any{
+			"grants": []string{"state:read"}, "add_grants": []string{"people:manage"}},
+			http.StatusBadRequest},
+		"a grant added and removed": {map[string]any{
+			"add_grants": []string{"state:read"}, "remove_grants": []string{"state:read"}},
+			http.StatusBadRequest},
+		"a name that is no grant": {map[string]any{
+			"remove_grants": []string{"state:raed"}}, http.StatusBadRequest},
+		"an addition the caller does not hold": {map[string]any{
+			"add_grants": []string{"secrets:read"}}, http.StatusForbidden},
+	} {
+		r := newRig(t)
+		got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
+			tc.body)
+		if got.status != tc.status {
+			t.Errorf("%s answered %d, want %d (body %v)", name, got.status,
+				tc.status, got.body)
+		}
+		if len(r.writer.calls) != 0 {
+			t.Errorf("%s published %v before it was refused", name, r.writer.calls)
+		}
+	}
+}
+
 // AN EDIT THAT CHANGED NO DOCUMENT ANSWERS ITS OUTCOME, beside the row.
 //
 // An edit with nothing left for the person's own document reads the row back,

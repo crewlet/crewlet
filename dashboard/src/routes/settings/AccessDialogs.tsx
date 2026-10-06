@@ -154,9 +154,15 @@ export function ServiceAccountDialog({
  * live one: the directory is read again every minute and when the tab comes
  * back, and the fields hold what the dialog opened with, so measured against
  * a newer row a field nobody touched reads as an edit — and sending it puts
- * back a grant, a seat or a login another administrator has just changed.
- * After a refusal part way, what landed is sent again equal to what the
- * engine holds, and the engine skips it.
+ * back a seat or a login another administrator has just changed. After a
+ * refusal part way, what landed is sent again equal to what the engine holds,
+ * and the engine skips it.
+ *
+ * THE GRANTS GO AS WHAT WAS TICKED AND UNTICKED (`add_grants`,
+ * `remove_grants`), which the engine applies to what the person holds when it
+ * decides — never as the whole list, whose untouched grants are the ones the
+ * dialog opened with: sent whole, a grant another administrator took away
+ * meanwhile comes back with any other tick, and one they gave goes.
  */
 export function EditPersonDialog({
   row: live,
@@ -190,12 +196,14 @@ export function EditPersonDialog({
     return seatOptions(own ? [{ handle: live.seat!, name: live.seat! }, ...vacant] : vacant);
   }, [seats.data, live.seat]);
 
-  const before = new Set(row.grants ?? []);
-  const grantsMoved = grants.length !== before.size || grants.some((g) => !before.has(g));
+  const before = row.grants ?? [];
+  const added = grants.filter((g) => !before.includes(g));
+  const removed = before.filter((g) => !grants.includes(g));
   const change: Record<string, unknown> = {
     ...(login.trim() !== (row.login ?? "") ? { login: login.trim() } : {}),
     ...(seat !== (row.seat ?? NO_SEAT) ? { seat } : {}),
-    ...(grantsMoved ? { grants } : {}),
+    ...(added.length > 0 ? { add_grants: added } : {}),
+    ...(removed.length > 0 ? { remove_grants: removed } : {}),
   };
   const nothing = Object.keys(change).length === 0;
 
