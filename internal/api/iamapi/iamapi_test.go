@@ -337,6 +337,9 @@ type fakeWriter struct {
 	// identity is every identity change the surface asked for.
 	identity []iamdomain.IdentityEdit
 
+	// stageReason is the reason the last stage change carried.
+	stageReason string
+
 	// held is the credential set a SetCredentials call's Apply is run
 	// against, the way the real decide runs it against the snapshot.
 	held []iamdomain.Credential
@@ -431,8 +434,9 @@ func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) 
 }
 
 func (w *fakeWriter) SetStage(_ context.Context, _ string, _ iam.Stage,
-	opID, _ string) (statelog.Result, error) {
+	opID, reason string) (statelog.Result, error) {
 
+	w.stageReason = reason
 	w.op("stage", opID)
 	return w.did("stage")
 }
@@ -1391,6 +1395,37 @@ func TestACreateWhoseSeatIsTakenCreatesNobody(t *testing.T) {
 	}
 	if !slices.Equal(r.writer.calls, []string{"enrol"}) {
 		t.Errorf("calls %v, want the one refused enrolment", r.writer.calls)
+	}
+}
+
+// A STAGE CHANGE SAYS WHICH STAGE, WHERE ITS CALLER GAVE NO REASON.
+//
+// A suspension moves the person's revocation epoch, and every session it ends
+// is listed as ended by the reason its record carries — which was the edit's
+// "changed through /iam/people", saying nothing about a suspension. The
+// CONTROL is a reason the caller gave, which is carried as given. Mutation:
+// pass the edit's reason to the stage change.
+func TestAStageChangeSaysWhichStage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, given, want string
+	}{
+		{"no reason given", "", "suspended through /iam/people"},
+		{"a reason given (the control)", "left the company", "left the company"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			body := map[string]any{"stage": "suspended"}
+			if tc.given != "" {
+				body["reason"] = tc.given
+			}
+			got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(), body)
+			if got.status != http.StatusOK || r.writer.stageReason != tc.want {
+				t.Errorf("answered %d (%v) with the reason %q, want %q", got.status,
+					got.body, r.writer.stageReason, tc.want)
+			}
+		})
 	}
 }
 

@@ -436,8 +436,12 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if in.Stage != nil {
+		// THE STAGE'S OWN DEFAULT, because a suspension's reason is what
+		// every session it ends is listed as ended by: the edit's
+		// "changed through /iam/people" said nothing about why.
+		staged := reasonOr(in.Reason, string(*in.Stage)+" through /iam/people")
 		if !step("stage")(writer.SetStage(r.Context(), id, *in.Stage,
-			statelog.StepOpID(op.id, "stage"), reason)) {
+			statelog.StepOpID(op.id, "stage"), staged)) {
 			return
 		}
 	}
