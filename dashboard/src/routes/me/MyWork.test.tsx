@@ -110,7 +110,7 @@ function serving(answers: Partial<Record<QueryName, Answer>>, org: unknown = fla
     return typeof answer === "function" ? answer(params ?? {}) : (answer ?? {});
   });
   vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(org as never);
   return query;
 }
@@ -345,7 +345,7 @@ test("the reader's own day is asked again when their inbox moves", async () => {
     async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
   );
   vi.mocked(useClient).mockReturnValue({ store, socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(flatOrg as never);
   mount();
   await counts();
@@ -585,7 +585,7 @@ test("the queue claims no count until the tracker answers", async () => {
           : {},
   );
   vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue({
     name: "Acme",
     roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "human" }],

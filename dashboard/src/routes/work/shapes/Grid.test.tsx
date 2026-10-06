@@ -44,7 +44,7 @@ vi.mock("~/lib/viewer.ts", () => ({
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useConnection: () => ({ connected: true }) };
+  return { ...actual, useConnection: () => ({ connected: true, accessRefused: null }) };
 });
 
 afterEach(() => {

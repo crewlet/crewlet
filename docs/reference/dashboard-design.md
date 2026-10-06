@@ -629,7 +629,15 @@ destination in the same words — "needs `config:read`" beside its hint. And for
 a reader with **no access yet** — a session without `state:read`, which every
 workspace reads the company through — every row of the sidebar carries the
 lock ("Needs `state:read`"), Settings included: offered unmarked, each led to
-the same panel with nothing beside it saying so.
+the same panel with nothing beside it saying so. In that frame, and in one the
+socket was refused, nothing of the company is offered at all: the sidebar's
+`+` is held with the refused reason below, its Projects and Pinned sections
+are not drawn, and the palette asks none of its questions and lists no seat or
+tool. A refusal DROPS what an earlier socket sent (`Store.setAccessRefused`),
+so a tab whose grant was withdrawn shows exactly what a session that never
+held it does, where it went on naming the company and listing its agents from
+the snapshot it held — an outage keeps the last state, and a refusal is not an
+outage.
 
 **A guarded section says so and nothing else.** Opened by a reader the engine
 has SAID holds none of the grants it needs, a guarded section is replaced by
@@ -728,7 +736,9 @@ zone. There is no company switcher: one engine runs one company.
 
 **The lockup is the company**, beside the product's mark: "Nimbus", on one
 line, and the way home. The product's name stands in only while no company has
-been sent. The kit's own default puts the product first and the company under
+been sent — which includes a session without `state:read`, since the name is
+part of the projection that grant reads, whether it never held the grant or
+had it withdrawn. The kit's own default puts the product first and the company under
 it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
@@ -2953,13 +2963,14 @@ nobody else, so the same words are the button's `title` while it is held — a
 pointer resting on it sees why — and a screen reader, which reads a described
 button's description rather than its title, hears it once. A form whose
 primary action is held also writes the reason on the page beside it (the New
-task sheet's foot), because neither reaches a touch screen. The five reasons,
+task sheet's foot), because neither reaches a touch screen. The six reasons,
 in the order you clear them (`lib/useWriteAccess.ts`) — and being bound to no
 seat is not one of them, since the engine makes your change all the same,
 under your own login:
 
 | You are | The control says |
 |---|---|
+| Refused the company — no access yet (a session without `state:read`, for which nothing is dialled) or a refusal the socket met | The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold. |
 | Offline | Offline — reconnect to make changes. Nothing is queued while you are away. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes — every change is recorded under your name. |

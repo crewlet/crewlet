@@ -123,7 +123,7 @@ function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
     return answer ?? {};
   });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue({
     name: "Acme",
     roles: [

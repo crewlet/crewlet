@@ -68,7 +68,7 @@ import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
-import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
+import { NO_ACCESS, SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
@@ -347,7 +347,7 @@ function Frame({ children }: { children: ReactNode }) {
   const route = useRoute();
   const peek = usePeek();
   const nav = useNavigator();
-  const { socket } = useClient();
+  const { socket, store } = useClient();
   const { connected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
@@ -363,6 +363,14 @@ function Frame({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (serves || undecided) socket.start();
   }, [serves, undecided, socket]);
+  // A SESSION WITH NO ACCESS IS A BROWSER THE ENGINE REFUSES, whether or not a
+  // dial found out: recorded where a refused handshake records one, so every
+  // surface reading the connection — the write gate, the palette — says the
+  // one thing rather than "offline" about a socket nobody dialled. The dial a
+  // later grant makes lifts it (`LiveSocket.start`).
+  useEffect(() => {
+    if (session.noAccess) store.setAccessRefused(NO_ACCESS);
+  }, [session.noAccess, store]);
   // A REFUSAL THE SOCKET MET IS ASKED ABOUT AGAIN: `state:read` withdrawn under
   // an open socket closes it, and the session read before it still holds the
   // grant — so the panel said "you hold state:read" beside the engine's "the

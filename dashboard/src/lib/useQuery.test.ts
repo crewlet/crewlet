@@ -31,7 +31,7 @@ function visible(is: boolean) {
 function asked() {
   const query = vi.fn().mockResolvedValue({});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   return query;
 }
 

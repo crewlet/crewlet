@@ -49,6 +49,13 @@ import { auth, type RestError, type SessionAnswer } from "~/protocol/index.ts";
 export const LIVE_VIEW_GRANT: Grant = "state:read";
 
 /**
+ * The refusal a session without [LIVE_VIEW_GRANT] is recorded as in the store
+ * (`Store.setAccessRefused`), where a refused handshake records the engine's:
+ * the frame dials nothing for it, so nothing else would.
+ */
+export const NO_ACCESS = `this session holds no ${LIVE_VIEW_GRANT}`;
+
+/**
  * How often a session with no access asks again, in ms. The socket's own
  * reconnect ceiling: a tab waiting on something outside it — an engine coming
  * back, an administrator's grant — notices within half a minute, and an idle

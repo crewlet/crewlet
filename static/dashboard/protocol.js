@@ -192,10 +192,32 @@ var Store = class {
 		};
 		this.emit("inboxMoves");
 	}
+	/**
+	* The engine knows this browser and will not serve it the company, or null.
+	*
+	* A REFUSAL DROPS WHAT THE ENGINE SERVED. It is a decision about who may
+	* read the company, so what an earlier socket sent stops being shown the
+	* moment it lands: a tab whose `state:read` was withdrawn went on naming the
+	* company, listing its agents and tools in the palette, from the snapshot it
+	* held — while a session that never held the grant, sent nothing, named and
+	* listed none of it. An outage keeps the last state on purpose ("showing the
+	* last state received"); a refusal is not an outage. `health` stays: it is
+	* the unguarded `/health`, not the company.
+	*/
 	setAccessRefused(reason) {
 		const next = reason === null ? null : reason || "refused";
 		if (this.state.accessRefused === next) return;
 		this.state.accessRefused = next;
+		if (next !== null) {
+			const { health, connected, authRejected } = this.state;
+			Object.assign(this.state, emptyState(), {
+				health,
+				connected,
+				authRejected,
+				accessRefused: next
+			});
+			this.emit(...ALL_DATA_SLICES, "phases", "inboxMoves");
+		}
 		this.emit("health");
 	}
 	setAuthRejected(value) {

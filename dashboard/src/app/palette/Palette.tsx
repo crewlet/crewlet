@@ -80,7 +80,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
-import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
+import { useAgents, useConnection, useOrg, useTools } from "~/lib/store-hooks.ts";
 import {
   activityOf,
   handleLabel,
@@ -185,6 +185,12 @@ export function CommandPalette({
   const org = useOrg();
   const tools = useTools();
   const index = useMemo(() => indexOrg(org), [org]);
+  // A BROWSER THE ENGINE SERVES NO COMPANY ASKS IT NOTHING: no access yet, or
+  // refused. Its questions would wait on a socket nobody dials, drawn as
+  // searches that never finish; the seats and tools a refusal dropped are not
+  // here to list (`Store.setAccessRefused`); and the writes say why they are
+  // held, through the gate every write reads.
+  const served = useConnection().accessRefused === null;
 
   const [scope, setScope] = useState<ScopeId>("all");
   const [query, setQuery] = useState("");
@@ -215,24 +221,25 @@ export function CommandPalette({
 
   // ---- the three questions ---------------------------------------------
   const wantsTasks =
-    !picking && (scope === "all" || scope === "tasks") && term.length >= SEARCH_MIN;
+    served && !picking && (scope === "all" || scope === "tasks") && term.length >= SEARCH_MIN;
   const tasks = useQuery(
     "work_search",
     { q: term, mode: "hybrid", limit: TASK_HITS },
     { enabled: wantsTasks },
   );
   const wantsPages =
-    !picking && (scope === "all" || scope === "pages") && term.length >= SEARCH_MIN;
+    served && !picking && (scope === "all" || scope === "pages") && term.length >= SEARCH_MIN;
   const pages = useQuery("knowledge", { q: term }, { enabled: wantsPages });
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = picking ? pickTerm : term;
   const wantsNames =
+    served &&
     (pickingAgent || (!picking && (scope === "all" || scope === "agents"))) &&
     colleagueSendable(nameTerm);
   const names = useQuery("colleague", { q: nameTerm }, { enabled: wantsNames });
   // THE COMPANY'S PROJECTS, once: to name the project a create lands in, and
   // to offer them when nothing on screen or in the chart says which.
-  const projectsRead = useQuery("work_projects", { limit: PROJECT_PAGE });
+  const projectsRead = useQuery("work_projects", { limit: PROJECT_PAGE }, { enabled: served });
   const projects: WorkProjectRow[] | null = projectsRead.data?.projects ?? null;
   const projectName = (key: string) => projects?.find((p) => p.key === key)?.name ?? "";
 

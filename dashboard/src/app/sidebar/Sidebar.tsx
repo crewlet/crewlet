@@ -74,6 +74,7 @@ import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 
 /** How many projects the sidebar asks for: the engine's own page of them. */
 const PROJECTS_PAGE = 200;
@@ -97,6 +98,12 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const openNewTask = useOpenNewTask();
   const health = useEngineHealth();
   const { connected, authRejected, accessRefused } = useConnection();
+  // THE ENGINE SERVES THIS BROWSER NO COMPANY — no access yet, or refused —
+  // and nothing of one is offered: the rows are locked, the `+` is held, and
+  // the live sections, whose answers an earlier socket may have left behind,
+  // are not drawn. `noAccess` as well as the store's refusal, because the
+  // frame records the first in the second only once it has rendered.
+  const unserved = noAccess || accessRefused !== null;
   const inbox = useInboxCounts();
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
@@ -191,12 +198,17 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
               into the project on screen when there is one — the sheet says
               where before anything is sent. NOT GATED HERE: the sheet's own
               Create is the write control, and it says why a reader who
-              cannot file cannot. */}
+              cannot file cannot — except in a frame the engine serves no
+              company to, where the sheet could not even read the projects
+              it offers and sat on "Reading the projects…" beside an
+              "Offline" nobody was. */}
           <IconButton
             size="sm"
             variant="ghost"
             label="New task"
             icon={<PlusGlyph size="sm" />}
+            disabledReason={unserved ? WRITE_REASONS.refused : undefined}
+            title={unserved ? WRITE_REASONS.refused : undefined}
             onClick={() => openNewTask({ project: routeProject(route.path) || undefined })}
           />
         </div>
@@ -274,16 +286,20 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        <RailBoundary label="Projects" resetKey={at}>
-          <ProjectsSection path={route.path} />
-        </RailBoundary>
-        <RailBoundary label="Pinned" resetKey={at}>
-          <PinnedSection
-            path={route.path}
-            viewKey={route.query.get("view") ?? ""}
-            owner={viewer.owner}
-          />
-        </RailBoundary>
+        {!unserved && (
+          <>
+            <RailBoundary label="Projects" resetKey={at}>
+              <ProjectsSection path={route.path} />
+            </RailBoundary>
+            <RailBoundary label="Pinned" resetKey={at}>
+              <PinnedSection
+                path={route.path}
+                viewKey={route.query.get("view") ?? ""}
+                owner={viewer.owner}
+              />
+            </RailBoundary>
+          </>
+        )}
         <RailBoundary label="Starred" resetKey={at}>
           <StarredSection path={route.path} />
         </RailBoundary>

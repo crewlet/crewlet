@@ -21,7 +21,7 @@ vi.mock("./store-hooks.ts", () => ({
 function answering(answer: unknown) {
   const query = vi.fn().mockResolvedValue(answer);
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
 }
 
 afterEach(() => {
@@ -91,7 +91,7 @@ describe("who the dashboard thinks you are", () => {
     const refused = Promise.reject(new Error("timeout"));
     const query = vi.fn(() => refused);
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await act(async () => {
       await refused.catch(() => {});
@@ -108,7 +108,7 @@ describe("who the dashboard thinks you are", () => {
   test("an unanswered query is not yet anybody", () => {
     const query = vi.fn(() => new Promise(() => {}));
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     expect(result.current.loading).toBe(true);
     expect(result.current.anonymous).toBe(false);
@@ -131,7 +131,7 @@ describe("one reading", () => {
       kind: "human",
     });
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     const { result } = renderHook(() => [useViewer(), useViewer(), useViewer()], {
       wrapper: ViewerProvider,
     });
@@ -144,7 +144,7 @@ describe("one reading", () => {
   test("outside a provider the hook refuses rather than asking for itself", () => {
     const query = vi.fn();
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     // React reports the throw on the console as well as throwing it.
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => renderHook(() => useViewer())).toThrow(/outside a ViewerProvider/);
