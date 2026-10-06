@@ -1436,15 +1436,20 @@ function Principal({
             empty={{ title: "Signed in nowhere" }}
             columns={[
               {
+                // A TIMESTAMP, so it is the column that shrinks: it took the
+                // grid's flexible width and drew it nearly empty while the
+                // State beside it, capped as a shrink column, cut a session's
+                // reason off at its edge with no ellipsis and no way to read
+                // the rest.
                 key: "started",
                 header: "Session",
+                shrink: true,
                 sortValue: (s) => s.created_at ?? "",
                 cell: (s) => <DateCell at={s.created_at} now={now} />,
               },
               {
                 key: "state",
                 header: "State",
-                shrink: true,
                 sortValue: (s) => (s.live ? 0 : 1),
                 cell: (s) =>
                   s.live ? (
@@ -1457,12 +1462,18 @@ function Principal({
                     </Tag>
                   ) : (
                     // WHY, SAID: it rode in a tooltip, so a session a password
-                    // change ended read as one that merely had.
-                    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+                    // change ended read as one that merely had. ONE LINE, cut
+                    // with an ellipsis and whole on its title where the column
+                    // is narrower than the sentence.
+                    <span className="row gap-1" style={{ minWidth: 0 }}>
                       <Tag size="sm" variant="neutral">
                         Ended
                       </Tag>
-                      {s.ended_reason && <span className="t-caption muted">{s.ended_reason}</span>}
+                      {s.ended_reason && (
+                        <span className="t-caption muted truncate" title={s.ended_reason}>
+                          {s.ended_reason}
+                        </span>
+                      )}
                     </span>
                   ),
               },

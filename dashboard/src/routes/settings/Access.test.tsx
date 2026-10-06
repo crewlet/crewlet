@@ -340,6 +340,13 @@ test("an ended session says why and draws no deadline it never reached", async (
   const row = reason.closest(".grid-row") as HTMLElement;
   expect(within(row).getByText("Not recorded")).toBeTruthy();
   expect(within(row).queryByText(/^in /)).toBeNull();
+  // AND IT CAN BE READ WHOLE. The State column was a shrink column, capped at
+  // a fifth of the grid and clipped with no ellipsis, so a reason was cut at
+  // its edge with no way to read the rest. It is the flexible column now, and
+  // a reason longer than it is cut with an ellipsis and whole on its title.
+  // Mutation: make the State column shrink again, or drop the title.
+  expect(reason.closest(".grid-cell")?.classList.contains("shrink")).toBe(false);
+  expect(reason.getAttribute("title")).toBe("ended with every session they held");
 });
 
 // A RESET LINK ITS PERSON USED READS USED: setting the password revokes it
