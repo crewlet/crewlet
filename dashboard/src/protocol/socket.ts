@@ -793,6 +793,11 @@ export class LiveSocket {
     // took before the connection recovered — and the open that stopped this
     // run is what says so, as is a `stop()`.
     if (this.fallbackRun !== run || this.connected) return;
+    // NOBODY SIGNED IN ENDS THIS RUN: every later read is the same 401, and a
+    // signed-out tab — the sign-in page, an invitation's — polled one every
+    // five seconds for as long as it stayed open. The reconnect loop goes on,
+    // on its backoff, and its dial is what notices a sign-in.
+    if (read.state === "nobody") return;
     if (read.state === "read") this.store.applySnapshot(read.snapshot);
     // THE NEXT READ WAITS WHAT THE ENGINE SAID: a 503 it wrote replaces the
     // next tick with its `Retry-After`, and one with none is its statement

@@ -890,7 +890,10 @@ async snapshot() {
 			cache: "no-store"
 		});
 		if (!response.ok) {
-			if (response.status === 401) needSession("sign_in");
+			if (response.status === 401) {
+				needSession("sign_in");
+				return { state: "nobody" };
+			}
 			return {
 				state: "unread",
 				retryAfter: await retryHintOf(response)
@@ -1581,6 +1584,7 @@ var LiveSocket = class {
 		this.fallbackTimer = 0;
 		const read = await api.snapshot();
 		if (this.fallbackRun !== run || this.connected) return;
+		if (read.state === "nobody") return;
 		if (read.state === "read") this.store.applySnapshot(read.snapshot);
 		const next = read.state === "unread" && read.retryAfter !== null ? retryAfterMs(read.retryAfter) : FALLBACK_MS;
 		if (next === null) return;

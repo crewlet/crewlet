@@ -370,6 +370,17 @@ describe("the degraded-mode poll", () => {
     expect(snapshotReads()).toBe(1);
   });
 
+  // NOBODY SIGNED IN IS NOT ASKED AGAIN ON A TIMER: every later read is the
+  // same 401, and a signed-out tab polled one every five seconds. Mutation:
+  // read a 401 as the ordinary tick and the snapshot is read again.
+  test("a 401 is not asked again on a timer", async () => {
+    snapshotAnswer = async () =>
+      new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 });
+    await dropped();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(snapshotReads()).toBe(1);
+  });
+
   test("a read nothing at the engine answered is the ordinary tick", async () => {
     snapshotAnswer = () => Promise.reject(new TypeError("Failed to fetch"));
     await dropped();
