@@ -123,6 +123,8 @@ let reader: string | null = null;
 let administrators = 1;
 /** What `GET /iam/invitations` answers. */
 let invitations: unknown = INVITATIONS;
+/** The human seats nobody holds, as `GET /iam/seats?unheld=true` answers. */
+let vacancies = [{ handle: "sam", name: "Sam Support" }];
 
 function engine(writes: Record<string, Response[]> = {}, directory: () => unknown = () => PEOPLE) {
   const sent: Sent[] = [];
@@ -157,7 +159,7 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
         return Promise.resolve(
           json(200, {
             seats: url.searchParams.get("unheld")
-              ? [{ handle: "sam", name: "Sam Support" }]
+              ? vacancies
               : [
                   { handle: "sam", name: "Sam Support" },
                   {
@@ -239,6 +241,7 @@ beforeEach(() => {
   reader = null;
   administrators = 1;
   invitations = INVITATIONS;
+  vacancies = [{ handle: "sam", name: "Sam Support" }];
 });
 
 afterEach(() => {
@@ -315,6 +318,30 @@ test("an invitation is sent keyed and its link is shown once", async () => {
   ).toBeTruthy();
   expect(within(dialog).getByText(/works once/)).toBeTruthy();
   expect(eng.reads("/iam/invitations")).toBeGreaterThan(before);
+});
+
+// EVERY HUMAN SEAT HELD IS SAID WHERE THE SEAT IS CHOSEN: the select offered
+// only "No seat" under a helper describing a seat nobody holds, which the
+// invitation would bind. The CONTROL is a vacancy, which keeps that helper.
+// Mutation: draw the static helper whatever the list says and it goes red.
+test("an invitation with every human seat held says its person joins bound to none", async () => {
+  vacancies = [];
+  engine({});
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
+  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
+  expect(await within(dialog).findByText(/Every human seat is held/)).toBeTruthy();
+  expect(within(dialog).queryByText(/A human seat nobody holds/)).toBeNull();
+  cleanup();
+
+  vacancies = [{ handle: "sam", name: "Sam Support" }];
+  engine({});
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
+  const open = await screen.findByRole("dialog", { name: "Invite a person" });
+  await settle();
+  expect(within(open).getByText(/A human seat nobody holds/)).toBeTruthy();
+  expect(within(open).queryByText(/Every human seat is held/)).toBeNull();
 });
 
 // AN INVITATION WITHOUT `state:read` IS SAID BEFORE IT IS SENT: its person can

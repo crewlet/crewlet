@@ -409,7 +409,15 @@ export function InviteDialog({
           <FormField
             label="Seat"
             optional
-            helper="A human seat nobody holds. Redeeming the invitation binds them to it, so they act as that seat."
+            helper={
+              // EVERY SEAT HELD IS A FACT, said where the choice is: the
+              // select offered only "No seat" under a helper describing the
+              // seat it would bind. Only on an ANSWER — a list still out, or
+              // one that failed (said below), is no such fact.
+              seats.data?.length === 0 && bind === NO_SEAT
+                ? "Every human seat is held, so the person joins bound to no seat — add a human seat to the org chart first if they should act as one."
+                : "A human seat nobody holds. Redeeming the invitation binds them to it, so they act as that seat."
+            }
           >
             {(field) => (
               <Select

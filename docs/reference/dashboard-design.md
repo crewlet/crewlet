@@ -5701,8 +5701,9 @@ and **Show expired and redeemed** asks for every one the estate still holds.
 [A write control is never hidden](#a-write-control-is-never-hidden) for why
 this screen is the exception):
 
-- **Invite person** — an address, a human seat nobody holds (or none) and the
-  grants, each grant the reader does not hold disabled with why, since nobody
+- **Invite person** — an address, a human seat nobody holds (or none — and
+  where every human seat is held, the field says so: the person joins bound to
+  no seat) and the grants, each grant the reader does not hold disabled with why, since nobody
   confers what they do not hold — and, while `state:read` is not ticked, a
   warning that the person will open nothing but their own Account. An edit of a
   person's grants says the same. The link comes back **once**, with its expiry
