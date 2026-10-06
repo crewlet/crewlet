@@ -224,11 +224,25 @@ var excluded = map[string]string{
 // from the events a person watching the feed is there for, and a projection
 // that skipped it on its own would leave the startup seed, which reads the
 // feed back out of the store, disagreeing with the stream about what the feed
-// holds. So the class is declared beside the admission list, and every feed
-// path asks [KeptOutOfFeed].
+// holds. So the class is declared beside the admission list, and every read
+// of the feed's rows asks [KeptOutOfFeed]: the live projection's ring, its
+// startup seed, and every view a reader scrolls on from the ring — the event
+// log's older pages and its axis, the Live screen's activity strip and a
+// seat's latest events — which ask for `feed_only` (store.ListQuery.FeedOnly),
+// so a bar never counts and an older page never lists a row the ring would
+// not hold.
 //
-// An unfed type is still a row with a category: it is in the event log, in a
-// turn's and a trace's history, and filterable by its category.
+// An unfed type is still a row with a category: it is in the store, in a
+// turn's and a trace's history, and listed by every read that does not ask
+// for the feed's rows — a type filter, a turn, a trace, a work key.
+//
+// MOVING A TYPE INTO THE CLASS is a change both sides of the history scatter
+// see, because a peer on the build before still counts it as a feed row. A
+// listing needs nothing: the asker drops the rows of every type this build
+// keeps out from whatever a peer sent (internal/eventfan). A histogram does —
+// a bar cannot be narrowed after the fact — so the addition takes a new
+// scatter version for a feed-only axis, which the older peer then refuses by
+// name rather than answering with the type counted in.
 var unfed = map[string]string{
 	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
 		"the auxiliary model cost for one key, several per turn beside the " +

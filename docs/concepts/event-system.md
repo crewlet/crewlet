@@ -421,9 +421,19 @@ feed is a ring of the whole company's last few hundred events — every node's i
 fed by a fleet-wide broadcast — and a turn writes several of these beside its
 own phases, a compaction a burst, so in the feed they would push out the turns
 and failures a reader is watching. The class is declared beside the category
-map in `internal/events` and asked by the live projection and by its startup
-seed's read alike, so the two halves of the feed cannot disagree; the row is
-still in `GET /events`, a turn's history and a trace.
+map in `internal/events` and asked by every read of the feed's rows: the live
+projection, its startup seed, and every view a reader scrolls on from the feed
+— the dashboard's event log pages and its axis, the Live strip, a seat's latest
+events — which ask `events` and `event_series` with `feed_only`, so a bar never
+counts and a page never lists a row the feed would not hold. The row is still
+in `GET /events` without it, a turn's history and a trace.
+
+During a rolling upgrade a node on the build before may not know a type is kept
+out, or not know `feed_only` at all. A feed-only listing is still answered by
+it — the node that asked drops those rows itself, since every row names its
+type — while a feed-only axis is asked at a scatter version that node refuses,
+because a bar cannot be narrowed after the fact; it is named in the answer's
+coverage rather than counted wrong.
 
 ---
 

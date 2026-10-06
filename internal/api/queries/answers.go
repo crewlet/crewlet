@@ -863,13 +863,17 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// The cursor the caller pages with next, echoed rather than left
 		// for a client to assemble: (time, id) is the table's key and a
 		// client that built it from the last row's fields would be
-		// reimplementing the one thing that must not drift.
-		"next": cursorOf(rows),
+		// reimplementing the one thing that must not drift — and it is
+		// NOT always the last row's, because a page the fleet narrowed
+		// itself covered the rows it dropped ([eventfan.Listing.Next]).
+		"next": cursorAt(listing.Next),
 		// A page shorter than the limit does NOT mean history is
-		// exhausted when a related-agent filter is set: that filter
-		// over-fetches and post-filters, so only a zero-row page ends
-		// the walk. Saying so beats a client inferring it wrongly.
-		"exhausted": len(rows) == 0,
+		// exhausted: a related-agent filter over-fetches and post-filters,
+		// and a page narrowed by the asker drops rows a peer sent. So only
+		// a page that covered nothing ends the walk — one whose rows were
+		// all dropped still has a cursor. Saying so beats a client
+		// inferring it wrongly.
+		"exhausted": listing.Next == nil,
 		// WHICH NODES THE PAGE WAS MERGED FROM. A node that did not answer
 		// is named here, because its rows are simply absent from the page
 		// and nothing else on it could say so.
@@ -971,6 +975,20 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 			q.Failed = &flag
 		default:
 			return store.ListQuery{}, badParams("failed", raw, []string{"true", "false"})
+		}
+	}
+	// THE ROWS THE ACTIVITY FEED CARRIES, which every view merged with the
+	// live ring asks for: the ring holds no accounting row
+	// ([events.KeptOutOfFeed]), so an older page that did — or an axis
+	// counting them — would show a reader scrolling past the ring a log the
+	// ring never was. Absent is every stored row: the event log's own reads
+	// of a turn, a trace or a type want the accounting rows too.
+	if raw := strings.TrimSpace(p.String("feed_only")); raw != "" {
+		switch raw {
+		case "true", "false":
+			q.FeedOnly = raw == "true"
+		default:
+			return store.ListQuery{}, badParams("feed_only", raw, []string{"true", "false"})
 		}
 	}
 	// THE EVENTS ONE SEAT PUBLISHED, named by its handle — see seatParam.
@@ -1078,15 +1096,15 @@ func instantParam(p Params, name string) (time.Time, error) {
 	return at.UTC(), nil
 }
 
-// cursorOf is the position a caller resumes from, or nil at the end.
-func cursorOf(rows []store.EventRecord) any {
-	if len(rows) == 0 {
+// cursorAt is the position a caller resumes from, as it sends it back, or nil
+// at the end.
+func cursorAt(c *store.Cursor) any {
+	if c == nil {
 		return nil
 	}
-	last := rows[len(rows)-1]
 	return map[string]any{
-		"before_time": last.Time.UTC().Format(time.RFC3339Nano),
-		"before_id":   last.ID,
+		"before_time": c.Time.UTC().Format(time.RFC3339Nano),
+		"before_id":   c.ID,
 	}
 }
 

@@ -80,6 +80,32 @@ type Listing struct {
 	// list it is "a node's page filled", which its answer never reads as a
 	// cursor — see listPartOf.
 	More bool
+
+	// Next is where the next page resumes: the last row this page COVERED,
+	// nil when it covered none — which is the end of the walk.
+	//
+	// NOT ALWAYS ITS LAST ROW. A page the asker narrowed itself — a filter an
+	// older peer answered wider than it was asked, re-applied to the rows it
+	// sent ([listParams.admits]) — covered the rows it dropped as well, and
+	// resuming from the last row it kept would ask for them again; a page
+	// whose every row was dropped would carry no cursor at all, and a reader
+	// walking the log would take it for the start of history.
+	Next *store.Cursor
+}
+
+// listingOf is a merged page with its cursor, narrowed by admits AFTER the
+// cursor is taken — see [Listing.Next]. The merge itself runs on what each
+// node sent, unnarrowed, so its stop is where every node's page stopped.
+func listingOf(rows []store.EventRecord, more bool, admits func(store.EventRecord) bool) Listing {
+	out := Listing{Rows: rows, More: more}
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		out.Next = &store.Cursor{Time: last.Time, ID: last.ID}
+	}
+	if admits != nil {
+		out.Rows = slices.DeleteFunc(slices.Clone(rows), func(r store.EventRecord) bool { return !admits(r) })
+	}
+	return out
 }
 
 // Trace is every row of one trace the fleet holds, up to the cap.
@@ -350,7 +376,10 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 		}
 	}
 	f.report(QuestionEvents, coverage, started)
-	return Listing{Rows: rows, More: more}, coverage, nil
+	// NARROWED BY THE ASKER TOO, after the merge: a peer that does not know a
+	// filter re-applied on the rows answers wider than it was asked, and a
+	// trace's sibling rows carry none of the page's filters at all.
+	return listingOf(rows, more, listParamsOf(q).admits()), coverage, nil
 }
 
 // Histogram answers the log's time axis over the fleet.
@@ -466,7 +495,7 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	}
 	rows, more := MergeListing(g.parts(), limit)
 	f.report(QuestionPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return listingOf(rows, more, nil), g.coverage, nil
 }
 
 // SeatPhases answers one seat's phase records, newest first, payload included.
@@ -493,7 +522,7 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 	}
 	rows, more := MergeListing(g.parts(), store.AgentPhaseLimit)
 	f.report(QuestionSeatPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return listingOf(rows, more, nil), g.coverage, nil
 }
 
 // Turns answers a page of turns, one row per turn however many nodes it ran

@@ -301,11 +301,16 @@ type ListQuery struct {
 	RelatedAgent string
 
 	// FeedOnly selects the rows the ACTIVITY FEED carries: every stored type
-	// but the ones [events.Unfed] keeps out of it. It is the live
-	// projection's startup seed, which rebuilds the feed from the store and
-	// must fill it with what the stream would have put there — a page of the
-	// newest rows filtered afterwards would hand back fewer than it asked for
-	// whenever a burst of accounting rows was newest.
+	// but the ones [events.Unfed] keeps out of it — a related agent's trace
+	// siblings included. It is what every read that is merged with or drawn
+	// beside the live ring asks: the live projection's startup seed, which
+	// rebuilds the feed from the store and must fill it with what the stream
+	// would have put there, and the activity views' older pages and axes,
+	// which a reader scrolls on from the ring. Filtered in the read rather
+	// than afterwards, because a page of the newest rows filtered afterwards
+	// would hand back fewer than it asked for whenever a burst of accounting
+	// rows was newest. [EventLog.Histogram] counts through the same
+	// predicate, so a feed-only bar counts what a feed-only page lists.
 	FeedOnly bool
 
 	// Since and Until bound the window a caller is asking about, as a
@@ -701,6 +706,15 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 		siblings, err := l.traceSiblings(ctx, out, limit)
 		if err != nil {
 			return nil, err
+		}
+		if q.FeedOnly {
+			// A TRACE'S SIBLINGS CARRY NONE OF THE PAGE'S FILTERS — they
+			// are the cause beside the effect — but a feed-only page is
+			// the feed's rows, and a turn's trace holds every one of its
+			// accounting records.
+			siblings = slices.DeleteFunc(siblings, func(r EventRecord) bool {
+				return events.KeptOutOfFeed(r.Type)
+			})
 		}
 		out = mergeRelated(out, siblings, limit)
 	}

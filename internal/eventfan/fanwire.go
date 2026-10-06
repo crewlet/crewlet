@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -51,9 +52,11 @@ import (
 //   - v4: `failed` on a listing's filters — the event log's "Failures only",
 //     which used to narrow the rows a tab had paged in rather than the rows
 //     it was sent.
-//   - v5: `feed_only` on a listing's filters — the activity feed's seed,
+//   - v5: `feed_only` on a HISTOGRAM's filters — the activity views' axis,
 //     which leaves out a stored type the feed does not carry
-//     (`auxiliary_spend`).
+//     (`auxiliary_spend`). A listing carries the same field at its other
+//     filters' version, because the asker re-applies it to every row a peer
+//     sent ([reapplied]); a bar it cannot re-apply to.
 const Protocol = 5
 
 // versionOf is the lowest scatter version that answers one question with
@@ -71,7 +74,14 @@ func versionOf(q Question, params any) int {
 	switch q {
 	case QuestionSeries:
 		if p, ok := params.(seriesParams); ok {
-			return max(2, p.List.version())
+			v := max(2, p.List.version())
+			if p.List.FeedOnly {
+				// A BAR CANNOT BE NARROWED AFTER THE FACT, so the
+				// filter a listing leaves to its asker is a version
+				// here — see [reapplied].
+				v = max(v, 5)
+			}
+			return v
 		}
 		return 2
 	case QuestionEvents:
@@ -93,11 +103,39 @@ func versionOf(q Question, params any) int {
 	return 1
 }
 
-// version is the lowest scatter version that honours every filter set.
+// reapplied is every listing filter the ASKER re-applies to the rows each node
+// sent ([listParams.admits]), with why it can be — and so the one kind of
+// filter a LISTING asks in no version of its own.
+//
+// A filter on what every row carries in itself, its type, can be re-applied to
+// whatever a peer sent, so a peer that dropped the filter and answered wider
+// costs a shorter page rather than wrong rows — and raising the version for it
+// would cost that peer's whole answer, which is the worse trade. A HISTOGRAM
+// cannot be narrowed after the fact, a bar being a count, so its axis is still
+// asked at the filter's version ([versionOf]).
+var reapplied = map[string]string{
+	"FeedOnly": "the activity feed's types, by each row's own type: the asker " +
+		"drops every type events.KeptOutOfFeed names from every part",
+}
+
+// admits is the filters this listing sets that the asker re-applies, as one
+// predicate over a row, or nil when it sets none — see [reapplied].
+//
+// THE ASKER'S OWN RULE, whatever a peer's is: a type a later build moves into
+// the feed's unfed class is still a feed row to a peer on the build before,
+// which answers feed_only by its own list, and the rows it sends are narrowed
+// here by this one.
+func (p listParams) admits() func(store.EventRecord) bool {
+	if !p.FeedOnly {
+		return nil
+	}
+	return func(r store.EventRecord) bool { return !events.KeptOutOfFeed(r.Type) }
+}
+
+// version is the lowest scatter version that honours every filter set, but
+// for the ones the asker re-applies itself ([reapplied]).
 func (p listParams) version() int {
 	switch {
-	case p.FeedOnly:
-		return 5
 	case p.Failed != nil:
 		return 4
 	case p.Suspended != nil:
@@ -240,12 +278,13 @@ type listParams struct {
 	// v4.
 	Failed *bool `json:"failed,omitempty"`
 
-	// v5: [store.ListQuery.FeedOnly], the live projection's seed of its
-	// activity feed, which leaves out the types the feed does not carry.
-	// RAISED LIKE EVERY OTHER FILTER although an older peer's log rarely
-	// holds one of those types: a node rolled back from a build that wrote
-	// them does, and its unfiltered answer would put a page of accounting
-	// rows into a restarted node's feed.
+	// [store.ListQuery.FeedOnly]: the rows the activity feed carries, which
+	// every view merged with the live ring asks for. v5 on a histogram, and
+	// on a listing NO VERSION OF ITS OWN: the asker re-applies it to every
+	// row a peer sent ([reapplied]), so a peer that does not know it — or
+	// knows a shorter list of the types it leaves out — answers a page the
+	// asker narrows rather than being refused, which cost a restarted node's
+	// feed every older peer's recent events for the length of an upgrade.
 	FeedOnly bool `json:"feed_only,omitempty"`
 }
 

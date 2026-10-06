@@ -32,6 +32,11 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 			"older peer can answer it and must not be excluded", got)
 	}
 	typ := reflect.TypeFor[listParams]()
+	for name := range reapplied {
+		if _, ok := typ.FieldByName(name); !ok {
+			t.Errorf("reapplied names %s, which is no listing filter", name)
+		}
+	}
 	for i := range typ.NumField() {
 		field := typ.Field(i)
 		if v1ListFields[field.Name] {
@@ -53,6 +58,25 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 			v.SetBool(true)
 		default:
 			t.Fatalf("listParams.%s is a %s; teach this test to set it", field.Name, v.Kind())
+		}
+		if _, ok := reapplied[field.Name]; ok {
+			// A FILTER THE ASKER RE-APPLIES TO THE ROWS asks no version on
+			// a listing — a peer that drops it answers a page the asker
+			// narrows, where raising it cost that peer's whole answer —
+			// and it must then actually be re-applied, and its axis, a
+			// count no asker can narrow, still asked at a version.
+			if got := versionOf(QuestionEvents, p); got != 1 {
+				t.Errorf("listParams.%s is re-applied by the asker and the listing is "+
+					"asked in v%d, want v1 — every older peer is refused for nothing", field.Name, got)
+			}
+			if p.admits() == nil {
+				t.Errorf("listParams.%s is declared re-applied and admits re-applies nothing", field.Name)
+			}
+			if got := versionOf(QuestionSeries, seriesParams{List: p}); got <= max(2, p.version()) {
+				t.Errorf("listParams.%s is set on an axis asked in v%d — a peer that drops it "+
+					"counts rows into a bar nobody can take them back out of", field.Name, got)
+			}
+			continue
 		}
 		if got := versionOf(QuestionEvents, p); got < 2 {
 			t.Errorf("listParams.%s is set and the listing is asked in v%d — a peer "+

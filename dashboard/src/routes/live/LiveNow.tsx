@@ -190,9 +190,19 @@ export function LiveNow() {
 
   // --- activity ----------------------------------------------------------
   const { cell, cells } = cutInto(spanOf(range.window), STRIP_CELLS);
+  // THE FEED'S ROWS, on the strip and on a seat's latest events alike: the
+  // unselected card is the live ring, which holds no accounting row, so a
+  // strip that counted them — or a seat's card listing its spend records,
+  // several after every turn — would be drawing a different stream.
   const series = useQuery(
     "event_series",
-    { since: range.since, until: range.until, bucket: "minute", ...(seat ? { seat } : {}) },
+    {
+      since: range.since,
+      until: range.until,
+      bucket: "minute",
+      feed_only: "true",
+      ...(seat ? { seat } : {}),
+    },
     { pollMs: 30_000 },
   );
   const strip = useMemo(
@@ -203,7 +213,7 @@ export function LiveNow() {
   // push names no seat on an event, so filtering it here would be a guess.
   const seatEvents = useQuery(
     "events",
-    { seat, limit: LATEST_EVENTS },
+    { seat, limit: LATEST_EVENTS, feed_only: "true" },
     { enabled: seat !== "", pollMs: SEAT_EVENTS_POLL_MS },
   );
   const latest = seat ? (seatEvents.data?.events ?? []) : pushed.slice(0, LATEST_EVENTS);
