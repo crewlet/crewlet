@@ -403,31 +403,39 @@ const e2bFileIdleTimeout = E2BClientTimeout
 
 // fileExchange makes one /files request whose every byte, sent or received,
 // re-arms [e2bFileIdleTimeout] — the wait for the response's headers
-// included, which is silence like any other.
+// included, which is silence like any other. A request with no body passes
+// nil.
 //
 // The caller owns both returns: it closes the response's body and stops the
 // reader, which also releases the request's context.
 func (c *envdClient) fileExchange(ctx context.Context, method, path string,
-	body io.Reader, size int64, header http.Header,
+	body []byte, header http.Header,
 ) (*http.Response, *idleReader, error) {
 	reqCtx, cancel := context.WithCancel(ctx)
 	// ARMED NOW, before the request is sent, so a connection that is never
 	// answered is abandoned exactly as one that stops mid-body is.
 	idle := newIdleReader(nil, cancel, c.fileIdle)
+	var reader io.Reader
 	if body != nil {
-		body = sendProgress{inner: body, idle: idle}
+		reader = sendProgress{inner: bytes.NewReader(body), idle: idle}
 	}
-	req, err := http.NewRequestWithContext(reqCtx, method, c.host+"/files?"+filesQuery(path), body)
+	req, err := http.NewRequestWithContext(reqCtx, method, c.host+"/files?"+filesQuery(path), reader)
 	if err != nil {
 		idle.stop()
 		return nil, nil, err
 	}
 	if body != nil {
-		// STATED, because the progress wrapper hides the buffer the
-		// transport would have read it from, and a request body of unknown
-		// length goes out chunked — a different wire shape for a write
-		// that has always carried its length.
-		req.ContentLength = size
+		// BOTH STATED, because the progress wrapper hides the buffer the
+		// request would have taken them from. Without the length a body
+		// goes out chunked — a different wire shape for a write that has
+		// always carried its length — and without GetBody the transport
+		// cannot send the body again: an HTTP/2 connection the server
+		// closes with GOAWAY before reading the request is retried on a
+		// fresh one only when the body can be had twice.
+		req.ContentLength = int64(len(body))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(sendProgress{inner: bytes.NewReader(body), idle: idle}), nil
+		}
 	}
 	for key, values := range header {
 		req.Header[key] = values
@@ -464,7 +472,7 @@ func (s sendProgress) Read(p []byte) (int, error) {
 // and a result file that do not exist until the job finishes, so "not there
 // yet" is the ordinary answer on most calls.
 func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) {
-	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, 0, nil)
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("e2b: read %s: %w", path, err)
 	}
@@ -488,7 +496,7 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 // IS the stream: envd serves the file as it is, and nothing here holds more
 // of it than the caller's own read asks for.
 func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, error) {
-	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, 0, nil)
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("e2b: open %s: %w", path, err)
 	}
@@ -544,7 +552,7 @@ func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail
 	// A suffix range of zero is unsatisfiable, so the smallest real one is
 	// asked for and dropped: what such a caller wants is the size.
 	header := http.Header{"Range": {fmt.Sprintf("bytes=-%d", max(want, 1))}}
-	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, 0, header)
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, header)
 	if err != nil {
 		return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w", path, err)
 	}
@@ -671,7 +679,7 @@ func (c *envdClient) writeFile(ctx context.Context, path string, content []byte)
 	}
 
 	header := http.Header{"Content-Type": {form.FormDataContentType()}}
-	resp, idle, err := c.fileExchange(ctx, http.MethodPost, path, &body, int64(body.Len()), header)
+	resp, idle, err := c.fileExchange(ctx, http.MethodPost, path, body.Bytes(), header)
 	if err != nil {
 		return fmt.Errorf("e2b: write %s: %w", path, err)
 	}

@@ -1,6 +1,9 @@
 package sandbox
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,3 +96,44 @@ func TestASilentFileTransferIsAbandonedAndSaysWhy(t *testing.T) {
 		}
 	}
 }
+
+// A FILE WRITE CAN BE SENT TWICE, and says how long it is. The idle bound's
+// progress wrapper hides the buffer a request would otherwise take both from:
+// without the length the body goes out chunked, and without GetBody the
+// transport cannot retry a write on a fresh connection when the server closed
+// the first before reading it (an HTTP/2 GOAWAY) — which the plain buffer the
+// write used to send could.
+func TestAFileWriteCarriesItsLengthAndCanBeSentAgain(t *testing.T) {
+	t.Parallel()
+	var sent, again []byte
+	var length int64
+	c := &envdClient{host: "http://box.example.com", fileIdle: time.Minute,
+		http: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			length = r.ContentLength
+			sent, _ = io.ReadAll(r.Body)
+			if r.GetBody == nil {
+				return nil, errors.New("the request cannot be sent again")
+			}
+			body, err := r.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			again, _ = io.ReadAll(body)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")),
+				Request: r}, nil
+		})}}
+	if err := c.writeFile(t.Context(), "/home/user/.crewlet/brief.md", []byte("fix the flake")); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
+	if length != int64(len(sent)) || length == 0 {
+		t.Errorf("Content-Length %d for a %d-byte body; want the body's own length", length, len(sent))
+	}
+	if !bytes.Equal(sent, again) || !bytes.Contains(sent, []byte("fix the flake")) {
+		t.Errorf("the body sent again differs from the one sent: %q vs %q", again, sent)
+	}
+}
+
+// roundTrip is an http.RoundTripper made of a function.
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
