@@ -41,11 +41,21 @@ import (
 // park states both halves, which is why a suspended phase is paid by the
 // segment it finished in and never twice — plus the workers it delegated to
 // and the extension judge, whose calls are metered beside the phases rather
-// than inside them. A resumed segment adds the collected coding run it resumed
-// from, which no phase of the engine's own ran. REFLECTION IS NOT IN IT: the
-// learning pass runs after the turn is over, on the seat's behalf rather than
-// the item's, and charging it to whatever the turn was on would make a task's
-// cost depend on how much its seat had to remember.
+// than inside them, and the AUXILIARY calls made inside it: its turn-start
+// context, the rewrites its ledgers, its judge's evidence and its tools asked
+// for, and its card's own rewrite. Those come from the segment's own tally
+// (turnTelemetry.auxSpent, which every in-turn call adds to through the turn's
+// attribution), never from the records, which the ledger flushes later and
+// the fleet reads at query time; the card is rewritten after the charge is
+// decided, so it tallies on its own and is added as the charge is written
+// ([Engine.withCards]). A resumed segment adds the collected coding run it
+// resumed from, which no phase of the engine's own ran. REFLECTION IS NOT IN
+// IT: the learning pass runs after the turn is over, on the seat's behalf
+// rather than the item's, and charging it to whatever the turn was on would
+// make a task's cost depend on how much its seat had to remember. Nor is the
+// condensation of a collected run's report, which the coordinator makes
+// between two segments, where no segment's tally is open (ADR-0022's
+// amendment).
 //
 // # A segment charged to nothing hands its spend on
 //
@@ -72,7 +82,8 @@ type segmentCharge struct {
 	// segment that finishes the turn; nil otherwise.
 	carry *execstate.Uncharged
 	// aux is the segment's attribution for the auxiliary calls its charge
-	// makes — the card's rewrite.
+	// makes — the card's rewrite — with no tally: [Engine.withCards] gives
+	// the card one of its own, since the segment's was summed already.
 	aux auxspend.Use
 }
 
@@ -98,7 +109,7 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	ended time.Time,
 ) segmentCharge {
 	item, _ := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
-	own := tracker.TurnSpend{
+	own := withAux(tracker.TurnSpend{
 		Rounds:     spend.Rounds,
 		Input:      spend.InputTokens + spend.WorkerInput + spend.JudgeInput + t.jobInput,
 		Output:     spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput,
@@ -107,13 +118,15 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		WallMs:     int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
 		Workers:    spend.Workers,
 		SentBack:   spend.SentBack,
-	}
+	}, t.auxSpent.Total())
 	if !t.resumed {
 		own.Turns = 1
 	}
 	total := addUncharged(own, t.uncharged)
+	cardUse := t.aux()
+	cardUse.Tally = nil
 	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed),
-		aux: t.aux()}
+		aux: cardUse}
 	if item == nil {
 		if res.Suspended {
 			charge.carry = unchargedOf(total)
@@ -153,6 +166,17 @@ func segmentOutcome(res turn.Result, err error) string {
 		return string(phase.Failed)
 	}
 	return string(res.Decision)
+}
+
+// withAux adds a segment's in-turn auxiliary spend to its charge. Tokens only:
+// an auxiliary call is not a round, and the cache counts are a breakdown of the
+// input it adds, as a phase's are.
+func withAux(s tracker.TurnSpend, aux auxspend.Spent) tracker.TurnSpend {
+	s.Input += aux.Input
+	s.Output += aux.Output
+	s.CacheRead += aux.CacheRead
+	s.CacheWrite += aux.CacheWrite
+	return s
 }
 
 // addUncharged folds what an earlier segment handed on into this one's spend.
@@ -215,13 +239,28 @@ func (e *Engine) recordTurnSpend(ctx context.Context, charge segmentCharge) {
 		// there is nowhere to charge.
 		return
 	}
-	fit := e.seatCompactor(e.Company(), charge.record.Seat, charge.aux)
-	charge.record.Summary = turnCard(ctx, fit, charge.record.Summary)
-	charge.record.Review = turnCard(ctx, fit, charge.record.Review)
+	charge = e.withCards(ctx, charge)
 	e.chargeSegment(ctx, halves.as(builtin.Actor{
 		Handle: charge.record.Seat, Kind: tracker.AuthorAgent,
 		TurnID: charge.record.TurnID,
 	}), charge)
+}
+
+// withCards fits the segment's summary and review to its task's card and adds
+// what rewriting them cost to the charge.
+//
+// A TALLY OF ITS OWN: the card is the segment's last auxiliary call and the
+// turn's work like the rest, but it is made after [turnTelemetry.chargeFor]
+// summed the segment's tally, so a rewrite tallied there would reach no
+// charge.
+func (e *Engine) withCards(ctx context.Context, charge segmentCharge) segmentCharge {
+	use := charge.aux
+	use.Tally = auxspend.NewTally()
+	fit := e.seatCompactor(e.Company(), charge.record.Seat, use)
+	charge.record.Summary = turnCard(ctx, fit, charge.record.Summary)
+	charge.record.Review = turnCard(ctx, fit, charge.record.Review)
+	charge.record.Spend = withAux(charge.record.Spend, use.Tally.Total())
+	return charge
 }
 
 // condensedCard is the marker a rewritten card line carries, so nobody reads

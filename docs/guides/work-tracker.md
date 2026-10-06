@@ -281,9 +281,15 @@ nothing. Only the engine's own tasks carry counters: a turn on a Jira issue is
 attributed on its events and adds to no row here.
 
 **What a turn's tokens include.** Its own phases, the workers it delegated to,
-the round-cap judge, and the coding runs it detached — in input and output,
-with the prompt cache's share of the input beside them. Learning afterwards
-(reflection, diary, skills) is the seat's own and is not charged to the task.
+the round-cap judge, the coding runs it detached, and the **auxiliary** model
+calls it made along the way — the turn-start memory filter, knowledge query and
+episode summary, every rewrite its ledgers and tools needed, and the
+condensing of its card — in input and output, with the prompt cache's share of
+the input beside them. Learning afterwards (reflection, diary, skills, the
+conversation ledger's account of the turn) is the seat's own and is not charged
+to the task, and neither is the condensing of a collected coding run's report,
+which happens between two segments of the turn; both are still on the seat's
+day in the [spend history](budgets-and-spend.md).
 Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
 how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
 returned the work for another pass.

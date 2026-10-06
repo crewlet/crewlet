@@ -901,7 +901,9 @@ the segment that finishes the turn judges "exactly one" over the whole turn.
 
 **A native item is charged for the turn.** Each completed segment adds what it
 spent to the task's own counters — its phases, its delegated workers, the
-round-cap judge and, on a resumed segment, the coding run it collected — under
+round-cap judge, the auxiliary calls made inside it (tallied by the segment as
+each returns, its card's rewrite included) and, on a resumed segment, the
+coding run it collected — under
 an id naming the segment (`turn/<turn_id>/dispatch`,
 `turn/<turn_id>/resume/<launch_id>`), so a segment recorded twice counts once
 and only the dispatch segment counts a turn. A parked segment on nothing hands

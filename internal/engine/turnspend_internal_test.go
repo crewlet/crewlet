@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -37,17 +38,25 @@ func segmentSpend(scale int) runner.Spend {
 }
 
 // rollupOf is what a segment's own published records add up to: its phases'
-// tokens, its workers', its judge's, and the job it collected. The per-seat
-// history and the turn's completion event are built from these same records,
-// so no charge to a task may ever come to more than they do.
-func rollupOf(s runner.Spend, jobIn, jobOut int) int {
-	return s.Total() + s.WorkerTokens() + s.JudgeTokens() + jobIn + jobOut
+// tokens, its workers', its judge's, its in-turn auxiliary calls' (the
+// `turn`-stage auxiliary_spend records filed under its run) and the job it
+// collected. The per-seat history and the turn's cost on every screen are
+// built from these same records, so no charge to a task may ever come to
+// more than they do.
+func rollupOf(s runner.Spend, aux auxspend.Spent, jobIn, jobOut int) int {
+	return s.Total() + s.WorkerTokens() + s.JudgeTokens() + aux.Tokens() + jobIn + jobOut
+}
+
+// segmentAux is one segment's in-turn auxiliary spend, distinct per scale.
+func segmentAux(scale int) auxspend.Spent {
+	return auxspend.Spent{Calls: 3, Input: 80 * scale, Output: 12 * scale, CacheRead: 40 * scale}
 }
 
 func dispatchTel(item *types.WorkItem) turnTelemetry {
 	t := turnTelemetry{
 		handle: "dev", runID: "run-1", trigger: types.Trigger{Type: "work_item"},
 		startedAt: time.Unix(1_700_000_000, 0).UTC(), written: &turnctx.Written{},
+		auxSpent: auxspend.NewTally(),
 	}
 	if item != nil {
 		copied := *item
@@ -63,14 +72,17 @@ func resumeTel(item *types.WorkItem, carried *execstate.Uncharged, jobIn, jobOut
 	}
 	t.resumed, t.launchID = true, "launch-1"
 	t.jobInput, t.jobOutput, t.uncharged = jobIn, jobOut, carried
+	// A RESUMED SEGMENT'S OWN TALLY, as describeResume gives it.
+	t.auxSpent = auxspend.NewTally()
 	return t
 }
 
 // A TASK'S SPEND NEVER EXCEEDS THE ROLLUP.
 //
 // What a turn charges its work item is a SHARE of what the turn's own records
-// state it spent — the phases, the workers, the judge and the coding runs it
-// collected — and, across every segment of a turn, never more than their sum.
+// state it spent — the phases, the workers, the judge, the auxiliary calls made
+// inside it and the coding runs it collected — and, across every segment of a
+// turn, never more than their sum.
 // Folding anything in twice (a resumed phase's pre-park half, a worker counted
 // inside its host phase and again beside it) would show a task costing more
 // than the company paid for it.
@@ -94,9 +106,11 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 			jobIn, jobOut := 4000, 700
 
 			dispatch := dispatchTel(tc.item)
+			dispatch.auxSpent.Add(segmentAux(1))
 			parked := dispatch.chargeFor(first, turn.Result{Suspended: true}, nil, ended)
 
 			resume := resumeTel(tc.item, parked.carry, jobIn, jobOut)
+			resume.auxSpent.Add(segmentAux(3))
 			if tc.sole != nil {
 				resume.written = turnctx.WrittenFrom([]types.WorkItem{*tc.sole}, false)
 			}
@@ -108,7 +122,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 					charged += c.record.Spend.Tokens()
 				}
 			}
-			rollup := rollupOf(first, 0, 0) + rollupOf(second, jobIn, jobOut)
+			rollup := rollupOf(first, segmentAux(1), 0, 0) + rollupOf(second, segmentAux(3), jobIn, jobOut)
 			if charged > rollup {
 				t.Fatalf("the task was charged %d tokens for a turn whose records "+
 					"add up to %d", charged, rollup)
@@ -372,4 +386,58 @@ func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
 		!strings.Contains(got, "open the turn") {
 		t.Errorf("an account with no rewrite was %q, want a pointer to the turn and no fragment", got)
 	}
+}
+
+// A TURN'S CARD IS PAID FOR BY ITS TASK. The card is rewritten after the
+// segment's charge was decided — the segment's tally already summed — so the
+// rewrite tallies on its own and is added as the charge is written: a long
+// account condensed for its card is part of what the turn cost the task, like
+// every other auxiliary call the turn made, and is filed under the turn.
+func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Dev"}
+	c := meteredCompany(config.TokenBudget{}, seat)
+	registry, err := phase.NewRegistry([]phase.Entry{{Key: "cheap", Provider: &cardRewriter{
+		answer: "Fixed the flaky test; opened !42.", in: 900, out: 30}}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = registry
+	pub := &capturedEvents{}
+	e := &Engine{auxSpend: auxspend.NewLedger(pub)}
+	e.epoch.current.Store(c)
+
+	tel := dispatchTel(&nativeItem)
+	tel.handle = seat.Handle()
+	tel.auxSpent.Add(segmentAux(1))
+	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil,
+		time.Unix(1_700_000_060, 0).UTC())
+	before := charge.record.Spend
+	charge.record.Summary = strings.Repeat("The turn investigated the flaky test and ", 40) + "opened !42."
+
+	charge = e.withCards(t.Context(), charge)
+	if charge.record.Summary != condensedCard+"Fixed the flaky test; opened !42." {
+		t.Fatalf("the card was not rewritten: %q", charge.record.Summary)
+	}
+	if got, want := charge.record.Spend.Tokens(), before.Tokens()+930; got != want {
+		t.Fatalf("the task is charged %d tokens, want %d: the segment's own and the "+
+			"card rewrite's 930", got, want)
+	}
+	e.auxSpend.Flush(t.Context())
+	recs := pub.records(t)
+	if len(recs) != 1 || recs[0].Stage != types.AuxStageTurn || recs[0].TurnID != "run-1" ||
+		recs[0].Purpose != types.AuxCondense(string(compact.KindOutcome)) {
+		t.Fatalf("the rewrite was recorded as %+v, want the turn's condense_outcome", recs)
+	}
+}
+
+// cardRewriter answers a card rewrite at a known cost.
+type cardRewriter struct {
+	answer  string
+	in, out int
+}
+
+func (cardRewriter) Model() string { return "aux" }
+func (p *cardRewriter) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{Model: "aux", Content: p.answer, InputTokens: p.in, OutputTokens: p.out}, nil
 }

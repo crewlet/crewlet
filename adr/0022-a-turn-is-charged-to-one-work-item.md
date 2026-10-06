@@ -48,6 +48,34 @@ instead.
 scan of the event log behind every board sort by spend, and every node's event
 log holds only what that node ran.
 
+## Amendment — a segment pays for its auxiliary calls
+
+A segment's tokens also include the **auxiliary calls made inside it**: its
+turn-start context (the memory filter, the knowledge query, the episode
+summary), every rewrite its ledgers, its judge's evidence, its tools and its
+delegated workers' answers needed, and its card's own rewrite. They are the
+turn's work, spent on its behalf mid-turn, and the history files them as the
+`turn` stage of `auxiliary_spend` under the turn's run, so a task that left them
+out would cost less than the turn that worked on it.
+
+They reach the charge through an **explicit per-segment tally**
+(`auxspend.Tally`, carried on the turn context and stated with every call's
+attribution), never by reading the records back: the charge is decided in the
+process that ran the segment, at its end, before the ledger has flushed the
+segment's last calls, and the records are the fleet's, read at query time. The
+card is rewritten after that decision, so its call is tallied on its own and
+added as the charge is written.
+
+Two auxiliary stages are deliberately NOT on the item. **Reflection** — the
+learning workers after the turn and the conversation ledger's account of it —
+is what the seat remembers, not what the work cost, so a task's cost does not
+depend on how much its seat had to remember; and the condensation of a
+collected coding run's report, which the coordinator makes **between two
+segments**, on whichever node collects, where no segment's tally is open. Both
+are in the seat's day and the company's history; the second is also in the
+turn's own cost wherever the history draws it, so it is the one in-turn call a
+task's spend is short of.
+
 ## What this does not decide
 
 It does not decide how a task's turns are listed or numbered on a screen, nor
