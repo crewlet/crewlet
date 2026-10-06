@@ -41,14 +41,13 @@ const (
 	// figure about how long a server takes over that many.
 	//
 	// SIXTY SECONDS, derived from what the batch caller's tick allows. The
-	// knowledge corpus duty (internal/search) makes at most eight calls a
-	// tick on a one-minute interval, and the engine cuts a tick off once it
-	// has gone five minutes without progress (internal/engine's
-	// embedTickBudget), counting each answered call as progress. A request
-	// at this ceiling is a fifth of that budget, so one that runs to it is
-	// never itself mistaken for a wedge — and four of them, the most
-	// requests one 128-input call becomes on OpenAI (128 inputs of 8 KiB
-	// against a 300 000-token request), still fit inside it.
+	// knowledge corpus duty (internal/search) plans its own requests and
+	// sends each through a call of its own, at most thirty-two a tick on a
+	// one-minute interval, and the engine cuts a tick off once it has gone
+	// five minutes without progress (internal/engine's embedTickBudget),
+	// counting each answered request as progress. A request at this
+	// ceiling is a fifth of that budget, so one that runs to it is never
+	// itself mistaken for a wedge.
 	//
 	// NOTHING HAS MEASURED how long a server takes to embed a full request
 	// — not OpenAI's, and not a CPU-hosted one, which is the deployment

@@ -288,11 +288,12 @@ round trip inside its own transaction. One **fleet-singleton duty** embeds each
 source once and publishes a record; every node applies it. The company pays the
 bill once and holds the answer everywhere.
 
-The duty ticks **every minute** and spends at most **8 batched provider calls**
-per tick, 128 sources apiece — so a tick on a caught-up company reads the
-semantic index's head and its per-list counts, counts the embedding space and
-runs one indexed anti-join that returns nothing, and stops; a tick on one that
-is behind cannot monopolise the provider budget. The one long tick is a
+The duty ticks **every minute** and embeds at most **1 024 sources in at most
+32 provider requests** per tick, 128 sources a request at most — so a tick on a
+caught-up company reads the semantic index's head and its per-list counts,
+counts the embedding space and runs one indexed anti-join that returns nothing,
+and stops; a tick on one that is behind cannot monopolise the provider budget.
+The one long tick is a
 **training** of the semantic index: about 120 µs a source to read every code
 and make one exact pass, plus a k-means and a filing of every code that run on
 **half the node's cores, and never fewer than two** — so the seats and the
@@ -305,11 +306,12 @@ that core the same training is about three and a half minutes of reading and
 seven and a half of arithmetic. The training renews the duty's lease as it
 runs, and stops publishing — handing its cores back within a fraction of a
 second — the moment it cannot. And a tick is cut off once it has gone **five
-minutes without progress**, never after five minutes of running: every batch
-embedded, every vector withdrawn, every 1 024 rows a training reads and the end
-of its k-means and filing are progress, so a wedged tick never holds the duty
-while a slow node still finishes its training once rather than starting it
-again every tick.
+minutes without progress**, never after five minutes of running: every request
+answered, every vector published or withdrawn, every 1 024 rows a training reads
+and the end of its k-means and filing are progress, so a wedged tick never holds
+the duty while a slow node still finishes its training once rather than starting
+it again every tick.
+
 **What is embedded is a source's opening.** The title, one space, then the
 body, every run of whitespace collapsed — and of that, the first **8 KiB**, or
 less where the model's own per-input bound is smaller. Collapsed first and cut
@@ -331,32 +333,56 @@ base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename
 also stamps.
 
-Those 8 calls are the **whole company's**, not each corpus's, and they are
-handed out **round robin** between the two. With both behind, each gets four a
-tick; with one caught up, the other takes all eight. So a tracker being
-cold-filled — or written to faster than 1 024 items a minute — **cannot stop
-the wiki being embedded**, which is the failure the division exists to prevent:
-a corpus that is never reached is not slow, it is permanently unsearchable by
-meaning, and the coverage figure below sums both corpora and would report it as
-merely behind. Equal shares rather than shares weighted by backlog, so how
-stale a corpus gets depends on *its own* size rather than on the size of the
-biggest corpus in the company.
+Those requests are the **whole company's**, not each corpus's, and they are
+handed out **round robin** between the two, one request at a time. With both
+behind, each gets half a tick's requests and half its sources; with one caught
+up, the other takes them all. So a tracker being cold-filled — or written to
+faster than 1 024 items a minute — **cannot stop the wiki being embedded**,
+which is the failure the division exists to prevent: a corpus that is never
+reached is not slow, it is permanently unsearchable by meaning, and the
+coverage figure below sums both corpora and would report it as merely behind.
+Equal shares rather than shares weighted by backlog, so how stale a corpus gets
+depends on *its own* size rather than on the size of the biggest corpus in the
+company.
 
-A cold fill of 110 000 sources is roughly **108 minutes and 860 batched
-requests** — again across every corpus together — and those numbers do not move
-with the configured width: providers bill per input *token*, and `dimensions`
-is a truncation parameter the request already carries.
+A cold fill of 110 000 sources is roughly **108 minutes and 860 requests** —
+again across every corpus together, and more requests but the same minutes
+where sources run long — and those numbers do not move with the configured
+width: providers bill per input *token*, and `dimensions` is a truncation
+parameter the request already carries.
 
-**A batch is sent in requests the model accepts.** One call carries up to 128
-sources, and the provider sends it in as many requests as the model's own limits
-need — inputs a request and tokens a request, counted in bytes so no tokenizer is
-needed (see [Configuration](../getting-started/configuration.md#providers)).
-On OpenAI, whose request total is 300 000 tokens, 128 sources of the full 8 KiB
-are four requests; sent as one, a corpus of code, markup or a script that is not
-Latin ran past the total and was refused on every tick. A source past the
-model's per-input bound is refused before anything is sent, and every batch
-request is held to a one-minute ceiling of its own — a single embedding is held
-to fifteen seconds, and a search's query vector to its own two-second budget.
+**Every request is one the model accepts for its size.** The duty forms each
+request itself, through the provider's own packing rule: at most 128 sources,
+and no more than the model's own limits admit — inputs a request and tokens a
+request, counted in bytes so no tokenizer is needed (see
+[Configuration](../getting-started/configuration.md#providers)). On OpenAI,
+whose request total is 300 000 tokens, 128 sources of the full 8 KiB are four
+requests; sent as one, a corpus of code, markup or a script that is not Latin
+ran past the total and was refused on every tick. Every request is held to a
+one-minute ceiling of its own — a single embedding is held to fifteen seconds,
+and a search's query vector to its own two-second budget.
+
+**A source the provider refuses costs only itself.** A refusal (HTTP 400, 413
+or 422) says the request is unacceptable and not which input, so a refused
+request is split in halves, sent ahead of everything else, until the input it
+refuses is alone — at most fifteen requests for one input among 128, inside the
+share of a tick each corpus is guaranteed — and every half it accepts on the way
+is embedded as it goes. The input refused alone is logged as
+`search_embed_input_refused`, naming the source, the model, the bytes it was
+sent and the per-input bound the model's limits assume (a refusal inside that
+bound means `max_input_tokens` is declared wider than the endpoint enforces, or
+the endpoint refuses the text for what it says). It is then **held back for an
+hour**, costing no request, and offered again **alone**: one request and one
+warning an hour, rather than its neighbours' place in every tick. A rewritten
+source is a new text and is offered at once; a config apply that rebuilds the
+provider forgets every refusal; a duty that moves to another node isolates each
+one again once. Any other failure — a rate limit, a timeout, a server down, a
+credential refused — is about the provider rather than an input, so it ends the
+tick's requests and the next tick asks again; nothing is lost, because the
+selection is derived from the rows. A tick in which the provider refused every
+request it was sent, inputs alone included, says so once
+(`search_embed_every_request_refused`): that is the configuration being
+refused, not any document.
 
 **A batch response has to say which input each vector answers.** A request
 carries many texts, and the API allows the results back in any order — so

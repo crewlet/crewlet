@@ -66,10 +66,10 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 // suiteWrite is one tick of the domain's own [search.Embedder] — the only
 // writer this domain has — over one document that needs a vector.
 //
-// THE TICK LOGS A FAILED BATCH RATHER THAN RETURNING IT, by design, so the
-// count is what says whether anything was published: a record the publisher
-// refused is a batch that published nothing, and a tick that published
-// nothing certifies nothing.
+// THE TICK LOGS A PROVIDER FAILURE RATHER THAN RETURNING IT, by design, and
+// returns a publish that failed — so both the error and the count are read: a
+// record the publisher refused is a tick that published nothing, and a tick
+// that published nothing certifies nothing.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: pub, Estate: db, Log: search.Domain{}.Stream().Name,
@@ -81,9 +81,10 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 				Readers: map[string]int{"suite-node": search.RecordVersion}}, nil
 		},
 		Embedder: embeddings.NewFake(8), Model: "suite-embed",
-		Corpora: []search.Corpus{oneStaleDocument{}},
-		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
-		Budget:  unbounded{},
+		Corpora:  []search.Corpus{oneStaleDocument{}},
+		Now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:   unbounded{},
+		Refusals: search.NewRefusals(),
 	})
 	if err != nil {
 		return err

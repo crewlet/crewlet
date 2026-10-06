@@ -30,54 +30,94 @@ import (
 //
 // # What it costs, from the constants below
 //
-// EmbedBatchesPerTick × EmbedBatch = 1 024 sources a tick, on a one-minute
-// tick — across EVERY corpus rather than each, divided between them round
-// robin by [Embedder.Tick], so the figures here are the company's and never
-// one corpus's. A cold fill of 110 000 sources is ≈ 108 minutes and ≈ 860
-// batched requests covering 110 000 inputs, billed once for the whole fleet —
-// and those three numbers do NOT move with the configured width, because the
+// EmbedSourcesPerTick = 1 024 sources a tick, on a one-minute tick — across
+// EVERY corpus rather than each, divided between them round robin by
+// [Embedder.Tick], so the figures here are the company's and never one
+// corpus's. A cold fill of 110 000 sources is ≈ 108 minutes and ≈ 860
+// requests of 128 sources — more requests where the sources run long, since a
+// request carries only what the model's request total admits, but the same
+// sources, the same minutes and the same bill — billed once for the whole
+// fleet; and those numbers do NOT move with the configured width, because the
 // provider bills per input TOKEN and `dimensions` is a truncation parameter it
-// already receives. The write rate IS a function of the width: 1 024 records ×
-// (4·D + envelope) per minute is ≈ 283 KB/s at 3 072, a factor of five under
-// the pace the walk paths are held to.
+// already receives. The write rate IS a function of the width: a record is
+// JSON carrying the vector as base64, ≈ 16.9 KB at 3 072 dimensions, so 1 024
+// of them a minute is ≈ 290 KB/s, a factor of five under the pace the walk
+// paths are held to.
 
 const (
-	// EmbedBatch is how many texts go in one provider call.
+	// EmbedBatch is the most sources one provider REQUEST carries.
 	//
 	// 128, which is where the round-trip amortisation has essentially
-	// flattened. It is a CALL, not a request: the provider sends a call in
-	// as many requests as the model's own limits need
-	// (embeddings.Limits.Requests) — at 8 KiB of input apiece, 128 inputs
-	// are up to four requests under OpenAI's 300 000-token request total,
-	// and a model that takes fewer inputs a request is sent more of them.
+	// flattened. A request carries no more than the MODEL admits either —
+	// its own input count, and its request total counted over the inputs'
+	// bytes ([embeddings.Limits]) — and the duty forms every request itself
+	// through that one packing rule ([embeddings.Limits.Requests]), so a
+	// request the model would refuse for its size is never formed: 128
+	// short sources are one request, and sources at the full 8 KiB are 36 a
+	// request under OpenAI's 300 000-token total.
 	EmbedBatch = 128
 
-	// EmbedBatchesPerTick bounds one tick's provider calls.
+	// EmbedSourcesPerTick bounds the sources one tick publishes a vector
+	// for.
 	//
-	// EIGHT, so a tick spends at most eight round trips and the duty
-	// cannot monopolise the singleton lease it holds. It is the knob that
-	// trades cold-fill time against how much of a minute this job owns:
-	// eight puts a 110 000-source fill at under two hours while leaving
-	// the tick's wall clock dominated by the provider rather than by us.
+	// 1 024, eight requests of [EmbedBatch]: the figure the cold-fill time
+	// and the write rate above are written against, and the selection each
+	// corpus is asked for. Withdrawals are outside it, as they always were
+	// (see [Embedder.Tick]).
 	//
-	// It is also the FAIRNESS FLOOR. [Embedder.Tick] hands these calls out
-	// one at a time, round robin over the corpora, so each of N corpora is
-	// guaranteed ⌊8/N⌋ of them however far behind its neighbours are — and
-	// [NewEmbedder] refuses a wiring with more corpora than there are calls
-	// to go round, because below one call apiece there is no per-tick share
-	// left to guarantee.
-	EmbedBatchesPerTick = 8
+	// It is also the FAIRNESS FLOOR. [Embedder.Tick] hands the requests out
+	// one at a time, round robin over the corpora, each carrying at most
+	// [EmbedBatch] sources — so each of N corpora is guaranteed ⌊8/N⌋
+	// requests' worth however far behind its neighbours are, and
+	// [NewEmbedder] refuses a wiring with more corpora than eight, because
+	// below one full request apiece there is no per-tick share left to
+	// guarantee.
+	EmbedSourcesPerTick = 8 * EmbedBatch
+
+	// EmbedRequestsPerTick bounds one tick's provider requests.
+	//
+	// THIRTY-TWO, and two needs agree on it.
+	//
+	//   - PACKING. A tick's 1 024 sources at the full 8 KiB are 29 requests
+	//     under OpenAI's request total, so a tick of long sources still
+	//     embeds its whole [EmbedSourcesPerTick] on the default model, and
+	//     a model that takes fewer inputs a request is held to 32 of them
+	//     rather than sent as many as its limits divide the tick into.
+	//   - ISOLATION. A refused request is split until the input it refuses
+	//     is alone, which costs at most 1 + 2·log₂128 = 15 requests for one
+	//     input among 128; with two corpora behind, each is guaranteed 16,
+	//     so a refusal is isolated inside the tick it is met in rather than
+	//     re-met, half-isolated, by every tick after it.
+	//
+	// It is also what bounds the tick's provider wall clock: every request
+	// is held to its own ceiling (embeddings.BatchTimeout), and a request
+	// that fails for any reason but a refusal ends the tick's requests
+	// rather than being followed by thirty-one more that would meet the
+	// same answer ([Embedder.Tick]).
+	EmbedRequestsPerTick = 32
+
+	// EmbedRefusalRetry is how long an input the provider refused ALONE is
+	// held back before it is offered again — alone ([Refusals]).
+	//
+	// AN HOUR. Held back, the input costs nothing; offered again, it costs
+	// one request and one log line — so an hour is one request in the
+	// 1 920 sixty ticks may make, and one warning an hour per input rather
+	// than one a minute, while a provider that stops refusing it (a gateway
+	// fixed, a content rule relaxed) has it embedded within the hour with
+	// no restart. Shorter buys a quicker retry of a refusal that is almost
+	// always permanent; longer leaves a fixed one unsearchable by meaning
+	// for longer than an operator who fixed it would expect.
+	EmbedRefusalRetry = time.Hour
 
 	// EmbedInterval is how often the duty ticks.
 	//
 	// ONE MINUTE, which is the tick the whole arithmetic above is written
-	// against: 8 batches x 128 sources is 1 024 sources a tick, so a cold
-	// fill of 110 000 sources is about 108 minutes and a steady company's
-	// backlog is emptied within a minute of the write that created it. It
-	// is also what bounds the WRITE rate this duty puts on the vector
-	// log — 1 024 records x (4*D + envelope) per minute is about 283 KB/s
-	// at a width of 3 072, a factor of five under the pace the walk paths
-	// are held to.
+	// against: 1 024 sources a tick, so a cold fill of 110 000 sources is
+	// about 108 minutes and a steady company's backlog is emptied within a
+	// minute of the write that created it. It is also what bounds the WRITE
+	// rate this duty puts on the vector log — 1 024 records of ≈ 16.9 KB a
+	// minute is about 290 KB/s at a width of 3 072, a factor of five under
+	// the pace the walk paths are held to.
 	//
 	// Faster would not embed anything sooner on a company that is caught
 	// up (a tick with no stale source costs one indexed count and stops),
@@ -281,19 +321,6 @@ func (d Document) text(bound int) string {
 	return embeddings.Opening(d.Title+" "+d.Body, bound)
 }
 
-// sha is the digest of the exact text that was embedded: sha256 over
-// [Document.text], which is byte for byte what the provider received.
-//
-// OF THE OPENING, not of the source, and that is what lets it answer the
-// question it exists for: a source rewritten into the same words — a re-file,
-// a label, a parent move — produces the same digest. A digest of the whole
-// body would differ whenever anything past the window moved, which is text the
-// provider never saw.
-func (d Document) sha(bound int) string {
-	sum := sha256.Sum256([]byte(d.text(bound)))
-	return hex.EncodeToString(sum[:])
-}
-
 // EmbedDeps is what the duty needs.
 type EmbedDeps struct {
 	// Publisher is the vector domain's write authority.
@@ -332,15 +359,28 @@ type EmbedDeps struct {
 	// Corpora are the source kinds to embed.
 	Corpora []Corpus
 
-	// Logger is where a provider failure is reported. A failure is
-	// LOGGED AND CARRIED, never propagated: the tick's other batches and
-	// the tick after it are the retry, and a duty that failed the whole
-	// tick on one bad batch would stop embedding the corpus because of
+	// Refusals is what the provider has refused ALONE: the inputs held
+	// back so that one the model will never accept costs a request an hour
+	// rather than fifteen a tick ([Refusals]).
+	//
+	// REQUIRED, and held by the caller ACROSS TICKS — the duty is rebuilt
+	// every tick — for ONE provider: a caller starts a new one whenever it
+	// builds the provider again, because a refusal is a fact about the
+	// provider as it was configured. Nil is refused rather than defaulted
+	// to a memory that lasts one tick, which would isolate the same input
+	// again at the front of every tick for ever.
+	Refusals *Refusals
+
+	// Logger is where a provider failure is reported. A failure to embed
+	// is LOGGED AND CARRIED, never returned: a refused input costs only
+	// itself, and anything else the provider answered ends this tick's
+	// requests with the tick after it as the retry — a duty that failed
+	// its whole tick over one would stop embedding the corpus because of
 	// one document in it.
 	//
 	// Nil is this package's own `component=search` logger, NEVER a
 	// discarding one: since a failure is only ever logged, a duty whose
-	// logger went nowhere would fail every batch with no trace at all.
+	// logger went nowhere would fail every request with no trace at all.
 	Logger *slog.Logger
 
 	// Now is the clock, injected so a test can hold it.
@@ -391,11 +431,11 @@ type EmbedDeps struct {
 // At that load the reading alone would have fitted five minutes, 1.4 times
 // over. But a budget of time is a cliff that moves: the reading nearly doubled
 // between an idle core and two searchers, it grows with the corpus, and
-// the tick that trains also makes this tick's embedding batches, each a
-// provider call whose requests carry a one-minute ceiling of their own
-// (embeddings.BatchTimeout) — eight of them and the reading pass five minutes
-// at the load measured. Progress has no such cliff: it measures the one thing
-// the bound is for, and needs the exemption anyway.
+// the tick that trains also makes this tick's embedding requests, each with a
+// one-minute ceiling of its own (embeddings.BatchTimeout) — a handful of them
+// and the reading pass five minutes at the load measured. Progress has no such
+// cliff: it measures the one thing the bound is for, and needs the exemption
+// anyway.
 type Budget interface {
 	// Advanced says a bounded stretch of the tick's work is done.
 	Advanced()
@@ -452,6 +492,11 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 			"the duty's steps show their progress to")
 	case d.Embedder == nil:
 		return nil, fmt.Errorf("search: the embed duty has no embedder")
+	case d.Refusals == nil:
+		return nil, fmt.Errorf("search: the embed duty has no refusal memory — " +
+			"EmbedDeps.Refusals is held across ticks for one provider, and " +
+			"without it an input the model refuses is isolated again at the " +
+			"front of every tick")
 	case d.Model == "":
 		return nil, fmt.Errorf("search: the embed duty has no model id — it " +
 			"rides on every row, and rows written without one cannot be " +
@@ -461,16 +506,17 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 			"width %d", d.Embedder.Width())
 	case len(d.Corpora) == 0:
 		return nil, fmt.Errorf("search: the embed duty has no corpus")
-	case len(d.Corpora) > EmbedBatchesPerTick:
-		// REFUSED RATHER THAN SERVED UNFAIRLY. A tick divides
-		// EmbedBatchesPerTick provider calls round robin, so with more
-		// corpora than calls the ones past the eighth get none — not
-		// this tick and not any tick, because every tick starts the
-		// round at the front. That is the failure this whole file is
-		// written against: a source kind silently unsearchable by
-		// meaning, with a coverage gauge that sums the corpora
-		// reporting the company as merely behind. Refusing says so at
-		// the wiring, which is where the extra corpus was added.
+	case len(d.Corpora) > EmbedSourcesPerTick/EmbedBatch:
+		// REFUSED RATHER THAN SERVED UNFAIRLY. A tick hands its requests
+		// out round robin, each up to EmbedBatch sources against a budget
+		// of EmbedSourcesPerTick, so with more corpora than eight full
+		// requests the ones past the eighth can get none — not this tick
+		// and not any tick, because every tick starts the round at the
+		// front. That is the failure this whole file is written against:
+		// a source kind silently unsearchable by meaning, with a coverage
+		// gauge that sums the corpora reporting the company as merely
+		// behind. Refusing says so at the wiring, which is where the
+		// extra corpus was added.
 		//
 		// A CORPUS UNDER THE CEILING IS NOT FREE EITHER, and the bill
 		// is in [Embedder.Tick]: every corpus is selected at the whole
@@ -478,11 +524,11 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 		// its title and the opening of its body — to embed 1 024. Read
 		// that paragraph before adding the third.
 		return nil, fmt.Errorf("search: the embed duty has %d corpora and a "+
-			"ceiling of %d provider calls a tick — every corpus must be "+
-			"guaranteed at least one call or the ones at the back of "+
+			"tick embeds %d sources at most %d a request — every corpus must be "+
+			"guaranteed at least one full request or the ones at the back of "+
 			"EmbedDeps.Corpora are never embedded at all; raise "+
-			"EmbedBatchesPerTick or embed fewer source kinds",
-			len(d.Corpora), EmbedBatchesPerTick)
+			"EmbedSourcesPerTick or embed fewer source kinds",
+			len(d.Corpora), EmbedSourcesPerTick, EmbedBatch)
 	}
 	if d.Logger == nil {
 		d.Logger = log
@@ -496,22 +542,39 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 // Tick embeds one tick's worth of sources and reports how many records it
 // published.
 //
+// # The unit of work is a REQUEST, and the duty forms every one
+//
+// Each corpus's stale sources are cut into requests by the model's own packing
+// rule ([embeddings.Limits.Requests], capped at [EmbedBatch] sources), and
+// each request is sent through a call of its own — so a request the model
+// would refuse for its size is never formed, and one it refuses all the same
+// is a request whose inputs this duty knows. What follows from an answer is in
+// the section above [pending]: a refusal is split until the input it refuses
+// is alone, and that input is held back ([Refusals]).
+//
 // # Why a failure is counted rather than returned
 //
-// The tick's unit of work is a BATCH, and the failures this meets are per
-// batch: a rate limit, a timeout, one document the provider refuses. Returning
-// the first one would abandon the other seven batches and every corpus after
-// this one — so the corpus stops being embedded because of one document in it,
-// and the symptom is a search that quietly stops improving.
+// A REFUSAL costs the input refused and nothing else. ANY OTHER FAILURE — a
+// rate limit, a timeout, a server down, a credential refused, an answer this
+// package could not read — is a fact about the provider rather than about an
+// input, and the next request would meet it too: it ends the tick's requests,
+// is logged, and the tick after it is the retry. Neither is returned, because
+// returning the first one would abandon every corpus after this one — the
+// corpus stops being embedded because of one document in it, and the symptom
+// is a search that quietly stops improving. A PUBLISH that fails is
+// different, and does stop the tick and is returned: an evicted node, an
+// unreachable broker or a store that refuses the snapshot fails the next
+// publish identically, so carrying it would spend the provider's answers on
+// vectors nothing can write.
 //
-// # How the tick's provider calls are divided between the corpora
+// # How the tick's requests are divided between the corpora
 //
-// ROUND ROBIN, ONE BATCH AT A TIME, and the shape it replaced is why: a single
-// budget spent corpus by corpus in order hands the whole tick to whoever is
-// first in [EmbedDeps.Corpora] whenever that corpus has [EmbedBatchesPerTick]
-// batches of backlog. A company writing tasks faster than 1 024 a minute — or
-// simply one still cold-filling a hundred thousand of them — never reached its
-// pages at all: not one page embedded, not one trashed page's vector
+// ROUND ROBIN, ONE REQUEST AT A TIME, and the shape it replaced is why: a
+// single budget spent corpus by corpus in order hands the whole tick to
+// whoever is first in [EmbedDeps.Corpora] whenever that corpus has a tick's
+// worth of backlog. A company writing tasks faster than 1 024 a minute — or
+// simply one still cold-filling a hundred thousand of them — never reached
+// its pages at all: not one page embedded, not one trashed page's vector
 // withdrawn, for as long as the task backlog refilled. And the symptom is the
 // one this file exists to prevent: page searches silently answering with the
 // lexical half only, while a coverage gauge that SUMS the corpora reports a
@@ -519,11 +582,12 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 //
 // Round robin IS a reserved share plus the redistribution of what nobody used,
 // expressed as one rule rather than two. With every corpus behind, each gets
-// ⌊budget/N⌋ calls and the remainder goes to the ones at the front — an
-// advantage bounded by a single call. With any of them caught up or empty, its
-// turn is skipped and the rest take the calls it did not need, so the global
-// ceiling is still spent in full and a corpus with nothing to do wastes
-// nothing.
+// ⌊budget/N⌋ requests — of [EmbedRequestsPerTick], and of the sources
+// [EmbedSourcesPerTick] allows — and the remainder goes to the ones at the
+// front, an advantage bounded by a single request. With any of them caught up
+// or empty, its turn is skipped and the rest take the requests it did not
+// need, so the ceilings are still spent in full and a corpus with nothing to
+// do wastes nothing.
 //
 // The two alternatives, and what each costs:
 //
@@ -560,55 +624,58 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 		failed = append(failed, fmt.Errorf("search: the semantic index: %w", err))
 	}
 
+	bound := e.inputBound()
+	now := e.deps.Now()
+	e.deps.Refusals.expire(now)
+
 	// ONE SELECTION PER CORPUS PER TICK, ASKED FOR THE WHOLE TICK'S
-	// CEILING. Every batch a corpus is granted is sliced out of this one
+	// CEILING. Every request a corpus is granted is formed out of this one
 	// list and the corpus is never re-queried, because a record this tick
 	// published is not applied yet: a second selection inside the same tick
 	// returns the documents just embedded and pays the provider for them
 	// again. Asking for the ceiling rather than for the fair share is what
-	// lets a corpus take the calls its neighbours did not use — how many
+	// lets a corpus take the requests its neighbours did not use — how many
 	// that is cannot be known until every corpus has answered.
 	//
 	// THE PRICE IS N SELECTIONS' WORTH OF ROWS TO SPEND ONE, and it is
 	// written as a function of N rather than of today's corpora because N
 	// is the term a later source kind moves: each corpus is asked for
-	// EmbedBatchesPerTick*EmbedBatch rows while the tick can embed that
-	// many in TOTAL, so with every corpus behind at once (N-1)/N of what
-	// was read is discarded — 1 024 documents at the two corpora shipped,
-	// 7 168 at the eight [NewEmbedder] allows. It is not only SQL work:
-	// every selected [Document] holds its body's first [embedReadChars]
-	// characters — up to 64 KiB, 16 KiB of prose — so N x 1 024 of those
-	// are live for the length of the tick, up to 64 MiB a corpus, and a
-	// third corpus is a 50 % rise in this duty's peak footprint before it
-	// embeds anything new. That is the figure to weigh when adding one.
-	// None of it is lost WORK — the selection is derived from the rows, so
-	// the next tick asks again.
+	// EmbedSourcesPerTick rows while the tick can embed that many in TOTAL,
+	// so with every corpus behind at once (N-1)/N of what was read is
+	// discarded — 1 024 documents at the two corpora shipped, 7 168 at the
+	// eight [NewEmbedder] allows. It is not only SQL work: every selected
+	// [Document] holds its body's first [embedReadChars] characters — up to
+	// 64 KiB, 16 KiB of prose — so N x 1 024 of those are live for the
+	// length of the tick, up to 64 MiB a corpus, and a third corpus is a
+	// 50 % rise in this duty's peak footprint before it embeds anything
+	// new. That is the figure to weigh when adding one. None of it is lost
+	// WORK — the selection is derived from the rows, so the next tick asks
+	// again.
 	//
 	// TWO SHAPES THAT WOULD BOUND THE READ WERE WEIGHED AND NOT TAKEN,
 	// because each buys it back with something load-bearing:
 	//
 	//   - A FAIR-SHARE FIRST PASS — ask each corpus for ceil(budget/N)
-	//     batches and top up whoever came back full — rations the FORGET
-	//     path by the same limit, because `gone` rides on this one
+	//     requests' worth and top up whoever came back full — rations the
+	//     FORGET path by the same limit, because `gone` rides on this one
 	//     selection. Withdrawals are deliberately OUTSIDE the provider
 	//     budget (see the loop below), so rationing them by 1/N is exactly
 	//     the trade this file refuses: a page somebody deleted would stay
 	//     findable by meaning N times as long, to save rows on a tick whose
-	//     wall clock is eight provider round trips.
+	//     wall clock is provider round trips.
 	//   - A TOP-UP SELECTION for a corpus that exhausted its slice needs a
 	//     cursor the [Corpus] seam does not have. It would re-read the rows
 	//     it already took and filter them against an id set, since the
 	//     selection order is not promised to be total — a smaller bounded
 	//     waste plus a second query and an invariant nothing else here
 	//     depends on, rather than no waste.
-	stale := make([][]Document, len(e.deps.Corpora))
-	for i, corpus := range e.deps.Corpora {
-		docs, gone, err := corpus.Stale(ctx, e.deps.Model, dim,
-			EmbedBatchesPerTick*EmbedBatch)
+	queues := make([]*corpusQueue, 0, len(e.deps.Corpora))
+	for _, corpus := range e.deps.Corpora {
+		docs, gone, err := corpus.Stale(ctx, e.deps.Model, dim, EmbedSourcesPerTick)
 		if err != nil {
 			// A SELECTION FAILURE COSTS ITS OWN CORPUS AND NOT THE
-			// TICK, for the same reason a batch failure costs its own
-			// batch — and here the reason is sharper: the corpora are
+			// TICK, for the same reason a refused input costs only
+			// itself — and here the reason is sharper: the corpora are
 			// visited in order, so returning on the first failure
 			// would let one corpus whose query cannot run starve every
 			// corpus behind it, tick after tick. That is the same
@@ -622,10 +689,29 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 				"search: select stale %s sources: %w", corpus.Source(), err))
 			continue
 		}
-		stale[i] = docs
+		q := &corpusQueue{source: corpus.Source()}
+		held := 0
+		for _, doc := range docs {
+			p := pendingOf(doc, bound)
+			switch e.deps.Refusals.standing(keyOf(q.source, p), now) {
+			case refusalHeld:
+				held++
+				continue
+			case refusalDue:
+				p.alone = true
+			}
+			q.waiting = append(q.waiting, p)
+		}
+		if held > 0 {
+			e.deps.Logger.DebugContext(ctx, "search_embed_inputs_held",
+				"source", string(q.source), "held", held,
+				"detail", "inputs the provider refused alone, held back until "+
+					"their retry is due")
+		}
+		queues = append(queues, q)
 
 		// A FORGET COSTS NO PROVIDER CALL, so it is outside the budget
-		// the calls are rationed by: withdrawing the vector of a task
+		// the requests are rationed by: withdrawing the vector of a task
 		// somebody deleted is a correction the company has already paid
 		// for, and rationing it would leave deleted work findable by
 		// meaning for exactly as long as the corpus stayed behind. It is
@@ -637,7 +723,7 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 				// unreachable broker or a store that refuses the
 				// snapshot fails the next corpus's publishes
 				// identically, so carrying it would buy nothing
-				// and spend eight provider calls to find out.
+				// and spend the provider's requests to find out.
 				failed = append(failed, err)
 				return published, errors.Join(failed...)
 			}
@@ -646,50 +732,88 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			// publish, bounded as every publish is. There can be a
 			// selection's worth of them a corpus — 1 024 after a bulk
 			// purge — and unreported they were the longest stretch a
-			// live tick went silent, eight batches' publishes with no
-			// provider call between them to show for it, which a
-			// slow broker could stretch past the bound.
+			// live tick went silent, a tick's publishes with no
+			// provider call between them to show for it, which a slow
+			// broker could stretch past the bound.
 			e.deps.Budget.Advanced()
 		}
 	}
 
-	for budget := EmbedBatchesPerTick; budget > 0; {
-		// ONE PASS OVER THE CORPORA, ONE BATCH EACH. A pass that hands
-		// out nothing means no corpus has work left, which is the only
-		// way out of this loop other than the budget: a caught-up
-		// company must cost one selection per corpus and stop.
+	limits := e.deps.Embedder.Limits()
+	limits.BatchInputs = min(limits.BatchInputs, EmbedBatch)
+	t := tickRequests{requests: EmbedRequestsPerTick, sources: EmbedSourcesPerTick}
+	for t.open() {
+		// ONE PASS OVER THE CORPORA, ONE REQUEST EACH. A pass that hands
+		// out nothing means no corpus has work left, which is the only way
+		// out of this loop other than the ceilings and a provider that
+		// stopped answering: a caught-up company must cost one selection
+		// per corpus and stop.
 		spent := false
-		for i, corpus := range e.deps.Corpora {
-			if budget == 0 {
+		for _, q := range queues {
+			if !t.open() {
 				break
 			}
-			if len(stale[i]) == 0 {
+			group, err := q.next(limits, t.sources)
+			if err != nil {
+				// UNREACHABLE: every text is cut inside the model's
+				// own bound ([Embedder.inputBound]) and the limits were
+				// validated when the provider was built. Said rather
+				// than assumed, and it ends the requests like any
+				// failure that is not about an input.
+				e.deps.Logger.WarnContext(ctx, "search_embed_unplannable",
+					"source", string(q.source), "error", err.Error())
+				t.stopped = true
+				break
+			}
+			if len(group) == 0 {
 				continue
 			}
-			batch := stale[i][:min(EmbedBatch, len(stale[i]))]
-			stale[i] = stale[i][len(batch):]
-			budget--
 			spent = true
-			// The batch reports its own progress, call and publishes
-			// apart ([Embedder.embed]).
-			n, err := e.embed(ctx, corpus.Source(), dim, batch)
+			n, err := e.request(ctx, q, dim, group, &t)
 			published += n
 			if err != nil {
-				// LOGGED AND CARRIED. The next batch and the next
-				// tick are the retry, and nothing here is lost:
-				// the selection is derived from the rows
-				// themselves, so an un-embedded source is simply
-				// selected again.
-				e.deps.Logger.WarnContext(ctx, "search_embed_batch_failed",
-					"source", string(corpus.Source()),
-					"documents", len(batch), "error", err.Error())
+				failed = append(failed, err)
+				return published, errors.Join(failed...)
 			}
 		}
 		if !spent {
 			break
 		}
 	}
+	if t.refused > 0 && t.accepted == 0 {
+		// EVERY REQUEST REFUSED, single inputs included, which is the
+		// shape of a provider refusing the CONFIGURATION rather than an
+		// input — a parameter it does not take, a model it does not serve
+		// at that width. Each input it refused alone is named above; this
+		// says what they have in common.
+		e.deps.Logger.WarnContext(ctx, "search_embed_every_request_refused",
+			"model", e.deps.Model, "requests", t.refused,
+			"detail", "the provider refused every request this tick, inputs "+
+				"sent alone included — when no input is ever accepted the "+
+				"refusal is the configuration's (providers.embeddings), not "+
+				"any document's")
+	}
 	return published, errors.Join(failed...)
+}
+
+// tickRequests is what a tick may still send, and what its answers were.
+type tickRequests struct {
+	// requests and sources are what is left of [EmbedRequestsPerTick]
+	// and [EmbedSourcesPerTick].
+	requests, sources int
+
+	// accepted and refused count the requests the provider embedded and
+	// refused.
+	accepted, refused int
+
+	// stopped says a failure that is not about an input ended the tick's
+	// requests.
+	stopped bool
+}
+
+// open reports whether the tick may send another request.
+func (t *tickRequests) open() bool {
+	return !t.stopped && t.requests > 0 && t.sources > 0
 }
 
 // inputBound is how many bytes of a source this duty sends: [EmbedInputBytes],
@@ -697,78 +821,137 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 //
 // THE MODEL'S BOUND IS A FACT the provider enforces — it refuses an input past
 // it before sending anything — so an opening longer than the model accepts is
-// not a longer opening but a batch refused on every tick. Where the model takes
-// 8 KiB or more, which OpenAI's do at exactly 8 192, this is EmbedInputBytes
-// unchanged, and so is every digest the corpus already carries.
+// not a longer opening but a request refused on every tick. Where the model
+// takes 8 KiB or more, which OpenAI's do at exactly 8 192, this is
+// EmbedInputBytes unchanged.
 func (e *Embedder) inputBound() int {
 	return min(EmbedInputBytes, e.deps.Embedder.Limits().InputBytes)
 }
 
-// embed sends one batch and publishes a record per vector it got back.
-func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Document) (int, error) {
-	bound := e.inputBound()
-	texts := make([]string, len(batch))
-	for i, doc := range batch {
-		texts[i] = doc.text(bound)
+// request sends one request — a group the model's limits admit — and acts on
+// the answer: publishes what it embedded, splits what it refused, holds back
+// an input refused alone, or ends the tick's requests.
+//
+// It returns the records it published, and an error only for a publish that
+// failed, which stops the tick ([Embedder.Tick]).
+func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group []pending, t *tickRequests) (int, error) {
+	texts := make([]string, len(group))
+	for i, p := range group {
+		texts[i] = p.text
 	}
 	vectors, err := e.deps.Embedder.EmbedBatch(ctx, texts)
+	t.requests--
 	// THE PROVIDER ANSWERED, WHATEVER IT ANSWERED, which is progress
-	// ([Budget]): one call, bounded by its own timeout.
+	// ([Budget]): one request, bounded by its own timeout.
 	e.deps.Budget.Advanced()
-	if err != nil {
-		return 0, err
+	switch {
+	case err == nil && len(vectors) != len(group):
+		// A SHORT ANSWER IS A RE-FILING, never a partial result: vectors
+		// are matched to sources by position. The provider's contract
+		// rules it out, so an implementation that broke it is not one to
+		// send the rest of the tick to.
+		e.deps.Logger.WarnContext(ctx, "search_embed_request_failed",
+			"source", string(q.source), "model", e.deps.Model,
+			"inputs", len(group), "error", fmt.Sprintf("the provider returned "+
+				"%d vectors for %d inputs", len(vectors), len(group)))
+		t.stopped = true
+		return 0, nil
+	case err == nil:
+		t.accepted++
+		return e.publishAll(ctx, q.source, dim, group, vectors, t)
+	case errors.Is(err, embeddings.ErrRefused) && len(group) > 1:
+		// SPLIT, AND THE HALVES GO FIRST: the corpus's next turns send
+		// them before anything else it holds, so the input the provider
+		// refuses is alone within log₂ of the request's size, and every
+		// half it accepts on the way publishes as it goes.
+		t.refused++
+		first, second := halves(group)
+		q.split = append([][]pending{first, second}, q.split...)
+		return 0, nil
+	case errors.Is(err, embeddings.ErrRefused):
+		// REFUSED ALONE: this input is what the provider will not take.
+		// It costs itself, and is held back until its retry is due.
+		t.refused++
+		p := group[0]
+		e.deps.Refusals.refuse(keyOf(q.source, p), e.deps.Now())
+		e.deps.Logger.WarnContext(ctx, "search_embed_input_refused",
+			"source", string(q.source), "id", p.doc.ID, "model", e.deps.Model,
+			"bytes", len(p.text),
+			"input_limit_bytes", e.deps.Embedder.Limits().InputBytes,
+			"retry_in", EmbedRefusalRetry.String(), "error", err.Error(),
+			"detail", "the provider refused this source's text sent alone; it "+
+				"is not embedded, and is offered again alone when the retry is "+
+				"due — a refusal of text inside input_limit_bytes says the "+
+				"model's limits are declared wider than the endpoint enforces "+
+				"(providers.embeddings.max_input_tokens), or that the endpoint "+
+				"refuses this text for what it says")
+		return 0, nil
 	}
-	if len(vectors) != len(batch) {
-		return 0, fmt.Errorf("search: the provider returned %d vectors for %d "+
-			"documents — they are matched positionally, so a short answer is a "+
-			"re-filing rather than a partial result", len(vectors), len(batch))
-	}
+	// NOT ABOUT AN INPUT — transient, the configuration, a cancellation or
+	// an answer this package could not read — so the next request would
+	// meet it too.
+	t.stopped = true
+	e.deps.Logger.WarnContext(ctx, "search_embed_request_failed",
+		"source", string(q.source), "model", e.deps.Model,
+		"inputs", len(group), "error", err.Error(),
+		"detail", "this tick sends no more requests; the next tick asks again, "+
+			"and nothing is lost — the selection is derived from the rows")
+	return 0, nil
+}
+
+// publishAll publishes a record per vector an accepted request returned.
+func (e *Embedder) publishAll(ctx context.Context, source Source, dim int, group []pending, vectors [][]float32, t *tickRequests) (int, error) {
 	published := 0
 	for i, vector := range vectors {
+		p := group[i]
 		if len(vector) == 0 {
 			// A DOCUMENT WITH NOTHING TO EMBED, which is a real state
 			// — an empty page, a task that is a title somebody
 			// deleted — and not a failure. It keeps no vector and is
-			// selected again next pass, which costs one slot in a
-			// batch and never a provider call, because an empty
-			// input is not sent.
+			// selected again next pass, never costing a provider call,
+			// because an empty input is not sent.
 			continue
 		}
-		err := e.publish(ctx, source, dim, bound, batch[i], vector)
+		err := e.publish(ctx, source, dim, p, vector)
 		// EACH PUBLISH IS PROGRESS ([Budget]), as a withdrawal's is: one
 		// publish, bounded as every publish is. Counted as one stretch
-		// with the call before it, a batch's hundred and twenty-eight
-		// were the longest a live tick went silent, and a broker slow
-		// enough to take its bound's length over them cut off a tick
-		// that was publishing steadily — the slow-but-advancing tick the
-		// bound exists NOT to cut off. A refused vector published
-		// nothing, and its refusal is an answer all the same.
+		// with the request before it, a request's hundred and
+		// twenty-eight were the longest a live tick went silent, and a
+		// broker slow enough to take its bound's length over them cut off
+		// a tick that was publishing steadily — the slow-but-advancing
+		// tick the bound exists NOT to cut off. A refused vector
+		// published nothing, and its refusal is an answer all the same.
 		e.deps.Budget.Advanced()
 		if err != nil {
 			// A VECTOR THIS DUTY REFUSES COSTS ITS OWN DOCUMENT AND
-			// NOT THE BATCH, which is the same rule one level down
-			// from the tick's: the refusal is about one vector, and
-			// dropping the other 127 would make one poisoned
-			// component cost a hundred provider calls' worth of
-			// work. It is not silent — the log names the document —
-			// and it is not lost, because the selection is over the
-			// rows and picks it up again.
+			// NOT THE REQUEST, which is the same rule one level down:
+			// the refusal is about one vector, and dropping the other
+			// 127 would make one poisoned component cost a hundred
+			// provider calls' worth of work. It is not silent — the
+			// log names the document — and it is not lost, because
+			// the selection is over the rows and picks it up again.
 			if errors.Is(err, errUnusableVector) {
 				e.deps.Logger.WarnContext(ctx, "search_embed_vector_refused",
-					"source", string(source), "id", batch[i].ID,
+					"source", string(source), "id", p.doc.ID,
 					"error", err.Error())
 				continue
 			}
 			return published, err
 		}
 		published++
+		t.sources--
+		if p.alone {
+			// ACCEPTED AFTER ALL — a provider fixed, a rule relaxed —
+			// so the memory of its refusal goes with it.
+			e.deps.Refusals.accept(keyOf(source, p))
+		}
 	}
 	return published, nil
 }
 
-// publish writes one embed record, its digest over the text sent at bound.
-func (e *Embedder) publish(ctx context.Context, source Source, dim, bound int, doc Document, vector []float32) error {
-	subject := Subject{Source: source, ID: doc.ID}
+// publish writes one embed record for p, its digest over the text sent.
+func (e *Embedder) publish(ctx context.Context, source Source, dim int, p pending, vector []float32) error {
+	subject := Subject{Source: source, ID: p.doc.ID}
 	packed, err := pack(vector, dim)
 	if err != nil {
 		return fmt.Errorf("search: %s: %w: %w", subject, errUnusableVector, err)
@@ -779,14 +962,14 @@ func (e *Embedder) publish(ctx context.Context, source Source, dim, bound int, d
 			Op:        OpEmbed,
 			CreatedAt: e.deps.Now().UTC(),
 			Scope: statelog.ScopeSet{
-				Paths: []string{ScopePath(doc.Container, subject)},
+				Paths: []string{ScopePath(p.doc.Container, subject)},
 			},
 		},
-		Container: doc.Container,
+		Container: p.doc.Container,
 		Model:     e.deps.Model,
 		Dim:       dim,
-		SourceRev: doc.Version,
-		TextSHA:   doc.sha(bound),
+		SourceRev: p.doc.Version,
+		TextSHA:   p.sha,
 		Embedding: packed,
 	}
 	return e.append(ctx, subject, rec)
@@ -921,7 +1104,7 @@ func opIDFor(rec VectorRecord) string {
 }
 
 // errUnusableVector marks a vector this duty will not publish, which its
-// caller treats as costing that document and not the batch it arrived in.
+// caller treats as costing that document and not the request it arrived in.
 var errUnusableVector = errors.New("the provider's vector cannot be published")
 
 // pack renders a vector in the layout the column holds.

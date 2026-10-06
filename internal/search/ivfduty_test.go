@@ -373,9 +373,10 @@ func boundedDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standi
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: standing, Embedder: embedder, Model: embedModel,
-		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
-		Now:     now,
-		Budget:  budget,
+		Corpora:  []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Now:      now,
+		Budget:   budget,
+		Refusals: search.NewRefusals(),
 	})
 	if err != nil {
 		t.Fatal(err)

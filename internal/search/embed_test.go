@@ -279,9 +279,10 @@ func TestEveryWithdrawalShowsTheTicksBoundItsProgress(t *testing.T) {
 		Log:      search.Domain{}.Stream().Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel,
-		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
-		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
-		Budget:  budget,
+		Corpora:  []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:   budget,
+		Refusals: search.NewRefusals(),
 	})
 	if err != nil {
 		t.Fatalf("build the duty: %v", err)
@@ -322,9 +323,10 @@ func TestEveryEmbeddedVectorShowsTheTicksBoundItsProgress(t *testing.T) {
 		Log:      search.Domain{}.Stream().Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel,
-		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
-		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
-		Budget:  budget,
+		Corpora:  []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:   budget,
+		Refusals: search.NewRefusals(),
 	})
 	if err != nil {
 		t.Fatalf("build the duty: %v", err)
@@ -349,60 +351,215 @@ type countedBudget struct{ advanced atomic.Int64 }
 func (b *countedBudget) Advanced()      { b.advanced.Add(1) }
 func (b *countedBudget) Exempt() func() { return func() {} }
 
-// A PROVIDER FAILURE COSTS THE BATCH AND NOT THE CORPUS.
+// EVERY REQUEST IS ONE THE MODEL ACCEPTS FOR ITS SIZE.
 //
-// The tick's unit of work is a batch and the failures this meets are per batch
-// — a rate limit, a timeout, one document the provider refuses. Failing the
-// tick on the first one abandons every batch after it, so the corpus stops
-// being embedded because of one document in it, and the symptom is a search
-// that quietly stops improving.
-func TestAFailedBatchDoesNotStopTheTick(t *testing.T) {
+// The duty forms its own requests through the provider's packing rule, so a
+// request past the model's input count or its request total is never formed —
+// sent, it would be refused on every tick, and before the duty planned its own
+// requests a tick of long sources did exactly that against OpenAI's 300 000
+// tokens. The twin enforces the same limits by the same code, and counts every
+// request it was sent.
+func TestEveryRequestTheDutyFormsFitsTheModel(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
-	// More than one batch's worth, with the FIRST batch poisoned.
+	limits := embeddings.Limits{InputBytes: 512, BatchInputs: 6, BatchBytes: 2_000, InputOverhead: 3}
+	h.embedder.SetLimits(limits)
+	seed := map[string]string{}
+	for i := range 40 {
+		seed[fmt.Sprintf("t-%02d", i)] = strings.Repeat(fmt.Sprintf("long body %d ", i), 30)
+	}
+	h.seedTasks(seed)
+
+	published, err := h.duty.Tick(t.Context())
+	if err != nil || published != 40 {
+		t.Fatalf("the tick published %d of 40 (%v)", published, err)
+	}
+	requests := h.embedder.Requests()
+	for i, request := range requests {
+		used := 0
+		for _, input := range request {
+			used += len(input) + limits.InputOverhead
+		}
+		if len(request) > limits.BatchInputs || used > limits.BatchBytes {
+			t.Errorf("request %d carried %d inputs and %d bytes, past the model's "+
+				"%d inputs and %d bytes", i, len(request), used, limits.BatchInputs,
+				limits.BatchBytes)
+		}
+	}
+	if len(requests) < 2 {
+		t.Fatalf("setup: 40 sources went in %d request(s), so the limits never bound", len(requests))
+	}
+}
+
+// A PERMANENTLY REFUSED INPUT CANNOT HOLD ITS NEIGHBOURS BACK.
+//
+// A refusal says the REQUEST is unacceptable and not which part of it, and the
+// selection is oldest first, so before the duty split a refused request every
+// one of its neighbours was refused with it on every tick for ever. Now the
+// request is split until the input refused is alone: everything else is
+// published in the tick the refusal is met in, at no more than 1 + 2·log₂n
+// requests, and the input refused alone costs only itself — and on the ticks
+// after it, nothing at all until its retry is due, when it is offered ALONE.
+func TestAPermanentlyRefusedInputCannotHoldItsNeighboursBack(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.refuse("poison")
+	seed := map[string]string{}
+	for i := range search.EmbedBatch {
+		seed[fmt.Sprintf("t-%04d", i)] = fmt.Sprintf("document number %d", i)
+	}
+	// THE OLDEST, so it is in the first request every tick forms.
+	seed["t-0000"] = "a poison pill the provider never accepts"
+	h.seedTasks(seed)
+
+	published, err := h.duty.Tick(t.Context())
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if published != search.EmbedBatch-1 {
+		t.Fatalf("the tick published %d of the %d sources the provider accepts",
+			published, search.EmbedBatch-1)
+	}
+	sent := len(h.embedder.sent())
+	if bound := 1 + 2*7; sent > bound {
+		t.Fatalf("isolating one refused input among %d took %d requests, past "+
+			"1 + 2·log₂n = %d", search.EmbedBatch, sent, bound)
+	}
+	h.drain()
+	if got := h.vectors(); got != search.EmbedBatch-1 {
+		t.Fatalf("%d vector(s) stored, want every neighbour of the refused input", got)
+	}
+
+	// HELD BACK: the next tick sends nothing for it.
+	if published, err = h.duty.Tick(t.Context()); err != nil || published != 0 {
+		t.Fatalf("the tick after the refusal published %d (%v)", published, err)
+	}
+	if again := len(h.embedder.sent()); again != sent {
+		t.Fatalf("the tick after the refusal sent %d request(s) for an input "+
+			"refused alone — it is held back until its retry is due", again-sent)
+	}
+
+	// AND ONCE DUE, OFFERED ALONE: one request carrying it and nothing else,
+	// although a neighbour written since stands right behind it — sent with
+	// it, the neighbour would be refused with it and split out again.
+	h.advance(search.EmbedRefusalRetry)
+	h.seedTasks(map[string]string{"t-new": "a document written since"})
+	if published, err = h.duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the retry tick published %d (%v), want the new neighbour", published, err)
+	}
+	requests := h.embedder.sent()[sent:]
+	if len(requests) != 2 || len(requests[0]) != 1 || !strings.Contains(requests[0][0], "poison") ||
+		len(requests[1]) != 1 || !strings.Contains(requests[1][0], "written since") {
+		t.Fatalf("the retry tick sent %q, want the refused input alone and then "+
+			"its neighbour", requests)
+	}
+}
+
+// AN INPUT REFUSED ALONE IS EMBEDDED ONCE THE PROVIDER TAKES IT.
+//
+// A refusal is a fact about a provider and a text, not a verdict on the source:
+// a gateway fixed or a content rule relaxed has it embedded at the next retry,
+// and the memory of the refusal goes. A source whose TEXT changed is a
+// different input, offered at once with its neighbours — and the memory of
+// what it used to say, offered nowhere since, is forgotten once twice the
+// retry has passed, or the memory would grow for the life of the process.
+func TestARefusedInputIsEmbeddedOnceItIsAccepted(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.refuse("poison")
+	h.seedTasks(map[string]string{"t-a": "a poison pill", "t-b": "a poison pill too"})
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.refusals.Len(); got != 2 {
+		t.Fatalf("%d refusal(s) remembered for two inputs refused alone", got)
+	}
+
+	// t-b IS REWRITTEN: a new text, a new input, offered at once.
+	h.embedder.accept("poison")
+	h.seedTasks(map[string]string{"t-b": "an ordinary body now"})
+	published, err := h.duty.Tick(t.Context())
+	if err != nil || published != 1 {
+		t.Fatalf("the tick after t-b was rewritten published %d (%v), want t-b", published, err)
+	}
+	h.drain()
+
+	// t-a IS ACCEPTED AT ITS RETRY, and forgotten.
+	h.advance(search.EmbedRefusalRetry)
+	if published, err = h.duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the retry tick published %d (%v), want t-a", published, err)
+	}
+	h.drain()
+	if got := h.vectors(); got != 2 {
+		t.Fatalf("%d vector(s) stored, want both", got)
+	}
+	if got := h.refusals.Len(); got != 1 {
+		t.Fatalf("%d refusal(s) remembered, want only t-b's old text — t-a's went "+
+			"when it was embedded", got)
+	}
+
+	// AND t-b's OLD TEXT GOES once nothing has offered it for twice the retry.
+	h.advance(search.EmbedRefusalRetry)
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.refusals.Len(); got != 0 {
+		t.Fatalf("%d refusal(s) remembered for texts no selection returns any more", got)
+	}
+}
+
+// A FAILURE THAT IS NOT ABOUT AN INPUT ENDS THE TICK'S REQUESTS, and the next
+// tick embeds what it left.
+//
+// A rate limit, a timeout or a server down is a fact about the provider, and
+// the next request would meet it too: sending the rest of the tick's thirty-two
+// is thirty-one more answers of the same kind, each up to a minute. Nothing is
+// lost by stopping — the selection is derived from the rows, so whatever the
+// tick did not embed is selected again.
+func TestATransientFailureEndsTheTicksRequests(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
 	seed := map[string]string{}
 	for i := range search.EmbedBatch + 5 {
 		seed[fmt.Sprintf("t-%04d", i)] = fmt.Sprintf("document number %d", i)
 	}
+	seed["t-0000"] = "the provider is busy with this one"
 	h.seedTasks(seed)
-	h.embedder.failFirst = true
+	h.embedder.FailTransiently("busy", 1)
 
 	published, err := h.duty.Tick(t.Context())
 	if err != nil {
 		t.Fatalf("the tick returned an error rather than carrying: %v", err)
 	}
-	if published != 5 {
-		t.Fatalf("the tick published %d record(s); the first batch of %d was "+
-			"refused and the second holds 5", published, search.EmbedBatch)
+	if published != 0 || len(h.embedder.Requests()) != 1 {
+		t.Fatalf("after a transient failure the tick published %d in %d request(s), "+
+			"want it to stop at the first", published, len(h.embedder.Requests()))
 	}
-	h.drain()
 
-	// AND THE NEXT TICK PICKS UP WHAT THE FAILED BATCH LEFT, because
-	// nothing was recorded for it: the selection is over the rows.
-	h.embedder.failFirst = false
 	again, err := h.duty.Tick(t.Context())
-	if err != nil {
-		t.Fatalf("second tick: %v", err)
-	}
-	if again != search.EmbedBatch {
-		t.Fatalf("the retry published %d of the %d the failed batch held",
-			again, search.EmbedBatch)
+	if err != nil || again != search.EmbedBatch+5 {
+		t.Fatalf("the next tick published %d of %d (%v)", again, search.EmbedBatch+5, err)
 	}
 }
 
 // A CORPUS THAT IS ALWAYS BEHIND DOES NOT STARVE THE ONE AFTER IT.
 //
-// The tick's provider calls are one budget shared by every corpus, and spent
-// corpus by corpus in order they all went to the first one that could take
-// them: a company writing tasks faster than the duty embeds them — or simply
-// one still cold-filling a hundred thousand — never reached its pages at all.
-// Not one page embedded, not one trashed page's vector withdrawn, for as long
-// as the backlog refilled, while the coverage gauge summed both corpora and
-// reported a company that was merely behind.
+// The tick's provider requests are one budget shared by every corpus, and
+// spent corpus by corpus in order they all went to the first one that could
+// take them: a company writing tasks faster than the duty embeds them — or
+// simply one still cold-filling a hundred thousand — never reached its pages
+// at all. Not one page embedded, not one trashed page's vector withdrawn, for
+// as long as the backlog refilled, while the coverage gauge summed both corpora
+// and reported a company that was merely behind.
+//
+// A model that takes sixteen inputs a request is what makes the REQUEST
+// ceiling bind here: each corpus has sixty-four requests of backlog, and the
+// tick has thirty-two.
 func TestABackloggedCorpusDoesNotStarveTheOneAfterIt(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
 	h.embedder.blank = true
+	h.embedder.SetLimits(embeddings.Limits{InputBytes: 8192, BatchInputs: 16, BatchBytes: 300_000})
 	tasks := &scriptedCorpus{source: search.SourceTask, backlog: -1}
 	// THE SECOND CORPUS IS BEHIND TOO, and also carries a vector to
 	// withdraw: under the old scheduling its selection never ran at all,
@@ -416,19 +573,19 @@ func TestABackloggedCorpusDoesNotStarveTheOneAfterIt(t *testing.T) {
 	}
 
 	calls := h.embedder.callsPerSource()
-	want := search.EmbedBatchesPerTick / 2
+	want := search.EmbedRequestsPerTick / 2
 	if calls[search.SourcePage] != want || calls[search.SourceTask] != want {
-		t.Fatalf("the tick spent %d call(s) on tasks and %d on pages; two "+
+		t.Fatalf("the tick spent %d request(s) on tasks and %d on pages; two "+
 			"corpora that are both behind divide the tick's %d evenly, and "+
 			"a page corpus at zero is a company whose wiki is unsearchable "+
 			"by meaning for as long as the task backlog refills",
 			calls[search.SourceTask], calls[search.SourcePage],
-			search.EmbedBatchesPerTick)
+			search.EmbedRequestsPerTick)
 	}
-	if total := calls[search.SourceTask] + calls[search.SourcePage]; total != search.EmbedBatchesPerTick {
-		t.Fatalf("the tick made %d provider calls against a ceiling of %d — "+
+	if total := calls[search.SourceTask] + calls[search.SourcePage]; total != search.EmbedRequestsPerTick {
+		t.Fatalf("the tick made %d provider requests against a ceiling of %d — "+
 			"the ceiling is what bounds the company's embedding bill, and "+
-			"sharing it fairly may not raise it", total, search.EmbedBatchesPerTick)
+			"sharing it fairly may not raise it", total, search.EmbedRequestsPerTick)
 	}
 	if published != 1 {
 		t.Fatalf("the tick published %d record(s); the provider embedded "+
@@ -437,13 +594,37 @@ func TestABackloggedCorpusDoesNotStarveTheOneAfterIt(t *testing.T) {
 	}
 }
 
+// AND THE SOURCES A TICK MAY EMBED ARE DIVIDED THE SAME WAY.
+//
+// With requests of a full [search.EmbedBatch], the binding ceiling is the
+// tick's sources rather than its requests — eight requests' worth — and the
+// round robin divides those as evenly: four requests, 512 vectors, each.
+func TestTheTicksSourcesAreDividedBetweenTheCorpora(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	tasks := &scriptedCorpus{source: search.SourceTask, backlog: -1}
+	pages := &scriptedCorpus{source: search.SourcePage, backlog: -1}
+
+	published, err := h.dutyOver(tasks, pages).Tick(t.Context())
+	if err != nil || published != search.EmbedSourcesPerTick {
+		t.Fatalf("the tick published %d (%v), want the %d a tick allows",
+			published, err, search.EmbedSourcesPerTick)
+	}
+	calls := h.embedder.callsPerSource()
+	if want := search.EmbedSourcesPerTick / search.EmbedBatch / 2; calls[search.SourceTask] != want ||
+		calls[search.SourcePage] != want {
+		t.Fatalf("the tick spent %d full request(s) on tasks and %d on pages, want %d each",
+			calls[search.SourceTask], calls[search.SourcePage], want)
+	}
+}
+
 // AND A CORPUS WITH NOTHING TO DO WASTES NOTHING.
 //
-// The share is a floor, not a quota: reserving four calls for a caught-up
-// wiki would halve the rate a cold fill of the tracker proceeds at, for a
-// corpus with no work to put them to. What a corpus does not use is taken by
-// whoever still has a backlog, which is what makes the round robin a reserved
-// share and its redistribution in one rule.
+// The share is a floor, not a quota: reserving half the requests for a
+// caught-up wiki would halve the rate a cold fill of the tracker proceeds at,
+// for a corpus with no work to put them to. What a corpus does not use is
+// taken by whoever still has a backlog, which is what makes the round robin a
+// reserved share and its redistribution in one rule.
 func TestAnIdleCorpusGivesItsShareToTheRest(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -453,14 +634,15 @@ func TestAnIdleCorpusGivesItsShareToTheRest(t *testing.T) {
 		wantPage    int
 	}{
 		{name: "an empty wiki", pageBacklog: 0,
-			wantTask: search.EmbedBatchesPerTick, wantPage: 0},
+			wantTask: search.EmbedRequestsPerTick, wantPage: 0},
 		{name: "one page behind", pageBacklog: 1,
-			wantTask: search.EmbedBatchesPerTick - 1, wantPage: 1},
+			wantTask: search.EmbedRequestsPerTick - 1, wantPage: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newEmbedHarness(t)
 			h.embedder.blank = true
+			h.embedder.SetLimits(embeddings.Limits{InputBytes: 8192, BatchInputs: 16, BatchBytes: 300_000})
 			tasks := &scriptedCorpus{source: search.SourceTask, backlog: -1}
 			pages := &scriptedCorpus{source: search.SourcePage, backlog: tc.pageBacklog}
 
@@ -469,9 +651,9 @@ func TestAnIdleCorpusGivesItsShareToTheRest(t *testing.T) {
 			}
 			calls := h.embedder.callsPerSource()
 			if calls[search.SourceTask] != tc.wantTask || calls[search.SourcePage] != tc.wantPage {
-				t.Fatalf("the tick spent %d call(s) on tasks and %d on pages, "+
-					"want %d and %d — a call the second corpus has no work for "+
-					"belongs to the one that does, or the ceiling buys less "+
+				t.Fatalf("the tick spent %d request(s) on tasks and %d on pages, "+
+					"want %d and %d — a request the second corpus has no work "+
+					"for belongs to the one that does, or the ceiling buys less "+
 					"than it costs", calls[search.SourceTask],
 					calls[search.SourcePage], tc.wantTask, tc.wantPage)
 			}
@@ -490,6 +672,7 @@ func TestAnUnreadableCorpusDoesNotStopTheOnesAfterIt(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
 	h.embedder.blank = true
+	h.embedder.SetLimits(embeddings.Limits{InputBytes: 8192, BatchInputs: 16, BatchBytes: 300_000})
 	boom := errors.New("the anti-join timed out")
 	tasks := &scriptedCorpus{source: search.SourceTask, err: boom}
 	pages := &scriptedCorpus{source: search.SourcePage, backlog: -1}
@@ -500,10 +683,10 @@ func TestAnUnreadableCorpusDoesNotStopTheOnesAfterIt(t *testing.T) {
 			"carries the failure must still report it", err)
 	}
 	calls := h.embedder.callsPerSource()
-	if calls[search.SourcePage] != search.EmbedBatchesPerTick {
-		t.Fatalf("the tick spent %d call(s) on the second corpus after the "+
+	if calls[search.SourcePage] != search.EmbedRequestsPerTick {
+		t.Fatalf("the tick spent %d request(s) on the second corpus after the "+
 			"first one's selection failed, want the whole ceiling of %d",
-			calls[search.SourcePage], search.EmbedBatchesPerTick)
+			calls[search.SourcePage], search.EmbedRequestsPerTick)
 	}
 }
 
@@ -517,23 +700,42 @@ func TestTheDutyRefusesAWiringWithNoBudget(t *testing.T) {
 	_, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: h.standing(nil), Embedder: h.embedder, Model: embedModel,
-		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Corpora:  []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Refusals: search.NewRefusals(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "EmbedDeps.Budget") {
 		t.Fatalf("a duty with no budget built as %v, want a refusal naming EmbedDeps.Budget", err)
 	}
 }
 
-// MORE CORPORA THAN THERE ARE CALLS IS A REFUSED WIRING.
+// A DUTY WITH NO REFUSAL MEMORY IS A REFUSED WIRING: the duty is rebuilt every
+// tick, so a memory defaulted inside it would last one tick, and an input the
+// model refuses would be isolated again at the front of every tick for ever.
+func TestTheDutyRefusesAWiringWithNoRefusalMemory(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	_, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
+		Standing: h.standing(nil), Embedder: h.embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Budget:  unbounded{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "EmbedDeps.Refusals") {
+		t.Fatalf("a duty with no refusal memory built as %v, want a refusal naming "+
+			"EmbedDeps.Refusals", err)
+	}
+}
+
+// MORE CORPORA THAN A TICK CAN SERVE IS A REFUSED WIRING.
 //
-// Below one call apiece there is no share left to guarantee: every tick starts
-// its round at the front, so the corpora past the ceiling would be embedded
-// never rather than slowly. Refusing says so at the wiring, which is the one
-// place the extra corpus can be taken back out.
+// Below one full request apiece there is no share left to guarantee: every
+// tick starts its round at the front, so the corpora past the ceiling would be
+// embedded never rather than slowly. Refusing says so at the wiring, which is
+// the one place the extra corpus can be taken back out.
 func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
-	corpora := make([]search.Corpus, search.EmbedBatchesPerTick+1)
+	corpora := make([]search.Corpus, search.EmbedSourcesPerTick/search.EmbedBatch+1)
 	for i := range corpora {
 		corpora[i] = &scriptedCorpus{source: search.SourceTask, backlog: -1}
 	}
@@ -542,13 +744,13 @@ func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 		Standing: h.standing(nil),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 		// EVERY OTHER FIELD WIRED, so the refusal is the corpora's.
-		Budget: unbounded{},
+		Budget: unbounded{}, Refusals: search.NewRefusals(),
 	})
 	if err == nil {
-		t.Fatalf("a duty with %d corpora and %d calls a tick was accepted — "+
-			"the ones past the ceiling are never embedded, and the coverage "+
+		t.Fatalf("a duty with %d corpora and %d full requests a tick was accepted "+
+			"— the ones past the ceiling are never embedded, and the coverage "+
 			"gauge sums them into a company that merely looks behind",
-			len(corpora), search.EmbedBatchesPerTick)
+			len(corpora), search.EmbedSourcesPerTick/search.EmbedBatch)
 	}
 }
 
@@ -645,7 +847,17 @@ type embedHarness struct {
 	embedder  *scriptedEmbedder
 	consumed  uint64
 	version   int64
+
+	// refusals is the memory every duty this harness builds shares, held
+	// across ticks as the engine holds it.
+	refusals *search.Refusals
+
+	// now is the duty's clock, moved by [embedHarness.advance].
+	now time.Time
 }
+
+// advance moves the duty's clock.
+func (h *embedHarness) advance(d time.Duration) { h.now = h.now.Add(d) }
 
 func newEmbedHarness(t *testing.T) *embedHarness {
 	t.Helper()
@@ -679,6 +891,8 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	h := &embedHarness{
 		t: t, db: db, log: log, applier: search.NewApplier(),
 		embedder: &scriptedEmbedder{Fake: embeddings.NewFake(64), poisonID: -1},
+		refusals: search.NewRefusals(),
+		now:      time.Unix(1_700_000_000, 0).UTC(),
 	}
 	rows, err := search.NewRows(db.Replicated().Reader(), search.Domain{}.Stream())
 	if err != nil {
@@ -707,8 +921,9 @@ func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
-		Now:    func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
-		Budget: unbounded{},
+		Now:      func() time.Time { return h.now },
+		Budget:   unbounded{},
+		Refusals: h.refusals,
 	})
 	if err != nil {
 		h.t.Fatalf("build the duty: %v", err)
@@ -883,34 +1098,64 @@ func (h *embedHarness) opIDs() []string {
 	return out
 }
 
-// scriptedEmbedder is the fake with two faults a test can ask for.
+// scriptedEmbedder is the fake with the faults a test can ask for.
 type scriptedEmbedder struct {
 	*embeddings.Fake
-	mu        sync.Mutex
-	calls     int
-	failFirst bool
-	// poisonID is the index within a batch whose vector is made
+	mu sync.Mutex
+	// poisonID is the index within a request whose vector is made
 	// non-finite, or -1 for none.
 	poisonID int
 	// blank answers every input with no vector at all, which is a real
 	// state — an empty source — and is what lets a scheduling test spend
-	// the tick's provider calls without publishing a record for each of
+	// the tick's provider requests without publishing a record for each of
 	// the thousand documents they carry.
 	blank bool
-	// batches is what each call was asked to embed, in order, so a test
-	// can see how the tick's calls were divided.
+	// refused are markers a request carrying any input that contains one
+	// is refused for, in the provider's own class ([embeddings.ErrRefused]),
+	// as a provider refuses the same input every time it is sent — until a
+	// test says it no longer does ([scriptedEmbedder.accept]).
+	refused []string
+	// batches is what each call was asked to embed, in order — refused
+	// ones included — so a test can see how the tick's requests were
+	// divided.
 	batches [][]string
+}
+
+// refuse makes every request carrying an input that contains marker refused.
+func (s *scriptedEmbedder) refuse(marker string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refused = append(s.refused, marker)
+}
+
+// accept stops refusing requests for marker.
+func (s *scriptedEmbedder) accept(marker string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refused = slices.DeleteFunc(s.refused, func(m string) bool { return m == marker })
+}
+
+// sent is every call the embedder was asked to answer, in order.
+func (s *scriptedEmbedder) sent() [][]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.batches)
 }
 
 func (s *scriptedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	s.mu.Lock()
-	s.calls++
-	first := s.calls == 1
-	fail, poison, blank := s.failFirst, s.poisonID, s.blank
+	poison, blank := s.poisonID, s.blank
 	s.batches = append(s.batches, append([]string(nil), texts...))
+	refused := slices.Clone(s.refused)
 	s.mu.Unlock()
-	if fail && first {
-		return nil, fmt.Errorf("the provider refused this batch")
+	for _, marker := range refused {
+		for _, text := range texts {
+			if strings.Contains(text, marker) {
+				return nil, &embeddings.Error{Model: embedModel, Status: 400,
+					Class: embeddings.ErrRefused,
+					Err:   fmt.Errorf("the script refuses inputs containing %q", marker)}
+			}
+		}
 	}
 	if blank {
 		return make([][]float32, len(texts)), nil
@@ -925,7 +1170,7 @@ func (s *scriptedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]
 	return out, nil
 }
 
-// callsPerSource is how many provider calls each source's documents were sent
+// callsPerSource is how many provider requests each source's documents were sent
 // in, read back from the text itself — [scriptedCorpus] titles every document
 // with its own source.
 func (s *scriptedEmbedder) callsPerSource() map[search.Source]int {
