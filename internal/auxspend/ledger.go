@@ -122,6 +122,9 @@ type bucket struct {
 // sealed is a record a flush has cut from its bucket: its id and its instant
 // fixed, so every attempt to publish it is the same event.
 type sealed struct {
+	// seq is the order the ledger sealed it in, which is what "oldest"
+	// means to the backlog: see [Ledger.keep].
+	seq   uint64
 	turn  string
 	ev    *events.Event
 	spent Spent
@@ -136,9 +139,13 @@ type Ledger struct {
 	pub    Publisher
 	logger *slog.Logger
 
-	mu      sync.Mutex
-	open    map[key]*bucket
+	mu   sync.Mutex
+	open map[key]*bucket
+	// pending is what a refused publish left, in the order it was sealed —
+	// oldest first, always, so the bound trims from the front.
 	pending []sealed
+	// sealed counts every record cut from a bucket, for [sealed.seq].
+	sealed uint64
 
 	runMu sync.Mutex
 	stop  context.CancelFunc
@@ -220,7 +227,8 @@ func (l *Ledger) flush(ctx context.Context, pick func(key) bool, retry bool) {
 		if !pick(k) {
 			continue
 		}
-		out = append(out, seal(k, b))
+		l.sealed++
+		out = append(out, seal(l.sealed, k, b))
 		delete(l.open, k)
 	}
 	l.mu.Unlock()
@@ -249,9 +257,38 @@ func (l *Ledger) flush(ctx context.Context, pick func(key) bool, retry bool) {
 	if len(failed) == 0 {
 		return
 	}
+	l.keep(ctx, failed)
+}
+
+// keep puts records a publish refused back in the backlog IN THE ORDER THEY
+// WERE SEALED, and drops the oldest past [MaxPending].
+//
+// MERGED BY SEAL ORDER rather than put in front or behind, because neither
+// place is right for every flush that is refused. The timer's flush takes the
+// backlog with it, so what it hands back is the oldest there is; a turn's
+// flush takes only that turn's new buckets, so what IT hands back is newer
+// than every record already waiting — and put in front, the bound's trim
+// dropped the turn's fresh records as "the oldest" while an hour-old backlog
+// stayed, and the next retry published newest first. Two flushes refused at
+// once interleave either way. failed and the backlog are each in seal order,
+// so one merge keeps the whole of it so.
+func (l *Ledger) keep(ctx context.Context, failed []sealed) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.pending = append(failed, l.pending...)
+	merged := make([]sealed, 0, len(l.pending)+len(failed))
+	i, j := 0, 0
+	for i < len(l.pending) && j < len(failed) {
+		if l.pending[i].seq <= failed[j].seq {
+			merged = append(merged, l.pending[i])
+			i++
+			continue
+		}
+		merged = append(merged, failed[j])
+		j++
+	}
+	merged = append(merged, l.pending[i:]...)
+	merged = append(merged, failed[j:]...)
+	l.pending = merged
 	if over := len(l.pending) - MaxPending; over > 0 {
 		var lost Spent
 		for _, s := range l.pending[:over] {
@@ -266,7 +303,7 @@ func (l *Ledger) flush(ctx context.Context, pick func(key) bool, retry bool) {
 }
 
 // seal cuts one bucket into its record.
-func seal(k key, b *bucket) sealed {
+func seal(seq uint64, k key, b *bucket) sealed {
 	rec := types.AuxiliarySpend{
 		Stage:   types.AuxStage(k.stage),
 		Purpose: types.AuxPurpose(k.purpose),
@@ -299,7 +336,7 @@ func seal(k key, b *bucket) sealed {
 		ev.Timestamp = b.ended.UTC()
 	}
 	ev.Source = source
-	return sealed{turn: k.turn, ev: ev, spent: b.spent}
+	return sealed{seq: seq, turn: k.turn, ev: ev, spent: b.spent}
 }
 
 // Run flushes on [FlushInterval] until [Ledger.Stop]. A second Run while one is

@@ -257,6 +257,56 @@ func TestARefusedBacklogIsBoundedOldestFirst(t *testing.T) {
 	}
 }
 
+// A TURN'S REFUSED FLUSH JOINS THE BACKLOG AT ITS END, because its records are
+// the newest there are.
+//
+// A turn's flush takes only that turn's buckets, never the backlog, so what it
+// hands back is newer than everything already waiting. Put in front, the
+// bound's trim dropped the turn's fresh records as "the oldest" at every turn's
+// end of an outage while the hour-old backlog stayed, and the retry published
+// newest first.
+func TestARefusedTurnFlushIsTheNewestInTheBacklog(t *testing.T) {
+	t.Parallel()
+	pub := &recorder{refuse: true}
+	l := auxspend.NewLedger(pub)
+	for i := range auxspend.MaxPending {
+		c := call(types.AuxMemoryFilter, "t", time.Duration(i)*time.Second, i+1, 0)
+		c.Use.TurnID = "old-" + time.Duration(i).String()
+		l.Add(c)
+		l.Flush(t.Context())
+	}
+	// Two turns end during the outage, each flushing its own bucket.
+	for i, turn := range []string{"new-1", "new-2"} {
+		c := call(types.AuxKnowledgeQuery, turn, time.Hour, 1_000_000+i, 0)
+		l.Add(c)
+		l.FlushTurn(t.Context(), turn)
+	}
+	pub.mu.Lock()
+	pub.refuse = false
+	pub.mu.Unlock()
+	l.Flush(t.Context())
+	got := pub.records(t)
+	if len(got) != auxspend.MaxPending {
+		t.Fatalf("published %d after the outage, want the %d the backlog holds",
+			len(got), auxspend.MaxPending)
+	}
+	if got[0].InputTokens != 3 {
+		t.Errorf("the backlog's first record has %d input tokens, want 3 — the two oldest "+
+			"dropped and the rest published oldest first", got[0].InputTokens)
+	}
+	tail := got[len(got)-2:]
+	if tail[0].TurnID != "new-1" || tail[1].TurnID != "new-2" {
+		t.Errorf("the backlog ends with %s, %s — want the two turns' records, newest last",
+			tail[0].TurnID, tail[1].TurnID)
+	}
+	for i := 1; i < len(got)-2; i++ {
+		if got[i].InputTokens < got[i-1].InputTokens {
+			t.Fatalf("record %d (%d tokens) published after a newer one (%d tokens)",
+				i, got[i].InputTokens, got[i-1].InputTokens)
+		}
+	}
+}
+
 // THE STOP FLUSHES WHAT THE TIMER HAS NOT: the last calls a draining node's
 // passes made are published before the stream it publishes on closes.
 func TestAStopFlushesWhatTheTimerHasNot(t *testing.T) {
