@@ -31,7 +31,12 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import { DateCell } from "~/app/frame/cells.tsx";
-import { GRANTS, TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
+import {
+  GRANTS,
+  TOKEN_DEFAULT_DAYS,
+  TOKEN_MAX_DAYS,
+  TOKEN_WITHHELD_GRANTS,
+} from "~/contract/identity.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -544,23 +549,39 @@ export function MintTokenDialog({
   const waiting = useWaiting();
   const [label, setLabel] = useState("");
   const [days, setDays] = useState("");
-  // WHAT STARTS TICKED is what this mint may send: the owner's grants a token
-  // may carry AND the minter holds — the engine refuses a token carrying a
-  // grant its minter does not hold, and the picker locks such a box, so one
-  // ticked here would be a refusal nobody could clear.
+  // WHAT STARTS TICKED. A SERVICE ACCOUNT'S MINT: what this mint may send —
+  // the account's grants a token may carry AND the minter holds, since the
+  // account exists to act with them, and the engine refuses a token carrying
+  // a grant its minter does not hold (the picker locks such a box, so one
+  // ticked here would be a refusal nobody could clear). A PERSON'S OWN:
+  // nothing. Every grant they held started ticked, so somebody pressing Mint
+  // without reading held a bearer secret carrying config:write, secrets:write
+  // and fleet:operate for their script; ticked one at a time, a token carries
+  // what its holder chose.
   const carried = useMemo(
     () =>
-      (owner.grants ?? []).filter(
-        (g) => !(TOKEN_WITHHELD_GRANTS as readonly string[]).includes(g) && held.includes(g),
-      ),
-    [owner.grants, held],
+      self
+        ? []
+        : (owner.grants ?? []).filter(
+            (g) => !(TOKEN_WITHHELD_GRANTS as readonly string[]).includes(g) && held.includes(g),
+          ),
+    [self, owner.grants, held],
   );
   const [grants, setGrants] = useState<string[]>(carried);
   const minted = write.answer?.kind === "done" ? write.answer.body : null;
   const token = typeof minted?.token === "string" ? minted.token : "";
   const expires = typeof minted?.expires_at === "string" ? minted.expires_at : "";
   const lifetime = days.trim() === "" ? 0 : Number(days);
-  const badDays = days.trim() !== "" && (!Number.isInteger(lifetime) || lifetime < 1);
+  // THE ENGINE'S CEILING, said here rather than posted for a 400.
+  const daysProblem =
+    days.trim() === ""
+      ? null
+      : !Number.isInteger(lifetime) || lifetime < 1
+        ? "A whole number of days, at least one."
+        : lifetime > TOKEN_MAX_DAYS
+          ? `At most ${TOKEN_MAX_DAYS} days.`
+          : null;
+  const badDays = daysProblem !== null;
   const actsAs: ReactNode = self ? "you" : owner.login || "the account";
 
   async function submit() {
@@ -621,8 +642,9 @@ export function MintTokenDialog({
         <>
           {self && (
             <Text as="p" variant="body" tone="secondary">
-              A token is for your own assistant or script: it acts as you, never with more than you
-              hold, and stops working when you change your password or sign out everywhere.
+              A token is for your own assistant or script: it acts as you, carrying only the grants
+              you tick below and never more than you hold, and stops working when you change your
+              password or sign out everywhere.
             </Text>
           )}
           <FormField label="Label" optional helper="What it is for, as its row will say.">
@@ -640,8 +662,8 @@ export function MintTokenDialog({
           <FormField
             label="Expires in days"
             optional
-            helper="Empty takes the engine's default of 90 days; at most 365."
-            error={badDays ? "A whole number of days, at least one." : undefined}
+            helper={`Empty takes the engine's default of ${TOKEN_DEFAULT_DAYS} days; at most ${TOKEN_MAX_DAYS}.`}
+            error={daysProblem ?? undefined}
           >
             {(field) => (
               <Input

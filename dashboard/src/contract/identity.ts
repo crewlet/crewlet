@@ -62,3 +62,15 @@ export const MAX_LOGIN = 64;
  * begin with.
  */
 export const CREDENTIAL_CLASSES = ["pat:", "session:"] as const;
+
+/**
+ * How long a machine token lives when its mint names no lifetime, in days
+ * (`credential.DefaultTokenLifetime`), and the most it may be minted for
+ * (`credential.MaxTokenLifetime`) — held by
+ * `internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes`.
+ * The token dialog refuses a lifetime past the second before it posts.
+ */
+export const TOKEN_DEFAULT_DAYS = 90;
+
+/** See [TOKEN_DEFAULT_DAYS]. */
+export const TOKEN_MAX_DAYS = 365;

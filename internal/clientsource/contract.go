@@ -201,6 +201,10 @@ var contract = []Entry{
 	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"CREDENTIAL_CLASSES", ReadLiteral,
 		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"TOKEN_DEFAULT_DAYS", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
+	{"TOKEN_MAX_DAYS", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
 
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},

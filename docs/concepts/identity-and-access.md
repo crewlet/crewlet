@@ -1173,7 +1173,10 @@ account is a credential that acts as them, held by somebody who is not them.
 a person mints their own from their own session, which is `POST
 /iam/credentials` with no `?person=` — the dashboard's Account page
 (`#/account`, **Personal access tokens › New token**) makes that request from
-the signed-in session, and `crewlet iam token -login` is that request too,
+the signed-in session — with **no grant ticked** to start, so a token carries
+what its holder chose rather than everything they hold, and with a lifetime
+past the 365-day ceiling refused before it is sent — and `crewlet iam token
+-login` is that request too,
 signing in for it exactly as the dashboard does —
 the password from the terminal without echo or the first line piped in, a
 second-factor code the same way or the line after it, and never either as a

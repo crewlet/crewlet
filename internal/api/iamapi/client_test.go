@@ -6,9 +6,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 )
 
 // THE DASHBOARD OFFERS EXACTLY THE ENGINE'S GRANTS, in its order, and withholds
@@ -132,5 +134,32 @@ func TestTheDashboardChecksALoginByTheEnginesGrammar(t *testing.T) {
 	}
 	if admitted == 0 {
 		t.Fatal("the engine admits nothing in the corpus, so it certifies nothing")
+	}
+}
+
+// THE DASHBOARD MINTS WITHIN THE ENGINE'S TOKEN LIFETIMES.
+//
+// The token dialog says what an empty lifetime takes and refuses one past the
+// ceiling before it posts — it posted `400` and showed the engine's sentence
+// back — so its two numbers are the engine's, in days. Mutation: move either
+// constant on one side and this fails.
+func TestTheDashboardMintsWithinTheEnginesTokenLifetimes(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for name, want := range map[string]time.Duration{
+		"TOKEN_DEFAULT_DAYS": credential.DefaultTokenLifetime,
+		"TOKEN_MAX_DAYS":     credential.MaxTokenLifetime,
+	} {
+		raw, err := clientsource.Scalar(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		days, err := strconv.Atoi(raw)
+		if err != nil {
+			t.Fatalf("%s is %q: %v", name, raw, err)
+		}
+		if got := time.Duration(days) * 24 * time.Hour; got != want {
+			t.Errorf("the dashboard's %s is %d days, the engine's %v", name, days, want)
+		}
 	}
 }

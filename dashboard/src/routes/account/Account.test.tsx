@@ -487,13 +487,35 @@ describe("personal access tokens", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New token" }));
     const dialog = await screen.findByRole("dialog", { name: "New personal access token" });
     fireEvent.change(within(dialog).getByLabelText(/^Label/), { target: { value: "laptop" } });
+    // NOTHING STARTS TICKED: a token carries what its holder chose, one grant
+    // at a time, rather than everything they hold.
+    for (const box of within(dialog).getAllByRole("checkbox")) {
+      expect(box).toHaveProperty("checked", false);
+    }
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Mint" }));
     expect(await within(dialog).findByText(/This token acts as you/)).toBeDefined();
     const mint = engineIs.writes().find((w) => w.path === "/iam/credentials")!;
     expect(mint.method).toBe("POST");
     // THE OWNER IS THE CALLER: a person's token is theirs alone to mint.
     expect(mint.query.has("person")).toBe(false);
-    expect(mint.body).toMatchObject({ label: "laptop", grants: ["state:read", "work:write"] });
+    expect(mint.body).toEqual({ label: "laptop", grants: ["state:read"] });
+  });
+
+  // THE ENGINE'S CEILING, said under the field: past it the dialog posted and
+  // showed the engine's 400 back. The CONTROL is the mint above, which names
+  // no lifetime and is posted.
+  test("a lifetime past the engine's ceiling is refused under the field, and nothing is posted", async () => {
+    const engineIs = engine({});
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "New token" }));
+    const dialog = await screen.findByRole("dialog", { name: "New personal access token" });
+    fireEvent.change(within(dialog).getByLabelText(/^Expires in days/), {
+      target: { value: "400" },
+    });
+    expect(within(dialog).getByText("At most 365 days.")).toBeDefined();
+    expect(within(dialog).getByRole("button", { name: "Mint" })).toHaveProperty("disabled", true);
+    expect(engineIs.writes()).toEqual([]);
   });
 
   // A TOKEN A COUNTER ENDED — a password change, signing out everywhere —
