@@ -78,20 +78,26 @@ func (m meteredModels) Head(role *org.Role, ph phase.Phase) (chain.Member, error
 
 // meteredProvider records a completion's tokens after the call returns.
 //
-// AFTER, not before, and that asymmetry with the turn loop is deliberate:
-// the loop knows a round's size before it spends because it is about to send
-// a request it built, while an auxiliary pass is one shot whose cost is only
-// known from the answer. The PRE-FLIGHT GATE is [Engine.learningBudget]; this
-// is the record of what already happened.
+// AFTER, as every charge in this engine is: a completion's size is known only
+// from its answer, and the turn loop charges each of its rounds after the
+// reply too. What differs is what waits on the charge. A round's verdict
+// decides whether the tools it asked for run and whether another round
+// starts, so the loop's charge judges it (and counts it either way); an
+// auxiliary pass is one shot whose answer is already in hand, so nothing waits
+// on a verdict and this records what happened without one. The PRE-FLIGHT
+// GATE is [Engine.learningBudget]; this is the record.
 //
-// A RECORD, NEVER THE GATE. It used to put the spend through Charge, which is
-// a decision about room: a completion that took a window past its ceiling was
-// REFUSED there and recorded not at all, so the counter stayed below the
-// ceiling, the pre-flight gate still read room, and the next pass ran and was
-// refused its record in turn — a company at its ceiling paid for every
-// reflection pass after it and its counter heard about none of them. Spend
-// that has happened is recorded whole, past the ceiling included, which is
-// what makes the gate read "no room" afterwards.
+// A RECORD, NEVER THE GATE. It used to put the spend through Charge, when a
+// refused Charge counted nothing: a completion that took a window past its
+// ceiling was refused there and recorded not at all, so the counter stayed
+// below the ceiling, the pre-flight gate still read room, and the next pass
+// ran and was refused its record in turn — a company at its ceiling paid for
+// every reflection pass after it and its counter heard about none of them.
+// Charge counts a refused round now, but it would still be the wrong verb: a
+// refusal stamps the window as the gate turning a charge away and an
+// admission clears every stamp, and neither is true of a pass nobody stopped.
+// Spend that has happened is recorded whole, past the ceiling included, which
+// is what makes the gate read "no room" afterwards.
 type meteredProvider struct {
 	inner llm.Provider
 	meter spendRecorder

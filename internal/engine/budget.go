@@ -39,7 +39,8 @@ import (
 //
 // Declared here, by the consumer: a turn's meter charges and reads, and a
 // meter that could reach the whole of [coord.Budgets] would one day be given
-// a reason to post-charge.
+// a reason to post-charge. It needs none: Charge counts the round it refuses,
+// so a refused round is on the counter without a second write.
 type budgetCounter interface {
 	Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error)
 	Used(ctx context.Context, scope string, windows coord.Windows) (coord.Usage, error)
@@ -100,9 +101,21 @@ func (m *meter) windows() coord.Windows {
 	return coord.WindowsAt(m.now(), m.basis.zone)
 }
 
-// Spend checks and increments in ONE operation. See coord.Budgets.Charge.
+// Spend records a round that has already been spent and judges whether it
+// fitted, in ONE operation. See coord.Budgets.Charge, which counts a round it
+// refuses as it counts one it admits.
+//
+// THE WRITE OUTLIVES THE CALLER'S CONTEXT, because the round was billed when
+// its reply arrived: a turn cancelled between that reply and this write — a
+// node draining, a turn's own deadline — is spend the counter would
+// otherwise never hear of, which is the leak a refusal that
+// counted nothing used to be. The CALLER is still told it hung up, exactly as
+// a charge on its own dead context told it, so it stops where it stopped
+// before and never runs the round's tools; only the record is new. It cannot
+// hang in the caller's place: the counter's own retries are bounded, and the
+// client bounds every request made on a context with no deadline.
 func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
-	got, err := m.budgets.Charge(ctx, coord.ChargeRequest{
+	got, err := m.budgets.Charge(context.WithoutCancel(ctx), coord.ChargeRequest{
 		Seat: m.agentScope, Tokens: tokens, Windows: m.windows(),
 		OrgCaps: m.basis.org, SeatCaps: m.basis.seat,
 	})
@@ -111,6 +124,10 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 		// tokens" from "the counter is unreachable": the first is a
 		// budget event an operator acts on, the second is an outage.
 		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: %w", err)
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: the round is "+
+			"recorded and the turn has ended: %w", cause)
 	}
 	if !got.OK {
 		return toolloop.SpendOutcome{

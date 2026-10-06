@@ -252,3 +252,93 @@ func TestAMeterPinsItsTurnsCapsAndClock(t *testing.T) {
 		t.Errorf("a turn on the raised ceiling = (%+v, %v), want admitted", next, err)
 	}
 }
+
+// A REFUSED ROUND IS ON BOTH COUNTERS, AND LEAVES NO ROOM FOR A SMALLER ONE.
+//
+// The meter is handed a round once its reply is in, so the round it refuses
+// has been billed. A counter that dropped it read short of the invoice, and
+// since the gate decides on room, the next round smaller than the room left
+// was admitted on top of tokens the refused one had already spent: at 98 of a
+// 100-token day, a 3-token round refused and then a 1-token round let through.
+func TestARefusedRoundIsCountedAndLeavesNoRoomForASmallerOne(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	m := e.meterFor(c, lead.Handle())
+
+	if got, err := m.Spend(ctx, 98); err != nil || !got.OK {
+		t.Fatalf("Spend(98) = (%+v, %v), want admitted", got, err)
+	}
+	got, err := m.Spend(ctx, 3)
+	if err != nil || got.OK || got.Used != 101 || got.Limit != 100 {
+		t.Fatalf("Spend(3) = (%+v, %v), want refused at 101 of 100: the refusal states "+
+			"the counter as the round left it", got, err)
+	}
+	if got, err := m.Spend(ctx, 1); err != nil || got.OK {
+		t.Fatalf("a smaller round after the refusal = (%+v, %v), want refused: the "+
+			"refused round was paid for, and left no room", got, err)
+	}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, lead)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 102 {
+			t.Errorf("%s = (%+v, %v), want all 102 tokens the three rounds spent", scope,
+				u.In(period.Day), err)
+		}
+	}
+}
+
+// A ROUND CHARGED AFTER ITS TURN ENDED IS STILL RECORDED, AND THE TURN IS TOLD.
+//
+// The round was billed when its reply arrived. A turn cancelled between that
+// reply and the charge — a node draining, the turn's own deadline — used to
+// lose the round from the counter with the charge, because the write ran on
+// the turn's dead context. The record now outlives it, and the caller is still
+// answered with its own ending, so it stops where it always did and runs none
+// of the round's tools.
+func TestARoundChargedAfterItsTurnEndedIsStillRecorded(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 1000}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	m := &meter{
+		budgets: deadContextRefused{fleet}, agentScope: scopeOf(t, c, lead),
+		basis: basisOf(c, lead), now: time.Now,
+	}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	got, err := m.Spend(ended, 250)
+	if !errors.Is(err, context.Canceled) || got.OK {
+		t.Fatalf("Spend on an ended turn = (%+v, %v), want the turn's own ending", got, err)
+	}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, lead)} {
+		u, err := fleet.Used(t.Context(), scope, windows)
+		if err != nil || u.In(period.Day).Used != 250 {
+			t.Errorf("%s = (%+v, %v), want the 250 the round spent", scope, u.In(period.Day), err)
+		}
+	}
+}
+
+// deadContextRefused is the in-memory counter with the one property of the
+// broker's it lacks: a request on a context that is done fails, as every
+// compare-and-swap the KV backend makes does.
+type deadContextRefused struct{ budgets budgetCounter }
+
+func (d deadContextRefused) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
+	if err := ctx.Err(); err != nil {
+		return coord.Spend{}, err
+	}
+	return d.budgets.Charge(ctx, req)
+}
+
+func (d deadContextRefused) Used(ctx context.Context, scope string, w coord.Windows) (coord.Usage, error) {
+	if err := ctx.Err(); err != nil {
+		return coord.Usage{}, err
+	}
+	return d.budgets.Used(ctx, scope, w)
+}
