@@ -527,7 +527,10 @@ type IAMGrantsChanged struct {
 	By      string   `json:"by"`
 
 	// OperatorID is the credential By acted through — see
-	// [IAMSessionEnded.OperatorID].
+	// [IAMSessionEnded.OperatorID]. EMPTY ON A REDEMPTION'S: By there is
+	// the invitation's issuer, who decided what it confers, and the
+	// redemption acted through no credential of theirs — the record that
+	// issued the invitation names the one they issued it through.
 	OperatorID string `json:"operator_id,omitempty"`
 
 	// Version is the record's position, packed — the same number the
@@ -539,7 +542,8 @@ type IAMGrantsChanged struct {
 // EventType is the "iam_grants_changed" wire type.
 func (IAMGrantsChanged) EventType() string { return "iam_grants_changed" }
 
-// Actor is who changed them.
+// Actor is who changed them: whoever decided the grants, which for a
+// redemption is the invitation's issuer and never the person redeeming it.
 func (e IAMGrantsChanged) Actor() string { return e.By }
 
 // Summary lists both directions, because a grant added and a grant taken away

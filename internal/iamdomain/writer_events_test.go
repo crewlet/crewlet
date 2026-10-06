@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -216,5 +218,61 @@ func TestAGestureMadeThroughATokenIsAnnouncedAsOne(t *testing.T) {
 	if next := party.As(principalNamed("dana.sre", iam.KindPerson, nil)); next.OperatorID != "dana.sre" {
 		t.Errorf("a party derived from one acting through a token carries "+
 			"operator %q, want its own login", next.OperatorID)
+	}
+}
+
+// A REDEMPTION'S GRANTS ARE ANNOUNCED AS ITS ISSUER'S DECISION.
+//
+// The sign-in surface enrols the person a redemption creates FOR them
+// ([iamdomain.Writer.For]): they redeemed the link, so the record is theirs.
+// What it confers is not — whoever issued the invitation decided that, and
+// the grant announcement made under the party's actor read as the new person
+// granting themselves state:read, naming them for a decision they did not
+// make. The first person a company enrols is the row an audit most needs to
+// find. The record itself stays the redeemer's: the control. Mutation:
+// announce under the party's own actor and By is the redeemer; carry its
+// credential and the row says the issuer acted through the redeemer's login.
+func TestARedemptionsGrantsAreAnnouncedAsItsIssuers(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	issued, err := inviteFor(t, rig, "sam@example.com", "")
+	if err != nil {
+		t.Fatalf("issue an invitation: %v", err)
+	}
+	rig.events.take()
+
+	person := uuid.Must(uuid.NewV7())
+	redeemer := nodeWriter(rig).For(iam.Principal{ID: person,
+		Kind: iam.KindPerson, Login: "sam.joiner"})
+	op := "invite:" + issued.ID
+	if err := rig.draining(func() error {
+		_, err := redeemer.Enrol(t.Context(), iamdomain.Enrolment{
+			PersonID: person.String(), Kind: iam.KindPerson,
+			Stage: iam.StageActive, Name: "Sam Joiner",
+			Email: "sam@example.com", Login: "sam.joiner",
+			Grants:     []iam.Grant{iam.GrantStateRead},
+			Invitation: issued.ID, InvitationSecret: issued.Secret,
+			OpID: op, Reason: "redeemed an invitation",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	rig.drain()
+
+	rows := grantRows(t, rig.events.take())
+	if len(rows) != 1 {
+		t.Fatalf("the redemption announced %d grant changes, want 1", len(rows))
+	}
+	if got := rows[0]; got.Person != person.String() || got.By != "ana.admin" ||
+		got.OperatorID != "" || !slices.Equal(got.Added, []string{"state:read"}) {
+		t.Errorf("the redemption announced %+v, want state:read added by the "+
+			"invitation's issuer, ana.admin, through no credential", got)
+	}
+	if got := rig.column(`SELECT actor FROM iam_history
+		WHERE person_id = ? AND op = ?`, person.String(),
+		string(iamdomain.OpEnrol)); !slices.Equal(got, []string{"sam.joiner"}) {
+		t.Errorf("the redemption's trail names %q as its author, want the "+
+			"person who redeemed it", got)
 	}
 }

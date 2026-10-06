@@ -2106,7 +2106,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_password_reset_issued` | The directory, when an administrator issues somebody a one-time password reset link — for whom, by whom and until when, never the link | Once per link |
 | `iam_password_changed` | The sign-in surface, when a person changes their own password — which ended every other session and token they held | Once per change |
 | `iam_password_reset` | The sign-in surface, when a reset link is spent — the password set, every session and token the person held ended, and nobody signed in | Once per link |
-| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
+| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed, by whoever decided it — for a redemption, the person who issued the invitation, never the person redeeming it |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
 

@@ -279,7 +279,9 @@ func (w *Writer) As(p iam.Principal) *Writer {
 // it could not say who had signed in, only that somebody had. The node only
 // wrote the record; the person made the gesture. What the engine decides for
 // itself — a sweep, a re-seal, a password re-hashed at this build's cost —
-// keeps the node as its author.
+// keeps the node as its author. And what a redemption CONFERS is announced as
+// the decision of whoever issued the invitation ([Writer.Enrol]), never as the
+// person it writes for: they redeemed the link, and chose none of its grants.
 //
 // Unlike [Writer.As] it carries no grants and no id from the principal: a
 // party's authority is never widened or narrowed by whom it writes for.

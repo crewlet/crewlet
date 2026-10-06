@@ -205,14 +205,22 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		}
 		return BucketScope(buckets...), nil
 	}
+	// WHO DECIDED WHAT IT CONFERS: this writer's party for an
+	// administrator's create, and for a redemption whoever issued the
+	// invitation ([Writer.redeemable]) — never the person redeeming it,
+	// whom a party derived with [Writer.For] names as the record's author.
+	decidedBy, decidedVia := w.Actor, w.OperatorID
 	decide := func(tx *sql.Tx) (_ []byte, err error) {
 		if err = wholeDirectory(ctx, tx); err != nil {
 			return nil, err
 		}
 		if in.Invitation != "" {
 			// THE INVITATION, READ WHERE THE GRANTS LAND FROM: the one
-			// read of it that decides anything.
-			err = w.redeemable(ctx, tx, in, blind, seat)
+			// read of it that decides anything. Its issuer acted through
+			// a credential when they issued it, which the issue's own
+			// record names; the redemption acted through none of theirs.
+			decidedVia = ""
+			decidedBy, err = w.redeemable(ctx, tx, in, blind, seat)
 		} else {
 			err = w.createsNobodyTwice(ctx, tx, in)
 		}
@@ -261,11 +269,11 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
 	// to what it carries — and the first person a company enrols, invited
 	// under the deployment's own token, is the one row of those an audit
-	// most needs to find.
+	// most needs to find: by whoever decided it.
 	if added, _ := grantDelta(nil, in.Grants); len(added) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
-			Person: in.PersonID, Added: added, By: w.Actor,
-			OperatorID: w.OperatorID, Version: result.Position.Packed(),
+			Person: in.PersonID, Added: added, By: decidedBy,
+			OperatorID: decidedVia, Version: result.Position.Packed(),
 		})
 	}
 	return result, err
@@ -537,8 +545,11 @@ func machineHolds[G ~string](kind iam.Kind, grants []G) error {
 // THE WRITER'S CLOCK decides the expiry, as [openInvitationFor]'s does: the
 // surface already refused an aged-out link against the same clock, and what
 // this buys is that the check and the grants it bounds are one snapshot.
+//
+// IT ANSWERS WHO ISSUED IT, because that is who decided what the redemption
+// confers: the person redeeming chose none of it.
 func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
-	blind, seat string) error {
+	blind, seat string) (string, error) {
 
 	var (
 		held           string
@@ -551,14 +562,14 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("%w: invitation %s is not held on this node, so "+
+		return "", fmt.Errorf("%w: invitation %s is not held on this node, so "+
 			"nothing says what redeeming it confers", ErrRefused, in.Invitation)
 	case err != nil:
-		return fmt.Errorf("iamdomain: read invitation %s: %w", in.Invitation, err)
+		return "", fmt.Errorf("iamdomain: read invitation %s: %w", in.Invitation, err)
 	}
 	invitation, err := DecodeInvitation(document)
 	if err != nil {
-		return fmt.Errorf("iamdomain: open invitation %s: %w", in.Invitation, err)
+		return "", fmt.Errorf("iamdomain: open invitation %s: %w", in.Invitation, err)
 	}
 	switch {
 	case !invitationAdmits(invitation.Verifier, in.InvitationSecret):
@@ -567,22 +578,22 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 		// naming an invitation's id — which every snapshot and proxy log
 		// holds — is not holding its link. An invitation issued before
 		// links carried a secret has no verifier and admits nobody.
-		return fmt.Errorf("%w: the secret presented is not the one invitation "+
+		return "", fmt.Errorf("%w: the secret presented is not the one invitation "+
 			"%s's link carries", ErrRefused, in.Invitation)
 	case held != blind:
-		return fmt.Errorf("%w: invitation %s was issued to another address — "+
+		return "", fmt.Errorf("%w: invitation %s was issued to another address — "+
 			"holding somebody's link is not holding their address",
 			ErrRefused, in.Invitation)
 	case spent != 0:
-		return fmt.Errorf("%w: invitation %s has already been used",
+		return "", fmt.Errorf("%w: invitation %s has already been used",
 			ErrRefused, in.Invitation)
 	case expires != 0 && !w.Now().Before(time.UnixMilli(expires)):
-		return fmt.Errorf("%w: invitation %s has aged out", ErrRefused,
+		return "", fmt.Errorf("%w: invitation %s has aged out", ErrRefused,
 			in.Invitation)
 	}
 	for _, g := range in.Grants {
 		if !g.Valid() || !slices.Contains(invitation.Grants, g) {
-			return fmt.Errorf("%w: redeeming invitation %s confers %v, and "+
+			return "", fmt.Errorf("%w: redeeming invitation %s confers %v, and "+
 				"%s is not among them — a redemption hands out what was "+
 				"offered and nothing more", ErrRefused, in.Invitation,
 				invitation.Grants, g)
@@ -593,11 +604,11 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 	// offered, and one it carried and the enrolment dropped would spend
 	// the link without the binding its issuer decided on.
 	if seat != invitation.Seat {
-		return fmt.Errorf("%w: invitation %s binds seat %q, and the "+
+		return "", fmt.Errorf("%w: invitation %s binds seat %q, and the "+
 			"enrolment names %q — a redemption binds what was offered and "+
 			"nothing else", ErrRefused, in.Invitation, invitation.Seat, seat)
 	}
-	return nil
+	return invitation.InvitedBy, nil
 }
 
 // loginFits refuses a login that is not in its holder's kind's grammar.
