@@ -463,6 +463,23 @@ test("an edit sends what its editor changed, whatever the directory read since",
   expect(eng.writes().map((w) => w.body)).toEqual([{ login: "bo.lange" }]);
 });
 
+// THE SEAT A PERSON HOLDS IS OFFERED BY ITS NAME. The vacancy list leaves it
+// out, so the edit added it back named by its handle — "jane / jane" beside
+// every vacancy's name. Mutation: name it by its handle and "Jane Founder" is
+// nowhere in the dialog.
+test("an edit offers the seat its person holds by the seat's name", async () => {
+  engine({}, () => ({
+    ...PEOPLE,
+    people: PEOPLE.people.map((p) => (p.id === "p-bo" ? { ...p, seat: "jane" } : p)),
+  }));
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  await settle();
+  expect(within(edit).getAllByText("Jane Founder").length).toBeGreaterThan(0);
+});
+
 // A GRANT CHANGE IS WHAT ITS EDITOR TICKED AND UNTICKED, which the engine
 // applies to what the person holds when it decides: while the dialog is open
 // another administrator strips Bo's state:read and gives him audit:read, the

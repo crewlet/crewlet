@@ -18,6 +18,7 @@ import {
   NO_SEAT,
   pressLabel,
   seatOptions,
+  useSeatEntry,
   useUnheldSeats,
 } from "~/components/people.tsx";
 import { useIamGesture } from "~/lib/iamWrite.ts";
@@ -190,11 +191,12 @@ export function EditPersonDialog({
   // but it is held, so the vacancies list leaves it out. The seat they hold
   // NOW, which the vacancies are read beside — an edit that landed its seat
   // part way holds the new one, and the one it left is vacant again.
+  const entry = useSeatEntry();
   const options = useMemo(() => {
     const vacant = seats.data ?? [];
     const own = live.seat && !vacant.some((s) => s.handle === live.seat);
-    return seatOptions(own ? [{ handle: live.seat!, name: live.seat! }, ...vacant] : vacant);
-  }, [seats.data, live.seat]);
+    return seatOptions(own ? [entry(live.seat!), ...vacant] : vacant);
+  }, [seats.data, live.seat, entry]);
 
   const before = row.grants ?? [];
   const added = grants.filter((g) => !before.includes(g));

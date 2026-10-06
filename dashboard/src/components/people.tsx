@@ -13,7 +13,7 @@
  * it all the same.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -32,6 +32,8 @@ import {
 import { KeyGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import { GRANTS, TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { rest } from "~/protocol/index.ts";
@@ -223,6 +225,21 @@ export function useUnheldSeats() {
   });
 }
 
+/**
+ * A seat the vacancy list leaves out — the one a person holds now, or one a
+ * dialog proposes before the list has arrived — named as the running org chart
+ * names it. Named by its handle, it was offered as "jane-founder / jane-founder"
+ * beside every vacancy's name.
+ */
+export function useSeatEntry(): (handle: string) => HumanSeat {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  return useCallback(
+    (handle: string) => ({ handle, name: index.byHandle.get(handle)?.name ?? handle }),
+    [index],
+  );
+}
+
 /** The value of the "nobody" option in a seat select. */
 export const NO_SEAT = "";
 
@@ -260,6 +277,7 @@ export function InviteDialog({
 }) {
   const write = useIamGesture();
   const seats = useUnheldSeats();
+  const entry = useSeatEntry();
   const [email, setEmail] = useState("");
   const [bind, setBind] = useState(seat);
   const [grants, setGrants] = useState<string[]>([]);
@@ -268,8 +286,8 @@ export function InviteDialog({
     // THE PROPOSED SEAT STAYS OFFERED while the read is out, so a dialog
     // opened from a seat's page does not drop it on the first render.
     const named = list.some((s) => s.handle === seat) || seat === NO_SEAT;
-    return seatOptions(named ? list : [...list, { handle: seat, name: seat }]);
-  }, [seats.data, seat]);
+    return seatOptions(named ? list : [...list, entry(seat)]);
+  }, [seats.data, seat, entry]);
 
   const done = write.answer?.kind === "done" ? write.answer.body : null;
   const url = typeof done?.url === "string" ? done.url : "";
