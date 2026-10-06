@@ -486,13 +486,32 @@ documented one, for a gateway or proxy in front of the model that accepts less;
 raising one is refused, naming the field, because the provider would refuse
 what the engine then sends.
 
-**Upgrading a company that needs them.** A stored company naming
-`gemini-embedding-001`, `embed-v4.0` or a model this build does not know, and
-stating none of these, is refused when the new build applies it — on boot too,
-where `crewlet config import` of the corrected file is the way through — exactly
-as a model with no known width is. A build older than these fields refuses a
-revision that carries them and keeps serving the configuration it has, so in a
-fleet, state them once every node runs a build that knows them.
+**Upgrading a company that needs them.** Two facts decide the order:
+
+- **A build older than these fields applies a revision that carries them, and
+  ignores them.** A stored revision is read leniently, so that a newer peer's
+  fields never take the older half of a fleet down — which means a limit you
+  state is enforced only by the nodes that know it, while an older node goes
+  on sending what it always sent. What an older node *does* refuse is a
+  document submitted to it: its `PUT` or `PATCH /config`, or an import that
+  goes through it, refuses keys it does not know.
+- **This build refuses a stored company that needs a limit and states none** —
+  one naming `gemini-embedding-001`, `embed-v4.0` or a model this build does
+  not know — at boot as well as at an apply, exactly as it refuses a model with
+  no known width — and, the same way, `embed-v4.0` at any `dimensions` but
+  1536, which its endpoint cannot produce. No node of this build starts on
+  that revision.
+
+So:
+
+- **On OpenAI's models**, an upgrade needs nothing: every limit is documented.
+  If you mean to *lower* one for a gateway, state it once every node runs this
+  build, because until then an older node does not enforce it.
+- **On any other model**, state the limits on the **first** node you upgrade:
+  with that node stopped, import the corrected document offline
+  (`crewlet config import company.yaml`), then start it. It publishes the
+  revision as it boots, and the older nodes apply it — without the limits —
+  and keep running until each is upgraded in turn.
 
 The engine counts **bytes** against those token limits rather than shipping a
 tokenizer per vendor: every tokenizer these models use emits at most one token

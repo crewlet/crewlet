@@ -1005,19 +1005,32 @@ type EmbeddingProvider struct {
 	// what the engine counts is bytes, and [EmbeddingProvider.InputBound] is
 	// the one conversion, which [EmbeddingProvider.Limits] carries.
 	//
-	// AN OLDER BUILD REFUSES A REVISION CARRYING THESE. Tier B is decoded
-	// strictly, so a node on a build that predates the fields reports the
-	// revision as one it cannot apply and keeps serving the epoch it has —
-	// the control plane's ordinary answer to a revision a node cannot run —
-	// which is why a fleet states them once every node runs a build that
-	// knows them. And THIS build refuses a stored revision that lacks one it
-	// needs — a company that named gemini-embedding-001, embed-v4.0 or a
-	// model the table does not carry before the limits existed — exactly as
-	// it refuses an unknown model with no width: a RUNNABLE rule, not an
-	// admission one, because there is no running such a company "as it did
-	// before" without either guessing the limits or sending what the model
-	// refuses. The operator states them (`crewlet config import` where the
-	// node cannot boot) and the company runs.
+	// AN OLDER BUILD APPLIES A REVISION CARRYING THESE, AND IGNORES THEM. A
+	// stored revision is read leniently ([DecodeCompany]) precisely so a
+	// newer peer's fields do not take the older half of a fleet down, so a
+	// node on a build that predates the fields applies the revision and
+	// sends as it always did: a stated limit is enforced only by the nodes
+	// that know it. What an older node refuses is a document SUBMITTED to
+	// it — its PUT or PATCH /config, an import through it — because the
+	// authored form is parsed strictly and these are keys it does not know.
+	//
+	// And THIS build refuses a stored revision that lacks one it needs — a
+	// company that named gemini-embedding-001, embed-v4.0 or a model the
+	// table does not carry before the limits existed — exactly as it refuses
+	// an unknown model with no width: a RUNNABLE rule, not an admission one,
+	// because there is no running such a company "as it did before" without
+	// either guessing the limits or sending what the model refuses. It is
+	// refused at boot as well as at an apply, so no node of this build
+	// starts on that revision.
+	//
+	// So the upgrade order depends on the model, and is written out for an
+	// operator in the configuration guide. A company on OpenAI's models
+	// needs nothing, and states a LOWERING limit only once every node runs a
+	// build that enforces it. Any other company states its limits in the
+	// document it imports offline (`crewlet config import`) on the FIRST
+	// node it upgrades, before that node starts: the node publishes the
+	// revision as it boots, and the older nodes apply it, without the
+	// limits, until each is upgraded in turn.
 	MaxInputTokens int `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty" js:"min=0" desc:"Most tokens one input may hold; 0 takes the named model's documented window. Required for a model this build does not know; may only lower a documented one."`
 	MaxBatchInputs int `yaml:"max_batch_inputs,omitempty" json:"max_batch_inputs,omitempty" js:"min=0" desc:"Most inputs one request may carry; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
 	MaxBatchTokens int `yaml:"max_batch_tokens,omitempty" json:"max_batch_tokens,omitempty" js:"min=0" desc:"Most tokens one request may carry, summed over its inputs; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
