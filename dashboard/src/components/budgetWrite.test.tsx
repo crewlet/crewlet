@@ -51,7 +51,7 @@ const BUDGETS: BudgetsAnswer = {
   seats: [{ agent_id: "a", role: "DevRel", handle: "devrel", windows: [day()] }],
 };
 
-function mount(own: BudgetWindow | undefined, orgRefusing: boolean) {
+function mount(own: BudgetWindow | undefined, orgRefusing: boolean, budgets = BUDGETS) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
   store.setConnected(true);
@@ -64,7 +64,7 @@ function mount(own: BudgetWindow | undefined, orgRefusing: boolean) {
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     what === "budgets"
-      ? Promise.resolve(BUDGETS)
+      ? Promise.resolve(budgets)
       : what === "viewer"
         ? Promise.resolve({
             operator_id: "U0",
@@ -116,6 +116,29 @@ test("it raises the company's when only the company's window is refusing", async
   mount(undefined, true);
   await open();
   expect(screen.getByRole("dialog", { name: "Raise the company's budget" })).toBeTruthy();
+});
+
+// "REFUSING SINCE" ONLY WHERE THE WINDOW IS STILL REFUSING. A refused round is
+// counted, so a window that refused one reads past its ceiling and refusing; a
+// ceiling raised since gives it room again while its stamp stays until the
+// next admitted charge clears it, and the dialog must not call that window
+// refusing in the same breath as its state says ok.
+test("a refusal stamp is said to be refusing only while the window still refuses", async () => {
+  const stamped = (extra: Partial<BudgetWindow>) =>
+    day({ refused_at: "2026-09-29T09:00:00Z", ...extra });
+  for (const [window, refusing] of [
+    [stamped({ used: 120, limit: 100, state: "refusing" }), true],
+    [stamped({ used: 120, limit: 1000, state: "ok" }), false],
+  ] as const) {
+    mount(day(), true, {
+      ...BUDGETS,
+      seats: [{ agent_id: "a", role: "DevRel", handle: "devrel", windows: [window] }],
+    });
+    await open();
+    const helper = screen.getByText(/tokens spent today/);
+    expect(/refusing since/.test(helper.textContent ?? "")).toBe(refusing);
+    cleanup();
+  }
 });
 
 // ONLY WHAT WAS CHANGED: the dialog shows all three windows, and a save
