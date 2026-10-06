@@ -97,7 +97,8 @@ type Writer struct {
 	// EMPTY ON THE NODE'S OWN WRITER, which acts through no credential.
 	//
 	// Set on a party [Writer.As] derived, and never carried by As from the
-	// writer it cloned: it is the party's, like the grants.
+	// writer it cloned: it is the party's, like the grants. [Writer.For]
+	// sets it to the credential of the person it writes for.
 	OperatorID string
 
 	// Principal is the id of the principal this writer's party IS — a

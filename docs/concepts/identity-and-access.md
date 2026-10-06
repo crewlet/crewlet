@@ -2075,8 +2075,15 @@ Identity has **two trails**, and they answer different questions.
   acted through (`operator_id`): a machine token's `pat:<id>`, a browser
   session's `session:<lineage>`, a Tier A token's own login. A token acts as
   its owner, so the actor is the owner either way, and the credential is what
-  says their token did it. What the sign-in surface and the duties write names
-  none, since the node acts on nobody's credential.
+  says their token did it. A gesture a person makes through the sign-in
+  surface — signing in or out, spending a second factor, redeeming an
+  invitation, setting a password from a reset link, enrolling their own
+  authenticator — is written down by the node under its own authority and
+  names the person as its actor, with the session it opened or closed as the
+  credential, or their login where it came through no session yet. What the
+  engine decides for itself — a sweep, a re-seal, a password re-hashed at the
+  current cost — names the node and no credential, since the node acts on
+  nobody's.
 - **The `auth` category** of the ordinary event feed is what *this node saw*:
   who signed in here and how, what ended a session, how many attempts failed
   and from where. Each row is published through the

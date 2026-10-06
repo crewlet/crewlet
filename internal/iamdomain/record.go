@@ -392,10 +392,12 @@ type MutationRecord struct {
 	// OperatorID is the credential Actor acted THROUGH — a machine token's
 	// `pat:<id>`, a browser session's `session:<lineage>`, a Tier A token's
 	// own login — which is what tells a token's gesture from its owner's
-	// when Actor names the owner either way. Empty where the party acted
-	// through none, which is the node's own writer — every sign-in,
-	// sign-out, step-up and enrolment the sign-in surface writes, and every
-	// duty.
+	// when Actor names the owner either way. A gesture a person makes
+	// through the sign-in surface is written FOR them ([Writer.For]): the
+	// session it opened or closed, or their login where it came through no
+	// session yet. Empty where the party acted through none, which is the
+	// node's own writer — every duty, and what the engine decides for
+	// itself, such as a password re-hashed at this build's cost.
 	OperatorID string `json:"operator_id,omitempty"`
 
 	// Reason is why, in at most [MaxReason] bytes, for the operations
