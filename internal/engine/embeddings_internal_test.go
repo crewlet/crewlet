@@ -1,10 +1,14 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -258,6 +262,76 @@ func TestAConfiguredEmbedderIsBuiltAtTheStatedLimits(t *testing.T) {
 	}
 	if got.Model() != "text-embedding-3-small" {
 		t.Errorf("Model() = %q", got.Model())
+	}
+}
+
+// THE PROVIDER ASKS FOR ITS WIDTH ON THE CONFIGURATION'S RULE. A model whose
+// endpoint documents `dimensions` as unsupported — embed-v4.0 through Cohere's
+// Compatibility API — is built not to send it, and every other model is built
+// to; the rule and its citations live in config, and this is where the engine
+// hands the answer to the provider, so a wiring that dropped it is a company
+// whose every embedding request carries a parameter its endpoint says it does
+// not take.
+func TestTheEmbedderAsksForItsWidthOnTheConfigurationsRule(t *testing.T) {
+	t.Parallel()
+	for model, wantAsked := range map[string]bool{
+		"embed-v4.0":             false,
+		"text-embedding-3-small": true,
+	} {
+		t.Run(model, func(t *testing.T) {
+			t.Parallel()
+			var (
+				mu    sync.Mutex
+				asked []bool
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				_, carried := req["dimensions"]
+				mu.Lock()
+				asked = append(asked, carried)
+				mu.Unlock()
+				vector := strings.TrimSuffix(strings.Repeat("0.5,", 1536), ",")
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[%s]}],"model":"m"}`, vector)
+			}))
+			t.Cleanup(srv.Close)
+			doc := fmt.Sprintf(`
+name: Nimbus
+providers:
+  llm:
+    scripted:
+      type: anthropic
+      model: claude-x
+      api_keys: ["sk-test"]
+  embeddings:
+    type: openai-compatible
+    model: %s
+    base_url: %s
+    api_key: sk-embed
+    max_batch_inputs: 96
+    max_batch_tokens: 128000
+roles:
+  - name: CEO
+    handle: ceo
+    llm: scripted
+`, model, srv.URL)
+			got, err := (&Engine{}).buildEmbedder(companyWith(t, doc))
+			if err != nil {
+				t.Fatalf("buildEmbedder: %v", err)
+			}
+			if _, err := got.Embed(t.Context(), "the deploy keeps failing"); err != nil {
+				t.Fatalf("Embed: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(asked) != 1 || asked[0] != wantAsked {
+				t.Fatalf("the request carried dimensions: %v, want %v", asked, wantAsked)
+			}
+		})
 	}
 }
 

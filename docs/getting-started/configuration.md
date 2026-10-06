@@ -433,7 +433,9 @@ providers:
                                         #   A model this build does not know is
                                         #   REFUSED with `dimensions` unset rather
                                         #   than given a guess — name a known model
-                                        #   or state the width yourself
+                                        #   or state the width yourself. embed-v4.0
+                                        #   takes no override: Cohere's endpoint
+                                        #   does not support the parameter
   # max_input_tokens: 512               # THE MODEL'S LIMITS, in tokens, and unset
   # max_batch_inputs: 32                #   takes the ones its vendor documents.
   # max_batch_tokens: 16384             #   Required where none is documented — a
@@ -452,6 +454,17 @@ providers:
 emits. There is no global default, because a number that was right for one
 model is silently wrong for the next — and a model this build does not know is
 refused rather than guessed at, naming both ways to fix it.
+
+Every request asks for the width, in the OpenAI `dimensions` parameter, where
+the endpoint takes it — so a shortened width is the width that comes back —
+and every answer is checked against it either way:
+
+| Model | `dimensions` at its endpoint | What the engine does |
+|---|---|---|
+| `text-embedding-3-large`, `text-embedding-3-small` | Supported: the vector is shortened to the width asked ([OpenAI's reference](https://developers.openai.com/api/reference/resources/embeddings/methods/create)) | Sends it, so a width below the model's own is the width stored |
+| `gemini-embedding-001` | Not mentioned by [Google's compatibility page](https://ai.google.dev/gemini-api/docs/openai), whose examples send none | Sends it, as it always has; an endpoint that ignored it would answer 3072, which the width check refuses at any other width |
+| `embed-v4.0` | Listed as unsupported by [Cohere's Compatibility API](https://docs.cohere.com/docs/compatibility-api), which takes no other way to choose a width either, so it answers at the model's default, 1536 ([the model page](https://docs.cohere.com/docs/cohere-embed)) | Never sends it, and refuses any other `dimensions`, naming the field |
+| any other model | Unknown | Sends it |
 
 **So do its limits.** How many tokens one input may hold, how many inputs one
 request may carry and how many tokens one request may carry in all are facts

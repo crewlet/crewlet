@@ -68,7 +68,10 @@
 // .dimensions. A model that produces a different width does not degrade a
 // search — it writes rows that cannot be read back. So the width is checked
 // against what the provider actually returns, on every call, and a mismatch
-// is refused loudly rather than stored.
+// is refused loudly rather than stored. It is also ASKED FOR, in the request's
+// `dimensions`, wherever the endpoint takes that parameter; which endpoint
+// does is the configuration's knowledge, cited per model there, and reaches
+// this package as [Config.OmitDimensions].
 package embeddings
 
 import (

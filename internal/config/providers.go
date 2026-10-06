@@ -977,7 +977,10 @@ type EmbeddingProvider struct {
 	// shortening its output. It must match what the model actually
 	// produces: the store's vector columns are checked against it, and a
 	// mismatch is not a degraded search but a write that cannot be read
-	// back.
+	// back. So a model whose endpoint documents the `dimensions` parameter
+	// as unsupported ([DimensionsUnsupported] — embed-v4.0 through
+	// Cohere's Compatibility API) is refused any width but its own, and is
+	// never sent the parameter at that one.
 	Dimensions int `yaml:"dimensions,omitempty" json:"dimensions,omitempty" js:"min=0;max=4096" desc:"Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces."`
 
 	// MaxInputTokens, MaxBatchInputs and MaxBatchTokens are the model's
@@ -1021,9 +1024,10 @@ type EmbeddingProvider struct {
 }
 
 // EmbeddingModel is what this build knows about one embedding model: the width
-// it emits and the limits its vendor documents for the endpoint the embedding
-// backend calls — an OpenAI-shaped POST /embeddings carrying `model`, an
-// `input` array and `dimensions` (internal/providers/embeddings).
+// it emits, what the endpoint the embedding backend calls does with a width
+// asked for, and the limits its vendor documents for that endpoint — an
+// OpenAI-shaped POST /embeddings carrying `model`, an `input` array and, where
+// the endpoint takes it, `dimensions` (internal/providers/embeddings).
 //
 // A ZERO LIMIT IS "NOT DOCUMENTED", never "unlimited": [Undocumented] says
 // which source was read and what it did not say, and validation refuses the
@@ -1035,6 +1039,19 @@ type EmbeddingModel struct {
 	// Width is the vector width the model emits when no shorter one is
 	// asked for.
 	Width int
+
+	// Dimensions is what the endpoint does with the request's `dimensions`
+	// parameter for this model, as its vendor documents it — which decides
+	// whether the embedder sends it ([EmbeddingProvider.SendsDimensions])
+	// and whether a width other than [EmbeddingModel.Width] can be
+	// configured at all.
+	Dimensions DimensionsSupport
+
+	// DimensionsSource is the documentation [EmbeddingModel.Dimensions] is
+	// read from, which a refusal of a width the endpoint cannot produce
+	// quotes — so the operator is told where to check, not merely that
+	// this build says no.
+	DimensionsSource string
 
 	// InputTokens is the most tokens one input may hold.
 	InputTokens int
@@ -1057,6 +1074,46 @@ type EmbeddingModel struct {
 	// tells an operator, so the field they are asked for comes with the
 	// reason nobody filled it in for them.
 	Undocumented string
+}
+
+// DimensionsSupport is what an embedding endpoint does with the request's
+// `dimensions` parameter for one model, as its vendor documents it.
+//
+// THREE VALUES, because the documentation says one of three things, and each
+// is acted on differently. An endpoint that SHORTENS to the width asked for is
+// sent it, so a store sized below the model's own width is filled at that
+// width. One documented as NOT TAKING it is never sent it, and holds a company
+// to the model's own width, because a width it cannot produce is a store whose
+// every vector would be refused. And where the documentation is SILENT the
+// parameter is sent as it always has been, since dropping it would rest on a
+// guess about the endpoint as much as keeping it does — and the width check
+// every response passes (internal/providers/embeddings) is what catches an
+// endpoint that ignores it.
+type DimensionsSupport string
+
+// The documented answers.
+const (
+	// DimensionsShortens is an endpoint that documents the parameter and
+	// returns a vector of the width asked for.
+	DimensionsShortens DimensionsSupport = "shortens"
+
+	// DimensionsUnsupported is an endpoint that documents the parameter as
+	// one it does not take, so it returns the model's own width and no
+	// other.
+	DimensionsUnsupported DimensionsSupport = "unsupported"
+
+	// DimensionsUnstated is an endpoint whose documentation says nothing
+	// about the parameter.
+	DimensionsUnstated DimensionsSupport = "unstated"
+)
+
+// Valid reports whether d is one of the documented answers.
+func (d DimensionsSupport) Valid() bool {
+	switch d {
+	case DimensionsShortens, DimensionsUnsupported, DimensionsUnstated:
+		return true
+	}
+	return false
 }
 
 // EmbeddingModels is every embedding model this build knows, keyed by the id
@@ -1132,8 +1189,19 @@ var EmbeddingModels = map[string]EmbeddingModel{
 	// (search.EmbedInputBytes): a byte less would move the opening of every
 	// long document, change the digest its replicated vector record carries,
 	// and re-embed the corpus.
-	"text-embedding-3-large": {Width: 3072, InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000},
-	"text-embedding-3-small": {Width: 1536, InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000},
+	//
+	// `dimensions`: "The number of dimensions the resulting output
+	// embeddings should have. Only supported in text-embedding-3 and later
+	// models" (the same reference), and the guide's table gives each
+	// model's own width.
+	"text-embedding-3-large": {
+		Width: 3072, Dimensions: DimensionsShortens, DimensionsSource: openAIDimensions,
+		InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000,
+	},
+	"text-embedding-3-small": {
+		Width: 1536, Dimensions: DimensionsShortens, DimensionsSource: openAIDimensions,
+		InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000,
+	},
 
 	// The model page (https://ai.google.dev/gemini-api/docs/models/gemini-embedding-001):
 	// an input token limit of 2,048 and a flexible output of 128..3072. The
@@ -1142,8 +1210,19 @@ var EmbeddingModels = map[string]EmbeddingModel{
 	// truncates an over-long input silently when asked to (autoTruncate,
 	// https://ai.google.dev/api/embeddings), and neither page says what the
 	// compatible endpoint does.
+	//
+	// `dimensions` is not mentioned on the compatibility page at all, and its
+	// examples send none. The native API shortens on request through its own
+	// `output_dimensionality` and emits 3072 by default
+	// (https://ai.google.dev/gemini-api/docs/embeddings), which says nothing
+	// about whether the compatible endpoint maps the OpenAI parameter onto
+	// it, ignores it or refuses it — so it is sent as it always was, and the
+	// width check on every response is what holds the vector to the store.
 	"gemini-embedding-001": {
-		Width: 3072, InputTokens: 2048, WrapTokens: EmbeddingWrapTokens,
+		Width: 3072, Dimensions: DimensionsUnstated,
+		DimensionsSource: "Google's page for the OpenAI-compatible endpoint " +
+			"(ai.google.dev/gemini-api/docs/openai) does not mention `dimensions`",
+		InputTokens: 2048, WrapTokens: EmbeddingWrapTokens,
 		Undocumented: "Google's page for the OpenAI-compatible endpoint " +
 			"(ai.google.dev/gemini-api/docs/openai) states no limit on the " +
 			"inputs or the tokens one request may carry, and the native " +
@@ -1157,18 +1236,34 @@ var EmbeddingModels = map[string]EmbeddingModel{
 	// (https://docs.cohere.com/docs/compatibility-api) documents no limit at
 	// all; the 96 texts a call of the native Embed API
 	// (https://docs.cohere.com/reference/embed) is that endpoint's, and so is
-	// its silent END truncation. That page also lists `dimensions` — which
-	// this backend always sends — as unsupported, without saying whether it
-	// is ignored or refused: ignored, the 1536 that comes back passes the
-	// width check at the default and fails it loudly for an override.
+	// its silent END truncation.
+	//
+	// That page lists `dimensions` among the embeddings parameters it does
+	// NOT support (it takes `input`, `model` and `encoding_format`), and
+	// says neither whether one sent is ignored or refused nor how a width is
+	// chosen instead — the native API's `output_dimension` is among the
+	// Cohere-specific parameters it does not take either. So the endpoint
+	// returns the model's own width, 1536 of 256, 512, 1024 and 1536 (the
+	// model page), and nothing else: the parameter is never sent, and no
+	// other width can be configured.
 	"embed-v4.0": {
-		Width: 1536, InputTokens: 128_000, WrapTokens: EmbeddingWrapTokens,
+		Width: 1536, Dimensions: DimensionsUnsupported,
+		DimensionsSource: "Cohere's Compatibility API " +
+			"(docs.cohere.com/docs/compatibility-api) lists `dimensions` among " +
+			"the embeddings parameters it does not support",
+		InputTokens: 128_000, WrapTokens: EmbeddingWrapTokens,
 		Undocumented: "Cohere's Compatibility API " +
 			"(docs.cohere.com/docs/compatibility-api) states no limit on the " +
 			"inputs or the tokens one request may carry — the native Embed " +
 			"API's 96 texts a call is a different endpoint's",
 	},
 }
+
+// openAIDimensions is where OpenAI documents the `dimensions` parameter for its
+// third-generation models.
+const openAIDimensions = "OpenAI's embeddings reference " +
+	"(developers.openai.com/api/reference/resources/embeddings/methods/create): " +
+	"`dimensions` is supported in text-embedding-3 and later models"
 
 // EmbeddingWrapTokens is the allowance, in tokens, for what a server adds
 // around each input of a model whose vendor does not document its count —
@@ -1231,6 +1326,24 @@ func (e *EmbeddingProvider) Width() int {
 		return e.Dimensions
 	}
 	return EmbeddingModels[strings.TrimSpace(e.Model)].Width
+}
+
+// SendsDimensions is whether the embedder asks for its width in every request
+// — the `dimensions` parameter — rather than only checking the width of what
+// comes back.
+//
+// Every model but one kind is asked: an endpoint that shortens answers at the
+// width the store was sized for, and one whose documentation is silent, or a
+// model this build does not know, is asked as it always has been. The one
+// kind is a model whose endpoint documents the parameter as NOT SUPPORTED
+// ([DimensionsUnsupported]) at the width it emits on its own: the answer is
+// that width without the parameter, and a parameter an endpoint says it does
+// not take is one it may refuse. At any other width the parameter is sent as
+// before — validation refuses that width, so only a caller that skipped
+// validation meets it, and it then fails as it always did, at the width check.
+func (e *EmbeddingProvider) SendsDimensions() bool {
+	model, known := EmbeddingModels[strings.TrimSpace(e.Model)]
+	return !known || model.Dimensions != DimensionsUnsupported || e.Width() != model.Width
 }
 
 // InputBound is the most PREPARED BYTES one input to this provider may hold,
@@ -1358,6 +1471,19 @@ func (e *EmbeddingProvider) validate(path Path) error {
 		p.add(at(path, "dimensions"), ErrOutOfRange,
 			"%d is past the %d ceiling, which is the widest any model in current "+
 				"use emits", e.Dimensions, MaxEmbeddingWidth)
+	case e.Dimensions > 0 && fixedWidth(strings.TrimSpace(e.Model)) && e.Dimensions != e.modelWidth():
+		// A WIDTH THE ENDPOINT CANNOT PRODUCE is refused here, not
+		// discovered at the first embedding: the store's columns are
+		// sized from this value, and an endpoint that takes no
+		// `dimensions` answers at the model's own width whatever was
+		// configured, so every vector would be refused as the wrong
+		// width for as long as the company ran.
+		model := EmbeddingModels[strings.TrimSpace(e.Model)]
+		p.add(at(path, "dimensions"), ErrConflict,
+			"%q emits %d through the endpoint this backend calls, and that "+
+				"endpoint takes no width of its own: %s. Leave `dimensions` "+
+				"unset, or state %d",
+			strings.TrimSpace(e.Model), model.Width, model.DimensionsSource, model.Width)
 	case e.Dimensions == 0 && strings.TrimSpace(e.Model) != "":
 		// AN UNKNOWN MODEL WITH NO WIDTH IS REFUSED, not defaulted. The
 		// width decides whether a vector written today can be read
@@ -1378,6 +1504,18 @@ func (e *EmbeddingProvider) validate(path Path) error {
 			"an openai-compatible embedding provider needs the endpoint to talk to")
 	}
 	return p.err()
+}
+
+// fixedWidth reports whether the endpoint for model takes no `dimensions`, so
+// the model's own width is the only one it produces.
+func fixedWidth(model string) bool {
+	return EmbeddingModels[model].Dimensions == DimensionsUnsupported
+}
+
+// modelWidth is the width the named model emits on its own, 0 for a model this
+// build does not carry.
+func (e *EmbeddingProvider) modelWidth() int {
+	return EmbeddingModels[strings.TrimSpace(e.Model)].Width
 }
 
 // validateLimits refuses a limit that is unknown, negative, above the model's

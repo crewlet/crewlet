@@ -51,6 +51,9 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 	provider, err := embeddings.New(embeddings.Config{
 		Model:      env.Value(cfg.Model),
 		Dimensions: cfg.Width(),
+		// THE CONFIGURATION'S RULE for whether a request asks for the
+		// width, where each endpoint's documentation is cited.
+		OmitDimensions: !cfg.SendsDimensions(),
 		// THE CONFIGURATION'S RULE for which key, the conventional
 		// OPENAI_API_KEY included, resolved through the store-aware chain.
 		APIKey:  cfg.ResolvedKey(env),

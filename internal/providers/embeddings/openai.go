@@ -68,6 +68,19 @@ type Config struct {
 	// are sized from. Required for the same reason.
 	Dimensions int
 
+	// OmitDimensions leaves the `dimensions` parameter out of every request.
+	//
+	// The zero value SENDS it, which is right for every endpoint but one
+	// kind: an endpoint that shortens on request (OpenAI's third-generation
+	// models) answers at the width the store was sized for, and one that
+	// ignores the parameter is caught by the width check every response
+	// passes. The one kind is an endpoint that documents the parameter as
+	// unsupported, at the width it emits on its own — the configuration
+	// decides that (config.EmbeddingProvider.SendsDimensions), where the
+	// vendor's documentation is cited; nothing here knows which endpoint it
+	// is talking to. The width check runs either way.
+	OmitDimensions bool
+
 	// APIKey is the credential, resolved. It is THE credential: nothing
 	// here reads a variable, and the SDK's own OPENAI_API_KEY autoload is
 	// overridden on every client, an empty key included. Which key an
@@ -98,6 +111,9 @@ type Provider struct {
 	model  string
 	width  int
 	limits Limits
+
+	// askWidth is whether a request carries `dimensions` ([Config.OmitDimensions]).
+	askWidth bool
 }
 
 // BatchEmbedder RATHER THAN Embedder, because the embed duty in internal/engine
@@ -164,6 +180,7 @@ func New(cfg Config) (*Provider, error) {
 	return &Provider{
 		client: sdk.NewClient(opts...),
 		model:  cfg.Model, width: cfg.Dimensions, limits: cfg.Limits,
+		askWidth: !cfg.OmitDimensions,
 	}, nil
 }
 
@@ -233,11 +250,9 @@ func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 // request sends one batch request — inputs already prepared, non-empty and
 // inside the limits — and returns one vector per input, in input order.
 func (p *Provider) request(ctx context.Context, input []string) ([][]float32, error) {
-	res, err := p.client.Embeddings.New(ctx, sdk.EmbeddingNewParams{
-		Model:      p.model,
-		Input:      sdk.EmbeddingNewParamsInputUnion{OfArrayOfStrings: input},
-		Dimensions: sdk.Int(int64(p.width)),
-	}, option.WithRequestTimeout(BatchTimeout))
+	res, err := p.client.Embeddings.New(ctx,
+		p.params(sdk.EmbeddingNewParamsInputUnion{OfArrayOfStrings: input}),
+		option.WithRequestTimeout(BatchTimeout))
 	if err != nil {
 		return nil, p.classify(err)
 	}
@@ -263,6 +278,23 @@ func (p *Provider) request(ctx context.Context, input []string) ([][]float32, er
 		out[at[i]] = checked
 	}
 	return out, nil
+}
+
+// params is one request's parameters for input.
+//
+// THE WIDTH IS ASKED FOR, not just checked, wherever the endpoint takes it. The
+// third-generation models support truncation to a shorter width, so a company
+// that sized its store at 768 gets 768 rather than a refusal — and a model that
+// ignores the parameter still fails the width check every response passes,
+// which is the case asking cannot fix. An endpoint documented as not taking
+// the parameter is not sent it ([Config.OmitDimensions]), and answers at the
+// model's own width, which is then the configured one.
+func (p *Provider) params(input sdk.EmbeddingNewParamsInputUnion) sdk.EmbeddingNewParams {
+	params := sdk.EmbeddingNewParams{Model: p.model, Input: input}
+	if p.askWidth {
+		params.Dimensions = sdk.Int(int64(p.width))
+	}
+	return params
 }
 
 // named fills in the model on a [TooLongError] the limits raised, which know
@@ -420,16 +452,9 @@ func (p *Provider) Embed(ctx context.Context, text string) ([]float32, error) {
 	if len(prepared) > p.limits.InputBytes {
 		return nil, &TooLongError{Model: p.model, Bytes: len(prepared), Limit: p.limits.InputBytes}
 	}
-	res, err := p.client.Embeddings.New(ctx, sdk.EmbeddingNewParams{
-		Model: p.model,
-		Input: sdk.EmbeddingNewParamsInputUnion{OfString: sdk.String(prepared)},
-		// THE WIDTH IS ASKED FOR, not just checked. The third-generation
-		// models support truncation to a shorter width, so a company that
-		// sized its store at 768 gets 768 rather than a refusal — and a
-		// model that ignores the parameter still fails the check below,
-		// which is the case this cannot fix.
-		Dimensions: sdk.Int(int64(p.width)),
-	}, option.WithRequestTimeout(EmbedTimeout))
+	res, err := p.client.Embeddings.New(ctx,
+		p.params(sdk.EmbeddingNewParamsInputUnion{OfString: sdk.String(prepared)}),
+		option.WithRequestTimeout(EmbedTimeout))
 	if err != nil {
 		return nil, p.classify(err)
 	}

@@ -386,7 +386,7 @@ A cold fill of 110 000 sources is roughly **108 minutes and 860 requests** —
 again across every corpus together, and more requests but the same minutes
 where sources run long — and those numbers do not move with the configured
 width: providers bill per input *token*, and `dimensions` is a truncation
-parameter the request already carries.
+parameter the request already carries wherever the endpoint takes one.
 
 **Every request is one the model accepts for its size.** The duty forms each
 request itself, through the provider's own packing rule: at most 128 sources,
