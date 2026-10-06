@@ -171,8 +171,9 @@ export interface PhaseRecord {
   conversationKey: string;
   toolsAvailable: string[];
   toolCatalogue: string[];
-  /** The named worker behind this call: a learning worker on an
-      `auxiliary` phase, a delegate template on a `subagent` one. */
+  /** The named worker behind this call: a delegate template on a
+      `subagent` phase. (The auxiliary model's purposes are on its own
+      `auxiliary_spend` records, which are no phase.) */
   worker: string;
   /** A delegated task's own id, as the executor wrote it. `subagent` only. */
   taskId: string;
@@ -923,8 +924,8 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       // and a run read before the executor that launched it reads as work
       // nobody asked for. Two runs of one iteration keep their time order. A
       // phase not on this list sorts after the ones that are and then by
-      // time, which is right for the nested calls (subagent, judge,
-      // auxiliary) that hang off a host phase.
+      // time, which is right for the nested calls (subagent, judge) that
+      // hang off a host phase.
       const ordered = [...list].sort((a, b) => {
         if (a.iteration !== b.iteration) return a.iteration - b.iteration;
         const order = ["onboarding", "execute", "sandbox", "review"];

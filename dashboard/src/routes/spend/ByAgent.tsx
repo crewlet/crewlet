@@ -1,6 +1,8 @@
 /**
  * "By agent": every seat that spent in the window — its ended turns, its
- * tokens, its share of the window, today's budget and its tokens per turn.
+ * tokens, its share of the window, today's budget and its tokens per turn —
+ * and every PERSON the auxiliary model spent for (`person`), who takes no
+ * turns and has no seat budget, so those two columns say so on their row.
  *
  * THE BUDGET COLUMN IS TODAY'S, and says so in its heading: a seat's ceiling
  * is a calendar window of its own (ADR-0019), read from the live meter the
@@ -55,6 +57,9 @@ export function turnsLink(w: Window): { path: string; clamped: string | null } {
   };
 }
 
+/** What a person's row says where a seat's counts its turns. */
+export const PERSON_TAKES_NO_TURNS = "A person takes no turns — this is what their questions cost";
+
 export function ByAgent({
   lines,
   loading,
@@ -100,7 +105,9 @@ export function ByAgent({
       <DataGrid
         name="agents"
         rows={loading && rows.length === 0 ? undefined : rows}
-        rowKey={(l) => l.row.agent_id || l.row.role}
+        // A PERSON IS KEYED BY THEIR HANDLE: a person has no agent id, and
+        // two people of one role keyed on the role were one row.
+        rowKey={(l) => l.row.agent_id || (l.row.person ? `person:${l.row.handle}` : l.row.role)}
         defaultSort="-tokens"
         phoneRows="compact"
         flush
@@ -152,12 +159,15 @@ export function ByAgent({
             // ("Tokens ⌄", "Per turn") were cut to "To…" over figures that fit.
             width: "4.5rem",
             sortValue: (l) => l.row.turns ?? -1,
-            cell: (l) => (
-              <>
-                <NumberCell value={l.row.turns} />
-                <PhoneUnit words={l.row.turns === 1 ? "turn" : "turns"} />
-              </>
-            ),
+            cell: (l) =>
+              l.row.person ? (
+                <EmptyValue label={PERSON_TAKES_NO_TURNS} />
+              ) : (
+                <>
+                  <NumberCell value={l.row.turns} />
+                  <PhoneUnit words={l.row.turns === 1 ? "turn" : "turns"} />
+                </>
+              ),
           },
           {
             key: "tokens",
@@ -215,7 +225,9 @@ export function ByAgent({
             sortValue: (l) => l.perTurn ?? -1,
             cell: (l) =>
               l.perTurn === null ? (
-                <EmptyValue label="No turn ended in this window" />
+                <EmptyValue
+                  label={l.row.person ? PERSON_TAKES_NO_TURNS : "No turn ended in this window"}
+                />
               ) : (
                 <span
                   className="spend-per-turn"

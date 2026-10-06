@@ -119,16 +119,14 @@ const RUNS_POLL_MS = 30_000;
 /** How often a seat's own latest events are read again, when one is chosen. */
 const SEAT_EVENTS_POLL_MS = 15_000;
 
-/** The phases the engine emits, the turn's own two first. */
-const PHASES = [
-  "execute",
-  "review",
-  "onboarding",
-  "sandbox",
-  "subagent",
-  "auxiliary",
-  "judge",
-] as const;
+/**
+ * The phases the engine emits, the turn's own two first.
+ *
+ * NOT `auxiliary`: no phase record carries it. The auxiliary model's spend is
+ * an `auxiliary_spend` record, which is no phase and runs nothing live, so a
+ * filter offering it matched no row and read as a quiet model.
+ */
+const PHASES = ["execute", "review", "onboarding", "sandbox", "subagent", "judge"] as const;
 
 /** The phase a running turn is in, in the vocabulary the phase filter uses. */
 function runningPhase(row: AgentRow): string {

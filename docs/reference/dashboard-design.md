@@ -745,7 +745,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change: the document, who read it and how, what links to it, its revisions and thread; edited as you | `edit=1` · `version=` (one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
-| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, background workers and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
+| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, the auxiliary model by purpose and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
@@ -5123,7 +5123,10 @@ export.
   hero's; the chart draws no ghost of the window before.
 - **By agent** — turns, tokens, share, **budget today** (the seat's daily window
   from its overlay, `exhausted` where the engine says `refusing`) and tokens per
-  ended turn. A row opens the seat in the peek; on a phone a seat is one
+  ended turn. A PERSON the auxiliary model spent for (`person: true` — their
+  questions answered with `answer_knowledge`) is a row of their own, keyed by
+  their handle, and says in its turns and per-turn cells that a person takes
+  no turns. A row opens the seat in the peek; on a phone a seat is one
   compact row — name, tokens and share, then turns · today · per turn, each
   with its unit. **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
   over the same window where the turn list has it (a quarter goes to its thirty
@@ -5132,7 +5135,12 @@ export.
 - **By model** is the engine's `by_provider`: each configured provider entry,
   the models it answered with, who used it (the top three and how many more)
   and its tokens. **By team** is `token_series{group: unit}` asked for every
-  team; **Background workers** is `by_worker`.
+  team; **Auxiliary model** is `by_worker` — what the seats' cheap model spent,
+  by purpose (`memory filter`, `condense thread`, `persist decider`, …) and its
+  provider calls. A breakdown rather than an addition: every one of those calls
+  is already in the row of the seat or person it was made for, under the
+  Auxiliary band. It used to be headed "Background workers" and to claim the
+  embedding pass, which is metered nowhere.
 - **Export** is a client CSV of the rollup and the by-agent table, every row
   labelled with its window and section, tokens only, and every text cell
   guarded so a spreadsheet opens a name as text rather than a formula.
