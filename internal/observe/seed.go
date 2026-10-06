@@ -69,7 +69,8 @@ const seedTurnReads = 16
 //     never fed, see events.KeptOutOfFeed), inside
 //     the store's own read floor ([store.EventHistory]). Payload-free, because
 //     a feed row carries none;
-//   - the spend: the newest [livestate.SpendRecordLimit] phase records inside
+//   - the spend: the newest [livestate.SpendRecordLimit] spend records — phases
+//     and auxiliary records — inside
 //     [livestate.LiveSpendWindow], read from the promoted token columns rather
 //     than the payloads. The count is the projection's record cap, applied at
 //     the READ, on every node: a busy day past it was otherwise read in full

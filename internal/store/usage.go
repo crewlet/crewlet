@@ -154,11 +154,15 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the four records a day is derived from, taken from their
-// payload types for the reason [phaseCompleted] is.
+// usageEventTypes are the five records a day is derived from, taken from their
+// payload types for the reason [phaseCompleted] is. The auxiliary record is one
+// of them so the fingerprint moves when it lands: a flush writes it up to one
+// ledger interval after its last call, stamped with that call's instant, and a
+// day whose only change was that row would otherwise never be re-derived.
 func usageEventTypes() []any {
 	return []any{
 		phaseCompleted,
+		auxiliarySpendType,
 		turnCompleted,
 		types.AgentTurnCompleted{}.EventType(),
 		types.KnowledgeRead{}.EventType(),
@@ -245,23 +249,32 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 	return out, nil
 }
 
-// usageTokens folds the window's phase completions into (phase, worker, model,
-// provider key) cells per seat, off the columns node/0015 and node/0032
-// promoted — never the payload.
+// usageTokens folds the window's spend records — the phase completions and the
+// auxiliary records — into (phase, worker, model, provider key) cells per seat,
+// off the columns node/0015, node/0032 and node/0040 promoted, never the
+// payload. An auxiliary record's cell is phase `auxiliary` with its purpose as
+// the worker, which is the cell shape every build already reads.
+//
+// CALLS ARE PROVIDER CALLS — the `calls` column's sum, not a count of rows —
+// since one coalesced auxiliary row stands for many (node/0040).
+//
+// A SEAT'S, by its agent id: a person's auxiliary spend on the operator
+// surface names no agent and is no seat's cell.
 func (d *DB) usageTokens(ctx context.Context, w UsageWindow,
 	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
 
+	holders, kinds := spendTypes()
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT agent_id, MAX(agent_role), phase, worker, model, provider_key,
 		       SUM(input_tokens), SUM(output_tokens),
 		       SUM(cache_read_tokens), SUM(cache_write_tokens),
-		       SUM(total_tokens), COUNT(*)
+		       SUM(total_tokens), SUM(calls)
 		  FROM crewlet_events
-		 WHERE event_type = ? AND event_time >= ? AND event_time < ?
+		 WHERE event_type IN (`+holders+`) AND event_time >= ? AND event_time < ?
 		   AND agent_id != ''
 		 GROUP BY agent_id, phase, worker, model, provider_key
 		 ORDER BY agent_id, phase, worker, model, provider_key`,
-		phaseCompleted, EncodeTime(w.Start), EncodeTime(w.End))
+		append(kinds, EncodeTime(w.Start), EncodeTime(w.End))...)
 	if err != nil {
 		return fmt.Errorf("store: read the usage day's spend: %w", err)
 	}

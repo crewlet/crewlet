@@ -60,8 +60,9 @@ const DefaultRecentTurns = 50
 // turns is a request to aggregate the whole window into one frame.
 const MaxRecentTurns = 500
 
-// Record is one completed phase's spend — the aggregator's input, and the
-// shape both producers hand it.
+// Record is one spend record — a completed phase's, or an auxiliary record's
+// coalesced calls — the aggregator's input, and the shape both producers hand
+// it.
 type Record struct {
 	EventID   string `json:"event_id"`
 	Timestamp string `json:"timestamp"`
@@ -69,12 +70,18 @@ type Record struct {
 	AgentID   string `json:"agent_id"`
 	AgentRole string `json:"agent_role"`
 
+	// Phase is the phase that ran, and [PhaseAuxiliary] on an auxiliary
+	// record — the `auxiliary_spend` event, which carries no phase of its
+	// own because it is none.
 	Phase string `json:"phase"`
-	// HostPhase is the phase a nested call ran under: an auxiliary
-	// learning worker's own LLM call, or the round-cap extension judge.
+	// HostPhase is the phase a nested call ran under: a delegated worker,
+	// or the round-cap extension judge.
 	HostPhase string `json:"host_phase"`
-	// Worker names the auxiliary worker, and is set only when Phase is
-	// "auxiliary" — which is why the worker rollup keys on the pair.
+	// Worker names what an auxiliary record's calls were FOR — its
+	// purpose, `memory_filter` or `condense_thread` — and is set only when
+	// Phase is "auxiliary", which is why the worker rollup keys on the
+	// pair. A delegated worker's template rides the same field on its
+	// `subagent` phase, and is kept out of that rollup by the pair.
 	Worker string `json:"worker"`
 	Model  string `json:"model"`
 	// ProviderKey is the configured provider entry that served the call.
@@ -93,6 +100,20 @@ type Record struct {
 	TurnID    string `json:"turn_id"`
 	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
+
+	// Stage is WHOSE COST an auxiliary record is — `turn`, `reflection`,
+	// `background` or `operator` — and empty on a phase's record, which is
+	// always its turn's. It decides one thing here: whether the record is
+	// part of its turn's cost ([Record.InTurn]).
+	Stage string `json:"stage,omitempty"`
+
+	// Calls is how many provider calls the record covers: a phase's model
+	// rounds, an auxiliary record's coalesced calls. ONE UNIT under one
+	// label everywhere a bucket says "N calls" — it counted RECORDS once,
+	// so a forty-round executor was one call beside a coalesced record of
+	// seventy rewrites. Zero is read as one: a record is at least the call
+	// that produced it, and an older peer's carries no count.
+	Calls int `json:"calls,omitempty"`
 
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
@@ -116,6 +137,42 @@ type Record struct {
 	CostUSD float64 `json:"cost_usd"`
 }
 
+// StageTurn is the auxiliary stage spent inside a turn, for its work —
+// types.AuxStageTurn, named here rather than imported so this package stays a
+// leaf. A test holds the two equal.
+const StageTurn = "turn"
+
+// InTurn reports whether a record is part of its turn's cost: every phase's,
+// and an auxiliary record of the [StageTurn] stage. A TURN'S COST IS DEFINED
+// HERE, ONCE — the turn list, the live window's per-turn rows and the Turn
+// screen all count what this admits — and the reflection after a turn is not in
+// it: it carries the turn's id so the turn's page can draw it, and it is the
+// seat's learning rather than what the work cost.
+func (r Record) InTurn() bool { return r.Stage == "" || r.Stage == StageTurn }
+
+// calls is the record's provider calls, at least the one that produced it.
+func (r Record) calls() int { return max(r.Calls, 1) }
+
+// PhaseCalls is a phase record's provider calls, from the two counts the record
+// carries: its `rounds` list's length — one entry per provider call — where it
+// recorded one, its `rounds_used` where it predates the list, and one where
+// neither says (a judge's single call, a coding run collected whole, whose own
+// calls happened inside a CLI the engine does not see).
+//
+// ONE RULE FOR BOTH PRODUCERS — the event store's writer and the live
+// projection — so a phase counts the same calls on either side of the live
+// edge; node/0040's backfill states it a third time in SQL, held to this one
+// by that migration's test.
+func PhaseCalls(rounds, roundsUsed int) int {
+	switch {
+	case rounds > 0:
+		return rounds
+	case roundsUsed > 0:
+		return roundsUsed
+	}
+	return 1
+}
+
 // Bucket is an accumulated total. Embedded rather than nested, because the
 // wire shape spreads it into each row: {"phase": "execute", "total_tokens":
 // 150, …}, not {"phase": "execute", "bucket": {…}}.
@@ -123,7 +180,9 @@ type Bucket struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
-	Calls        int `json:"calls"`
+	// Calls is how many PROVIDER CALLS the bucket's spend was made in — see
+	// [Record.Calls] for why that, and not a count of records.
+	Calls int `json:"calls"`
 
 	// CacheReadTokens and CacheWriteTokens sum the prompt cache's share of
 	// the calls in this bucket.
@@ -155,7 +214,7 @@ func (b *Bucket) add(r Record) {
 	b.TotalTokens += r.TotalTokens
 	b.CacheReadTokens += r.CacheReadTokens
 	b.CacheWriteTokens += r.CacheWriteTokens
-	b.Calls++
+	b.Calls += r.calls()
 	// A NEGATIVE price is not a rebate, it is a bad payload, and summing it
 	// would silently reduce a company's reported spend. Only a positive one
 	// counts, and only a positive one is priced.
@@ -231,8 +290,11 @@ type ProviderRow struct {
 // per-seat breakdown already is.
 const TopProviderSeats = 3
 
-// WorkerRow is the per-worker breakdown of a rollup — the background duties
-// (reflection, summarisation) that spend tokens outside any seat's turn.
+// WorkerRow is the per-purpose breakdown of the AUXILIARY spend: what the
+// seats' cheap model was spent on — the turn-start context, each kind of
+// compaction, the reflection workers, the background passes, a person's
+// answered question. Every phase of the auxiliary band, broken down by what it
+// was for; its rows sum to that band.
 type WorkerRow struct {
 	Worker string `json:"worker"`
 	Bucket
@@ -445,10 +507,12 @@ func Aggregate(records []Record, opts Options) Rollup {
 		agent.Bucket.add(r)
 		bucketFor(agent.ByPhase, phase).add(r)
 
-		if r.TurnID == "" {
+		if r.TurnID == "" || !r.InTurn() {
 			// A phase with no turn still counts toward every other
 			// rollup — it is real spend — but it cannot be attributed to
 			// a turn, and inventing a key would make one row per phase.
+			// Nor can a reflection's spend, which names the turn it
+			// learned from and is not that turn's cost ([Record.InTurn]).
 			continue
 		}
 		turn := byTurn[r.TurnID]
@@ -587,8 +651,9 @@ func ranked(m map[string]int) []string {
 	return keys
 }
 
-// PhaseAuxiliary is the phase whose records carry a worker. Named here rather
-// than imported from the event catalogue so this package stays a leaf.
+// PhaseAuxiliary is the phase an auxiliary record is filed under, and the one
+// whose records carry a worker. Named here rather than imported from the event
+// catalogue so this package stays a leaf.
 const PhaseAuxiliary = "auxiliary"
 
 func bucketFor(m map[string]*Bucket, key string) *Bucket {

@@ -190,6 +190,13 @@ type Spend struct {
 	// when a phase names no model; this is the key itself, never the
 	// fallback. schema/0032.
 	ProviderKey string `json:"provider_key,omitempty"`
+
+	// Calls is how many PROVIDER CALLS the row covers — a phase's rounds,
+	// an auxiliary record's coalesced calls — and zero on a row that is no
+	// call. Stage is an auxiliary record's stage (`turn`, `reflection`, …),
+	// empty on every other row. schema/0040.
+	Calls int    `json:"calls,omitempty"`
+	Stage string `json:"stage,omitempty"`
 }
 
 // Cursor is an exclusive keyset position: the reader holds this row and wants
@@ -346,9 +353,10 @@ INSERT INTO crewlet_events (
 	summary, actor, tags, payload,
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
-	cache_read_tokens, cache_write_tokens, provider_key, work_item
+	cache_read_tokens, cache_write_tokens, provider_key, work_item,
+	calls, spend_stage
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -499,6 +507,7 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// agent_id's beside it, so the column and the tag can never
 		// name two different items. See schema/0033.
 		tags["work_item"],
+		spend.Calls, spend.Stage,
 	); err != nil {
 		return err
 	}
@@ -1261,14 +1270,24 @@ const (
 // row of the table. The extraction is free of a scan cost the filter does not
 // already pay — the event_type and event_time predicates are what choose the
 // rows, and json_extract runs only on the ones they keep.
+//
+// BOTH SPEND TYPES — a phase's record and an auxiliary record — and one more
+// payload read on the second alone: a PERSON's auxiliary spend (the operator
+// stage) names no agent role, since a person is not an agent seat, and carries
+// the role of the person's seat as `actor_role`, which the per-seat breakdown
+// names it by.
 const phaseTokenSQL = `
-SELECT event_time, event_id, agent_id, agent_role,
+SELECT event_time, event_id, agent_id,
+       CASE WHEN agent_role = '' AND event_type = 'auxiliary_spend'
+            THEN COALESCE(json_extract(payload, '$.actor_role'), '')
+            ELSE agent_role END,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
        cache_read_tokens, cache_write_tokens, provider_key,
-       COALESCE(json_extract(payload, '$.cost_usd'), 0)
+       COALESCE(json_extract(payload, '$.cost_usd'), 0),
+       calls, spend_stage
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+WHERE event_type IN ('agent_phase_completed', 'auxiliary_spend') AND event_time >= ?`
 
 // AgentPhaseLimit bounds a seat's phase history.
 //
@@ -1277,6 +1296,12 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // response verbatim, so a hundred of them is already megabytes on the wire for
 // a list nobody scrolls to the end of. The dashboard keeps its own cap at the
 // same number, so the page and the answer agree about where history stops.
+//
+// PHASES ONLY, and an auxiliary record is deliberately not one: it is a SUM of
+// calls with no prompt and no response, so it has nothing this list renders,
+// and a compaction's burst would push a seat's real model calls off its first
+// page. What the auxiliary model spent is in every spend figure and on the
+// turn's own page.
 const AgentPhaseLimit = 50
 
 // The event_time floor is EventHistory, the same one every other read of this
@@ -1505,7 +1530,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
 			&rec.CacheReadTokens, &rec.CacheWriteTokens, &rec.ProviderKey,
-			&rec.CostUSD,
+			&rec.CostUSD, &rec.Calls, &rec.Stage,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}

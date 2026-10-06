@@ -75,16 +75,33 @@ const (
 	// holds. Any wider window the Tokens view offers is a store query.
 	LiveSpendWindow = 24 * time.Hour
 
-	// SpendRecordLimit is a memory and latency backstop on retained
-	// per-phase records. The real bound is the window above; this only
-	// binds for an org emitting more than this in a day. Truncation drops
-	// the OLDEST records, so an org past the cap sees a rollup covering
-	// slightly less than a day rather than a wrong total.
+	// SpendRecordLimit is a memory and latency backstop on retained spend
+	// records. The real bound is the window above; this only binds for an
+	// org emitting more than this in a day. Truncation drops the OLDEST
+	// records, so an org past the cap sees a rollup covering slightly less
+	// than a day rather than a wrong total.
+	//
+	// THE WHOLE COMPANY'S, per projection: every node's projection is fed
+	// by a fleet-wide broadcast, so this is one company's day on every node
+	// rather than one node's share of it.
+	//
+	// 24 000, sized in TURNS rather than records, which is what an operator
+	// can reason about. A turn wrote about three spend records — its
+	// executor, its reviewer, a worker or a judge now and then — so the 8
+	// 000 this was put the cap at roughly 2 600 turns a company-day. The
+	// auxiliary records (types.AuxiliarySpend) add about six per turn — one
+	// per turn-start call, per compaction kind and per reflection worker,
+	// coalesced per flush — so nine records a turn would have halved that
+	// to about 900. Three times the records keeps the same 2 600 turns. A
+	// record held here is about 400 bytes with its parsed stamp and its
+	// index entry, so the cap is about 10 MB at most; the fold the stream
+	// makes on its five-second tick measured 12 ms on one core at the cap
+	// (24 000 records over 2 700 turns), outside this projection's lock.
 	//
 	// Exported because the startup seed reads no more than this from the
 	// store: a record past the cap would be dropped on arrival, so reading
 	// it costs the seed's time budget and buys nothing.
-	SpendRecordLimit = 8000
+	SpendRecordLimit = 24_000
 )
 
 // stateEvents are the events the seat's state machine below reads.
@@ -94,12 +111,16 @@ const (
 // applyState is ever reached, so an entry here would be read by nothing.
 //
 // agent_turn_completed ENDS THE WORK, and reflection_completed only the
-// learning pass that follows it. Reflection is the trailing sentinel for the
-// auxiliary phases, and the reflector returns without publishing it on five
-// paths (no workers configured, an unknown role, a per-role
-// `learning_enabled: false`, a spent token budget, a redelivery it has already
-// marked) — so a seat whose turn end was read only off reflection stayed
-// mid-phase, in a phase that had ended, for the life of the process.
+// learning pass that follows it. Reflection is the pass's trailing sentinel,
+// and the reflector returns without publishing it on five paths (no workers
+// configured, an unknown role, a per-role `learning_enabled: false`, a spent
+// token budget, a redelivery it has already marked) — so a seat whose turn end
+// was read only off reflection stayed mid-phase, in a phase that had ended,
+// for the life of the process.
+//
+// auxiliary_spend is deliberately ABSENT: what the reflection's workers — and
+// every other auxiliary call — spent is a record of spend, published after the
+// turn ended, and a seat state that read it would reopen the turn it names.
 var stateEvents = map[string]struct{}{
 	"agent_spawned":         {},
 	"agent_terminated":      {},
@@ -555,7 +576,11 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 		return change
 	}
 
-	if env.Type == "agent_phase_completed" {
+	// BOTH SPEND TYPES. An auxiliary record goes on through the seat's
+	// guards below like any event and moves nothing there: it is in no state
+	// set, and it carries no `failed` key — which is what keeps it inert,
+	// rather than a branch here that would hide a record that one day did.
+	if spendTypes[env.Type] {
 		change.Tokens = s.foldSpend(*env, payload)
 	}
 

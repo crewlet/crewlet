@@ -15,7 +15,19 @@ import (
 // re-implementation in the browser, and whatever a reconnect left behind —
 // and a refresh routinely disagreed with the page it replaced.
 
-// foldSpend records one completed phase's spend, reporting whether it counted.
+// spendTypes are the two events whose payload is a spend record: a phase's own,
+// and an auxiliary record's coalesced calls (types.AuxiliarySpend). Neither
+// more nor fewer than the event store's writer folds, for the reason every
+// field below matches its columns.
+var spendTypes = map[string]bool{
+	"agent_phase_completed": true,
+	auxiliarySpendType:      true,
+}
+
+// auxiliarySpendType is the auxiliary record's wire type.
+const auxiliarySpendType = "auxiliary_spend"
+
+// foldSpend records one spend record, reporting whether it counted.
 //
 // Deduped by event id so a redelivered envelope cannot inflate the rollup, and
 // window-pruned so a long-lived process does not keep aggregating spend that
@@ -32,7 +44,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	// and re-parsing them — up to three layouts each, twice per pass —
 	// happened inside the projection's write lock, which is the mutex
 	// every /agents request and every websocket snapshot waits on.
-	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: tokens.Record{
+	rec := tokens.Record{
 		EventID:      env.ID,
 		Timestamp:    env.Timestamp,
 		AgentID:      str(payload, "agent_id"),
@@ -47,8 +59,8 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		InputTokens:  num(payload, "input_tokens"),
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
-		// Every value the store's columns carry (schema/0015, 0032):
-		// the live window and a queried one fold through one
+		// Every value the store's columns carry (schema/0015, 0032,
+		// 0040): the live window and a queried one fold through one
 		// aggregation, and a value one producer carries and the other
 		// drops is a rollup that changes when the window crosses the
 		// live edge.
@@ -56,9 +68,30 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		CacheWriteTokens: num(payload, "cache_write_tokens"),
 		ProviderKey:      str(payload, "provider_key"),
 		CostUSD:          fraction(payload, "cost_usd"),
-	}})
+		Calls:            tokens.PhaseCalls(length(payload, "rounds"), num(payload, "rounds_used")),
+	}
+	if env.Type == auxiliarySpendType {
+		// THE AUXILIARY MODEL'S SPEND, filed as the store's writer files
+		// it: the auxiliary phase, its purpose as the worker, its stage,
+		// the calls it coalesced — and a PERSON's under their seat's
+		// role, since a person is no agent role.
+		rec.Phase, rec.HostPhase, rec.Iteration = tokens.PhaseAuxiliary, "", 0
+		rec.Worker = str(payload, "purpose")
+		rec.Stage = str(payload, "stage")
+		rec.Calls = max(num(payload, "calls"), 1)
+		if rec.AgentRole == "" {
+			rec.AgentRole = str(payload, "actor_role")
+		}
+	}
+	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: rec})
 	s.pruneSpend(env.Timestamp)
 	return true
+}
+
+// length is the number of elements of a list field, zero for anything else.
+func length(payload map[string]any, key string) int {
+	list, _ := payload[key].([]any)
+	return len(list)
 }
 
 // pruneSpend drops records that have aged out of the live window.
