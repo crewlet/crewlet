@@ -1118,7 +1118,9 @@ func decodeTally(raw []byte) (coord.Tally, error) {
 // judged first, then the seat. Each scope is one compare-and-swap that rolls
 // its windows, counts the round, and stamps the windows that refused it, so a
 // refusal and the record of the round it refused land in the same write and
-// no reader ever sees one without the other.
+// no reader ever sees one without the other. Nothing either write recorded is
+// ever taken back: a seat write that fails after the company's landed leaves
+// the round on the company, and says so.
 func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		// Not an error and not a charge. A phase whose provider reported
@@ -1158,12 +1160,20 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 
 	seat, refusing, err := f.count(ctx, req.Seat, req.Tokens, req.Windows, req.SeatCaps, true)
 	if err != nil {
-		// COMPENSATE: the seat's verdict is unknown, so the charge is an
-		// error, and an error is all or nothing — the company's half is
-		// taken back rather than left counting a round the caller was told
-		// failed.
-		f.unwindOrg(ctx, req.Tokens, org)
-		return coord.Spend{}, err
+		// THE COMPANY KEEPS THE ROUND. The seat's verdict is unknown, so
+		// the charge is an error and the round stops — but the round was
+		// billed before it was charged, and the company's record of it is
+		// true, exactly as it is where the company refused above. Taking
+		// it back used to leave the company short of a round it had paid
+		// for, since nothing that charges asks again, and the next round
+		// was admitted against room this one had used. The error names the
+		// partial (coord.SeatUncountedError) so nobody reads it as a
+		// charge that recorded nothing.
+		log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", req.Seat,
+			"tokens", req.Tokens, "error", err,
+			"detail", "the company counted this round and the seat's write failed; the "+
+				"seat's own counter understates its spend by the round")
+		return coord.Spend{}, &coord.SeatUncountedError{Seat: req.Seat, Tokens: req.Tokens, Err: err}
 	}
 	if len(refusing) > 0 {
 		// Refused by the seat. The company's half stays counted, and its
@@ -1235,8 +1245,9 @@ func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coor
 	return org.Usage(coord.OrgScope, windows), nil
 }
 
-// unwindOrg takes back the org's half of a charge whose seat half did not
-// land, from the windows that charge was counted in.
+// unwindOrg takes back the org's half of a post-charge whose seat half did not
+// land, from the windows that post-charge was counted in. A [FleetStore.Charge]
+// never comes here: what it counted on the company stays counted.
 //
 // On a context that OUTLIVES the caller's. The failure being undone is often
 // the caller's own cancellation (a turn stopped mid-charge, a node draining),

@@ -203,7 +203,10 @@ known size:
   records for its next flush — most of an hour of a busy company — and logs
   any it has to drop past that, with their tokens.
 - **A charge that failed.** A counter the node could not reach is short of
-  that call; the record still reaches the rollup.
+  that call; the record still reaches the rollup. A charge that reached the
+  company's counter and then failed on the seat's keeps the call on the
+  company and leaves only that seat's counter short of it, logged as
+  `coord_kv_budget_spend_uncounted`.
 - **A person's day during a rolling upgrade** — above.
 - **Upgrade order.** A node without `data` hands its records to a data node
   (custody), and a data node on an older build drops a type its build does

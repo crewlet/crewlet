@@ -382,13 +382,13 @@ func (f *Fleet) ExpireApplies(cutoff time.Time) {
 // Charge records a round in the org's counter and the seat's, in every
 // window, and judges whether it fitted.
 //
-// The twin holds ONE mutex for the whole call, so the compensation the KV
-// backend needs for a seat write that fails never runs here. That is not a
-// shortcut around the contract — the observable behaviour is identical, and
-// the suite asserts the behaviour — it is what a single process can honestly
-// offer: there is no second writer to race and no write that can fail, so
-// building a compensation nothing could ever exercise would be a path with no
-// test that could reach it. The arithmetic is [coord.Tally]'s, the same the KV
+// The twin holds ONE mutex for the whole call, so the partial the KV backend
+// reports for a seat write that fails after the company's
+// ([coord.SeatUncountedError]) never arises here. That is not a shortcut around
+// the contract — the observable behaviour is identical, and the suite asserts
+// the behaviour — it is what a single process can honestly offer: there is no
+// second writer to race and no write that can fail, so a partial nothing could
+// ever produce would be a path with no test that could reach it. The arithmetic is [coord.Tally]'s, the same the KV
 // backend runs: the company counted and judged first, then the seat — with no
 // verdict of its own when the company refused, since the round is counted
 // there all the same.

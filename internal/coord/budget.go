@@ -179,6 +179,40 @@ func (r ChargeRequest) Validate() error {
 	return nil
 }
 
+// SeatUncountedError is a charge that reached the COMPANY's counter and not the
+// seat's: the company's write landed and the seat's then failed.
+//
+// It is the one partial a charge can leave — the order is built, the company
+// first and then the seat ([Budgets.Charge]) — and it is NAMED rather than
+// undone. What a charge records was billed before it was charged, so the
+// company's record of it is true. The compensation that used to run here took
+// the round back off the company whenever the seat's write failed, and nothing
+// that charges asks again — the engine's meter stops the round on the error —
+// so the company was left short of a round the vendor had already been paid
+// for: room handed to the next round that the refused write had used, on the
+// counter every seat in the company is judged against.
+//
+// The seat's counter is short by Tokens in the windows the charge was cut for,
+// until they turn over: its own ceiling then judges less than the seat spent,
+// which is the fail-open direction for that one seat's cap. It is bounded by
+// how often a write fails right after the one before it landed, and a backend
+// logs it where it happens.
+type SeatUncountedError struct {
+	// Seat is the seat's counter key, and Tokens what its counter is missing.
+	Seat   string
+	Tokens int
+
+	// Err is why the seat's write failed.
+	Err error
+}
+
+func (e *SeatUncountedError) Error() string {
+	return fmt.Sprintf("coord: the company's counter holds %d tokens that %s's does not, "+
+		"because the seat's write failed: %v", e.Tokens, e.Seat, e.Err)
+}
+
+func (e *SeatUncountedError) Unwrap() error { return e.Err }
+
 // Spend is what one charge did.
 type Spend struct {
 	// OK is false when a scope refused. The Refused fields then say WHICH
@@ -380,14 +414,20 @@ type Budgets interface {
 	// first finds that out the slow way. A seat that the org refused for is
 	// still counted, without a verdict of its own: the round was the seat's.
 	//
-	// What the order costs is the one compensation left: a seat write that
-	// FAILS after the org's landed takes the org's half back (on a context
-	// that outlives the caller's), so an error is all or nothing. It cannot
-	// cover a process that dies between the two writes; the org is then
-	// over-stated by one round in the windows it was counted in, which
-	// trips a cap EARLY — the fail-closed direction, bounded by how often a
-	// node dies mid-charge and by the windows turning over, and visible in
-	// the counter rather than silently absorbed.
+	// What the order costs is one partial, and it is KEPT: a seat write that
+	// FAILS after the org's landed leaves the round on the company and not
+	// on the seat, and the answer is a [SeatUncountedError] naming it. The
+	// round was billed before it was charged, so the company's record of it
+	// is true, and taking it back would make the counter wrong in a second
+	// place — no caller charges a round twice, so a company that gave its
+	// half back was short of a round it had paid for. A process that dies
+	// between the two writes leaves the same partial with nobody told. Either
+	// way the SEAT is under-stated by one round in the windows it was cut
+	// for, which lets that one seat's cap trip a round LATE — the fail-open
+	// direction for the seat, bounded by how often a write fails right after
+	// the one before it landed and by the windows turning over, and logged
+	// where it happens. The company, which every seat is judged against,
+	// stays exact.
 	//
 	// FAILS CLOSED: an error stops the round. It is NOT a refusal, and a
 	// caller must not report it as one — "the company is out of tokens"
@@ -427,10 +467,10 @@ type Budgets interface {
 	// nor that it had room for one. A counter it takes past a cap is
 	// refused by the next Charge, which stamps it then.
 	//
-	// All or nothing, as Charge is: an error takes the org's half back, so
-	// a caller that retries does not count the company twice. The
-	// compensation is the same BEST-EFFORT one Charge's is — two keys and
-	// no transaction — and a backend that cannot make it says so in its log
+	// All or nothing, which Charge is not: an error takes the org's half
+	// back, so a caller that retries does not count the company twice. The
+	// compensation is BEST-EFFORT — two keys and no transaction — and a
+	// backend that cannot make it says so in its log
 	// rather than in the answer, because the caller's answer is already
 	// decided. It errs in the one safe direction: the org reads HIGH, so a
 	// cap trips early rather than late.

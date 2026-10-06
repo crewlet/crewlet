@@ -1457,8 +1457,11 @@ same**, on the seat's counter and the company's, because the vendor has
 already billed it: the refusing window reads past its ceiling by the round that
 crossed it, and every later round is refused against that figure until the
 window turns over or the ceiling is raised. Each scope's check is atomic, and
-an error is all or nothing: a seat write that fails after the company's landed
-takes the company's back. In a fleet the counters live in the coordination
+nothing a charge counted is taken back: a seat write that fails after the
+company's landed stops the round as an outage and leaves it on the company,
+whose record of a billed round is true, so only that seat's own counter is
+short of it — logged as `coord_kv_budget_spend_uncounted` — until the window
+turns over. In a fleet the counters live in the coordination
 slot, so an org cap of 500 k is 500 k across every node rather than per
 process.
 

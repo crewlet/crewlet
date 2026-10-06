@@ -873,31 +873,60 @@ func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
 	}
 }
 
-// A CHARGE WHOSE CALLER HANGS UP STILL UNWINDS THE COMPANY'S HALF.
+// A CHARGE WHOSE SEAT WRITE FAILS KEEPS THE ROUND ON THE COMPANY.
 //
-// The org is written before the seat, and a seat write that fails is undone by
-// taking the org's tokens back off, so an error is all or nothing. The failure
-// being undone is often the caller's own cancellation, and an unwind that
-// inherited that dead context failed with it: the company was billed for a
-// charge its caller was told had failed, and kept refusing early until its
-// windows turned over.
-func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
-	store := openFleet(t, embeddedNATS(t))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	store.budgets = hangUpAfterWriting{
-		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
-	}
+// The company is written before the seat, and the round was billed before
+// either: a charge is handed tokens a model call has already spent. So when
+// the seat's write fails after the company's landed, the company's record of
+// the round is true and stays — the answer is an error, naming the partial,
+// and the round stops as an outage. The compensation this replaced took the
+// company's half back, and since nothing that charges asks again, the billed
+// round then sat on neither counter and the next round was admitted against
+// room it had used. Two ways for the seat's write to fail: the caller hanging
+// up between the writes, and the broker refusing the write itself.
+func TestAChargeWhoseSeatWriteFailsKeepsTheRoundOnTheCompany(t *testing.T) {
+	seat := coord.AgentScope("x")
+	for _, tc := range []struct {
+		name  string
+		fault func(store *FleetStore, cancel context.CancelFunc) jetstream.KeyValue
+	}{
+		{"the caller hangs up after the company's write", func(store *FleetStore, cancel context.CancelFunc) jetstream.KeyValue {
+			return hangUpAfterWriting{KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel}
+		}},
+		{"the broker refuses the seat's write", func(store *FleetStore, _ context.CancelFunc) jetstream.KeyValue {
+			return failWriting{KeyValue: store.budgets, key: encodeKey(seat)}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openFleet(t, embeddedNATS(t))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			store.budgets = tc.fault(store, cancel)
 
-	if got, err := store.Charge(ctx, coord.ChargeRequest{
-		Seat: "agent:x", Tokens: 10, Windows: testWindows(),
-		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
-	}); err == nil {
-		t.Fatalf("Charge = %+v, want the seat's write to fail on the cancelled context", got)
-	}
-	if used := orgSpent(t, store); used != [3]int{} {
-		t.Errorf("org day/week/month = %v after a charge that failed, want nothing: "+
-			"the unwind ran on the cancelled context and left the company billed", used)
+			got, err := store.Charge(ctx, coord.ChargeRequest{
+				Seat: seat, Tokens: 10, Windows: testWindows(),
+				OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
+			})
+			var partial *coord.SeatUncountedError
+			if !errors.As(err, &partial) || partial.Seat != seat || partial.Tokens != 10 {
+				t.Fatalf("Charge = (%+v, %v), want an error naming the 10 tokens the seat "+
+					"%s is missing", got, err, seat)
+			}
+			if got.OK || got.RefusedScope != "" {
+				t.Fatalf("Charge = %+v: a failed write reported as a decision", got)
+			}
+			if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+				t.Errorf("org day/week/month = %v, want the 10 the round was billed in every "+
+					"window: the company's record of a spent round was taken back", used)
+			}
+			u, err := store.Used(t.Context(), seat, testWindows())
+			if err != nil {
+				t.Fatalf("Used: %v", err)
+			}
+			if day := u.Windows[0].Used; day != 0 {
+				t.Errorf("the seat's day = %d, want 0: the fault did not stop its write", day)
+			}
+		})
 	}
 }
 
@@ -1200,4 +1229,29 @@ func (k hangUpAfterWriting) Update(ctx context.Context, key string, value []byte
 		k.hangUp()
 	}
 	return rev, err
+}
+
+// failWriting is a counter bucket whose broker refuses every write to one key,
+// with an error that is not a lost race — so the write fails once rather than
+// being retried, the way a broker that is unreachable or out of storage fails
+// it.
+type failWriting struct {
+	jetstream.KeyValue
+	key string
+}
+
+var errWriteRefused = errors.New("nats: the broker refused the write (injected)")
+
+func (k failWriting) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	if key == k.key {
+		return 0, errWriteRefused
+	}
+	return k.KeyValue.Create(ctx, key, value, opts...)
+}
+
+func (k failWriting) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	if key == k.key {
+		return 0, errWriteRefused
+	}
+	return k.KeyValue.Update(ctx, key, value, revision)
 }
