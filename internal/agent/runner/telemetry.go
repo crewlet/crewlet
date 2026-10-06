@@ -145,6 +145,13 @@ func (e emitter) nestedAt(round int) emitter {
 	return e
 }
 
+// talliedOn is this emitter counting the workers it closes on spend, under mu,
+// rather than on the runner's own tally — see [meter].
+func (e emitter) talliedOn(spend *Spend, mu *sync.Mutex) emitter {
+	e.tally, e.mu = spend, mu
+	return e
+}
+
 func (r *Runner) emitter() emitter {
 	return emitter{
 		pub: r.cfg.Publisher, turn: r.cfg.Turn,

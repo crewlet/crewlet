@@ -75,7 +75,7 @@ func (r *Runner) workerCatalogue() string {
 // there is a phase that can spend a batch of model calls on work the turn has
 // already done. Onboarding is a seat reading its own team's pages, which is
 // not fan-out work.
-func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
+func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, surface func() *tools.Surface,
 ) tools.Entry {
 	if r.cfg.Subagent == nil || ph != phase.Execute {
@@ -91,7 +91,9 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 	// that is the one hook the subagent package calls on every path a
 	// child can take, after its prompt was built.
 	offer := r.cfg.Skills.Offer()
-	emit := r.emitter().nestedAt(round)
+	// The workers' spend is the SURFACE's: a bridged executor's workers
+	// run after this segment ended, and are paid by the one that resumes.
+	emit := r.emitter().nestedAt(round).talliedOn(m.spend, m.mu)
 	tool := subagent.NewTool(subagent.Config{
 		Seat: r.cfg.Seat, Models: r.cfg.Models,
 		// The parent's UNIVERSE and its LIVE active list. The second is a
@@ -107,7 +109,7 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 			return s.Active()
 		},
 		Discovery: DiscoveryTools,
-		Compact:   r.cfg.Compact,
+		Compact:   m.compact,
 		Skills:    offer.Catalogue(),
 		Budget:    r.cfg.Budget,
 		// The parent's OWN fence, not a second one: a worker has no grant
@@ -123,7 +125,7 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 		Trace:           r.cfg.Turn.Trace,
 		// The parent turn, so every seat-scoped tool in the grant works.
 		// Without it a child is handed tools that always fail.
-		Turn: r.cfg.Turn.Context,
+		Turn: m.turn,
 		// And the parent's own load-before-use gate, so a child cannot
 		// reach by being spawned what its parent would have had to load a
 		// skill for.

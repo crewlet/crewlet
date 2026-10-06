@@ -28,14 +28,16 @@ import (
 // the rewrite and every long report falls back to whole lines.
 //
 // A row an older build parked carries no work key, so its unit of work is the
-// derived turn id, as every other record of that run files it.
+// derived turn id, as every other record of that run files it. And what the
+// rewrite cost is answered with it, exactly as its record states it, for the
+// segment that resumes from the collection to pay.
 //
 // Driven through the real compactor and the real ledger, with a model that
 // answers exactly as long as it is asked to be.
 //
 // Mutations: file the call under the background stage, drop the turn id, read
-// the raw work key, or hand the compactor the whole budget rather than the
-// budget less the label — each turns this red.
+// the raw work key, hand the compactor the whole budget rather than the budget
+// less the label, or answer no cost — each turns this red.
 func TestARunsCondensationIsFiledUnderItsTurnAndFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	derived := workkey.Derive([]string{"evt-1"})
@@ -60,8 +62,10 @@ func TestARunsCondensationIsFiledUnderItsTurnAndFitsItsBudget(t *testing.T) {
 
 			const budget = 4096
 			text := strings.Repeat("the coding agent changed the parser and its tests\n", 400)
+			cost := map[sandbox.RunPart]sandbox.AuxTokens{}
 			for _, part := range sandbox.RunParts {
-				got, err := runCondenser{engine: e}.Condense(t.Context(), tc.run, part, text, budget)
+				got, spent, err := runCondenser{engine: e}.Condense(t.Context(), tc.run, part, text, budget)
+				cost[part] = spent
 				if err != nil {
 					t.Fatalf("%s: condense: %v", part, err)
 				}
@@ -100,6 +104,16 @@ func TestARunsCondensationIsFiledUnderItsTurnAndFitsItsBudget(t *testing.T) {
 				}
 				if rec.InputTokens == 0 || rec.OutputTokens == 0 {
 					t.Fatalf("%s: the record states no tokens: %+v", part, rec)
+				}
+				// WHAT IT COST IS HANDED BACK, as the record states it:
+				// the coordinator carries it to the segment that resumes
+				// from the collection, the only one that can charge the
+				// turn's work item for it.
+				want := sandbox.AuxTokens{Input: rec.InputTokens, Output: rec.OutputTokens,
+					CacheRead: rec.CacheReadTokens, CacheWrite: rec.CacheWriteTokens}
+				if cost[part] != want {
+					t.Fatalf("%s: the condenser answered a cost of %+v and its record states %+v",
+						part, cost[part], want)
 				}
 			}
 		})

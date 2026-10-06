@@ -78,6 +78,12 @@ type AgentRunRequest struct {
 	// loop would execute against; see the package rule above.
 	Surface *tools.Surface
 
+	// Spend is what the calls Surface serves cost the engine, counted
+	// apart from this segment because they happen after it — see
+	// [BridgedSpend]. The launcher records its running total with every
+	// bridged call, for the segment that resumes from the run to pay.
+	Spend *BridgedSpend
+
 	// Round is the turn iteration this executor is, so the run's record and
 	// the resumed phase agree about which round they are in.
 	Round int
@@ -106,7 +112,11 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit,
+	// ITS OWN METER: every call this surface serves is the CLI's, made
+	// over the bridge after this segment has suspended and charged what it
+	// spent — see [BridgedSpend].
+	bridged := NewBridgedSpend()
+	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
 		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -133,6 +143,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	if err := r.cfg.AgentRun.LaunchExecutor(ctx, AgentRunRequest{
 		Brief:   system + "\n\n" + user,
 		Surface: surface,
+		Spend:   bridged,
 		Round:   round,
 	}); err != nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("launching the agent-mode executor: %w", err)
@@ -198,7 +209,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 			func() []ledger.Call { return turn.Record(history, bridged) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, submit,
+	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, state.Round, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err

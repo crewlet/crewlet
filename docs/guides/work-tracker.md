@@ -285,11 +285,14 @@ the round-cap judge, the coding runs it detached, and the **auxiliary** model
 calls it made along the way — the turn-start memory filter, knowledge query and
 episode summary, every rewrite its ledgers and tools needed, and the
 condensing of its card — in input and output, with the prompt cache's share of
-the input beside them. Learning afterwards (reflection, diary, skills, the
-conversation ledger's account of the turn) is the seat's own and is not charged
-to the task, and neither is the condensing of a collected coding run's report,
-which happens between two segments of the turn; both are still on the seat's
-day in the [spend history](budgets-and-spend.md#auxiliary-spend).
+the input beside them. That includes what the engine spends on a coding run
+while no part of the turn is running: an agent-mode run's calls through the
+tool bridge (the rewrites its tools ask for, the workers it delegates to) and
+the condensing of a collected run's report, failure or question, which the part
+of the turn that resumes from the run pays. Learning afterwards (reflection,
+diary, skills, the conversation ledger's account of the turn) is the seat's own
+and is not charged to the task; it is still on the seat's day in the [spend
+history](budgets-and-spend.md#auxiliary-spend).
 Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
 how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
 returned the work for another pass.

@@ -234,7 +234,8 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 // a second turn engine.
 func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error) {
 	snapshot := r.cfg.Registry.Snapshot()
-	surface, err := r.surfaceWith(ctx, phase.Onboarding, 0, snapshot, nil, onboardingAlwaysOn)
+	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
+		onboardingAlwaysOn)
 	if err != nil {
 		return false, err
 	}

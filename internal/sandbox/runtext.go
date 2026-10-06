@@ -161,8 +161,15 @@ const MaxDeliveredRefBytes = 16 << 10
 // rewrite could be had, and the caller's fallback stands. It is handed the
 // RUN, not just its seat, because a rewrite is a model call the engine files
 // under the turn the run belongs to.
+//
+// THE SPEND IS ANSWERED WHATEVER THE ERROR SAYS: a rewrite that came back too
+// long was still paid for. It rides the collected result to the segment that
+// resumes from it ([Result.Condensed]), which is the one that pays it to the
+// turn's work item — no segment is running while a run is collected, so no
+// segment's own tally could.
 type Condenser interface {
-	Condense(ctx context.Context, run PendingRun, part RunPart, text string, budget int) (string, error)
+	Condense(ctx context.Context, run PendingRun, part RunPart, text string,
+		budget int) (string, AuxTokens, error)
 }
 
 // fitResult holds the report and the failure detail of a collected run to
@@ -180,14 +187,18 @@ type Condenser interface {
 // publish an unbounded transcript, and the record carrying the run's only
 // spend would be refused whole.
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
+	// THIS COLLECTION'S OWN, counted from nothing: the field is the
+	// coordinator's, and a runner that set it would be charging the turn
+	// for a rewrite nobody made.
+	result.Condensed = AuxTokens{}
 	// THE QUESTION FIRST, because a question nobody can be asked becomes
 	// part of the failure — fitted after it, the refusal rode past the
 	// failure's bound.
 	if result.NeedsInput {
 		result = c.fitQuestion(ctx, run, result)
 	}
-	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes)
-	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes)
+	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes, &result.Condensed)
+	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes, &result.Condensed)
 	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
 		boundTranscript(result.Transcript)
 	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
@@ -208,7 +219,8 @@ func (c *Coordinator) fitQuestion(ctx context.Context, run PendingRun, result Re
 	if len(question) <= MaxQuestionBytes {
 		return result
 	}
-	if rewritten, ok := c.condensed(ctx, run, PartQuestion, question, MaxQuestionBytes); ok {
+	if rewritten, ok := c.condensed(ctx, run, PartQuestion, question, MaxQuestionBytes,
+		&result.Condensed); ok {
 		result.Question = rewritten
 		return result
 	}
@@ -398,23 +410,29 @@ func KeepEnd(text string, keep int) (string, int) {
 // kib is a size as a reader says it, in KiB rounded up.
 func kib(n int) string { return fmt.Sprintf("%d KiB", (n+1023)/1024) }
 
-func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart, text string, budget int) string {
+func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart, text string,
+	budget int, spent *AuxTokens,
+) string {
 	if len(text) <= budget {
 		return text
 	}
-	if rewritten, ok := c.condensed(ctx, run, part, text, budget); ok {
+	if rewritten, ok := c.condensed(ctx, run, part, text, budget, spent); ok {
 		return rewritten
 	}
 	return wholeLines(part, text, budget)
 }
 
 // condensed is the seat's auxiliary model's rewrite of a piece past its
-// budget, or false — said in the log — where none could be had.
-func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPart, text string, budget int) (string, bool) {
+// budget, or false — said in the log — where none could be had. What the
+// attempt cost is added to spent either way.
+func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPart, text string,
+	budget int, spent *AuxTokens,
+) (string, bool) {
 	if c.condense == nil {
 		return "", false
 	}
-	rewritten, err := c.condense.Condense(ctx, run, part, text, budget)
+	rewritten, cost, err := c.condense.Condense(ctx, run, part, text, budget)
+	*spent = spent.Plus(cost)
 	if err == nil && len(rewritten) <= budget {
 		return rewritten, true
 	}

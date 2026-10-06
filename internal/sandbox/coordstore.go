@@ -239,6 +239,12 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
+		// Onto THIS job's record, starting one where the row carries none
+		// of its own — see ReleaseClaim.
+		if run.Launch.ID != run.LaunchID {
+			run.Launch = LaunchRecord{ID: run.LaunchID}
+		}
+		run.Launch.Condensed = q.Condensed
 		return true
 	})
 	return err
@@ -349,19 +355,35 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 // rather than clobbering each other.
 //
 // A run whose row is gone is not an error: the run ended while a late call was
-// in flight, which is the ordinary shape of a box shutting down. The append is
+// in flight, which is the ordinary shape of a box shutting down. Nor is a job
+// the row has moved on from (see the pin on [PendingStore]). The append is
 // simply dropped, and the caller — which must not fail the box's call over
-// telemetry — treats false the same as true.
-func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error) {
+// telemetry — goes on as it would have.
+func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (string, error) {
+	call := a.Call
 	if call.At.IsZero() {
 		call.At = s.clock()
 	}
+	var launch string
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if a.Launch != "" && a.Launch != run.LaunchID {
+			return false
+		}
 		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
 			run.BridgeCalls, run.BridgeCallsElided, call)
+		// Onto THIS job's record, starting one where the row carries none
+		// of its own — see ReleaseClaim.
+		if run.Launch.ID != run.LaunchID {
+			run.Launch = LaunchRecord{ID: run.LaunchID}
+		}
+		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
+		launch = run.LaunchID
 		return true
 	})
-	return won, err
+	if err != nil || !won {
+		return "", err
+	}
+	return launch, nil
 }
 
 // appendBounded adds one call and drops from the MIDDLE past the cap.

@@ -912,7 +912,9 @@ the segment that finishes the turn judges "exactly one" over the whole turn.
 spent to the task's own counters — its phases, its delegated workers, the
 round-cap judge, the auxiliary calls made inside it (tallied by the segment as
 each returns, its card's rewrite included) and, on a resumed segment, the
-coding run it collected — under
+coding run it collected and what the engine spent on that run while no segment
+was running (an agent-mode run's bridged tools and delegated workers, and the
+condensing of the run's report, failure or question at collection) — under
 an id naming the segment (`turn/<turn_id>/dispatch`,
 `turn/<turn_id>/resume/<launch_id>`), so a segment recorded twice counts once
 and only the dispatch segment counts a turn. A parked segment on nothing hands

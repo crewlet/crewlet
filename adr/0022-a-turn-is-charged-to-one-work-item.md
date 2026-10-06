@@ -66,15 +66,27 @@ segment's last calls, and the records are the fleet's, read at query time. The
 card is rewritten after that decision, so its call is tallied on its own and
 added as the charge is written.
 
-Two kinds of auxiliary call are deliberately NOT on the item. The
+One kind of auxiliary call is deliberately NOT on the item: the
 **reflection** stage — the learning workers after the turn and the conversation
 ledger's account of it — is what the seat remembers, not what the work cost, so
-a task's cost does not depend on how much its seat had to remember; and the
-condensation of a collected coding run's report, a `turn`-stage call the
-coordinator makes **between two segments**, on whichever node collects, where
-no segment's tally is open. Both are in the seat's day and the company's
-history; the second is also in the turn's own cost wherever the history draws
-it, so it is the one in-turn call a task's spend is short of.
+a task's cost does not depend on how much its seat had to remember. It is in
+the seat's day and the company's history.
+
+Two kinds of the turn's own spend happen while **no segment is running**, and
+the segment that resumes from the coding run pays them, as it pays the run's
+own tokens: an agent-mode executor's calls through the tool bridge, which go on
+after the segment that launched the run has suspended and charged — the
+auxiliary rewrites its tools ask for and the workers it delegates to — and the
+condensation of a collected run's report, failure or question, which the
+coordinator makes between two segments on whichever node collects. Each is
+counted on a tally of its own rather than a segment's: the bridge session's
+meter, whose running total rides every bridged call onto the run's row (the
+job's own record, so a relaunch never hands one job's spend to the next), and
+the condensation's, carried on the collected result — or, for a run that parks
+on a question, written with the question for the resume its answer drives. A
+collection retried after a failed resume condenses again, and only the attempt
+the landing resume ran from reaches the item, so the item can fall short of the
+turn's cost and never exceed it.
 
 ## What this does not decide
 

@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -51,28 +53,98 @@ func decodeBridgeArgs(raw string) map[string]any {
 	return tools.ReadArgs(raw)
 }
 
-// bridgeLedger appends a bridged run's calls to its pending-run row.
-type bridgeLedger struct{ store sandbox.PendingStore }
+// bridgeLedger appends a bridged run's calls to its pending-run row, and with
+// each one what the run's bridged calls have cost the engine so far.
+//
+// ONE PER SESSION, so one per job: the first append is recorded under the job
+// the row holds and answers its name, and every later one names that job, so a
+// call that outlives its job never lands on the next one's record (see
+// [sandbox.PendingStore.AppendBridgeCall]).
+type bridgeLedger struct {
+	store sandbox.PendingStore
 
-var _ mcpbridge.Ledger = bridgeLedger{}
+	// spend is the run's bridged meter, whose running total rides every
+	// append — see [runner.BridgedSpend]. Nil records the calls alone.
+	spend bridgedMeter
+
+	mu sync.Mutex
+	// launch is the job this session's calls are recorded under, learned
+	// from the first append that landed.
+	launch string
+}
+
+var _ mcpbridge.Ledger = (*bridgeLedger)(nil)
+
+// bridgedMeter is a run's bridged meter, as the ledger reads it.
+type bridgedMeter interface{ Total() runner.Bridged }
+
+// newBridgeLedger is the ledger of one bridge session. A nil meter — a run
+// launched with none — records the calls alone, and is never stored as an
+// interface holding a nil pointer.
+func newBridgeLedger(store sandbox.PendingStore, meter *runner.BridgedSpend) *bridgeLedger {
+	l := &bridgeLedger{store: store}
+	if meter != nil {
+		l.spend = meter
+	}
+	return l
+}
 
 // Append records one call. See [mcpbridge.Ledger] for why an error here never
 // reaches the box.
-func (l bridgeLedger) Append(ctx context.Context, runID string, call tools.Call) error {
-	if l.store == nil {
+//
+// THE TOTAL IS READ AFTER THE CALL RAN, so it includes what the call itself
+// cost; two calls finishing together each write the total they read, and the
+// store keeps the newest of them ([sandbox.EngineSpend.Newest]). A call whose
+// append fails has its cost carried by the next one that lands, since the
+// total is cumulative — only the last call of a run can lose it, and then the
+// task is charged short of what the turn shows rather than past it.
+func (l *bridgeLedger) Append(ctx context.Context, runID string, call tools.Call) error {
+	if l == nil || l.store == nil {
 		return nil
 	}
-	_, err := l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeCall{
-		Name: call.Name,
-		// ENCODED HERE, once. The row is JSON in the coordination store,
-		// so a decoded map would be re-encoded by the store's own pass —
-		// and a large id survives one round trip through a
-		// json.Number-aware decode and not two through the default one.
-		Args:   encodeArgs(call.Args),
-		Output: call.Output,
-		Failed: call.Failed,
+	l.mu.Lock()
+	launch := l.launch
+	l.mu.Unlock()
+	landed, err := l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeAppend{
+		Launch: launch,
+		Call: sandbox.BridgeCall{
+			Name: call.Name,
+			// ENCODED HERE, once. The row is JSON in the coordination
+			// store, so a decoded map would be re-encoded by the store's
+			// own pass — and a large id survives one round trip through a
+			// json.Number-aware decode and not two through the default one.
+			Args:   encodeArgs(call.Args),
+			Output: call.Output,
+			Failed: call.Failed,
+		},
+		Spent: l.spent(),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if landed != "" {
+		l.mu.Lock()
+		if l.launch == "" {
+			l.launch = landed
+		}
+		l.mu.Unlock()
+	}
+	return nil
+}
+
+// spent is the meter's running total in the shape a run's row carries, and
+// nothing where the run has no meter.
+func (l *bridgeLedger) spent() sandbox.EngineSpend {
+	if l.spend == nil {
+		return sandbox.EngineSpend{}
+	}
+	return engineSpendOf(l.spend.Total())
+}
+
+// engineSpendOf is a bridged meter's total in the shape a run's row carries.
+func engineSpendOf(b runner.Bridged) sandbox.EngineSpend {
+	return sandbox.EngineSpend{Aux: auxTokensOf(b.Aux), Workers: b.Workers,
+		WorkerInput: b.WorkerInput, WorkerOutput: b.WorkerOutput}
 }
 
 // encodeArgs renders a call's arguments as the JSON text the row holds.

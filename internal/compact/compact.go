@@ -344,6 +344,15 @@ type Bound struct {
 	use  auxspend.Use
 }
 
+// Tallied is this binding with its rewrites tallied on spend instead: the same
+// seat and the same attribution, paid by another segment of the turn — see
+// [github.com/crewlet/crewlet/internal/agent/turnctx.Turn.WithAuxSpend], whose
+// reason it shares.
+func (b Bound) Tallied(spend *auxspend.Tally) Bound {
+	b.use.Tally = spend
+	return b
+}
+
 // Fit is [Compactor.Fit] for the bound seat.
 func (b Bound) Fit(ctx context.Context, kind Kind, text string, budget int) (Result, error) {
 	return b.c.Fit(ctx, Request{Seat: b.seat, Use: b.use, Kind: kind, Text: text, Budget: budget})

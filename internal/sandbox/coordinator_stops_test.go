@@ -716,11 +716,11 @@ func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state 
 	return s.inner.MarkSuspended(ctx, turnID, state)
 }
 
-func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error) {
+func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (string, error) {
 	if s.called("AppendBridgeCall") {
-		return false, errRefusedCall
+		return "", errRefusedCall
 	}
-	return s.inner.AppendBridgeCall(ctx, turnID, call)
+	return s.inner.AppendBridgeCall(ctx, turnID, a)
 }
 
 func (s *refusingStore) ListActive(ctx context.Context) ([]PendingRun, error) {

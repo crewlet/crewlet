@@ -236,6 +236,13 @@ type Result struct {
 	// coordinator, never by a runner.
 	TranscriptElidedLines int
 	TranscriptElidedBytes int
+
+	// Condensed is what condensing this result's report, failure or
+	// question to the record's bounds cost the seat's auxiliary model
+	// ([Coordinator.fitResult]) — a failed rewrite included, since it was
+	// still paid for. Set by the coordinator, never by a runner; the segment
+	// that resumes from this collection pays it ([ResumeRequest.Engine]).
+	Condensed AuxTokens
 }
 
 // usageFloored is r with every count of what the run spent made non-negative,

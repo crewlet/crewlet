@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -49,13 +50,17 @@ import (
 // the fleet reads at query time; the card is rewritten after the charge is
 // decided, so it tallies on its own and is added as the charge is written
 // ([Engine.withCards]). A resumed segment adds the collected coding run it
-// resumed from, which no phase of the engine's own ran. REFLECTION IS NOT IN
-// IT: the learning pass runs after the turn is over, on the seat's behalf
-// rather than the item's, and charging it to whatever the turn was on would
-// make a task's cost depend on how much its seat had to remember. Nor is the
-// condensation of a collected run's report, which the coordinator makes
-// between two segments, where no segment's tally is open (ADR-0022's
-// amendment).
+// resumed from, which no phase of the engine's own ran — and what the ENGINE
+// spent on that run while no segment was running (turnTelemetry.jobEngine):
+// an agent-mode run's bridged calls, whose auxiliary rewrites and delegated
+// workers are counted on the run's own meter and written to its row with
+// every call ([runner.BridgedSpend]), and the condensation of the run's
+// report, failure or question at collection, which the coordinator carries to
+// this resume ([sandbox.ResumeRequest.Engine]). Each figure lands beside the
+// segment's own of the same kind. REFLECTION IS NOT IN IT: the learning pass
+// runs after the turn is over, on the seat's behalf rather than the item's,
+// and charging it to whatever the turn was on would make a task's cost depend
+// on how much its seat had to remember (ADR-0022's amendment).
 //
 // # A segment charged to nothing hands its spend on
 //
@@ -109,16 +114,21 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	ended time.Time,
 ) segmentCharge {
 	item, _ := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
-	own := withAux(tracker.TurnSpend{
-		Rounds:     spend.Rounds,
-		Input:      spend.InputTokens + spend.WorkerInput + spend.JudgeInput + t.jobInput,
-		Output:     spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput,
+	// THE JOB'S ENGINE SPEND: what its bridged calls and the condensation
+	// of its collection cost, which no segment was running to tally.
+	job := t.jobEngine
+	own := withAux(withAux(tracker.TurnSpend{
+		Rounds: spend.Rounds,
+		Input: spend.InputTokens + spend.WorkerInput + spend.JudgeInput + t.jobInput +
+			job.WorkerInput,
+		Output: spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput +
+			job.WorkerOutput,
 		CacheRead:  spend.CacheRead,
 		CacheWrite: spend.CacheWrite,
 		WallMs:     int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
-		Workers:    spend.Workers,
+		Workers:    spend.Workers + job.Workers,
 		SentBack:   spend.SentBack,
-	}, t.auxSpent.Total())
+	}, t.auxSpent.Total()), auxSpentOf(job.Aux))
 	if !t.resumed {
 		own.Turns = 1
 	}
@@ -177,6 +187,12 @@ func withAux(s tracker.TurnSpend, aux auxspend.Spent) tracker.TurnSpend {
 	s.CacheRead += aux.CacheRead
 	s.CacheWrite += aux.CacheWrite
 	return s
+}
+
+// auxSpentOf is a run row's auxiliary figures as the tally's own shape.
+func auxSpentOf(a sandbox.AuxTokens) auxspend.Spent {
+	return auxspend.Spent{Input: a.Input, Output: a.Output,
+		CacheRead: a.CacheRead, CacheWrite: a.CacheWrite}
 }
 
 // addUncharged folds what an earlier segment handed on into this one's spend.

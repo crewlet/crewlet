@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -45,6 +46,21 @@ func segmentSpend(scale int) runner.Spend {
 // more than they do.
 func rollupOf(s runner.Spend, aux auxspend.Spent, jobIn, jobOut int) int {
 	return s.Total() + s.WorkerTokens() + s.JudgeTokens() + aux.Tokens() + jobIn + jobOut
+}
+
+// jobEngineSpend is what the engine spent on a collected job outside every
+// segment: its bridged calls' auxiliary spend and workers, and the
+// condensation of its collection. Published as `turn`-stage auxiliary_spend
+// records under the run and as the workers' own phase records, so it is part
+// of the rollup like everything else.
+var jobEngineSpend = sandbox.EngineSpend{
+	Aux:     sandbox.AuxTokens{Input: 640, Output: 45, CacheRead: 200, CacheWrite: 12},
+	Workers: 1, WorkerInput: 2100, WorkerOutput: 180,
+}
+
+// engineTokens is what an engine spend adds to the rollup.
+func engineTokens(s sandbox.EngineSpend) int {
+	return s.Aux.Input + s.Aux.Output + s.WorkerInput + s.WorkerOutput
 }
 
 // segmentAux is one segment's in-turn auxiliary spend, distinct per scale.
@@ -111,6 +127,10 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 
 			resume := resumeTel(tc.item, parked.carry, jobIn, jobOut)
 			resume.auxSpent.Add(segmentAux(3))
+			// AND WHAT THE ENGINE SPENT ON THE JOB BETWEEN THE TWO — its
+			// bridged calls, its collection's condensation — which no
+			// segment was running to tally, and which the resume pays.
+			resume.jobEngine = jobEngineSpend
 			if tc.sole != nil {
 				resume.written = turnctx.WrittenFrom([]types.WorkItem{*tc.sole}, false)
 			}
@@ -122,7 +142,8 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 					charged += c.record.Spend.Tokens()
 				}
 			}
-			rollup := rollupOf(first, segmentAux(1), 0, 0) + rollupOf(second, segmentAux(3), jobIn, jobOut)
+			rollup := rollupOf(first, segmentAux(1), 0, 0) + rollupOf(second, segmentAux(3), jobIn, jobOut) +
+				engineTokens(jobEngineSpend)
 			if charged > rollup {
 				t.Fatalf("the task was charged %d tokens for a turn whose records "+
 					"add up to %d", charged, rollup)
@@ -137,6 +158,52 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 				t.Fatalf("a turn on nothing charged %d tokens", charged)
 			}
 		})
+	}
+}
+
+// A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
+//
+// Between the segment that launched a coding run and the one that resumes from
+// it, the engine spends on the job with no segment running: an agent-mode
+// run's bridged calls — the auxiliary rewrites its tools asked for, the workers
+// it delegated to — and the condensation of the run's account at collection.
+// The resume request carries it, and the resumed segment's charge adds each
+// figure where its own of the same kind goes.
+//
+// Mutation: leave the job's engine spend out of chargeFor, and every figure
+// below comes up short.
+func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
+	t.Parallel()
+	ended := time.Unix(1_700_000_060, 0).UTC()
+	resume := resumeTel(&nativeItem, nil, 0, 0)
+	resume.jobEngine = jobEngineSpend
+	spend := segmentSpend(1)
+	got := resume.chargeFor(spend, turn.Result{Decision: phase.Done}, nil, ended).record.Spend
+
+	// Every figure the job's engine spend carries lands where the segment's
+	// own of the same kind does: workers beside its workers, auxiliary
+	// tokens beside its own auxiliary calls, the cache shares as a
+	// breakdown of the input they came with.
+	aux, job := jobEngineSpend.Aux, jobEngineSpend
+	if want := spend.InputTokens + spend.WorkerInput + spend.JudgeInput +
+		job.WorkerInput + aux.Input; got.Input != want {
+		t.Errorf("input = %d, want %d with the job's workers and auxiliary calls", got.Input, want)
+	}
+	if want := spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput +
+		job.WorkerOutput + aux.Output; got.Output != want {
+		t.Errorf("output = %d, want %d", got.Output, want)
+	}
+	if want := spend.CacheRead + aux.CacheRead; got.CacheRead != want {
+		t.Errorf("cache read = %d, want %d", got.CacheRead, want)
+	}
+	if want := spend.CacheWrite + aux.CacheWrite; got.CacheWrite != want {
+		t.Errorf("cache write = %d, want %d", got.CacheWrite, want)
+	}
+	if want := spend.Workers + job.Workers; got.Workers != want {
+		t.Errorf("workers = %d, want %d with the ones the coding agent delegated to", got.Workers, want)
+	}
+	if got.Turns != 0 {
+		t.Errorf("a resumed segment counted %d turns", got.Turns)
 	}
 }
 

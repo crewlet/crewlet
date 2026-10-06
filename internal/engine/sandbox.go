@@ -389,6 +389,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		RefsElided:    req.DeliveredRefsElided,
 		InputTokens:   req.InputTokens,
 		OutputTokens:  req.OutputTokens,
+		Engine:        req.Engine,
 	})
 }
 
@@ -478,6 +479,11 @@ type resumeInput struct {
 	// [sandbox.ResumeRequest.InputTokens].
 	InputTokens  int
 	OutputTokens int
+
+	// Engine is what the engine spent on the job between segments — its
+	// bridged calls and the condensation of its collection — which this
+	// segment's charge includes too: see [sandbox.ResumeRequest.Engine].
+	Engine sandbox.EngineSpend
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -1493,27 +1499,40 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 type runCondenser struct{ engine *Engine }
 
 func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part sandbox.RunPart,
-	text string, budget int) (string, error) {
+	text string, budget int) (string, sandbox.AuxTokens, error) {
 	company := r.engine.Company()
 	if company == nil {
-		return "", compact.ErrUnavailable
+		return "", sandbox.AuxTokens{}, compact.ErrUnavailable
 	}
 	note := compact.Result{Compacted: true, From: len(text)}.Note()
 	// THE TURN'S OWN COST, filed under the run the report belongs to: the
-	// resumed segment reads it as the coding run's answer. No segment's
-	// tally is open while a run is collected — the condensation happens
-	// between two of them, on whichever node collects — so it is in the
-	// turn's cost on every rollup and not on its work item (ADR-0022).
-	// UnitOfWork, never the raw field, as every other record of a collected
-	// run files it: a row an older build parked carries no work key, and its
-	// unit is then the derived turn id.
-	use := auxspend.Use{Stage: types.AuxStageTurn, TurnID: run.TurnID, WorkKey: run.UnitOfWork()}
+	// resumed segment reads it as the coding run's answer. UnitOfWork, never
+	// the raw field, as every other record of a collected run files it: a
+	// row an older build parked carries no work key, and its unit is then
+	// the derived turn id.
+	//
+	// ITS OWN TALLY, handed back with the text: no segment's tally is open
+	// while a run is collected — the condensation happens between two of
+	// them, on whichever node collects — so the coordinator carries what it
+	// cost to the segment that resumes from the collection, which pays it
+	// to the turn's work item (ADR-0022). A rewrite that failed was paid
+	// for too, so the tally is answered on every path.
+	spent := auxspend.NewTally()
+	use := auxspend.Use{Stage: types.AuxStageTurn, TurnID: run.TurnID, WorkKey: run.UnitOfWork(),
+		Tally: spent}
 	res, err := r.engine.seatCompactor(company, run.AgentHandle, use).Fit(ctx, runPartKind(part), text,
 		budget-len(note)-1)
+	cost := auxTokensOf(spent.Total())
 	if err != nil {
-		return "", err
+		return "", cost, err
 	}
-	return note + "\n" + res.Text, nil
+	return note + "\n" + res.Text, cost, nil
+}
+
+// auxTokensOf is an auxiliary tally in the shape a run's row carries.
+func auxTokensOf(s auxspend.Spent) sandbox.AuxTokens {
+	return sandbox.AuxTokens{Input: s.Input, Output: s.Output,
+		CacheRead: s.CacheRead, CacheWrite: s.CacheWrite}
 }
 
 // runPartKind is what the compactor is told a piece of a run's account IS,

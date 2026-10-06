@@ -308,6 +308,24 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 	return &bound
 }
 
+// WithAuxSpend derives the Turn for calls a DIFFERENT segment pays for: this
+// one, its auxiliary calls tallied on spend rather than on [Turn.AuxSpend].
+//
+// One caller, and the shape of the problem it solves is the reason it exists:
+// an agent-mode executor hands its tool surface to a coding CLI over the
+// bridge, and the CLI goes on calling those tools after the segment that
+// launched it has ended and charged what it spent. Tallied on that segment's
+// tally, every one of those calls was added to a number nothing read again.
+// A copy, for [Turn.InPhase]'s reason; nil in, nil out.
+func (t *Turn) WithAuxSpend(spend *auxspend.Tally) *Turn {
+	if t == nil {
+		return nil
+	}
+	bound := *t
+	bound.AuxSpend = spend
+	return &bound
+}
+
 // CallLog is this run's call log, or nil outside a turn — see [Turn.Calls].
 func (t *Turn) CallLog() *CallLog {
 	if t == nil {

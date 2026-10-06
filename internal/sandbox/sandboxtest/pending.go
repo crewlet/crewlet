@@ -100,6 +100,9 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"BridgeCallsSurviveWithoutAFence", testBridgeCallsSurviveWithoutAFence},
 		{"BridgeCallsForAMissingRunAreDropped", testBridgeCallsForAMissingRunAreDropped},
 		{"BridgeCallsDropTheMiddleNotTheStart", testBridgeCallsDropTheMiddleNotTheStart},
+		{"ABridgedRunsSpendIsTheNewestTotal", testABridgedRunsSpendIsTheNewestTotal},
+		{"ABridgedCallOutlivingItsJobIsNotTheNextJobs", testABridgedCallOutlivingItsJobIsNotTheNextJobs},
+		{"AParkedJobsCondensationIsKeptForItsAnswer", testAParkedJobsCondensationIsKeptForItsAnswer},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -248,8 +251,8 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.PendingStore) {
 	first := run("t-relaunch-bridge")
 	mustBeginLaunch(t, s, first)
-	if _, err := s.AppendBridgeCall(context.Background(), first.TurnID, sandbox.BridgeCall{
-		Name: "submit_work", Args: `{"outcome":"delivered"}`, At: base,
+	if _, err := s.AppendBridgeCall(context.Background(), first.TurnID, sandbox.BridgeAppend{
+		Call: sandbox.BridgeCall{Name: "submit_work", Args: `{"outcome":"delivered"}`, At: base},
 	}); err != nil {
 		t.Fatalf("AppendBridgeCall: %v", err)
 	}
@@ -518,7 +521,8 @@ func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingS
 			return err
 		},
 		"AppendBridgeCall": func() error {
-			_, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeCall{Name: "read_page"})
+			_, err := s.AppendBridgeCall(ctx, "t1",
+				sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page"}})
 			return err
 		},
 	}
@@ -1022,7 +1026,8 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 		}},
 		{"release the box", func() error { return s.ReleaseBox(ctx, "t1") }},
 		{"append a bridged call", func() error {
-			_, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeCall{Name: "read_page", At: base})
+			_, err := s.AppendBridgeCall(ctx, "t1",
+				sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page", At: base}})
 			return err
 		}},
 	} {
@@ -1599,11 +1604,11 @@ func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, r)
 
 	for _, name := range []string{"read_page", "post_message", "read_page"} {
-		ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
-			Name: name, Args: `{"id":1}`, Output: name + " ok",
+		launch, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+			Call: sandbox.BridgeCall{Name: name, Args: `{"id":1}`, Output: name + " ok"},
 		})
-		if err != nil || !ok {
-			t.Fatalf("AppendBridgeCall(%s) = %v, %v", name, ok, err)
+		if err != nil || launch == "" {
+			t.Fatalf("AppendBridgeCall(%s) = %q, %v", name, launch, err)
 		}
 	}
 
@@ -1641,9 +1646,10 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
 	}
 
-	ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{Name: "read_page"})
-	if err != nil || !ok {
-		t.Fatalf("a log append was refused by ownership: %v, %v", ok, err)
+	launch, err := s.AppendBridgeCall(ctx, r.TurnID,
+		sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page"}})
+	if err != nil || launch == "" {
+		t.Fatalf("a log append was refused by ownership: %q, %v", launch, err)
 	}
 	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
 		t.Errorf("%d calls recorded", len(got.BridgeCalls))
@@ -1652,15 +1658,15 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 
 // A LATE CALL FROM A BOX THAT IS SHUTTING DOWN is the ordinary shape here, and
 // it must not be an error: the caller cannot fail the box's call over a log
-// row, so false and true have to be equally safe to ignore.
+// row, so an answer of no job has to be as safe to ignore as one.
 func testBridgeCallsForAMissingRunAreDropped(t *testing.T, s sandbox.PendingStore) {
-	ok, err := s.AppendBridgeCall(t.Context(), "never-existed",
-		sandbox.BridgeCall{Name: "read_page"})
+	launch, err := s.AppendBridgeCall(t.Context(), "never-existed",
+		sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page"}})
 	if err != nil {
 		t.Fatalf("a missing run was an error: %v", err)
 	}
-	if ok {
-		t.Error("an append onto no row reported success")
+	if launch != "" {
+		t.Errorf("an append onto no row reported landing under %q", launch)
 	}
 }
 
@@ -1673,8 +1679,8 @@ func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStor
 
 	total := sandbox.MaxBridgeCalls + 10
 	for i := range total {
-		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
-			Name: fmt.Sprintf("call-%03d", i),
+		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+			Call: sandbox.BridgeCall{Name: fmt.Sprintf("call-%03d", i)},
 		}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
@@ -1695,6 +1701,110 @@ func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStor
 	// lies about what the run did.
 	if got.BridgeCallsElided != 10 {
 		t.Errorf("elided = %d, want 10", got.BridgeCallsElided)
+	}
+}
+
+// bridged is a session's running total after n calls, every figure distinct.
+func bridged(n int) sandbox.EngineSpend {
+	return sandbox.EngineSpend{
+		Aux:     sandbox.AuxTokens{Input: 100 * n, Output: 10 * n, CacheRead: 40 * n, CacheWrite: 4 * n},
+		Workers: n, WorkerInput: 1000 * n, WorkerOutput: 70 * n,
+	}
+}
+
+// WHAT A BRIDGED RUN'S CALLS COST THE ENGINE RIDES ITS CALLS, AS THE NEWEST
+// TOTAL. Each append carries the session's running total, and two calls that
+// finish together race to the row — so the total an earlier call read can land
+// after a later one's. The job's record keeps the largest of each figure, which
+// within one session is the latest, and no append moves it backwards. The
+// segment that resumes from the job pays it; without it on the row, a resume on
+// another node or after a restart would have nothing to pay from.
+func testABridgedRunsSpendIsTheNewestTotal(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-spend")
+	mustLaunched(t, s, r)
+
+	launch, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+		Call: sandbox.BridgeCall{Name: "query_episodes"}, Spent: bridged(1)})
+	if err != nil || launch == "" {
+		t.Fatalf("first append = %q, %v", launch, err)
+	}
+	if want := mustGet(t, s, r.TurnID).LaunchID; launch != want {
+		t.Fatalf("the first append answered job %q, want the row's %q", launch, want)
+	}
+	// The third call's total lands before the second's.
+	for _, n := range []int{3, 2} {
+		if got, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+			Launch: launch, Call: sandbox.BridgeCall{Name: "refresh_memory"}, Spent: bridged(n),
+		}); err != nil || got != launch {
+			t.Fatalf("append %d = %q, %v; want job %q", n, got, err, launch)
+		}
+	}
+	if got := mustGet(t, s, r.TurnID).LaunchFacts().Bridged; got != bridged(3) {
+		t.Fatalf("the job's bridged spend = %+v, want the newest total %+v", got, bridged(3))
+	}
+}
+
+// A CALL FROM A JOB THAT IS OVER IS NOT THE NEXT JOB'S. A session's first
+// append is recorded under the job the row holds, and every later one names
+// that job; once the row has moved on — a second launch on the same turn — a
+// call still in flight from the first (a worker that outlived a killed CLI) is
+// not recorded, neither its log entry nor its spend, because the second job's
+// resume would pay for it again. The second job starts with nothing bridged.
+func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-pin")
+	mustLaunched(t, s, r)
+	first, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+		Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(1)})
+	if err != nil || first == "" {
+		t.Fatalf("first append = %q, %v", first, err)
+	}
+
+	mustBeginLaunch(t, s, run("t-bridge-pin"))
+	after := mustGet(t, s, r.TurnID)
+	if after.LaunchID == first {
+		t.Fatal("the second launch kept the first job's name — the case exercises nothing")
+	}
+	if got := after.LaunchFacts().Bridged; got != (sandbox.EngineSpend{}) {
+		t.Fatalf("a fresh job starts with the last one's bridged spend: %+v", got)
+	}
+
+	late, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+		Launch: first, Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(4)})
+	if err != nil {
+		t.Fatalf("a late call was an error: %v", err)
+	}
+	if late != "" {
+		t.Errorf("a call from a job that is over was recorded under %q", late)
+	}
+	got := mustGet(t, s, r.TurnID)
+	if len(got.BridgeCalls) != 0 || got.LaunchFacts().Bridged != (sandbox.EngineSpend{}) {
+		t.Fatalf("the next job took a call from the last one: calls %+v, spend %+v",
+			got.BridgeCalls, got.LaunchFacts().Bridged)
+	}
+}
+
+// WHAT CONDENSING A PARKED JOB'S COLLECTION COST IS PARKED WITH ITS QUESTION,
+// on the job's own record, for the resume the answer drives — which may run
+// days later on another node, with nothing collected — exactly as the job's own
+// tokens are. A second launch on the turn is a new job, and carries none of it.
+func testAParkedJobsCondensationIsKeptForItsAnswer(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-park-condensed")
+	mustLaunched(t, s, r)
+	cost := sandbox.AuxTokens{Input: 900, Output: 60, CacheRead: 300}
+	if err := s.MarkAwaiting(ctx, r.TurnID, sandbox.Clarification{
+		Question: "which branch?", InputTokens: 5000, OutputTokens: 400, Condensed: cost,
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	if got := mustGet(t, s, r.TurnID).LaunchFacts().Condensed; got != cost {
+		t.Fatalf("the parked job's condensation = %+v, want %+v", got, cost)
+	}
+	mustBeginLaunch(t, s, run("t-park-condensed"))
+	if got := mustGet(t, s, r.TurnID).LaunchFacts().Condensed; got != (sandbox.AuxTokens{}) {
+		t.Fatalf("a new job carries the last one's condensation: %+v", got)
 	}
 }
 

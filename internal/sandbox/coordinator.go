@@ -114,6 +114,19 @@ type ResumeRequest struct {
 	// completion that parked resumed nothing.
 	InputTokens  int
 	OutputTokens int
+
+	// Engine is what the ENGINE spent on the job outside every segment of
+	// the turn — its bridged calls ([LaunchRecord.Bridged]) and the
+	// condensation of the collection this resume runs from, or for an
+	// answer of the one that parked ([LaunchRecord.Condensed]) — for the
+	// same charge: no segment was running to tally it, and this one is the
+	// job's.
+	//
+	// A COLLECTION RETRIED after a failed resume condenses again, and each
+	// attempt is a call the turn's cost carries; only the one the resume
+	// that lands runs from reaches the item, so the item errs short of the
+	// turn, never past it.
+	Engine EngineSpend
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -639,6 +652,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		Engine: run.LaunchFacts().Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 	})
 	return err
 }
@@ -736,6 +750,18 @@ type runOutcome struct {
 	DeliveredRefsElided int
 	InputTokens         int
 	OutputTokens        int
+	// Engine is what the engine spent on the job between segments — see
+	// [ResumeRequest.Engine].
+	Engine EngineSpend
+}
+
+// parkedEngineSpend is what the engine spent on a parked job outside every
+// segment, for the resume its answer drives: what its bridged calls cost, and
+// what condensing the collection that parked it did — both off the job's own
+// record, since nothing was collected for this resume.
+func parkedEngineSpend(run PendingRun) EngineSpend {
+	facts := run.LaunchFacts()
+	return facts.Bridged.Plus(EngineSpend{Aux: facts.Condensed})
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
@@ -1021,6 +1047,8 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		Question: result.Question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		// And what condensing this collection cost, paid by the same resume.
+		Condensed: result.Condensed,
 		// WHO IT IS PUT TO, resolved now and written with the question:
 		// the label is the coding agent's own words, and "what is waiting
 		// on me" is a question nobody could answer while it was all the
@@ -1200,6 +1228,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	// that job's one segment, so it is the one that charges them.
 	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer, ""), true, trigger, runOutcome{
 		InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+		Engine: parkedEngineSpend(claimed),
 	})
 	if disposition == AnswerDeferred {
 		// The claim went back and the run is awaiting this same answer
@@ -1315,6 +1344,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	disposition, err := c.resumeAndSettle(ctx, claimed,
 		answerText(claimed, given.Answer, answererName(given)), true, trigger, runOutcome{
 			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+			Engine: parkedEngineSpend(claimed),
 		})
 	if disposition == AnswerDeferred {
 		// THE RUN IS AWAITING THIS SAME ANSWER AGAIN, so it comes back —
@@ -1436,6 +1466,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
+		Engine: outcome.Engine,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand

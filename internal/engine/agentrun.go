@@ -78,7 +78,9 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Handle:  l.turn.Handle(),
 		Role:    l.seat.Name,
 		Surface: req.Surface,
-		Ledger:  bridgeLedger{store: pending},
+		// The run's calls, and with each what they have cost the engine
+		// so far, for the segment that resumes from the run to pay.
+		Ledger: newBridgeLedger(pending, req.Spend),
 	})
 	if endpoint == "" {
 		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent

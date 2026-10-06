@@ -23,11 +23,15 @@ type condenseCall struct {
 type fakeCondenser struct {
 	calls  []condenseCall
 	answer func(part RunPart, text string, budget int) (string, error)
+	// cost is what every call reports it spent, an answer or not.
+	cost AuxTokens
 }
 
-func (f *fakeCondenser) Condense(_ context.Context, run PendingRun, part RunPart, text string, budget int) (string, error) {
+func (f *fakeCondenser) Condense(_ context.Context, run PendingRun, part RunPart, text string,
+	budget int) (string, AuxTokens, error) {
 	f.calls = append(f.calls, condenseCall{run.AgentHandle, run.TurnID, part, len(text), budget})
-	return f.answer(part, text, budget)
+	answer, err := f.answer(part, text, budget)
+	return answer, f.cost, err
 }
 
 func lines(prefix string, n int) string {

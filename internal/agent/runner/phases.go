@@ -386,7 +386,8 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit, r.executorActive(snapshot))
+	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, round, snapshot, submit,
+		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -570,7 +571,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
-	surface, err := r.surfaceWith(ctx, phase.Review, round, snapshot, submit, nil)
+	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Review, round, snapshot, submit, nil)
 	if err != nil {
 		return turn.Review{}, err
 	}
@@ -1319,7 +1320,10 @@ type phaseResult struct {
 // a resumed Execute as well as a fresh one. Injected here because this is the
 // single funnel every phase surface goes through, so a phase that lost the
 // tool mid-turn is not representable.
-func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
+//
+// m is where the surface's own calls are charged — the runner's own segment
+// for every surface but an agent-mode executor's ([meter]).
+func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, submit tools.Callable, active []string, loaded ...string,
 ) (*tools.Surface, error) {
 	if submit != nil {
@@ -1357,7 +1361,7 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// funnel every phase surface goes through, so a fresh Execute and a
 	// RESUMED one get it from one place — and a resumed turn that lost the
 	// tool mid-run is not representable.
-	if entry := r.spawnEntry(ctx, ph, round, snapshot,
+	if entry := r.spawnEntry(ctx, m, ph, round, snapshot,
 		func() *tools.Surface { return surface }); entry.Tool != nil {
 		next, err := snapshot.With(entry)
 		if err != nil {
@@ -1380,7 +1384,7 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// Bound to the turn AS THIS PHASE, so a tool reporting what it did can
 	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
 	surface = tools.NewSurface(ph.String(), snapshot, active).
-		ForTurn(r.cfg.Turn.Context.InPhase(types.Phase(ph)))
+		ForTurn(m.turn.InPhase(types.Phase(ph)))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
 	// what the catalogue showed cannot disagree: both are derived from the
 	// same active list, at the same moment, and the catalogue's "required"
