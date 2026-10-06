@@ -422,6 +422,44 @@ describe("the second factor", () => {
   });
 });
 
+describe("a first authenticator", () => {
+  // A FIRST AUTHENTICATOR ISSUES A FIRST SET OF RECOVERY CODES, as a required
+  // enrolment does; it said "your recovery codes are unchanged" to somebody who
+  // held none and prompted nothing. The CONTROL replaces an app beside a set,
+  // which keeps it and says so. Mutation: skip the set and the first case reads
+  // the replacement's sentence.
+  test.each([
+    ["holding no recovery codes", [], "Set up an authenticator…", true],
+    ["replacing an app beside a set (the control)", [APP, CODES], "Replace authenticator…", false],
+  ])("%s", async (_, credentials, press, issued) => {
+    let legs = 0;
+    const engineIs = engine({
+      credentials,
+      writes: {
+        "POST /auth/totp": () =>
+          legs++ === 0
+            ? json(200, { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://totp/x" })
+            : json(200, { status: "enrolled" }),
+        "POST /auth/totp/recovery": () => json(200, { codes: ["aaaa-bbbb", "cccc-dddd"] }),
+      },
+    });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: press }));
+    const dialog = await screen.findByRole("dialog", { name: "Two-step verification" });
+    fireEvent.change(await within(dialog).findByLabelText(/code/i), {
+      target: { value: "123456" },
+    });
+    fireEvent.submit(within(dialog).getByLabelText(/code/i).closest("form")!);
+    if (issued) {
+      expect(await within(dialog).findByText("aaaa-bbbb")).toBeDefined();
+      expect(within(dialog).queryByText(/recovery codes are unchanged/)).toBeNull();
+    } else {
+      expect(await within(dialog).findByText(/recovery codes are unchanged/)).toBeDefined();
+    }
+    expect(engineIs.writes().some((w) => w.path === "/auth/totp/recovery")).toBe(issued);
+  });
+});
+
 describe("personal access tokens", () => {
   test("a mint names nobody, and its value is shown once as acting as you", async () => {
     const engineIs = engine({

@@ -5520,7 +5520,9 @@ into swapping for somebody else's.
   the page reads nothing more, since every read would be refused. A wrong
   current password is the sign-in surface's one refusal, about what was typed,
   and never sends the person to sign in. **Two-step verification** sets up or
-  replaces the authenticator app, and **New recovery codes** issues a set —
+  replaces the authenticator app — a first one issuing a first set of recovery
+  codes, shown once, as `#/enrol` does, and a replacement keeping the set held
+  — and **New recovery codes** issues a set —
   offered only beside an app, because recovery codes held alone are a second
   factor of their own, which the engine refuses to issue.
 - **Where you are signed in** — the live sessions, with **This browser**

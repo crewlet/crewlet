@@ -276,9 +276,22 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
  * permanent hold on somebody's account — and the step-up ceremony answers it
  * before the seed arrives, so this dialog only ever shows a seed its reader
  * proved they may have.
+ *
+ * `codes` is whether they hold recovery codes now. Holding none — a first
+ * authenticator — the enrolment ISSUES a first set, as a required enrolment
+ * does ([FirstRecoveryCodes]), since a phone lost next week is otherwise an
+ * account nobody but an administrator can reopen; it used to say "your
+ * recovery codes are unchanged" to somebody who held none, and prompt nothing.
+ * Holding a set, the set stays and the sentence says so.
  */
-export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
+export function AuthenticatorDialog({ codes, onClose }: { codes: boolean; onClose: () => void }) {
   const [enrolled, setEnrolled] = useState(false);
+  // AS THE DIALOG OPENED: the page behind re-reads the credentials when the
+  // tab comes back — from a password manager the codes were saved into — and
+  // the set issued here would then turn this into the replacement's sentence,
+  // taking the codes off the screen before they were saved.
+  const [first] = useState(!codes);
+  const issuing = enrolled && first;
   return (
     <Modal
       open
@@ -288,15 +301,20 @@ export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
       size="md"
       stackBody
       footer={
-        <Button variant={enrolled ? "primary" : "ghost"} onClick={onClose}>
-          {enrolled ? "Done" : "Cancel"}
-        </Button>
+        // THE FIRST SET CARRIES ITS OWN WAY ON, once it is saved or skipped.
+        issuing ? null : (
+          <Button variant={enrolled ? "primary" : "ghost"} onClick={onClose}>
+            {enrolled ? "Done" : "Cancel"}
+          </Button>
+        )
       }
     >
-      {enrolled ? (
+      {issuing ? (
+        <FirstRecoveryCodes onDone={onClose} />
+      ) : enrolled ? (
         <Text as="p" variant="body">
-          Your authenticator is set up, and signing in asks for its code from now on. If it replaced
-          one you had, codes from the old app no longer work; your recovery codes are unchanged.
+          Your authenticator is set up, and signing in asks for its code from now on. Codes from the
+          app it replaced no longer work; your recovery codes are unchanged.
         </Text>
       ) : (
         <>

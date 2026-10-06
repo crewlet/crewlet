@@ -341,7 +341,7 @@ function Security({
       </div>
       {dialog === "factor" && (
         <LayerBoundary title="Two-step verification" onClose={close}>
-          <AuthenticatorDialog onClose={close} />
+          <AuthenticatorDialog codes={codes} onClose={close} />
         </LayerBoundary>
       )}
       {dialog === "codes" && (
