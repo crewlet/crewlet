@@ -2025,7 +2025,7 @@ locks, both in the authority table, and the build holds both:
 
 - **The row says so.** Every verb that needs somebody at a keyboard states it
   beside its grant and its window, and a request that **presented a machine
-  token** is refused there — `403 unauthorized`, `reason: token_refused` —
+  token** is refused there — `403 token_refused` —
   whatever its owner may do. Some rows need a person on every arm: revealing a
   secret, every directory write, ending every session in the company, and
   changing how somebody proves who they are (enrolling or replacing a second

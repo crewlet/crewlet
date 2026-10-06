@@ -463,6 +463,17 @@ const (
 	// identity recently enough for what it just asked to do.
 	CodeStepUpRequired Code = "step_up_required"
 
+	// CodeTokenRefused is a request that presented a machine token on a
+	// verb that needs a person present.
+	//
+	// ITS OWN CODE rather than `unauthorized`, for step_up_required's
+	// reason: that code's sentence says the credential lacks a grant and to
+	// ask whoever runs the deployment for it, which is false here — the
+	// owner may hold every grant there is and no grant on a token admits
+	// it. Answered `unauthorized` with a sentence of its own as `detail`,
+	// the envelope's two sentences contradicted each other.
+	CodeTokenRefused Code = "token_refused"
+
 	// CodeSecondFactorEnrolmentRequired is a session opened on a password
 	// alone where the deployment requires a second factor its person does
 	// not hold: it may enrol one (`POST /auth/totp`), read who it is,
@@ -779,6 +790,9 @@ var codes = map[Code]string{
 		"one of your recovery codes.",
 	CodeStepUpRequired: "This action needs you to have confirmed who you are " +
 		"recently. Confirm it, then try again.",
+	CodeTokenRefused: "A personal access token cannot do this, whatever its " +
+		"owner may do: it needs a person present, and a token proves nobody " +
+		"is. Sign in as yourself and do it there.",
 	CodeSecondFactorEnrolmentRequired: "This company requires a second factor " +
 		"and you have not set one up yet. Add an authenticator app to your " +
 		"account, and everything else opens once you have.",

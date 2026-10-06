@@ -178,10 +178,12 @@ const RetryUndecidedSeconds = 2
 //     carrying the window it needs ([StepUpDetail]): the rule admitted the
 //     caller, and confirming who they are and replaying the request is the
 //     whole remedy, which a client can do without asking anybody.
-//   - A MACHINE TOKEN on a verb that needs a person present is that 403 with
-//     its own sentence as `detail` ([tokenRefusedDetail]): the envelope's
-//     `message` is about a grant the credential lacks, and no grant on a
-//     token would admit it.
+//   - A MACHINE TOKEN on a verb that needs a person present is `403
+//     token_refused`, its own code for step_up_required's reason: the
+//     `unauthorized` code's sentence is about a grant the credential lacks,
+//     and no grant on a token would admit it. It was that code with a
+//     sentence of its own as `detail`, so the envelope's `message` and its
+//     `detail` contradicted each other.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
 	switch {
 	case d.Unknown():
@@ -189,27 +191,14 @@ func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decisio
 	case d.Reason == ReasonStepUp:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
 			StepUpDetail(d))
+	case d.Reason == ReasonTokenRefused:
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused,
+			RefusalDetail(d.Reason, d.Grants))
 	default:
-		detail := RefusalDetail(d.Reason, d.Grants)
-		if d.Reason == ReasonTokenRefused {
-			detail["detail"] = tokenRefusedDetail
-		}
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			detail)
+			RefusalDetail(d.Reason, d.Grants))
 	}
 }
-
-// tokenRefusedDetail is what a request that presented a machine token is told
-// when the verb needs a person present ([ReasonTokenRefused]).
-//
-// ITS OWN SENTENCE, because the `unauthorized` code's — the credential "does
-// not carry the grant this request needs; ask whoever runs this deployment for
-// it" — is false here: the refusal's grants are empty, the owner may hold
-// every grant there is, and nobody could hand the token one that admits it.
-// What admits the gesture is its owner, signed in.
-const tokenRefusedDetail = "a personal access token cannot do this, whatever " +
-	"its owner may do: it needs a person present, and a token proves nobody " +
-	"is. Sign in as yourself and do it there"
 
 // Handle mounts one guarded route.
 //
