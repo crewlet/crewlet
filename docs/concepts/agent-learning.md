@@ -570,6 +570,6 @@ Explicitly rejected:
 - **Monolithic CLI coupling** — Hermes's learning loop is threaded through its agent entry point; ours sits behind the `EventQueue` as its own package.
 - **LLM-nudge-only triggers**: Hermes's pipeline fires only if the model invokes the tool. Ours pairs nudges with the deterministic reflect dispatcher.
 - **Single-user `USER.md` persona**: replaced by multi-party counterparty profiles keyed by `(observer, subject, platform)`.
-- **Home-dir file storage** — replaced by vector-indexed tables in the engine's own store.
+- **Home-dir file storage** — replaced by tables in the engine's own store, each row carrying its embedding and the model it came from (no vector index — recall is a per-seat scan the database ranks).
 - **Unversioned skill overwrites** — Crewlet keeps prior revisions for rollback.
 - **No model fine-tuning requirement** — notably, Hermes itself also runs on stock models; Crewlet's in-engine learning never touches weights.
