@@ -152,7 +152,7 @@ func (r *fetchingReader) Read(p []byte) (int, error) {
 }
 
 // filesApp is an authenticated node serving fake's files.
-func filesApp(t *testing.T, fake *fakeFiles) *api.App {
+func filesApp(t *testing.T, fake api.ProjectFiles) *api.App {
 	t.Helper()
 	b := closedPosture()
 	return newApp(t, api.Options{Bootstrap: &b, Files: fake})
@@ -168,14 +168,15 @@ func content(n int) []byte {
 }
 
 // withinPace fails unless every captured deadline was the route's whole
-// window: "now" cuts off every real client, an hour bounds no trickle.
+// window — the object store's one floor, a chunk being a mebibyte: "now" cuts
+// off every real client, an hour bounds no trickle.
 func withinPace(t *testing.T, log *paceLog) {
 	t.Helper()
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	for i, d := range log.out {
-		if d < httpjson.BodyReadTimeout-time.Second || d > httpjson.BodyReadTimeout+time.Second {
-			t.Errorf("deadline %d was set %v out, want %v", i, d, httpjson.BodyReadTimeout)
+		if d < objstore.MiBPace-time.Second || d > objstore.MiBPace+time.Second {
+			t.Errorf("deadline %d was set %v out, want %v", i, d, objstore.MiBPace)
 		}
 	}
 }
@@ -222,39 +223,86 @@ func TestAnUploadReadsEachChunkInAWindowOfItsOwn(t *testing.T) {
 // A BODY THAT STOPS ARRIVING IS THE CLIENT'S, not the store's: it answers 400
 // and records nothing. It answered 503 `unavailable`, which tells a client to
 // retry a request whose own connection was what failed.
+//
+// AND A BODY CUT SHORT IS ONE THAT STOPPED, never one that ended: net/http
+// answers a client that went away mid-body with io.ErrUnexpectedEOF, which the
+// upload took for the end of the file and RECORDED — the half that arrived,
+// as the file, answered 200.
 func TestAnUploadWhoseBodyStopsIsRefusedAsTheClients(t *testing.T) {
 	t.Parallel()
-	fake := newFakeFiles(&paceLog{})
-	a := filesApp(t, fake)
+	for _, stop := range []error{errors.New("i/o timeout"), io.ErrUnexpectedEOF} {
+		t.Run(stop.Error(), func(t *testing.T) {
+			t.Parallel()
+			fake := newFakeFiles(&paceLog{})
+			a := filesApp(t, fake)
 
-	cut := io.MultiReader(bytes.NewReader(content(objstore.ChunkSize+10)),
-		&failingReader{err: errors.New("i/o timeout")})
-	req := httptest.NewRequest(http.MethodPut, "/work/files/ENG/reports/q3.bin", cut)
-	req.Header.Set("Authorization", "Bearer secret")
-	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, req)
+			cut := io.MultiReader(bytes.NewReader(content(objstore.ChunkSize+10)),
+				&failingReader{err: stop})
+			req := httptest.NewRequest(http.MethodPut, "/work/files/ENG/reports/q3.bin", cut)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("a body that stopped answered %d, want 400: %s", rec.Code, rec.Body.String())
-	}
-	var answer map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
-		t.Fatal(err)
-	}
-	if answer["error"] != string(httpjson.CodeUnreadableBody) ||
-		!strings.Contains(answer["detail"], "i/o timeout") {
-		t.Errorf("answer = %v, want unreadable_body naming the read's own failure", answer)
-	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if fake.puts != 0 {
-		t.Errorf("a file was recorded from a body that never arrived")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("a body that stopped answered %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			var answer map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+				t.Fatal(err)
+			}
+			if answer["error"] != string(httpjson.CodeUnreadableBody) ||
+				!strings.Contains(answer["detail"], stop.Error()) {
+				t.Errorf("answer = %v, want unreadable_body naming the read's own failure", answer)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if fake.puts != 0 {
+				t.Errorf("a file was recorded from a body that never arrived")
+			}
+		})
 	}
 }
 
 type failingReader struct{ err error }
 
 func (r *failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// cutFiles is fakeFiles whose content arrives short: sent, and then the
+// source fails the way a stream cut mid-object does.
+type cutFiles struct {
+	*fakeFiles
+	sent []byte
+}
+
+func (c *cutFiles) Open(context.Context, objstore.Manifest) (io.ReadCloser, error) {
+	return io.NopCloser(io.MultiReader(bytes.NewReader(c.sent),
+		&failingReader{err: io.ErrUnexpectedEOF})), nil
+}
+
+// A DOWNLOAD WHOSE CONTENT IS CUT SHORT IS ABORTED, never ended as if it were
+// whole. The status and the Content-Length are sent by then, so the one honest
+// signal left is the aborted response — and a source that stopped with
+// io.ErrUnexpectedEOF was ended cleanly instead, with the cut logged nowhere.
+func TestADownloadWhoseContentIsCutShortIsAborted(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(&paceLog{})
+	fake.file = &tracker.File{Version: 1, Project: "ENG", Path: "reports/q3.bin",
+		Size: 2 * objstore.ChunkSize}
+	a := filesApp(t, &cutFiles{fakeFiles: fake, sent: content(objstore.ChunkSize + 100)})
+
+	req := httptest.NewRequest(http.MethodGet, "/work/files/ENG/reports/q3.bin", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	aborted := func() (panicked any) {
+		defer func() { panicked = recover() }()
+		a.ServeHTTP(rec, req)
+		return nil
+	}()
+	if err, _ := aborted.(error); !errors.Is(err, http.ErrAbortHandler) {
+		t.Fatalf("a download cut at %d of %d bytes ended with %v (status %d), want the "+
+			"response aborted", rec.Body.Len(), 2*objstore.ChunkSize, aborted, rec.Code)
+	}
+}
 
 // A DOWNLOAD'S EVERY CHUNK HAS ITS OWN WINDOW TOO, opened once the chunk is in
 // hand. The route copied with no write deadline, so a client that opened a

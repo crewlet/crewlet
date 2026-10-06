@@ -137,6 +137,11 @@ var ErrTooLarge = errors.New("objstore: the object is over its size limit")
 // ONE CHUNK IN MEMORY AT A TIME, which is the whole reason this streams: a
 // node that buffered a file to hash it first would need the file's size in
 // memory, and a small stateless node would be the one to fail.
+//
+// The object ends where r answers io.EOF itself ([Fill]), and a read that
+// fails — a body cut short's io.ErrUnexpectedEOF among them — fails the split
+// with nothing of its last piece handed over: a split that took a cut body
+// for a whole one answered a manifest of the half that arrived.
 func Split(ctx context.Context, r io.Reader, limit int64,
 	put func(ctx context.Context, c Chunk, data []byte) error) (Manifest, error) {
 
@@ -147,7 +152,10 @@ func Split(ctx context.Context, r io.Reader, limit int64,
 		if err := ctx.Err(); err != nil {
 			return Manifest{}, err
 		}
-		n, err := io.ReadFull(r, buf)
+		n, end, err := Fill(r, buf)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("objstore: read the object: %w", err)
+		}
 		if n > 0 {
 			if m.Size+int64(n) > limit {
 				return Manifest{}, fmt.Errorf("%w (%d bytes)", ErrTooLarge, limit)
@@ -161,12 +169,9 @@ func Split(ctx context.Context, r io.Reader, limit int64,
 			m.Chunks = append(m.Chunks, c)
 			m.Size += int64(n)
 		}
-		switch {
-		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		if end {
 			m.Hash = Hash(hex.EncodeToString(whole.Sum(nil)))
 			return m, nil
-		case err != nil:
-			return Manifest{}, fmt.Errorf("objstore: read the object: %w", err)
 		}
 	}
 }

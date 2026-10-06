@@ -133,6 +133,11 @@ promises, and its size is the provider's problem rather than any node's disk.
 - **Every request goes out from the node that serves the upload or the
   download**, a stateless node included, so every node needs to reach the
   endpoint.
+- **Every request carries a deadline of its own**, so a bucket that stops
+  answering fails the request rather than holding it: thirty seconds for one
+  that moves no body, the same plus thirty seconds a mebibyte for one that
+  carries bytes up, five minutes for completing an upload made in parts, and a
+  minute for reading a chunk back.
 
 ### One store per fleet
 
@@ -156,7 +161,9 @@ bucket's layout), stop the fleet, delete the `backend` record from the
 **An upload stores every chunk before it writes the row** that names them. A
 file that is listed is therefore always a file whose bytes are in the store,
 and an upload cut off halfway leaves only chunks nothing names, which the
-collector removes a day later.
+collector removes a day later. **A body ends only where the client ended it**:
+one cut short — a connection that closed mid-body included — is refused, never
+recorded as the part of the file that arrived.
 
 **A download streams**, a few chunks ahead, and never holds the file in memory.
 Each chunk is checked against its name as it arrives.
@@ -174,9 +181,11 @@ judged against the replicated estate the data node holds:
   so it reads every row committed when it began), lists the store, and deletes
   every chunk **written more than a day ago that no row names**. The day is the
   grace an upload in flight is given between storing its chunks and writing its
-  row. A collection that cannot read the whole estate — this node holds a
-  record it could not apply — **deletes nothing**: a row it could not read may
-  name any chunk.
+  row. Only a name that is a chunk's hash is the collector's: anything else in
+  the bucket, or under the prefix, is never counted, judged or deleted. A
+  collection that cannot read the whole estate — this node holds a record it
+  could not apply — **deletes nothing**: a row it could not read may name any
+  chunk.
 - **Audit, daily.** It asks the store about every chunk a row names. One that
   is not there is a file that cannot be downloaded, and raises
   [`objects_missing`](#alarms) with the count and the first hundred hashes.

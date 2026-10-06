@@ -21,6 +21,12 @@
 //
 // # Collection: deletion is the only dangerous thing, and it has three rules (ADR-0027)
 //
+// What a name in the store MEANS is read here, never by a backend: a backend
+// lists every name it holds, verbatim, and only a name that is a content
+// address is the collector's. Anything else — another application's object
+// under a shared prefix, something an operator put in the bucket — is never
+// counted, judged or deleted.
+//
 // A chunk is deleted only when ALL of these hold:
 //
 //   - It is older than [PendingGrace]. Bytes are uploaded BEFORE the record
@@ -260,13 +266,21 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport) error {
 		}
 		return nil
 	}
-	err = c.opts.Store.Backend().List(ctx, func(held objstore.Held) error {
+	err = c.opts.Store.Backend().List(ctx, func(info objstore.Info) error {
+		// THE GRAMMAR IS READ HERE, not by the backend: a backend lists
+		// every name it holds, and a name that is not a content address
+		// is somebody else's object — never counted, never judged and
+		// never deleted.
+		h := objstore.Hash(info.Name)
+		if !h.Valid() {
+			return nil
+		}
 		r.Listed++
-		if !held.Written.Before(cutoff) {
+		if !info.Written.Before(cutoff) {
 			return nil
 		}
 		r.Aged++
-		batch = append(batch, held.Hash)
+		batch = append(batch, h)
 		if len(batch) < judgeBatch {
 			return nil
 		}
@@ -291,16 +305,16 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport) error {
 func (c *Collector) delete(ctx context.Context, h objstore.Hash, cutoff time.Time) (bool, error) {
 	deleted := false
 	err := c.opts.Store.Locked(ctx, h, func(ctx context.Context) error {
-		written, err := c.opts.Store.Backend().Stat(ctx, h)
+		info, err := c.opts.Store.Backend().Stat(ctx, string(h))
 		switch {
 		case errors.Is(err, objstore.ErrNotFound):
 			return nil
 		case err != nil:
 			return err
-		case !written.Before(cutoff):
+		case !info.Written.Before(cutoff):
 			return nil // re-put since it was listed
 		}
-		if err := c.opts.Store.Backend().Delete(ctx, h); err != nil {
+		if err := c.opts.Store.Backend().Delete(ctx, string(h)); err != nil {
 			return err
 		}
 		deleted = true
@@ -345,7 +359,7 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) error {
 			}
 			asked[h] = struct{}{}
 			r.Referenced++
-			_, err := c.opts.Store.Backend().Stat(ctx, h)
+			_, err := c.opts.Store.Backend().Stat(ctx, string(h))
 			switch {
 			case errors.Is(err, objstore.ErrNotFound):
 				r.Missing++

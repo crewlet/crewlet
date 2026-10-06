@@ -1,59 +1,15 @@
 package objstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
 )
-
-// ErrNotFound is a chunk the backend does not hold.
-var ErrNotFound = errors.New("objstore: no such chunk")
-
-// ErrCorrupt is a chunk whose bytes no longer hash to the name it is stored
-// under — never handed to a reader.
-var ErrCorrupt = errors.New("objstore: a chunk's bytes do not match its name")
-
-// Held is one chunk a backend lists: its name and when it was last written.
-type Held struct {
-	Hash Hash
-	// Written is when the chunk was last PUT — a put of a chunk already
-	// held moves it, which is what the collector's grace is measured from.
-	Written time.Time
-}
-
-// Backend is where the bytes live: one store the whole fleet shares.
-//
-// Implemented by the fleet's own JetStream object store (natsobj), by an
-// S3-compatible bucket (s3obj) and by the in-memory twin (memobj), and all of
-// them certified by ONE suite (objstoretest).
-//
-// THE CONTRACT IS FOUR VERBS AND A LISTING, and every one is idempotent.
-// Content addressing is what makes that enough: a name is its bytes, so a put
-// that lands twice stores one thing, and nothing ever has to compare versions.
-type Backend interface {
-	// Put stores data under h, REPLACING any copy already there and
-	// moving its written instant to now — the one property the collector's
-	// grace rests on: a file re-using a chunk the collector has judged old
-	// re-puts it, and the re-put is what makes it young again.
-	Put(ctx context.Context, h Hash, data []byte) error
-
-	// Get answers the bytes stored under h, or [ErrNotFound]. A backend
-	// returns what it holds; checking it against h is [Store]'s.
-	Get(ctx context.Context, h Hash) ([]byte, error)
-
-	// Stat answers when h was last written, or [ErrNotFound].
-	Stat(ctx context.Context, h Hash) (time.Time, error)
-
-	// Delete removes h. Deleting what is not there is not an error.
-	Delete(ctx context.Context, h Hash) error
-
-	// List hands every chunk the backend holds to visit, in no particular
-	// order, stopping at the first error visit returns.
-	List(ctx context.Context, visit func(Held) error) error
-}
 
 // Locks serialises the two writers that can disagree about one chunk: a file
 // re-putting a chunk the store already holds, and the collector deleting it.
@@ -62,12 +18,13 @@ type Backend interface {
 //
 // The collector deletes a chunk no row names once it is older than a grace,
 // and a file that re-uses an existing chunk re-puts it to make it young again
-// ([Backend.Put]). Without exclusion, the collector can read the chunk's age,
-// the writer's re-put can land, and the collector's delete can then remove
-// the bytes the writer is about to name — a file whose record lands pointing
-// at nothing. With it, the collector's read of the age and its delete are one
-// step against every re-put, so either the re-put came first (the chunk is
-// young and stays) or the delete did (and the re-put stores it again).
+// ([Backend.Put] moves the written instant [Info] reports). Without
+// exclusion, the collector can read the chunk's age, the writer's re-put can
+// land, and the collector's delete can then remove the bytes the writer is
+// about to name — a file whose record lands pointing at nothing. With it, the
+// collector's read of the age and its delete are one step against every
+// re-put, so either the re-put came first (the chunk is young and stays) or
+// the delete did (and the re-put stores it again).
 //
 // A chunk the store does NOT hold needs no lock: nothing can be deleting it,
 // and a put of it is the first copy.
@@ -141,7 +98,7 @@ func (s *Store) Put(ctx context.Context, h Hash, data []byte) error {
 	if got := HashOf(data); got != h {
 		return fmt.Errorf("objstore: put %s with bytes that hash to %s", h, got)
 	}
-	_, err := s.backend.Stat(ctx, h)
+	_, err := s.backend.Stat(ctx, string(h))
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return s.put(ctx, h, data)
@@ -153,8 +110,13 @@ func (s *Store) Put(ctx context.Context, h Hash, data []byte) error {
 	})
 }
 
+// chunkType is what a chunk is stored as: bytes cut from a file at an
+// arbitrary point are no media type of their own.
+const chunkType = "application/octet-stream"
+
 func (s *Store) put(ctx context.Context, h Hash, data []byte) error {
-	if err := s.backend.Put(ctx, h, data); err != nil {
+	if err := s.backend.Put(ctx, string(h), bytes.NewReader(data),
+		PutMeta{ContentType: chunkType}); err != nil {
 		return fmt.Errorf("objstore: store chunk %s: %w", h, err)
 	}
 	return nil
@@ -190,15 +152,40 @@ func (s *Store) Locked(ctx context.Context, h Hash, fn func(context.Context) err
 	return fn(bounded)
 }
 
+// chunkReadBudget bounds the read of one chunk — every backend refuses a read
+// with no deadline ([Backend.Get]), because a read that stops moving has to
+// end somewhere, and the callers reading chunks (a download, the backup)
+// carry none of their own.
+//
+// A CHUNK'S [MiBPace], AND AS LONG AGAIN: a chunk is at most a mebibyte, which
+// the floor gives thirty seconds, and the second pace covers the request
+// around the bytes — the broker's lookup of the object before it streams it,
+// a bucket's connection and a retry.
+const chunkReadBudget = 2 * MiBPace
+
 // Get answers one chunk's bytes, checked against its name: a chunk whose
 // bytes no longer hash to h is [ErrCorrupt], never handed out.
 func (s *Store) Get(ctx context.Context, h Hash) ([]byte, error) {
 	if !h.Valid() {
 		return nil, fmt.Errorf("%w: %q", ErrBadHash, h)
 	}
-	data, err := s.backend.Get(ctx, h)
+	ctx, cancel := context.WithTimeout(ctx, chunkReadBudget)
+	defer cancel()
+	r, err := s.backend.Get(ctx, string(h), 0, -1)
 	if err != nil {
 		return nil, fmt.Errorf("objstore: read chunk %s: %w", h, err)
+	}
+	defer func() { _ = r.Close() }()
+	// BOUNDED one byte past a chunk: a name that holds more than any chunk
+	// can is not the chunk it names, and reading it whole would be a
+	// memory bill somebody else wrote.
+	data, err := io.ReadAll(io.LimitReader(r, ChunkSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("objstore: read chunk %s: %w", h, err)
+	}
+	if len(data) > ChunkSize {
+		return nil, fmt.Errorf("%w: %s holds more than the %d bytes a chunk can",
+			ErrCorrupt, h, ChunkSize)
 	}
 	if got := HashOf(data); got != h {
 		return nil, fmt.Errorf("%w: %s holds bytes that hash to %s", ErrCorrupt, h, got)

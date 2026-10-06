@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
+	"time"
 )
 
 // A SPLIT CUTS AT THE CHUNK SIZE, HANDS OVER EVERY PIECE IN ORDER, AND ITS
@@ -77,6 +81,105 @@ func TestAPieceThatCouldNotBeStoredFailsTheSplit(t *testing.T) {
 	}
 }
 
+// endsWith yields its bytes and then answers err in place of the end, as a
+// request body whose client went away does.
+type endsWith struct {
+	r   io.Reader
+	err error
+}
+
+func (e *endsWith) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err == io.EOF {
+		return n, e.err
+	}
+	return n, err
+}
+
+// stuck answers nothing and no error, for ever.
+type stuck struct{}
+
+func (stuck) Read([]byte) (int, error) { return 0, nil }
+
+// failingWith answers its bytes together with an error, in one read.
+type failingWith struct {
+	data []byte
+	err  error
+}
+
+func (f *failingWith) Read(p []byte) (int, error) {
+	n := copy(p, f.data)
+	f.data = f.data[n:]
+	return n, f.err
+}
+
+// THE END OF A STREAM IS io.EOF ITSELF, and every other answer is the failure
+// it is. io.ReadFull, which the object store read through, answers its own
+// short read as io.ErrUnexpectedEOF — the value net/http's request body
+// answers for a client that went away mid-body — so a reader that took the
+// one for the end stored a cut upload as a whole one.
+func TestAFillEndsOnlyAtIoEOFItself(t *testing.T) {
+	t.Parallel()
+	data := []byte("seven b")
+	cases := []struct {
+		name    string
+		r       io.Reader
+		size    int
+		wantN   int
+		wantEnd bool
+		wantErr error
+	}{
+		{"a full buffer from a trickle", iotest.OneByteReader(bytes.NewReader(data)), 4, 4, false, nil},
+		{"a short end", iotest.OneByteReader(bytes.NewReader(data)), 10, 7, true, nil},
+		{"an end that fills the buffer exactly", iotest.DataErrReader(bytes.NewReader(data)), 7, 7, true, nil},
+		{"an end and nothing before it", bytes.NewReader(nil), 4, 0, true, nil},
+		{"a body cut short", &endsWith{bytes.NewReader(data), io.ErrUnexpectedEOF}, 10, 7, false, io.ErrUnexpectedEOF},
+		{"a cut body, wrapped", &endsWith{bytes.NewReader(data),
+			fmt.Errorf("the body: %w", io.ErrUnexpectedEOF)}, 10, 7, false, io.ErrUnexpectedEOF},
+		{"a wrapped end", &endsWith{bytes.NewReader(data), fmt.Errorf("the body: %w", io.EOF)}, 10, 7, false, io.EOF},
+		{"a failure arriving with the last bytes", &failingWith{data, io.ErrClosedPipe}, 7, 7, false, io.ErrClosedPipe},
+		{"a reader that never moves", stuck{}, 4, 0, false, io.ErrNoProgress},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			buf := make([]byte, c.size)
+			n, end, err := Fill(c.r, buf)
+			if n != c.wantN || end != c.wantEnd || !errors.Is(err, c.wantErr) || (c.wantErr == nil) != (err == nil) {
+				t.Fatalf("Fill = %d, end %v, %v; want %d, end %v, %v", n, end, err, c.wantN, c.wantEnd, c.wantErr)
+			}
+			if !bytes.Equal(buf[:n], data[:n]) {
+				t.Fatalf("Fill read %q, want %q", buf[:n], data[:n])
+			}
+		})
+	}
+}
+
+// A SPLIT ENDS ONLY WHERE ITS READER ENDS: a body cut short is a failed split
+// with no manifest, never a manifest of the half that arrived — which is what
+// an upload whose client went away mid-body was recorded as.
+func TestACutBodyFailsTheSplit(t *testing.T) {
+	t.Parallel()
+	for _, cut := range []error{io.ErrUnexpectedEOF,
+		fmt.Errorf("the file's body could not be read: %w", io.ErrUnexpectedEOF),
+		fmt.Errorf("the file's body: %w", io.EOF)} {
+		for _, size := range []int{10, ChunkSize, ChunkSize + 10} {
+			stored := 0
+			m, err := Split(context.Background(), &endsWith{bytes.NewReader(make([]byte, size)), cut},
+				int64(2*ChunkSize), func(_ context.Context, _ Chunk, data []byte) error {
+					stored += len(data)
+					return nil
+				})
+			if !errors.Is(err, cut) {
+				t.Fatalf("a body of %d bytes cut with %q split into %+v, %v; want the cut", size, cut, m, err)
+			}
+			if want := size / ChunkSize * ChunkSize; stored != want {
+				t.Errorf("a body of %d bytes cut with %q handed over %d bytes, want the %d "+
+					"of its whole chunks", size, cut, stored, want)
+			}
+		}
+	}
+}
+
 // A MANIFEST WHOSE PARTS DO NOT ADD UP IS REFUSED — it is what a reader
 // reassembles by, and what the collector keeps alive.
 func TestAManifestWhosePartsDoNotAddUpIsRefused(t *testing.T) {
@@ -138,6 +241,21 @@ func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 	} {
 		if _, err := bad.Chunks(); err == nil {
 			t.Errorf("%s: a statement was built", name)
+		}
+	}
+}
+
+// A TRANSFER IS GIVEN A PACE FOR EVERY MEBIBYTE IT BEGINS, so a request
+// carrying one byte gets as long as one carrying a mebibyte and one byte more
+// gets a second pace — never a bound rounded down to less than its body
+// needs at the floor.
+func TestATransferIsPacedByTheMebibytesItBegins(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[int64]time.Duration{
+		0: 0, 1: MiBPace, MiB: MiBPace, MiB + 1: 2 * MiBPace, 8 * MiB: 8 * MiBPace,
+	} {
+		if got := PaceFor(n); got != want {
+			t.Errorf("PaceFor(%d) = %v, want %v", n, got, want)
 		}
 	}
 }

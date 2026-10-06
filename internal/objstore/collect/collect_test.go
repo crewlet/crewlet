@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -129,7 +130,7 @@ func (h *harness) put(content string) objstore.Hash {
 
 func (h *harness) held(hash objstore.Hash) bool {
 	h.t.Helper()
-	_, err := h.backend.Stat(h.t.Context(), hash)
+	_, err := h.backend.Stat(h.t.Context(), string(hash))
 	if errors.Is(err, objstore.ErrNotFound) {
 		return false
 	}
@@ -165,6 +166,36 @@ func TestAnUnreferencedChunkGoesOnlyAfterTheGrace(t *testing.T) {
 	}
 	if !h.held(named) {
 		t.Fatal("a chunk a file names was deleted")
+	}
+}
+
+// A NAME THAT IS NOT A CONTENT ADDRESS IS NEVER THE COLLECTOR'S: a backend
+// lists every name it holds, and the collector — the one reader of the
+// grammar — neither counts nor judges nor deletes an object it did not name,
+// however old.
+func TestANameThatIsNotAChunkIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	foreign := []string{"somebody-elses.txt", strings.ToUpper(string(objstore.HashOf([]byte("x"))))}
+	for _, name := range foreign {
+		if err := h.backend.Put(t.Context(), name, strings.NewReader("theirs"),
+			objstore.PutMeta{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphan := h.put("an unreferenced chunk")
+	h.clock.advance(PendingGrace + time.Hour)
+	r, err := h.c.Collect(t.Context())
+	if err != nil || r.Listed != 1 || r.Deleted != 1 || !r.Completed {
+		t.Fatalf("the pass = %+v, %v; want the one chunk listed and deleted", r, err)
+	}
+	if h.held(orphan) {
+		t.Fatal("the unreferenced chunk was kept")
+	}
+	for _, name := range foreign {
+		if _, err := h.backend.Stat(t.Context(), name); err != nil {
+			t.Errorf("%q, which is not a chunk, is gone: %v", name, err)
+		}
 	}
 }
 
@@ -262,7 +293,7 @@ func TestTheAuditCountsWhatTheStoreLost(t *testing.T) {
 	lost := h.put("lost")
 	h.source.name(kept)
 	h.source.name(lost)
-	if err := h.backend.Delete(t.Context(), lost); err != nil {
+	if err := h.backend.Delete(t.Context(), string(lost)); err != nil {
 		t.Fatal(err)
 	}
 	r, err := h.c.Audit(t.Context())

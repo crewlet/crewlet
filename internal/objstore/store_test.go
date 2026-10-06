@@ -90,7 +90,7 @@ func TestAReaderStopsWhenClosedAndFailsOnAMissingChunk(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.Delete(t.Context(), m.Chunks[1].Hash); err != nil {
+	if err := backend.Delete(t.Context(), string(m.Chunks[1].Hash)); err != nil {
 		t.Fatal(err)
 	}
 	r, err = s.Open(t.Context(), m)
@@ -139,9 +139,57 @@ func TestCorruptBytesAreRefusedBothWays(t *testing.T) {
 	if err := s.Put(t.Context(), h, data); err != nil {
 		t.Fatal(err)
 	}
-	backend.Corrupt(h, []byte("rotted"))
+	backend.Corrupt(string(h), []byte("rotted"))
 	if _, err := s.Get(t.Context(), h); !errors.Is(err, objstore.ErrCorrupt) {
 		t.Fatalf("Get of a rotted chunk = %v, want ErrCorrupt", err)
+	}
+	// A NAME HOLDING MORE THAN ANY CHUNK CAN is not the chunk it names, and
+	// is refused having read one byte past a chunk rather than all of it.
+	backend.Corrupt(string(h), make([]byte, objstore.ChunkSize+1))
+	if _, err := s.Get(t.Context(), h); !errors.Is(err, objstore.ErrCorrupt) {
+		t.Fatalf("Get of a name holding more than a chunk = %v, want ErrCorrupt", err)
+	}
+}
+
+// deadlineBackend records the deadline each read reached the backend under.
+type deadlineBackend struct {
+	objstore.Backend
+	deadline time.Time
+}
+
+func (b *deadlineBackend) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	b.deadline, _ = ctx.Deadline()
+	return b.Backend.Get(ctx, name, off, n)
+}
+
+// A CHUNK IS READ UNDER A DEADLINE OF ITS OWN when its caller carries none —
+// every backend refuses a read without one — and under the caller's when that
+// is sooner.
+func TestAChunkIsReadUnderItsOwnBudget(t *testing.T) {
+	t.Parallel()
+	backend := &deadlineBackend{Backend: memobj.New()}
+	s, _ := newStore(t, backend)
+	data := []byte("read in time")
+	h := objstore.HashOf(data)
+	if err := s.Put(t.Context(), h, data); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	if got, err := s.Get(t.Context(), h); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("Get with no deadline of its own = %q, %v", got, err)
+	}
+	if backend.deadline.IsZero() || backend.deadline.After(before.Add(2*objstore.MiBPace+time.Second)) {
+		t.Fatalf("the backend read under deadline %v, want one within two paces of %v",
+			backend.deadline, before)
+	}
+	soon, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	want, _ := soon.Deadline()
+	if _, err := s.Get(soon, h); err != nil {
+		t.Fatal(err)
+	}
+	if !backend.deadline.Equal(want) {
+		t.Fatalf("the backend read under %v, want the caller's sooner %v", backend.deadline, want)
 	}
 }
 
@@ -151,9 +199,9 @@ type countingBackend struct {
 	puts atomic.Int32
 }
 
-func (b *countingBackend) Put(ctx context.Context, h objstore.Hash, data []byte) error {
+func (b *countingBackend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
 	b.puts.Add(1)
-	return b.Backend.Put(ctx, h, data)
+	return b.Backend.Put(ctx, name, r, m)
 }
 
 // A RE-PUT OF A CHUNK THE STORE HOLDS WAITS FOR ITS LOCK — the one the
