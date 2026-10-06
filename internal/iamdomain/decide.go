@@ -1153,6 +1153,19 @@ func generationOf(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	return uint64(generation), nil
 }
 
+// countersOf is a person's [Counters], read inside a decide.
+func countersOf(ctx context.Context, tx *sql.Tx, personID string) (Counters, error) {
+	epoch, err := epochOf(ctx, tx, personID)
+	if err != nil {
+		return Counters{}, err
+	}
+	generation, err := generationOf(ctx, tx)
+	if err != nil {
+		return Counters{}, err
+	}
+	return Counters{Epoch: epoch, Generation: generation}, nil
+}
+
 // SessionStart is what opening a session needs.
 //
 // NO EPOCH AND NO GENERATION: both are read inside the decide — see
@@ -1453,8 +1466,12 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 		if person.Credentials, err = in.Apply(person.Credentials); err != nil {
 			return err
 		}
+		counters, err := countersOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
 		if person.Credentials, err = fitHeld(person.Credentials, w.Now(),
-			ErrInvalid); err != nil {
+			counters, ErrInvalid); err != nil {
 			return err
 		}
 		mutation, err = EncodePerson(person)
@@ -1624,14 +1641,11 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		if err != nil {
 			return err
 		}
-		epoch, err := epochOf(ctx, tx, in.PersonID)
+		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
-		generation, err := generationOf(ctx, tx)
-		if err != nil {
-			return err
-		}
+		epoch, generation := counters.Epoch, counters.Generation
 		token := Credential{
 			V: DocumentVersion, ID: in.ID, Method: MethodToken,
 			Verifier: in.Verifier, Label: in.Label, ExpiresAt: in.ExpiresAt,
@@ -1651,7 +1665,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		kept = append(kept, token)
 		// THE NEW TOKEN IS LIVE, so making room never drops it: only a
 		// credential that has already stopped verifying gives up its place.
-		if owner.Credentials, err = fitHeld(kept, now, ErrInvalidToken); err != nil {
+		if owner.Credentials, err = fitHeld(kept, now, counters, ErrInvalidToken); err != nil {
 			return err
 		}
 		minted = TokenMinted{Grants: grants, ExpiresAt: in.ExpiresAt,
@@ -2399,15 +2413,15 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 			V: DocumentVersion, ID: id, Method: MethodPassword,
 			Verifier: in.Verifier,
 		})
-		if person.Credentials, err = fitHeld(kept, now, ErrInvalid); err != nil {
-			return err
-		}
-		epoch, err := epochOf(ctx, tx, in.PersonID)
+		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
+		if person.Credentials, err = fitHeld(kept, now, counters, ErrInvalid); err != nil {
+			return err
+		}
 		rec.Mutation, err = EncodePasswordChange(PasswordChange{
-			V: DocumentVersion, Person: person, Epoch: epoch + 1,
+			V: DocumentVersion, Person: person, Epoch: counters.Epoch + 1,
 		})
 		return err
 	}
@@ -2558,8 +2572,12 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if len(added) > 0 {
 			updated.Credentials = RevokeResetLinks(updated.Credentials, w.Now())
 		}
+		counters, err := countersOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
 		if updated.Credentials, err = fitHeld(updated.Credentials, w.Now(),
-			ErrInvalid); err != nil {
+			counters, ErrInvalid); err != nil {
 			return err
 		}
 		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)

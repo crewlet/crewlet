@@ -372,8 +372,8 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 				row.Label = held.Label
 				row.Grants = held.Grants
 				row.Spent = held.Spent
-				row.Superseded = row.Method == MethodToken &&
-					(epoch > held.Epoch || generation > held.Generation)
+				row.Superseded = held.EndedBy(Counters{Epoch: epoch,
+					Generation: generation})
 			}
 			out = append(out, row)
 		}

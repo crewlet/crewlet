@@ -1207,7 +1207,11 @@ stays on the person's record — listed with when and why it stopped — until
 the retention sweep collects it, seven days after it lapsed, or until a change
 needs its place: a mint, a second factor or new recovery codes that would
 leave more than 64 drops the credentials that lapsed **earliest**, as many as
-it needs and never a live one. Only a change that would leave more than 64
+it needs and never a live one. A token ended by signing out everywhere, a
+password change, a suspension or an administrator ending somebody's sessions
+has lapsed too, and goes first: nothing records when it stopped, it can never
+verify again, and the sweep would otherwise keep it until its own expiry.
+Only a change that would leave more than 64
 **live** credentials is refused, `400 invalid_body`, and revoking a token
 nothing uses makes room at once. The bound is what keeps a person's record —
 every credential change republishes all of them — inside the identity log's

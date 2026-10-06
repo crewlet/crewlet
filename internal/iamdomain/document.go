@@ -358,10 +358,28 @@ const (
 	MaxHeldCredentials = 64
 )
 
+// Counters are the two numbers that end a credential stamped with them, read in
+// one snapshot: the person's revocation epoch and the company's session
+// generation. Every gesture that ends a person's sessions and machine tokens —
+// a password set, signing out everywhere, a suspension, an administrator
+// ending their sessions, invalidating everybody's — moves one of them and
+// writes no `revoked_at`.
+type Counters struct{ Epoch, Generation uint64 }
+
+// EndedBy reports a credential a COUNTER ended: a machine token minted at an
+// epoch or a generation that has since moved on — the comparison
+// [credential.CheckToken] refuses it on. Counters only move forward, so it
+// never verifies again.
+func (c Credential) EndedBy(now Counters) bool {
+	return c.Method == MethodToken &&
+		(now.Epoch > c.Epoch || now.Generation > c.Generation)
+}
+
 // fitHeld is a credential set as a write lands it: set itself where it is
 // within [MaxHeldCredentials], and otherwise set without the credentials that
-// LAPSED EARLIEST — revoked, or past their expiry — until it is. Refused as
-// cause only when the credentials still LIVE are past the cap on their own.
+// LAPSED EARLIEST — revoked, past their expiry, or ended by a counter
+// ([Credential.EndedBy]) at counters — until it is. Refused as cause only when
+// the credentials still LIVE are past the cap on their own.
 //
 // # Why a lapsed credential gives up its place rather than holding it
 //
@@ -380,7 +398,16 @@ const (
 // its expiry, whichever came first — with the set's own order breaking a tie,
 // so the credential dropped is the one the sweep would have collected first,
 // and the rest keep their account for their full week.
-func fitHeld(set []Credential, now time.Time, cause error) ([]Credential, error) {
+//
+// A CREDENTIAL A COUNTER ENDED IS LAPSED, and the earliest of all: it writes no
+// `revoked_at`, so nothing says when it stopped, and the sweep never collects
+// it before its own expiry — up to a year for a token. Counted as live, a
+// person signed out everywhere with sixty tokens was refused every mint, second
+// factor and recovery set over tokens that could never verify again, each
+// listed as revoked with no way to revoke it.
+func fitHeld(set []Credential, now time.Time, counters Counters,
+	cause error) ([]Credential, error) {
+
 	over := len(set) - MaxHeldCredentials
 	if over <= 0 {
 		return set, nil
@@ -391,14 +418,14 @@ func fitHeld(set []Credential, now time.Time, cause error) ([]Credential, error)
 	}
 	var lapsed []lapse
 	for i, c := range set {
-		at, gone := lapsedAt(c, now)
+		at, gone := lapsedAt(c, now, counters)
 		if gone {
 			lapsed = append(lapsed, lapse{index: i, at: at})
 		}
 	}
 	if len(lapsed) < over {
 		return nil, fmt.Errorf("%w: this would leave %d live credentials on one "+
-			"person and the cap is %d — a revoked or expired one makes room when "+
+			"person and the cap is %d — a revoked, expired or ended one makes room when "+
 			"a change needs it, so revoke a token nothing uses and ask again",
 			cause, len(set)-len(lapsed), MaxHeldCredentials)
 	}
@@ -417,9 +444,12 @@ func fitHeld(set []Credential, now time.Time, cause error) ([]Credential, error)
 }
 
 // lapsedAt is when c stopped verifying — its revocation or its expiry,
-// whichever came first — and false for a credential that still verifies at
-// now.
-func lapsedAt(c Credential, now time.Time) (time.Time, bool) {
+// whichever came first, and the zero instant for one a counter ended — and
+// false for a credential that still verifies at now and counters.
+func lapsedAt(c Credential, now time.Time, counters Counters) (time.Time, bool) {
+	if c.EndedBy(counters) {
+		return time.Time{}, true
+	}
 	expired := !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(now)
 	switch revoked := !c.RevokedAt.IsZero(); {
 	case revoked && expired:
