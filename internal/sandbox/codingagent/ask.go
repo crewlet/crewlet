@@ -11,10 +11,12 @@ import (
 // runs one shim command, crewlet-ask, which records the question and audience
 // to a file the runner reads on collect.
 //
-// The shim is SIGNAL-ONLY: it never posts anything itself. The engine routes
-// the question on its audited per-role surface, so identity attribution,
-// capability guards and delegation telemetry all stay on the engine rather
-// than being delegated to a script inside a box.
+// The shim is SIGNAL-ONLY: it never posts anything itself. The engine
+// announces the question, attributed to the seat whose run asked, and puts it
+// to the people its audience names on the engine's own surfaces (their
+// decisions on the dashboard, the sandbox-runs board) — so identity
+// attribution, capability guards and delegation telemetry all stay on the
+// engine rather than being delegated to a script inside a box.
 
 // AskShim is the crewlet-ask script, pointed at this box's output path.
 //
