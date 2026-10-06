@@ -31,9 +31,15 @@
 //     own sentence, which says every return that puts a message back spends a
 //     delivery. The twin spends one now and the flag is gone; what the case
 //     certifies on both backends is the contract's number.
-//   - It required a nak to replay from the head. JetStream returns redelivered
-//     messages behind never-delivered ones, so only the twin does this. Now
-//     HeadReplayOnNak.
+//   - It required a nak to replay from the head. JetStream returns a FAILED
+//     delivery behind never-delivered ones, so only the twin did this, and it
+//     became the HeadReplayOnNak capability — the FreeDeferral mistake again:
+//     a flag the twin declared and the shipped broker did not, so every
+//     engine and node test run on the twin certified a seat that retried a
+//     failure ahead of the conversation's newer mail. The twin returns a
+//     failure behind them now, the flag is gone, and
+//     a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head
+//     asserts the one order on both backends.
 //   - It required a FAILED delivery and a newer event of its conversation to
 //     reach one handler call. The contract orders a partition, never the
 //     calls a conversation is spread across, and a failure waits out its
@@ -333,28 +339,6 @@ type Capabilities struct {
 	// event reaches exactly one member and that the load is shared, which
 	// is the part every broker owes.
 	StrictRoundRobin bool
-
-	// HeadReplayOnNak declares that a negatively acknowledged event
-	// returns to the FRONT of the mailbox, ahead of events already queued
-	// behind it.
-	//
-	// A capability rather than a requirement, and deliberately so:
-	// measured, the twin returns a failed event to the head at once, while
-	// JetStream withholds it for its redelivery backoff and serves
-	// never-delivered mail meanwhile, so it comes back BEHIND them (a
-	// hand-back — a deferral, a hold — is returned at the head on both).
-	// Nothing above internal/queue may depend on either answer. Event
-	// timestamps order what ONE handler call carries, which
-	// within_a_partition_events_are_ordered_by_timestamp and
-	// a_redelivered_event_rejoins_its_conversation_in_timestamp_order
-	// certify for every backend; nothing orders two calls, so on JetStream
-	// a newer event of a failed one's own conversation is handled before
-	// it (see queue.OrderForDispatch). This flag only asks a backend that
-	// DOES replay from the head to keep doing it, so the property cannot
-	// rot unnoticed on the twin the fleet suite runs against — and a test
-	// that passes on that twin can lean on it without knowing, which is
-	// the reason to read this before trusting one.
-	HeadReplayOnNak bool
 
 	// RequiresStart declares that this backend's publish, subscription and
 	// attachment verbs refuse on a queue that has not been started or has
@@ -697,11 +681,15 @@ func (j *journal) awaitLabels(t *testing.T, what string, want ...string) {
 // awaitLabelsInAnyOrder waits for exactly these labels, in whatever sequence.
 //
 // For the cases whose subject is WHAT was delivered rather than in what
-// order — chiefly anything involving a redelivery, since [Caps.HeadReplayOnNak]
-// says the backends genuinely differ there and the engine no longer depends
-// on either answer. A case that asserted the sequence anyway would pass on
-// one backend, pass on the other whenever the timing happened to favour it,
-// and fail under load: a flake that reads as a broker bug.
+// order — chiefly a redelivery that races a fresh publish, where the order
+// rests on a backoff window the shipped broker measures in wall-clock time.
+// The order the contract DOES state (a failure behind the mail waiting when it
+// failed, a hand-back at the head) is certified where it belongs, by
+// a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head, which
+// holds the mail before it is published so nothing races. A case that
+// asserted a sequence the contract does not state would pass on one backend,
+// pass on the other whenever the timing happened to favour it, and fail
+// under load: a flake that reads as a broker bug.
 //
 // The expectation is still passed down, so a timeout can report a delivery
 // that CONTRADICTS rather than merely lags — a missing event and a surplus

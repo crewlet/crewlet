@@ -196,7 +196,11 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 	// The identities of this chunk's events, so a mid-batch quiesce can
 	// tell what a deferral pushed back to the FRONT from what was already
 	// queued behind it — and slot the undispatched partitions between the
-	// two.
+	// two. A partition that FAILED leaves this set as soon as it does: a
+	// failure goes to the BACK ([Broker.retryLaterLocked]), and on a mailbox
+	// that held nothing else it would otherwise read as part of the leading
+	// run a deferral made, so the undispatched partitions were spliced in
+	// behind a retry the broker serves after them.
 	inChunk := make(map[*events.Event]struct{}, len(chunk))
 	for _, ev := range chunk {
 		inChunk[ev] = struct{}{}
@@ -249,7 +253,7 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 		b.mu.Unlock()
 
 		evs := part.Items
-		b.invoke(ctx, sub, m, evs,
+		outcome := b.invoke(ctx, sub, m, evs,
 			func(hctx context.Context) queue.Result { return m.batchHandler(hctx, evs) },
 			// The same machine-parsable failure event a real backend
 			// emits for batch partitions: log consumers must not see
@@ -268,6 +272,11 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 				"event_count", len(evs),
 			},
 		)
+		if outcome == queue.OutcomeNak {
+			for _, ev := range evs {
+				delete(inChunk, ev)
+			}
+		}
 	}
 }
 
@@ -327,18 +336,32 @@ func (b *Broker) restoreLocked(
 // invoke runs one delivery and applies the handler's outcome.
 //
 // Ack drops the events — they were removed from the mailbox before the call.
-// Nak returns them to the FRONT with their redelivery counters bumped, and a
-// message past the budget moves to the dead-letter subject instead of being
-// destroyed.
+// The two returns put them back in DIFFERENT places, because that is what the
+// only broker this engine ships does and the contract now states it (see
+// queue.OutcomeNak and queue.OutcomeDefer):
 //
-// THE FRONT IS ONE OF THE TWO ANSWERS THE CONTRACT ALLOWS, not what a
-// conversation depends on — this comment used to say it was. The shipped
-// broker withholds a failure for its backoff and hands the conversation's
-// newer events over first, in calls of their own, so nothing above the queue
-// may rely on a failed event coming back ahead of them: event timestamps order
-// one handler call and nothing orders two (queue.OrderForDispatch). The twin
-// keeps the head because queuetest's HeadReplayOnNak asks a backend that does
-// it to keep doing it.
+//   - A NAK — a failure — goes BEHIND every event that was waiting when it
+//     failed. JetStream withholds a failed delivery for its redelivery backoff
+//     (NakWithDelay, a second doubling to thirty) and serves never-delivered
+//     mail meanwhile, so it comes back after them. This twin used to put it
+//     back at the HEAD, and declared that as a capability the shipped broker
+//     did not have: every engine and node test run here certified a seat that
+//     retried a failure before a newer message of the same conversation, which
+//     production never does — the order a parked coding run's answer route
+//     and the ordinary turn's retry were both written against.
+//   - A DEFER — a hand-back — goes back at the HEAD, which is where JetStream
+//     puts a plain Nak (it serves redeliveries before new mail): measured 100
+//     of 100, 60 of them under CPU pressure, in 76ad6f656.
+//
+// THE BACKOFF IS VIRTUAL, so dispatch stays inline and deterministic: no timer
+// holds a failure back. It is "elapsed" once the drain has served everything
+// that was queued when the failure happened — which is the order the broker
+// gives whenever its backoff outlasts the dispatch of what was waiting, the
+// case the engine has to be written for. What the twin does NOT reproduce is
+// mail PUBLISHED inside a backoff window landing ahead of the retry: here
+// anything published after the failure lands behind it. Nothing above the
+// queue may lean on either side of that — an event's timestamp is the only
+// order the contract gives across two handler calls (queue.OrderForDispatch).
 //
 // DEFER COSTS EXACTLY WHAT A NAK COSTS, and quiesces the attachment as well.
 // This twin used to return a deferred batch untouched, which modelled a broker
@@ -359,7 +382,7 @@ func (b *Broker) invoke(
 	call func(context.Context) queue.Result,
 	failureEvent string,
 	attrs []any,
-) {
+) queue.Outcome {
 	client := m.client
 
 	// In-flight is counted on the node that OWNS the handler, not on
@@ -404,9 +427,9 @@ func (b *Broker) invoke(
 		// dead-letter that ends it is the contract's too: a message whose
 		// deliveries went on handoffs is dead-lettered with a line rather
 		// than circling a mailbox no budget can ever retire it from.
-		dead = b.redeliverOrDeadLetterLocked(sub, evs, client.maxRedeliveries)
+		dead = b.handBackLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeNak:
-		dead = b.redeliverOrDeadLetterLocked(sub, evs, client.maxRedeliveries)
+		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeAck:
 		// Acked: the events left the mailbox before the call, so there
 		// is nothing to put back.
@@ -429,6 +452,7 @@ func (b *Broker) invoke(
 	case queue.OutcomeAck:
 	}
 	b.logDeadLetters(ctx, sub, dead)
+	return res.Outcome
 }
 
 // logDeadLetters reports what a charge retired, and is called with the broker
@@ -448,7 +472,7 @@ func (b *Broker) logDeadLetters(ctx context.Context, sub *subscription, dead []d
 // An event on its FIRST delivery has spent no redeliveries, so its headroom is
 // the whole budget; one that has been redelivered budget times has none, and
 // the next hand-back dead-letters it — which is exactly where
-// redeliverOrDeadLetterLocked draws the line, and the two must not be allowed
+// [Broker.chargeLocked] draws the line, and the two must not be allowed
 // to disagree about the boundary they share.
 //
 // PER EVENT AND NOTHING ELSE. This twin states what it can read off each
@@ -489,18 +513,35 @@ func runHandler(ctx context.Context, call func(context.Context) queue.Result) (r
 	return call(ctx)
 }
 
-// redeliverOrDeadLetterLocked charges a hand-back and returns the events to the
-// FRONT of the mailbox, handing back the ones that exhausted their budget for
-// the caller to log once it has released the lock.
+// handBackLocked charges a HAND-BACK — a deferral — and returns the events to
+// the FRONT of the mailbox, handing back the ones that exhausted their budget
+// for the caller to log once it has released the lock.
 //
-// The front is where an outcome the HANDLER gave puts them, because a
-// conversation depends on order and the handler saw these before anything
-// queued behind them. The blocked-drain path charges the same way and splices
-// elsewhere — see [Broker.restoreLocked] — which is why the charge itself is
-// [Broker.chargeLocked] and neither path owns it.
-func (b *Broker) redeliverOrDeadLetterLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
+// The front, because a hand-back is a healthy delivery this consumer may not
+// work right now, and the broker serves it before anything newer: see
+// [Broker.invoke]. The blocked-drain path charges the same way and splices
+// elsewhere — see [Broker.restoreLocked] — and a failure goes to the back
+// ([Broker.retryLaterLocked]), which is why the charge itself is
+// [Broker.chargeLocked] and no path owns it.
+func (b *Broker) handBackLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
 	keep, dead := b.chargeLocked(sub, evs, budget)
 	sub.mail = prepend(keep, sub.mail)
+	return dead
+}
+
+// retryLaterLocked charges a FAILURE and returns the events BEHIND everything
+// already waiting, which is where the shipped broker's redelivery backoff puts
+// them: see [Broker.invoke] for why, and for what the virtual backoff does and
+// does not reproduce.
+//
+// A failure that is the only thing in the mailbox therefore comes straight
+// back, exactly as it would on the broker once its backoff elapsed with
+// nothing else to serve — the virtual backoff has no wall clock, so a poison
+// message still reaches its dead-letter boundary inside one drain rather than
+// across minutes of timers.
+func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget int) []deadLetter {
+	keep, dead := b.chargeLocked(sub, evs, budget)
+	sub.mail = append(sub.mail, keep...)
 	return dead
 }
 

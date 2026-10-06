@@ -348,36 +348,91 @@ func (s *suite) runCore(t *testing.T) {
 		})
 	})
 
-	t.Run("nak_returns_the_event_to_the_front_of_the_mailbox", func(t *testing.T) {
+	// THE ORDER A RETURN TAKES, on every backend — and it is two orders, not
+	// one. A FAILURE comes back BEHIND the mail that was waiting when it
+	// failed: the shipped broker withholds it for its redelivery backoff and
+	// serves never-delivered messages meanwhile. A HAND-BACK — a deferral —
+	// comes back at the HEAD, because the broker serves a plain Nak's
+	// redelivery before new mail.
+	//
+	// It was a capability, HeadReplayOnNak, that only the twin declared, and
+	// that was the wrong repair for the reason FreeDeferral was: every engine
+	// and node test runs on the twin, so for as long as the twin replayed a
+	// failure from the head they certified a seat that retried a failed
+	// message before its conversation's newer one — an order production never
+	// gives. A parked coding run's answer route and the ordinary turn's retry
+	// were both written against it. One case, both backends, one answer.
+	//
+	// The mail is HELD while it is published, so both events are waiting
+	// before anything is fetched and nothing races the backoff.
+	t.Run("a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head", func(t *testing.T) {
 		t.Parallel()
-		if !s.caps.HeadReplayOnNak {
-			t.Skip("backend redelivers behind never-delivered events")
-		}
-		q := s.start(ctx, t)
-		seen := newJournal()
-		var failed bool
-		subscribe(ctx, t, q, "topic.head", "grp", func(_ context.Context, ev *events.Event) queue.Result {
-			seen.record(labelOf(ev))
-			if !failed {
-				failed = true
-				return queue.Nak(errors.New("once"))
+		quiescing := s.needQuiescing(t)
+
+		run := func(t *testing.T, topic string, fail func() queue.Result) *journal {
+			t.Helper()
+			q := s.start(ctx, t)
+			seen := newJournal()
+			var once sync.Once
+			subscribe(ctx, t, q, topic, "grp", func(_ context.Context, ev *events.Event) queue.Result {
+				seen.record(labelOf(ev))
+				res := queue.Ack()
+				if labelOf(ev) == "e1" {
+					once.Do(func() { res = fail() })
+				}
+				return res
+			})
+			if err := q.PauseTopic(ctx, topic, "grp", "test"); err != nil {
+				t.Fatalf("PauseTopic: %v", err)
 			}
-			return queue.Ack()
+			publish(ctx, t, q, topic, newEvent("e1"))
+			publish(ctx, t, q, topic, newEvent("e2"))
+			if err := q.ResumeTopic(ctx, topic, "grp", "test"); err != nil {
+				t.Fatalf("ResumeTopic: %v", err)
+			}
+			return seen
+		}
+
+		t.Run("a_nak_returns_behind_the_mail_that_was_waiting", func(t *testing.T) {
+			seen := run(t, "topic.failure_order", func() queue.Result {
+				return queue.Nak(errors.New("once"))
+			})
+			seen.awaitLabels(t, "e2 to be served before the failed e1 comes back",
+				"e1", "e2", "e1")
 		})
 
-		// Held while publishing, so both events are waiting when the
-		// first one fails and there is something for the redelivery to
-		// come back ahead of.
-		if err := q.PauseTopic(ctx, "topic.head", "grp", "test"); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
-		publish(ctx, t, q, "topic.head", newEvent("e1"))
-		publish(ctx, t, q, "topic.head", newEvent("e2"))
-		if err := q.ResumeTopic(ctx, "topic.head", "grp", "test"); err != nil {
-			t.Fatalf("ResumeTopic: %v", err)
-		}
-
-		seen.awaitLabels(t, "the redelivery to come back ahead of e2", "e1", "e1", "e2")
+		t.Run("a_deferral_returns_at_the_head", func(t *testing.T) {
+			q := s.start(ctx, t)
+			seen := newJournal()
+			var once sync.Once
+			const topic = "topic.handback_order"
+			subscribe(ctx, t, q, topic, "grp", func(_ context.Context, ev *events.Event) queue.Result {
+				seen.record(labelOf(ev))
+				res := queue.Ack()
+				if labelOf(ev) == "e1" {
+					once.Do(func() { res = queue.Defer("hand it back") })
+				}
+				return res
+			})
+			if err := q.PauseTopic(ctx, topic, "grp", "test"); err != nil {
+				t.Fatalf("PauseTopic: %v", err)
+			}
+			publish(ctx, t, q, topic, newEvent("e1"))
+			publish(ctx, t, q, topic, newEvent("e2"))
+			if err := q.ResumeTopic(ctx, topic, "grp", "test"); err != nil {
+				t.Fatalf("ResumeTopic: %v", err)
+			}
+			seen.awaitLabels(t, "the deferral", "e1")
+			awaitState(t, "the deferral to quiesce the attachment", func() bool {
+				return quiescing(q, topic, "grp")
+			})
+			seen.staysAt(t, 1, "a quiesced attachment")
+			if resumed, err := q.Unquiesce(ctx, topic, "grp"); err != nil || !resumed {
+				t.Fatalf("Unquiesce = (%v, %v), want (true, nil)", resumed, err)
+			}
+			seen.awaitLabels(t, "the handed-back e1 to come back ahead of e2",
+				"e1", "e1", "e2")
+		})
 	})
 
 	t.Run("redelivery_rotates_across_members", func(t *testing.T) {

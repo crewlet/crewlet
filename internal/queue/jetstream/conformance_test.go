@@ -82,6 +82,12 @@ func testTimings(cfg Config) Config {
 	if cfg.FetchWait == 0 {
 		cfg.FetchWait = 25 * time.Millisecond
 	}
+	// 25 ms, and it is what queuetest's return-order case stands on: a
+	// failure is returned with NakWithDelay and the consumer serves the
+	// never-delivered mail while it waits, so it comes back BEHIND it, while
+	// a hand-back is a plain Nak whose redelivery the broker serves before
+	// new mail. Measured 100 of 100 each way, 60 of them under CPU pressure,
+	// at this value (76ad6f656).
 	if cfg.NakDelay == 0 {
 		cfg.NakDelay = 25 * time.Millisecond
 	}
@@ -233,17 +239,6 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 		// StrictRoundRobin — JetStream serves whichever member asks
 		// first. Each event still reaches exactly one member, which is
 		// the part every broker owes.
-		//
-		// HeadReplayOnNak — measured false, and the mechanism is the
-		// BACKOFF rather than the broker's queueing: a failure is returned
-		// with NakWithDelay, and the consumer serves never-delivered mail
-		// while it waits, so it comes back behind them. A hand-back — a
-		// deferral, a hold — is a plain Nak, and the broker serves
-		// redeliveries before new mail, so that comes back at the head:
-		// 100 runs of 100 each way, 60 of them under CPU pressure, with
-		// this harness's 25ms backoff. This is why order inside a handler
-		// call comes from event timestamps rather than from the broker,
-		// and why nothing orders two calls (see queue.OrderForDispatch).
 		//
 		// History — this backend has no ledger of everything ever
 		// published; interest retention deliberately drops what no
