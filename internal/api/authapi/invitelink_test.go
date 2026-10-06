@@ -260,25 +260,30 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 //
 // A person bound to a seat writes as the seat, so the invitation records its
 // author by the seat's handle, and the page said "founder invited you" to
-// somebody who knows that person as "Jane Founder". The CONTROL is an author
-// the chart does not hold, named as the record holds it. Mutation: answer the
-// recorded author and the seat's name is never shown.
+// somebody who knows that person as "Jane Founder". A machine — a Tier A
+// token, a service account — is named by nobody: "token:founder invited you"
+// told the company's first person nothing they could recognise. The CONTROL
+// is an author the chart does not hold, named as the record holds it.
+// Mutation: answer the recorded author and the seat's name is never shown and
+// the machine is named.
 func TestAnInvitationNamesWhoSentItAsTheChartNamesThem(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name  string
-		seats companySeats
-		want  string
+		name   string
+		seats  companySeats
+		author string
+		want   string
 	}{
 		{"a seat the chart holds", companySeats{"founder": {Handle: "founder",
-			Kind: session.SeatKindHuman, Name: "Jane Founder"}}, "Jane Founder"},
-		{"a seat it does not (the control)", companySeats{}, "founder"},
+			Kind: session.SeatKindHuman, Name: "Jane Founder"}}, "", "Jane Founder"},
+		{"a Tier A token", companySeats{}, "token:founder", ""},
+		{"a seat it does not (the control)", companySeats{}, "", "founder"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			mux := http.NewServeMux()
 			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
-				o.Directory = sealedInvitation{}
+				o.Directory = authoredInvitation{author: tc.author}
 				o.Seats = tc.seats
 				o.Sealer = stubSealer{address: "dana@example.com"}
 			}).Routes(mux)
@@ -294,4 +299,21 @@ func TestAnInvitationNamesWhoSentItAsTheChartNamesThem(t *testing.T) {
 			}
 		})
 	}
+}
+
+// authoredInvitation is [sealedInvitation] issued by author, or by its own
+// seat author where author is empty.
+type authoredInvitation struct {
+	sealedInvitation
+	author string
+}
+
+func (a authoredInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := a.sealedInvitation.InvitationByID(ctx, id)
+	if a.author != "" {
+		row.InvitedBy = a.author
+	}
+	return row, err
 }

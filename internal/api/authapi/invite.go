@@ -147,9 +147,18 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 // them. The record names its author as every record does, and a person bound
 // to a seat writes AS the seat, by its handle — so the page read "jane-founder
 // invited you" — while the chart names the seat "Jane Founder". A seat is
-// named as the company this node runs names it; anybody else, or a seat this
-// node cannot place, by the name the record holds.
+// named as the company this node runs names it; a person by their login, or a
+// seat this node cannot place, by the name the record holds.
+//
+// AND A MACHINE BY NOBODY: an invitation a Tier A token or a service account
+// issued read "token:founder invited jane.doe@example.com" to somebody who has
+// never seen the deployment's configuration — the company's first person,
+// above all, invited under the token every deployment starts with. Named by
+// nobody, the page says whom the invitation is for and not who sent it.
 func (s *Service) inviterOf(ctx context.Context, author string) string {
+	if iam.ValidMachineHandle(author) {
+		return ""
+	}
 	if s.seats == nil || !iam.ValidSeatHandle(author) {
 		return author
 	}
