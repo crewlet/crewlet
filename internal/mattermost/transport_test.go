@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -129,6 +130,7 @@ func transport(t *testing.T, inst *instance, mutate func(*mattermost.TransportOp
 			Seats: []mattermost.SeatConfig{{Handle: "swe", Token: "tok-swe"}},
 		},
 		Publisher: &recorder{},
+		Claims:    coordmemory.NewFleet(),
 		Backoff:   fastBackoff,
 		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
 			return newSocket(), nil

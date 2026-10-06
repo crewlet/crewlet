@@ -57,8 +57,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	})
 
 	opts := api.Options{
-		State:    state,
-		EventLog: db.Events(),
+		State: state,
 		Sources: queries.Sources{State: state, Events: eventfan.Solo("node-a", db.Events()),
 			Usage: db.Replicated()},
 		Now: func() time.Time { return clock },

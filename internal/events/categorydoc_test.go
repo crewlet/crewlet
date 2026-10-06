@@ -137,16 +137,22 @@ func looksLikeEventType(s string) bool {
 	}, s)
 }
 
-// A category name printed in the docs has to be a value the engine can
-// actually file a row under, `webhook` included — which no event TYPE carries,
-// because the receiver writes that row itself.
-func TestWebhookIsInTheVocabulary(t *testing.T) {
+// EVERY DELIVERY IS ONE ROW, FILED UNDER `webhook`, from ONE type. The
+// integration counts select on the category, so the record of a delivery has
+// to land there — and only the record: the wake beside it categorised too would
+// store every delivery twice, and a second type filed under `webhook` would be
+// a second idea of what a delivery is, which is the shape the Mattermost socket
+// had when it wrote no row at all and its count was a null.
+func TestEveryDeliveryIsOneWebhookRow(t *testing.T) {
 	t.Parallel()
 	if !slices.Contains(events.CategoryNames(), events.WebhookCategory) {
-		t.Fatalf("CategoryNames() = %v, want %q among them: the receiver files "+
-			"every delivery under it, so a vocabulary without it reads as "+
-			"complete and is wrong",
+		t.Fatalf("CategoryNames() = %v, want %q among them: every delivery is "+
+			"filed under it, so a vocabulary without it reads as complete and is wrong",
 			events.CategoryNames(), events.WebhookCategory)
+	}
+	if got := events.TypesByCategory()[events.WebhookCategory]; !slices.Equal(got, []string{"inbound_delivery"}) {
+		t.Errorf("types filed under %q = %v, want exactly [inbound_delivery]: one "+
+			"record shape for every inbound edge", events.WebhookCategory, got)
 	}
 	if _, placed := events.Category("raw_webhook"); placed {
 		t.Error("raw_webhook is categorised; it must stay excluded, or every " +

@@ -60,7 +60,7 @@ func catalogue() []events.Payload {
 		// knowledge.go
 		KnowledgeRead{},
 		// webhook.go
-		RawWebhook{},
+		RawWebhook{}, InboundDelivery{},
 		// custody.go
 		CustodyBatch{},
 		ReflectionDue{},
@@ -114,6 +114,7 @@ var wireTypes = []string{
 	"prompt.size",
 	"provider_fallback",
 	"raw_webhook",
+	"inbound_delivery",
 	"reflection_completed",
 	"sandbox_answer_given",
 	"sandbox_clarification_requested",
@@ -353,6 +354,7 @@ var wireTags = map[string][]string{
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
+	"inbound_delivery":                {"body", "channel", "delivery_key", "label", "recipient", "replayed", "route", "summary"},
 }
 
 // TestPayloadTagsMatchTheWireContract pins every payload's keys, both ways: a
@@ -811,6 +813,14 @@ func (f *filler) fill(v reflect.Value, name string) {
 			}
 		}
 	case reflect.Slice:
+		if v.Type() == reflect.TypeOf(json.RawMessage(nil)) {
+			// RAW JSON IS JSON, so it is filled as a document rather than
+			// as bytes: a delivery's body travels verbatim, and the round
+			// trip proves it arrives as the same document. Compact, since
+			// that is the form an encoder writes it back in.
+			v.SetBytes([]byte(`{"` + name + `":` + strconv.Itoa(f.next()) + `}`))
+			return
+		}
 		slice := reflect.MakeSlice(v.Type(), 2, 2)
 		for i := range 2 {
 			f.fill(slice.Index(i), name)

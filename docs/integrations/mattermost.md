@@ -52,7 +52,8 @@ apart from an administrator switching an agent off — see below, and
 for why the same rule holds at Datadog and GitLab.
 
 This is the one integration that needs **no public address at all**. The
-engine dials out to your server and holds one websocket per seat, so nothing
+engine dials out to your server and holds one websocket per seat — on every
+node, see [Running on a fleet](#running-on-a-fleet) — so nothing
 has to reach the engine and there is no webhook secret, no shared token and no
 inbound route to expose.
 
@@ -590,7 +591,8 @@ in order within each channel — across channels the order is the channel list's
 which does not matter because each replayed post becomes its own agent turn. Every channel is read, not only ones with prior traffic — a message
 in a channel the bot was invited to *during* the outage would otherwise be
 invisible forever. Duplicates across the boundary are caught by a per-seat
-de-duplication ring.
+de-duplication ring, and by the fleet-wide claim described in
+[Running on a fleet](#running-on-a-fleet).
 
 The replay is what the live socket would have delivered, and nothing more.
 Mattermost's `since=` is *update*-based, and an update is not new content: a
@@ -629,6 +631,55 @@ disconnect and a server hanging up on sight look identical otherwise.
 > authenticates *after* the handshake, so adopting it means moving every
 > seat to an `Authorization` header on the upgrade — a change to how every
 > seat connects, and to how a revoked token surfaces.
+
+### Running on a fleet
+
+**Every node opens every seat's socket**, not only the seats it holds. That is
+deliberate redundancy: a node that restarts, drains or loses a seat's lease
+leaves the seat heard by every other node meanwhile, so there is no handover
+to get wrong and no gap for a backfill to cover. Each post therefore arrives
+once per node, and the fleet decides which one delivers it:
+
+1. A node reading a post **claims** it fleet-wide in the coordination store,
+   under `mattermost|<handle>|<post id>` — per seat, because one post is a
+   delivery to every bot in its channel.
+2. The node that wins publishes it onto `crewlet.notifications.inbound` and
+   records the delivery (a `socket:posted` row, below). Every other node drops
+   it.
+3. A claim store that cannot answer **fails open**: the post is delivered,
+   because a message suppressed by a store blink is a message nobody answers.
+   A post two nodes both deliver is caught by the second layer — its wake's id
+   is derived from the seat and the post, so the inbox and the completion
+   ledger recognise the pair and the seat takes one turn.
+4. A publish that fails gives the post back: the claim is released and the
+   seat's cursor is held before the post, so the seat reconnects and replays
+   it — on this node, or on whichever peer gets to it first. A post is never
+   spent before it is queued.
+
+**The claim lasts 30 minutes** — twice the 15-minute replay window. A peer
+whose socket dropped re-reads up to 15 minutes behind the moment it
+reconnects, so a post can come round again that long after it was written,
+and the reconnect itself may have waited out the 5-minute backoff ceiling;
+the margin covers that and the clock difference between the server and the
+nodes. A claim that lapsed first would let the peer deliver the post again.
+The webhook routes claim for 5 minutes, and the coordination store holds each
+claim to its own deadline ([Retention is a bucket's age](../concepts/coordination.md#retention-is-a-buckets-age)).
+
+**What it costs is N sockets and N backfills per bot on an N-node fleet.**
+Every node authenticates every bot, holds its socket open and pings it every
+30 seconds, and every node that reconnects walks the bot's channels — so a
+Mattermost restart is N times the reconnect traffic a single node would send,
+spread by the backoff's jitter. For a company of tens of bots on a handful of
+nodes that is a small number of idle connections; it is the one cost of a
+seat never going deaf while placement moves it.
+
+**Each delivery is counted once.** The node that wins a post's claim publishes
+an `inbound_delivery` record beside the wake, so Settings › Integrations
+counts Mattermost's deliveries like any other surface's — one post presented
+to one seat, whichever node read it — and its row lists them as
+`socket:posted`, with the post id as the provider's id. The record is
+published rather than written, so a node without `data` reaches a data node's
+event log through custody like everything else it publishes.
 
 ### Outbound
 

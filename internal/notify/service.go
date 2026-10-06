@@ -65,14 +65,16 @@ type Routed struct {
 
 	// WakeID makes this wake RECOGNISABLE as a duplicate of itself.
 	//
-	// Nil takes a fresh random id, which is right for every vendor edge:
-	// a webhook redelivery is collapsed by the inbound-delivery claim
-	// before a parser ever sees it, and there is nothing deterministic in
-	// a vendor's payload to derive a stable id from anyway.
+	// Nil takes a fresh random id, which is right for a webhook edge: a
+	// redelivery is collapsed by the inbound-delivery claim before a parser
+	// ever sees it, and there is nothing deterministic in most vendors'
+	// payloads to derive a stable id from anyway.
 	//
-	// The ENGINE'S OWN producers set it, because their first dedupe layer
-	// FAILS OPEN by design — a coordination store that cannot be reached
-	// must not silently stop notifications — and a redelivery that slips
+	// The ENGINE'S OWN producers set it, and so does the Mattermost socket
+	// (every node reads every seat's socket and claims each post), because
+	// their first dedupe layer FAILS OPEN by design — a coordination store
+	// that cannot be reached must not silently stop notifications — and a
+	// redelivery that slips
 	// through it needs something else to catch it. A derived id lets the
 	// inbox's same-id dedupe and the fleet completion ledger recognise
 	// the pair; with a random one neither layer can see it, and the seat

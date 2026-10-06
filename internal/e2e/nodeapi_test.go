@@ -178,7 +178,6 @@ func wireAPI(
 		Bootstrap:    boot,
 		Runtime:      runtime,
 		QueueBackend: backends.Queue.Backend(),
-		EventLog:     backends.Store.Events(),
 		Sources:      sources,
 		Operator:     operators,
 		Config:       configSurface,

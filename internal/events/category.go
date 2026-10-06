@@ -99,6 +99,15 @@ var categories = map[string]string{
 	"notifications_coalesced": "notification",
 	"turn_trigger_skipped":    "notification",
 
+	// Webhook: one inbound delivery presented to one seat, from either edge
+	// — a webhook route or a chat socket. Its own category rather than
+	// `notification`, because it records what ARRIVED, before anything was
+	// decided about it, and the integration counts read exactly this set.
+	// The row is filed under the delivery's own label rather than this
+	// type (internal/observe), so this is the one type whose rows never
+	// carry its name.
+	"inbound_delivery": WebhookCategory,
+
 	// System: the engine talking about itself. A turn's start is stored
 	// beside its completion, because the pair is what bounds a turn in
 	// history: a turn that began and never finished is a start with no
@@ -201,11 +210,12 @@ var excluded = map[string]string{
 		"for the batch would describe the transport and repeat every event " +
 		"in it — and on the node that published it, it would be handed to " +
 		"custody in a batch of its own",
-	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
-		"receiver under its own id with the raw provider bytes as its payload. " +
-		"This event is the wake it publishes onto a seat's inbox, so " +
-		"categorising it would write a second row per delivery saying the same " +
-		"thing under a different id",
+	"raw_webhook": "the delivery is ALREADY a row: both inbound edges — the " +
+		"webhook receiver and the Mattermost socket — publish inbound_delivery " +
+		"beside it, filed under the provider's own label with the provider's " +
+		"bytes as its payload. This event is the wake an edge publishes for the " +
+		"transports to route, so categorising it would write a second row per " +
+		"delivery saying the same thing under a different id",
 }
 
 // liveOnly is the subset of [excluded] that still drives the live projection.
@@ -213,8 +223,8 @@ var excluded = map[string]string{
 // A subset rather than the same set: agent_turn_progress, the two seat
 // lifecycle events and the budget snapshot move a live row without joining the
 // activity feed, while raw_webhook reaches the projector not at all, because it
-// is published onto a seat's inbox rather than onto crewlet.events.*, and the
-// receiver ingests its own envelope for it.
+// is published onto the inbound notification topic rather than onto
+// crewlet.events.* — the feed hears a delivery through inbound_delivery.
 var liveOnly = map[string]bool{
 	"agent_turn_progress": true,
 	"agent_spawned":       true,
@@ -239,23 +249,25 @@ func LiveOnly(eventType string) bool { return liveOnly[eventType] }
 // nobody has placed it.
 func Excluded(eventType string) string { return excluded[eventType] }
 
-// WebhookCategory is the one category no event TYPE carries.
+// WebhookCategory is the category every inbound DELIVERY row is filed under,
+// and the one inbound_delivery alone carries.
 //
-// The webhook receiver writes its row directly, under the provider's exact
-// bytes and its own delivery id, so nothing in the map above ever produces it —
-// but it is a real value of the `category` column, a real option in the
-// dashboard's filter, and a vocabulary that omitted it would read as complete
-// and be wrong. See internal/api/webhooks.
+// Its rows are the one family whose type column is not the event's type: an
+// inbound_delivery is filed under the delivery's own label (`webhook:push`,
+// `forge:avi:jira:created:issue`, `socket:posted`) with the provider's bytes as its
+// payload — see internal/observe — because that is what an operator matches
+// against their provider's console. Named rather than spelled in the map, since
+// the integration counts (internal/api/queries) and the dashboard's delivery
+// panels select on this value.
 const WebhookCategory = "webhook"
 
-// CategoryNames is every value the `category` column can hold, sorted, with
-// [WebhookCategory] included.
+// CategoryNames is every value the `category` column can hold, sorted.
 //
 // Exported so a docs generator and the guard test read the same list the
 // engine files rows under, rather than a copy somebody has to remember to
 // update.
 func CategoryNames() []string {
-	seen := map[string]bool{WebhookCategory: true}
+	seen := map[string]bool{}
 	for _, category := range categories {
 		seen[category] = true
 	}

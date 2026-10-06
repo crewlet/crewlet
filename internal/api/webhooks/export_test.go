@@ -1,5 +1,7 @@
 package webhooks
 
+import "github.com/crewlet/crewlet/internal/events/types"
+
 // BodyKeyForTest exposes the payload-derived delivery key.
 //
 // The empty-body case has no route that can reach it — every handler refuses
@@ -29,14 +31,14 @@ func GitHubSecretForTest(s Secrets, handle string) string { return githubSecret(
 // accept the same payload.
 func DatadogSummaryForTest(body map[string]any) string { return datadogSummary(body) }
 
-// DeliveryTagsForTest exposes the filterable dimensions one delivery's stored
-// row carries.
+// DeliveryRecordForTest exposes the record one accepted delivery publishes.
 //
 // Asserted directly because the thing it decides is invisible from a route:
 // what a listing can say about a delivery WITHOUT reading its payload. A
 // deliveries screen pages the log, and the payload is deliberately not in a
 // listing — so a dimension missing here is one an operator can only get by
 // fetching a payload per row, which is the pattern the tags exist to retire.
-func DeliveryTagsForTest(handle, key string) map[string]string {
-	return deliveryTags(delivery{handle: handle, key: key})
+func DeliveryRecordForTest(route, label, handle, key string, raw []byte) types.InboundDelivery {
+	return deliveryRecord(route,
+		delivery{label: label, handle: handle, key: key, raw: raw})
 }

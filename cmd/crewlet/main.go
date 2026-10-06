@@ -1605,9 +1605,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// comes off an HTTP request's own credential.
 		Operator:     operators,
 		QueueBackend: e.Backends().Queue.Backend(),
-		// THIS NODE'S OWN event store, which the webhook edge writes the
-		// deliveries it accepts into.
-		EventLog: e.Backends().Store.Events(),
 		// A question the read surface has no source for comes back
 		// unknown rather than empty, which is the difference between
 		// "this node has no event log" and "the company has done

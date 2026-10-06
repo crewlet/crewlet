@@ -387,11 +387,14 @@ relay arrive as verified HTTP on `/webhooks/*` and take every step above — fiv
 of them verified by an HMAC over the body, and Datadog by a constant-time
 comparison of a shared token, because its provider attaches only fixed-value
 headers and so has nothing varying with the payload to sign.
-Mattermost does not: it holds **one websocket per seat**, outbound from this
-node, so it needs no public URL and no signing secret — and it joins the picture
-only at the republish onto `crewlet.notifications.inbound`, with its own
-per-socket dedupe instead of the fleet claim. Everything from that subject
-onward is identical for both.
+Mattermost does not: every node holds **one websocket per seat**, outbound,
+so it needs no public URL and no signing secret — and it joins the picture only
+at the republish onto `crewlet.notifications.inbound`, after the same kind of
+fleet-wide claim the webhook edge takes, because every node reads every seat's
+socket and only one may deliver each post
+([Running on a fleet](../integrations/mattermost.md#running-on-a-fleet)).
+Both edges record each delivery as an `inbound_delivery` event. Everything
+from that subject onward is identical for both.
 
 A schedule firing, an `a2a_ask` from a colleague and a sandbox run completing
 enter further down still: they publish straight to

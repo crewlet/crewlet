@@ -22,6 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -51,25 +54,42 @@ import (
 // to a second, which is exactly the quantity the window cases measure.
 var pinned = time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 
-// recorder is a queue.Publisher that keeps what it was given, and can be made
-// to fail.
+// recorder is a queue.Publisher that keeps the WAKES it was given, and can be
+// made to fail.
+//
+// A delivery's RECORD it hands to `node` instead — what a real node does with
+// a published event: its publish listener files the row, and the projection
+// hears the envelope. So a case reads rows and live envelopes exactly as a
+// node would produce them, and the record is never mistaken for a wake.
 type recorder struct {
 	mu   sync.Mutex
 	sent []*events.Event
 	err  error
+	node func(context.Context, *events.Event)
 }
 
-func (r *recorder) Publish(_ context.Context, topic string, ev *events.Event) error {
+func (r *recorder) Publish(ctx context.Context, topic string, ev *events.Event) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.err != nil {
+		r.mu.Unlock()
 		return r.err
 	}
-	if topic != "crewlet.notifications.inbound" {
+	switch topic {
+	case topics.NotificationsInbound:
+		r.sent = append(r.sent, ev)
+		r.mu.Unlock()
+		return nil
+	case topics.Event(types.InboundDelivery{}.EventType()):
+		node := r.node
+		r.mu.Unlock()
+		if node != nil {
+			node(ctx, ev)
+		}
+		return nil
+	default:
+		r.mu.Unlock()
 		return errors.New("published onto " + topic + ", which nothing consumes")
 	}
-	r.sent = append(r.sent, ev)
-	return nil
 }
 
 func (r *recorder) count() int {
@@ -93,7 +113,7 @@ func (r *recorder) fail(err error) {
 	r.err = err
 }
 
-// sink is an Emitter that keeps every envelope.
+// sink is a live projection that keeps every envelope.
 type sink struct {
 	mu   sync.Mutex
 	seen []livestate.Envelope
@@ -153,12 +173,20 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 		secrets:    secrets,
 		configured: &configured,
 	}
+	// THE NODE: its publish listener writes the row into its own store, and
+	// its projection hears the envelope — the two consumers of a published
+	// record, wired as a real node wires them.
+	writer := observe.NewWriter(e.events).Listen()
+	e.published.node = func(ctx context.Context, ev *events.Event) {
+		writer(ctx, topics.Event(ev.Type), ev)
+		if env, ok := observe.Envelope(ev); ok {
+			e.stream.Ingest(env)
+		}
+	}
 	options := webhooks.Options{
 		Secrets:    func() webhooks.Secrets { return *secrets },
 		Publisher:  e.published,
-		Events:     e.events,
 		Claims:     e.claims,
-		Stream:     e.stream,
 		Configured: func() bool { return configured },
 		// A flow that completes nothing. The landing cases that are about
 		// a creation hand in their own.

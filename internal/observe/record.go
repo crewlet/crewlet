@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -79,6 +80,10 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 		// now keeps it, one write late rather than lost.
 		at = time.Now().UTC()
 	}
+	filed, payload := ev.Type, raw
+	if d, ok := delivery(ev); ok {
+		filed, payload = d.filed, d.bytes
+	}
 	return store.EventRecord{
 		// SET HERE, from the bytes body already produced. The store
 		// derives it when a caller does not, and this is the one
@@ -87,7 +92,7 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 		// payload on the publishing goroutine of every LLM call.
 		Spend:        store.SpendFor(ev.Type, raw),
 		ID:           ev.ID.String(),
-		Type:         ev.Type,
+		Type:         filed,
 		Source:       ev.Source,
 		Time:         at,
 		Category:     category,
@@ -97,7 +102,7 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
 		Tags:         store.ExtractTags(raw),
-		Payload:      raw,
+		Payload:      payload,
 	}, true
 }
 
@@ -122,9 +127,15 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 	}
 	raw := encode(ev)
 	tags := store.ExtractTags(raw)
+	filed, topic, payload := ev.Type, topics.Event(ev.Type), payloadOf(raw)
+	if d, ok := delivery(ev); ok {
+		// The SAME row [Record] files and [FeedRow] reads back, so a
+		// delivery seen live and the one a reload seeds read alike.
+		filed, topic, payload = d.filed, livestate.WebhookTopic(ev.Source), payloadOf(d.bytes)
+	}
 	return livestate.Envelope{
 		ID:   ev.ID.String(),
-		Type: ev.Type,
+		Type: filed,
 		// RFC3339Nano because that is what the projection's own stamp
 		// parser reads first, and what every other timestamp on this wire
 		// serializes to. A different spelling still orders — the parser
@@ -138,8 +149,8 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		TraceID:      ev.TraceID,
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
-		Topic:        topics.Event(ev.Type),
-		Payload:      payloadOf(raw),
+		Topic:        topic,
+		Payload:      payload,
 		// THE STORE'S RULE, not a second reading of the payload: the row a
 		// restarted process seeds from the store carries the column this
 		// fills, and the two halves of one feed must name one seat alike —
@@ -147,6 +158,43 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		AgentID:   tags["agent_id"],
 		ChannelID: tags["channel_id"],
 	}, true
+}
+
+// deliveryRow is what an inbound delivery is filed as.
+type deliveryRow struct {
+	filed string
+	bytes []byte
+}
+
+// delivery reports how an [types.InboundDelivery] is filed: under the
+// delivery's own LABEL rather than the event's type, with the provider's own
+// BYTES as its payload.
+//
+// THE ONE EVENT FILED UNDER ANOTHER NAME, and it is the reason the type exists
+// rather than an exception to it: a delivery row has always been the
+// provider's event name (what an operator matches against their provider's
+// console, and what the dashboard's delivery panels show) over the bytes the
+// provider sent (what opening the row shows). Both inbound edges publish it so
+// that every delivery is filed by this one rule — written here, where both the
+// row and the live envelope are derived, so the two cannot disagree. The tags
+// still come from the whole event: the recipient, the provider's id and the
+// route are fields of the record, not of what the provider sent.
+//
+// A record with no label or no body keeps the event's own: a row filed under
+// nothing would be unreadable, and an empty payload says less than the record.
+func delivery(ev *events.Event) (deliveryRow, bool) {
+	d, ok := events.DataAs[*types.InboundDelivery](ev)
+	if !ok || d == nil {
+		return deliveryRow{}, false
+	}
+	out := deliveryRow{filed: ev.Type, bytes: encode(ev)}
+	if d.Label != "" {
+		out.filed = d.Label
+	}
+	if len(d.Body) > 0 {
+		out.bytes = d.Body
+	}
+	return out, true
 }
 
 // payloadOf is the projection's half: the event as one flat JSON object — the

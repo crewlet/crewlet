@@ -596,6 +596,13 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 		return nil, fmt.Errorf("engine: mattermost: url resolved empty (%q)", cfg.URL)
 	}
 
+	// EVERY SEAT, ON EVERY NODE — not the seats this node holds. A node that
+	// restarts, drains or loses a lease leaves its seats heard by every other
+	// node meanwhile, so a seat's socket has no handover and no gap for a
+	// backfill to cover. What that costs is N sockets and N backfills per bot
+	// on an N-node fleet, and what makes it correct is the fleet-wide claim
+	// each post takes before it is published (Claims, below): one node
+	// delivers it, and every other node drops it.
 	seats := mattermost.SeatsFrom(c.Org, e.resolver().LookupOK)
 	if len(seats) == 0 {
 		// Enabled with no provisioned seats is a company mid-setup, not
@@ -610,8 +617,12 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 			Seats:  seats,
 		},
 		Publisher: e.backends.Queue,
-		Follows:   e.followStore(),
-		Registry:  e.Registry,
+		// THE FLEET'S, as the change feed's and the webhook edge's are:
+		// a claim only this process could see would leave a post woken
+		// once per node.
+		Claims:   e.backends.Fleet,
+		Follows:  e.followStore(),
+		Registry: e.Registry,
 	})
 	if err != nil {
 		return nil, err

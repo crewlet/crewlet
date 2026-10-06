@@ -109,6 +109,16 @@ var tagKeys = map[string]string{
 	"target":    "target",
 	"recipient": "recipient",
 	"closed_by": "closed_by",
+	// An INBOUND DELIVERY's two identities beside its recipient: the
+	// provider's own id for it (what an operator has in front of them in
+	// the provider's console — a delivery header, a Mattermost post id),
+	// and the ROUTE that authenticated it, which is not always the
+	// integration it belongs to: a Forge-relayed Jira event is source
+	// `jira`, route `forge`. Tags because a deliveries listing never
+	// selects the payload, and the integration counts read the route to
+	// say what arrived through the relay.
+	"delivery_key": "delivery_key",
+	"route":        "route",
 	// Which THIRD-PARTY APP a notification event concerns. A tag rather than a
 	// payload read for the same reason as `failed` below: a listing
 	// deliberately never selects the payload column, so the Integrations

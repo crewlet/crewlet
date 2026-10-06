@@ -1,12 +1,17 @@
 package types
 
-import "github.com/crewlet/crewlet/internal/events"
+import (
+	"encoding/json"
+
+	"github.com/crewlet/crewlet/internal/events"
+)
 
 // The inbound edge's envelope: one provider delivery, verified at the API and
-// republished for the transports to route.
+// republished for the transports to route — and the record that it arrived.
 
 func init() {
 	events.Register[RawWebhook]()
+	events.Register[InboundDelivery]()
 }
 
 // RawWebhook is one authenticated provider delivery, on its way from the API's
@@ -80,3 +85,84 @@ func (e RawWebhook) SummaryFor(actor string) string {
 	}
 	return "received a " + actor + " webhook"
 }
+
+// InboundDelivery is the RECORD that one inbound delivery reached this
+// company: the row Settings › Integrations counts and lists as a surface's
+// deliveries. [RawWebhook] is the wake; this is its audit row, and they are
+// separate events because the wake is not stored (internal/events says why)
+// while every delivery is.
+//
+// # One path for every surface
+//
+// Both inbound edges publish it — the webhook receiver for a delivery it
+// verified and queued, and the Mattermost socket fleet for a post it claimed
+// and queued — and the store's publish listener files it, inline on the
+// publishing node or through custody on a node without `data`. The socket runs
+// on every node, stateless ones included, so a row written straight into a
+// node's own store would vanish with a stateless node's scratch database;
+// publishing is what reaches a data node from anywhere. And with one producer
+// there is one rule for what a delivery row looks like rather than one per
+// edge, and every node's live projection hears a delivery rather than only the
+// node that took it.
+//
+// # Filed under its label, with the provider's bytes
+//
+// The row a delivery becomes is filed under [InboundDelivery.Label] as its
+// type and carries [InboundDelivery.Body] as its payload (internal/observe),
+// because those are what a delivery row has always been: the provider's own
+// event name an operator matches against their console, and the bytes the
+// provider sent. The envelope's type names the PRODUCER's shape; the row's
+// names the delivery.
+//
+// # Counted once
+//
+// A delivery is ONE PRESENTATION TO ONE SEAT, counted once across the fleet: a
+// Slack or GitHub app is per seat, so a message two agents' apps both receive
+// is two deliveries, and a Mattermost post two bots' sockets both read is two
+// too — while every node reading the same bot's socket is still one, because
+// the fleet claims the post before it is published or recorded.
+type InboundDelivery struct {
+	// Label is what the delivery is filed under: `webhook:<event>` from a
+	// webhook route, `forge:<event>` from the Forge relay and
+	// `socket:posted` from a Mattermost socket.
+	Label string `json:"label"`
+
+	// Route is the INGRESS that authenticated the delivery, which is not
+	// always the integration it belongs to (the envelope's source): the
+	// Forge relay hands Jira and Confluence events on under its own token,
+	// so a relayed Jira event has source `jira` and route `forge`. A socket
+	// delivery's route is its surface, `mattermost`.
+	Route string `json:"route"`
+
+	// Text is the one-line account a listing shows.
+	Text string `json:"summary"`
+
+	// Recipient is the seat a per-seat delivery was addressed to — a Slack
+	// or GitHub app's seat, or the bot whose socket read a Mattermost post.
+	// Empty for a company-wide delivery, which the notification spine
+	// routes rather than the URL addresses.
+	Recipient string `json:"recipient,omitempty"`
+
+	// DeliveryKey is the provider's own identity for the delivery — the id
+	// it sends in a header, or a Mattermost post id — which is what an
+	// operator has in front of them in the provider's console. Empty when
+	// the provider sends none.
+	DeliveryKey string `json:"delivery_key,omitempty"`
+
+	// Channel is the chat channel a socket delivery was posted in.
+	Channel string `json:"channel,omitempty"`
+
+	// Replayed marks a post a reconnecting socket read back from the gap it
+	// was away for, rather than one it heard live.
+	Replayed bool `json:"replayed,omitempty"`
+
+	// Body is what the provider sent, exactly: a webhook's signed bytes, or
+	// a socket post as the socket carried it.
+	Body json.RawMessage `json:"body,omitempty"`
+}
+
+// EventType is the wire name.
+func (InboundDelivery) EventType() string { return "inbound_delivery" }
+
+// Summary is the delivery's own one-line account.
+func (e InboundDelivery) Summary() string { return e.Text }

@@ -5005,22 +5005,30 @@ Notes:
 
 ## Webhook Deliveries
 
-Every verified delivery writes one row to the event log under
-`category: "webhook"`, so the listing answers "what has been arriving" without
-reading a payload:
+Every delivery — one delivery presented to one seat, counted once across the
+fleet — writes one row to the event log under `category: "webhook"`, so the
+listing answers "what has been arriving" without reading a payload. Both
+inbound edges write it the same way: a webhook route for each delivery it
+verified, and the [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet)
+for each post it claimed. Each publishes an `inbound_delivery` event, which the
+node's own event log files — or, on a node without `data`, a data node's,
+through custody — so a delivery read on any node is a row:
 
 | Field | What it carries |
 |---|---|
-| `type` | `webhook:<event>`, or `forge:<event>` for an Atlassian Cloud relay |
-| `source` | The integration the **payload** belongs to — the route for six of the seven, and the relayed product for Forge |
+| `type` | The delivery's own label: `webhook:<event>` from a webhook route, `forge:<event>` for an Atlassian Cloud relay, `socket:posted` for a Mattermost post |
+| `source` | The integration the **payload** belongs to — the route for six of the seven webhook routes, the relayed product for Forge, and `mattermost` for a post |
 | `summary` | The delivery in one sentence |
-| `tags.recipient` | The seat a per-seat delivery was addressed to, absent for a company-wide one. It is one of the four keys the log indexes as a **party**, so `GET /events?agent=<handle>` also returns what reached that seat from outside |
-| `tags.delivery_key` | The provider's own delivery id, absent for the providers that send none — what an operator has in front of them in the provider's console |
-| `payload` | The **raw body the provider sent**, on `GET /events/{event_id}` only. A listing never carries a payload, so a deliveries screen is one request rather than one per row |
+| `tags.recipient` | The seat a per-seat delivery was addressed to — a Slack or GitHub app's seat, or the bot whose socket read a post — absent for a company-wide one. It is one of the four keys the log indexes as a **party**, so `GET /events?agent=<handle>` also returns what reached that seat from outside |
+| `tags.delivery_key` | The provider's own delivery id — a delivery header, or a Mattermost post id — absent for the providers that send none (the Forge relay, Datadog, and an Atlassian build without the identifier header, which this edge deduplicates on a hash of the body instead): what an operator has in front of them in the provider's console |
+| `tags.route` | The ingress that authenticated it, which is not always its `source`: a Forge-relayed Jira event is `source: jira`, `route: forge`. The integrations answer counts `inbound` by it |
+| `payload` | The **raw body the provider sent** (a Mattermost post as its socket carried it), on `GET /events/{event_id}` only. A listing never carries a payload, so a deliveries screen is one request rather than one per row |
 
 Note that a row exists only for a delivery that was **verified, claimed and
 queued**. A refusal — a bad signature, an unset secret, a body too large — is
-answered at the edge and appears in the engine's log rather than here.
+answered at the edge and appears in the engine's log rather than here; a post a
+peer node already claimed is that node's row; and a post whose publish failed
+is read again rather than recorded.
 
 ---
 

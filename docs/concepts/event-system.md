@@ -388,8 +388,14 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # agent_phase_completed, and measuring them there
                            # means hauling every phase payload back
 
-# webhook: no event type; the receiver writes the delivery's row itself,
-#          with the provider's exact bytes as the payload
+# webhook: inbound_delivery — one delivery presented to one seat, counted
+#          once across the fleet, from a webhook route or a Mattermost
+#          socket. The ONE type whose rows do not carry its name: each is
+#          filed under the delivery's own label (webhook:<event>,
+#          forge:<event>, socket:posted) with the provider's exact bytes as
+#          the payload, because that is what an operator matches against
+#          their provider's console. Published rather than written, so a
+#          stateless node's socket reaches a data node through custody
 ```
 
 **Categorised, and published by nothing in this build.** The category map also
@@ -417,7 +423,7 @@ long as retention keeps them; none may be registered or categorised again.
 live-only per-round signal whose durable record is `agent_phase_completed`),
 `budget_meters` (a snapshot of the fleet's shared token counters, every capped
 calendar window with its engine-computed state, published by every node on a
-fixed tick, which the next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row), and the two
+fixed tick, which the next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its edge publishes beside it), and the two
 A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
 exclusions table in the Deployment page above.
