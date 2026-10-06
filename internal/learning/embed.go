@@ -18,13 +18,32 @@ import (
 // retired key. What each path is handed instead is a function that reads the
 // engine's CURRENT embedder each time it is called, and "is there one" is that
 // call's answer ([ErrNoEmbeddings]) rather than a nil checked once at build.
+//
+// # A vector is a point in one model's space, and says which
+//
+// Two models of one width are two spaces — text-embedding-3-small and
+// embed-v4.0 both answer 1 536 floats — and a cosine across them ranks
+// nothing while looking exactly like a ranking. So what the seam answers is a
+// [Vector]: the floats AND the model they came from, read off the same
+// embedder in the same call, so the two can never describe different
+// providers across an apply. Every stored vector is tagged with it, and every
+// recall compares only rows of the query's model.
+
+// Vector is one text's embedding and the model whose space it is in.
+type Vector struct {
+	// Values are the floats, as wide as the store's vector columns.
+	Values []float32
+
+	// Model is the id of the model that produced them.
+	Model string
+}
 
 // Embed turns text into a vector, or reports why it cannot.
 //
 // [ErrNoEmbeddings] is the company having configured none, which every caller
 // treats as a supported state rather than a failure; any other error is a
 // provider that was asked and did not answer.
-type Embed func(ctx context.Context, text string) ([]float32, error)
+type Embed func(ctx context.Context, text string) (Vector, error)
 
 // ErrNoEmbeddings reports that this company configures no embeddings
 // provider, so nothing can be embedded at all.

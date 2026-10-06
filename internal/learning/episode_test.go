@@ -35,8 +35,14 @@ func ep(id, handle string, at time.Time) learning.Episode {
 		ID: id, Handle: handle, Role: "CTO", TurnID: "turn-" + id,
 		StartedAt: at, EndedAt: at, TaskSummary: "did " + id,
 		ReviewOutcome: "done", Duration: 3 * time.Second,
+		// Every fixture vector is in one space; a test about another
+		// model says so.
+		EmbeddingModel: testModel,
 	}
 }
+
+// testModel is the model every fixture vector here came from.
+const testModel = "fixture-embedding"
 
 func mustAppend(t *testing.T, e *learning.Episodes, episode learning.Episode) bool {
 	t.Helper()
@@ -259,7 +265,7 @@ func TestRecallRanksBySimilarity(t *testing.T) {
 	}
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -293,7 +299,7 @@ func TestRecallSkipsRowsWithNoEmbedding(t *testing.T) {
 	mustAppend(t, e, seen)
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -321,7 +327,7 @@ func TestRecallIsScopedToTheSeatAndToRawEpisodes(t *testing.T) {
 	}
 
 	hits, _ := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel,
 	})
 	if len(hits) != 1 || hits[0].Episode.ID != "mine" {
 		t.Errorf("hits = %v, want only this seat's raw episode", hitIDs(hits))
@@ -340,7 +346,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 		mustAppend(t, e, x)
 	}
 	first, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 2,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 2,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -352,7 +358,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	}
 	for range 20 {
 		again, _ := e.Recall(context.Background(), learning.RecallQuery{
-			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 2,
+			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 2,
 		})
 		if len(again) != len(first) || again[0].Episode.ID != first[0].Episode.ID {
 			t.Fatalf("unstable ranking: %v then %v", hitIDs(first), hitIDs(again))
@@ -372,7 +378,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 		mustAppend(t, same, x)
 	}
 	tied, err := same.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 3,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -383,7 +389,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	}
 	for range 20 {
 		again, _ := same.Recall(context.Background(), learning.RecallQuery{
-			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 3,
 		})
 		if got := hitIDs(again); !slices.Equal(got, want) {
 			t.Fatalf("fully-tied ranking is unstable: %v then %v", want, got)
@@ -397,7 +403,7 @@ func TestRecallRefusesAQueryItCannotAnswer(t *testing.T) {
 	if _, err := e.Recall(context.Background(), learning.RecallQuery{Handle: "ceo"}); !errors.Is(err, learning.ErrNoEmbedding) {
 		t.Errorf("err = %v, want ErrNoEmbedding", err)
 	}
-	if _, err := e.Recall(context.Background(), learning.RecallQuery{Embedding: []float32{1}}); err == nil {
+	if _, err := e.Recall(context.Background(), learning.RecallQuery{Embedding: []float32{1}, Model: testModel}); err == nil {
 		t.Error("a recall with no seat was accepted")
 	}
 }
@@ -425,7 +431,7 @@ func TestUndefinedSimilarityIsSkippedRatherThanRanked(t *testing.T) {
 	}
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 10,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 10,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -514,7 +520,7 @@ func TestAPoisonedEmbeddingDoesNotCostARealHit(t *testing.T) {
 	mustAppend(t, e, poison)
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 3,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)

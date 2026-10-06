@@ -41,14 +41,14 @@ func seedMemory(t *testing.T, db *store.DB) {
 		}
 	}
 	exec(`INSERT INTO agent_diary (id, agent_id, kind, content, source, turn_id,
-		metadata, retrieval_count, embedding, created_at)
+		metadata, retrieval_count, embedding, embedding_model, created_at)
 		VALUES (?, ?, 'diary_long', 'the release train is thursdays', 'reflect',
-		't1', '{}', 3, ?, ?)`, "d1", seat.AgentID, embedding, at)
+		't1', '{}', 3, ?, 'fixture-model', ?)`, "d1", seat.AgentID, embedding, at)
 	exec(`INSERT INTO episodes (id, agent_handle, agent_role, turn_id, started_at,
 		ended_at, plan_summary, task_summary, tool_sequence, review_outcome,
-		duration_ms, embedding, kind)
+		duration_ms, embedding, embedding_model, kind)
 		VALUES (?, ?, 'Engineer', 't1', ?, ?, 'plan', 'task', '["slack_post"]',
-		'done', 1200, ?, 'raw')`, "e1", seat.Handle, at, at, embedding)
+		'done', 1200, ?, 'fixture-model', 'raw')`, "e1", seat.Handle, at, at, embedding)
 	exec(`INSERT INTO counterparty_profiles (observer_handle, subject_handle,
 		subject_external_id, subject_platform, subject_name, traits,
 		first_seen_at, last_updated_at, last_corroborated_at, interaction_count)
@@ -167,6 +167,67 @@ func TestAnEmbeddingSurvivesAsBytes(t *testing.T) {
 		if want := []byte{0x00, 0x01, 0xfe, 0xff, 0x7f}; !slices.Equal(got, want) {
 			t.Errorf("%s.%s came back as %v, want %v", probe.table, probe.column, got, want)
 		}
+	}
+}
+
+// A VECTOR TRAVELS WITH THE MODEL IT CAME FROM. Recall compares only rows of
+// the query's model, so a vector that arrived without its model would be a
+// row the new holder can never recall — the same silent amnesia as a vector
+// that arrived as text.
+func TestAVectorsModelTravelsWithIt(t *testing.T) {
+	t.Parallel()
+	oldOwner, newOwner := openStore(t), openStore(t)
+	seedMemory(t, oldOwner)
+	carry(t, oldOwner, newOwner)
+
+	for _, table := range []string{"agent_diary", "episodes"} {
+		var model string
+		if err := newOwner.SQL().QueryRowContext(t.Context(),
+			"SELECT embedding_model FROM "+table+" WHERE id IN ('d1', 'e1')").Scan(&model); err != nil {
+			t.Fatalf("read %s.embedding_model: %v", table, err)
+		}
+		if model != "fixture-model" {
+			t.Errorf("%s arrived naming model %q", table, model)
+		}
+	}
+}
+
+// A ROW FROM A BUILD THAT PREDATES THE COLUMN ARRIVES IN NO SPACE: its JSON
+// has no embedding_model key, so the column takes its default, NULL — which
+// no recall compares against — rather than the row being refused or guessed
+// into the space this node is configured for now.
+func TestAnOlderBuildsVectorArrivesNamingNoModel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	source := openStore(t)
+	seedMemory(t, source)
+	target := openStore(t)
+	diary := tables[0]
+	rows, _, err := export(ctx, source.SQL(), diary, seat, 0)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("export = %d rows, %v", len(rows), err)
+	}
+	delete(rows[0].Values, "embedding_model")
+	body, err := encode(rows[0])
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, spec, known, err := decode(body)
+	if err != nil || !known {
+		t.Fatalf("decode: known=%v err=%v", known, err)
+	}
+	if err := target.Tx(ctx, func(tx *sql.Tx) error {
+		return upsert(ctx, tx, spec, decoded)
+	}); err != nil {
+		t.Fatalf("upsert an older build's row: %v", err)
+	}
+	var model sql.NullString
+	if err := target.SQL().QueryRowContext(ctx,
+		"SELECT embedding_model FROM agent_diary WHERE id = 'd1'").Scan(&model); err != nil {
+		t.Fatalf("read the carried row: %v", err)
+	}
+	if model.Valid {
+		t.Errorf("an untagged vector arrived naming model %q", model.String)
 	}
 }
 

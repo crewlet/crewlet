@@ -312,8 +312,8 @@ func TestAnUnreachableEmbedderStillWritesTheEpisode(t *testing.T) {
 	t.Parallel()
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(context.Context, string) ([]float32, error) {
-			return nil, errors.New("the provider is down")
+		o.Embed = func(context.Context, string) (learning.Vector, error) {
+			return learning.Vector{}, errors.New("the provider is down")
 		}
 	})
 	reflectEpisode(t, w, epTurn())
@@ -332,9 +332,9 @@ func TestAReachableEmbedderStampsTheVector(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var embedded string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = func(_ context.Context, text string) (learning.Vector, error) {
 			embedded = text
-			return []float32{0.5, 0.5, 0.5, 0.5}, nil
+			return learning.Vector{Values: []float32{0.5, 0.5, 0.5, 0.5}, Model: "m"}, nil
 		}
 	})
 	reflectEpisode(t, w, epTurn())
@@ -346,6 +346,11 @@ func TestAReachableEmbedderStampsTheVector(t *testing.T) {
 	if len(got[0].Embedding) != 4 {
 		t.Fatalf("embedding = %v, want the 4-wide vector", got[0].Embedding)
 	}
+	// TAGGED WITH ITS SPACE: a vector stored without the model it came
+	// from is one no recall can compare.
+	if got[0].EmbeddingModel != "m" {
+		t.Errorf("embedding model = %q, want the embedder's", got[0].EmbeddingModel)
+	}
 }
 
 // A SLOW EMBEDDER IS A MISSING VECTOR, not a stalled pass: the write must not
@@ -355,9 +360,9 @@ func TestASlowEmbedderIsBoundedAndYieldsNoVector(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
 		o.EmbedTimeout = 10 * time.Millisecond
-		o.Embed = func(ctx context.Context, _ string) ([]float32, error) {
+		o.Embed = func(ctx context.Context, _ string) (learning.Vector, error) {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return learning.Vector{}, ctx.Err()
 		}
 	})
 	reflectEpisode(t, w, epTurn())
@@ -400,9 +405,9 @@ func TestAnEmptySummaryNeverReachesTheEmbedder(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var calls int
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(context.Context, string) ([]float32, error) {
+		o.Embed = func(context.Context, string) (learning.Vector, error) {
 			calls++
-			return []float32{1, 0, 0, 0}, nil
+			return learning.Vector{Values: []float32{1, 0, 0, 0}, Model: "m"}, nil
 		}
 	})
 	turn := epTurn()
@@ -427,9 +432,9 @@ func TestALongSummaryIsCappedOnARuneBoundary(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var sent string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = func(_ context.Context, text string) (learning.Vector, error) {
 			sent = text
-			return []float32{1, 0, 0, 0}, nil
+			return learning.Vector{Values: []float32{1, 0, 0, 0}, Model: "m"}, nil
 		}
 	})
 	turn := epTurn()

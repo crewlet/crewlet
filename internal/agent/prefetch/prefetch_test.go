@@ -89,7 +89,12 @@ type diary struct {
 	marked *retrievalLog
 }
 
-func (d diary) Recall(context.Context, string, learning.RecallQuery, time.Time) ([]learning.DiaryHit, error) {
+// Recall refuses what the real one refuses: a query with no vector, or one
+// that does not say which model the vector came from.
+func (d diary) Recall(_ context.Context, _ string, q learning.RecallQuery, _ time.Time) ([]learning.DiaryHit, error) {
+	if len(q.Embedding) == 0 || q.Model == "" {
+		return nil, learning.ErrNoEmbedding
+	}
 	return d.hits, d.err
 }
 
@@ -136,7 +141,11 @@ type episodes struct {
 	err  error
 }
 
-func (e episodes) Recall(context.Context, learning.RecallQuery) ([]learning.Hit, error) {
+// Recall refuses what the real one refuses, as the diary fake does.
+func (e episodes) Recall(_ context.Context, q learning.RecallQuery) ([]learning.Hit, error) {
+	if len(q.Embedding) == 0 || q.Model == "" {
+		return nil, learning.ErrNoEmbedding
+	}
 	return e.hits, e.err
 }
 
@@ -249,7 +258,9 @@ func memory(id, content string) learning.DiaryEntry {
 	}
 }
 
-func embeds(context.Context, string) ([]float32, error) { return []float32{0.1, 0.2}, nil }
+func embeds(context.Context, string) (learning.Vector, error) {
+	return learning.Vector{Values: []float32{0.1, 0.2}, Model: "m"}, nil
+}
 
 func fetch(t *testing.T, src prefetch.Sources, r prefetch.Request) prefetch.Blocks {
 	t.Helper()

@@ -86,7 +86,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		return ""
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: recallHits,
+		Handle: handle, Embedding: vector.Values, Model: vector.Model, Limit: recallHits,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "episode_recall_failed", "seat", handle, "error", err.Error())

@@ -136,7 +136,8 @@ func (w *Episodist) Skip(t Turn) string {
 // Reflect implements [Worker].
 func (w *Episodist) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
 	ep := w.episodeOf(t)
-	ep.Embedding = w.vector(ctx, ep.TaskSummary)
+	vector := w.vector(ctx, ep.TaskSummary)
+	ep.Embedding, ep.EmbeddingModel = vector.Values, vector.Model
 
 	written, err := w.episodes.Append(ctx, ep)
 	if err != nil {
@@ -207,9 +208,9 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 //
 // NEVER an error: see the type comment. The failure is logged where it
 // happens and the row is written without a vector.
-func (w *Episodist) vector(ctx context.Context, summary string) []float32 {
+func (w *Episodist) vector(ctx context.Context, summary string) Vector {
 	if w.embed == nil || summary == "" {
-		return nil
+		return Vector{}
 	}
 	summary = textcut.Bytes(summary, episodeEmbedInput)
 	ctx, cancel := context.WithTimeout(ctx, w.timeout)
@@ -218,13 +219,13 @@ func (w *Episodist) vector(ctx context.Context, summary string) []float32 {
 	if errors.Is(err, ErrNoEmbeddings) {
 		// The company configures none, which is how it is set up rather
 		// than a fault worth a line per turn.
-		return nil
+		return Vector{}
 	}
 	if err != nil {
 		log.WarnContext(ctx, "episode_embedding_failed", "error", err.Error(),
 			"detail", "the episode is written without a vector; recall skips "+
 				"it while the time-window queries still surface it")
-		return nil
+		return Vector{}
 	}
 	return vector
 }

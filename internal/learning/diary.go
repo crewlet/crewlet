@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -73,7 +72,11 @@ type DiaryEntry struct {
 	RetrievalCount  int
 	LastRetrievedAt time.Time
 
-	Embedding []float32
+	// Embedding is the note's vector, and EmbeddingModel the model whose
+	// space it is in — both set or neither, see [Episode.EmbeddingModel].
+	Embedding      []float32
+	EmbeddingModel string
+
 	CreatedAt time.Time
 }
 
@@ -111,26 +114,22 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 
 	// Same policy as an episode's embedding, and for the same reason — see
 	// Episodes.encodeEmbedding. A wrong width fails the write; a non-finite
-	// component costs the vector and not the observation.
-	var blob any
-	if len(e.Embedding) > 0 {
-		packed, err := d.db.EncodeVector(e.Embedding)
-		switch {
-		case errors.Is(err, store.ErrVectorNotFinite):
-			log.Warn("diary_embedding_discarded", "entry", e.ID, "error", err.Error())
-		case err != nil:
-			return fmt.Errorf("learning: encode diary embedding: %w", err)
-		default:
-			blob = packed
-		}
+	// component, or a vector naming no model, costs the vector and not the
+	// observation.
+	blob, model, err := encodeVectorColumns(d.db, e.Embedding, e.EmbeddingModel,
+		"diary_embedding_discarded")
+	if err != nil {
+		return fmt.Errorf("learning: diary entry %s: %w", e.ID, err)
 	}
 	if _, err := d.db.SQL().ExecContext(ctx, `
 		INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
-			turn_id, metadata, retrieval_count, last_retrieved_at, embedding, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+			turn_id, metadata, retrieval_count, last_retrieved_at, embedding,
+			embedding_model, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		e.ID, e.AgentID, string(e.Kind), e.Content, store.NullTime(e.TTLUntil),
-		e.Source, e.TurnID, jsonObject(e.Metadata), blob, store.EncodeTime(e.CreatedAt),
+		e.Source, e.TurnID, jsonObject(e.Metadata), blob, model,
+		store.EncodeTime(e.CreatedAt),
 	); err != nil {
 		return fmt.Errorf("learning: write diary entry %s: %w", e.ID, err)
 	}
@@ -138,7 +137,8 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 }
 
 const diaryColumns = `id, agent_id, kind, content, ttl_until, source, turn_id,
-	metadata, retrieval_count, last_retrieved_at, embedding, created_at`
+	metadata, retrieval_count, last_retrieved_at, embedding, embedding_model,
+	created_at`
 
 func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	var (
@@ -147,9 +147,11 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 		created            int64
 		ttl, lastRetrieved sql.NullInt64
 		embedding          []byte
+		embeddingModel     sql.NullString
 	)
 	if err := rows.Scan(&e.ID, &e.AgentID, &kind, &e.Content, &ttl, &e.Source,
-		&e.TurnID, &metadata, &e.RetrievalCount, &lastRetrieved, &embedding, &created,
+		&e.TurnID, &metadata, &e.RetrievalCount, &lastRetrieved, &embedding,
+		&embeddingModel, &created,
 	); err != nil {
 		return DiaryEntry{}, err
 	}
@@ -165,6 +167,7 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	if len(embedding) > 0 {
 		if vec, err := store.DecodeVector(embedding); err == nil {
 			e.Embedding = vec
+			e.EmbeddingModel = store.Text(embeddingModel)
 		} else {
 			log.Warn("diary_embedding_undecodable", "entry", e.ID, "error", err)
 		}
@@ -238,7 +241,7 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 	if agentID == "" {
 		return nil, fmt.Errorf("learning: diary recall needs an agent")
 	}
-	if len(q.Embedding) == 0 {
+	if len(q.Embedding) == 0 || q.Model == "" {
 		return nil, ErrNoEmbedding
 	}
 	limit, floor := q.Limit, q.MinSimilarity
@@ -260,6 +263,7 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		        FROM agent_diary
 		        WHERE agent_id = ?
 		          AND embedding IS NOT NULL
+		          AND embedding_model = ?
 		          AND length(embedding) = ?
 		          AND (ttl_until IS NULL OR ttl_until > ?)
 		    )
@@ -267,7 +271,7 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		    ORDER BY distance ASC, created_at DESC, id DESC
 		    LIMIT ?
 		 )`,
-		probe, agentID, width, store.EncodeTime(now), 1-floor, limit)
+		probe, agentID, q.Model, width, store.EncodeTime(now), 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
 	}

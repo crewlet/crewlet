@@ -506,6 +506,12 @@ than adapt:
   after it the knowledge corpus re-embeds itself, while diary and episode
   vectors written at the old width are not re-embedded and are reached by
   recency alone.
+- **Per model, at recall.** Two models of one width are two spaces —
+  `text-embedding-3-small` and `embed-v4.0` both answer 1 536 floats — so
+  every diary and episode vector is stored with the model it came from and
+  recall compares only rows of the query's model. Changing `model` at the
+  same width is therefore an ordinary apply: rows from the previous model are
+  reached by recency alone rather than ranked against a space they are not in.
 - **On every call.** A vector that comes back at the wrong width is refused
   rather than stored — on every call and not just the first, because a
   gateway or aggregator can move models mid-deployment.

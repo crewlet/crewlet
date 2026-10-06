@@ -1727,12 +1727,12 @@ func BenchmarkRecallScan(b *testing.B) {
 			}
 			for i := range n {
 				ep := rawEp(fmt.Sprintf("e%04d", i), t0.Add(time.Duration(i)*time.Minute))
-				ep.Embedding = vec()
+				ep.Embedding, ep.EmbeddingModel = vec(), "bench-embedding"
 				if _, err := e.Append(b.Context(), ep); err != nil {
 					b.Fatal(err)
 				}
 			}
-			q := RecallQuery{Handle: "ceo", Embedding: vec(), Limit: 5}
+			q := RecallQuery{Handle: "ceo", Embedding: vec(), Model: "bench-embedding", Limit: 5}
 			b.ResetTimer()
 			for b.Loop() {
 				if _, err := e.Recall(context.Background(), q); err != nil {

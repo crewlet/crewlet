@@ -107,16 +107,29 @@ func (e *Engine) storeWidth() int {
 // has always had here: a long ask is one batch call, whose requests carry a
 // corpus's ceiling rather than a turn start's, and a turn must not wait longer
 // for its similarity search because the ask was long.
-func (e *Engine) embedText(ctx context.Context, text string) ([]float32, error) {
+//
+// THE MODEL IS READ OFF THE SAME EMBEDDER the floats came from, in the same
+// call, so a vector and the space it is tagged with can never describe two
+// providers on either side of an apply.
+func (e *Engine) embedText(ctx context.Context, text string) (learning.Vector, error) {
 	held := e.embeddings.Load()
 	if held == nil || *held == nil {
-		return nil, learning.ErrNoEmbeddings
+		return learning.Vector{}, learning.ErrNoEmbeddings
 	}
-	batch, ok := (*held).(embeddings.BatchEmbedder)
-	if !ok {
-		return (*held).Embed(ctx, text)
+	embedder := *held
+	var (
+		values []float32
+		err    error
+	)
+	if batch, ok := embedder.(embeddings.BatchEmbedder); ok {
+		bounded, cancel := context.WithTimeout(ctx, embeddings.EmbedTimeout)
+		defer cancel()
+		values, err = embeddings.EmbedWhole(bounded, batch, text)
+	} else {
+		values, err = embedder.Embed(ctx, text)
 	}
-	ctx, cancel := context.WithTimeout(ctx, embeddings.EmbedTimeout)
-	defer cancel()
-	return embeddings.EmbedWhole(ctx, batch, text)
+	if err != nil {
+		return learning.Vector{}, err
+	}
+	return learning.Vector{Values: values, Model: embedder.Model()}, nil
 }

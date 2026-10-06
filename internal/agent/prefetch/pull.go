@@ -50,7 +50,7 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 		return nil, ErrNoSimilarity
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: limit,
+		Handle: handle, Embedding: vector.Values, Model: vector.Model, Limit: limit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("prefetch: recall episodes for %s: %w", handle, err)

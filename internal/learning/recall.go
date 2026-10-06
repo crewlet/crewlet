@@ -21,6 +21,13 @@ type RecallQuery struct {
 	Handle    string
 	Embedding []float32
 
+	// Model is the model Embedding came from, and REQUIRED: a recall
+	// compares only rows of the same model, because two models of one
+	// width are two spaces and the width filter alone admits both. A row
+	// from another model — or from before vectors named theirs — is not
+	// a worse match, it is no match at all.
+	Model string
+
 	// Limit is how many hits to return. 0 takes a small default: recall
 	// goes into a prompt, and a dozen half-relevant memories crowd out the
 	// task they were fetched for.
@@ -77,7 +84,7 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if q.Handle == "" {
 		return nil, fmt.Errorf("learning: recall needs a seat")
 	}
-	if len(q.Embedding) == 0 {
+	if len(q.Embedding) == 0 || q.Model == "" {
 		return nil, ErrNoEmbedding
 	}
 	limit := q.Limit
@@ -116,6 +123,7 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 		        FROM episodes
 		        WHERE agent_handle = ?
 		          AND embedding IS NOT NULL
+		          AND embedding_model = ?
 		          AND length(embedding) = ?
 		          AND kind = ?
 		    )
@@ -123,7 +131,7 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 		    ORDER BY distance ASC, ended_at DESC, id DESC
 		    LIMIT ?
 		 )`,
-		probe, q.Handle, width, string(KindRaw), 1-floor, limit)
+		probe, q.Handle, q.Model, width, string(KindRaw), 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
@@ -168,6 +176,12 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 // The Go loop skipped them silently (cosine returns false on a shape
 // mismatch); without `length(embedding) = ?` the SQL would turn that same
 // history into a recall that errors instead of one that returns what it can.
+//
+// AND IT STAYS beside the model filter, which does not subsume it: one model
+// answers at whatever width is asked (the text-embedding-3 models truncate to
+// `dimensions`), so a width changed by a restart leaves rows of the SAME model
+// at the old width — a space the model filter admits and the distance
+// function refuses.
 func vectorProbe(db *store.DB, embedding []float32) ([]byte, int, error) {
 	blob, err := db.EncodeVector(embedding)
 	if err != nil {

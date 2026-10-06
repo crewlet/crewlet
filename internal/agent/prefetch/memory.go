@@ -170,7 +170,8 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 
 	if vector, ok := f.embed(ctx, r.Task); ok {
 		hits, err := f.src.Diary.Recall(ctx, r.AgentID, learning.RecallQuery{
-			Handle: r.AgentID, Embedding: vector, Limit: memoryVectorLimit,
+			Handle: r.AgentID, Embedding: vector.Values, Model: vector.Model,
+			Limit: memoryVectorLimit,
 		}, now)
 		if err != nil {
 			log.WarnContext(ctx, "memory_recall_failed", "agent_id", r.AgentID, "error", err.Error())
@@ -354,19 +355,19 @@ func jsonArray(text string) string {
 // [learning.ErrNoEmbeddings] because the engine's current epoch has none — is
 // how that company is set up, and is not logged; a provider that was asked
 // and failed is.
-func (f *Fetcher) embed(ctx context.Context, text string) ([]float32, bool) {
+func (f *Fetcher) embed(ctx context.Context, text string) (learning.Vector, bool) {
 	if f.src.Embed == nil {
-		return nil, false
+		return learning.Vector{}, false
 	}
 	vector, err := f.src.Embed(ctx, text)
 	if errors.Is(err, learning.ErrNoEmbeddings) {
-		return nil, false
+		return learning.Vector{}, false
 	}
-	if err != nil || len(vector) == 0 {
+	if err != nil || len(vector.Values) == 0 || vector.Model == "" {
 		if err != nil {
 			log.WarnContext(ctx, "prefetch_embedding_failed", "error", err.Error())
 		}
-		return nil, false
+		return learning.Vector{}, false
 	}
 	return vector, true
 }

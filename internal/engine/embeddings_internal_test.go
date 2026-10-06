@@ -202,8 +202,12 @@ func TestAStoredEmbedderEmbedsTheWholeOfWhatItIsHanded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
-	if !slices.Equal(v, alone) {
+	if !slices.Equal(v.Values, alone) {
 		t.Fatal("a short text is not the vector Embed gives it")
+	}
+	// TAGGED WITH THE SPACE IT IS IN, read off the embedder that made it.
+	if v.Model != fake.Model() {
+		t.Fatalf("the vector names model %q, want the embedder's %q", v.Model, fake.Model())
 	}
 
 	long := strings.Repeat("the deploy keeps failing on staging ", 400)
@@ -214,8 +218,9 @@ func TestAStoredEmbedderEmbedsTheWholeOfWhatItIsHanded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a text past the model's bound was not embedded whole: %v", err)
 	}
-	if len(v) != 4 {
-		t.Fatalf("vector width = %d, want the embedder's 4", len(v))
+	if len(v.Values) != 4 || v.Model != fake.Model() {
+		t.Fatalf("vector = %d wide in %q, want the embedder's 4 in %q",
+			len(v.Values), v.Model, fake.Model())
 	}
 }
 

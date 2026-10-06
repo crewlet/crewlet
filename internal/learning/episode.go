@@ -58,13 +58,19 @@ type Episode struct {
 	ReviewOutcome string
 	Duration      time.Duration
 
-	// Embedding is the task summary's vector, or nil when the embeddings
-	// provider was unreachable at write time.
+	// Embedding is the turn's vector, or nil when the embeddings provider
+	// was unreachable at write time.
 	//
 	// Nil is a supported state, not a failure: recall skips such rows while
 	// the time-window and outcome queries still surface them. A transient
 	// outage must never cost an episode.
 	Embedding []float32
+
+	// EmbeddingModel is the model whose space Embedding is in, and empty
+	// exactly when there is no vector — or when the row was written before
+	// vectors named their model (node migration 0039), which recall then
+	// excludes: a vector in no known space compares with nothing.
+	EmbeddingModel string
 
 	Kind  Kind
 	Count int
@@ -99,10 +105,10 @@ const episodeInsertSQL = `
 INSERT INTO episodes (
 	id, agent_handle, agent_role, work_item, turn_id, started_at, ended_at,
 	plan_summary, task_summary, tool_sequence, skills_used, review_outcome,
-	duration_ms, embedding, kind, count, exemplar_turn_ids,
+	duration_ms, embedding, embedding_model, kind, count, exemplar_turn_ids,
 	consolidated_into_skill_id, common_task_pattern, common_outcome,
 	success_rate, subjects_involved, notable_patterns, work_key, conversation_key
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (agent_handle, work_key) DO NOTHING`
 
 // Append records one episode, at most once per (seat, work key).
@@ -139,7 +145,7 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 	if ep.Count < 1 {
 		ep.Count = 1
 	}
-	blob, err := e.encodeEmbedding(ep.Embedding)
+	blob, model, err := e.encodeEmbedding(ep.Embedding, ep.EmbeddingModel)
 	if err != nil {
 		return false, err
 	}
@@ -147,7 +153,7 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
 		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
 		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,
+		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob, model,
 		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
 		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
 		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
@@ -178,25 +184,43 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 // episode is the record of a turn that really happened — the one thing this
 // subsystem may not lose to a bad response from an embeddings API. Storing it
 // anyway is not an option either: [store.ErrVectorNotFinite] says why.
-func (e *Episodes) encodeEmbedding(v []float32) (any, error) {
+//
+// THE MODEL TRAVELS WITH THE BYTES, both or neither. A vector that names no
+// model is in no known space and no recall could compare it with anything, so
+// it is DISCARDED like a non-finite one — the row lands, its vector does not —
+// rather than failing a write the subsystem may not lose; and a model with no
+// vector to describe is stored as nothing.
+func (e *Episodes) encodeEmbedding(v []float32, model string) (blob, space any, err error) {
+	return encodeVectorColumns(e.db, v, model, "episode_embedding_discarded")
+}
+
+// encodeVectorColumns is [Episodes.encodeEmbedding]'s rule, for the two tables
+// that store a seat's vectors — one rule, so the diary and the episodes can
+// never disagree about what a stored vector must say about itself.
+func encodeVectorColumns(db *store.DB, v []float32, model, discarded string) (blob, space any, err error) {
 	if len(v) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	blob, err := e.db.EncodeVector(v)
+	if model == "" {
+		log.Warn(discarded, "error", "the vector names no model, so it is in "+
+			"no space a recall can compare against")
+		return nil, nil, nil
+	}
+	packed, err := db.EncodeVector(v)
 	switch {
 	case errors.Is(err, store.ErrVectorNotFinite):
-		log.Warn("episode_embedding_discarded", "error", err.Error())
-		return nil, nil
+		log.Warn(discarded, "error", err.Error())
+		return nil, nil, nil
 	case err != nil:
-		return nil, fmt.Errorf("learning: encode embedding: %w", err)
+		return nil, nil, fmt.Errorf("learning: encode embedding: %w", err)
 	}
-	return blob, nil
+	return packed, model, nil
 }
 
 const episodeColumns = `id, agent_handle, agent_role, work_item, turn_id,
 	started_at, ended_at, plan_summary, task_summary, tool_sequence,
-	skills_used, review_outcome, duration_ms, embedding, kind, count,
-	exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
+	skills_used, review_outcome, duration_ms, embedding, embedding_model, kind,
+	count, exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
 	common_outcome, success_rate, subjects_involved, notable_patterns,
 	work_key, conversation_key`
 
@@ -205,6 +229,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		ep                                     Episode
 		started, ended, durationMS             int64
 		embedding                              []byte
+		embeddingModel                         sql.NullString
 		kind                                   string
 		toolSeq, skills, exemplars, subjects   string
 		consolidated, workKey, conversationKey sql.NullString
@@ -212,7 +237,8 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 	if err := rows.Scan(
 		&ep.ID, &ep.Handle, &ep.Role, &ep.WorkItem, &ep.TurnID,
 		&started, &ended, &ep.PlanSummary, &ep.TaskSummary, &toolSeq,
-		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &kind, &ep.Count,
+		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &embeddingModel,
+		&kind, &ep.Count,
 		&exemplars, &consolidated, &ep.CommonTaskPattern,
 		&ep.CommonOutcome, &ep.SuccessRate, &subjects, &ep.NotablePatterns,
 		&workKey, &conversationKey,
@@ -240,6 +266,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 			log.Warn("episode_embedding_undecodable", "episode", ep.ID, "error", err)
 		} else {
 			ep.Embedding = vec
+			ep.EmbeddingModel = store.Text(embeddingModel)
 		}
 	}
 	return ep, nil
@@ -374,5 +401,7 @@ func parseList(raw string) []string {
 	return out
 }
 
-// ErrNoEmbedding reports a recall asked for without a query vector.
-var ErrNoEmbedding = errors.New("learning: recall needs a query embedding")
+// ErrNoEmbedding reports a recall asked for without a query vector, or
+// without the model it came from — which is half of one, since a vector
+// compares only with rows of its own model.
+var ErrNoEmbedding = errors.New("learning: recall needs a query embedding and its model")

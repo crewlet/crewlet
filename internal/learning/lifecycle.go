@@ -1175,7 +1175,7 @@ func insertSummaryTx(ctx context.Context, tx *sql.Tx, ep Episode) error {
 		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
 		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
 		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), nil,
+		ep.ReviewOutcome, ep.Duration.Milliseconds(), nil, nil,
 		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
 		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
 		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,

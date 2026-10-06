@@ -87,7 +87,7 @@ var tables = []table{
 		columns: []string{
 			"id", "agent_id", "kind", "content", "ttl_until", "source",
 			"turn_id", "metadata", "retrieval_count", "last_retrieved_at",
-			"embedding", "created_at",
+			"embedding", "embedding_model", "created_at",
 		},
 		blobs: []string{"embedding"},
 	},
@@ -99,7 +99,7 @@ var tables = []table{
 			"id", "agent_handle", "agent_role", "work_item", "turn_id",
 			"started_at", "ended_at", "plan_summary", "task_summary",
 			"tool_sequence", "skills_used", "review_outcome", "duration_ms",
-			"embedding", "kind", "count", "exemplar_turn_ids",
+			"embedding", "embedding_model", "kind", "count", "exemplar_turn_ids",
 			"consolidated_into_skill_id", "common_task_pattern",
 			"common_outcome", "success_rate", "subjects_involved",
 			"notable_patterns", "work_key", "conversation_key",
