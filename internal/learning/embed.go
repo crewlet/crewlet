@@ -10,14 +10,17 @@ import (
 // # A FUNCTION, READ AT CALL TIME
 //
 // The company's embedder is replaced on every config apply — a new model, a
-// rotated key — and an apply builds its tools and workers BEFORE it stores the
-// embedder it is applying. So a seam holding the embedder it was built with
-// ran one epoch behind for its whole life: the first epoch a node booted had
-// none at all, and re-activating an unchanged revision to rotate a credential
-// (the documented gesture) left every holder calling the provider with the
-// retired key. What each path is handed instead is a function that reads the
-// engine's CURRENT embedder each time it is called, and "is there one" is that
-// call's answer ([ErrNoEmbeddings]) rather than a nil checked once at build.
+// rotated key — and an apply builds its TOOLS before it stores the embedder it
+// is applying (and its reflection workers after). So a tool holding the
+// embedder it was built with ran one epoch behind for its whole life: the
+// first epoch a node booted had none at all, and re-activating an unchanged
+// revision to rotate a credential (the documented gesture) left every such
+// tool calling the provider with the retired key. The workers were current
+// only because of the order of two calls in the apply, which is no property
+// of theirs. What each path is handed instead is a function that reads the
+// engine's CURRENT embedder each time it is called, so the order of those
+// calls never matters, and "is there one" is that call's answer
+// ([ErrNoEmbeddings]) rather than a nil checked once at build.
 //
 // # A vector is a point in one model's space, and says which
 //
