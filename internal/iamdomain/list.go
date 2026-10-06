@@ -593,9 +593,14 @@ type HistoryRow struct {
 	ObjectKind string
 	ObjectID   string
 	PersonID   string
-	Op         OpKind
-	Actor      string
-	ActorKind  iam.Kind
+
+	// Login is the login PersonID holds now, or empty for an entry about
+	// nobody, or about somebody removed since.
+	Login string
+
+	Op        OpKind
+	Actor     string
+	ActorKind iam.Kind
 
 	// OperatorID is the credential Actor acted through, and empty where
 	// the record named none: the node's own writer.
@@ -658,28 +663,35 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 	}
 	out := HistoryPage{At: r.committed()}
 	query := strings.Builder{}
+	// THE LOGIN OF WHOEVER AN ENTRY IS ABOUT, joined from their row as it
+	// stands: an entry names them by id, and a trail of id prefixes said
+	// whose session opened and whose row changed to nobody reading it. A
+	// removed person's row is gone, so their entries name nobody — the
+	// removal erases what identified them, and the trail keeps the id.
 	query.WriteString(`
-		SELECT id, class, object_kind, object_id, person_id, op, actor,
-		       actor_kind, operator_id, reason, summary, broker_at, version
-		FROM iam_history WHERE 1 = 1`)
+		SELECT h.id, h.class, h.object_kind, h.object_id, h.person_id, h.op,
+		       h.actor, h.actor_kind, h.operator_id, h.reason, h.summary,
+		       h.broker_at, h.version, COALESCE(p.login, '')
+		FROM iam_history h LEFT JOIN iam_people p ON p.id = h.person_id
+		WHERE 1 = 1`)
 	var args []any
 	if q.Before > 0 {
-		query.WriteString(` AND version < ?`)
+		query.WriteString(` AND h.version < ?`)
 		args = append(args, int64(q.Before))
 	}
 	if q.Since > 0 {
-		query.WriteString(` AND version >= ?`)
+		query.WriteString(` AND h.version >= ?`)
 		args = append(args, int64(q.Since))
 	}
 	if q.Person != "" {
-		query.WriteString(` AND person_id = ?`)
+		query.WriteString(` AND h.person_id = ?`)
 		args = append(args, q.Person)
 	}
 	if q.Op != "" {
-		query.WriteString(` AND op = ?`)
+		query.WriteString(` AND h.op = ?`)
 		args = append(args, string(q.Op))
 	}
-	query.WriteString(` ORDER BY version DESC LIMIT ?`)
+	query.WriteString(` ORDER BY h.version DESC LIMIT ?`)
 	args = append(args, limit+1)
 
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -699,7 +711,7 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 			)
 			if err := rows.Scan(&row.ID, &class, &row.ObjectKind, &row.ObjectID,
 				&row.PersonID, &op, &row.Actor, &actorKind, &row.OperatorID,
-				&row.Reason, &row.Summary, &at, &version); err != nil {
+				&row.Reason, &row.Summary, &at, &version, &row.Login); err != nil {
 				return fmt.Errorf("iamdomain: scan a trail entry: %w", err)
 			}
 			row.Class = HistoryClass(class)
@@ -724,8 +736,8 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 // DefaultHistoryPage and MaxHistoryPage bound a page of the trail.
 //
 // A HUNDRED AND A THOUSAND, and they are larger than the directory's for one
-// reason: a trail entry is a small ROW, opened from nothing and joined to
-// nothing, while a directory row carries a person whole and is opened before
+// reason: a trail entry is a small ROW, opened from nothing and joined to one
+// login, while a directory row carries a person whole and is opened before
 // anybody can render it. What bounds both is the response size.
 const (
 	DefaultHistoryPage = 100

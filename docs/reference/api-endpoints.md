@@ -1114,6 +1114,10 @@ browser sessions, a Tier A token's own login. A token acts as its owner, so
 gesture from their own. It is absent from an entry the sign-in surface or a
 duty wrote: the node acts on nobody's credential.
 
+An entry about somebody names them by `person`, their id, and by `login`, the
+login their row holds when the trail is read — absent once they are removed,
+since the removal erases what identified them and the trail keeps the id.
+
 ### `/config/*` — live config management (auth-gated)
 
 Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). The routes that can change the org chart — `PUT` and `PATCH /config`, a revert, and the seat and unit entity routes — also admit a unit's **lead** for what is inside the units they lead, read and judged change by change (see [A lead edits their own team](#a-lead-edits-their-own-team)). A write also asks for a proof of identity inside `step_up`, and a session whose proof is older is refused `403 step_up_required` (see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.

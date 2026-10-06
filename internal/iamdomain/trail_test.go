@@ -80,3 +80,45 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 		}
 	}
 }
+
+// AN ENTRY NAMES THE LOGIN OF WHOEVER IT IS ABOUT, WHILE THEY ARE ENROLLED.
+//
+// The trail names its subject by id, and a page of id prefixes said whose
+// session opened and whose row changed to nobody reading it. The login their
+// row holds rides beside it; a removal erases what identified them, so their
+// entries name nobody once they are gone — the CONTROL. Mutation: drop the
+// join and the suspension's entry names nobody.
+func TestATrailEntryNamesTheLoginOfWhoeverItIsAbout(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	id := uuid.New().String()
+	enrolSarah(t, rig, id)
+	if _, err := rig.writer.SetStage(t.Context(), id, iam.StageSuspended,
+		"op-suspend", "a leave"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	rig.drain()
+	logins := func() map[string]string {
+		t.Helper()
+		page, err := reader.History(t.Context(), iamdomain.HistoryQuery{Person: id})
+		if err != nil {
+			t.Fatalf("read the trail: %v", err)
+		}
+		out := map[string]string{}
+		for _, row := range page.Entries {
+			out[row.Reason] = row.Login
+		}
+		return out
+	}
+	if got := logins()["a leave"]; got != "sarah.chen" {
+		t.Errorf("the suspension's entry names %q, want sarah.chen", got)
+	}
+	if _, err := rig.writer.Remove(t.Context(), id, "op-remove", "gone"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	rig.drain()
+	if got := logins()["a leave"]; got != "" {
+		t.Errorf("after the removal the suspension's entry names %q, want nobody", got)
+	}
+}

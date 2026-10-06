@@ -655,6 +655,37 @@ test("the identity trail is merged in, asked from the window's start", async () 
   expect(screen.getByText("took it off the board")).toBeTruthy();
 });
 
+// AN IDENTITY ENTRY NAMES WHOSE IT IS by the login the engine joins in, where
+// a page of id prefixes said whose session opened to nobody. The CONTROL is an
+// entry about somebody removed, which has no login and keeps its short id.
+// Mutation: name every subject by its id and the logins are nowhere.
+test("an identity entry names whose it is by their login", async () => {
+  restAnswers.identity = () =>
+    json({
+      events: [
+        identityEntry({ login: "sam.okafor", summary: "invited sam" }),
+        identityEntry({
+          id: "ih-2",
+          class: "session",
+          object_kind: "session",
+          object_id: "01a10f3d-0000-7000-8000-000000000001",
+          op: "open",
+          login: "sam.okafor",
+          summary: "signed in",
+          position: 42,
+        }),
+        identityEntry({ id: "ih-3", summary: "removed", position: 43 }),
+      ],
+      next: 0,
+      position: "CREWLET_IAM_LOG@1:43",
+    });
+  serving({});
+  mount();
+  await waitFor(() => expect(screen.getByText("sam.okafor's session")).toBeTruthy());
+  expect(screen.getAllByText("sam.okafor").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("person 0198f0a0").length).toBeGreaterThan(0);
+});
+
 // A REFUSED TRAIL IS SAID, AND THE REST STAND: the directory's trail is the
 // audit grant's, and a reader refused it keeps every other source.
 test("a refused identity trail names the grant, and the other sources stand", async () => {
