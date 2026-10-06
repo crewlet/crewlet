@@ -97,3 +97,4 @@ type recorder struct {
 func (r *recorder) Line(l []byte)          { r.line(l) }
 func (r *recorder) Skipped(n int64)        { r.skip(n) }
 func (r *recorder) Result() sandbox.Result { return sandbox.Result{} }
+func (r *recorder) Entries() []string      { return nil }

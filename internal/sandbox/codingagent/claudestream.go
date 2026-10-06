@@ -152,6 +152,10 @@ func (d *claudeEvents) Line(line []byte) {
 
 func (d *claudeEvents) Skipped(n int64) { d.transcript.skip(n) }
 
+// Entries implements [Decoder]. Nothing else here grows with the stream: the
+// pending calls are forgotten as their results arrive.
+func (d *claudeEvents) Entries() []string { return d.transcript.take() }
+
 func (d *claudeEvents) Result() sandbox.Result {
 	return sandbox.Result{Transcript: d.transcript.String()}
 }

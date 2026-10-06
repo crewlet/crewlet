@@ -313,26 +313,3 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 		t.Errorf("result text %q, input %d, cost %v; want the result line's", res.Text, res.InputTokens, res.CostUSD)
 	}
 }
-
-// A PEEK SHOWS WHAT A CLAUDE RUN IS DOING — the transcript of the stream so
-// far, which under `json` was nothing at all until the run ended.
-func TestAPeekShowsARunningClaudeRun(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	// Mid-run: the stream so far, no result and no done marker.
-	b.Put(p.Stream(), strings.Join(claudeRunStream[:7], "\n")+"\n")
-	b.Put(p.Err(), "not what a run that streams shows")
-
-	out, err := runner.Peek(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Peek: %v", err)
-	}
-	want := "I'll run the suite first.\n[tool] Bash: go test ./...\n[tool] Read: /home/user/repo/flaky_test.go\n" +
-		"[tool] Bash: go test -run TestFlaky -count=20 ./..."
-	if out.Source != sandbox.SourceTranscript || out.Text != want || out.Finished || out.Cut {
-		t.Errorf("Peek = source %q, finished %v, cut %v, text\n%s\nwant the stream's transcript so far",
-			out.Source, out.Finished, out.Cut, out.Text)
-	}
-}

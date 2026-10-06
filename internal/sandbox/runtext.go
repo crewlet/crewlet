@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -362,6 +363,36 @@ func elidedNote(whole, partial, bytes int) string {
 	}
 	return fmt.Sprintf("(%s left out here: a run's record keeps the first %d KiB and the last %d KiB "+
 		"of its transcript, in whole lines)\n", what, transcriptHeadBytes>>10, transcriptTailBytes>>10)
+}
+
+// KeepEnd is the end of text in WHOLE LINES, at most keep bytes of it, and the
+// offset in text where what it keeps begins — the one rule for showing a
+// stream's end, shared by the live view's windows and the error stream a
+// collection reads.
+//
+// A window opens wherever a byte count put it, and the line it opened inside
+// is the end of something nobody can read whole from here, so it starts at the
+// next line instead — or right at the count, where that is already a line's
+// start. A single line longer than keep is the one case whole lines cannot
+// meet, and it keeps its own end on a character, marked with a leading "…"
+// that is not part of the text the offset counts: a process's last line is
+// where it says what went wrong.
+func KeepEnd(text string, keep int) (string, int) {
+	if len(text) <= keep {
+		return text, 0
+	}
+	cut := len(text) - keep
+	if cut > 0 && text[cut-1] == '\n' {
+		return text[cut:], cut
+	}
+	if i := strings.IndexByte(text[cut:], '\n'); i >= 0 && cut+i+1 < len(text) {
+		return text[cut+i+1:], cut + i + 1
+	}
+	start := cut
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return "…" + text[start:], start
 }
 
 // kib is a size as a reader says it, in KiB rounded up.

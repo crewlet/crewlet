@@ -43,6 +43,14 @@ type Decoder interface {
 	// Result is what the stream said: for a CLI whose result is its stream,
 	// the whole of it; for one whose result is read apart, its transcript.
 	Result() sandbox.Result
+
+	// Entries hands over the transcript entries decoded since it was last
+	// asked, in order, and FORGETS them — what a live reading needs of a
+	// stream that may run for hours ([Runner.Follow]), where keeping them
+	// would hold the whole transcript in memory for as long as somebody
+	// watches. A decoder read this way also stops keeping what only a
+	// Result needs, so it is read one way or the other, never both.
+	Entries() []string
 }
 
 // maxLineBytes is the longest single line of a run's output that is read; a
@@ -144,48 +152,42 @@ func (t *transcriptLines) String() string {
 	return strings.TrimSpace(strings.Join(t.lines, "\n"))
 }
 
+// take hands over the entries added since the last take and forgets them.
+//
+// A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED: its note is said where the
+// run ends, by the next entry, exactly as a whole read says it — so a reading
+// taken in pieces names the same lines as one taken whole.
+func (t *transcriptLines) take() []string {
+	lines := t.lines
+	t.lines = nil
+	return lines
+}
+
 // redactContext is how much MORE than it keeps a read from a stream's end
 // takes, so a credential that began before the kept window is still
 // recognised and redacted.
 //
 // Every credential shape the redaction pass knows fits on one line except a
-// private key, whose PEM block is 1.7 KiB (RSA-2048) to about 6.4 KiB
-// (RSA-8192) between its BEGIN and END lines. A window opening inside such a
-// block would show its base64 body with no BEGIN for the rule to anchor on;
-// with this much read before the window, any key that reaches into it is read
-// whole and redacted as one. Sixty-four KiB is ten of the largest, and the
-// read it costs is a fraction of the window it guards.
-const redactContext = 64 << 10
+// private key, whose block runs from its BEGIN line to an END line at most
+// [redact.MaxKeyBlockBytes] after it. A window opening inside such a block
+// would show its base64 body with no BEGIN for the rule to anchor on; with
+// this much read before the window, any key that reaches into it is read
+// whole and redacted as one — and the bound is the redaction's own, so the two
+// cannot drift.
+const redactContext = redact.MaxKeyBlockBytes
 
 // streamEnd is the end of a stream as text a person or a model can be shown:
 // at most keep bytes of WHOLE lines from the end of tail, redacted, and how
 // many bytes of the file came before what is shown.
 //
 // REDACTED BEFORE IT IS BOUNDED, for the reason [redactContext] exists, and
-// on WHOLE LINES: a window opens wherever the byte count put it, and the line
-// it opened inside is the end of something nobody can read whole from here.
-// A single line longer than keep is the one case that cannot be met in whole
-// lines, and it keeps its own end, marked — a process's last line is where it
-// says what went wrong.
+// on WHOLE LINES by the one rule every stream's end is shown by
+// ([sandbox.KeepEnd]).
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 	data, partial := tail.Lines()
 	text := redact.Secrets(string(data))
-	unread := tail.Before() + int64(partial)
-	if len(text) <= keep {
-		return text, unread
-	}
-	cut := len(text) - keep
-	if i := strings.IndexByte(text[cut:], '\n'); i >= 0 && cut+i+1 < len(text) {
-		unread += int64(cut + i + 1)
-		return text[cut+i+1:], unread
-	}
-	// One line longer than the budget: its own end, on a character.
-	start := cut
-	for start < len(text) && (text[start]&0xC0) == 0x80 {
-		start++
-	}
-	unread += int64(start)
-	return "…" + text[start:], unread
+	kept, at := sandbox.KeepEnd(text, keep)
+	return kept, tail.Before() + int64(partial) + int64(at)
 }
 
 // humanSize renders a byte count as a reader would say it.

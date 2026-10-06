@@ -342,6 +342,19 @@ type openCodeEvents struct {
 	// it counted rather than kept.
 	plain        strings.Builder
 	plainDropped int64
+
+	// following is a decoder read through Entries, which keeps neither
+	// the answer nor the plain output a Result would need: a live reading
+	// holds it for as long as somebody watches.
+	following bool
+}
+
+// Entries implements [Decoder].
+func (d *openCodeEvents) Entries() []string {
+	d.following = true
+	d.answers = nil
+	d.plain.Reset()
+	return d.transcript.take()
 }
 
 func (d *openCodeEvents) Line(line []byte) {
@@ -366,7 +379,9 @@ func (d *openCodeEvents) Line(line []byte) {
 	switch ev.Type {
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
-			d.answers = append(d.answers, chunk)
+			if !d.following {
+				d.answers = append(d.answers, chunk)
+			}
 			d.transcript.add(chunk)
 		}
 	case "tool_use":
@@ -378,6 +393,9 @@ func (d *openCodeEvents) Line(line []byte) {
 }
 
 func (d *openCodeEvents) keepPlain(line []byte) {
+	if d.following {
+		return
+	}
 	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > sandbox.MaxFileBytes {
 		d.plainDropped += int64(len(line) + 1)
 		return
@@ -502,6 +520,7 @@ type lineFunc func(line []byte)
 func (f lineFunc) Line(line []byte)     { f(line) }
 func (lineFunc) Skipped(int64)          {}
 func (lineFunc) Result() sandbox.Result { return sandbox.Result{} }
+func (lineFunc) Entries() []string      { return nil }
 
 // firstLine is one transcript line's echoed command or path, bounded — a
 // PREVIEW, for a person scanning what the run did, and marked as one.

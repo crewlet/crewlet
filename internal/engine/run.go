@@ -541,9 +541,11 @@ type Engine struct {
 	stopMemoryServe queue.Unsubscribe
 
 	// sandboxTails answers a running coding run's live output from the node
-	// that owns it, and stopTailServe withdraws this node as one of its
-	// answerers. See sandboxtail.go.
+	// that owns it, sandboxFeeds is this node's readings of the runs it owns,
+	// and stopTailServe withdraws this node as one of its answerers. See
+	// sandboxtail.go.
 	sandboxTails  *sandbox.TailReader
+	sandboxFeeds  *sandbox.LiveFeeds
 	stopTailServe queue.Unsubscribe
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an

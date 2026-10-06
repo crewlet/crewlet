@@ -351,11 +351,19 @@ type FakeRunner struct {
 	// and a non-nil answer fails it — for a collection whose failure
 	// depends on what happened to the caller meanwhile.
 	CollectFunc func(ctx context.Context) error
-	// PeekErr, when set, fails every Peek.
-	PeekErr error
+	// LiveErr, when set, fails every read of a live reading.
+	LiveErr error
+	// LiveGate, when set, is waited on by every read of a live reading
+	// before it answers — a box that takes a while to read.
+	LiveGate chan struct{}
 
-	output Output
-	peeks  int
+	// The job's live account: what it has said, under which origin and
+	// from which source. See [FakeRunner.Say].
+	account string
+	origin  string
+	source  OutputSource
+	reads   int
+	waiting int
 }
 
 var _ Runner = (*FakeRunner)(nil)
@@ -414,32 +422,99 @@ func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle)
 	return r.result, nil
 }
 
-// Peek returns the output a test set with [FakeRunner.SetOutput], and says
-// the job is finished once [FakeRunner.Finish] has been called.
-func (r *FakeRunner) Peek(ctx context.Context, box Sandbox, handle RunHandle) (Output, error) {
+// Follow begins a live reading of the account a test writes with
+// [FakeRunner.Say].
+//
+// THE ACCOUNT IS DETERMINISTIC, as a real runner's derivation is: every
+// reading of the same account under the same origin reads the same text, so a
+// reading begun afresh — another owner on the same build — continues where an
+// earlier one stopped. [FakeRunner.Rewrite] is the other case: the same origin
+// deriving different text, a build whose parser or redaction changed.
+func (r *FakeRunner) Follow(RunHandle) LiveReading { return &fakeReading{runner: r} }
+
+// Say is the job writing more of its account, from source, under the current
+// origin ("fake@0" until [FakeRunner.Restart] names another).
+func (r *FakeRunner) Say(source OutputSource, text string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.PeekErr != nil {
-		return Output{}, r.PeekErr
+	r.source = source
+	r.account += text
+}
+
+// Restart begins the account anew under another origin — a stream read again
+// from another place, or a switch from one account to the other.
+func (r *FakeRunner) Restart(origin string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.origin, r.account = origin, ""
+}
+
+// Rewrite replaces the account wholesale under the SAME origin: what a node
+// whose build derives the stream differently would read.
+func (r *FakeRunner) Rewrite(text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.account = text
+}
+
+// Reads is how many times a live reading read the box.
+func (r *FakeRunner) Reads() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reads
+}
+
+// Waiting is how many reads have begun and not answered yet.
+func (r *FakeRunner) Waiting() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.waiting
+}
+
+// fakeReading is one live reading of a [FakeRunner]'s account.
+type fakeReading struct {
+	runner *FakeRunner
+	origin string
+	at     int
+}
+
+func (f *fakeReading) Read(ctx context.Context, _ Sandbox) (LiveRead, error) {
+	r := f.runner
+	r.mu.Lock()
+	gate := r.LiveGate
+	r.waiting++
+	r.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			r.mu.Lock()
+			r.waiting--
+			r.mu.Unlock()
+			return LiveRead{}, ctx.Err()
+		}
 	}
-	out := r.output
-	out.Finished = r.done
-	r.peeks++
-	return out, nil
-}
-
-// SetOutput is what the next Peek reports the job has said so far.
-func (r *FakeRunner) SetOutput(out Output) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.output = out
-}
-
-// Peeks is how many times the box was peeked at.
-func (r *FakeRunner) Peeks() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.peeks
+	r.waiting--
+	r.reads++
+	if r.LiveErr != nil {
+		return LiveRead{}, r.LiveErr
+	}
+	origin := r.origin
+	if origin == "" {
+		origin = "fake@0"
+	}
+	if origin != f.origin || f.at > len(r.account) {
+		f.origin, f.at = origin, 0
+	}
+	source := r.source
+	if source == "" {
+		source = SourceNone
+	}
+	text := r.account[f.at:]
+	f.at = len(r.account)
+	return LiveRead{Origin: origin, Source: source, Text: text, Finished: r.done}, nil
 }
 
 // Finish makes the next Poll report done and the next Collect return result.

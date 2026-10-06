@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 var log = logging.Get("sandbox.coding_agent")
@@ -509,84 +507,6 @@ func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string) s
 	}
 	return fmt.Sprintf("%s (%s) is %s, past the %s the engine reads back from a box whole, "+
 		"so it was not read", what, path, size, humanSize(sandbox.MaxFileBytes))
-}
-
-// peekWindow is how much of the END of a running job's event stream one peek
-// decodes into the live view.
-//
-// The view shows the last [sandbox.MaxLiveOutputBytes] of the transcript, and
-// one transcript line stands for one event whose raw size is dominated by
-// what the event echoes — a tool's whole output on a stream that carries it
-// (Claude Code's carries it twice: the result block, and the CLI's own copy
-// beside it), tens of KiB for a file read or a long command. A mebibyte of
-// stream is the last dozen or more such events whole, which is a screen of
-// activity; it is one ranged read per peek, where a peek used to read and
-// decode the whole stream and was refused outright once it passed 32 MiB.
-const peekWindow = 1 << 20
-
-// Peek reads what the job has said about itself so far, for a person watching
-// the run live — see [sandbox.Output].
-//
-// THE SAME TWO ACCOUNTS COLLECT READS, in the same preference: the transcript
-// the runner's decoder builds out of the event stream, and the error stream
-// for an agent whose stdout carries no events. Nothing is written, nothing is
-// signalled and no marker is cleared: a peek racing the completion poll
-// changes neither's answer.
-//
-// THE END OF EACH, read from the end ([peekWindow], and the error stream's
-// last [sandbox.MaxLiveOutputBytes] with [redactContext] before it), because
-// what a watcher asks is what the agent is doing now; and REDACTED here, at
-// the box's boundary, for the reason Collect's own output is — the box's
-// environment holds the seat's credentials.
-func (r *Runner) Peek(ctx context.Context, box sandbox.Sandbox, _ sandbox.RunHandle) (sandbox.Output, error) {
-	paths := PathsFor(box)
-	out := r.cli.Output(paths)
-	marker, err := box.ReadFile(ctx, paths.Done())
-	if err != nil {
-		return sandbox.Output{}, err
-	}
-	live := sandbox.Output{Source: sandbox.SourceNone, AsOf: time.Now().UTC(), Finished: len(marker) > 0}
-	text, frontless := "", false
-	if out.Events {
-		tail, err := box.ReadTail(ctx, out.Stdout, peekWindow)
-		if err != nil {
-			return sandbox.Output{}, err
-		}
-		lines, _ := tail.Lines()
-		dec := r.cli.Events()
-		decodeAll(dec, string(lines))
-		text = strings.TrimSpace(dec.Result().Transcript)
-		frontless = !tail.Whole()
-		if !live.Finished && out.Terminal && len(lines) > 0 {
-			live.Finished = r.cli.Finished(string(lines))
-		}
-	}
-	if text != "" {
-		live.Source = sandbox.SourceTranscript
-		text = redact.Secrets(text)
-	} else {
-		tail, err := box.ReadTail(ctx, paths.Err(), sandbox.MaxLiveOutputBytes+redactContext)
-		if err != nil {
-			return sandbox.Output{}, err
-		}
-		var unread int64
-		text, unread = streamEnd(tail, sandbox.MaxLiveOutputBytes)
-		text = strings.TrimSpace(text)
-		frontless = unread > 0
-		if text != "" {
-			live.Source = sandbox.SourceStderr
-		}
-	}
-	// REDACTED WHOLE, THEN CUT: a secret straddling the cut would otherwise
-	// survive as a fragment the pattern no longer recognises.
-	live.Cut = frontless || len(text) > sandbox.MaxLiveOutputBytes
-	live.Text = textcut.Tail(text, sandbox.MaxLiveOutputBytes)
-	if live.Cut && text != "" && !strings.HasPrefix(live.Text, "…") {
-		// The window began after the stream did, so the front is gone
-		// even where what was read fits: marked as the cut it is.
-		live.Text = "…" + live.Text
-	}
-	return live, nil
 }
 
 // overlayAsk surfaces a question the shim recorded, if there is one, and a
