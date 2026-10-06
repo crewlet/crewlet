@@ -50,6 +50,19 @@ import (
 // maxBytes is the embedder's [Limits.InputBytes]; one below [utf8.UTFMax]
 // cannot hold every character, and is a caller's mistake this refuses by
 // panicking rather than by looping or returning pieces nothing can send.
+//
+// # Why the long-word cut always ends
+//
+// Each cut of a long word takes the longest prefix of at most maxBytes that
+// ends on a rune boundary, and the loop advances by that prefix — so it ends
+// only if the prefix is never empty. Two facts make that so, and both are
+// needed: the text is [Prepare]d, which makes it VALID UTF-8 (a stray byte
+// becomes a whole U+FFFD, as the request's JSON encoding makes it), and
+// maxBytes is at least [utf8.UTFMax]. In valid UTF-8 a rune boundary lies at
+// most three bytes before any cut, so a cut at maxBytes ≥ 4 keeps at least one
+// whole character. Over invalid bytes there is no such boundary — a run of
+// continuation bytes has none at all — and the prefix was empty on every pass,
+// appending empty pieces without end.
 func Chunks(text string, maxBytes int) []string {
 	if maxBytes < utf8.UTFMax {
 		panic(fmt.Sprintf("embeddings: Chunks: a %d-byte piece cannot hold every "+
@@ -83,7 +96,10 @@ func Chunks(text string, maxBytes int) []string {
 		flush()
 		// A WORD LONGER THAN A PIECE is cut on rune boundaries; every
 		// cut but the last is a piece of its own, and the last starts the
-		// next piece, so the words after it can join it.
+		// next piece, so the words after it can join it. Every head is
+		// at least one character, because the text is valid UTF-8 and
+		// maxBytes ≥ utf8.UTFMax — see the doc above for why the loop
+		// rests on both.
 		for len(word) > maxBytes {
 			head := textcut.Bytes(word, maxBytes)
 			chunks = append(chunks, head)

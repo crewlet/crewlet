@@ -1186,8 +1186,9 @@ var EmbeddingModels = map[string]EmbeddingModel{
 const EmbeddingWrapTokens = 16
 
 // EmbeddingLimits is what the embedder enforces, in the unit it counts without
-// a tokenizer: bytes of PREPARED text — whitespace collapsed, which is what is
-// sent (embeddings.Prepare).
+// a tokenizer: bytes of PREPARED text — whitespace collapsed and every stray
+// byte a U+FFFD, which is the text the server decodes from the request
+// (embeddings.Prepare).
 type EmbeddingLimits struct {
 	// InputBytes is the most prepared bytes one input may hold.
 	InputBytes int
