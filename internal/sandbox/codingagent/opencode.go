@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -533,8 +534,19 @@ func (lineFunc) Entries() []string      { return nil }
 // content plus a three-byte ellipsis), so the constant bounded nothing it
 // named; and the byte slice split whatever multi-byte character straddled the
 // cut, which reaches the event store as invalid UTF-8.
+//
+// REDACTED WHOLE BEFORE IT IS CUT, and here because this is the one place
+// every preview cut goes through — a tool's subject, a failed call's error and
+// a run's ending, for both decoders and so for the record and the live view
+// alike. The transcript is redacted again downstream, but by then the cut has
+// already happened: a token whose start fell in the last few dozen bytes
+// before the limit survived as a fragment shorter than its rule's length floor
+// (`ghp_` and 28 of a GitHub token's 36 characters), which no pattern
+// recognises and which identifies the token to anybody holding its checksum.
+// The whole value, not just its first line, because a private key's block
+// runs from a BEGIN line on the first line into the lines below it.
 func firstLine(s string, limit int) string {
-	line, rest, more := strings.Cut(strings.TrimSpace(s), "\n")
+	line, rest, more := strings.Cut(strings.TrimSpace(redact.Secrets(s)), "\n")
 	suffix := ""
 	if more {
 		suffix = fmt.Sprintf(" (+%d more line(s))", strings.Count(rest, "\n")+1)
