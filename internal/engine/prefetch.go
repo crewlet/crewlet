@@ -260,11 +260,10 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 //     what was sent rather than of the wrapping: an issue's key and title, an
 //     email's subject, the surface a chat message came from — and on a
 //     tracker comment the only place the topic is named at all;
-//   - a scheduled task: its [types.TaskAssigned.Ask], the brief without the
-//     run id the scheduler mints for every fire;
-//   - anything else that states an ask (a colleague's question, their
-//     answer): its brief, which is already the ask itself and names who
-//     asked — the one sender a turn woken by a colleague has;
+//   - anything else that states an ask (a schedule's task, a colleague's
+//     question, their answer): its brief, which is already the ask itself —
+//     and for a colleague names who asked, the one sender a turn woken by a
+//     colleague has;
 //   - an event from a build that predates its typed payload: the body in its
 //     free-form bag, as DescribeTrigger reads it.
 //
@@ -289,9 +288,6 @@ func eventAsk(ev *events.Event) string {
 	if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
 		return strings.TrimSpace(strings.TrimSpace(n.Subject) + "\n\n" +
 			strings.TrimSpace(salientBody(n)))
-	}
-	if asker, ok := ev.Data.(interface{ Ask() string }); ok {
-		return asker.Ask()
 	}
 	if brief, ok := ev.Data.(events.Briefer); ok {
 		if b := strings.TrimSpace(brief.Brief()); b != "" {

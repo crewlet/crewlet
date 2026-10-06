@@ -56,13 +56,13 @@ func TestTheTurnsAskIsWhatWasAskedNotTheWrapping(t *testing.T) {
 			wantNot: []string{"## Triage", salient},
 		},
 		{
-			name: "a schedule's fire is its task without the run id",
+			name: "a schedule's fire is its task without the fire's id",
 			event: events.New(types.TaskAssigned{
-				TaskID: "9f2c1a7e-0d4b-4a59-9e1f-2b6c3d8e7a10", Schedule: "weekly-report",
-				Description: "Summarise the week's merged PRs.",
+				TaskID:   "unit:Engineering:weekly-report:2026-09-28T09:00:00Z:swe",
+				Schedule: "weekly-report", Description: "Summarise the week's merged PRs.",
 			}, events.TraceContext{}),
 			want:    []string{"weekly-report", "Summarise the week's merged PRs."},
-			wantNot: []string{"9f2c1a7e"},
+			wantNot: []string{"2026-09-28T09:00:00Z"},
 		},
 		{
 			name: "a colleague's question names who asked",

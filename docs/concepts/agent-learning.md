@@ -334,7 +334,7 @@ A source's `notify.Prompt` builds the **enriched body**: for a Slack message, ab
 
 So the raw message rides separately. The notification's `SalientBody` carries the inbound body verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message, and the merged notification's own `salient_body` is the same messages joined chronologically with sender attribution (`Alice: …`).
 
-**The turn's ask.** At turn start the engine derives, from the trigger, **what the turn was asked** (`prefetch.Request.Ask`) beside the task the executor is handed: each notification's subject and salient body (the subject is part of what was sent — an issue's key and title, the surface a chat message came from, and on a tracker comment the only place the topic is named), a coalesced burst's merged salient body, a colleague's question with who asked, and a schedule's task without the run id the scheduler mints for every fire. Every relevance judgement is made against it:
+**The turn's ask.** At turn start the engine derives, from the trigger, **what the turn was asked** (`prefetch.Request.Ask`) beside the task the executor is handed: each notification's subject and salient body (the subject is part of what was sent — an issue's key and title, the surface a chat message came from, and on a tracker comment the only place the topic is named), a coalesced burst's merged salient body, a colleague's question with who asked, and a schedule's name and task. Every relevance judgement is made against it:
 
 | Surface | Reads |
 |---|---|

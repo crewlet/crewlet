@@ -77,33 +77,18 @@ func (e TaskAssigned) Role() string { return e.RoleName }
 // AgentID is the instance holding that seat.
 func (e TaskAssigned) AgentID() string { return e.Agent }
 
-// Brief is the assigned work.
+// Brief is the assigned work: the schedule it is a fire of, and the
+// schedule's own task text.
 //
-// The id is carried alongside the description rather than instead of it: the
-// seat needs the description to know what to do and the id to write the result
-// back to the tracker, and an id on its own is the ask this engine used to
-// hand every scheduled turn.
+// WITHOUT THE TASK ID, which it used to lead with as "Task <id>" on the
+// stated ground that the seat needs it "to write the result back to the
+// tracker". It does not and cannot: the one producer is the scheduler, whose
+// id is a readable name for the fire — scope, schedule, instant and runner —
+// kept for telemetry and gating nothing, so a seat handed it as a task was
+// handed something that reads as a tracker key and names no item. And as
+// the turn's ask it made two fires of one schedule unalike to every
+// similarity search, by the one part that differs on every fire.
 func (e TaskAssigned) Brief() string {
-	var b strings.Builder
-	if e.Schedule != "" {
-		b.WriteString("Scheduled work: " + e.Schedule + "\n\n")
-	}
-	if e.TaskID != "" {
-		b.WriteString("Task " + e.TaskID + "\n\n")
-	}
-	b.WriteString(e.Description)
-	return strings.TrimSpace(b.String())
-}
-
-// Ask is the assigned work as a relevance judgement reads it: the [Brief]
-// without the task id.
-//
-// The id is in the brief so the seat can write a result back under it; it is
-// no part of WHAT was asked, and the scheduler — the one producer — mints a
-// fresh one for every fire. Judged against, it is a run of random characters
-// that makes two fires of one schedule unalike, which is the opposite of
-// what "similar prior work" is for.
-func (e TaskAssigned) Ask() string {
 	var b strings.Builder
 	if e.Schedule != "" {
 		b.WriteString("Scheduled work: " + e.Schedule + "\n\n")
