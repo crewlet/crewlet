@@ -163,6 +163,14 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 // cap, while an ERROR means the counter that enforces one could not be read.
 // Answering zero for the second would read as UNCAPPED and let a fan-out spend
 // without a ceiling on exactly the failure a budget exists for.
+//
+// AND SO DOES A READER THAT ANSWERS NOTHING LEFT. Zero from a reader is a
+// capped seat whose tightest window is spent — the engine hands no reader at
+// all to a seat nothing caps — and subagent reads a ParentRemaining of zero as
+// UNCAPPED. Passed on, an exhausted seat's fan-out got no slice, which is the
+// fail-open direction the error case is refused for; and there is nothing to
+// share, since the phase's own first charge is refused against a window with
+// no room for a single token.
 func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 	if r.cfg.Subagent == nil || r.cfg.Subagent.Remaining == nil {
 		// No counter configured: the seat itself runs uncapped, so its
@@ -176,7 +184,10 @@ func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 				"offered with no ceiling")
 		return 0, false
 	}
-	if remaining < 0 {
+	if remaining <= 0 {
+		log.InfoContext(ctx, "subagent_budget_spent", "remaining", remaining,
+			"detail", "the seat has no token budget left to share, so the spawner is left "+
+				"off this phase's surface rather than offered with no ceiling")
 		return 0, false
 	}
 	return remaining, true
