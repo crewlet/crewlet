@@ -111,8 +111,10 @@ learning:                               # optional — agent-learning subsystem
     enabled: true                       # ReflectEngine + reflect_and_persist tool
     persist_decider: true               # run the post-turn PersistDecider on every turn
     budget_tokens: 5000                 # soft cap on the decider's LLM call (0 disables)
-    summarize_episodes: true            # cheap-model summarisation of query_episodes hits
-    summarize_max_tokens: 400           # soft cap on summariser response length
+    summarize_episodes: true            # cheap-model briefing of the turn-start
+                                        # Similar prior work hits (query_episodes is
+                                        # never summarised)
+    summarize_max_tokens: 400           # soft cap on that briefing, in tokens
   counterparty:
     enabled: true                       # CounterpartyProfiler + auto-inject + lookup inline
     budget_tokens: 3000                 # soft cap on the profiler's LLM call per turn

@@ -94,13 +94,16 @@ type Reflect struct {
 	// BudgetTokens softly caps the reflection call. 0 disables the cap.
 	BudgetTokens int `yaml:"budget_tokens,omitempty" json:"budget_tokens,omitempty" js:"min=0" desc:"Soft token cap on the reflection call; 0 = uncapped."`
 
-	// SummarizeEpisodes passes raw episode hits through the seat's cheap
-	// auxiliary model for a compact per-hit summary. Falls back to raw
-	// output when no auxiliary model is configured.
-	SummarizeEpisodes Toggle `yaml:"summarize_episodes,omitempty" json:"summarize_episodes,omitzero" desc:"Summarise episode hits through the auxiliary model (default on)."`
+	// SummarizeEpisodes passes the turn-start `## Similar prior work`
+	// block's hits through the seat's cheap auxiliary model, which writes
+	// ONE short briefing of them (at most four bullets) in place of the raw
+	// entries. Falls back to the raw entries when no auxiliary model
+	// answers. query_episodes' answer is never summarised: a seat that asked
+	// for its turns gets them.
+	SummarizeEpisodes Toggle `yaml:"summarize_episodes,omitempty" json:"summarize_episodes,omitzero" desc:"Summarise the turn-start Similar prior work block's hits into one briefing through the auxiliary model (default on); query_episodes is never summarised."`
 
-	// SummarizeMaxTokens softly caps that summary.
-	SummarizeMaxTokens int `yaml:"summarize_max_tokens,omitempty" json:"summarize_max_tokens,omitempty" js:"min=0" desc:"Soft cap on a per-hit summary."`
+	// SummarizeMaxTokens softly caps that briefing.
+	SummarizeMaxTokens int `yaml:"summarize_max_tokens,omitempty" json:"summarize_max_tokens,omitempty" js:"min=0" desc:"Soft cap on the Similar prior work briefing, in tokens."`
 }
 
 // Runs reports whether reflection runs, applying the true default.

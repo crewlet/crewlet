@@ -7,8 +7,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The four blocks with no auxiliary judgement in them — plus one optional
@@ -96,11 +99,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		return ""
 	}
 
-	bullets := make([]string, 0, len(hits))
-	for _, hit := range hits {
-		bullets = append(bullets, renderEpisode(hit))
-	}
-	raw := joinBullets(bullets)
+	raw := joinBullets(f.renderEpisodes(ctx, r.Seat, hits))
 	if raw == "" || !f.src.SummarizeEpisodes {
 		return raw
 	}
@@ -130,19 +129,43 @@ func (f *Fetcher) summaryTokens() int {
 	return DefaultSummaryTokens
 }
 
+// renderEpisodes renders the recalled turns, each one's account condensed
+// where it is long — concurrently, since each condensing is a model call and
+// a turn start is waiting on all of them — and each condensing bounded by
+// [AuxTimeout], the bound every other auxiliary call at a turn start is held
+// to.
+func (f *Fetcher) renderEpisodes(ctx context.Context, seat *org.Role, hits []learning.Hit) []string {
+	fit := f.src.Compact.For(seat)
+	bullets := make([]string, len(hits))
+	var wg sync.WaitGroup
+	for i, hit := range hits {
+		wg.Go(func() {
+			bounded, cancel := context.WithTimeout(ctx, AuxTimeout)
+			defer cancel()
+			bullets[i] = renderEpisode(bounded, fit, hit)
+		})
+	}
+	wg.Wait()
+	return bullets
+}
+
 // renderEpisode renders one past turn.
 //
-// The TASK and the OUTCOME, because those are the two things that make a
-// past turn useful: what it was, and whether it worked. The tool sequence
-// rides along because it is the cheapest possible answer to "how did I do
-// this last time".
-func renderEpisode(hit learning.Hit) string {
+// WHAT WOKE IT, WHAT IT DID, AND WHETHER IT WORKED, because those are what
+// make a past turn useful as precedent. The label alone was all this showed,
+// and a label names the kind of event and nothing of the work — every chat
+// turn's is "Message from <someone>: <surface> message" — so the account of
+// what the turn did ([learning.EpisodeAccount]) rides beside it. The tool
+// sequence rides along because it is the cheapest possible answer to "how did
+// I do this last time".
+func renderEpisode(ctx context.Context, fit compact.Bound, hit learning.Hit) string {
 	ep := hit.Episode
-	summary := collapse(firstNonEmpty(ep.TaskSummary, ep.PlanSummary))
-	if summary == "" {
+	label := collapse(ep.TaskSummary)
+	account := learning.EpisodeAccount(ctx, ep, fit)
+	if label == "" && account == "" {
 		return ""
 	}
-	line := "- " + summary
+	line := "- " + firstNonEmpty(label, "(a turn with no recorded trigger)")
 	var notes []string
 	if ep.ReviewOutcome != "" {
 		notes = append(notes, "outcome: "+ep.ReviewOutcome)
@@ -152,6 +175,9 @@ func renderEpisode(hit learning.Hit) string {
 	}
 	if len(notes) > 0 {
 		line += " _(" + strings.Join(notes, "; ") + ")_"
+	}
+	if account != "" {
+		line += "\n  What it did: " + account
 	}
 	return line
 }

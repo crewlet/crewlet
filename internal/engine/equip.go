@@ -48,6 +48,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
+		Compact:           e.compactorFor(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
 		RefreshesPerTurn:  c.Config.Learning.PersonalMemory.MaxRefreshesPerTurn,
 		SkillBodyMax:      refinement.MaxBodyChars,

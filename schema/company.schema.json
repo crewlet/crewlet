@@ -1870,7 +1870,7 @@
           ]
         },
         "summarize_episodes": {
-          "description": "Summarise episode hits through the auxiliary model (default on).",
+          "description": "Summarise the turn-start Similar prior work block's hits into one briefing through the auxiliary model (default on); query_episodes is never summarised.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -1879,7 +1879,7 @@
           ]
         },
         "summarize_max_tokens": {
-          "description": "Soft cap on a per-hit summary.",
+          "description": "Soft cap on the Similar prior work briefing, in tokens.",
           "minimum": 0,
           "type": [
             "integer",

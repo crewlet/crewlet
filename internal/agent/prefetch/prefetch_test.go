@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -906,6 +907,73 @@ func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("recall is missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// WHAT A PAST TURN DID RIDES BESIDE ITS LABEL. The label is the kind of event
+// that woke it — every chat turn's reads "Message from <someone>" — so a block
+// of labels told a seat three times that somebody had sent a message, and
+// nothing of what it did about it.
+func TestRecallShowsWhatAPastTurnDidBesideItsLabel(t *testing.T) {
+	t.Parallel()
+	got := fetch(t, prefetch.Sources{
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary:   "Message from Ana: Slack message",
+			PlanSummary:   "Rolled staging back to v41 and\nposted the runbook fix in #ops.",
+			ReviewOutcome: "done",
+		}}}},
+		Embed: embeds,
+	}, request(t)).EpisodeRecall
+	want := "- Message from Ana: Slack message _(outcome: done)_\n" +
+		"  What it did: Rolled staging back to v41 and posted the runbook fix in #ops."
+	if got != want {
+		t.Fatalf("recall =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A LONG ACCOUNT IS CONDENSED, NEVER CUT. A turn's account of what it did is
+// its final answer when no review wrote one, and an answer can be pages; the
+// block is in the system prompt and re-sent every round, so past its bound the
+// seat's auxiliary model rewrites it — marked as a rewrite — and the opening
+// of it is never passed off as the whole.
+func TestALongAccountIsCondensedNotCut(t *testing.T) {
+	t.Parallel()
+	long := "OPENING-" + strings.Repeat("the deploy log said ", 200) + "and the fix was the cache key."
+	model := &aux{answers: []string{"fixed the cache key that broke the staging deploy"}}
+	got := fetch(t, prefetch.Sources{
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary: "Message from Ana: Slack message", PlanSummary: long,
+		}}}},
+		Embed:   embeds,
+		Compact: compact.New(models{provider: model}, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	for _, want := range []string{"fixed the cache key that broke the staging deploy", "condensed by a model"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("recall is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "OPENING-") {
+		t.Fatalf("the account's opening was carried alongside its rewrite:\n%s", got)
+	}
+	if model.calls() != 1 || !strings.Contains(model.prompts()[0], "and the fix was the cache key.") {
+		t.Fatalf("the rewrite was not shown the whole account (%d calls)", model.calls())
+	}
+}
+
+// AND ONE NO MODEL CAN CONDENSE IS NAMED BY ITS SIZE, never shown in part: a
+// fragment reads as the whole account.
+func TestAnAccountNoModelCanCondenseIsNamedNotCut(t *testing.T) {
+	t.Parallel()
+	long := "OPENING-" + strings.Repeat("the deploy log said ", 200)
+	got := fetch(t, prefetch.Sources{
+		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
+			TaskSummary: "Message from Ana: Slack message", PlanSummary: long,
+		}}}},
+		Embed: embeds,
+	}, request(t)).EpisodeRecall
+	if strings.Contains(got, "OPENING-") || !strings.Contains(got, "What it did: (") ||
+		!strings.Contains(got, "not shown") {
+		t.Fatalf("recall = %q, want the account named by its size", got)
 	}
 }
 

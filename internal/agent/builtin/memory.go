@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -202,6 +205,10 @@ type queryEpisodes struct {
 	// what a company with no embeddings has.
 	recall Recaller
 
+	// compact condenses a recalled turn's long account of what it did; nil
+	// names such an account by its size (see [learning.EpisodeAccount]).
+	compact *compact.Compactor
+
 	// limit is the company's configured default hit count. Bounded by
 	// maxEpisodeLimit whatever it says, because the ceiling is about what
 	// fits in a prompt rather than what an operator wants.
@@ -335,17 +342,67 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your %d most recent turns%s:\n\n", len(found), scope)
-	for _, ep := range found {
-		fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
-		if ep.TaskSummary != "" {
-			fmt.Fprintf(&b, " — %s", ep.TaskSummary)
-		}
-		b.WriteString("\n")
-		if ep.ReviewOutcome != "" {
-			fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
-		}
+	for _, entry := range t.render(ctx, turn, found) {
+		b.WriteString(entry)
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+// render renders each recalled turn, condensing the long accounts
+// concurrently — each is a model call, and a model is waiting on the answer —
+// at most [compact.Parallel] at once, the compactor's own bound on how many
+// rewrites one caller opens against a seat's provider.
+func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
+	fit := t.compact.For(turn.Seat)
+	out := make([]string, len(found))
+	var group errgroup.Group
+	group.SetLimit(compact.Parallel)
+	for i, ep := range found {
+		group.Go(func() error {
+			out[i] = renderPastTurn(ctx, fit, ep)
+			return nil
+		})
+	}
+	_ = group.Wait() // every render answers nil: a failed rewrite is a size note
+	return out
+}
+
+// renderPastTurn is one entry of query_episodes' answer.
+//
+// A RAW TURN is what woke it, how it ended, and what it did — the account,
+// which the label alone never said: every chat turn's label is "Message from
+// <someone>". A COMPACTED ROW stands for a cluster of turns, so it is the
+// pattern, how many turns it stands for and how many of them ended done, and
+// what varied: it has no label and no account of its own, and rendered as a
+// turn it showed nothing but its date.
+func renderPastTurn(ctx context.Context, fit compact.Bound, ep learning.Episode) string {
+	var b strings.Builder
+	if ep.Kind == learning.KindCompacted {
+		count := max(ep.Count, 1)
+		fmt.Fprintf(&b, "- %s to %s — %d turns like this: %s\n",
+			ep.StartedAt.Format(time.DateOnly), ep.EndedAt.Format(time.DateOnly), count,
+			ep.CommonTaskPattern)
+		if ep.ReviewOutcome != "" {
+			done := int(math.Round(ep.SuccessRate * float64(count)))
+			fmt.Fprintf(&b, "    outcome: %s (%d of %d done)\n", ep.ReviewOutcome, done, count)
+		}
+		if notable := strings.TrimSpace(ep.NotablePatterns); notable != "" {
+			fmt.Fprintf(&b, "    what varied: %s\n", notable)
+		}
+		return b.String()
+	}
+	fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
+	if ep.TaskSummary != "" {
+		fmt.Fprintf(&b, " — %s", ep.TaskSummary)
+	}
+	b.WriteString("\n")
+	if ep.ReviewOutcome != "" {
+		fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
+	}
+	if account := learning.EpisodeAccount(ctx, ep, fit); account != "" {
+		fmt.Fprintf(&b, "    what it did: %s\n", account)
+	}
+	return b.String()
 }
 
 // --- refresh_memory ------------------------------------------------------- //
