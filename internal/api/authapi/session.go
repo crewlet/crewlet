@@ -83,6 +83,14 @@ type sessionResponse struct {
 	// token has its own lifetime and no session to end.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 
+	// Lineage is the id of the session this request carried — the one a
+	// listing of the person's sessions names it by — so a client can say
+	// which of them is this browser and offer no named sign-out of it.
+	// ABSENT exactly where ExpiresAt is. Not a secret: it is what
+	// `POST /auth/logout/{lineage}` takes, and that route decides on the
+	// session's owner, never on who knows its id.
+	Lineage string `json:"lineage,omitempty"`
+
 	// ReauthAt is when this caller's proof of who they are stops counting
 	// for a step-up gesture (`api.auth.session.step_up`) — the instant the
 	// authority table judges against, so a screen counting down to it
@@ -130,10 +138,14 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 	// the year 1. A request whose credential was a header carries no
 	// session, and the zero bearer omits it.
 	var expires time.Time
+	var lineage string
 	status := statusSignedIn
 	if r.Header.Get("Authorization") == "" {
 		presented := s.presentedSession(r)
 		expires = presented.Bearer.AbsoluteExpiresAt
+		if presented.Bearer.Lineage != uuid.Nil {
+			lineage = presented.Bearer.Lineage.String()
+		}
 		// THE BEARER'S MARK AND THE ROW'S TOGETHER, as the guard reads
 		// it: on a node that has not applied the session's start there
 		// is no row, and the session is still the restricted one.
@@ -148,6 +160,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		Stage:     principal.Stage,
 		Grants:    principal.Grants,
 		ExpiresAt: expires,
+		Lineage:   lineage,
 		ReauthAt:  principal.ReauthAt,
 		StepUpDue: s.stepUpDue(principal),
 		Status:    status,

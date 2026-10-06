@@ -133,3 +133,40 @@ func TestChangingHowYouProveWhoYouAreAsksTheStepUpWindow(t *testing.T) {
 		}
 	}
 }
+
+// THE SESSION ROUTE NAMES THE SESSION THE REQUEST CARRIED.
+//
+// A person's sessions are listed by lineage, and the one a browser is reading
+// that list from is the one it must not be offered a named sign-out of — so
+// `GET /auth/session` says which lineage is this browser's, and it is the
+// cookie's own, never another session of the same person. The CONTROL is the
+// second browser, which reads its own. Mutation: drop the lineage and both
+// answers are empty; read it from anything but the presented bearer and the
+// two browsers name one session.
+func TestTheSessionRouteNamesTheSessionTheRequestCarried(t *testing.T) {
+	t.Parallel()
+	r, h := passwordRig(t)
+	here, elsewhere := signedIn(t, h), signedIn(t, h)
+	if len(r.estate.starts) != 2 {
+		t.Fatalf("two sign-ins opened %d sessions", len(r.estate.starts))
+	}
+	lineageOf := func(cookie string) string {
+		t.Helper()
+		rec, _ := send(t, h, http.MethodGet, "/auth/session", "", cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /auth/session answered %d: %s", rec.Code, rec.Body)
+		}
+		var got struct {
+			Lineage string `json:"lineage"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got.Lineage
+	}
+	for i, cookie := range []string{here, elsewhere} {
+		if got, want := lineageOf(cookie), r.estate.starts[i].Lineage; got != want {
+			t.Errorf("browser %d read lineage %q, want its own session's %q", i, got, want)
+		}
+	}
+}
