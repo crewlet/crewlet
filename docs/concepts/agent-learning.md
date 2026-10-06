@@ -482,12 +482,19 @@ Every telemetry write (`Skills.MarkUsed`, the `skill_used` and `knowledge_read` 
 Every completion made on a seat's behalf, the auxiliary calls on this page
 included, is charged to the seat's [`token_budget`](../guides/deployment.md)
 counter and the company's, in the windows current when it returns. For the
-auxiliary calls one wrapper at the model seam does it: the learning workers
-and the turn-start prefetch both resolve their model through the engine's
-metered registry, so a worker added later is charged without anyone wiring a
-charge. Because an auxiliary call's size is known only from its answer, each
-one is **recorded** after it returns, past the ceiling included; where a gate reads the room left first, it decides whether the
-work starts at all:
+auxiliary calls ONE SEAM does it: the learning workers, the turn-start prefetch,
+every compaction and a person's answered question resolve their model through
+the engine's auxiliary seam, stating whose cost the call is — its **stage**
+(`turn`, `reflection`, `background`, `operator`), its **purpose** and the turn it
+serves — and the seam both charges the call and records it as an
+`auxiliary_spend` event, so a worker added later is charged and counted in every
+spend figure without anyone wiring either. A call whose attribution names no
+stage or purpose is refused before a model is resolved. Because an auxiliary
+call's size is known only from its answer, each one is **recorded** after it
+returns, past the ceiling included; where a gate reads the room left first, it
+decides whether the work starts at all. See
+[Budgets and spend § Auxiliary spend](../guides/budgets-and-spend.md#auxiliary-spend)
+for where each stage's spend is drawn:
 
 | Path | Calls | Gate before it starts |
 |---|---|---|

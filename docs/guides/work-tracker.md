@@ -289,7 +289,7 @@ the input beside them. Learning afterwards (reflection, diary, skills, the
 conversation ledger's account of the turn) is the seat's own and is not charged
 to the task, and neither is the condensing of a collected coding run's report,
 which happens between two segments of the turn; both are still on the seat's
-day in the [spend history](budgets-and-spend.md).
+day in the [spend history](budgets-and-spend.md#auxiliary-spend).
 Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
 how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
 returned the work for another pass.

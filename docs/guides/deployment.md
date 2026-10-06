@@ -928,6 +928,14 @@ That last step is what keeps every figure derived from a node's own log
 honest: the `usage` domain sums each node's day, so a batch two data nodes
 kept would bill a stateless node's spend twice.
 
+**Upgrade the data nodes first.** A data node writes each event in a batch by
+its own build's category map, and drops a type its build does not place — so a
+node without `data` on a newer build hands an older data node events it
+cannot keep. The one such type today is `auxiliary_spend`: a stateless node's
+auxiliary spend kept by an older data node is on the budget counter and in no
+spend figure. With every data node upgraded before the nodes without `data`,
+nothing is dropped.
+
 #### What gets stored, and under which category
 
 `category` is the one column with a closed vocabulary, and it is what the
@@ -973,7 +981,7 @@ category.
 
 | Stored, not in the activity feed | Why |
 |---|---|
-| `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush. A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
+| `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
 
 #### Querying events
 
