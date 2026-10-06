@@ -50,6 +50,9 @@ smaller (see
 [Where the vectors come from](../concepts/knowledge-system.md#where-the-vectors-come-from)).
 So a passage deep in a long page is found by `hybrid` and `keyword` through the
 words it uses, and never by `semantic`, which cannot see past the window.
+`crewlet search eval` reports, per corpus, how many sources and how much of
+their text lie past it (see
+[What the quality of this can and cannot be promised](../concepts/knowledge-system.md#what-the-quality-of-this-can-and-cannot-be-promised)).
 
 A semantic ranking needs the **query** in the same embedding space as the
 documents. The asking node computes that vector once through the company's

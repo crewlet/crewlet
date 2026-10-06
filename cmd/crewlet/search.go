@@ -30,6 +30,13 @@ import (
 // Run it monthly and after any change to providers.embeddings.model or
 // .dimensions, which are the two inputs that move the answer.
 //
+// It also says how much of each corpus lies past the window a vector is
+// computed from: a source is embedded as its opening, so a passage deep in a
+// long page is found by its words and never by its meaning. That is a
+// property of the company's own documents, which only its own store can
+// answer, and it is the number that decides whether a source needs more than
+// one vector.
+//
 // # It reads a FILE, not a running node
 //
 // The replicated estate is exclusively owned by the running engine, so this
@@ -59,7 +66,11 @@ const searchUsage = `usage: crewlet search eval [-store PATH] [-config PATH] [fl
          run — and again with the full scan as its first stage, so the report
          says what the index costs. Every query is measured unfiltered,
          narrowed to each source and narrowed to its own container, and the
-         evaluation passes only if every one of those shapes does.`
+         evaluation passes only if every one of those shapes does. It also
+         reports, per corpus, how many sources and how many bytes lie past
+         the window each vector was computed from — what a search by
+         meaning cannot see, which a keyword search still reads — and so
+         reads every source's whole body.`
 
 func runSearchEval(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("search eval", flag.ContinueOnError)
@@ -86,8 +97,20 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 			"seeded fixture's FixtureMeanPairCos is fitted from")
 	metrics := fs.Bool("metrics", false,
 		"print the report as one key=value line per metric, for a collector")
+	window := fs.Int("window", 0, fmt.Sprintf(
+		"the bytes of each source the vectors were computed from, for the "+
+			"report of what lies past them; 0 takes the smaller of %d and the "+
+			"measured model's own per-input bound — state it when "+
+			"providers.embeddings.max_input_tokens lowers that bound",
+		search.EmbedInputBytes))
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *window < 0 {
+		// Refused rather than read as 0, which would report the default
+		// window under a flag that asked for another one.
+		return fmt.Errorf("crewlet search eval: -window %d is not a number of bytes; "+
+			"pass the bound the embedding duty runs at, or 0 for the default", *window)
 	}
 
 	path := strings.TrimSpace(*storePath)
@@ -116,6 +139,7 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 
 	var report search.EvalReport
 	var spaces []search.Space
+	var past windowReport
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		if spaces, err = search.SpacesIn(ctx, tx); err != nil {
@@ -125,6 +149,13 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 			Model: *model, Dim: *dim, Queries: *queries,
 			Limit: *limit, Candidates: *candidates, Probes: *probes,
 		})
+		if err != nil {
+			return err
+		}
+		// WHAT LIES PAST THE WINDOW, in the same read: every source's
+		// whole body, which is why it is this command's and no gauge's.
+		past.bytes, past.basis = embeddedWindow(*window, report.Model)
+		past.corpora, err = search.Window(ctx, tx, past.bytes)
 		return err
 	}); err != nil {
 		return err
@@ -132,8 +163,10 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 
 	if *metrics {
 		printEvalMetrics(stdout, report)
+		printWindowMetrics(stdout, past)
 	} else {
 		printEvalReport(stdout, report, spaces, *fit)
+		printWindowReport(stdout, past)
 	}
 	if !report.Passed() {
 		// A NON-ZERO EXIT, because this is a gate an operator can put in a
@@ -333,4 +366,74 @@ func boolMetric(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+// windowReport is what lies past the window each source's vector was computed
+// from, per corpus, and the window it was measured at.
+type windowReport struct {
+	// bytes is the window, and basis how it was decided.
+	bytes   int
+	basis   string
+	corpora []search.WindowReport
+}
+
+// embeddedWindow is how many bytes of each source the measured model's vectors
+// were computed from, and what says so: the operator's -window, else the
+// corpus's opening (search.EmbedInputBytes) cut to the model's own per-input
+// bound where this build knows a smaller one.
+//
+// THE STORE DOES NOT SAY. The bound the duty applied is the configuration's —
+// the model's documented window, lowered by any `max_input_tokens` the company
+// stated — and the company configuration is not in the replicated estate this
+// command reads. So a model this build knows is resolved from its table, and a
+// stated lower bound is the operator's to pass.
+func embeddedWindow(stated int, model string) (int, string) {
+	if stated > 0 {
+		return stated, "as -window states"
+	}
+	bound := (&config.EmbeddingProvider{Model: model}).Limits().InputBytes
+	if known, ok := config.EmbeddingModels[model]; ok && bound == 0 && known.InputTokens > 0 {
+		// A MODEL WHOSE REQUEST LIMITS ARE UNDOCUMENTED still documents its
+		// window, and the per-input bound is that window less the wrap
+		// allowance, as config.EmbeddingProvider.Limits takes it.
+		bound = known.InputTokens - known.WrapTokens
+	}
+	if bound > 0 && bound < search.EmbedInputBytes {
+		return bound, model + "'s own per-input bound"
+	}
+	return search.EmbedInputBytes, "the corpus's opening"
+}
+
+// printWindowReport says how much of each corpus a search by meaning cannot
+// see — the measurement that decides whether a source needs more than one
+// vector.
+func printWindowReport(w io.Writer, r windowReport) {
+	fmt.Fprintf(w, "window       %d bytes a source (%s): a semantic search sees each "+
+		"source's title and body up to it, a keyword search the whole body\n",
+		r.bytes, r.basis)
+	for _, c := range r.corpora {
+		fmt.Fprintf(w, "past window  %-5s %d of %d sources (%s), %s of %s of text (%s)\n",
+			c.Source, c.Beyond, c.Sources, share(int64(c.Beyond), int64(c.Sources)),
+			humanBytes(c.BeyondBytes), humanBytes(c.Bytes), share(c.BeyondBytes, c.Bytes))
+	}
+}
+
+// printWindowMetrics is the window report as metric lines, labelled by source.
+func printWindowMetrics(w io.Writer, r windowReport) {
+	fmt.Fprintf(w, "search_eval_window_bytes %d\n", r.bytes)
+	for _, c := range r.corpora {
+		label := fmt.Sprintf(`{source=%q}`, string(c.Source))
+		fmt.Fprintf(w, "search_eval_window_sources%s %d\n", label, c.Sources)
+		fmt.Fprintf(w, "search_eval_window_beyond_sources%s %d\n", label, c.Beyond)
+		fmt.Fprintf(w, "search_eval_window_text_bytes%s %d\n", label, c.Bytes)
+		fmt.Fprintf(w, "search_eval_window_beyond_bytes%s %d\n", label, c.BeyondBytes)
+	}
+}
+
+// share is part of whole as a percentage, and a dash for an empty whole.
+func share(part, whole int64) string {
+	if whole <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.1f%%", 100*float64(part)/float64(whole))
 }

@@ -57,6 +57,11 @@ type PageCorpus struct{ DB store.ReplicatedReader }
 // Source implements [Corpus].
 func (PageCorpus) Source() Source { return SourcePage }
 
+// pageLive is the population the page corpus embeds: published pages not in
+// the trash — one spelling for every statement that reads or counts it, for
+// [taskLive]'s reason.
+const pageLive = `p.status = 'published' AND p.trashed_at IS NULL`
+
 // pageSelectionStatement: the published pages whose vector in the asked space
 // is missing or was computed from another body, title or container, oldest
 // first, each with the opening of its body and the digest of the vector it has
@@ -68,7 +73,7 @@ const pageSelectionStatement = `
 	FROM pages_heads p
 	LEFT JOIN kb_vectors v
 	  ON v.source = 'page' AND v.source_id = p.id
-	WHERE p.status = 'published' AND p.trashed_at IS NULL
+	WHERE ` + pageLive + `
 	  AND (v.source_id IS NULL
 	       OR v.source_rev <> p.edit_version
 	       OR v.title <> p.title
@@ -83,8 +88,7 @@ const pageWithdrawalsStatement = `
 	SELECT v.source_id
 	FROM kb_vectors v
 	LEFT JOIN pages_heads p
-	  ON p.id = v.source_id AND p.status = 'published'
-	 AND p.trashed_at IS NULL
+	  ON p.id = v.source_id AND ` + pageLive + `
 	WHERE v.source = 'page' AND p.id IS NULL
 	LIMIT ?`
 
@@ -101,10 +105,10 @@ const pageCoverageStatement = `
 	FROM pages_heads p
 	LEFT JOIN kb_vectors v
 	  ON v.source = 'page' AND v.source_id = p.id
-	WHERE p.status = 'published' AND p.trashed_at IS NULL`
+	WHERE ` + pageLive
 
 // pageSelection, pageWithdrawals and pageCoverageCount are the three
-// statements this corpus runs, each with its arguments â one place, so the
+// statements this corpus runs, each with its arguments — one place, so the
 // plan gate explains what runs rather than a copy.
 func pageSelection(model string, dim, limit int) (string, []any) {
 	return pageSelectionStatement, []any{embedReadChars, model, dim, model, dim, limit}

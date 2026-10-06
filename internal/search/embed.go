@@ -144,7 +144,8 @@ const (
 	// multi-topic page is a mean of its topics and matches none of them
 	// well. What lies past the window is not lost to search — the keyword
 	// half indexes the WHOLE body ([Indexer]) — only to a search by
-	// meaning.
+	// meaning, and `crewlet search eval` reports how much of each corpus
+	// that is ([Window]).
 	//
 	// FROM ABOVE IT IS THE MOST THAT IS PROVABLY INSIDE THE WINDOW without a
 	// tokenizer. A tokenizer emits at most one token per byte of its input
@@ -1331,6 +1332,16 @@ type TaskCorpus struct{ DB store.ReplicatedReader }
 // Source implements [Corpus].
 func (TaskCorpus) Source() Source { return SourceTask }
 
+// taskLive is the population the task corpus embeds: every task not removed.
+//
+// ONE SPELLING for every statement that reads or counts it — the selection,
+// the withdrawals, the coverage and the window report ([Window]) — because
+// two ideas of which sources a corpus holds is a coverage over one population
+// and a backlog over another. Spelled out rather than implied, too: a
+// tracker index carries this predicate, and the planner reaches a partial
+// index only for a statement that states it.
+const taskLive = `t.removed_at IS NULL`
+
 // TaskSelection is the statement [TaskCorpus.Stale] selects stale tasks with,
 // and its arguments; [TaskWithdrawals] and [TaskCoverageCount] are the other
 // two it runs.
@@ -1355,7 +1366,7 @@ const taskSelectionStatement = `
 	FROM tracker_tasks t
 	LEFT JOIN kb_vectors v
 	  ON v.source = 'task' AND v.source_id = t.id
-	WHERE t.removed_at IS NULL
+	WHERE ` + taskLive + `
 	  AND (v.source_id IS NULL
 	       OR v.source_rev <> t.version
 	       OR v.model <> ? OR v.dim <> ?)
@@ -1372,7 +1383,7 @@ const taskWithdrawalsStatement = `
 	SELECT v.source_id
 	FROM kb_vectors v
 	LEFT JOIN tracker_tasks t
-	  ON t.id = v.source_id AND t.removed_at IS NULL
+	  ON t.id = v.source_id AND ` + taskLive + `
 	WHERE v.source = 'task' AND t.id IS NULL
 	LIMIT ?`
 
@@ -1393,7 +1404,7 @@ const taskCoverageStatement = `
 	FROM tracker_tasks t
 	LEFT JOIN kb_vectors v
 	  ON v.source = 'task' AND v.source_id = t.id
-	WHERE t.removed_at IS NULL`
+	WHERE ` + taskLive
 
 // Stale implements [Corpus].
 func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {

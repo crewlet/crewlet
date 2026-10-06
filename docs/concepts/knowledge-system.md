@@ -244,6 +244,9 @@ narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — sc
 narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
 narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
 verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
+window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
+past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
+past window  page  9874 of 14224 sources (69.4%), 402.1 MiB of 518.6 MiB of text (77.5%)
 ```
 
 It exits non-zero when any shape's recall is below its floor, or any drops a
@@ -254,6 +257,23 @@ point it at the copy inside a backup, which needs nothing stopped and measures
 the same rows. `-probes N` measures what reading *N* lists would recall
 instead of the count the index reads now (a narrowed search still reads more
 from there).
+
+**The last lines say what a search by meaning cannot see.** A source is
+embedded as its opening ([below](#where-the-vectors-come-from)), so for each
+corpus the report counts the sources whose text runs past that window and how
+much of the corpus's text lies past it — measured as the vectors are, the
+title and the whole body with the whitespace collapsed. That text is still
+found by the words it uses; it is never found by its meaning, so a `semantic`
+search cannot reach it and a `hybrid` one reaches it only through its keyword
+half. It is the number that decides whether a source needs more than one
+vector: a tracker of short items loses almost nothing, a wiki of long runbooks
+may lose most of each page. The window is the corpus's 8 KiB, cut to the
+model's own per-input bound where this build knows a smaller one; the store
+does not carry the company's configuration, so where
+`providers.embeddings.max_input_tokens` lowers the bound, pass the bound the
+duty runs at as `-window BYTES`. This part of the report reads every source's
+whole body, which is why it is a command an operator runs and not a gauge the
+engine evaluates.
 
 The floor is a **curve** rather than a number, because recall from a sign code
 decreases as the corpus grows — 0.98 at twenty thousand sources, 0.93 at a
