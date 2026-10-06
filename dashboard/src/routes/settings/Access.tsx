@@ -102,7 +102,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
@@ -1428,9 +1428,14 @@ function Principal({
                       {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
                     </Tag>
                   ) : (
-                    <Tag size="sm" variant="neutral" title={s.ended_reason}>
-                      Ended
-                    </Tag>
+                    // WHY, SAID: it rode in a tooltip, so a session a password
+                    // change ended read as one that merely had.
+                    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+                      <Tag size="sm" variant="neutral">
+                        Ended
+                      </Tag>
+                      {s.ended_reason && <span className="t-caption muted">{s.ended_reason}</span>}
+                    </span>
                   ),
               },
               {
@@ -1439,7 +1444,15 @@ function Principal({
                 shrink: true,
                 drop: 1,
                 sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
-                cell: (s) => <DateCell at={s.ended_at ?? s.expires_at} now={now} />,
+                cell: (s) =>
+                  // A DEADLINE IS NOT AN END: a session a counter ended — a
+                  // password change, signing out everywhere — has no ended_at,
+                  // and its expiry read "in 6d" beside "Ended".
+                  !s.live && !s.ended_at && s.expires_at && tsKey(s.expires_at) > now ? (
+                    <EmptyValue label="Not recorded" />
+                  ) : (
+                    <DateCell at={s.ended_at ?? s.expires_at} now={now} />
+                  ),
               },
             ]}
           />

@@ -553,6 +553,16 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 			row.Epoch = uint64(epoch)
 			row.Superseded = sessionSuperseded(uint64(start), row.Epoch,
 				invalidated, current)
+			if row.Superseded && ended == 0 {
+				// A COUNTER ENDED IT, and no record named this session, so
+				// the row holds no reason: say which, or the listing shows
+				// an ended session with no account of why — beside the
+				// deadline it never reached.
+				row.EndedWhy = "ended with every session they held"
+				if uint64(start) < invalidated {
+					row.EndedWhy = "ended with every session in the company"
+				}
+			}
 			row.CreatedAt = fromMillis(created)
 			row.ExpiresAt = fromMillis(expires)
 			row.EndedAt = fromMillis(ended)

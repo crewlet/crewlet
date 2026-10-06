@@ -311,6 +311,35 @@ test("an opened person shows the credentials and sessions read for them", async 
   expect(credentials?.searchParams.get("person")).toBe("p-ana");
 });
 
+// AN ENDED SESSION SAYS WHY, AND NOT WHEN IT WOULD HAVE ENDED. One a counter
+// ended carries a reason and no ended_at; its reason rode in a tooltip and its
+// deadline read as "in 6d" beside "Ended". Mutation: show the expiry for every
+// ended session and the deadline is drawn.
+test("an ended session says why and draws no deadline it never reached", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam((url) =>
+    url.pathname === "/iam/people/p-ana/sessions"
+      ? json(200, {
+          sessions: [
+            {
+              lineage: "s-2",
+              person: "p-ana",
+              live: false,
+              created_at: new Date(Date.now() - 3_600_000).toISOString(),
+              expires_at: new Date(Date.now() + 6 * 86_400_000).toISOString(),
+              ended_reason: "ended with every session they held",
+            },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const reason = await screen.findByText("ended with every session they held");
+  const row = reason.closest(".grid-row") as HTMLElement;
+  expect(within(row).getByText("Not recorded")).toBeTruthy();
+  expect(within(row).queryByText(/^in /)).toBeNull();
+});
+
 // THE INVITATIONS NOBODY REDEEMED, and — asked — every one the estate holds:
 // a sealed address is a state, and a redeemed one says so rather than its
 // deadline. Mutation: drop `all=true` from the toggle's read and the redeemed
