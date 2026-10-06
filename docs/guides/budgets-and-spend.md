@@ -46,6 +46,14 @@ ceiling is raised. The figure is what the company was billed; a counter that
 left the refused round out read lower than the invoice and let the next, smaller
 round in on room that was already spent.
 
+Because every later round is certain to be refused, **a refusal also stops every
+later model call of the turn before it is sent**: the next phase, the round-cap
+judge, the seat's other workers and an agent-mode coding run are refused without
+being made, rather than each billed and then refused. The refused round itself
+is the one a turn pays for past its ceiling — and a turn running alongside it,
+on the same company, can still pay for one round of its own before the counter
+tells it.
+
 A window's allowance comes back when the window turns over, rolled inside the
 first charge after the boundary — nothing has to run at midnight. There is no
 reset: to make room before a window turns over, raise its ceiling. The engine

@@ -361,6 +361,15 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		// agentrun.go for what that does and does not change. The branch
 		// is here, at the top of the phase, because everything below it
 		// is the native loop's own assembly.
+		//
+		// A REFUSAL ALREADY CERTAIN launches nothing. A native pass is
+		// stopped by its own loop before its first call; this one makes
+		// its calls in a box, post-charged when the run is collected, so
+		// it is asked here — or a run would be paid for whole on a window
+		// already past its ceiling.
+		if err := toolloop.Refusal(r.cfg.Budget); err != nil {
+			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+		}
 		return r.executeAsAgentRun(ctx, round, notes, history)
 	}
 	snapshot := r.cfg.Registry.Snapshot()
@@ -1109,13 +1118,22 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 // rather than inside [extension.Consider], which is policy plus a model and
 // has no business knowing about spans, meters or the event vocabulary.
 //
-// A CHARGE THAT REFUSES DOES NOT FAIL THE TURN. The extension is a generosity
+// A CHARGE THAT REFUSES DOES NOT FAIL THE PHASE. The extension is a generosity
 // on a phase that has already run out of rounds, and a seat at its cap should
-// stop extending, not die: an over-budget judgement is logged, published and
-// treated as "no extension", which is the same outcome as the judge saying no.
-// Its tokens are on the counter either way: the judge has answered by the
-// time it is charged, and a meter records a call it refuses as it records one
-// it admits ([toolloop.BudgetMeter]).
+// stop extending rather than have the phase break under it: an over-budget
+// judgement is logged, published and treated as "no extension", which is the
+// same outcome as the judge saying no. Its tokens are on the counter either
+// way: the judge has answered by the time it is charged, and a meter records a
+// call it refuses as it records one it admits ([toolloop.BudgetMeter]). What
+// the refusal does stop is every model call after it: the meter now holds it,
+// so the next phase's first round — the reviewer's, or the executor's after a
+// correction — is refused before it is made, and the turn ends on the budget
+// without paying for a call certain to be thrown away.
+//
+// AND A JUDGE IS NOT CALLED AT ALL ON A REFUSAL ALREADY CERTAIN: it is a model
+// call like any other, billed and then refused. That happens when a refusal
+// lands inside the phase's last round without being the round's own — a
+// worker it delegated to, refused by the seat or the company.
 func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRound int,
 	policy extension.Policy, req extension.Request,
 ) (int, extension.Decision) {
@@ -1129,6 +1147,20 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 		attribute.Int("crewlet.iteration", iteration),
 		attribute.Int("crewlet.rounds", req.RoundsUsed))
 	defer span.End()
+
+	// A REFUSAL ALREADY CERTAIN calls no judge — see above. Only where the
+	// judge WOULD be called: a policy that declines to ask, or a seat with
+	// no judge, costs nothing, and its own reason is the truer account of
+	// why the phase was not extended.
+	if asks, _ := policy.ShouldAsk(req.RoundsUsed); asks && r.cfg.Judge != nil {
+		if refused := toolloop.Refusal(r.cfg.Budget); refused != nil {
+			log.WarnContext(ctx, "extension_judge_over_budget", "phase", ph,
+				"iteration", iteration, "tokens", 0, "error", refused.Error(),
+				"detail", "the budget had already refused this turn, so the judge was not called")
+			span.SetAttributes(attribute.Bool("crewlet.judge_called", false))
+			return 0, extension.Rescue("budget_exhausted")
+		}
+	}
 
 	// THE JUDGE'S OWN WALL CLOCK, bracketed here rather than inside
 	// [extension.Consider] for the same reason the span is: that function is

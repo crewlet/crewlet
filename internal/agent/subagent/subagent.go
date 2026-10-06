@@ -940,6 +940,31 @@ func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutco
 	return outcome, nil
 }
 
+// Refused reports a refusal every further charge of the call is certain to
+// meet: the parent's, where its meter holds one, and otherwise the slice's own
+// once it has no room left for a single token. See
+// [toolloop.BudgetMeter.Refused].
+//
+// THE SLICE IS FINAL. It only grows — every round is recorded on it, refused
+// or not — and its cap is fixed for the call, so once it is spent every worker
+// that starts later, in a later wave or behind max_parallel, would make one
+// full first call (its prompt, its tools, its dependencies' answers) that the
+// vendor bills and the slice refuses. Asked before that call, the worker ends
+// on the slice with no call made. And the parent's outranks the slice's for
+// the reason it does in [sliceMeter.Spend].
+func (m *sliceMeter) Refused() (toolloop.SpendOutcome, bool) {
+	if outcome, refused := m.inner.Refused(); refused {
+		return outcome, true
+	}
+	m.mu.Lock()
+	used := m.used
+	m.mu.Unlock()
+	if used < m.cap {
+		return toolloop.SpendOutcome{}, false
+	}
+	return toolloop.SpendOutcome{OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap}, true
+}
+
 // resolveProvider builds the seat's sub-agent chain.
 //
 // A chain even for one member: the wrapper is a pass-through there, and a

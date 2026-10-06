@@ -73,11 +73,23 @@ func (s *fakeSurface) Execute(_ context.Context, call llm.ToolCall) (toolloop.To
 
 // meter records spends and can refuse or fail. A refused spend is recorded
 // too, as the fleet's counter records one: the meter is handed tokens a
-// round has already spent.
+// round has already spent. And it holds what it has seen as the engine's
+// meter does: once nothing more fits under refuseAt, every later charge is
+// certain to be refused, and [meter.Refused] says so before one is made.
 type meter struct {
 	spent    int
 	refuseAt int // refuse once cumulative spend would exceed this; 0 never
 	err      error
+}
+
+func (m *meter) Refused() (toolloop.SpendOutcome, bool) {
+	if m.refuseAt == 0 || m.spent < m.refuseAt {
+		return toolloop.SpendOutcome{}, false
+	}
+	return toolloop.SpendOutcome{
+		Scope: "role", Used: m.spent, Limit: m.refuseAt,
+		Period: period.Week, Window: "2026-W39", ResetsAt: weekTurnsOver,
+	}, true
 }
 
 func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
@@ -704,6 +716,86 @@ func TestARefusedRoundDoesNotRunItsTools(t *testing.T) {
 	}
 	if len(s.ran) != 0 {
 		t.Errorf("a refused round ran its tools: %v", s.ran)
+	}
+}
+
+// A REFUSAL THE METER ALREADY HOLDS MAKES NO CALL — the first round included.
+//
+// The refused round is counted, so the window it named reads past its ceiling
+// and every later charge is refused whatever its size. The loop used to make
+// the next call anyway, which the vendor billed and the meter then refused:
+// a phase opened after the turn was refused (the reviewer after a judge's
+// refusal, the executor after onboarding's) paid for one round it could
+// never keep. Stopped before the call, it is refused with the same error, and
+// a person's note waiting for that round is left in the box for whoever
+// reads it next rather than marked as read by a round that never ran.
+func TestARefusalTheMeterHoldsMakesNoCall(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{}
+	var log []string
+	box := &noteBox{log: &log}
+	box.offer("n-1", "use staging")
+	m := &meter{refuseAt: 100, spent: 130}
+
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{}, MaxRounds: 5, Budget: m, Steer: box,
+	})
+	var be *toolloop.BudgetError
+	if !errors.As(err, &be) || be.Scope != "role" || be.Used != 130 || be.Limit != 100 ||
+		be.Window != "2026-W39" || !be.ResetsAt.Equal(weekTurnsOver) {
+		t.Fatalf("err = %v, want the refusal the meter holds, window and all", err)
+	}
+	if p.calls != 0 {
+		t.Errorf("the provider was called %d times on a refusal the meter already held", p.calls)
+	}
+	if m.spent != 130 {
+		t.Errorf("the meter was charged to %d by a round that should never have run", m.spent)
+	}
+	if len(log) != 0 {
+		t.Errorf("the box was drained (%v) by a round that never ran", log)
+	}
+}
+
+// chargingSurface charges the turn's meter from inside a tool, the way a
+// worker the round delegated to charges the seat's: a refusal can land on the
+// meter during a round without being that round's own.
+type chargingSurface struct {
+	fakeSurface
+	meter  *meter
+	tokens int
+}
+
+func (s *chargingSurface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+	if _, err := s.meter.Spend(ctx, s.tokens); err != nil {
+		return toolloop.ToolResult{}, err
+	}
+	return s.fakeSurface.Execute(ctx, call)
+}
+
+// A REFUSAL LANDING DURING A ROUND STOPS THE NEXT ROUND'S CALL. The round was
+// admitted and its tool ran, and the tool's own charge — a worker refused by
+// the seat — took the window past its ceiling. The loop's next round is
+// certain to be refused, so it is not made.
+func TestARefusalLandingDuringARoundStopsTheNextCall(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{InputTokens: 40, ToolCalls: []llm.ToolCall{toolCall("1", "delegate")}},
+		{Content: "never asked"},
+	}}
+	m := &meter{refuseAt: 100}
+	s := &chargingSurface{fakeSurface: fakeSurface{tools: []llm.ToolDef{def("delegate")}}, meter: m, tokens: 80}
+
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5, Budget: m,
+	})
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("err = %v, want the refusal the tool's charge left standing", err)
+	}
+	if p.calls != 1 {
+		t.Errorf("the provider was called %d times, want the one admitted round", p.calls)
+	}
+	if len(s.ran) != 1 {
+		t.Errorf("tools ran %v, want the admitted round's one call", s.ran)
 	}
 }
 

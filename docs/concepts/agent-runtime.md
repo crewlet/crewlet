@@ -319,7 +319,10 @@ stateDiagram-v2
   delivered again in order and asked again. A revision that lowers a ceiling
   parks it again at the cost of one delivery.
 - **Refused mid-flight.** A window that had room when the delivery was claimed
-  can run out during the turn. That turn stops with `budget_exhausted`, and the
+  can run out during the turn. That turn stops with `budget_exhausted` and makes
+  no model call after the refusal — its meter holds it, so the next phase, the
+  round-cap judge and the turn's other workers are refused before they are sent
+  ([Turn Engine](turn-engine.md#runtime-invariants), invariant 4) — and the
   seat is parked exactly as above — unless the turn had already written outside
   the engine (an MCP write, a colleague ask, a coding run), in which case the
   trigger is recorded and acked, because running it again after the reset would

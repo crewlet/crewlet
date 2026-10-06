@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -203,6 +204,9 @@ type buildOpts struct {
 	// calls, when set, is the run's call log, on a turn context the
 	// surfaces are bound to — for the cases about what a run has called.
 	calls *turnctx.CallLog
+
+	// budget is the turn's meter, for the cases about what a refusal stops.
+	budget toolloop.BudgetMeter
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -291,6 +295,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Steer:     opts.steer,
 		Subagent:  opts.subagent,
 		Turn:      runTurn,
+		Budget:    opts.budget,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

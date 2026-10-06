@@ -324,6 +324,127 @@ func TestARoundChargedAfterItsTurnEndedIsStillRecorded(t *testing.T) {
 	}
 }
 
+// clockedMeter is a seat's meter over fleet, on a clock the case moves.
+func clockedMeter(t *testing.T, fleet *coordmem.Fleet, c *Company, seat *org.Role, clock *time.Time) *meter {
+	t.Helper()
+	return &meter{
+		budgets: fleet, agentScope: scopeOf(t, c, seat),
+		basis: basisOf(c, seat), now: func() time.Time { return *clock },
+	}
+}
+
+// A METER HOLDS THE REFUSAL IT ANSWERED UNTIL THE WINDOW TURNS OVER.
+//
+// The refused round is counted, so the window reads past its ceiling, and the
+// turn's ceilings are pinned: every later charge in that window is refused,
+// whatever its size. The meter is what every call of the turn charges, so it
+// is the one place that can say so before the next call is made — and only
+// for as long as that is true, which ends when the window does.
+func TestAMeterHoldsTheRefusalItAnsweredUntilTheWindowTurnsOver(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if got, held := m.Refused(); held {
+		t.Fatalf("a fresh meter holds %+v", got)
+	}
+	if got, err := m.Spend(ctx, 98); err != nil || !got.OK {
+		t.Fatalf("Spend(98) = (%+v, %v), want admitted", got, err)
+	}
+	if got, held := m.Refused(); held {
+		t.Fatalf("a window with room left holds %+v", got)
+	}
+	if got, err := m.Spend(ctx, 3); err != nil || got.OK {
+		t.Fatalf("Spend(3) = (%+v, %v), want refused", got, err)
+	}
+	got, held := m.Refused()
+	midnight := time.Date(2026, time.March, 15, 0, 0, 0, 0, time.UTC)
+	if !held || got.OK || got.Scope != "agent" || got.Used != 101 || got.Limit != 100 ||
+		got.Period != period.Day || got.Window != "2026-03-14" || !got.ResetsAt.Equal(midnight) {
+		t.Fatalf("Refused = (%+v, %v), want the seat's day as the counter refused it", got, held)
+	}
+
+	clock = midnight
+	if got, held := m.Refused(); held {
+		t.Fatalf("Refused after the window turned over = %+v, want nothing: the next "+
+			"charge is judged against a new day", got)
+	}
+}
+
+// AN ADMITTED ROUND THAT FILLS A WINDOW LEAVES NOTHING TO ADMIT.
+//
+// Nothing refused it — it fitted exactly — but the window has no room left for
+// a single token, which is the same "refusing" the budget park parks a seat
+// on (windowRefuses), and the next call would be billed and refused.
+func TestAnAdmittedRoundThatFillsAWindowIsHeld(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead"}
+	c := meteredCompany(config.TokenBudget{Week: ceiling(100)}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if got, err := m.Spend(t.Context(), 100); err != nil || !got.OK {
+		t.Fatalf("Spend(100) = (%+v, %v), want admitted at the ceiling", got, err)
+	}
+	got, held := m.Refused()
+	if !held || got.Scope != "org" || got.Period != period.Week || got.Used != 100 || got.Limit != 100 {
+		t.Fatalf("Refused = (%+v, %v), want the company's full week", got, held)
+	}
+}
+
+// A HELD REFUSAL IS NAMED AS THE COUNTER WOULD NAME IT NOW: the company before
+// the seat, because the company is judged first; and once the company's window
+// turns over, the seat's that still stands.
+func TestAHeldRefusalNamesTheCompanyFirst(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Month: 50}}
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if got, err := m.Spend(ctx, 60); err != nil || got.Scope != "agent" {
+		t.Fatalf("Spend(60) = (%+v, %v), want the seat's month refusing", got, err)
+	}
+	if got, err := m.Spend(ctx, 50); err != nil || got.Scope != "org" {
+		t.Fatalf("Spend(50) = (%+v, %v), want the company's day refusing", got, err)
+	}
+	if got, held := m.Refused(); !held || got.Scope != "org" || got.Period != period.Day {
+		t.Fatalf("Refused = (%+v, %v), want the company's day named before the seat's month", got, held)
+	}
+	clock = time.Date(2026, time.March, 15, 9, 0, 0, 0, time.UTC)
+	if got, held := m.Refused(); !held || got.Scope != "agent" || got.Period != period.Month {
+		t.Fatalf("Refused the next day = (%+v, %v), want the seat's month, which still stands", got, held)
+	}
+}
+
+// A REFUSAL ANSWERED TO A CALLER THAT HUNG UP IS HELD ALL THE SAME. The window
+// is full whether or not that caller is listening, and the turn's next call is
+// made by somebody else.
+func TestARefusalAnsweredToACallerThatHungUpIsHeld(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := m.Spend(ended, 250); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Spend on an ended turn = %v, want the turn's own ending", err)
+	}
+	if got, held := m.Refused(); !held || got.Scope != "agent" || got.Used != 250 {
+		t.Fatalf("Refused = (%+v, %v), want the refusal the hung-up charge met", got, held)
+	}
+}
+
 // deadContextRefused is the in-memory counter with the one property of the
 // broker's it lacks: a request on a context that is done fails, as every
 // compare-and-swap the KV backend makes does.

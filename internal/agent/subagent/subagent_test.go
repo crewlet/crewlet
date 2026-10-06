@@ -150,6 +150,19 @@ func (c countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutco
 	return c.m.spend(tokens)
 }
 
+// Refused holds a refusal once one has been answered, as the engine's meter
+// does: a meter that refuses every charge refuses every later one too, so
+// once it has said no it says so before the next call is made.
+func (c countingMeter) Refused() (toolloop.SpendOutcome, bool) {
+	c.m.mu.Lock()
+	defer c.m.mu.Unlock()
+	if !c.m.refuse || len(c.m.charges) == 0 {
+		return toolloop.SpendOutcome{}, false
+	}
+	last := c.m.charges[len(c.m.charges)-1]
+	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: c.m.total, Limit: c.m.total - last}, true
+}
+
 // publisher captures the batch summary event.
 type publisher struct {
 	mu     sync.Mutex
@@ -945,11 +958,16 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Every child's round was spent before anything judged it, so all three
-	// are on the parent's counter. What the shared slice decides is how many
-	// get past it: a per-child wrapper would have let all three finish.
-	if m.sum() != 450 {
-		t.Fatalf("the parent counter holds %d, want the 450 the batch's three rounds spent", m.sum())
+	// Every round a child made was spent before anything judged it, so each
+	// is on the parent's counter — however many were made: the three run
+	// at once, and a child that starts once the slice is spent makes none
+	// (see TestAWorkerStartedOnASpentSliceMakesNoCall). What the shared
+	// slice decides is how many get past it: a per-child wrapper would
+	// have let all three finish.
+	if calls := p.count(); calls < 2 || m.sum() != 150*calls {
+		t.Fatalf("the parent counter holds %d after %d rounds of 150, want every round "+
+			"that was made, and at least the one that fitted and the one that did not",
+			m.sum(), calls)
 	}
 	var ok int
 	for _, r := range results {
@@ -1082,8 +1100,13 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	close(release)
 	results := <-done
 
-	if m.sum() != 8*60 {
-		t.Fatalf("the parent counter holds %d, want every child's 60-token round", m.sum())
+	// Every round a child made is on the parent's counter. How many were
+	// made depends on how many children passed the slice's standing check
+	// before the rounds ahead of them were recorded on it — at least the one
+	// that fitted and the one that crossed it, and none after.
+	if calls := p.count(); calls < 2 || m.sum() != 60*calls {
+		t.Fatalf("the parent counter holds %d after %d rounds of 60, want every round "+
+			"that was made", m.sum(), calls)
 	}
 	var ok int
 	for _, r := range results {
@@ -1093,6 +1116,112 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	}
 	if ok != 1 {
 		t.Errorf("%d of 8 children fitted a one-child slice", ok)
+	}
+}
+
+// A WORKER THAT STARTS ON A SPENT SLICE MAKES NO CALL.
+//
+// Every round is recorded on the slice, refused or not, and its cap is fixed
+// for the call, so once a round takes it to its cap every later charge is
+// refused, whatever its size. A worker started after that — in a later wave,
+// or waiting on max_parallel — used to send its whole first request (its
+// prompt, its tools, its dependencies' answers), which the vendor billed and
+// the slice then refused. It is stopped before the call now, on the slice, and
+// says so.
+func TestAWorkerStartedOnASpentSliceMakesNoCall(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	m := &meter{}
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 100, 50), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{m}
+	cfg.ParentRemaining = 1000 // slice = 200: one 150-token worker fits, the next spends it
+	cfg.Limits.MinTokensPerTask = 0
+	cfg.Limits.MaxParallel = 1
+
+	// A first wave of one, which fits; then a wave of two that queue on
+	// max_parallel, so whichever runs second starts on the slice the first
+	// spent. Which of the two that is, the scheduler decides.
+	results, err := subagent.Run(context.Background(), cfg, batch([]string{"read_file"}, []subagent.Task{
+		{ID: "a", Prompt: "a", SystemPrompt: "s"},
+		{ID: "b", Prompt: "b", SystemPrompt: "s", After: []string{"a"}},
+		{ID: "c", Prompt: "c", SystemPrompt: "s", After: []string{"a"}},
+	}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := p.count(); got != 2 {
+		t.Errorf("the model was called %d times, want 2: the worker that started on a "+
+			"spent slice paid for a call the slice was certain to refuse", got)
+	}
+	if m.sum() != 300 {
+		t.Errorf("the parent counter holds %d, want the two rounds that were made", m.sum())
+	}
+	byID := map[string]subagent.Result{}
+	for _, r := range results {
+		byID[r.ID] = r
+	}
+	if r := byID["a"]; r.Failed() {
+		t.Fatalf("the worker that fitted did not finish: %+v", r)
+	}
+	rounds := map[int]int{}
+	for _, id := range []string{"b", "c"} {
+		r := byID[id]
+		if r.Status != subagent.StatusBudget {
+			t.Errorf("worker %s = %+v, want it stopped on the slice", id, r)
+		}
+		rounds[r.Rounds]++
+	}
+	if rounds[1] != 1 || rounds[0] != 1 {
+		t.Errorf("rounds made by the second wave = %v, want one worker that crossed the "+
+			"slice in its round and one that started on the spent slice and made none", rounds)
+	}
+}
+
+// standingMeter is a seat's counter holding a refusal it already answered, as
+// the engine's meter does once a window it charged is full.
+type standingMeter struct{ countingMeter }
+
+func (s standingMeter) Refused() (toolloop.SpendOutcome, bool) {
+	return toolloop.SpendOutcome{OK: false, Scope: "agent", Used: 120, Limit: 100}, true
+}
+
+// A REFUSAL THE SEAT ALREADY HOLDS STOPS EVERY WORKER BEFORE ITS CALL.
+//
+// The seat's counter refused a round — the parent's own, or a sibling's — and
+// its refused round is counted, so every later charge in that window is
+// refused whatever its size. A worker still to make its first round, or its
+// next one, used to make it, be billed, and be refused. And it is the SEAT's
+// refusal that is reported, never the worker's slice.
+func TestAWorkerStopsOnTheSeatsStandingRefusal(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	m := &meter{}
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 10, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = standingMeter{countingMeter{m}}
+	cfg.ParentRemaining = 1000 // a slice with room: only the seat's refusal stands
+	cfg.Limits.MinTokensPerTask = 0
+
+	results, err := subagent.Run(context.Background(), cfg, batch([]string{"read_file"}, []subagent.Task{
+		{Prompt: "a", SystemPrompt: "s"},
+		{Prompt: "b", SystemPrompt: "s"},
+	}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := p.count(); got != 0 {
+		t.Errorf("the model was called %d times on a seat whose refusal already stood", got)
+	}
+	for _, r := range results {
+		if r.Status != subagent.StatusFailed || !strings.Contains(r.Error, "agent") {
+			t.Errorf("a worker stopped by the seat's refusal = %+v, want failed naming the "+
+				"seat's budget rather than its own slice", r)
+		}
 	}
 }
 
@@ -2351,6 +2480,8 @@ func (b blockingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOut
 	return b.inner.Spend(ctx, tokens)
 }
 
+func (b blockingMeter) Refused() (toolloop.SpendOutcome, bool) { return b.inner.Refused() }
+
 // errOnceMeter fails the FIRST charge and serves the rest, so a test can put a
 // store blip in the middle of a batch.
 type errOnceMeter struct {
@@ -2367,10 +2498,18 @@ func (e errOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutc
 	return e.inner.Spend(ctx, tokens)
 }
 
+func (e errOnceMeter) Refused() (toolloop.SpendOutcome, bool) { return e.inner.Refused() }
+
 // refuseOnceMeter refuses the FIRST charge and serves the rest, so a test can
 // watch what a definite refusal does to a shared reservation. The refused
 // round is recorded on the inner counter like every other, as the fleet's
 // counter records one.
+//
+// It holds NO standing refusal ([refuseOnceMeter.Refused]), which is the one
+// way a real meter can refuse a charge and admit the next: the refusing window
+// turned over in between, which ends what the refusal made certain. Holding
+// one, every later worker would stop on the parent's refusal before its call,
+// and the slice's own record of the refused round would never be tested.
 type refuseOnceMeter struct {
 	inner toolloop.BudgetMeter
 	once  *sync.Once
@@ -2384,6 +2523,10 @@ func (r refuseOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendO
 		return got, err
 	}
 	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: got.Used, Limit: got.Used - tokens}, nil
+}
+
+func (r refuseOnceMeter) Refused() (toolloop.SpendOutcome, bool) {
+	return toolloop.SpendOutcome{}, false
 }
 
 // skillFor is a one-skill catalogue that fires only when its tool is in

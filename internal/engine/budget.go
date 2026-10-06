@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -86,11 +87,24 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 // the day it is counted in, which is the same rule every other epoch read
 // follows. What it does not pin is the instant: each round is charged to the
 // windows current when it is charged.
+//
+// ONE METER SERVES THE WHOLE TURN — every phase, the round-cap judge and every
+// worker the turn delegates to charge it — which is what lets it answer
+// [toolloop.BudgetMeter.Refused] for all of them: a window it has seen full
+// stays full for the rest of the turn, because the ceilings are pinned and
+// nothing takes spend back off a counter, until the window turns over.
 type meter struct {
 	budgets    budgetCounter
 	agentScope string
 	basis      budgetBasis
 	now        func() time.Time
+
+	// mu guards full.
+	mu sync.Mutex
+	// full is every capped window this meter has seen with no room left
+	// for a single token, at most one per scope and period, each as the
+	// refusal it makes certain. See [meter.Refused].
+	full []toolloop.SpendOutcome
 }
 
 var _ toolloop.BudgetMeter = (*meter)(nil)
@@ -125,18 +139,113 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 		// budget event an operator acts on, the second is an outage.
 		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: %w", err)
 	}
+	// WHAT THE ANSWER MAKES CERTAIN is kept before the caller is told
+	// anything, a caller that hung up included: the window is full whether
+	// or not this caller is still listening, and the turn's next call is
+	// made by somebody else.
+	outcome := toolloop.SpendOutcome{OK: true}
+	if !got.OK {
+		outcome = toolloop.SpendOutcome{
+			Scope: got.RefusedScope, Used: got.RefusedUsed, Limit: got.RefusedLimit,
+			Period: got.RefusedPeriod, Window: got.RefusedWindow.Label,
+			ResetsAt: got.RefusedWindow.End,
+		}
+		m.keepFull(outcome)
+	} else {
+		m.keepFilled(got)
+	}
 	if cause := context.Cause(ctx); cause != nil {
 		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: the round is "+
 			"recorded and the turn has ended: %w", cause)
 	}
-	if !got.OK {
-		return toolloop.SpendOutcome{
-			Scope: got.RefusedScope, Used: got.RefusedUsed, Limit: got.RefusedLimit,
-			Period: got.RefusedPeriod, Window: got.RefusedWindow.Label,
-			ResetsAt: got.RefusedWindow.End,
-		}, nil
+	return outcome, nil
+}
+
+// Refused reports the refusal every further charge of this turn is certain to
+// meet, if this meter has seen one. See [toolloop.BudgetMeter.Refused].
+//
+// From two answers the counter already gave, and never a read: a charge it
+// REFUSED, whose refused round is counted, so the window it named reads past
+// its ceiling; and a charge it ADMITTED whose usage left a capped window at its
+// ceiling exactly — the same "no room for a single token" [windowRefuses]
+// parks a seat on. Either is final until that window turns over, because the
+// meter's ceilings are the turn's pinned ones and a counter only grows within
+// a window (coord.SeatUncountedError: nothing is taken back).
+//
+// NAMED AS THE COUNTER WOULD NAME IT NOW: of the windows still current, the
+// company's before the seat's — the company is judged first — and within a
+// scope the window that ends last ([coord.Outlasts]), which is when the seat
+// can next be admitted without a ceiling being raised.
+func (m *meter) Refused() (toolloop.SpendOutcome, bool) {
+	now := m.now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var named toolloop.SpendOutcome
+	found := false
+	for _, full := range m.full {
+		if !now.Before(full.ResetsAt) {
+			// Turned over: the window this was is gone, and the next
+			// charge is judged against a fresh one.
+			continue
+		}
+		if !found || namesBefore(full, named) {
+			named, found = full, true
+		}
 	}
-	return toolloop.SpendOutcome{OK: true}, nil
+	return named, found
+}
+
+// namesBefore reports whether a refusal of a's window is the one a charge names
+// over b's: the company before a seat, and within a scope the window a waits
+// on longer.
+func namesBefore(a, b toolloop.SpendOutcome) bool {
+	if (a.Scope == "org") != (b.Scope == "org") {
+		return a.Scope == "org"
+	}
+	return coord.Outlasts(
+		period.Window{Period: a.Period, Label: a.Window, End: a.ResetsAt},
+		period.Window{Period: b.Period, Label: b.Window, End: b.ResetsAt})
+}
+
+// keepFull records a window this meter has seen full, replacing what it held
+// for the same scope and period: a window that turned over and filled again is
+// one record, not two.
+func (m *meter) keepFull(full toolloop.SpendOutcome) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, held := range m.full {
+		if held.Scope == full.Scope && held.Period == full.Period {
+			m.full[i] = full
+			return
+		}
+	}
+	m.full = append(m.full, full)
+}
+
+// keepFilled records every capped window an admitted charge left at its
+// ceiling. Its round fitted, so nothing refused it — but nothing will fit
+// after it either, and this is the one moment the meter is told so without
+// paying for a call to find out.
+func (m *meter) keepFilled(got coord.Spend) {
+	for _, scope := range []struct {
+		name  string
+		usage coord.Usage
+		caps  coord.Caps
+	}{
+		{"org", got.Org, m.basis.org},
+		{"agent", got.Agent, m.basis.seat},
+	} {
+		for p, ceiling := range scope.caps {
+			slot := scope.usage.In(p)
+			if !windowRefuses(slot, ceiling) {
+				continue
+			}
+			m.keepFull(toolloop.SpendOutcome{
+				Scope: scope.name, Used: slot.Used, Limit: ceiling,
+				Period: p, Window: slot.Window.Label, ResetsAt: slot.Window.End,
+			})
+		}
+	}
 }
 
 // Remaining is this seat's headroom, in tokens: the least room left in any

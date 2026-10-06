@@ -1502,7 +1502,8 @@ just short of it; `refused_at` is when the gate said no.
 No model call can be checked by its own size first, because its size is known
 only once it has happened. A turn's round is judged when it is charged, as
 above, because a verdict still has something to stop: the tools it asked for
-and the rounds after it. Four other spends have nothing left to stop by the
+and every model call of the turn after it, each refused before it is sent
+rather than billed and refused in turn. Four other spends have nothing left to stop by the
 time their size is known, so each is **post-charged** — added to the counters
 in the windows it is recorded in, without a verdict — behind a gate that reads
 the room left *before* it starts:

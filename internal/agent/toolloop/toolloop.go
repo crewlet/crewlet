@@ -421,16 +421,60 @@ type BudgetMeter interface {
 	// Already spent, because the loop charges a round once its reply is
 	// in — a round's size is known no sooner — and before any tool the
 	// round asked for runs. So a refusal decides what FOLLOWS the round:
-	// its tools do not run and no later round starts. It does not undo
-	// the round, which the vendor has billed, and a meter must record a
-	// round it refuses exactly as it records one it admits: one that
-	// dropped it under-stated the company by the round that crossed the
-	// cap, and admitted the next round smaller than the room left on top
-	// of tokens the refused one had already used.
+	// its tools do not run, and no later model call of the turn is made
+	// ([BudgetMeter.Refused]). It does not undo the round, which the vendor
+	// has billed, and a meter must record a round it refuses exactly as it
+	// records one it admits: one that dropped it under-stated the company
+	// by the round that crossed the cap, and admitted the next round
+	// smaller than the room left on top of tokens the refused one had
+	// already used.
 	//
 	// An error means the counter could not be reached, which is not the
 	// same as a refusal and must not be treated as one.
 	Spend(ctx context.Context, tokens int) (SpendOutcome, error)
+
+	// Refused reports a refusal every further charge is CERTAIN to meet,
+	// from what this meter has already been told — it asks the counter
+	// nothing. A caller asks it before every model call it is about to
+	// make, and on true makes none: the call would be billed by the vendor,
+	// then refused, and everything it bought thrown away. That is the half
+	// of a refusal Spend cannot carry, because a refusal is answered to one
+	// caller and a turn makes its calls from several — the next round of
+	// this loop, the round-cap judge, the next phase, a sibling worker, an
+	// agent-mode executor's launch — and before this each of them paid for
+	// one call certain to be refused.
+	//
+	// CERTAIN, NEVER LIKELY. A meter answers true only for a window it has
+	// seen with no room left for a single token, judged by ceilings that do
+	// not move for the meter's life, on a counter nothing takes spend back
+	// from — so every later charge in that window is refused, whatever its
+	// size. It stops answering true when that window turns over
+	// ([SpendOutcome.ResetsAt]); a window with no calendar, a worker's own
+	// slice, never turns over. What a meter has not seen — another seat
+	// spending the company's last room since this one last charged — is
+	// left to the next charge, which is the gate.
+	//
+	// The outcome is the refusal as the counter would name it now, and is
+	// what the caller reports ([Refusal]).
+	Refused() (SpendOutcome, bool)
+}
+
+// Refusal is the error a meter's standing refusal answers, or nil: nil for a
+// nil meter, and nil while no refusal stands ([BudgetMeter.Refused]).
+//
+// It is the question the loop asks before every round, exported because the
+// loop is not the only frame that calls a model on a turn's meter: the
+// round-cap judge and an agent-mode executor's launch ask it too, so every
+// call in a turn is stopped by the same answer.
+func Refusal(meter BudgetMeter) error {
+	if meter == nil {
+		return nil
+	}
+	outcome, refused := meter.Refused()
+	if !refused {
+		return nil
+	}
+	return budgetError(outcome)
 }
 
 // ErrBudgetExhausted is returned when a spend was refused. Callers branch on
@@ -887,6 +931,18 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			}
 		}
 
+		// A REFUSAL ALREADY CERTAIN ends the loop before the call it would
+		// refuse is made — the first round included, since the refusal may
+		// have been answered to another caller on the turn's meter: an
+		// earlier phase, the round-cap judge, a worker this phase
+		// delegated to. Asked before the notes below are drained, so a
+		// person's note is not marked taken by a round that never runs.
+		// The loop publishes nothing here: no round opened, and the record
+		// the caller reads already holds every round that did.
+		if err := Refusal(cfg.Budget); err != nil {
+			return nil, err
+		}
+
 		// A PERSON'S NOTES, straight after the fence and before anything
 		// is spent: the round about to run is the first to read them. See
 		// [Config.Steer] for why here and nowhere else.
@@ -1339,6 +1395,13 @@ func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if outcome.OK {
 		return nil
 	}
+	return budgetError(outcome)
+}
+
+// budgetError is the error a refusal answers, the meter's outcome carried
+// unchanged — one constructor for a refusal the loop was just told and one a
+// meter already held, so the two read alike everywhere they are reported.
+func budgetError(outcome SpendOutcome) *BudgetError {
 	scope := outcome.Scope
 	if scope == "" {
 		scope = "org"
