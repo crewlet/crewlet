@@ -501,7 +501,29 @@ func (in Enrolment) validate() error {
 			"they make is recorded under while they hold no seat, and without "+
 			"one they would be recorded as nobody", ErrInvalidLogin)
 	}
+	if err := machineHolds(in.Kind, in.Grants); err != nil {
+		return err
+	}
 	return loginFits(in.Kind, in.Login)
+}
+
+// machineHolds refuses a MACHINE a grant it could never exercise: one a
+// token never carries ([iam.PersonPresentGrants]). A machine has no password
+// and no session — it acts only through tokens minted on it, which drop those
+// grants on every request, and a Tier A token's row is no account at all — so
+// a service account created holding `people:manage` listed a grant nothing it
+// can present would ever carry.
+func machineHolds[G ~string](kind iam.Kind, grants []G) error {
+	if kind != iam.KindMachine {
+		return nil
+	}
+	for _, g := range grants {
+		if slices.Contains(iam.PersonPresentGrants, iam.Grant(g)) {
+			return fmt.Errorf("%w: a machine acts only through tokens, and a "+
+				"token never carries %s — it needs a person present", ErrInvalid, g)
+		}
+	}
+	return nil
 }
 
 // redeemable refuses an enrolment its invitation does not cover, read inside
@@ -2515,8 +2537,14 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err = w.MayConfer(person.Grants, updated.Grants); err != nil {
 			return err
 		}
+		added, _ := grantDelta(person.Grants, updated.Grants)
+		// ONLY WHAT IS ADDED, as MayConfer judges: a row already holding
+		// such a grant can still be edited, and is where it is taken away.
+		if err = machineHolds(person.Kind, added); err != nil {
+			return err
+		}
 		// A GRANT GAINED ENDS EVERY OUTSTANDING RESET LINK, in this record.
-		if added, _ := grantDelta(person.Grants, updated.Grants); len(added) > 0 {
+		if len(added) > 0 {
 			updated.Credentials = RevokeResetLinks(updated.Credentials, w.Now())
 		}
 		if updated.Credentials, err = fitHeld(updated.Credentials, w.Now(),

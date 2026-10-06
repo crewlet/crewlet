@@ -803,7 +803,10 @@ alike — and so is a `kind` other
 than `person` or `machine`, since a seat belongs to the company document and
 the engine is the node. A value outside a bound is `400` too: a `reason` longer than 256
 bytes (it is rendered into the authentication trail beside the op, so it
-names which cause fired rather than narrating). An enrolment is one record, so a
+names which cause fired rather than narrating), and a machine given
+`secrets:read` or `people:manage` — by a create, or by an edit that adds one —
+since a machine acts only through tokens and a token never carries either. An
+enrolment is one record, so a
 refused create leaves nothing behind and the corrected retry lands.
 
 #### `POST /iam/credentials` mints a machine token

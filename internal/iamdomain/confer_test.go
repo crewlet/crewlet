@@ -2,6 +2,7 @@ package iamdomain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,9 +48,9 @@ func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 		})
 	}
 	if err := enrol(narrowAdmin(rig), "op-widen", "ci:widen",
-		[]iam.Grant{iam.GrantSecretRead}); !errors.Is(err, iamdomain.ErrRefused) {
+		[]iam.Grant{iam.GrantConfigWrite}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party holding only %s enrolled somebody carrying "+
-			"secrets:read (%v)", iamdomain.AdminGrant, err)
+			"config:write (%v)", iamdomain.AdminGrant, err)
 	}
 	// REFUSED BEFORE THE FIRST CLAIM, so the refusal leaves nothing behind:
 	// the writer's own grants need no read, and a claimed login behind a
@@ -59,10 +60,68 @@ func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 		t.Errorf("a refused enrolment left rows behind: %v", got)
 	}
 	// AND THE CONTROL: what the writer holds, it may confer.
-	if err := enrol(narrowAdmin(rig), "op-within", "ci:within",
-		[]iam.Grant{iamdomain.AdminGrant}); err != nil {
-		t.Errorf("a party holding %s was refused conferring it: %v",
-			iamdomain.AdminGrant, err)
+	reader := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iamdomain.AdminGrant, iam.GrantStateRead}))
+	if err := enrol(reader, "op-within", "ci:within",
+		[]iam.Grant{iam.GrantStateRead}); err != nil {
+		t.Errorf("a party holding state:read was refused conferring it: %v", err)
+	}
+}
+
+// A MACHINE HOLDS NO GRANT A TOKEN NEVER CARRIES.
+//
+// A machine has no password and no session: it acts only through tokens, and
+// a token drops `secrets:read` and `people:manage` on every request — so a
+// service account created holding either listed a grant it could never
+// exercise. An enrolment is refused it, and so is an edit that ADDS one. The
+// CONTROLS: a person may hold both, and a machine may hold the rest.
+// Mutation: drop the check from the enrolment, or from the edit, and its case
+// lands.
+func TestAMachineHoldsNoGrantATokenNeverCarries(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	enrol := func(kind iam.Kind, login, email string, grants []iam.Grant) (string, error) {
+		id := uuid.Must(uuid.NewV7()).String()
+		return id, rig.draining(func() error {
+			_, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+				PersonID: id, Kind: kind, Stage: iam.StageActive, Login: login,
+				Email: email, Grants: grants, OpID: operationKey(), Reason: "test",
+			})
+			return err
+		})
+	}
+	for _, g := range iam.PersonPresentGrants {
+		if _, err := enrol(iam.KindMachine, "ci:"+strings.ReplaceAll(string(g), ":", "-"), "",
+			[]iam.Grant{iam.GrantStateRead, g}); !errors.Is(err, iamdomain.ErrInvalid) {
+			t.Errorf("a machine was enrolled holding %s (%v)", g, err)
+		}
+	}
+	if _, err := enrol(iam.KindPerson, "dana.ops", "dana@example.com",
+		iam.PersonPresentGrants); err != nil {
+		t.Errorf("a person was refused the grants a token never carries: %v", err)
+	}
+	machine, err := enrol(iam.KindMachine, "ci:release", "",
+		[]iam.Grant{iam.GrantStateRead})
+	if err != nil {
+		t.Fatalf("a machine holding state:read was refused: %v", err)
+	}
+	update := func(grants []iam.Grant) error {
+		return rig.draining(func() error {
+			_, err := rig.writer.UpdatePerson(rig.t.Context(), iamdomain.PersonUpdate{
+				PersonID: machine, OpID: operationKey(), Reason: "test",
+				Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
+					p.Grants = grants
+					return p, nil
+				},
+			})
+			return err
+		})
+	}
+	if err := update([]iam.Grant{iam.GrantStateRead, iam.GrantPeopleManage}); !errors.Is(err, iamdomain.ErrInvalid) {
+		t.Errorf("an edit gave a machine people:manage (%v)", err)
+	}
+	if err := update([]iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}); err != nil {
+		t.Errorf("an edit giving a machine work:write was refused: %v", err)
 	}
 }
 

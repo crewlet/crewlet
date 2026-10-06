@@ -1148,8 +1148,12 @@ A **machine token** is the third credential, beside the deployment's Tier A
 tokens and a person's session: a bearer minted *for somebody in the
 directory* — a person's own token for the assistant they work through, or the
 token a **service account** (a directory row of kind `machine`, with a coloned
-login such as `ci:release`) presents from a pipeline. It is what
-`crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any other:
+login such as `ci:release`) presents from a pipeline. A service account has
+no password and no session, so it acts only through its tokens — and since a
+token never carries `secrets:read` or `people:manage`, a machine row is refused
+either: an enrolment or an edit that would give one to a machine is `400`. It
+is what `crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any
+other:
 
 ```bash
 # Your own, for the assistant you work through: signs in as you for the one
@@ -1437,7 +1441,7 @@ read-only. What each gesture ends is the route's:
 |---|---|
 | **Invite person** | An address, a human seat nobody holds, the grants (none the inviter does not hold). The [link](#everybody-arrives-by-invitation) is shown once; redeeming it creates the person |
 | **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address |
-| **New service account** · **Mint token** | A machine with a coloned login and grants, then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants — never `secrets:read` or `people:manage` — shown once |
+| **New service account** · **Mint token** | A machine with a coloned login and grants — never `secrets:read` or `people:manage`, which no token carries and so no machine is given — then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants, shown once |
 | **Edit login, seat and grants** | One edit carrying only what changed. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
 | **Suspend** · **Reactivate** | A suspended person may not act, every session and token they hold ends, and a seat they hold is withheld; reactivating restores the seat and lets them sign in again |
 | **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold |
