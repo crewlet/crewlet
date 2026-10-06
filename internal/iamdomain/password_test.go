@@ -237,3 +237,43 @@ func TestAResetLinkIsNoBearer(t *testing.T) {
 		t.Errorf("a machine token resolved as a reset link: %+v", tokenRow)
 	}
 }
+
+// A RESET LINK ITS PERSON USED IS LISTED AS USED, NOT AS WITHDRAWN.
+//
+// Setting a password revokes every reset link the person holds, the one spent
+// included, so a listing reading the revocation alone said the link they had
+// just used was one somebody withdrew. The spent link is marked; the CONTROL is
+// a second link the same set revoked, which is not. Mutation: leave the spent
+// link unmarked and both read as withdrawn.
+func TestAResetLinkItsPersonUsedIsListedAsUsed(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	spent, _ := issueReset(t, rig, owner)
+	other, _ := issueReset(t, rig, owner)
+	if err := rig.draining(func() error {
+		_, err := nodeWriter(rig).SetPassword(t.Context(), iamdomain.PasswordSet{
+			PersonID: owner, Verifier: "argon-new", Spends: spent,
+			OpID: operationKey(), Reason: "set a new password from a reset link",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	rig.drain()
+	rows, err := rig.reader(t).Credentials(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]iamdomain.CredentialRow{}
+	for _, row := range rows {
+		listed[row.ID] = row
+	}
+	for id, want := range map[string]bool{spent: true, other: false} {
+		row := listed[id]
+		if row.RevokedAt.IsZero() || row.Spent != want {
+			t.Errorf("the link %s is listed revoked at %v, spent %v — want "+
+				"revoked, spent %v", id, row.RevokedAt, row.Spent, want)
+		}
+	}
+}

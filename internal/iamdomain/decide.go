@@ -2354,9 +2354,13 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 			// REPLACED, not revoked: a password has no listing of its
 			// own anybody reads afterwards, and a second one on the
 			// row is a second password that works.
-			if c.Method != MethodPassword {
-				kept = append(kept, c)
+			if c.Method == MethodPassword {
+				continue
 			}
+			if c.Method == MethodReset && c.ID == in.Spends {
+				c.Spent = true
+			}
+			kept = append(kept, c)
 		}
 		kept = append(kept, Credential{
 			V: DocumentVersion, ID: id, Method: MethodPassword,
@@ -2412,6 +2416,11 @@ type PasswordSet struct {
 	// does not hold and must not read separately. It may refuse; it forms
 	// nothing.
 	Check func(Person) error
+
+	// Spends is the reset link this password is set from, marked
+	// [Credential.Spent] beside the revocation every link takes; empty for
+	// a person changing their own.
+	Spends string
 
 	OpID   string
 	Reason string

@@ -40,15 +40,19 @@ import { rest } from "~/protocol/index.ts";
 export const PEOPLE_MANAGE = "people:manage";
 
 /**
- * The word for a credential the engine reports `revoked`: EXPIRED only past
- * its own deadline with nobody's revocation stamped on it. A token ended by a
- * counter — its owner changing their password or signing out everywhere, or a
- * restore — carries neither stamp, and it was revoked rather than aged out.
+ * The word for a credential the engine reports `revoked`: USED for a reset
+ * link its person spent, which setting the password revokes as well — read as
+ * "Revoked" it said somebody had withdrawn the link they had just used.
+ * EXPIRED only past its own deadline with nobody's revocation stamped on it. A
+ * token ended by a counter — its owner changing their password or signing out
+ * everywhere, or a restore — carries neither stamp, and it was revoked rather
+ * than aged out.
  */
 export function endedWord(
-  c: { revoked_at?: string; expires_at?: string },
+  c: { revoked_at?: string; expires_at?: string; spent?: boolean },
   now: number,
-): "Revoked" | "Expired" {
+): "Revoked" | "Expired" | "Used" {
+  if (c.spent) return "Used";
   return !c.revoked_at && c.expires_at && tsKey(c.expires_at) <= now ? "Expired" : "Revoked";
 }
 

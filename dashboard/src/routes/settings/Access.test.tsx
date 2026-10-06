@@ -340,6 +340,39 @@ test("an ended session says why and draws no deadline it never reached", async (
   expect(within(row).queryByText(/^in /)).toBeNull();
 });
 
+// A RESET LINK ITS PERSON USED READS USED: setting the password revokes it
+// too, and "Revoked" said somebody had withdrawn it. The CONTROL is a link
+// withdrawn unused. Mutation: drop `spent` from the word and both read Revoked.
+test("a reset link its person used reads used, one withdrawn reads revoked", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam((url) =>
+    url.pathname === "/iam/credentials"
+      ? json(200, {
+          credentials: [
+            {
+              id: "c-used",
+              person: "p-ana",
+              method: "reset",
+              revoked: true,
+              revoked_at: "2026-10-06T03:00:00Z",
+              spent: true,
+            },
+            {
+              id: "c-withdrawn",
+              person: "p-ana",
+              method: "reset",
+              revoked: true,
+              revoked_at: "2026-10-05T03:00:00Z",
+            },
+          ],
+        })
+      : null,
+  );
+  mount();
+  expect(await screen.findByText("Used")).toBeTruthy();
+  expect(screen.getAllByText("Revoked")).toHaveLength(1);
+});
+
 // THE INVITATIONS NOBODY REDEEMED, and — asked — every one the estate holds:
 // a sealed address is a state, and a redeemed one says so rather than its
 // deadline. Mutation: drop `all=true` from the toggle's read and the redeemed

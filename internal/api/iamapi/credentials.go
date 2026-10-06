@@ -36,6 +36,9 @@ type credentialView struct {
 	RevokedAt time.Time                  `json:"revoked_at,omitzero"`
 	Revoked   bool                       `json:"revoked"`
 
+	// Spent is a reset link its person used, which is revoked too.
+	Spent bool `json:"spent,omitempty"`
+
 	// Grants are what a machine token was minted carrying: the ceiling on
 	// what it does, re-cut to its owner's own grants on every request.
 	// Absent on every other method.
@@ -63,7 +66,7 @@ func (s *Service) GetCredentials(w http.ResponseWriter, r *http.Request) {
 			ID: row.ID, Person: row.PersonID, Method: row.Method,
 			Label: row.Label, CreatedAt: row.CreatedAt,
 			ExpiresAt: row.ExpiresAt, RevokedAt: row.RevokedAt,
-			Revoked: row.Revoked(now), Grants: row.Grants,
+			Revoked: row.Revoked(now), Spent: row.Spent, Grants: row.Grants,
 		})
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"credentials": out})

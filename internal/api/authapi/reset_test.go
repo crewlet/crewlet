@@ -116,6 +116,10 @@ func TestAResetLinkSetsAPasswordOnceAndSignsNobodyIn(t *testing.T) {
 	}
 	if len(r.estate.passwordSets) != 1 {
 		t.Errorf("the link set %d passwords, want one", len(r.estate.passwordSets))
+	} else if got := r.estate.passwordSets[0].Spends; got != id {
+		// SPENT BY NAME, so the listing says the link was used rather than
+		// withdrawn.
+		t.Errorf("the set spends %q, want the link %s", got, id)
 	}
 	if _, failures := r.audit.snapshot(); len(failures) != 0 {
 		t.Errorf("a spent link that proved itself was counted: %v", failures)

@@ -158,6 +158,8 @@ export interface CredentialRow {
    * the read.
    */
   revoked: boolean;
+  /** A reset link its person used, which is revoked too. */
+  spent?: boolean;
   /** What a machine token was minted carrying. */
   grants?: string[] | null;
 }

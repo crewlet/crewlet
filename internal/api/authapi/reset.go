@@ -131,7 +131,8 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		},
-		OpID: opID, Reason: "set a new password from a reset link",
+		Spends: held.ID,
+		OpID:   opID, Reason: "set a new password from a reset link",
 	})
 	switch {
 	case errors.Is(err, errResetSpent), errors.Is(err, iamdomain.ErrNotFound),

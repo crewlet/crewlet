@@ -317,6 +317,11 @@ type Credential struct {
 	// credential without knowing which they were.
 	Generation uint64 `json:"generation,omitempty"`
 
+	// Spent marks a reset link its person USED, beside the revocation every
+	// link they held takes when a password is set: listed as revoked alone,
+	// the link they had just used read as one an administrator withdrew.
+	Spent bool `json:"spent,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 

@@ -968,7 +968,9 @@ the same `500 no_external_url`. The link is a `reset` credential on the person,
 stored as the SHA-256 of its secret and good for **24 hours**: it travels out
 of band to somebody locked out today. It is listed among the person's
 credentials (`GET /iam/credentials?person=`), revoked like any of them, and
-issuing another revokes the one before it — a person holds at most one. A
+issuing another revokes the one before it — a person holds at most one. Once
+spent it is listed `revoked` and `spent: true`, since setting the password
+revokes every link the person held, the one they used included. A
 machine is `409` (it has no password; mint it a token), and so is a person
 `suspended` or `retired`, naming the `stage`, because a link would hand back an
 account somebody stopped: reactivate them first. A person holding a grant the

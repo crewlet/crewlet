@@ -312,6 +312,9 @@ type CredentialRow struct {
 	// somebody's sessions all move the epoch, so a listing that read the
 	// row alone reported every token they ended as in use.
 	Superseded bool
+
+	// Spent is a reset link its person used — see [Credential.Spent].
+	Spent bool
 }
 
 // Revoked reports a credential that has been withdrawn, has aged out, or was
@@ -368,6 +371,7 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 			if held, err := DecodeCredential(document); err == nil {
 				row.Label = held.Label
 				row.Grants = held.Grants
+				row.Spent = held.Spent
 				row.Superseded = row.Method == MethodToken &&
 					(epoch > held.Epoch || generation > held.Generation)
 			}
