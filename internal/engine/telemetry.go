@@ -441,10 +441,15 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// would double-count them — and the split is the only thing that
 		// answers "how much of this turn was fan-out" when a seat's spend
 		// jumps and its own rounds did not.
-		SubagentCount:        spend.Workers,
-		SubagentTokens:       spend.WorkerTokens(),
-		SubagentInputTokens:  spend.WorkerInput,
-		SubagentOutputTokens: spend.WorkerOutput,
+		//
+		// A RESUMED SEGMENT ADDS THE WORKERS ITS RUN DELEGATED TO over the
+		// tool bridge, because it is the segment that pays for them
+		// (turnspend.go): they ran while no segment was, and on no other
+		// segment's record.
+		SubagentCount:        spend.Workers + t.jobEngine.Workers,
+		SubagentTokens:       spend.WorkerTokens() + t.jobEngine.WorkerInput + t.jobEngine.WorkerOutput,
+		SubagentInputTokens:  spend.WorkerInput + t.jobEngine.WorkerInput,
+		SubagentOutputTokens: spend.WorkerOutput + t.jobEngine.WorkerOutput,
 		// The cache's share of InputTokens over the turn's own phases,
 		// as the phase records state it.
 		CacheReadTokens:  spend.CacheRead,

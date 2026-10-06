@@ -508,3 +508,31 @@ func (cardRewriter) Model() string { return "aux" }
 func (p *cardRewriter) Complete(context.Context, llm.Request) (*llm.Completion, error) {
 	return &llm.Completion{Model: "aux", Content: p.answer, InputTokens: p.in, OutputTokens: p.out}, nil
 }
+
+// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. An
+// agent-mode run's workers ran over the tool bridge while no segment was
+// running, so the segment that resumes from the run is the one that pays for
+// them — and its completion is the one record of the turn that can say they
+// ran, beside the workers it delegated to itself.
+//
+// Mutation: leave the job's workers out of the completion, and this goes red.
+func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
+	t.Parallel()
+	e, p, tel := failing(t)
+	tel.resumed, tel.launchID = true, "launch-1"
+	tel.jobEngine = jobEngineSpend
+	spend := segmentSpend(1)
+
+	e.publishTurnCompleted(t.Context(), tel, spend, turn.Result{Decision: phase.Done}, nil)
+
+	got := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
+	job := jobEngineSpend
+	if got.SubagentCount != spend.Workers+job.Workers ||
+		got.SubagentInputTokens != spend.WorkerInput+job.WorkerInput ||
+		got.SubagentOutputTokens != spend.WorkerOutput+job.WorkerOutput ||
+		got.SubagentTokens != spend.WorkerTokens()+job.WorkerInput+job.WorkerOutput {
+		t.Fatalf("the completion counts %d workers, %d in / %d out (%d), want the "+
+			"segment's own and the run's bridged ones together", got.SubagentCount,
+			got.SubagentInputTokens, got.SubagentOutputTokens, got.SubagentTokens)
+	}
+}
