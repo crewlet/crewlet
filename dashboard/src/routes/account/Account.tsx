@@ -28,6 +28,15 @@
  * this node has not applied the change yet it answers no session (`202`): the
  * cookie is cleared, and the page says to sign in with the new password.
  *
+ * # Every gesture re-reads who this browser is
+ *
+ * A gesture the engine asks a step-up for — a token's mint or revocation, the
+ * authenticator, new recovery codes — REPLACES this browser's session when
+ * the confirmation is made, under a new lineage, and so does a password
+ * change. So every gesture re-reads `/auth/session` before the lists: the
+ * "This browser" mark read before it would leave this browser's new session
+ * offered a named sign-out, which ends this browser.
+ *
  * # A credential that is not a person's sees what it is
  *
  * A Tier A token exchanged for a session is the deployment's credential, with
@@ -83,6 +92,8 @@ export function tierATokenOf(login: string): string {
 
 export function Account() {
   const session = useRest("/auth/session", (signal) => auth.session(signal), READ);
+  const { reload } = session;
+  const sessionMoved = useCallback(() => reload({ quiet: true }), [reload]);
   const answer = session.data;
   return (
     <>
@@ -92,7 +103,7 @@ export function Account() {
       </PageNote>
       {answer ? (
         answer.kind === "person" ? (
-          <PersonAccount session={answer} onSessionMoved={() => void session.reload()} />
+          <PersonAccount session={answer} onSessionMoved={sessionMoved} />
         ) : (
           <NotAPerson session={answer} />
         )
@@ -147,8 +158,8 @@ function PersonAccount({
   onSessionMoved,
 }: {
   session: SessionAnswer;
-  /** The session this browser holds was replaced (a password change). */
-  onSessionMoved: () => void;
+  /** Read who this browser is again; resolves once that read has settled. */
+  onSessionMoved: () => Promise<void>;
 }) {
   const id = encodeURIComponent(session.person);
   const profile = useRest(
@@ -170,32 +181,27 @@ function PersonAccount({
   );
   const { reload: reloadCredentials } = credentials;
   const { reload: reloadSessions } = sessions;
-  const credentialsMoved = useCallback(
-    () => void reloadCredentials({ quiet: true }),
-    [reloadCredentials],
-  );
-  const sessionsMoved = useCallback(() => void reloadSessions({ quiet: true }), [reloadSessions]);
-  const passwordChanged = useCallback(() => {
-    onSessionMoved();
-    credentialsMoved();
-    sessionsMoved();
-  }, [onSessionMoved, credentialsMoved, sessionsMoved]);
+  // ONE RE-READ AFTER EVERY GESTURE, who this browser is FIRST: a step-up or a
+  // password change gave it a new session, and the list compared against the
+  // old lineage would offer this browser a named sign-out.
+  const moved = useCallback(() => {
+    void onSessionMoved().then(() => {
+      void reloadCredentials({ quiet: true });
+      void reloadSessions({ quiet: true });
+    });
+  }, [onSessionMoved, reloadCredentials, reloadSessions]);
   const grants = session.grants ?? [];
 
   return (
     <div className="col gap-4">
       <Profile session={session} profile={profile} />
-      <Security
-        credentials={credentials}
-        onChanged={credentialsMoved}
-        onPassword={passwordChanged}
-      />
-      <Sessions session={session} sessions={sessions} onChanged={sessionsMoved} />
+      <Security credentials={credentials} onChanged={moved} />
+      <Sessions session={session} sessions={sessions} onChanged={moved} />
       <Tokens
         owner={{ id: session.person, login: session.login, grants: profile.data?.grants ?? grants }}
         held={grants}
         credentials={credentials}
-        onChanged={credentialsMoved}
+        onChanged={moved}
       />
     </div>
   );
@@ -264,11 +270,9 @@ function Profile({
 function Security({
   credentials,
   onChanged,
-  onPassword,
 }: {
   credentials: RestResult<CredentialRow[]>;
   onChanged: () => void;
-  onPassword: () => void;
 }) {
   const [dialog, setDialog] = useState<"factor" | "codes" | null>(null);
   const live = (credentials.data ?? []).filter((c) => !c.revoked);
@@ -284,7 +288,7 @@ function Security({
         <Card.Title>Security</Card.Title>
       </Card.Header>
       <div className="col gap-4">
-        <ChangePassword onChanged={onPassword} />
+        <ChangePassword onChanged={onChanged} />
         <section className="col gap-2" aria-label="Two-step verification">
           <span className="t-label">Two-step verification</span>
           {credentials.data === null ? (

@@ -5520,7 +5520,10 @@ into swapping for somebody else's.
 - **Where you are signed in** — the live sessions, with **This browser**
   marked by the lineage `/auth/session` names; any other is signed out by name
   (`POST /auth/logout/{lineage}`), and **Sign out everywhere** says it ends
-  every personal access token too, which it does.
+  every personal access token too, which it does. Every gesture on the page
+  reads `/auth/session` again before the lists, because one the engine asked a
+  step-up for replaced this browser's session under a new lineage, and a mark
+  read before it would offer this browser a named sign-out.
 - **Personal access tokens** — the tokens that act as the reader, each with
   what it carries and when it expires, **Revoke** on a live one, and **New
   token**: a label, a lifetime (empty takes the engine's default) and grants

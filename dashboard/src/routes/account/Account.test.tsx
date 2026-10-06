@@ -6,7 +6,8 @@
  * The invariants, in the order they cost when they go: every read and write
  * names the CALLER and never somebody picked — no `?person=` on a credential
  * read, a mint or a revocation; this browser's own session is marked and
- * offered no named sign-out, while another is ended by its lineage; a password
+ * offered no named sign-out, while another is ended by its lineage — after a
+ * gesture whose step-up replaced this browser's session too; a password
  * change sends the current one as its proof and says what it ended; a wrong
  * current password is the engine's sentence and does NOT send the person to
  * sign in; recovery codes are offered only beside an authenticator; and a Tier
@@ -108,8 +109,10 @@ function json(status: number, payload: unknown): Response {
 }
 
 /**
- * The engine: the reads a person's page makes, from `session` and
- * `credentials`, and every write answered from `writes` by `METHOD /path`.
+ * The engine: the reads a person's page makes, from `state` — who this
+ * browser is (null once its cookie is gone, answered 401), its sessions and
+ * `credentials` — and every write answered from `writes` by `METHOD /path`,
+ * which may move `state` as the engine's own write would.
  */
 function engine({
   session = PERSON,
@@ -120,6 +123,10 @@ function engine({
   credentials?: unknown[];
   writes?: Record<string, () => Response>;
 } = {}) {
+  const state: { session: SessionAnswer | null; sessions: typeof SESSIONS } = {
+    session,
+    sessions: SESSIONS,
+  };
   const sent: Sent[] = [];
   vi.stubGlobal(
     "fetch",
@@ -138,13 +145,15 @@ function engine({
       }
       switch (url.pathname) {
         case "/auth/session":
-          return json(200, session);
+          return state.session
+            ? json(200, state.session)
+            : json(401, { error: "unauthenticated", message: "Sign in." });
         case "/auth/config":
           return json(200, { min_password_length: 12, second_factor: "optional" });
         case "/iam/people/p-1":
           return json(200, ROW);
         case "/iam/people/p-1/sessions":
-          return json(200, SESSIONS);
+          return json(200, state.sessions);
         case "/iam/credentials":
           return json(200, { credentials });
       }
@@ -153,6 +162,7 @@ function engine({
   );
   return {
     sent,
+    state,
     writes: () => sent.filter((s) => s.method !== "GET"),
     reads: (path: string) => sent.filter((s) => s.method === "GET" && s.path === path),
   };
@@ -229,6 +239,49 @@ describe("a person's own page", () => {
       expect(engineIs.reads("/iam/people/p-1/sessions").length).toBeGreaterThan(before),
     );
     expect(reloads).not.toHaveBeenCalled();
+  });
+
+  // A STEP-UP REPLACES THIS BROWSER'S SESSION under a new lineage, and nothing
+  // else tells the page: a mark read before it left this browser's new
+  // session untagged and offered it a named sign-out, which ends this browser.
+  // The CONTROL is the other session the new list carries, which IS offered
+  // one.
+  test("a gesture whose step-up replaced this browser's session marks the new one", async () => {
+    const STEPPED_UP = "0192e7a0-0000-7000-8000-00000000000d";
+    const PHONE = "0192e7a0-0000-7000-8000-00000000000e";
+    const engineIs = engine({
+      writes: {
+        "DELETE /iam/credentials/c-tok": () => {
+          engineIs.state.session = { ...PERSON, lineage: STEPPED_UP };
+          engineIs.state.sessions = {
+            sessions: [
+              {
+                lineage: STEPPED_UP,
+                person: "p-1",
+                created_at: "2026-10-06T01:00:00Z",
+                live: true,
+              },
+              { lineage: PHONE, person: "p-1", created_at: "2026-10-05T20:00:00Z", live: true },
+              { lineage: HERE, person: "p-1", created_at: "2026-10-06T00:00:00Z", live: false },
+            ],
+          };
+          return json(200, { revoked: true });
+        },
+      },
+    });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke my assistant" }));
+    const dialog = await screen.findByRole("dialog", { name: "Revoke this token?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
+    expect(
+      await screen.findByRole("button", {
+        name: "Sign out the session started 2026-10-05T20:00:00Z",
+      }),
+    ).toBeDefined();
+    expect(screen.getByText("This browser")).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Sign out the session started 2026-10-06T01:00:00Z" }),
+    ).toBeNull();
   });
 
   test("signing out everywhere says it ends personal tokens, and ends in the sign-in", async () => {
