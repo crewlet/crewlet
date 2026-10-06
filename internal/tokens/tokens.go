@@ -591,7 +591,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 	byTokensThen(out.ByPhase, func(r PhaseRow) (int, string) { return r.TotalTokens, r.Phase })
 	byTokensThen(out.ByModel, func(r ModelRow) (int, string) { return r.TotalTokens, r.Model })
 	byTokensThen(out.ByWorker, func(r WorkerRow) (int, string) { return r.TotalTokens, r.Worker })
-	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, r.Role })
+	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, agentTie(r, r.Role) })
 
 	// Turns are NEWEST FIRST, not biggest first: the table is a tail of
 	// recent activity, and ordering it by size would pin one expensive
@@ -680,6 +680,21 @@ func ranked(m map[string]int) []string {
 // personKey is a person's key in a per-seat fold: apart from every seat's,
 // whose keys are roles and agent ids, neither of which contains a NUL.
 func personKey(handle string) string { return "person\x00" + handle }
+
+// agentTie is what equal-total rows of a per-seat fold are ordered by: the key
+// the fold filed the row under — seat, the fold's own key for a seat (a role on
+// the live window, an agent id on a named one) — or the person's.
+//
+// NEVER THE SEAT'S KEY ALONE: every person row on a named window carries one
+// empty agent id and two people of one role share a role, so two people with
+// equal totals compared equal and came back in Go's randomised map order —
+// which [byTokensThen] exists to stop.
+func agentTie(r AgentRow, seat string) string {
+	if r.Person {
+		return personKey(r.Handle)
+	}
+	return seat
+}
 
 // PhaseAuxiliary is the phase an auxiliary record is filed under, and the one
 // whose records carry a worker. Named here rather than imported from the event

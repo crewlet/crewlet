@@ -1,6 +1,7 @@
 package tokens_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -140,5 +141,47 @@ func TestAPersonsSpendIsTheirOwnRowOnBothWindows(t *testing.T) {
 	}
 	if people != 2 || named.Totals.TotalTokens != 150 {
 		t.Fatalf("named by_agent = %+v, want two person rows beside the seat", named.ByAgent)
+	}
+}
+
+// PEOPLE WITH EQUAL TOTALS COME BACK IN ONE ORDER, on both windows.
+//
+// A person's row carries no agent id, and two people may share a role, so a
+// tie broken on the seat's key alone compared them equal and left them in Go's
+// randomised map order: an export or a golden capture of the same window
+// differed on every refresh. Each fold is asked many times, because a map's
+// order is what the defect turns on.
+func TestEqualPeopleAreOrderedByTheirOwnHandle(t *testing.T) {
+	t.Parallel()
+	handles := []string{"ana", "bo", "cy", "di", "ed", "flo"}
+	var records []tokens.Record
+	var cells []tokens.Cell
+	for _, h := range handles {
+		r := auxRec("operator", "answer_knowledge", "", "2026-06-14T12:00:09Z", 1, 40)
+		r.AgentID, r.AgentRole, r.Person, r.EventID = "", "Founder", h, "q-"+h
+		records = append(records, r)
+		cells = append(cells, tokens.Cell{Day: "2026-06-14", Handle: h, Role: "Founder",
+			Person: true, Phase: tokens.PhaseAuxiliary, Worker: "answer_knowledge",
+			Model: "haiku", Bucket: tokens.Bucket{TotalTokens: 40, Calls: 1}})
+	}
+	r := days(t, "2026-06-14", "2026-06-14", time.UTC)
+	order := func(rows []tokens.AgentRow) []string {
+		out := make([]string, 0, len(rows))
+		for _, a := range rows {
+			out = append(out, a.Handle)
+		}
+		return out
+	}
+	for range 20 {
+		live := tokens.Aggregate(records, tokens.Options{Since: since, Until: until})
+		named := tokens.FoldDaily(cells, nil, tokens.DailyOptions{Range: r})
+		for window, got := range map[string][]string{
+			"live": order(live.ByAgent), "named": order(named.ByAgent),
+		} {
+			if !slices.Equal(got, handles) {
+				t.Fatalf("%s by_agent = %v, want %v: equal totals ordered by handle",
+					window, got, handles)
+			}
+		}
 	}
 }
