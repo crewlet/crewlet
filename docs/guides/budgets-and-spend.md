@@ -181,12 +181,12 @@ usage publisher's own tick). Every figure's **calls** are provider calls — a
 phase's model rounds, an auxiliary record's coalesced calls — never records.
 
 **What is not counted: embeddings.** The calls that turn text into vectors for
-semantic search — the fleet's embedding duty embedding the pages, tasks and
-memories that changed, and each turn's one query vector at its start — are
-metered by neither the counter nor the rollup: they run on the embeddings
-provider rather than a seat's model chain, a token budget does not judge them,
-and their usage is a different unit from a completion's. A company paying for
-embeddings sees that bill at its embeddings provider.
+semantic search — the fleet's embedding duty embedding the pages and tasks that
+changed, a seat's diary and episodes embedding what they store, and each turn's
+one query vector at its start — are metered by neither the counter nor the
+rollup: they run on the embeddings provider rather than a seat's model chain,
+and a token budget does not judge them. A company paying for embeddings sees
+that bill at its embeddings provider.
 
 ### Why the counter and the rollup still differ
 
