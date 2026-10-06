@@ -464,7 +464,15 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 			take.Spent)), nil
 	}
 
-	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint)
+	// WHO IS ASKING, as the turn-start filter was told: its per-subject
+	// rule — a preference about somebody not party to the task does not
+	// apply — is unenforceable without it, so the re-filter would surface
+	// "Sam prefers short replies" on a turn where Miles is asking.
+	senders := make([]learning.Subject, 0, len(turn.Senders))
+	for _, sender := range turn.Senders {
+		senders = append(senders, learning.SubjectOf(sender))
+	}
+	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint, senders)
 	if err != nil {
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
 	}

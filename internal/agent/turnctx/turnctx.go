@@ -226,6 +226,16 @@ type Turn struct {
 	// that is on the run's row.
 	Requester string
 
+	// Senders are the parties who triggered this turn, in the order they
+	// spoke — the same people the turn-start memory filter was told about,
+	// carried so a tool that re-runs that filter mid-turn (refresh_memory)
+	// can tell it too: the filter's one hard rule is per subject — a
+	// preference about somebody not party to the task does not apply — and
+	// a filter that does not know who is asking cannot enforce it. Empty
+	// for a turn no identifiable sender woke, and for a resumed turn,
+	// which re-reads no trigger.
+	Senders []types.CanonicalIdentity
+
 	// Phase is the phase session this value was bound for, and empty on
 	// the Turn the engine built for the whole turn. Set only through
 	// [Turn.InPhase], by the frame that builds a phase's tool surface, so

@@ -280,6 +280,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// And who woke it, for a question a run it detaches puts to
 			// "the requester" long after this frame is gone.
 			Requester: t.requester,
+			// AND WHO SPOKE, for a tool that re-runs the turn-start memory
+			// filter — see [turnctx.Turn.Senders].
+			Senders: sendersSpoken(t.interactions),
 			// THE ITEM THIS TURN IS ON, and the set its writes report
 			// into. The item rides every phase event and the row of any
 			// coding run this turn detaches; the set is the one mutable
@@ -796,4 +799,23 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction) s
 		return ""
 	}
 	return interactions[0].Sender.Handle
+}
+
+// sendersSpoken is every distinct identifiable sender of a turn's
+// interactions, in the order they first spoke — the set [sendersOf] gives the
+// turn-start prefetch, read off the interactions the same resolution built.
+func sendersSpoken(interactions []types.InboundInteraction) []types.CanonicalIdentity {
+	var (
+		out  []types.CanonicalIdentity
+		seen = map[types.CanonicalIdentity]bool{}
+	)
+	for _, in := range interactions {
+		id := in.Sender
+		if (id.Handle == "" && (id.ExternalID == "" || id.Platform == "")) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }

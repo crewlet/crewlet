@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -416,6 +417,27 @@ func TestRefreshMemoryRefiltersOnAHint(t *testing.T) {
 	}
 }
 
+// THE RE-FILTER IS TOLD WHO IS ASKING, as the turn-start filter was. Its one
+// hard rule is per subject — a preference about somebody not party to the task
+// does not apply — and a re-filter built without the turn's senders could not
+// tell the person asking from anybody else, so a note about one colleague
+// surfaced on a turn another one started.
+func TestRefreshMemoryTellsTheFilterWhoIsAsking(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{}
+	tool := registered(t, builtin.Deps{Diary: &countingDiary{}, Recall: recall},
+		builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+	turn.Senders = []types.CanonicalIdentity{
+		{ExternalID: "U1", Platform: "slack", DisplayName: "Miles"},
+	}
+	callFor(t, tool, turn, map[string]any{"context_hint": "the deploy freeze"})
+	want := []learning.Subject{{ExternalID: "U1", Platform: "slack", Name: "Miles"}}
+	if !slices.Equal(recall.senders, want) {
+		t.Fatalf("the re-filter was told the senders were %+v, want %+v", recall.senders, want)
+	}
+}
+
 // The cap, and the idempotency that makes it fair. The filter is an auxiliary
 // model call, so a model that re-hints every round spends a completion per
 // round for answers that converge after the second — but charging a REPEAT
@@ -620,12 +642,13 @@ func notesIn(out string) string {
 
 // fakeRecall stands in for the turn-start prefetch's searches.
 type fakeRecall struct {
-	hits  []learning.Hit
-	notes []learning.DiaryEntry
-	err   error
-	text  string
-	hint  string
-	limit int
+	hits    []learning.Hit
+	notes   []learning.DiaryEntry
+	err     error
+	text    string
+	hint    string
+	senders []learning.Subject
+	limit   int
 	// memoryCalls counts what the ledger's cache is there to avoid.
 	memoryCalls int
 }
@@ -638,8 +661,10 @@ func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string,
 	return f.hits, nil
 }
 
-func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string) ([]learning.DiaryEntry, error) {
-	f.hint = hint
+func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string,
+	senders []learning.Subject,
+) ([]learning.DiaryEntry, error) {
+	f.hint, f.senders = hint, senders
 	f.memoryCalls++
 	if f.err != nil {
 		return nil, f.err

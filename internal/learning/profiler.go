@@ -331,12 +331,7 @@ func (p *Profiler) subjectsOf(t Turn) []subjectMessages {
 		index = map[Subject]int{}
 	)
 	for _, in := range t.Event.Interactions {
-		s := Subject{
-			Handle:     strings.TrimSpace(in.Sender.Handle),
-			ExternalID: strings.TrimSpace(in.Sender.ExternalID),
-			Platform:   strings.TrimSpace(in.Sender.Platform),
-			Name:       strings.TrimSpace(in.Sender.DisplayName),
-		}
+		s := SubjectOf(in.Sender)
 		if !s.Valid() {
 			// Nothing to key a profile on. An engine-authored
 			// notification has no sender, and observing "" would file

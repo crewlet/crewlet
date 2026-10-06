@@ -166,3 +166,25 @@ func TestATurnWaitsNoLongerThanItsBudgetForItsVector(t *testing.T) {
 		t.Fatalf("recall = %q with no vector, want nothing", blocks.EpisodeRecall)
 	}
 }
+
+// THE PULL'S RE-FILTER IS TOLD WHO IS ASKING. refresh_memory built its filter
+// request with no senders, so the "Current sender:" line the turn-start filter
+// judges its per-subject rule by was missing from every re-filter.
+func TestTheMemoryReFilterIsToldWhoIsAsking(t *testing.T) {
+	t.Parallel()
+	model := &aux{answers: []string{"[0]"}}
+	f := prefetch.New(prefetch.Sources{
+		Diary:  diary{recent: []learning.DiaryEntry{memory("m1", "Sam prefers short replies")}},
+		Models: models{provider: model},
+		Embed:  embeds,
+	})
+	_, seat := company(t)
+	if _, err := f.RecallMemories(t.Context(), seat, "agent-1", "the deploy freeze",
+		[]learning.Subject{{ExternalID: "U2", Platform: "slack", Name: "Miles"}}); err != nil {
+		t.Fatalf("RecallMemories: %v", err)
+	}
+	prompts := model.prompts()
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "Current sender: Miles") {
+		t.Fatalf("the re-filter was not told who is asking:\n%v", prompts)
+	}
+}

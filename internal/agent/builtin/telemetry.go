@@ -128,6 +128,8 @@ type Recaller interface {
 	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error)
 
 	// RecallMemories re-runs the personal-memory relevance filter against a
-	// hint, returning what it picked.
-	RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string) ([]learning.DiaryEntry, error)
+	// hint, returning what it picked. senders are who triggered the turn —
+	// what the filter's per-subject rule is judged against.
+	RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string,
+		senders []learning.Subject) ([]learning.DiaryEntry, error)
 }

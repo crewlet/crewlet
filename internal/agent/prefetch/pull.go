@@ -68,7 +68,15 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 // empty, because "the most recent eight" would leak a memory about one person
 // into a turn about another, which is the failure the filter exists to
 // prevent.
-func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string) ([]learning.DiaryEntry, error) {
+//
+// WITH THE TURN'S SENDERS, which the block's own request carries: the filter's
+// per-subject rule — a preference about somebody not party to the task does
+// not apply — has nothing to judge "party to the task" by without them, and a
+// re-filter built without them was a filter that could not tell the person
+// asking from anybody else.
+func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string,
+	senders []learning.Subject,
+) ([]learning.DiaryEntry, error) {
 	if f == nil || f.src.Diary == nil || seat == nil || agentID == "" {
 		return nil, nil
 	}
@@ -78,7 +86,7 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 	// THE HINT IS THE ASK: it is the executor's own account of what the
 	// task is about, written after recon, and the whole of what the filter
 	// and the vector are judged against here.
-	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint}
+	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint, Senders: senders}
 	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request))
 	if len(candidates) == 0 {
 		return nil, nil

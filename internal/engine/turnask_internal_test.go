@@ -100,3 +100,20 @@ func TestAnEventWithNoAskContributesNothing(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// THE TURN'S SENDERS, for a tool that re-runs the memory filter: every distinct
+// identifiable sender in the order they first spoke — the set the turn-start
+// filter was told — and nobody with nothing to be identified by.
+func TestATurnsSendersAreWhoSpokeInOrderOnce(t *testing.T) {
+	t.Parallel()
+	ana := types.CanonicalIdentity{ExternalID: "U1", Platform: "slack", DisplayName: "Ana"}
+	bo := types.CanonicalIdentity{Handle: "cto"}
+	got := sendersSpoken([]types.InboundInteraction{
+		{Sender: ana}, {Sender: bo}, {Sender: ana},
+		{Sender: types.CanonicalIdentity{DisplayName: "nobody we can name"}},
+		{Sender: types.CanonicalIdentity{ExternalID: "U9"}},
+	})
+	if len(got) != 2 || got[0] != ana || got[1] != bo {
+		t.Fatalf("senders = %+v, want Ana then the CTO", got)
+	}
+}
