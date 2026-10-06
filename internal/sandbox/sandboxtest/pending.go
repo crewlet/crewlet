@@ -1,6 +1,7 @@
-// Package sandboxtest is the pending-run store's contract suite.
+// Package sandboxtest is the code sandbox's two contract suites: the
+// pending-run store's ([Run]) and a box's file reads ([Box]).
 //
-// THE PROPERTIES THAT MATTER HERE ARE THE STORE'S. The at-most-once tail claim,
+// THE PROPERTIES THAT MATTER IN [Run] ARE THE STORE'S. The at-most-once tail claim,
 // the scoped release and the charge record it carries, the epoch fence, the
 // box record's two halves moving together: each is a conditional write, not
 // code around one, so a suite that ran only against a fake would assert the

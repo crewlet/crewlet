@@ -23,8 +23,10 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -279,7 +281,34 @@ type Sandbox interface {
 	JobRunning(ctx context.Context, commandID string) (bool, error)
 
 	WriteFile(ctx context.Context, path string, content []byte) error
+
+	// ReadFile reads a file the engine means to read WHOLE — a report, a
+	// question, a marker, a result line — and REFUSES one past
+	// [MaxFileBytes] ([ErrFileTooLarge]) rather than returning its first
+	// part, because a clipped report reads as a finished one. Empty on
+	// missing: a poll for a marker that is not written yet is not an error.
+	//
+	// NEVER FOR A MACHINE STREAM. A coding agent's event log and its stderr
+	// grow with the run and have no size a whole read could honestly refuse
+	// at — the engine keeps a bounded share of them in the end — so they
+	// are read with [Sandbox.OpenFile] or [Sandbox.ReadTail] instead.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
+
+	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
+	// once in bounded memory: a coding agent's event log, read at
+	// collection a line at a time. Nothing is refused for its size, since
+	// the reader holds one piece at a time and decides itself what to keep.
+	// A missing file is a reader that yields nothing, as ReadFile's empty
+	// answer is; the caller closes it.
+	OpenFile(ctx context.Context, path string) (io.ReadCloser, error)
+
+	// ReadTail reads at most n bytes from the END of a file, with the
+	// file's whole size — for a question about a stream's end: has the job
+	// printed its terminal event, what is it doing now, what did it say last
+	// before it failed. A whole read answers each of those at the cost of
+	// the whole stream, every poll, for as long as the run lasts. Empty on
+	// missing, as the others are.
+	ReadTail(ctx context.Context, path string, n int) (FileTail, error)
 
 	// SetTimeout resets the box's wall-clock TTL to seconds from now.
 	//
@@ -297,6 +326,51 @@ type Sandbox interface {
 	Pause(ctx context.Context) error
 
 	Close(ctx context.Context) error
+}
+
+// FileTail is the end of a file, read by [Sandbox.ReadTail].
+type FileTail struct {
+	// Data is the file's last bytes — all of it when the file is no longer
+	// than what was asked for. It begins wherever the byte count put it, so
+	// a reader of lines drops a partial first one ([FileTail.Lines]).
+	Data []byte
+
+	// Size is the whole file's size as the read found it, so a caller can
+	// say how much came before Data rather than present the end as the
+	// whole.
+	Size int64
+}
+
+// Whole reports whether Data is the entire file.
+func (t FileTail) Whole() bool { return int64(len(t.Data)) >= t.Size }
+
+// Before is how many bytes of the file came before Data and were not read.
+func (t FileTail) Before() int64 { return max(t.Size-int64(len(t.Data)), 0) }
+
+// Lines is Data without a first line the window began inside, and how many
+// bytes that partial line held. A tail that is the whole file begins at a
+// line, so nothing is dropped from it; one that began mid-file begins
+// wherever the byte count landed, and the bytes before its first line break
+// are the end of a line nobody can read whole from here.
+func (t FileTail) Lines() ([]byte, int) {
+	if t.Whole() {
+		return t.Data, 0
+	}
+	i := bytes.IndexByte(t.Data, '\n')
+	if i < 0 {
+		return nil, len(t.Data)
+	}
+	return t.Data[i+1:], i + 1
+}
+
+// tailOf is the end of a file held in memory, in the shape every backend's
+// [Sandbox.ReadTail] answers.
+func tailOf(content []byte, n int) FileTail {
+	n = max(n, 0)
+	if len(content) <= n {
+		return FileTail{Data: content, Size: int64(len(content))}
+	}
+	return FileTail{Data: content[len(content)-n:], Size: int64(len(content))}
 }
 
 // ExecOptions are the per-command knobs both exec shapes take.

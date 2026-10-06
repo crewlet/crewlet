@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -353,6 +355,26 @@ func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return readHostFile(target, path)
 }
 
+// OpenFile implements [Sandbox] for a box on the engine host: the file itself,
+// read in place, after the same escape check every other path takes.
+func (b *directBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	target, err := b.resolve(path)
+	if err != nil {
+		return nil, err
+	}
+	return openHostFile(target, path)
+}
+
+// ReadTail implements [Sandbox] for a box on the engine host: a seek, so the
+// cost is what is read rather than how long the run has been writing.
+func (b *directBox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
+	target, err := b.resolve(path)
+	if err != nil {
+		return FileTail{}, err
+	}
+	return readHostTail(target, path, n)
+}
+
 // SetTimeout refreshes the box's keepalive stamp.
 //
 // This DOES have a counterpart here, and missing it was the bug: the orphan
@@ -615,6 +637,70 @@ func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error
 		return nil, err
 	}
 	return readHostFile(target, path)
+}
+
+// OpenFile implements [Sandbox]: the host side of the mount, read in place.
+func (b *containerBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	target, err := b.hostPath(path)
+	if err != nil {
+		return nil, err
+	}
+	return openHostFile(target, path)
+}
+
+// ReadTail implements [Sandbox]: a seek on the host side of the mount.
+func (b *containerBox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
+	target, err := b.hostPath(path)
+	if err != nil {
+		return FileTail{}, err
+	}
+	return readHostTail(target, path, n)
+}
+
+// openHostFile is a local box's OpenFile once the path is resolved: the file,
+// or a reader that yields nothing for one that is not there yet.
+//
+// ONLY ABSENCE IS EMPTY. A file that exists and cannot be opened is an error,
+// because the reader of a stream decides what the run did from what it reads,
+// and an unreadable event log answered as an empty one is a run that "said
+// nothing" — which a collection settles as a run that produced nothing.
+func openHostFile(target, path string) (io.ReadCloser, error) {
+	f, err := os.Open(target)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return io.NopCloser(strings.NewReader("")), nil
+	case err != nil:
+		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	return f, nil
+}
+
+// readHostTail is a local box's ReadTail once the path is resolved.
+//
+// A SECTION OF THE FILE, never a read to its end: a job still writing can
+// have grown it since the size was taken, and a read to EOF would then answer
+// more than was asked for. Whatever arrived inside the window is counted into
+// the size, so Data never claims to be more of the file than the file was.
+func readHostTail(target, path string, n int) (FileTail, error) {
+	f, err := os.Open(target)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return FileTail{}, nil
+	case err != nil:
+		return FileTail{}, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return FileTail{}, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	want := int64(max(n, 0))
+	start := max(info.Size()-want, 0)
+	data, err := io.ReadAll(io.NewSectionReader(f, start, want))
+	if err != nil {
+		return FileTail{}, fmt.Errorf("local sandbox: read %s: %w", path, err)
+	}
+	return FileTail{Data: data, Size: max(info.Size(), start+int64(len(data)))}, nil
 }
 
 // readHostFile is a local box's ReadFile once the path is resolved: empty for

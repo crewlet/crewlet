@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -272,6 +273,16 @@ func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte)
 // ReadFile implements [Sandbox].
 func (s *E2BSandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return s.envd.readFile(ctx, path)
+}
+
+// OpenFile implements [Sandbox]: envd's download body, read as it arrives.
+func (s *E2BSandbox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	return s.envd.openFile(ctx, path)
+}
+
+// ReadTail implements [Sandbox]: a suffix range on envd's download.
+func (s *E2BSandbox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
+	return s.envd.readTail(ctx, path, n)
 }
 
 // SetTimeout implements [Sandbox]: the keepalive.

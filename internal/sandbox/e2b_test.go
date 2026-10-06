@@ -1,6 +1,7 @@
 package sandbox_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // What these tests protect.
@@ -64,6 +66,11 @@ type e2bStub struct {
 	// streamDelay is how long the stub waits between frames, standing in
 	// for a command that takes real time.
 	streamDelay time.Duration
+	// ignoreRange serves every download whole with 200, standing in for an
+	// envd that does not honour a Range request.
+	ignoreRange bool
+	// ranges is every Range header a download carried, in order.
+	ranges []string
 }
 
 func newE2BStub() *e2bStub {
@@ -201,12 +208,23 @@ func (s *e2bStub) serveFiles(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.mu.Lock()
 		content, held := s.files[path]
+		if r.Header.Get("Range") != "" {
+			s.ranges = append(s.ranges, r.Header.Get("Range"))
+		}
 		s.mu.Unlock()
 		if !held {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write(content)
+		if s.ignoreRange {
+			_, _ = w.Write(content)
+			return
+		}
+		// THROUGH ServeContent, as envd itself serves /files
+		// (packages/envd/internal/api/download.go in e2b-dev/infra), so a
+		// Range request is answered with 206 and Content-Range by the same
+		// code the real box runs.
+		http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(content))
 	case http.MethodPost:
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -657,6 +675,73 @@ func TestE2BFilesRoundTripAndMissingIsEmpty(t *testing.T) {
 	}
 	if len(missing) != 0 {
 		t.Fatalf("a missing file returned %q", missing)
+	}
+}
+
+// THE FILE CONTRACT, against a fake envd that serves downloads the way envd
+// does — through ServeContent, so a range is answered by the same code.
+func TestE2BKeepsTheFileContract(t *testing.T) {
+	t.Parallel()
+	sandboxtest.Box(t, func(t *testing.T) sandbox.Sandbox {
+		provider, _ := newE2B(t, newE2BStub())
+		box, err := provider.Create(t.Context(), sandbox.Spec{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return box
+	})
+}
+
+// A TAIL IS A SUFFIX RANGE, so the cost of asking a running job what it last
+// wrote is the window and not the whole stream — every poll, for as long as
+// the run lasts.
+func TestE2BReadsATailAsASuffixRange(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := bytes.Repeat([]byte("0123456789\n"), 10_000)
+	stub.files["/home/user/.crewlet/result.json"] = content
+
+	tail, err := box.ReadTail(t.Context(), "/home/user/.crewlet/result.json", 64)
+	if err != nil {
+		t.Fatalf("ReadTail: %v", err)
+	}
+	if !bytes.Equal(tail.Data, content[len(content)-64:]) || tail.Size != int64(len(content)) {
+		t.Errorf("tail = %d bytes of %d; want the last 64 of %d", len(tail.Data), tail.Size, len(content))
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if !slices.Equal(stub.ranges, []string{"bytes=-64"}) {
+		t.Errorf("the download asked for %q; want one suffix range of 64", stub.ranges)
+	}
+}
+
+// AN ENVD THAT IGNORES THE RANGE IS STILL ANSWERED RIGHT. Its 200 carries the
+// whole file, which is read through keeping only the end, so the answer is
+// the same and only its cost differs — a box's envd version is not something
+// this engine gets to choose.
+func TestE2BReadsATailFromAnEnvdThatIgnoresTheRange(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	stub.ignoreRange = true
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := bytes.Repeat([]byte("abcdefghij"), 50_000)
+	stub.files["/home/user/.crewlet/err.log"] = content
+
+	tail, err := box.ReadTail(t.Context(), "/home/user/.crewlet/err.log", 1000)
+	if err != nil {
+		t.Fatalf("ReadTail: %v", err)
+	}
+	if !bytes.Equal(tail.Data, content[len(content)-1000:]) || tail.Size != int64(len(content)) {
+		t.Errorf("tail = %d bytes of %d; want the last 1000 of %d", len(tail.Data), tail.Size, len(content))
 	}
 }
 

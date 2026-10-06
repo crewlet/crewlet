@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +44,52 @@ func TestEnvdClientFallsBackToTheSharedTransport(t *testing.T) {
 	} {
 		if got := newEnvdClient("box.example.com", tc.from).http.Transport; got != httpx.Transport() {
 			t.Errorf("%s: transport = %T, want the one httpx shares", tc.name, got)
+		}
+	}
+}
+
+// A FILE TRANSFER IS BOUNDED BY SILENCE. An envd that takes the connection and
+// never answers held a /files read for as long as the caller's context lived,
+// and the completion poll's context lives as long as the process — so one
+// wedged box stalled the poll of every other box behind it. The transfer is
+// abandoned once no byte has moved for the bound, and says that is why, rather
+// than reporting a "context canceled" the caller did not cause.
+func TestASilentFileTransferIsAbandonedAndSaysWhy(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() {
+		close(release)
+		server.Close()
+	})
+	c := newEnvdClient(server.URL, server.Client())
+	c.fileIdle = 50 * time.Millisecond
+
+	for name, transfer := range map[string]func() error{
+		"whole": func() error { _, err := c.readFile(t.Context(), "/home/user/.crewlet/done"); return err },
+		"tail": func() error {
+			_, err := c.readTail(t.Context(), "/home/user/.crewlet/result.json", 64)
+			return err
+		},
+		"open": func() error { _, err := c.openFile(t.Context(), "/home/user/.crewlet/result.json"); return err },
+		"write": func() error {
+			return c.writeFile(t.Context(), "/home/user/.crewlet/brief.md", []byte("x"))
+		},
+	} {
+		done := make(chan error, 1)
+		go func() { done <- transfer() }()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "moved no byte") {
+				t.Errorf("%s: a silent envd answered %v; want the transfer abandoned for its silence", name, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: a silent envd held the transfer past ten seconds against a 50ms bound", name)
 		}
 	}
 }

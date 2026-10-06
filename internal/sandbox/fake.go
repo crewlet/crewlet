@@ -1,9 +1,11 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"path"
 	"slices"
@@ -40,6 +42,11 @@ type FakeSandbox struct {
 
 	// ExecFunc, when set, answers Exec instead of the default success.
 	ExecFunc func(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
+
+	// ReadErr, when set, is consulted by every read with the file's path,
+	// and a non-nil answer is that read's error — standing in for a box
+	// whose file could not be read back (a transport failure, not a size).
+	ReadErr func(path string) error
 }
 
 var _ Sandbox = (*FakeSandbox)(nil)
@@ -97,9 +104,48 @@ func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) e
 
 // ReadFile is empty-on-missing, matching every real backend: the runner polls
 // for markers that do not exist until the job finishes.
+//
+// It REFUSES A FILE PAST [MaxFileBytes] exactly as every real backend does
+// ([readCapped] is their rule too). It answered the whole file whatever its
+// size, so every runner and coordinator test that ran through this twin
+// certified a read no real box would make: a 33 MiB stdout read whole here was
+// a run wedged or lost on every backend it could reach.
 func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	content, err := s.content(p)
+	if err != nil || content == nil {
+		return nil, err
+	}
+	return readCapped(bytes.NewReader(content), p)
+}
+
+// OpenFile streams the file whole, as every real backend does: a machine
+// stream is never refused for its size.
+func (s *FakeSandbox) OpenFile(ctx context.Context, p string) (io.ReadCloser, error) {
+	content, err := s.content(p)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(content)), nil
+}
+
+// ReadTail answers the file's last n bytes and its whole size.
+func (s *FakeSandbox) ReadTail(ctx context.Context, p string, n int) (FileTail, error) {
+	content, err := s.content(p)
+	if err != nil {
+		return FileTail{}, err
+	}
+	return tailOf(content, n), nil
+}
+
+// content is one file's bytes, or the error a test scripted for reading it.
+func (s *FakeSandbox) content(p string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.ReadErr != nil {
+		if err := s.ReadErr(path.Clean(p)); err != nil {
+			return nil, err
+		}
+	}
 	return slices.Clone(s.files[path.Clean(p)]), nil
 }
 
