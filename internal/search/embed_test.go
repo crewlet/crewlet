@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -838,47 +839,121 @@ func TestATransientFailureEndsTheTicksRequests(t *testing.T) {
 	}
 }
 
-// A TICK SAYS THE CONFIGURATION IS REFUSED ONLY WHEN IT IS: inputs refused
-// alone, nothing accepted, and no other failure. Then each input refused alone
-// is named and one line says what they have in common. A tick that met one
-// refusal and was then stopped by a rate limit sent requests nobody refused,
-// and blaming the configuration for it sends an operator to fix a setting
-// that is fine.
-func TestATickSaysTheConfigurationIsRefusedOnlyWhenItIs(t *testing.T) {
+// THE DUTY BLAMES THE CONFIGURATION ONLY ON EVIDENCE THAT CAN CARRY IT: a
+// provider that has accepted nothing since it was configured as it is, refusing
+// at least two different inputs it had never been sent, with no other failure
+// in the tick. Then each input refused alone is named and one line says what
+// they have in common.
+//
+// Everything short of that is a document's refusal, and blaming the
+// configuration for it sends an operator to a setting that is fine: one new
+// task the provider refuses on a caught-up company is a tick of nothing but a
+// refusal sent alone, and so is every hourly retry of an input already held;
+// refusals beside accepted requests are a provider that takes this
+// configuration; and a tick that met a refusal and was then stopped by a rate
+// limit sent requests nobody refused.
+func TestTheDutyBlamesTheConfigurationOnlyOnEvidence(t *testing.T) {
 	t.Parallel()
+	const blame = "search_embed_every_request_refused"
+	tick := func(t *testing.T, h *embedHarness) {
+		t.Helper()
+		if _, err := h.duty.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		h.drain()
+	}
 	seed := map[string]string{}
 	for i := range 8 {
 		seed[fmt.Sprintf("t-%04d", i)] = fmt.Sprintf("document number %d", i)
 	}
 
-	h := newEmbedHarness(t)
-	h.seedTasks(seed)
-	h.embedder.refuse("") // every input, as a refused configuration is
-	if _, err := h.duty.Tick(t.Context()); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	if got := h.logs.count("search_embed_every_request_refused"); got != 1 {
-		t.Fatalf("a tick the provider refused whole said so %d time(s), want once", got)
-	}
-	if h.logs.count("search_embed_input_refused") == 0 {
-		t.Fatal("no input refused alone was named")
-	}
+	t.Run("a provider that refuses everything", func(t *testing.T) {
+		t.Parallel()
+		h := newEmbedHarness(t)
+		h.seedTasks(seed)
+		h.embedder.refuse("") // every input, as a refused configuration is
+		tick(t, h)
+		if got := h.logs.count(blame); got != 1 {
+			t.Fatalf("a provider that refused everything it was sent was blamed "+
+				"%d time(s), want once", got)
+		}
+		if h.logs.count("search_embed_input_refused") == 0 {
+			t.Fatal("no input refused alone was named")
+		}
+	})
 
-	stopped := newEmbedHarness(t)
-	seed["t-0000"] = "a poison pill the provider never accepts"
-	stopped.seedTasks(seed)
-	stopped.embedder.refuse("poison")
-	stopped.embedder.FailTransiently("document", 1)
-	if _, err := stopped.duty.Tick(t.Context()); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	if stopped.logs.count("search_embed_request_failed") == 0 {
-		t.Fatal("the case did not reach the transient failure it is about")
-	}
-	if got := stopped.logs.count("search_embed_every_request_refused"); got != 0 {
-		t.Fatalf("a tick stopped by a transient failure blamed the configuration "+
-			"%d time(s)", got)
-	}
+	t.Run("one new document on a caught-up company", func(t *testing.T) {
+		t.Parallel()
+		h := newEmbedHarness(t)
+		h.seedTasks(map[string]string{"t-a": "an ordinary task", "t-b": "another one"})
+		tick(t, h)
+		h.embedder.refuse("poison")
+		h.seedTasks(map[string]string{"t-c": "a poison pill"})
+		tick(t, h)
+		if h.logs.count("search_embed_input_refused") != 1 {
+			t.Fatal("setup: the new task was not refused alone")
+		}
+		// AND ITS HOURLY RETRY, the only request of its tick.
+		h.advance(search.EmbedRefusalRetry)
+		tick(t, h)
+		if h.logs.count("search_embed_input_refused") != 2 {
+			t.Fatal("setup: the retry was not sent")
+		}
+		if got := h.logs.count(blame); got != 0 {
+			t.Fatalf("one document's refusal and its retry blamed the "+
+				"configuration %d time(s)", got)
+		}
+	})
+
+	t.Run("one document on a provider that has embedded nothing yet", func(t *testing.T) {
+		t.Parallel()
+		h := newEmbedHarness(t)
+		h.embedder.refuse("poison")
+		h.seedTasks(map[string]string{"t-a": "a poison pill"})
+		tick(t, h)
+		h.advance(search.EmbedRefusalRetry)
+		tick(t, h)
+		if got := h.logs.count(blame); got != 0 {
+			t.Fatalf("one input, refused and then retried, blamed the "+
+				"configuration %d time(s) — one input is a document", got)
+		}
+	})
+
+	t.Run("refusals beside accepted requests", func(t *testing.T) {
+		t.Parallel()
+		h := newEmbedHarness(t)
+		mixed := maps.Clone(seed)
+		mixed["t-0000"] = "a poison pill"
+		mixed["t-0005"] = "another poison pill"
+		h.seedTasks(mixed)
+		h.embedder.refuse("poison")
+		tick(t, h)
+		if h.logs.count("search_embed_input_refused") != 2 {
+			t.Fatal("setup: the two poisons were not both refused alone")
+		}
+		if got := h.logs.count(blame); got != 0 {
+			t.Fatalf("a tick whose provider embedded six documents blamed the "+
+				"configuration %d time(s)", got)
+		}
+	})
+
+	t.Run("a refusal and then a transient failure", func(t *testing.T) {
+		t.Parallel()
+		h := newEmbedHarness(t)
+		stopped := maps.Clone(seed)
+		stopped["t-0000"] = "a poison pill the provider never accepts"
+		h.seedTasks(stopped)
+		h.embedder.refuse("poison")
+		h.embedder.FailTransiently("document", 1)
+		tick(t, h)
+		if h.logs.count("search_embed_request_failed") == 0 {
+			t.Fatal("the case did not reach the transient failure it is about")
+		}
+		if got := h.logs.count(blame); got != 0 {
+			t.Fatalf("a tick stopped by a transient failure blamed the "+
+				"configuration %d time(s)", got)
+		}
+	})
 }
 
 // A CORPUS THAT IS ALWAYS BEHIND DOES NOT STARVE THE ONE AFTER IT.

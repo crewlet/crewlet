@@ -437,10 +437,17 @@ at once, while an apply that changes something else, or rotates the key, keeps
 it; a duty that moves to another node isolates each one again once. Any other failure — a rate limit, a timeout, a server down, a
 credential refused — is about the provider rather than an input, so it ends the
 tick's requests and the next tick asks again; nothing is lost, because the
-selection is derived from the rows. A tick in which the provider refused every
-request it was sent, inputs alone included, and nothing else failed, says so
-once (`search_embed_every_request_refused`): that is the configuration being
-refused, not any document.
+selection is derived from the rows. When the provider has accepted **no**
+request since the node began embedding with it as configured, and a tick sees
+it refuse at least two different inputs sent alone for the first time with
+nothing else failing, the duty says so once that tick
+(`search_embed_every_request_refused`): that is the configuration being refused
+— a parameter the endpoint does not take, a model it does not serve at that
+width — not any document. One refused document, the hourly retry of one already
+held, and refusals beside requests the provider accepted are each a document's
+refusal and never blame the configuration. A node that restarts, or takes the
+duty over, with two refused documents and nothing else to embed cannot tell
+those apart from a refused configuration, and says so as well.
 
 **A batch response has to say which input each vector answers.** A request
 carries many texts, and the API allows the results back in any order — so

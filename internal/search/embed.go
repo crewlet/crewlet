@@ -929,24 +929,38 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			break
 		}
 	}
-	if t.refusedAlone > 0 && t.accepted == 0 && !t.stopped {
-		// EVERY REQUEST REFUSED, single inputs included, which is the
-		// shape of a provider refusing the CONFIGURATION rather than an
-		// input — a parameter it does not take, a model it does not serve
-		// at that width. Each input it refused alone is named above; this
-		// says what they have in common.
+	if t.refusedFresh >= 2 && !t.stopped && !e.deps.Refusals.everAccepted() {
+		// THE CONFIGURATION, NOT A DOCUMENT — said only on evidence that
+		// can carry it: this provider, configured as it is, has accepted
+		// NOTHING since this memory of it began, and this tick it refused
+		// at least two different inputs sent alone that it had never been
+		// sent before. That is the shape of a parameter it does not take
+		// or a model it does not serve at that width. Each input refused
+		// alone is named above; this says what they have in common.
 		//
-		// ONLY WHEN THAT IS WHAT HAPPENED: an input refused alone, nothing
-		// accepted, and no other failure. A tick that met one refusal and
-		// was then stopped by a rate limit sent requests that were not
-		// refused at all, and blaming the configuration for it would send
-		// an operator to fix a setting that is fine.
+		// NOT ON ONE TICK'S ANSWERS ALONE. A caught-up company's one new
+		// task the provider refuses is a tick of nothing but a refusal
+		// sent alone, and so is the hourly retry of an input already
+		// held — both are a document's refusal, and blaming the
+		// configuration sent an operator to a setting that was fine, once
+		// on the first and again every hour on the second. A provider that
+		// has embedded anything under this configuration is not refusing
+		// the configuration, and a retry is not fresh evidence of anything.
+		// Nor beside a failure that is not about an input: a tick that met
+		// a refusal and was then stopped by a rate limit sent requests
+		// nobody refused.
+		//
+		// What two fresh inputs cannot rule out is a node that took the
+		// duty — or restarted — with two refused documents and nothing else
+		// to embed: its memory starts empty, and those are all it sends.
+		// The line says what it saw, so that reader can tell.
 		e.deps.Logger.WarnContext(ctx, "search_embed_every_request_refused",
-			"model", e.deps.Model, "requests", t.refused,
-			"detail", "the provider refused every request this tick, inputs "+
-				"sent alone included — when no input is ever accepted the "+
-				"refusal is the configuration's (providers.embeddings), not "+
-				"any document's")
+			"model", e.deps.Model, "requests", t.refused, "inputs", t.refusedFresh,
+			"detail", "the provider has accepted no request since this node "+
+				"began embedding with it as configured, and this tick refused "+
+				"different inputs sent alone — a provider that accepts nothing "+
+				"is refusing the configuration (providers.embeddings), not any "+
+				"document")
 	}
 	return published, errors.Join(failed...)
 }
@@ -962,8 +976,9 @@ type tickRequests struct {
 	share int
 
 	// accepted and refused count the requests the provider embedded and
-	// refused, and refusedAlone the refused ones that carried one input.
-	accepted, refused, refusedAlone int
+	// refused, and refusedFresh the refused ones that carried one input
+	// never refused alone before — not a due retry of one already held.
+	accepted, refused, refusedFresh int
 
 	// stopped says a failure that is not about an input ended the tick's
 	// requests.
@@ -1051,6 +1066,7 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 		return 0, nil
 	case err == nil:
 		t.accepted++
+		e.deps.Refusals.accepted()
 		for _, p := range group {
 			if p.alone {
 				// ACCEPTED AFTER ALL — a provider fixed, a rule relaxed —
@@ -1073,8 +1089,10 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 		// REFUSED ALONE: this input is what the provider will not take.
 		// It costs itself, and is held back until its retry is due.
 		t.refused++
-		t.refusedAlone++
 		p := group[0]
+		if !p.alone {
+			t.refusedFresh++
+		}
 		e.deps.Refusals.refuse(q.source, p, e.deps.Now())
 		e.deps.Logger.WarnContext(ctx, "search_embed_input_refused",
 			"source", string(q.source), "id", p.doc.ID, "model", e.deps.Model,

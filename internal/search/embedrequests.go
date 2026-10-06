@@ -47,11 +47,14 @@ import (
 // ([corpusQueue.resume]) — an isolation takes as many ticks as its requests
 // need and never starts again. Each corpus also holds its share of the tick's
 // SOURCES in reserve while it can work ([tickRequests.room]), so a neighbour
-// embedding full requests cannot spend the ceiling out from under it. A refusal that was really the request's
-// size or a setting the server rejects whatever the inputs are surfaces the
-// same way and is told apart by the same means: halves that succeed blame no
-// input at all, and halves that all fail end in a log line naming every input
-// and, once a tick sees nothing but refusals, one line saying so.
+// embedding full requests cannot spend the ceiling out from under it.
+//
+// A refusal that was really the request's size or a setting the server rejects
+// whatever the inputs are surfaces the same way and is told apart by the same
+// means: halves that succeed blame no input at all, and halves that all fail
+// end in a log line naming every input and, once a provider that has accepted
+// nothing refuses two different inputs sent alone, one line saying so
+// ([Embedder.Tick]).
 //
 // # And an input refused alone is held back, then offered again alone
 //
@@ -287,6 +290,11 @@ type Refusals struct {
 	// tick ended: the groups it split a refused request into and did not
 	// reach, in the order it would have sent them ([Refusals.suspend]).
 	frontier map[Source][][]frontierKey
+
+	// embedded says the provider has accepted a request since this memory
+	// began: the evidence that whatever it refuses is a document's fault
+	// and not its configuration's ([Embedder.Tick]).
+	embedded bool
 }
 
 // frontierKey is one source of a suspended isolation: its id and the digest
@@ -316,6 +324,21 @@ type refusal struct {
 // NewRefusals is an empty memory, for one provider configuration.
 func NewRefusals() *Refusals {
 	return &Refusals{at: map[refusalID]refusal{}, frontier: map[Source][][]frontierKey{}}
+}
+
+// accepted records that the provider embedded a request.
+func (r *Refusals) accepted() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.embedded = true
+}
+
+// everAccepted reports whether the provider has embedded a request since this
+// memory began — under this configuration, on this node.
+func (r *Refusals) everAccepted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.embedded
 }
 
 // suspend keeps what source's isolation has not reached at the end of a tick —
