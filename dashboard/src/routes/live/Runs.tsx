@@ -864,7 +864,18 @@ export function RunScreen({ turnId }: { turnId: string }) {
               <Card.Title>Doing now</Card.Title>
             </Card.Header>
             {RUNNING.includes(run.status) && run.launch_id ? (
-              <LiveOutput turnId={run.turn_id} launchId={run.launch_id} now={now} />
+              // KEYED BY THE JOB: the row's launch moves to a later job on the
+              // same run, and that job's view starts empty rather than with
+              // the last job's output above it. A `replaced` answer reads the
+              // board again, so the page follows the job the row holds now
+              // rather than waiting out the board's poll.
+              <LiveOutput
+                key={`${run.turn_id}|${run.launch_id}`}
+                turnId={run.turn_id}
+                launchId={run.launch_id}
+                now={now}
+                onReplaced={board.refetch}
+              />
             ) : RUNNING.includes(run.status) ? (
               <span className="t-caption">
                 {run.owner

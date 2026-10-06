@@ -19,7 +19,8 @@ import { buildWaterfall } from "~/lib/waterfall.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
 import { phaseRecord } from "~/test/phaseRecord.ts";
-import { SANDBOX_TAIL_POLL_MS, Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
+import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
+import { Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -73,7 +74,7 @@ const PARKED = [
 /** Mount the Timeline over a stubbed tail answer, counting the asks. */
 function mount(
   events: EventRecord[],
-  tail: SandboxTailAnswer,
+  tail: SandboxTailAnswer | ((asked: number) => SandboxTailAnswer),
   {
     selected: initial = "",
     now = T0 + 60_000,
@@ -96,7 +97,8 @@ function mount(
   ) => {
     if (what === "sandbox_tail") {
       asked.push(params as Record<string, unknown>);
-      return Promise.resolve(tail);
+      // A FUNCTION ANSWERS THE NTH ASK, for a run whose output grows.
+      return Promise.resolve(typeof tail === "function" ? tail(asked.length) : tail);
     }
     return Promise.resolve({});
   };
@@ -158,7 +160,8 @@ describe("a running coding run's live output", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
     await flush();
-    expect(asked).toEqual([{ turn_id: "turn-1", launch_id: "L1" }]);
+    // BY CURSOR, holding nothing yet: the owner answers what there is.
+    expect(asked).toEqual([{ turn_id: "turn-1", launch_id: "L1", cursor: true }]);
     expect(screen.getByText("running go test ./...")).toBeTruthy();
 
     // IT POLLS while open…
@@ -195,6 +198,89 @@ describe("a running coding run's live output", () => {
       { selected: "run:L1" },
     );
     expect(await screen.findByText(/has not written anything it can show yet/)).toBeTruthy();
+  });
+
+  // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END. Each answer adds what was
+  // written since; the block keeps the newest line in view — the one that
+  // says what the run is doing now — until the reader scrolls up, after which
+  // the text they are reading stays where it is.
+  //
+  // Mutation: drop the follow, and the block stays at its top; follow
+  // regardless of the reader, and their scroll is taken away.
+  test("accumulates what it is sent and follows the end until the reader scrolls up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    const lines = ["[tool] bash: go build\n", "[tool] bash: go vet\n", "[tool] bash: go test\n"];
+    let end = 0;
+    const answer = (n: number): SandboxTailAnswer => {
+      const text = lines[Math.min(n, lines.length) - 1]!;
+      const start = end;
+      end += text.length;
+      return {
+        outcome: "tail",
+        turn_id: "turn-1",
+        launch_id: "L1",
+        node: "node-b",
+        output: {
+          text,
+          source: "transcript",
+          cut: false,
+          as_of: iso(59_000),
+          finished: false,
+          cursor: true,
+          reset: n === 1,
+          epoch: "transcript@0",
+          start,
+          end,
+          digest: `d${end}`,
+          window_bytes: 262_144,
+        },
+      };
+    };
+    const { asked } = mount(PARKED, answer, { selected: "run:L1" });
+    await flush();
+    const pre = document.querySelector(".live-output pre") as HTMLElement;
+    expect(pre.textContent).toContain("go build");
+    Object.defineProperty(pre, "scrollHeight", { configurable: true, value: 1_000 });
+    Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+    });
+    expect(pre.textContent).toContain("go build");
+    expect(pre.textContent).toContain("go vet");
+    expect(asked[1]).toEqual({
+      turn_id: "turn-1",
+      launch_id: "L1",
+      cursor: true,
+      epoch: "transcript@0",
+      after: lines[0]!.length,
+      digest: `d${lines[0]!.length}`,
+    });
+    expect(pre.scrollTop).toBe(1_000);
+
+    pre.scrollTop = 200;
+    fireEvent.scroll(pre);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+    });
+    expect(pre.textContent).toContain("go test");
+    expect(pre.scrollTop).toBe(200);
+  });
+
+  // A JOB STILL BEING SET UP IS ASKED ABOUT AGAIN, and is not called stopped.
+  test("a job being set up keeps the poll going", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    const { asked } = mount(
+      PARKED,
+      { outcome: "launching", turn_id: "turn-1", launch_id: "L1", status: "launching" },
+      { selected: "run:L1" },
+    );
+    await flush();
+    expect(screen.getByText(/its box made and provisioned/)).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
+    });
+    expect(asked.length).toBeGreaterThan(1);
   });
 
   test("a run that stopped running stops the poll", async () => {

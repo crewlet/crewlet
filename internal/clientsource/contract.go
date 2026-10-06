@@ -209,6 +209,11 @@ var contract = []Entry{
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},
 
+	// sandbox.ts
+	{"SANDBOX_TAIL_OUTCOMES", ReadLiteral, "internal/sandbox.TestTheDashboardKnowsEveryTailOutcome"},
+	{"LIVE_OUTPUT_MAX_BYTES", ReadScalar, "internal/sandbox.TestTheDashboardHoldsWhatTheRecordWillHold"},
+	{"SANDBOX_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheOwnersReuse"},
+
 	// fleet.ts
 	{"BROKER_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerKind"},
 	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},

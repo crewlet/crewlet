@@ -30,6 +30,7 @@ import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
+import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { AccessAnswer } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
@@ -3178,29 +3179,54 @@ export interface TurnAnswer {
 }
 
 /**
- * What a running coding run has said so far, read from its box by the node
- * that owns it (`sandbox.Output`). Redacted by the engine; the LAST 8 KiB.
+ * What a running coding run has said, read from its box by the node that owns
+ * it (`sandbox.Output`), redacted by the engine — in one of two shapes.
+ *
+ * A WINDOW, for a request that asked by no cursor or an owner that reads none:
+ * the last `window_bytes` (8 KiB) in whole lines, replacing what was shown. Or,
+ * with `cursor` set, what the asker LACKS: the text after the offset it holds
+ * through (`start`), or on `reset` the last `window_bytes` (256 KiB, what the
+ * record will hold) in whole lines, which replaces what it held. Offsets are
+ * UTF-8 bytes of the reading named `epoch`; `end` and `digest` go back on the
+ * next request.
  */
 export interface SandboxOutput {
   text: string;
   /** Which of the job's two accounts of itself this is. */
   source: "transcript" | "stderr" | "none";
-  /** The text lost its front to the bound. */
+  /** Output came before what this answer carries and is not in it. */
   cut: boolean;
   /** When the box was read, on the owning node's clock. */
   as_of: string;
   /** The job is over and waiting to be collected; it will not grow again. */
   finished: boolean;
+  /** The most this shape carries, so a caption says the bound from the answer.
+   *  Absent from an older owner's window, which was 8 KiB. */
+  window_bytes?: number;
+  /** Cursor-shaped: the owner read the asker's cursor. Absent on a window. */
+  cursor?: boolean;
+  epoch?: string;
+  start?: number;
+  end?: number;
+  digest?: string;
+  /** The text replaces what the asker holds rather than following it. */
+  reset?: boolean;
+  /** The owner's reading began after the job's own start. */
+  front?: boolean;
+  /** Bytes written but not shown yet, until their redaction is settled. */
+  held?: number;
 }
 
 /**
  * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
- * tail of that job while it runs, `not_running` with the record's own status
- * once it is not, or the owning node NAMED where it did not answer
- * (`owner_silent`) or runs a build that cannot (`owner_upgrading`).
+ * tail of that job while it runs, `launching` while its box is still being
+ * made, `not_running` with the record's own status once it is not,
+ * `box_paused` for a running record whose box is paused (never woken to be
+ * read), or the owning node NAMED where it did not answer (`owner_silent`) or
+ * runs a build that cannot (`owner_upgrading`).
  */
 export interface SandboxTailAnswer {
-  outcome: "tail" | "not_running" | "owner_silent" | "owner_upgrading";
+  outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
   /** The node that owns the run — the one that answered, or did not. */

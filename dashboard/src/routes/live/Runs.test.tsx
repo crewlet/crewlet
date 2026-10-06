@@ -24,6 +24,7 @@ import { Router } from "~/app/router.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
 import { overflowing } from "~/testing.tsx";
 import { BridgeLog, RunScreen } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
@@ -281,7 +282,12 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
       work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
       ...answers,
     };
-    const answer = all[what];
+    // A FUNCTION ANSWERS FROM THE QUESTION, for a case whose answers move.
+    const given = all[what];
+    const answer =
+      typeof given === "function"
+        ? (given as (p: Record<string, unknown>) => unknown)(params ?? {})
+        : given;
     // AN `Error` STANDS FOR A READ THAT FAILED: the socket rejects with the
     // refusal's code, which is what `useQuery` surfaces as `error`.
     if (answer instanceof Error) return Promise.reject(answer);
@@ -374,9 +380,109 @@ test("a running run's page polls the live output of the job it holds", async () 
   expect(asked.find((a) => a.what === "sandbox_tail")?.params).toEqual({
     turn_id: "turn-1",
     launch_id: "job-2",
+    cursor: true,
   });
   expect(await screen.findByText("running the tests")).toBeTruthy();
 });
+
+// A JOB STILL BEING SET UP IS NOT A STOPPED ONE. The run's row exists, with its
+// launch id, from before its box does, and it stays `launching` through the
+// box's creation and provisioning. The page took that answer as final and
+// never asked again — the view of a run opened in its first minute stayed on
+// "no longer running" for the whole run.
+//
+// Mutation: treat `launching` as terminal, and the page asks once.
+test("a run's page keeps asking about a job still being set up", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+  const { asked } = mountPage({
+    sandbox_runs: { runs: [run({ status: "launching", launch_id: "job-1" })] },
+    turn: { turn_id: "turn-1", events: [] },
+    sandbox_tail: {
+      outcome: "launching",
+      turn_id: "turn-1",
+      launch_id: "job-1",
+      status: "launching",
+    },
+  });
+  await settle();
+  expect(await screen.findByText(/its box made and provisioned/)).toBeTruthy();
+  expect(screen.queryByText(/no longer running/)).toBeNull();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
+  });
+  expect(asked.filter((a) => a.what === "sandbox_tail").length).toBeGreaterThan(1);
+  vi.useRealTimers();
+});
+
+// A LATER JOB ON THE SAME RUN IS FOLLOWED, IN A VIEW OF ITS OWN. A `replaced`
+// answer reads the board again, the row names the new job, and the view of it
+// starts empty rather than with the old job's output above the new one's —
+// the view is keyed by the job, not by the run.
+//
+// Mutation: let a view outlive its job — no key, and no reset of the hook's
+// view when its job changes — and the old job's text is still on screen after
+// the switch; drop the refetch, and the page waits out the board's poll on
+// "replaced".
+test("a run's page follows a later job into a view of its own", async () => {
+  let job = "job-1";
+  const { asked } = mountPage({
+    sandbox_runs: () => ({ runs: [run({ status: "running", launch_id: job })] }),
+    turn: { turn_id: "turn-1", events: [] },
+    sandbox_tail: (params: Record<string, unknown>) => {
+      if (params.launch_id === "job-1") {
+        if (job === "job-1") {
+          job = "job-2";
+          return {
+            outcome: "tail",
+            turn_id: "turn-1",
+            launch_id: "job-1",
+            output: liveOutput("the first job's output\n"),
+          };
+        }
+        return {
+          outcome: "not_running",
+          turn_id: "turn-1",
+          launch_id: "job-1",
+          status: "replaced",
+        };
+      }
+      return {
+        outcome: "tail",
+        turn_id: "turn-1",
+        launch_id: "job-2",
+        output: liveOutput("the second job's output\n"),
+      };
+    },
+  });
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+  expect(await screen.findByText(/the first job's output/)).toBeTruthy();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
+  });
+  await settle();
+  expect(await screen.findByText(/the second job's output/)).toBeTruthy();
+  expect(screen.queryByText(/the first job's output/)).toBeNull();
+  expect(asked.some((a) => a.what === "sandbox_tail" && a.params.launch_id === "job-2")).toBe(true);
+  vi.useRealTimers();
+});
+
+/** A cursor-shaped output that is the whole of what a job has said. */
+function liveOutput(text: string) {
+  return {
+    text,
+    source: "transcript",
+    cut: false,
+    as_of: new Date().toISOString(),
+    finished: false,
+    cursor: true,
+    reset: true,
+    epoch: "transcript@0",
+    start: 0,
+    end: text.length,
+    digest: "d",
+    window_bytes: 262_144,
+  };
+}
 
 // A SETTLED RUN STILL HAS A PAGE: its record is gone from the board, and what
 // it did is the `sandbox` phase its turn published, with the transcript on it.

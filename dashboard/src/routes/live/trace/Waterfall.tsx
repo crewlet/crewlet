@@ -38,11 +38,14 @@
  *
  * While a coding run's span is open AND a reader has it open, its live output
  * is asked of the node that owns the run every [SANDBOX_TAIL_POLL_MS]
- * (`sandbox_tail`). Nothing else asks: closing the span, or the run ending,
- * stops the poll. The answer is honest about the two ways it can be empty — a
- * run that has not written anything yet, and an owner that did not answer —
- * and names the owner in the second, because "nothing to show" and "the node
- * that could show it is silent" send a reader to opposite places.
+ * (`sandbox_tail`), and the view holds what it is sent — up to what the run's
+ * record will hold — following the end unless the reader scrolled up. Nothing
+ * else asks: closing the span, or the run stopping, stops the poll; a job still
+ * being set up is not a stopped one. The answer is honest about the ways it can
+ * be empty — a run that has not written anything yet, a job not started yet,
+ * and an owner that did not answer — and names the owner in the last, because
+ * "nothing to show" and "the node that could show it is silent" send a reader
+ * to opposite places.
  */
 
 import {
@@ -62,10 +65,20 @@ import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import { fmtCount, fmtDuration, fmtElapsed, fmtTime, plural, relTime } from "~/lib/format.ts";
+import {
+  fmtBytes,
+  fmtCount,
+  fmtDuration,
+  fmtElapsed,
+  fmtTime,
+  plural,
+  relTime,
+  utf8Bytes,
+} from "~/lib/format.ts";
 import { deliveredLine, rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
+import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
 import {
   fraction,
   phaseLabel,
@@ -74,17 +87,6 @@ import {
   type Waterfall as Model,
 } from "~/lib/waterfall.ts";
 import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
-
-/**
- * How often an open coding run's live output is asked for, in ms.
- *
- * THREE SECONDS: above the fleet read budget (`sandbox.TailReadBudget`, two
- * seconds) so at most one request is ever in flight per open span, and short
- * enough that the agent's current step is on screen while it is still the
- * current step. It costs nothing while nobody looks — the poll runs only while
- * a reader has a running run's span open.
- */
-export const SANDBOX_TAIL_POLL_MS = 3_000;
 
 /** What each kind of span is called in its detail's eyebrow. */
 const KIND_LABEL: Record<SpanKind, string> = {
@@ -677,41 +679,72 @@ function RunDetail({
 /**
  * A running coding run's live output, asked of the node that owns it every
  * [SANDBOX_TAIL_POLL_MS] for as long as this is mounted — which is as long as
- * a reader has the span open and the run is running.
+ * a reader has the span (or the run's page) open and the job has not stopped.
+ *
+ * It HOLDS what it has been sent, up to what the run's record will hold, and is
+ * sent only what it lacks (`lib/useLiveTail.ts`). It FOLLOWS THE END — the
+ * newest line is the one that answers "what is it doing now" — unless the
+ * reader has scrolled up, in which case the text they are reading stays where
+ * it is. And it says what it does not hold, from the answer and from what it
+ * dropped, rather than spelling a bound of its own.
+ *
+ * A `replaced` answer is reported through `onReplaced`, for a screen that names
+ * the job by the run's current one: the run's page reads the board again and
+ * follows the new job.
  */
 export function LiveOutput({
   turnId,
   launchId,
   now,
+  onReplaced,
 }: {
   turnId: string;
   launchId: string;
   now: number;
+  onReplaced?: () => void;
 }) {
-  // A RUN THAT HAS STOPPED STOPS THE POLL: its output is on its record from
-  // here on, which the trace re-reads when the record lands. The answer that
-  // said so is KEPT — a disabled question answers nothing, and the reader is
-  // owed the reason the output stopped rather than "asking…" for ever.
-  const [final, setFinal] = useState<SandboxTailAnswer | null>(null);
-  const tail = useQuery(
-    "sandbox_tail",
-    { turn_id: turnId, launch_id: launchId },
-    { enabled: final === null, pollMs: SANDBOX_TAIL_POLL_MS },
-  );
-  const answer = final ?? tail.data;
+  const tail = useLiveTail(turnId, launchId);
+  const answer = tail.answer;
+  const replaced = answer?.outcome === "not_running" && answer.status === "replaced";
   useEffect(() => {
-    if (tail.data?.outcome === "not_running") setFinal(tail.data);
-  }, [tail.data]);
+    if (replaced) onReplaced?.();
+  }, [replaced, onReplaced]);
 
-  let body: ReactNode;
+  const frame = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  // The block is drawn once there is text; its scroll is listened to from then.
+  const showing = tail.text !== "";
+  // THE READER'S SCROLL DECIDES. At the bottom (within a line of it), the
+  // block follows the end; anywhere else, it stays where they put it.
+  useEffect(() => {
+    const pre = frame.current?.querySelector("pre");
+    if (!pre) return;
+    const onScroll = () => {
+      following.current = pre.scrollHeight - pre.scrollTop - pre.clientHeight < FOLLOW_SLACK_PX;
+    };
+    pre.addEventListener("scroll", onScroll);
+    return () => pre.removeEventListener("scroll", onScroll);
+  }, [showing]);
+  useLayoutEffect(() => {
+    const pre = frame.current?.querySelector("pre");
+    if (pre && following.current) pre.scrollTop = pre.scrollHeight;
+  }, [tail.text]);
+
+  let notice: ReactNode = null;
   if (!answer) {
-    body = tail.error ? (
+    notice = tail.error ? (
       <Callout variant="warning">The run&rsquo;s output could not be read: {tail.error}.</Callout>
     ) : (
       <span className="t-caption">Asking the node that runs it…</span>
     );
+  } else if (tail.error) {
+    notice = (
+      <Callout variant="warning">
+        The last read failed ({tail.error}); what is below is what was read before — asking again.
+      </Callout>
+    );
   } else if (answer.outcome === "owner_silent") {
-    body = (
+    notice = (
       <Callout variant="warning">
         {answer.node
           ? `${answer.node}, the node that owns this run, did not answer in time — asking again.`
@@ -719,39 +752,40 @@ export function LiveOutput({
       </Callout>
     );
   } else if (answer.outcome === "owner_upgrading") {
-    body = (
+    notice = (
       <Callout variant="info">
         {answer.node ?? "The node that owns this run"} runs an older build that cannot show a run
         live. Its output arrives on the run&rsquo;s record when it is collected.
       </Callout>
     );
-  } else if (answer.outcome === "not_running") {
-    body = (
+  } else if (answer.outcome === "launching") {
+    notice = (
       <span className="t-caption">
-        {answer.status === "awaiting_clarification"
+        The job is being set up — its box made and provisioned, the coding agent not started yet.
+        Its output appears here once the agent begins.
+      </span>
+    );
+  } else if (answer.outcome === "box_paused") {
+    notice = (
+      <span className="t-caption">
+        The run&rsquo;s box is paused, which is how a job that finished waits to be collected; it is
+        not woken to be read. What it did arrives on the run&rsquo;s record.
+      </span>
+    );
+  } else if (answer.outcome === "not_running") {
+    notice = (
+      <span className="t-caption">
+        {answer.status === "awaiting_clarification" || answer.status === "reseed"
           ? "The run stopped to ask a person something — it is parked until they answer."
-          : answer.status === "replaced"
+          : replaced
             ? "A later job replaced this one on the same run."
             : "The run is no longer running — its output is on its record once it is collected."}
       </span>
     );
-  } else {
-    const out = answer.output;
-    body =
-      !out || out.source === "none" ? (
-        <span className="t-caption">
-          The coding agent has not written anything it can show yet.
-        </span>
-      ) : (
-        <CodeBlock
-          plain
-          selectable
-          copyable
-          maxHeight={RECORD_MAX_HEIGHT}
-          label={out.source === "stderr" ? "Live output (its error stream)" : "Live output"}
-          code={out.text}
-        />
-      );
+  } else if (tail.text === "") {
+    notice = (
+      <span className="t-caption">The coding agent has not written anything it can show yet.</span>
+    );
   }
   const out = answer?.output;
   // WHAT IS ANNOUNCED IS THE OUTCOME, never the output. The whole block was a
@@ -762,6 +796,7 @@ export function LiveOutput({
   // run stopped, it is showing output again — is news; the output itself is
   // there to be read at the reader's own pace.
   const state = liveState(answer, !!tail.error);
+  const holding = holdingLine(tail);
   return (
     <div className="col gap-2 live-output">
       <span className="row gap-2 baseline">
@@ -769,7 +804,7 @@ export function LiveOutput({
         <span className="t-label">Live output</span>
         {out && (
           <span className="t-caption">
-            {out.cut ? "the last 8 KiB · " : ""}read {relTime(out.as_of, now)}
+            {holding ? `${holding} · ` : ""}read {relTime(out.as_of, now)}
             {answer?.node ? ` on ${answer.node}` : ""}
             {out.finished ? " · finished, waiting to be collected" : ""}
           </span>
@@ -778,12 +813,57 @@ export function LiveOutput({
       <span className="sr-only" role="status">
         {state}
       </span>
-      {body}
-      <span className="t-caption">
-        {plural(SANDBOX_TAIL_POLL_MS / 1000, "second")} between reads, while this is open.
-      </span>
+      {notice}
+      {showing && (
+        <div ref={frame}>
+          <CodeBlock
+            plain
+            selectable
+            copyable
+            maxHeight={RECORD_MAX_HEIGHT}
+            label={out?.source === "stderr" ? "Live output (its error stream)" : "Live output"}
+            code={tail.text}
+          />
+        </div>
+      )}
+      {tail.held > 0 && !tail.final && (
+        <span className="t-caption">
+          {fmtBytes(tail.held)} written and not shown yet — held until what it redacts to is settled
+          (a line not finished, or a private key whose end has not been written).
+        </span>
+      )}
+      {!tail.final && (
+        <span className="t-caption">
+          {plural(SANDBOX_TAIL_POLL_MS / 1000, "second")} between reads, while this is open.
+        </span>
+      )}
     </div>
   );
+}
+
+/** How near the bottom a reader's scroll counts as following the end, in px —
+ *  about a line, so a block that grew by one line under a reader at the bottom
+ *  still reads as one they were following. */
+const FOLLOW_SLACK_PX = 24;
+
+/**
+ * What the view holds, said when it is not the whole of what the run wrote —
+ * from the answer's own bound and the view's own count, never a figure spelled
+ * here.
+ */
+export function holdingLine(view: LiveView): string {
+  if (view.mode === "window") {
+    return view.answer?.output?.cut ? `the last ${fmtBytes(view.windowBytes)}` : "";
+  }
+  if (view.mode !== "cursor") return "";
+  const parts: string[] = [];
+  if (view.dropped > 0) {
+    parts.push(
+      `the last ${fmtBytes(utf8Bytes(view.text))} held; ${fmtBytes(view.dropped)} earlier not held here`,
+    );
+  }
+  if (view.front) parts.push("read from partway through the run");
+  return parts.join("; ");
 }
 
 /**
@@ -799,6 +879,10 @@ export function liveState(answer: SandboxTailAnswer | null | undefined, failed: 
       return "The node that owns this run did not answer.";
     case "owner_upgrading":
       return "The node that owns this run cannot show it live.";
+    case "launching":
+      return "The job is being set up.";
+    case "box_paused":
+      return "The run's box is paused; its job has finished.";
     case "not_running":
       return "The run is no longer running.";
     default:

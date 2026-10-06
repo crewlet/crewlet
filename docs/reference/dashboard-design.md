@@ -4814,11 +4814,35 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
   the trace asks the node that owns the run for its live output every three
   seconds (`sandbox_tail`, see [Watching a run
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
-  closing the span or the run stopping ends the poll. *Nothing to show yet*
-  and *the node that owns this run did not answer* are different sentences,
-  and the second names the node. A screen reader is told the tail's STATE —
-  one sentence in a status region, which changes only when the state does —
-  never the output or the "read 3s ago" clock, which change every poll.
+  closing the span or the job stopping ends the poll — and only
+  `not_running` is stopping: a job still being set up (`launching`), a box
+  paused before its record moves on (`box_paused`), a silent owner and a
+  failed read all keep asking, and keep what is on screen.
+  - **The view holds what it was sent.** It asks by CURSOR — the reading it
+    holds, how far and the owner's digest there — and APPENDS what the owner
+    says it lacks, or replaces what it holds on a reset. `lib/useLiveTail.ts`
+    is that hook, and not `useQuery`, because the cursor moves with every
+    answer and a cursor in a query's parameters re-runs its effect the moment
+    an answer lands. It holds at most what the run's record will
+    (`LIVE_OUTPUT_MAX_BYTES` in `contract/sandbox.ts`, the engine's
+    `sandbox.MaxRunTextBytes`, held to it by a gate), dropping its FRONT on a
+    line past that, and the caption says how much earlier output it no longer
+    holds — every figure read from the answer or the view's own count, never
+    spelled on the screen. A delta that does not follow what the view holds is
+    never spliced in: the view keeps its text and asks for a reset. An owner on
+    an older build answers a WINDOW, which replaces what is shown each poll,
+    and the caption names its size.
+  - **It follows the end unless the reader scrolled up.** At the bottom (within
+    about a line, `FOLLOW_SLACK_PX`) the block scrolls to each new line;
+    anywhere else it stays where they put it.
+  - Bytes the owner holds back until their redaction is settled — a line not
+    finished, a private key whose end has not been written — are counted
+    under the block rather than shown.
+  - *Nothing to show yet* and *the node that owns this run did not answer*
+    are different sentences, and the second names the node. A screen reader
+    is told the tail's STATE — one sentence in a status region, which changes
+    only when the state does — never the output or the "read 3s ago" clock,
+    which change every poll.
 - **Notes sent to a turn** name their sender as a seat's name, the way every
   other attribution does, and say what became of each — read at a round, or
   expired — without assuming the reader sent it.
@@ -4857,7 +4881,11 @@ it, so a link to one run landed on a board with the run below the fold.
     is on the seat's inbox and the node holding the seat resumes the run.
   - A running run's page polls its live output from the node that owns it
     (`sandbox_tail`, by the `launch_id` the row names, every 3 s while the page
-    is open — the same `LiveOutput` the turn trace draws).
+    is open — the same `LiveOutput` the turn trace draws). The view is keyed
+    on the turn AND the launch, so a later job starts a view of its own rather
+    than appending its output to the last job's; an answer naming the job
+    `replaced` reads the board again at once, so the page follows the job the
+    row holds now rather than waiting out `RUNS_POLL_MS`.
   - A run is collected when its record is deleted, and its page still
     answers: it reads the turn and draws every `sandbox` phase the turn
     published — what the job reported, what it delivered, its tokens and its
