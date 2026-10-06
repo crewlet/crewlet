@@ -534,6 +534,32 @@ type PendingRun struct {
 	// to reach. Bounded by [maxDeclinedAnswers]; cleared with the question.
 	DeclinedAnswers []string `json:"declined_answers,omitempty"`
 
+	// HandBack is what a declined answer still owes the seat's inbox: the
+	// copies of its deliveries, under the ids they are published with,
+	// written IN THE SAME WRITE that lets the answer go
+	// ([PendingStore.DeclineAnswer]) and removed once they are published
+	// ([PendingStore.ClearHandBack]).
+	//
+	// AN OUTBOX ON THE ROW, because the decline is two effects in two
+	// systems — a compare-and-set here and a publish to the broker — and
+	// neither order of the two survives a crash between them on its own.
+	// Published first, a crash before the write left the answer recorded
+	// AND its copy on the inbox, so the reply was delivered twice: once as
+	// the answer a later resume used, once as an ordinary message. Written
+	// first with nothing beside it, a crash before the publish would lose the
+	// reply outright. Written first WITH the copies, the write is the
+	// decision and the copies are its durable consequence: whichever node
+	// reads the row next publishes them, under ids derived from the
+	// originals, so a publish repeated after a crash is the same message
+	// twice — collapsed by the inbox's same-id dedupe and the completion
+	// ledger — and never a second one.
+	//
+	// It is the row's and survives everything the row does — a new question,
+	// a relaunch, a recorded answer — because what it owes is owed to the
+	// seat rather than to any question; a run that ENDS publishes what it
+	// still carries as its record is deleted ([Coordinator.endRecord]).
+	HandBack []HandedBack `json:"hand_back,omitempty"`
+
 	// WorkItem is the one work item the launching turn was charged to, nil
 	// when it was on nothing.
 	//
@@ -939,13 +965,23 @@ type PendingStore interface {
 	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer) (PendingRun, bool, error)
 
 	// DeclineAnswer lets go of a recorded answer the run could not be
-	// resumed with: the run goes back to the status the record took it out
-	// of, the answer is cleared, and its deliveries — with the copies
-	// handed back for them, declined — join [PendingRun.DeclinedAnswers].
-	// Only while the run is still [StatusAnswered] on that launch, holding
-	// that answer, and no newer lease outranks the fence; reports whether
-	// THIS call did. FALSE IS NOT AN ERROR.
-	DeclineAnswer(ctx context.Context, turnID, launch string, declined []string, fence Fence) (bool, error)
+	// resumed with, IN ONE WRITE: the run goes back to the status the record
+	// took it out of, the answer is cleared, its deliveries and the ids of
+	// the copies handed back for them join [PendingRun.DeclinedAnswers], and
+	// the copies themselves join [PendingRun.HandBack] for the caller to
+	// publish. Only while the run is still [StatusAnswered] on that launch,
+	// holding exactly the answer made of the deliveries named, and no newer
+	// lease outranks the fence. Returns the row as written IFF THIS CALL
+	// DID. FALSE IS NOT AN ERROR.
+	DeclineAnswer(ctx context.Context, turnID, launch string, answer []string,
+		handBack []HandedBack, fence Fence) (PendingRun, bool, error)
+
+	// ClearHandBack removes the copies a decline owed the seat's inbox that
+	// have now been published, by their ids, and reports whether it removed
+	// any. Unconditioned on status, launch or lease: what it records is a
+	// fact about the broker, true whoever published them. FALSE IS NOT AN
+	// ERROR — a run that is gone, or copies a peer already cleared.
+	ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error)
 }
 
 // Conversation is the durable conversation this run reports back to.
@@ -1207,6 +1243,20 @@ type RecordedAnswer struct {
 	// reseed when the pause reaper had already reclaimed the box — and the
 	// one an answer that is let go of puts it back to.
 	From string `json:"from"`
+}
+
+// HandedBack is one copy of a declined answer's delivery, owed to the seat's
+// inbox as the ordinary message it is — see [PendingRun.HandBack].
+type HandedBack struct {
+	// ID is the copy's own id, derived from the original's, so publishing it
+	// twice is one message to every reader that dedupes on ids.
+	ID string `json:"id"`
+
+	// Original is the delivery it is a copy of.
+	Original string `json:"original"`
+
+	// Event is the copy as it is published, encoded.
+	Event json.RawMessage `json:"event"`
 }
 
 // Audience is who a parked question may be answered by: the seats, and

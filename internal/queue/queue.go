@@ -576,8 +576,11 @@ type EventQueue interface {
 	// PAIR, so a second subsystem gating the same inbox cannot release
 	// the first one's hold by lifting its own, and a hold on one group
 	// does not gate every other group on a shared subject. The engine
-	// takes one reason today: a seat whose node has no turn engine
-	// pauses before requeuing, so the copies buffer rather than loop.
+	// holds a seat's inbox under four, each lifted only by the subsystem
+	// that took it: a company with no turn engine, a person's pause, a
+	// spent budget window, and a detached coding run holding the seat
+	// (or an answer's resume it owes) — see internal/agent/inbox's Hold
+	// and the engine's budget park.
 	PauseTopic(ctx context.Context, topic, group, reason string) error
 
 	// ResumeTopic releases one reason's hold, flushing when none remain.

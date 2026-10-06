@@ -272,17 +272,45 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 	})
 }
 
-// DeclineAnswer lets go of a recorded answer. See the contract on
-// [PendingStore].
-func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, declined []string, fence Fence) (bool, error) {
-	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+// DeclineAnswer lets go of a recorded answer, recording the copies it owes
+// the seat's inbox in the same write. See the contract on [PendingStore].
+func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, answer []string,
+	handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
+	if len(answer) == 0 {
+		return PendingRun{}, false, fmt.Errorf("sandbox: declining an answer to run %s that names no delivery", turnID)
+	}
+	return s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusAnswered || run.LaunchID != launch || run.Answer == nil ||
-			outranked(*run, fence) || !slices.Contains(declined, firstID(run.Answer.EventIDs)) {
+			outranked(*run, fence) || !slices.Equal(run.Answer.EventIDs, answer) {
 			return false
+		}
+		declined := slices.Clone(answer)
+		for _, copied := range handBack {
+			declined = append(declined, copied.ID)
 		}
 		run.Status = run.Answer.declinedTo()
 		run.Answer = nil
 		run.DeclinedAnswers = boundedDeclined(append(run.DeclinedAnswers, declined...))
+		run.HandBack = append(run.HandBack, handBack...)
+		return true
+	})
+}
+
+// ClearHandBack removes published copies from a run's hand-back. See the
+// contract on [PendingStore].
+func (s *CoordStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		kept := slices.DeleteFunc(slices.Clone(run.HandBack), func(h HandedBack) bool {
+			return slices.Contains(ids, h.ID)
+		})
+		if len(kept) == len(run.HandBack) {
+			return false
+		}
+		if len(kept) == 0 {
+			kept = nil
+		}
+		run.HandBack = kept
 		return true
 	})
 	return won, err
@@ -297,14 +325,6 @@ func boundedDeclined(ids []string) []string {
 		return ids
 	}
 	return slices.Clone(ids[len(ids)-maxDeclinedAnswers:])
-}
-
-// firstID is the first of a list of ids, or empty.
-func firstID(ids []string) string {
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[0]
 }
 
 // ClaimOwnership moves a run to this node, refusing to steal a newer lease.

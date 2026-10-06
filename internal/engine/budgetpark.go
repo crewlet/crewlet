@@ -174,22 +174,23 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 }
 
 // budgetRefusing reports whether one of a seat's capped windows is refusing,
-// and the reason naming it — the budget stage's question, ASKED WITHOUT
-// PARKING. For a caller that is not a delivery (a retried resume) and so has
-// no mail of its own to hold: it waits rather than parks, and a delivery that
-// arrives meanwhile takes the park itself. An unreadable counter is not a
-// refusal, for the reason [Engine.budgetPark] gives.
-func (e *Engine) budgetRefusing(ctx context.Context, handle string) (string, bool) {
+// the reason naming it and the instant that window turns over — the budget
+// stage's question, ASKED WITHOUT PARKING. For a caller that is not a delivery
+// (a retried resume) and so has no mail of its own to hold: it waits for the
+// window's end rather than parks, and a delivery that arrives meanwhile takes
+// the park itself. An unreadable counter is not a refusal, for the reason
+// [Engine.budgetPark] gives.
+func (e *Engine) budgetRefusing(ctx context.Context, handle string) (string, time.Time, bool) {
 	m, ok := e.meterFor(e.Company(), handle).(*meter)
 	if !ok || m == nil || !m.basis.capped() {
-		return "", false
+		return "", time.Time{}, false
 	}
 	r, refusing, err := m.refusing(ctx)
 	if err != nil || !refusing {
-		return "", false
+		return "", time.Time{}, false
 	}
 	return fmt.Sprintf("budget: %s window %s resets %s",
-		r.Window.Period, r.Window.Label, rfc3339(r.Window.End)), true
+		r.Window.Period, r.Window.Label, rfc3339(r.Window.End)), r.Window.End, true
 }
 
 // recordBudgetParkLocked records a park and arms its reset. The caller holds

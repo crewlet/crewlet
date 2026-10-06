@@ -1347,6 +1347,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Pause == nil {
 		d.Pause = e.holdInbox
 	}
+	if d.HoldSandbox == nil {
+		// LIVE, for the reason Answer is below: the coordinator a seat's
+		// sandbox hold belongs to may arrive by apply.
+		d.HoldSandbox = e.holdSandboxSeat
+	}
 	if d.Budget == nil {
 		d.Budget = e.budgetPark
 	}

@@ -116,17 +116,17 @@ func (r *answerResumer) resumedWith() []string {
 	return append([]string(nil), r.answers...)
 }
 
-// inboxHold is the engine's answer hold, on the queue under test.
+// inboxHold is the engine's sandbox seat hold, on the queue under test.
 type inboxHold struct{ q queue.EventQueue }
 
 func (h inboxHold) Hold(ctx context.Context, handle string) error {
 	return h.q.PauseTopic(ctx, topics.AgentInbox(handle), topics.AgentInboxGroup(handle),
-		string(inbox.HoldAnswerOwed))
+		string(inbox.HoldSandbox))
 }
 
 func (h inboxHold) Release(ctx context.Context, handle string) error {
 	return h.q.ResumeTopic(ctx, topics.AgentInbox(handle), topics.AgentInboxGroup(handle),
-		string(inbox.HoldAnswerOwed))
+		string(inbox.HoldSandbox))
 }
 
 // handCranked is time.AfterFunc driven by the test.

@@ -228,6 +228,17 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the busy half of it",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
 	}},
+	"HoldSeat": {{
+		name: "a delivery that reached a seat this node counts as held",
+		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldSeat(t.Context(), "swe") },
+	}},
+	"Readmit": {{
+		name: "a signal that a seat's conditions may have cleared",
+		call: func(_ *testing.T, rig *coordRig) {
+			rig.coordinator.Readmit("paused", "swe")
+			rig.fireRetries()
+		},
+	}},
 	"Manager": {{
 		name: "the manager a caller mints a box through",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.Manager() },
@@ -763,10 +774,17 @@ func (s *refusingStore) RecordAnswer(ctx context.Context, turnID, launch string,
 }
 
 func (s *refusingStore) DeclineAnswer(ctx context.Context, turnID, launch string,
-	declined []string, fence Fence,
-) (bool, error) {
+	answer []string, handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
 	if s.called("DeclineAnswer") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.DeclineAnswer(ctx, turnID, launch, answer, handBack, fence)
+}
+
+func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {
+	if s.called("ClearHandBack") {
 		return false, errRefusedCall
 	}
-	return s.inner.DeclineAnswer(ctx, turnID, launch, declined, fence)
+	return s.inner.ClearHandBack(ctx, turnID, ids)
 }

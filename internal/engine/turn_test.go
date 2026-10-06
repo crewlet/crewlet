@@ -147,6 +147,9 @@ type recorder struct {
 	paused    []string
 	holds     []inbox.Hold
 	deferred  []string
+	// sandboxHolds is every seat the dispatcher asked the sandbox
+	// coordinator to hold, for a delivery that reached it held.
+	sandboxHolds []string
 }
 
 func (r *recorder) run(_ context.Context, req engine.Request) (turn.Result, error) {
@@ -171,6 +174,9 @@ func dispatcher(t *testing.T, r *recorder) *engine.Dispatcher {
 			r.paused = append(r.paused, handle)
 			r.holds = append(r.holds, hold)
 			return nil
+		},
+		HoldSandbox: func(_ context.Context, handle string) {
+			r.sandboxHolds = append(r.sandboxHolds, handle)
 		},
 		NoteDeferred: func(handle string) { r.deferred = append(r.deferred, handle) },
 		Now:          func() time.Time { return clock },
@@ -221,9 +227,11 @@ func TestAGuardStopsTheTurnBeforeItStarts(t *testing.T) {
 		"not owned": {inbox.Conditions{}, queue.OutcomeDefer, false, false, true},
 		"no engine": {
 			inbox.Conditions{Owned: true}, queue.OutcomeAck, true, true, false},
+		// HELD AND DEFERRED, never parked: a park republished onto the
+		// inbox the consumer was still reading, for the length of the run.
 		"sandbox": {
 			inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true},
-			queue.OutcomeAck, true, false, false},
+			queue.OutcomeDefer, false, false, true},
 		"shedding": {
 			inbox.Conditions{Owned: true, TurnEngineReady: true},
 			queue.OutcomeDefer, false, false, true},
@@ -257,9 +265,9 @@ func TestAParkIsNeverAckedUntilItsRequeueLands(t *testing.T) {
 	// broker believes it was handled and nothing holds it.
 	r := &recorder{}
 	d := dispatcher(t, r)
-	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true}
-	}
+	// The one screening that still parks: a company with no model, behind
+	// the hold it takes first.
+	d.Conditions = func(string) inbox.Conditions { return inbox.Conditions{Owned: true} }
 	d.Park = func(context.Context, string, []*events.Event) error {
 		return errors.New("broker unreachable")
 	}
@@ -295,9 +303,7 @@ func TestNoParkPathNAKsRatherThanDropping(t *testing.T) {
 	r := &recorder{}
 	d := dispatcher(t, r)
 	d.Park = nil
-	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true, SeatHeldBySandbox: true}
-	}
+	d.Conditions = func(string) inbox.Conditions { return inbox.Conditions{Owned: true} }
 	if got := d.Dispatch(context.Background(), "ceo", []*events.Event{ev("notification")}); got.Outcome != queue.OutcomeNak {
 		t.Errorf("outcome = %v, want a NAK", got.Outcome)
 	}
@@ -761,11 +767,10 @@ func TestAPanicWhileRequeuingLeavesThePublishedCopiesToRun(t *testing.T) {
 	d := dispatcher(t, r)
 	d.Completions = completions
 	d.Identify = func(string) (string, string) { return "CEO", "a-1" }
-	// The seat is parked on a detached run, so the whole delivery is
-	// requeued rather than worked.
+	// The company configures no model, so the whole delivery is requeued
+	// behind the hold rather than worked.
 	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
-			SeatHeldBySandbox: true}
+		return inbox.Conditions{Owned: true, AdmitsTriggers: true}
 	}
 	d.Park = func(_ context.Context, _ string, evs []*events.Event) error {
 		r.parked = append(r.parked, evs[:1])
@@ -1399,40 +1404,53 @@ func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 	}
 }
 
-// THE ONE WAY OUT OF THE SANDBOX PARK. A coding run that stops to ask a
-// person something leaves its seat busy, so every inbound on that seat is
-// requeued — including the person's reply. Without this seam the answer is
-// parked behind the question for ever: the run sits awaiting until its box's
-// pause TTL reclaims it, and the person who answered is never told anything
-// happened.
-func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
+// A SEAT A CODING RUN HOLDS DEFERS UNDER THE SANDBOX HOLD, AND OFFERS NOTHING.
+//
+// It used to PARK every delivery — requeue it onto the inbox it came from and
+// ack it — offering it to the seat's parked runs first. Nothing stopped the
+// consumer, so the copy was the next thing it fetched, and each message waiting
+// on a busy seat went round fetch, offer (a store read), publish, ack for the
+// whole run. The coordinator now holds the inbox while a run holds the seat, so
+// a delivery reaches here only by racing that hold or finding it refused: the
+// hold is asked for again, the delivery is deferred at the head, and the seat
+// host is told the consumer stopped so its renew lifts the quiesce and leaves
+// the hold as the only thing stopping it. An answer to ANOTHER of the seat's
+// runs waits under the hold with the rest of the mail and is offered when the
+// run stops holding the seat — so nothing is offered here.
+func TestAHeldSeatDefersUnderTheSandboxHoldAndOffersNothing(t *testing.T) {
 	t.Parallel()
 	r := &recorder{}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, SeatHeldBySandbox: true}
+			AdmitsTriggers: true, SeatHeldBySandbox: true, SandboxAwaitsAnswer: true}
 	}
-	var asked []string
-	d.Answer = func(_ context.Context, handle string, reply sandbox.Reply) (sandbox.AnswerDisposition, error) {
-		conv, answer, trigger := unpackReply(reply)
-		asked = append(asked, handle+"/"+conv.Identity)
-		if answer == "" || trigger == nil {
-			t.Error("the answer text and its trigger did not reach the coordinator")
-		}
+	offered := false
+	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
+		offered = true
 		return sandbox.AnswerConsumed, nil
 	}
 
 	got := d.Dispatch(context.Background(), "swe",
 		[]*events.Event{inThread("notification", "chat:C1")})
-	if got.Outcome != queue.OutcomeAck {
-		t.Errorf("outcome = %v, want an ack — the delivery was handled", got.Outcome)
+	if got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral that keeps the delivery at the head", got.Outcome)
 	}
 	if len(r.parked) != 0 {
-		t.Errorf("the answer was requeued behind the question it answers: %v", r.parked)
+		t.Errorf("the delivery was republished onto the inbox the consumer is reading: %v", r.parked)
 	}
-	if !slices.Equal(asked, []string{"swe/chat:C1"}) {
-		t.Errorf("the coordinator was asked %v", asked)
+	if !slices.Equal(r.sandboxHolds, []string{"swe"}) {
+		t.Errorf("the sandbox hold was asked for on %v, want the seat's — a delivery that "+
+			"raced a refused hold must retry it", r.sandboxHolds)
+	}
+	if !slices.Equal(r.deferred, []string{"swe"}) {
+		t.Errorf("deferral noted for %v, want the seat: an un-noted quiesce outlasts the hold", r.deferred)
+	}
+	if offered {
+		t.Error("a held seat offered its mail as an answer")
+	}
+	if len(r.reqs) != 0 || len(r.paused) != 0 {
+		t.Errorf("a held seat ran %d turns and took %v holds of its own", len(r.reqs), r.paused)
 	}
 }
 
@@ -1989,13 +2007,14 @@ func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
 }
 
 // FAIL-OPEN, in every direction. A delivery that is NOT the answer, a
-// conversation the partition cannot name, a coordinator that errored, and a
-// node with no coordinator at all must each park as before: parking is
-// recoverable, and acking a message nothing handled is not.
+// coordinator that errored, a disposition this build cannot read and a node
+// with no coordinator at all each become the ordinary turn they look like:
+// acking a message nothing handled loses it, and a free seat's ordinary mail
+// is what it is there for.
 //
-// A delivery a run is still OWED is the one exception, and it is not parked:
-// see TestAnAnswerStillOwedOnAHeldSeatIsDeferredNotParked.
-func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
+// A delivery a run is still OWED is the one exception, and it is not run: see
+// TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun.
+func TestADeliveryThatIsNotTheAnswerBecomesATurn(t *testing.T) {
 	t.Parallel()
 	type answerer func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error)
 	for name, answer := range map[string]answerer{
@@ -2005,31 +2024,27 @@ func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
 		"an unreadable store": func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 			return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
 		},
-		// AND A DISPOSITION THIS BUILD CANNOT READ falls back to what a
-		// node with no coordinator does, which is this same park.
 		"a disposition this build does not know": func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 			return sandbox.AnswerDisposition("something else"), nil
 		},
 		"no coordinator": nil,
 	} {
-		r := &recorder{}
+		r := &recorder{result: turn.Result{Decision: phase.Done}}
 		d := dispatcher(t, r)
 		d.Conditions = func(string) inbox.Conditions {
 			return inbox.Conditions{Owned: true, TurnEngineReady: true,
-				AdmitsTriggers: true, SeatHeldBySandbox: true}
+				AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 		}
 		d.Answer = answer
 
 		got := d.Dispatch(context.Background(), "swe",
 			[]*events.Event{inThread("notification", "chat:C1")})
 		if got.Outcome != queue.OutcomeAck {
-			t.Errorf("%s: outcome = %v, want an ack for a successful park", name, got.Outcome)
+			t.Errorf("%s: outcome = %v, want an ack for a worked turn", name, got.Outcome)
 		}
-		if len(r.parked) != 1 {
-			t.Errorf("%s: the delivery was not parked (%d parks)", name, len(r.parked))
-		}
-		if len(r.reqs) != 0 {
-			t.Errorf("%s: a turn ran on a seat parked on a coding run", name)
+		if len(r.reqs) != 1 {
+			t.Errorf("%s: %d turns ran, want the delivery worked as the message it is",
+				name, len(r.reqs))
 		}
 	}
 }
@@ -2047,11 +2062,11 @@ func TestAFailedAnswerDispatchNamesBothKeys(t *testing.T) {
 	logging.Configure(slog.LevelWarn, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 
-	r := &recorder{}
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, SeatHeldBySandbox: true}
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		return sandbox.AnswerNotMine, errors.New("the coordination store is unreachable")
@@ -2074,16 +2089,16 @@ func TestAFailedAnswerDispatchNamesBothKeys(t *testing.T) {
 }
 
 // A partition with no conversation cannot be matched against a question asked
-// in one, so it parks without asking: the coordinator's own disambiguation is
-// positional within a conversation, and offering it a key-less delivery would
-// let a scheduled fire answer somebody's question.
+// in one, so it is worked without asking: the coordinator's own disambiguation
+// is positional within a conversation, and offering it a key-less delivery
+// would let a scheduled fire answer somebody's question.
 func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
 	t.Parallel()
-	r := &recorder{}
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
 	d := dispatcher(t, r)
 	d.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, SeatHeldBySandbox: true}
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	called := false
 	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
@@ -2094,16 +2109,16 @@ func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
 	if called {
 		t.Error("a delivery with no conversation was offered as an answer")
 	}
-	if len(r.parked) != 1 {
-		t.Errorf("it was not parked either (%d parks)", len(r.parked))
+	if len(r.reqs) != 1 {
+		t.Errorf("it was not worked either (%d turns)", len(r.reqs))
 	}
 }
 
-// AND ONLY THE SANDBOX PARK. Every other park is a node that cannot run the
-// turn at all — no turn engine, a shedding config posture — and offering
-// those deliveries to a coordinator would answer a question with a message
-// the seat was never able to read.
-func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
+// AND NEVER FROM A PARK. A park is a node that cannot run the turn at all — no
+// turn engine, a person's pause — and offering those deliveries to a
+// coordinator would answer a question with a message the seat was never able
+// to read.
+func TestAParkNeverOffersItsDeliveryAsAnAnswer(t *testing.T) {
 	t.Parallel()
 	r := &recorder{}
 	d := dispatcher(t, r)
@@ -2573,7 +2588,7 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 	dp := dispatcher(t, parked)
 	dp.Conditions = func(string) inbox.Conditions {
 		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, SeatHeldBySandbox: true}
+			AdmitsTriggers: true, SandboxAwaitsAnswer: true}
 	}
 	dp.Answer = func(_ context.Context, _ string, reply sandbox.Reply) (sandbox.AnswerDisposition, error) {
 		conv, _, _ := unpackReply(reply)
@@ -2898,35 +2913,4 @@ func unpackReply(reply sandbox.Reply) (sandbox.ConversationRef, string, *events.
 		trigger = reply.Events[0]
 	}
 	return reply.Conv, reply.Text, trigger
-}
-
-// AN ANSWER STILL OWED ON A HELD SEAT IS DEFERRED, NOT PARKED.
-//
-// The park REPUBLISHES, which puts the copy at the TAIL of the inbox — behind
-// the person's next message, which would then be offered to the question
-// first and taken as its answer. So the held seat hands an owed answer back
-// the way the free seat does: a deferral, which keeps it at the head.
-func TestAnAnswerStillOwedOnAHeldSeatIsDeferredNotParked(t *testing.T) {
-	t.Parallel()
-	r := &recorder{}
-	d := dispatcher(t, r)
-	d.Conditions = func(string) inbox.Conditions {
-		return inbox.Conditions{Owned: true, TurnEngineReady: true,
-			AdmitsTriggers: true, SeatHeldBySandbox: true}
-	}
-	d.Answer = func(context.Context, string, sandbox.Reply) (sandbox.AnswerDisposition, error) {
-		return sandbox.AnswerDeferred, errors.New("the answer could not be recorded")
-	}
-	got := d.Dispatch(context.Background(), "swe",
-		[]*events.Event{inThread("notification", "chat:C1")})
-	if got.Outcome != queue.OutcomeDefer {
-		t.Errorf("outcome = %v, want a deferral", got.Outcome)
-	}
-	if len(r.parked) != 0 {
-		t.Errorf("an answer still owed was republished behind the conversation's newer mail: %v",
-			r.parked)
-	}
-	if len(r.reqs) != 0 {
-		t.Errorf("a turn ran on a seat a coding job holds")
-	}
 }

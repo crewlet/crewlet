@@ -246,12 +246,12 @@ type CoordinatorOptions struct {
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
 
-	// Hold keeps a seat's later mail behind the resume of an answer it
-	// owes — see [AnswerHold]. Nil holds nothing, which a coordinator built
-	// without an inbox (a test's) is entitled to: the answer is still
-	// recorded and resumed, and only the order of the seat's next turn
-	// against that resume is left to chance.
-	Hold AnswerHold
+	// Hold holds a seat's inbox while one of its runs holds the seat or an
+	// answer it owes is waiting on its resume — see [SeatHold]. Nil holds
+	// nothing, which a coordinator built without an inbox (a test's) is
+	// entitled to: the runs are still driven and the answers still resumed,
+	// and only what the seat's mail does meanwhile is left to the screening.
+	Hold SeatHold
 
 	// Admit says whether a seat may run a retried resume now — see
 	// [Admission]. Nil admits every retry.
@@ -336,18 +336,20 @@ type Coordinator struct {
 	// delivery rather than remembered here.
 	attempts map[answerKey]map[string]answerBudget
 
-	// retries are the owed answers this node is retrying the resume of,
-	// by turn id; owed is which of them each seat owes, the set its inbox
-	// hold is taken for; held whether that hold is applied, and holdBusy
-	// and holdDirty the serialisation [Coordinator.reconcileHold] runs
-	// under. All under mu.
+	// retries are the owed answers this node is retrying the resume (or
+	// the hand-back) of, by turn id; owed is which of them each seat owes,
+	// which with the seat's holding count is what its inbox hold is taken
+	// for; held whether that hold is applied, and holdBusy, holdDirty and
+	// holdGen the serialisation [Coordinator.reconcileHold] runs under. All
+	// under mu.
 	retries   map[string]*answerRetry
 	owed      map[string]map[string]struct{}
 	held      map[string]bool
 	holdBusy  map[string]bool
 	holdDirty map[string]bool
+	holdGen   map[string]uint64
 
-	hold  AnswerHold
+	hold  SeatHold
 	admit Admission
 	after func(time.Duration, func()) func() bool
 
@@ -432,6 +434,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		held:      map[string]bool{},
 		holdBusy:  map[string]bool{},
 		holdDirty: map[string]bool{},
+		holdGen:   map[string]uint64{},
 		hold:      opts.Hold,
 		admit:     opts.Admit,
 		after:     opts.After,
@@ -539,6 +542,10 @@ func (c *Coordinator) uncountRun(handle, status string) { c.moveRun(handle, stat
 // [Coordinator.SeatRuns] needs: a park is a decrement and an increment, and a
 // delivery screened between two separate writes would see a seat with no run
 // of either kind.
+//
+// AND THE SEAT'S INBOX HOLD FOLLOWS IT, outside the lock: a run entering
+// [Holding] holds the seat's inbox and the last one leaving lifts it (see
+// seathold.go), at the transition rather than at the next delivery.
 func (c *Coordinator) moveRun(handle, from, to string) {
 	if handle == "" {
 		return
@@ -546,6 +553,7 @@ func (c *Coordinator) moveRun(handle, from, to string) {
 	fromHolding, fromAwaiting := setOf(from)
 	toHolding, toAwaiting := setOf(to)
 	c.adjust(handle, toHolding-fromHolding, toAwaiting-fromAwaiting)
+	c.reconcileHold(c.life, handle)
 }
 
 // setOf says which count a status belongs to. A status that owns no seat-level
@@ -637,12 +645,14 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 		counts.awaiting += awaiting
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if counts == (seatRuns{}) {
 		delete(c.runs, handle)
-		return
+	} else {
+		c.runs[handle] = counts
 	}
-	c.runs[handle] = counts
+	c.mu.Unlock()
+	// The hold follows the recount, as it follows every transition.
+	c.reconcileHold(ctx, handle)
 }
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
@@ -1922,6 +1932,19 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, fence Fence
 	}
 	c.reportStopped(ctx, settled)
 	c.clearAnswerAttempts(settled.AgentHandle, settled.TurnID)
+	// A REPLY A DECLINE STILL OWED THE SEAT goes out with the record that
+	// owed it, read off the record as it was deleted: the hand-back is the
+	// seat's rather than the run's, and nothing reads a deleted row again.
+	// The ids are derived, so a copy the decline itself already published
+	// is the same message again.
+	if len(settled.HandBack) > 0 {
+		if _, err := c.publishCopies(ctx, settled.AgentHandle, settled.HandBack); err != nil {
+			log.ErrorContext(ctx, "sandbox_answer_handback_failed",
+				"turn_id", settled.TurnID, "agent", settled.AgentHandle, "error", err.Error(),
+				"detail", "the run ended with a reply it owed the seat unpublished, and the "+
+					"reply could not be handed to the seat")
+		}
+	}
 	return settled, true, nil
 }
 
@@ -2107,6 +2130,19 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 			c.countRun(run.AgentHandle, run.Status)
 			parked++
 		}
+		// AND A REPLY A DECLINE OWES THE SEAT, whatever the run has done
+		// since: the decline's write landed and the node that wrote it
+		// stopped before its copies were published (or before it could
+		// say they were). Owed to the seat rather than to the run, so it
+		// is this holder's to publish — before the mailbox opens, so the
+		// copies are waiting with the rest of the seat's mail when it
+		// does. A run ended above published what it still carried as its
+		// record went ([Coordinator.endRecord]); an answered run's owed
+		// resume publishes it first ([Coordinator.retryOwed]).
+		if len(run.HandBack) > 0 &&
+			slices.Contains([]string{StatusRunning, StatusAwaiting, StatusReseed}, run.Status) {
+			c.recoverOwed(ctx, run)
+		}
 	}
 	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", recovered,
@@ -2208,12 +2244,15 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// never be offered a delivery for again. See [MaxAnswerAttempts].
 	c.releaseAnswerAttempts(handle)
 	// AND ANY ANSWER IT WAS STILL RESUMING: it stays recorded on the run, and
-	// the successor's recovery pass drives it. The inbox hold taken for it
-	// goes too — the seat's mail is the successor's to order now.
-	c.releaseOwed(c.life, handle)
+	// the successor's recovery pass drives it.
+	c.releaseOwed(handle)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	delete(c.runs, handle)
+	c.mu.Unlock()
+	// AND THE SEAT'S INBOX HOLD, which the release's detach has already
+	// dropped with the attachment: forgotten, never lifted — the seat's mail
+	// is the successor's to order now. See [Coordinator.forgetHold].
+	c.forgetHold(handle)
 	log.Debug("sandbox_seat_released", "seat", handle)
 }
 

@@ -268,13 +268,15 @@ func TestASeatThisNodeDoesNotOwnIsDeferred(t *testing.T) {
 	}
 }
 
-func TestASeatHeldBySandboxParksRatherThanRunning(t *testing.T) {
+func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 	t.Parallel()
-	// A detached coding run outlasts any broker ack window, so its seat's
-	// mail is requeued rather than held against the ack deadline. Nil
-	// answers no — a build with no sandbox provider has no seat waiting on
-	// one — so this is the half that says the hook is read at all.
+	// A detached coding run holds its seat for as long as it runs, so the
+	// seat starts no turn: the coordinator holds its inbox, and a delivery
+	// that reaches it anyway is deferred under that hold. Nil answers no — a
+	// build with no sandbox provider has no seat waiting on one — so this is
+	// the half that says the hook is read at all.
 	var parked [][]*events.Event
+	var held []string
 	d := &engine.Dispatcher{
 		// Ownership is the guard above this one; pin it so what is under
 		// test is the sandbox branch and not the lease table.
@@ -283,6 +285,7 @@ func TestASeatHeldBySandboxParksRatherThanRunning(t *testing.T) {
 			parked = append(parked, evs)
 			return nil
 		},
+		HoldSandbox: func(_ context.Context, handle string) { held = append(held, handle) },
 	}
 	e := newEngine(t, engine.Options{
 		Dispatch:    d,
@@ -298,16 +301,17 @@ func TestASeatHeldBySandboxParksRatherThanRunning(t *testing.T) {
 	}
 
 	if got := e.Dispatch(context.Background(), "ceo",
-		[]*events.Event{ev("external_notification")}); got.Outcome != queue.OutcomeAck {
-		t.Errorf("outcome = %v, want an ack after a park", got.Outcome)
+		[]*events.Event{ev("external_notification")}); got.Outcome != queue.OutcomeDefer {
+		t.Errorf("outcome = %v, want a deferral under the sandbox hold", got.Outcome)
 	}
-	if len(parked) != 1 {
-		t.Fatalf("parked %d partitions, want 1", len(parked))
+	if len(parked) != 0 || len(held) != 1 {
+		t.Fatalf("parked %d partitions and asked for %d holds, want no park and one hold",
+			len(parked), len(held))
 	}
 	if got := e.Dispatch(context.Background(), "cto",
-		[]*events.Event{ev("external_notification")}); got.Outcome == queue.OutcomeAck &&
-		len(parked) != 1 {
-		t.Error("a seat waiting on nothing was parked too")
+		[]*events.Event{ev("external_notification")}); got.Outcome == queue.OutcomeDefer &&
+		len(held) != 1 {
+		t.Error("a seat waiting on nothing was held too")
 	}
 }
 

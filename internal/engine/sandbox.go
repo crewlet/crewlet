@@ -1432,10 +1432,10 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
 		Stopped: e.releaseWorkingStatus,
-		// The seat's later mail waits behind an owed answer's resume, and
-		// a retried resume asks the seat's conditions first — see
-		// [answerHold] and [Engine.mayResumeAnswer].
-		Hold:  answerHold{engine: e},
+		// A seat's inbox is held while one of its runs holds it or an
+		// answer's resume is owed, and a retried resume asks the seat's
+		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
+		Hold:  seatHold{engine: e},
 		Admit: e.mayResumeAnswer,
 	})
 	if err != nil {
@@ -1514,62 +1514,120 @@ func (e *Engine) answerParkedRun(ctx context.Context, handle string,
 	return rt.coordinator.TryResumeFromAnswer(ctx, handle, reply)
 }
 
-// answerHold is the seat-inbox hold the sandbox coordinator keeps while one of
-// a seat's runs is owed the resume of a recorded answer — see
-// [sandbox.AnswerHold] and [inbox.HoldAnswerOwed].
+// seatHold is the seat-inbox hold the sandbox coordinator keeps while one of a
+// seat's runs holds the seat, or is owed the resume of a recorded answer — see
+// [sandbox.SeatHold] and [inbox.HoldSandbox].
 //
 // A HOLD, NOT A PARK: the mail waits on the broker with its order and its
-// delivery count intact, where a park would republish it in a loop for as
-// long as the resume's retries take.
-type answerHold struct{ engine *Engine }
+// delivery count intact, where a park republished it onto the inbox it had
+// just been fetched from, in a loop, for as long as the run held the seat.
+type seatHold struct{ engine *Engine }
 
-var _ sandbox.AnswerHold = answerHold{}
+var _ sandbox.SeatHold = seatHold{}
 
-func (h answerHold) Hold(ctx context.Context, handle string) error {
+func (h seatHold) Hold(ctx context.Context, handle string) error {
 	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
 	if subject == "" || group == "" {
 		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
 	}
-	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, string(inbox.HoldAnswerOwed))
+	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, string(inbox.HoldSandbox))
 }
 
-func (h answerHold) Release(ctx context.Context, handle string) error {
+func (h seatHold) Release(ctx context.Context, handle string) error {
 	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
 	if subject == "" || group == "" {
 		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
 	}
-	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, string(inbox.HoldAnswerOwed))
+	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, string(inbox.HoldSandbox))
 }
+
+// holdSandboxSeat is the dispatcher's [Dispatcher.HoldSandbox]: it asks the
+// coordinator current when the delivery arrives for the hold it keeps on a
+// seat one of whose runs holds it. With no runtime nothing holds any seat.
+func (e *Engine) holdSandboxSeat(ctx context.Context, handle string) {
+	if rt := e.sandbox.Load(); rt != nil {
+		rt.coordinator.HoldSeat(ctx, handle)
+	}
+}
+
+// What a retried resume the seat's conditions refused waits on — the
+// [sandbox.Condition] each refusal names, and the one each signal re-checks.
+// See [Engine.mayResumeAnswer] for which event moves each, and
+// [Engine.readmitAnswers] for where the engine passes it on.
+const (
+	// waitOwnership — the seat's lease is not fresh, or the seat is still
+	// being established. Re-decided by the next renew, so the refusal waits
+	// one heartbeat on the clock.
+	waitOwnership sandbox.Condition = "ownership"
+
+	// waitPause — a person paused the seat, or this node has not read the
+	// pauses yet. Moved by the pause watch: a resume, or its first complete
+	// answer.
+	waitPause sandbox.Condition = "pause"
+
+	// waitTurnEngine — the company configures no model. Moved by the apply
+	// that brings one.
+	waitTurnEngine sandbox.Condition = "turn_engine"
+
+	// waitPosture — this node's config posture refuses new work. Moved by
+	// the reconcile loop's tick that finds it admitting again.
+	waitPosture sandbox.Condition = "posture"
+
+	// waitBudget — one of the seat's capped token windows is refusing.
+	// Lifted on the clock when the window turns over, which the refusal
+	// names, or at once by an apply that changes the ceilings.
+	waitBudget sandbox.Condition = "budget"
+)
 
 // mayResumeAnswer is the coordinator's [sandbox.Admission]: whether a seat may
-// run a RETRIED resume of a recorded answer now.
+// run a RETRIED resume of a recorded answer now, and if not, what that waits
+// on.
 //
 // THE SCREENING'S OWN CONDITIONS, read the way a delivery reads them, because
 // the first attempt runs inside the delivery that carried the answer and so
 // passed them; a retry runs outside any delivery and must not be the one way a
 // turn starts on a seat whose lease is not fresh, that a person paused, that
 // has no model, whose node refuses new work, or whose budget is refusing.
-// Whether a sandbox run holds the seat is deliberately NOT asked: a resume of
-// an answer was always admitted beside another of the seat's jobs, which is
-// what the answer offer on a held seat is for.
-func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (bool, string) {
+// Whether a sandbox run holds the seat is deliberately NOT asked: an answer
+// recorded before another of the seat's runs started holding it is still
+// owed, and resuming it beside that job is what it was always admitted to do.
+//
+// EACH REFUSAL NAMES WHAT IT WAITS ON, so the retry waits for that rather than
+// re-checking on a timer (see [sandbox.Coordinator.Readmit]). Two of them are
+// clocks: a lease is re-proved by the renew the seat host makes once a
+// heartbeat, so ownership is re-checked one heartbeat later; and a budget
+// window ends at an instant the counters name. The rest are events this node
+// observes and passes on in [Engine.readmitAnswers]'s callers.
+func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Refusal, bool) {
 	c := e.conditionsFor(nil)(handle)
 	switch {
 	case !c.Owned:
-		return false, "seat is not owned here"
+		return sandbox.Refusal{Condition: waitOwnership, Reason: "seat is not owned here",
+			Until: e.now().Add(e.node.Host().HeartbeatInterval())}, true
 	case c.PauseUnknown:
-		return false, "this node has not yet read whether the seat is paused"
+		return sandbox.Refusal{Condition: waitPause,
+			Reason: "this node has not yet read whether the seat is paused"}, true
 	case c.Paused:
-		return false, "a person paused this seat"
+		return sandbox.Refusal{Condition: waitPause, Reason: "a person paused this seat"}, true
 	case !c.TurnEngineReady:
-		return false, "no turn engine"
+		return sandbox.Refusal{Condition: waitTurnEngine, Reason: "no turn engine"}, true
 	case !c.AdmitsTriggers:
-		return false, "config posture refuses new work"
+		return sandbox.Refusal{Condition: waitPosture, Reason: "config posture refuses new work"}, true
 	}
-	if reason, refusing := e.budgetRefusing(ctx, handle); refusing {
-		return false, reason
+	if reason, resets, refusing := e.budgetRefusing(ctx, handle); refusing {
+		return sandbox.Refusal{Condition: waitBudget, Reason: reason, Until: resets}, true
 	}
-	return true, ""
+	return sandbox.Refusal{}, false
+}
+
+// readmitAnswers passes on that a condition a retried resume may be waiting on
+// can have cleared, for the named seats or every seat: the coordinator
+// re-checks at once the attempts waiting on exactly that. Nothing to do on a
+// node with no sandbox runtime, which owes no answer.
+func (e *Engine) readmitAnswers(cond sandbox.Condition, handles ...string) {
+	if rt := e.sandbox.Load(); rt != nil {
+		rt.coordinator.Readmit(cond, handles...)
+	}
 }
 
 // answerRunByTurn hands a person's answer BY TURN to the parked coding run it

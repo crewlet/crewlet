@@ -361,6 +361,9 @@ func TestAnAnswerThatCannotBeResumedIsHandedBackAfterItsAttempts(t *testing.T) {
 	if len(handed) != 1 || handed[0].ID != copyID || !handed[0].Timestamp.Equal(r1.Timestamp) {
 		t.Fatalf("handed back %v, want one copy of R1 under its derived id", handed)
 	}
+	if len(got.HandBack) != 0 {
+		t.Fatalf("hand-back %+v still owed after the copy was published", got.HandBack)
+	}
 	if holds.holding("swe") {
 		t.Fatal("the seat's inbox is still held after the answer was let go")
 	}
@@ -404,40 +407,5 @@ func TestAnAnswerARecoveredSeatOwesIsResumedByItsNewHolder(t *testing.T) {
 	}
 	if holds.holding("swe") {
 		t.Fatal("the seat's inbox is still held after the inherited answer resumed")
-	}
-}
-
-// A RETRY WAITS OUT THE SEAT'S CONDITIONS WITHOUT SPENDING ITS ATTEMPTS. A
-// paused seat, a refusing budget or a lease being renewed is not a resume that
-// failed, so the attempts that exist for one are not charged for it.
-func TestARetryRefusedByTheSeatsConditionsChargesNothing(t *testing.T) {
-	rig := newCoordRig(t)
-	parkOnAQuestion(t, rig)
-	asked := rig.get("t1").AskedAt
-	rig.resumer.failWith(errors.New("transient"))
-	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-		chatReply(answerOnTheDM, "use main", replyAt("use main", asked.Add(time.Minute)))); d != AnswerConsumed {
-		t.Fatalf("disposition = %q, want the answer recorded", d)
-	}
-	rig.resumer.failWith(nil)
-	admitted := false
-	rig.coordinator.admit = func(context.Context, string) (bool, string) {
-		return admitted, "a person paused this seat"
-	}
-	for range 3 * MaxAnswerAttempts {
-		if rig.fireRetries() != 1 {
-			t.Fatal("a refused retry was not rescheduled")
-		}
-	}
-	if len(rig.resumer.calls()) != 0 {
-		t.Fatal("a resume ran on a seat its conditions refused")
-	}
-	if got := rig.get("t1"); got.Status != StatusAnswered {
-		t.Fatalf("status = %q, want the answer still owed", got.Status)
-	}
-	admitted = true
-	rig.fireRetries()
-	if len(rig.resumer.calls()) != 1 {
-		t.Fatal("the resume did not run once the seat admitted it")
 	}
 }

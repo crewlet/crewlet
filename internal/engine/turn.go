@@ -66,6 +66,17 @@ type Dispatcher struct {
 	// two subsystems hold inboxes this way and each lifts only its own.
 	Pause func(ctx context.Context, handle string, hold inbox.Hold, reason string) error
 
+	// HoldSandbox asks the sandbox coordinator for the hold it keeps on a
+	// seat one of whose runs holds it ([inbox.HoldSandbox]), for a delivery
+	// that reached the seat anyway — one that raced the hold, or found it
+	// refused — before that delivery is deferred. The hold is the
+	// coordinator's to take and lift, at its own transitions, so this asks
+	// rather than takes: a hold taken here would be one the coordinator does
+	// not know to lift when the run settles. Nil asks nothing, and the
+	// deferral alone stands — a node with no coordinator has no run holding
+	// any seat.
+	HoldSandbox func(ctx context.Context, handle string)
+
 	// Budget parks the seat when one of its capped token windows is
 	// refusing, and reports the deferral reason naming the window — see
 	// budgetpark.go. An error is a park that could not be taken, which
@@ -80,10 +91,10 @@ type Dispatcher struct {
 	// question it asked, and reports what to DO with the delivery — see
 	// [sandbox.AnswerDisposition].
 	//
-	// THE ONE WAY OUT OF THE SANDBOX PARK. A run that stops to ask a person
-	// something leaves its seat busy, so every inbound on that seat is
-	// requeued — including the person's reply. Without this seam the answer
-	// is parked behind the question for ever: the run sits in
+	// THE ONE WAY A PERSON'S REPLY REACHES THE RUN THAT ASKED. A run that
+	// stops to ask a person something gives its seat back, and the reply
+	// arrives on the seat's own inbox looking like any other message.
+	// Without this seam it is consumed as an unrelated turn: the run sits in
 	// [sandbox.StatusAwaiting] until its box's pause TTL reclaims it, and
 	// the person who answered is never told anything happened.
 	//
@@ -94,7 +105,7 @@ type Dispatcher struct {
 	// to the ordinary route and it was consumed as an unrelated turn while
 	// the run that asked waited out its pause TTL for a further message.
 	//
-	// Nil is a node with no coordinator, where a park is the whole answer.
+	// Nil is a node with no coordinator, where no run is waiting.
 	//
 	// It takes the WHOLE delivery as a [sandbox.Reply]: the conversation
 	// reference (the match turns on the identity, and the partition travels
@@ -416,35 +427,21 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			}
 		}
 		return d.park(ctx, handle, screening.Events, held)
-	case inbox.ActionPark:
-		if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle, screening.Events) {
-			disposition, cause := d.answered(ctx, handle, screening.Events)
-			switch disposition {
-			case sandbox.AnswerConsumed:
-				// The delivery WAS the answer, recorded on the run that
-				// asked; the coordinator owns its resume from here.
-				// Acking is what stops it being requeued behind the
-				// question it just answered.
-				d.recordAnswered(ctx, handle, screening.Events)
-				return queue.Ack()
-			case sandbox.AnswerDeferred:
-				// STILL OWED, and handed back the way the free-seat path
-				// hands it back — DEFERRED, never parked. A park
-				// REPUBLISHES, which is a new message at the TAIL of the
-				// inbox, so the person's next message, already waiting
-				// there, would be offered to the question first and
-				// taken as its answer. See the free-seat branch below.
-				if d.NoteDeferred != nil {
-					d.NoteDeferred(handle)
-				}
-				return queue.Defer(answerOwedReason(handle, cause))
-			}
-			// A delivery no run is owed is the held seat's ordinary
-			// mail, and the park below is exactly what it wants: a
-			// coding job HOLDS the seat, which outlasts any ack window,
-			// so it cannot sit unacked waiting for a backoff.
+	case inbox.ActionHoldAndDefer:
+		// A SEAT A DETACHED RUN HOLDS, reached by a delivery that raced the
+		// coordinator's hold on it or found that hold refused. The hold is
+		// asked for again — the retry a refused one gets — and the delivery
+		// is DEFERRED: it keeps its place at the head of the inbox, and the
+		// hold keeps it there until the run stops holding the seat.
+		//
+		// NEVER A PARK, which is what this was: a park republishes onto
+		// the inbox the delivery was just fetched from, and with nothing
+		// stopping the consumer the copy came straight back, for the
+		// length of the run. See sandbox.SeatHold.
+		if d.HoldSandbox != nil {
+			d.HoldSandbox(ctx, handle)
 		}
-		return d.park(ctx, handle, screening.Events, held)
+		return screening.Result()
 	}
 
 	// THE BUDGET, BEFORE THE DELIVERY IS CLAIMED: before the completion
@@ -486,17 +483,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// A run parked on a question does not hold its seat — that is the whole
 	// design, the answer arrives on the seat's own inbox — so the reply
 	// reaches here, on the ordinary path, looking like any other message.
-	// Guarded by the park alone, this match could only ever run while the
-	// seat was HELD, which is the one state a parked run is never in: every
-	// clarification answer was consumed as an unrelated turn while the box
-	// waited out its pause TTL.
+	// Offered only while the seat was HELD, which is the one state a parked
+	// run is never in, every clarification answer was consumed as an
+	// unrelated turn while the box waited out its pause TTL. This is the
+	// ONLY offer now: a seat a run holds has its inbox held, and an answer
+	// to another of its runs waits there to be offered here when it lifts.
 	//
-	// AFTER THE LEDGER, unlike the park's offer, and that is this path's own
-	// rule rather than an inconsistency: the completion ledger has already
-	// said which of these events were worked, and a trigger that produced a
-	// turn must not also be spliced into somebody's coding run. The park
-	// cannot read the ledger at all — a parked partition is never marked
-	// done — so it offers what it has.
+	// AFTER THE LEDGER, because the completion ledger has already said
+	// which of these events were worked, and a trigger that produced a turn
+	// must not also be spliced into somebody's coding run.
 	if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle, surviving) {
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
@@ -1338,11 +1333,12 @@ func (d *Dispatcher) recordAnswered(ctx context.Context, handle string, evs []*e
 }
 
 // park requeues a delivery and acks it, or NAKs where it could not be
-// requeued.
+// requeued. Only behind a pause hold ([inbox.ActionPauseAndPark]): the copies
+// land on the inbox the delivery came from, and with nothing stopping the
+// consumer they would be fetched straight back.
 //
-// It takes the EVENTS rather than the screening that asked for them, because
-// the answer offer parks a list the screening never saw: the survivors of the
-// completion ledger, which is a shorter list than the partition it screened.
+// It takes the EVENTS rather than the screening that asked for them, so the
+// list it requeues is stated where it is decided.
 func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Event, held *holding) queue.Result {
 	// NARROWED BEFORE THE REQUEUE, not after it. [Engine.park] publishes one
 	// event at a time, so a panic inside it leaves some copies on the queue

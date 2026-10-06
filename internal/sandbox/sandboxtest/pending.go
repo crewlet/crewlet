@@ -95,6 +95,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AnAnswerIsRecordedOnlyOnTheQuestionThatAsked", testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked},
 		{"AnAnswerIsResumedFromItsRecord", testAnAnswerIsResumedFromItsRecord},
 		{"ADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain", testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain},
+		{"ADeclineOwesItsCopiesInTheSameWrite", testADeclineOwesItsCopiesInTheSameWrite},
 		{"ANewQuestionForgetsTheLastOnesAnswer", testANewQuestionForgetsTheLastOnesAnswer},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -1561,7 +1562,7 @@ func testAnAnswerWaitingOnItsResumeStillExpiresTheBox(t *testing.T, s sandbox.Pe
 		t.Fatal("the row still reads as holding a box")
 	}
 
-	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1"}, sandbox.Fence{}); err != nil || !ok {
+	if ok, err := decline(t, s, launch, "r1"); err != nil || !ok {
 		t.Fatalf("DeclineAnswer = %v, %v", ok, err)
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusReseed {
@@ -2017,6 +2018,21 @@ func answerOf(id, text string) sandbox.RecordedAnswer {
 	return sandbox.RecordedAnswer{Text: text, EventIDs: []string{id}, RecordedAt: base}
 }
 
+// copyOf is the hand-back a decline of delivery id owes the seat: one copy,
+// under id + "-copy".
+func copyOf(id string) sandbox.HandedBack {
+	return sandbox.HandedBack{ID: id + "-copy", Original: id,
+		Event: json.RawMessage(`{"id":"` + id + `-copy"}`)}
+}
+
+// decline lets go of the one-delivery answer id on t1, owing its copy.
+func decline(t *testing.T, s sandbox.PendingStore, launch, id string) (bool, error) {
+	t.Helper()
+	_, ok, err := s.DeclineAnswer(t.Context(), "t1", launch, []string{id},
+		[]sandbox.HandedBack{copyOf(id)}, sandbox.Fence{})
+	return ok, err
+}
+
 // THE FIRST REPLY IS THE ANSWER, and the store is where that is decided: two
 // replies racing for one question — on two nodes across a handoff — both read
 // it waiting, and exactly one record lands.
@@ -2137,10 +2153,13 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 	// Only the answer it holds is let go of.
-	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"other"}, sandbox.Fence{}); err != nil || ok {
+	if ok, err := decline(t, s, launch, "other"); err != nil || ok {
 		t.Fatalf("declining an answer the run does not hold = %v, %v, want refused", ok, err)
 	}
-	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1", "r1-copy"}, sandbox.Fence{}); err != nil || !ok {
+	if got := mustGet(t, s, "t1"); len(got.HandBack) != 0 {
+		t.Fatalf("a refused decline still recorded copies as owed: %+v", got.HandBack)
+	}
+	if ok, err := decline(t, s, launch, "r1"); err != nil || !ok {
 		t.Fatalf("DeclineAnswer = %v, %v", ok, err)
 	}
 	got := mustGet(t, s, "t1")
@@ -2157,7 +2176,7 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r2", "use dev")); err != nil || !ok {
 		t.Errorf("a new reply to the reopened question = %v, %v, want it recorded", ok, err)
 	}
-	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r2"}, sandbox.Fence{}); err != nil || !ok {
+	if ok, err := decline(t, s, launch, "r2"); err != nil || !ok {
 		t.Fatalf("DeclineAnswer: %v, %v", ok, err)
 	}
 	// BOUNDED, newest kept.
@@ -2166,13 +2185,73 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 		if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf(id, "x")); err != nil || !ok {
 			t.Fatalf("RecordAnswer %s = %v, %v", id, ok, err)
 		}
-		if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{id}, sandbox.Fence{}); err != nil || !ok {
+		if ok, err := decline(t, s, launch, id); err != nil || !ok {
 			t.Fatalf("DeclineAnswer %s = %v, %v", id, ok, err)
 		}
 	}
 	got = mustGet(t, s, "t1")
-	if len(got.DeclinedAnswers) != 16 || got.DeclinedAnswers[15] != "r22" {
+	if len(got.DeclinedAnswers) != 16 || got.DeclinedAnswers[15] != "r22-copy" {
 		t.Errorf("declined = %v, want the newest 16", got.DeclinedAnswers)
+	}
+}
+
+// A DECLINE OWES ITS COPIES IN THE SAME WRITE, and they are owed until a
+// publisher clears them — whatever the run does in between. The write is the
+// decision to hand the reply back, and the copies on the row are what make
+// that decision survive the process that took it: a decline that cleared the
+// answer and recorded nothing would lose the reply to a crash before its
+// publish, and one that recorded the copies anywhere but this write could be
+// seen half done.
+func testADeclineOwesItsCopiesInTheSameWrite(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	written, ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1"},
+		[]sandbox.HandedBack{copyOf("r1")}, sandbox.Fence{})
+	if err != nil || !ok {
+		t.Fatalf("DeclineAnswer = %v, %v", ok, err)
+	}
+	for name, got := range map[string]sandbox.PendingRun{"returned": written, "stored": mustGet(t, s, "t1")} {
+		if got.Status != sandbox.StatusAwaiting || got.Answer != nil ||
+			len(got.HandBack) != 1 || got.HandBack[0].ID != "r1-copy" ||
+			string(got.HandBack[0].Event) != `{"id":"r1-copy"}` {
+			t.Fatalf("%s row = %q answer %+v hand-back %+v, want the question open and r1's "+
+				"copy owed, from the one write", name, got.Status, got.Answer, got.HandBack)
+		}
+	}
+	// A DECLINE NEEDS THE ANSWER IT LETS GO OF.
+	if _, _, err := s.DeclineAnswer(ctx, "t1", launch, nil, nil, sandbox.Fence{}); err == nil {
+		t.Error("a decline naming no delivery was accepted")
+	}
+
+	// OWED THROUGH WHATEVER THE RUN DOES NEXT: a new answer, and a new job.
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r2", "use dev")); err != nil || !ok {
+		t.Fatalf("RecordAnswer r2 = %v, %v", ok, err)
+	}
+	if err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); len(got.HandBack) != 1 {
+		t.Fatalf("hand-back = %+v after a new answer and a relaunch, want r1's copy still owed",
+			got.HandBack)
+	}
+
+	// CLEARED BY ID, and only what is named.
+	if ok, err := s.ClearHandBack(ctx, "t1", []string{"someone-else"}); err != nil || ok {
+		t.Errorf("clearing a copy the run does not owe = %v, %v, want nothing removed", ok, err)
+	}
+	if ok, err := s.ClearHandBack(ctx, "t1", []string{"r1-copy"}); err != nil || !ok {
+		t.Fatalf("ClearHandBack = %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); len(got.HandBack) != 0 {
+		t.Fatalf("hand-back = %+v after it was cleared", got.HandBack)
+	}
+	if ok, err := s.ClearHandBack(ctx, "gone", []string{"r1-copy"}); err != nil || ok {
+		t.Errorf("clearing a run that does not exist = %v, %v", ok, err)
 	}
 }
 
@@ -2193,7 +2272,7 @@ func testANewQuestionForgetsTheLastOnesAnswer(t *testing.T, s sandbox.PendingSto
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "x")); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
-	if ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1"}, sandbox.Fence{}); err != nil || !ok {
+	if ok, err := decline(t, s, launch, "r1"); err != nil || !ok {
 		t.Fatalf("DeclineAnswer = %v, %v", ok, err)
 	}
 	if err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{}); err != nil {

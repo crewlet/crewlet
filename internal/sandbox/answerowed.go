@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -52,8 +53,9 @@ import (
 //
 // The resume no longer runs inside the delivery that carried the answer, so
 // nothing about the inbox's own serial dispatch keeps the seat's later mail
-// behind it. The coordinator takes an inbox hold ([AnswerHold]) for as long as
-// any of the seat's answers is owed, and lifts it once the resume has RETURNED
+// behind it. The coordinator holds the seat's inbox ([SeatHold], the hold
+// seathold.go keeps for a busy seat too) for as long as any of the seat's
+// answers is owed, and lifts it once the resume has RETURNED
 // — so R2 is worked after R1's resume, with the run's own replies already in
 // the thread it reads, rather than racing it. A hold rather than a park,
 // because the held mail waits on the broker with its place and its delivery
@@ -69,9 +71,22 @@ import (
 // the message it looks like, and that reply is declined for this question so
 // it is never recorded against it again. That is exactly where the
 // handed-back delivery used to end up, with the difference that it now gets
-// there once, in order, rather than circling the inbox. The run itself stays
+// there EXACTLY ONCE, in order, rather than circling the inbox: the decision
+// and the copies it owes are one write, and the copies are published off the
+// row afterwards under ids derived from the originals, so a crash at any step
+// is finished by the next reader of the row without losing the reply or
+// delivering it twice (see [Coordinator.declineAnswer]). The run itself stays
 // resumable: the seat's next holder, or this node after a restart, is offered
 // the next qualifying reply.
+//
+// # A retry the seat's own conditions refuse
+//
+// WAITS FOR WHAT REFUSED IT, rather than re-checking on a timer: every
+// condition a retry is admitted under changes on an event the engine observes
+// or at an instant the refusal names, so the refusal says which
+// ([Refusal]), and the engine re-checks the attempts waiting on it when it
+// happens ([Coordinator.Readmit]). A backstop ([answerWaitBackstop]) re-checks
+// what a missed signal would strand. See [Coordinator.waitOwed].
 
 // answerRetrySeed and answerRetryCeiling space the retries of a recorded
 // answer's resume: the first a second after the failure, each after that twice
@@ -104,27 +119,57 @@ func answerRetryDelay(failures int) time.Duration {
 // list were delivered as ordinary messages long before.
 const maxDeclinedAnswers = 16
 
-// AnswerHold takes and lifts the hold on a seat's inbox that keeps its later
-// mail behind an owed answer's resume.
+// Condition names what a refused retry is waiting for, so that the signal
+// that can clear it wakes it and nothing else does.
 //
-// DECLARED HERE AND IMPLEMENTED BY THE ENGINE, which owns the seat's inbox and
-// the name the hold is taken under. The coordinator calls Hold when a seat
-// first owes an answer and Release when it owes none, once each — the holds are
-// keyed by reason, so a second Hold would be the same hold and a Release the
-// last of them.
-type AnswerHold interface {
-	Hold(ctx context.Context, handle string) error
-	Release(ctx context.Context, handle string) error
+// DEFINED BY THE ENGINE, whose conditions they are: this package only keeps
+// the name a refusal gave and compares it with the one a signal names (see
+// [Coordinator.Readmit]).
+type Condition string
+
+// Refusal is why a seat may not run a retried resume now, and what would
+// change that.
+type Refusal struct {
+	// Condition is what the refusal waits on; a [Coordinator.Readmit] naming
+	// it re-checks the retry at once.
+	Condition Condition
+
+	// Reason is the refusal, for a log line.
+	Reason string
+
+	// Until is the instant the refusal lifts on the clock alone — the end of
+	// the budget window that is refusing, the next lease renew — and zero
+	// when only an event can lift it.
+	Until time.Time
 }
 
-// Admission says whether a seat may run a resume NOW, and why not.
+// Admission says whether a seat may run a resume NOW, and if not, why and
+// until when.
 //
 // The engine's answer, because the conditions are the ones its inbox
 // screening applies to every delivery — the lease held fresh, no person's
 // pause, a turn engine, a posture that admits work, a budget that is not
 // refusing — and an inline resume used to inherit them by running inside a
 // delivery. A retry runs outside any delivery, so it asks.
-type Admission func(ctx context.Context, handle string) (ok bool, reason string)
+type Admission func(ctx context.Context, handle string) (refusal Refusal, refused bool)
+
+// answerWaitBackstop is the longest a retry the seat's conditions refused waits
+// for the signal that clears them before it re-checks on its own.
+//
+// A BACKSTOP AND NOT A SCHEDULE. Every condition a refusal can name changes on
+// an event the engine already observes and passes on ([Coordinator.Readmit]) —
+// a person resuming the seat, an apply bringing a model or a ceiling, the
+// posture admitting work again — or on a clock the refusal itself names
+// ([Refusal.Until]). What this bounds is a signal that never came: a path that
+// moves one of those conditions and was never wired to say so. Five minutes is
+// one admission check (this node's own reads and, at most, one read of the
+// token counters) per refused answer per five minutes while nothing has
+// changed, and it keeps a missed signal's cost — the person's answer resumed
+// late — well inside the 30-minute default `pause_ttl_seconds`, so a missed
+// signal does not also cost the run its paused box. The old answer was to
+// re-check every 30 seconds, which is a poll of conditions that change only on
+// events.
+const answerWaitBackstop = 5 * time.Minute
 
 // Reply is a delivery offered to a parked run as the answer to its question.
 type Reply struct {
@@ -315,7 +360,8 @@ func declinedCopyID(id uuid.UUID) uuid.UUID {
 	return uuid.NewSHA1(declinedCopyNamespace, []byte(id.String()))
 }
 
-// answerRetry is one owed answer's series of failed resumes on this node.
+// answerRetry is one owed answer's series of attempts on this node: at its
+// resume, or — once that is let go — at handing its reply back to the seat.
 type answerRetry struct {
 	handle string
 	launch string
@@ -326,6 +372,11 @@ type answerRetry struct {
 	first    time.Time
 	window   time.Duration
 
+	// waiting is what an attempt the seat's conditions refused is waiting
+	// on, for as long as it waits — and empty while the series is
+	// attempting, failing or handing back. See [Coordinator.Readmit].
+	waiting Condition
+
 	// stop cancels the pending attempt, reporting whether it had not yet
 	// started.
 	stop func() bool
@@ -334,6 +385,12 @@ type answerRetry struct {
 // live reports whether the series may make another attempt.
 func (r *answerRetry) live(now time.Time) bool {
 	return answerBudget{failures: r.failures, first: r.first}.live(now, r.window)
+}
+
+// spent reports whether the series has failed and run out of attempts — what
+// sends a retry to the decline rather than to another resume.
+func (r *answerRetry) spent(now time.Time) bool {
+	return r.failures > 0 && !r.live(now)
 }
 
 // recordAnswer records a delivery as the answer to the run it qualifies for,
@@ -444,10 +501,18 @@ func (c *Coordinator) owedFailed(ctx context.Context, run PendingRun, cause erro
 	c.scheduleOwed(run.TurnID, delay)
 }
 
-// scheduleOwed arms the next attempt at an owed answer's resume.
+// scheduleOwed arms the next attempt at an owed answer.
 func (c *Coordinator) scheduleOwed(turnID string, delay time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.scheduleOwedLocked(turnID, delay)
+}
+
+// scheduleOwedLocked is [Coordinator.scheduleOwed] for a caller holding c.mu —
+// which a refusal and a readmission both have to be, so that a signal landing
+// between "this attempt is waiting on X" and the timer that waits for it can
+// never be overwritten by that timer.
+func (c *Coordinator) scheduleOwedLocked(turnID string, delay time.Duration) {
 	r := c.retries[turnID]
 	if r == nil || c.closed {
 		return
@@ -464,8 +529,10 @@ func (c *Coordinator) scheduleOwed(turnID string, delay time.Duration) {
 	})
 }
 
-// retryOwed is one scheduled attempt: admitted by the seat's conditions, then
-// made against the row as the store holds it now.
+// retryOwed is one scheduled attempt, made against the row as the store holds
+// it now: a hand-back the row still owes is published first, an answer whose
+// attempts are spent is declined, and anything else is a resume — admitted by
+// the seat's conditions first.
 func (c *Coordinator) retryOwed(turnID string) {
 	ctx := c.life
 	if ctx.Err() != nil {
@@ -474,26 +541,15 @@ func (c *Coordinator) retryOwed(turnID string) {
 	c.mu.Lock()
 	r := c.retries[turnID]
 	var handle, launch string
+	var spent bool
 	if r != nil {
-		r.stop = nil
+		r.stop, r.waiting = nil, ""
 		handle, launch = r.handle, r.launch
+		spent = r.spent(c.now())
 	}
 	c.mu.Unlock()
 	if r == nil {
 		return
-	}
-	if c.admit != nil {
-		if ok, reason := c.admit(ctx, handle); !ok {
-			// NOT A FAILURE, so nothing is charged: a paused seat, a
-			// refusing budget, a stale company or a lease being renewed
-			// is the seat's condition, and the resume waits it out at
-			// the slowest spacing rather than spending the attempts that
-			// exist for a resume that fails.
-			log.DebugContext(ctx, "sandbox_answer_resume_waiting",
-				"turn_id", turnID, "agent", handle, "reason", reason)
-			c.scheduleOwed(turnID, answerRetryCeiling)
-			return
-		}
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
 	if err != nil {
@@ -501,10 +557,42 @@ func (c *Coordinator) retryOwed(turnID string) {
 			fmt.Errorf("sandbox: reading run %s for its recorded answer: %w", turnID, err))
 		return
 	}
-	if !found || run.Status != StatusAnswered || run.LaunchID != launch {
+	if !found {
+		c.settleOwed(ctx, handle, turnID)
+		return
+	}
+	// WHAT A DECLINE ALREADY DECIDED goes out before anything else is
+	// decided about the run: the write that let the answer go is on the row,
+	// and its copies are what it owes. Whatever the run has done since — a
+	// new answer, a new question, a relaunch — they are still owed.
+	if len(run.HandBack) > 0 {
+		if err := c.deliverHandBack(ctx, run); err != nil {
+			log.ErrorContext(ctx, "sandbox_answer_handback_failed",
+				"turn_id", turnID, "agent", handle, "error", err.Error(),
+				"detail", "the reply this run let go of is recorded on it as owed to the seat; "+
+					"the hand-back is tried again, and the seat's mail waits behind it")
+			c.scheduleOwed(turnID, answerRetryCeiling)
+			return
+		}
+	}
+	if run.Status != StatusAnswered || run.LaunchID != launch {
 		// Over, resumed, declined or relaunched since: nothing is owed.
 		c.settleOwed(ctx, handle, turnID)
 		return
+	}
+	if spent {
+		// THE BOUND IS SPENT and the decline that followed it did not
+		// land: decided again, never resumed again — the attempts it was
+		// owed have all been made.
+		c.declineAnswer(ctx, run, errors.New("sandbox: the answer's attempts are spent and "+
+			"letting it go did not land"))
+		return
+	}
+	if c.admit != nil {
+		if refusal, refused := c.admit(ctx, handle); refused {
+			c.waitOwed(ctx, turnID, refusal)
+			return
+		}
 	}
 	if gone := c.attemptOwed(ctx, run); gone {
 		// THE RUN ENDED UNDER THE ATTEMPT — settled and announced as
@@ -512,7 +600,7 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// long ago, so nothing would ever bring the reply to the seat.
 		// Handed back as the ordinary message it is, as the inline
 		// attempt's caller does with the delivery still in hand.
-		if _, err := c.handBack(ctx, run.AgentHandle, *run.Answer); err != nil {
+		if _, err := c.publishCopies(ctx, run.AgentHandle, handBackOf(*run.Answer)); err != nil {
 			log.ErrorContext(ctx, "sandbox_answer_handback_failed",
 				"turn_id", run.TurnID, "agent", run.AgentHandle, "error", err.Error(),
 				"detail", "the run this reply answered has ended and the reply could not "+
@@ -521,15 +609,106 @@ func (c *Coordinator) retryOwed(turnID string) {
 	}
 }
 
+// waitOwed parks an attempt the seat's conditions refused until what refused
+// it can have changed.
+//
+// # Why a wait and not a poll
+//
+// NOT A FAILURE, so nothing is charged: a paused seat, a refusing budget, a
+// company with no model, a node whose posture refuses work and a lease being
+// renewed are the seat's condition, and the attempts exist for a resume that
+// fails. And not a poll either, which is what this was — a re-check every 30
+// seconds for as long as the condition held, which for a person's pause or a
+// spent daily budget is hours of re-checks that can only say no. Every one of
+// those conditions changes on something DISCRETE, and the engine observes
+// each: the pause watch hears a resume, an apply brings a model, a ceiling or
+// a posture, the budget window ends at an instant the refusal names, and a
+// lease is re-proved by the next renew, which happens once per heartbeat. So
+// the refusal names what it waits on ([Refusal]): the clock it waits for is
+// armed, the event it waits for re-checks it through [Coordinator.Readmit] the
+// moment it happens, and nothing runs in between.
+//
+// # Why there is still a timer
+//
+// A signal can be missed — a path that moves one of those conditions and was
+// never wired to say so — and an answered run whose re-check never comes is a
+// person's answer stranded on a seat that could have taken it. So no wait is
+// longer than [answerWaitBackstop], and that re-check finds the condition
+// cleared or names it again.
+func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refusal) {
+	wait := answerWaitBackstop
+	if !refusal.Until.IsZero() {
+		wait = min(wait, max(refusal.Until.Sub(c.now()), 0))
+	}
+	c.mu.Lock()
+	r := c.retries[turnID]
+	var handle string
+	if r != nil {
+		r.waiting = refusal.Condition
+		handle = r.handle
+		c.scheduleOwedLocked(turnID, wait)
+	}
+	c.mu.Unlock()
+	if r == nil {
+		return
+	}
+	log.DebugContext(ctx, "sandbox_answer_resume_waiting",
+		"turn_id", turnID, "agent", handle, "condition", string(refusal.Condition),
+		"reason", refusal.Reason, "recheck_in_s", wait.Seconds())
+}
+
+// Readmit re-checks at once every attempt waiting on cond, for the named seats
+// or — named none — every seat: the signal that the condition may have
+// cleared. An attempt waiting on anything else is left waiting, so a signal
+// costs nothing but the attempts it can actually release, and one that turns
+// out not to have released them waits again on whatever refuses it now.
+//
+// Safe from any goroutine, and cheap enough to call on every occurrence of the
+// event: with nothing waiting it is one pass over this node's owed answers.
+func (c *Coordinator) Readmit(cond Condition, handles ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for turnID, r := range c.retries {
+		if r.waiting == "" || r.waiting != cond ||
+			(len(handles) > 0 && !slices.Contains(handles, r.handle)) {
+			continue
+		}
+		r.waiting = ""
+		c.scheduleOwedLocked(turnID, 0)
+	}
+}
+
 // declineAnswer gives up on an answer this node could not resume with, once
 // its attempts are spent: the reply goes on to the seat's ordinary route as
 // the message it looks like, and the run goes back to waiting on its question.
 //
-// THE COPIES ARE PUBLISHED FIRST, under ids derived from the originals
-// ([declinedCopyID]), and the record is let go of second. The other order
-// loses the reply outright on a failure between the two; this one can at worst
-// deliver it twice — once as the answer a later attempt resumed with, once as
-// an ordinary message — which is the recoverable way round.
+// # Exactly once, across a crash at any step
+//
+// Letting go is a write to the row and a publish to the broker, and it is
+// ordered so that a process stopping between any two steps neither loses the
+// reply nor delivers it twice:
+//
+//  1. THE WRITE, which is the decision ([PendingStore.DeclineAnswer]): the
+//     answer is cleared, the reply and its copies are declined for the
+//     question, and the copies — encoded, under ids derived from the
+//     originals ([declinedCopyID]) — are recorded on the row as owed to the
+//     seat ([PendingRun.HandBack]). Stopped before it lands, the answer is
+//     still recorded and owed its resume, nothing has been published, and the
+//     seat's next holder (or this node's next attempt) drives it again from
+//     the row.
+//  2. THE PUBLISH of those copies, read back off what the write stored.
+//     Stopped before it, whoever reads the row next — this node's retry, or
+//     the seat's next holder's recovery pass — finds the copies still owed
+//     and publishes them.
+//  3. THE CLEAR ([PendingStore.ClearHandBack]). Stopped before it, the copies
+//     are published AND still recorded, so the next reader publishes them
+//     again — under the same ids, which is one message to the inbox's same-id
+//     dedupe and to the completion ledger, never a second.
+//
+// It used to publish first and write second, which could not lose the reply
+// but could deliver it twice: a crash between the two left the answer
+// recorded and its copy on the inbox, and the run was then resumed with the
+// reply that had also been worked as an ordinary message.
 //
 // THE RUN IS NOT ENDED, for the reason [MaxAnswerAttempts] gives: every
 // failure that reaches here is a statement about THIS node, and the turn is
@@ -551,26 +730,24 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 		return
 	}
-	copies, err := c.handBack(ctx, run.AgentHandle, *answer)
+	declined, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID,
+		answer.EventIDs, handBackOf(*answer), fenceOf(run))
 	if err != nil {
-		// NOT LET GO OF: without the copy the reply would be lost. The
-		// decline is tried again at the slowest spacing.
-		log.ErrorContext(ctx, "sandbox_answer_handback_failed",
-			"turn_id", run.TurnID, "agent", run.AgentHandle, "error", err.Error())
-		c.scheduleOwed(run.TurnID, answerRetryCeiling)
-		return
-	}
-	declined := append(slices.Clone(answer.EventIDs), copies...)
-	let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID, declined, fenceOf(run))
-	if err != nil {
+		// THE WRITE MAY HAVE LANDED, and either way nothing has been
+		// published: the retry reads the row and finds the copies owed, or
+		// the answer still recorded and declines it again.
 		log.ErrorContext(ctx, "sandbox_answer_decline_failed",
 			"turn_id", run.TurnID, "agent", run.AgentHandle, "error", err.Error())
 		c.scheduleOwed(run.TurnID, answerRetryCeiling)
 		return
 	}
-	if let {
-		c.moveRun(run.AgentHandle, StatusAnswered, answer.declinedTo())
+	if !let {
+		// Resumed, declined or relaunched since this attempt read the row:
+		// whatever that was is its writer's, a hand-back included.
+		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
+		return
 	}
+	c.moveRun(run.AgentHandle, StatusAnswered, answer.declinedTo())
 	log.ErrorContext(ctx, "sandbox_answer_requeue_exhausted",
 		"turn_id", run.TurnID, "agent", run.AgentHandle, "attempts", MaxAnswerAttempts,
 		"window_s", answerWindow(run).Seconds(), "error", errDetail(cause),
@@ -578,11 +755,90 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 			"recorded for it, in every one of its spaced attempts, so the reply is handed "+
 			"to the seat as the ordinary message it looks like; the run waits on its "+
 			"question again and its box is bounded by pause_ttl_seconds")
+	if err := c.deliverHandBack(ctx, declined); err != nil {
+		// RECORDED AS OWED, so not lost: the retry publishes it. The seat
+		// stays held until it does, so the copy reaches the inbox before
+		// the mail waiting behind it is let go and the two are drained —
+		// and ordered by when they were posted — together.
+		log.ErrorContext(ctx, "sandbox_answer_handback_failed",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "error", err.Error(),
+			"detail", "the reply is recorded on the run as owed to the seat and is handed "+
+				"back on the next attempt")
+		c.scheduleOwed(run.TurnID, answerRetryCeiling)
+		return
+	}
 	c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 }
 
-// recoverOwed takes over an answer a previous holder of the seat recorded and
-// did not resume with: the seat's inbox is held behind it, and the first
+// handBackOf is what letting go of a recorded answer owes the seat's inbox:
+// each of its deliveries as the ordinary message it is, under an id derived
+// from the original's ([declinedCopyID]).
+//
+// Their own instants are kept: the copy is the message the person sent, and
+// whether it could answer a question is measured from when they sent it.
+func handBackOf(answer RecordedAnswer) []HandedBack {
+	var out []HandedBack
+	for _, ev := range answer.decodedEvents() {
+		handed := *ev
+		handed.ID = declinedCopyID(ev.ID)
+		raw, err := json.Marshal(&handed)
+		if err != nil {
+			log.Warn("sandbox_answer_copy_unencodable", "event_id", ev.ID.String(),
+				"error", err.Error())
+			continue
+		}
+		out = append(out, HandedBack{ID: handed.ID.String(), Original: ev.ID.String(), Event: raw})
+	}
+	return out
+}
+
+// deliverHandBack publishes the copies a run's row owes the seat's inbox and
+// then clears them from the row. See [Coordinator.declineAnswer] for why in
+// that order; a clear that fails is only logged, because the copies are out
+// and the next reader's repeat of them is the same messages again.
+func (c *Coordinator) deliverHandBack(ctx context.Context, run PendingRun) error {
+	published, err := c.publishCopies(ctx, run.AgentHandle, run.HandBack)
+	if len(published) > 0 {
+		if _, clearErr := c.pending.ClearHandBack(ctx, run.TurnID, published); clearErr != nil {
+			log.WarnContext(ctx, "sandbox_answer_handback_uncleared",
+				"turn_id", run.TurnID, "agent", run.AgentHandle, "error", clearErr.Error(),
+				"detail", "the copies are published; whoever reads the run next publishes "+
+					"them again under the same ids, which the seat's inbox collapses")
+		}
+	}
+	return err
+}
+
+// publishCopies publishes copies to a seat's inbox, in order, and reports the
+// ids it published — counting one that can never be published, which is
+// dropped loudly rather than owed for ever — and the error that stopped it.
+func (c *Coordinator) publishCopies(ctx context.Context, handle string, copies []HandedBack) ([]string, error) {
+	inbox := topics.AgentInbox(handle)
+	if inbox == "" {
+		return nil, fmt.Errorf("sandbox: seat %q has no inbox to hand its reply back to", handle)
+	}
+	var published []string
+	for _, copied := range copies {
+		var ev events.Event
+		if err := json.Unmarshal(copied.Event, &ev); err != nil {
+			log.ErrorContext(ctx, "sandbox_answer_copy_undecodable", "agent", handle,
+				"copy", copied.ID, "original", copied.Original, "error", err.Error(),
+				"detail", "a reply recorded as owed to the seat cannot be decoded and is "+
+					"dropped from what the run owes")
+			published = append(published, copied.ID)
+			continue
+		}
+		if err := c.queue.Publish(ctx, inbox, &ev); err != nil {
+			return published, fmt.Errorf("sandbox: handing %s back to %s: %w", copied.Original, handle, err)
+		}
+		published = append(published, copied.ID)
+	}
+	return published, nil
+}
+
+// recoverOwed takes over what a previous holder of the seat left owed on a run
+// — an answer it recorded and did not resume with, or copies a decline it
+// wrote did not publish: the seat's inbox is held behind it, and the first
 // attempt is made at once, off the seat's preparation.
 func (c *Coordinator) recoverOwed(ctx context.Context, run PendingRun) {
 	c.mu.Lock()
@@ -595,31 +851,8 @@ func (c *Coordinator) recoverOwed(ctx context.Context, run PendingRun) {
 	c.scheduleOwed(run.TurnID, 0)
 }
 
-// handBack publishes a recorded answer's deliveries to the seat's inbox as the
-// ordinary messages they are, under ids derived from the originals
-// ([declinedCopyID]), and reports those ids.
-//
-// Their own instants are kept: the copy is the message the person sent, and
-// whether it could answer a question is measured from when they sent it.
-func (c *Coordinator) handBack(ctx context.Context, handle string, answer RecordedAnswer) ([]string, error) {
-	inbox := topics.AgentInbox(handle)
-	if inbox == "" {
-		return nil, fmt.Errorf("sandbox: seat %q has no inbox to hand its reply back to", handle)
-	}
-	var copies []string
-	for _, ev := range answer.decodedEvents() {
-		handed := *ev
-		handed.ID = declinedCopyID(ev.ID)
-		if err := c.queue.Publish(ctx, inbox, &handed); err != nil {
-			return nil, fmt.Errorf("sandbox: handing %s back to %s: %w", ev.ID, handle, err)
-		}
-		copies = append(copies, handed.ID.String())
-	}
-	return copies, nil
-}
-
 // owe records that a seat owes one of its runs an answer's resume, and takes
-// the seat's inbox hold if it is the first.
+// the seat's inbox hold if it is the first thing holding it.
 func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
 	owed := c.owed[handle]
@@ -633,7 +866,7 @@ func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 }
 
 // settleOwed forgets an owed answer — resumed, declined or moved on — and
-// lifts the seat's inbox hold if it was the last.
+// lifts the seat's inbox hold if nothing else needs it.
 func (c *Coordinator) settleOwed(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
 	if r := c.retries[turnID]; r != nil {
@@ -654,9 +887,11 @@ func (c *Coordinator) settleOwed(ctx context.Context, handle, turnID string) {
 
 // releaseOwed drops everything a seat owes on this node, for a seat it no
 // longer holds: the successor's recovery pass drives every recorded answer
-// again.
-func (c *Coordinator) releaseOwed(ctx context.Context, handle string) {
+// and every owed hand-back again. The inbox hold is not lifted here — the
+// release detached it — see [Coordinator.forgetHold].
+func (c *Coordinator) releaseOwed(handle string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	for turnID, r := range c.retries {
 		if r.handle != handle {
 			continue
@@ -667,75 +902,6 @@ func (c *Coordinator) releaseOwed(ctx context.Context, handle string) {
 		delete(c.retries, turnID)
 	}
 	delete(c.owed, handle)
-	c.mu.Unlock()
-	c.reconcileHold(ctx, handle)
-}
-
-// reconcileHold brings a seat's inbox hold into line with what it owes.
-//
-// ONE RECONCILER PER SEAT AT A TIME, and it loops until what it applied is
-// still what is wanted. The queue call cannot be made under the lock — the
-// in-memory twin's release drains the inbox synchronously into handlers that
-// come straight back here — and two callers each applying their own decision
-// outside it could land in either order, leaving a seat held with nothing owed
-// or owed with nothing held. So a caller that finds a reconcile in progress
-// marks the seat dirty and leaves, and the one in progress goes round again.
-func (c *Coordinator) reconcileHold(ctx context.Context, handle string) {
-	if c.hold == nil || handle == "" {
-		return
-	}
-	// A hold is the seat's, not the request's: one taken or lifted on a
-	// context a drain is cancelling would do nothing at all.
-	ctx = context.WithoutCancel(ctx)
-	for {
-		c.mu.Lock()
-		if c.holdBusy[handle] {
-			c.holdDirty[handle] = true
-			c.mu.Unlock()
-			return
-		}
-		want := len(c.owed[handle]) > 0
-		if want == c.held[handle] {
-			c.mu.Unlock()
-			return
-		}
-		c.holdBusy[handle] = true
-		c.mu.Unlock()
-
-		var err error
-		if want {
-			err = c.hold.Hold(ctx, handle)
-		} else {
-			err = c.hold.Release(ctx, handle)
-		}
-
-		c.mu.Lock()
-		delete(c.holdBusy, handle)
-		dirty := c.holdDirty[handle]
-		delete(c.holdDirty, handle)
-		if err == nil {
-			if want {
-				c.held[handle] = true
-			} else {
-				delete(c.held, handle)
-			}
-		}
-		c.mu.Unlock()
-		if err != nil {
-			// Logged and left: a hold that could not be taken lets the
-			// seat's later mail run beside the resume, which reorders
-			// it and loses nothing; one that could not be lifted is
-			// lifted by the seat's next detach, which releases every
-			// hold its inbox carries. Retrying a queue call that just
-			// refused, from a loop that holds a delivery, is worse
-			// than either.
-			log.WarnContext(ctx, "sandbox_answer_hold_failed", "agent", handle,
-				"hold", want, "error", err.Error())
-			if !dirty {
-				return
-			}
-		}
-	}
 }
 
 // errDetail is an error's text, or empty.

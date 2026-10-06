@@ -417,6 +417,14 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		// thing a released inbox does is judge a delivery against the
 		// counters, and it must do so under the ceilings now current.
 		e.reconcileBudgetParks(ctx, next)
+		// AND A RETRIED RESUME WAITING ON EITHER: an apply is the event
+		// that brings a model and the one that moves a ceiling, so the
+		// answers waiting on them are re-checked under the epoch now
+		// current. One still refused waits again, on whatever refuses it.
+		if next.Models != nil {
+			e.readmitAnswers(waitTurnEngine)
+		}
+		e.readmitAnswers(waitBudget)
 		// AND A PAUSE WHOSE SEAT THIS REVISION REMOVED goes with the seat,
 		// or a seat later added under the same handle would arrive paused
 		// by somebody who paused a different role. See seatpause.go.
