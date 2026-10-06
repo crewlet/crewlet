@@ -30,6 +30,7 @@ import {
   type SelectOption,
 } from "@crewlethq/ui";
 import { KeyGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
+import { DateCell } from "~/app/frame/cells.tsx";
 import { GRANTS, TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -56,6 +57,28 @@ export function endedWord(
 ): "Revoked" | "Expired" | "Used" {
   if (c.spent) return "Used";
   return !c.revoked_at && c.expires_at && tsKey(c.expires_at) <= now ? "Expired" : "Revoked";
+}
+
+/**
+ * When a credential stops working: its deadline, none for one that has none —
+ * and NONE for one already ended some other way. A used reset link and a
+ * revoked token keep the deadline they were issued with, and it read "in 1d"
+ * beside "Used", counting down to an end the credential will never reach. One
+ * that EXPIRED did reach it, so its deadline is shown.
+ */
+export function ExpiresCell({
+  c,
+  now,
+}: {
+  c: { revoked?: boolean; revoked_at?: string; expires_at?: string; spent?: boolean };
+  now: number;
+}) {
+  if (c.revoked && endedWord(c, now) !== "Expired") return <EmptyValue label="Already ended" />;
+  return c.expires_at ? (
+    <DateCell at={c.expires_at} now={now} />
+  ) : (
+    <EmptyValue label="Does not expire" />
+  );
 }
 
 /** Whether a reader's grants reach the directory's writes. */
@@ -389,6 +412,7 @@ export function InviteDialog({
 export function ConfirmDialog({
   title,
   confirm,
+  dismiss = "Cancel",
   danger,
   typeToConfirm,
   write,
@@ -399,6 +423,12 @@ export function ConfirmDialog({
   title: string;
   /** The button's word: "Suspend", "Remove". */
   confirm: string;
+  /**
+   * The word on the button that does nothing, for a gesture whose own word
+   * is "Cancel": "Cancel" beside "Cancel invitation" kept the invitation for
+   * somebody who pressed it meaning to cancel it.
+   */
+  dismiss?: string;
   danger?: boolean;
   /** A value the person types to confirm, where the gesture cannot be undone. */
   typeToConfirm?: string;
@@ -422,7 +452,7 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={write.busy}>
-            Cancel
+            {dismiss}
           </Button>
           <Button
             type="submit"

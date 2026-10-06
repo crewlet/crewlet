@@ -60,7 +60,13 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, MonitorGlyph, ShieldUserGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { ConfirmDialog, endedWord, GrantTags, MintTokenDialog } from "~/components/people.tsx";
+import {
+  ConfirmDialog,
+  endedWord,
+  ExpiresCell,
+  GrantTags,
+  MintTokenDialog,
+} from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -666,7 +672,7 @@ function Tokens({
               shrink: true,
               drop: 1,
               sortValue: (c) => c.expires_at ?? "",
-              cell: (c) => <DateCell at={c.expires_at} now={now} />,
+              cell: (c) => <ExpiresCell c={c} now={now} />,
             },
             {
               key: "grants",

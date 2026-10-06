@@ -98,6 +98,8 @@ const ALL_INVITATIONS = {
   invitations: [
     ...OPEN_INVITATIONS.invitations,
     { id: "inv-3", email: "old@example.com", grants: [], state: "redeemed", person: "p-old" },
+    // REDEEMED BY SOMEBODY SINCE REMOVED: the removal erased the address.
+    { id: "inv-4", grants: [], state: "redeemed", person: "p-gone", invited_by: "jane" },
   ],
   next: "",
 };
@@ -371,6 +373,75 @@ test("a reset link its person used reads used, one withdrawn reads revoked", asy
   mount();
   expect(await screen.findByText("Used")).toBeTruthy();
   expect(screen.getAllByText("Revoked")).toHaveLength(1);
+});
+
+// AN ENDED CREDENTIAL DRAWS NO DEADLINE IT WILL NEVER REACH. A used reset
+// link and a revoked token keep the deadline they were issued with, and the
+// person panel read "Used — in 1d". The CONTROLS: a credential that EXPIRED
+// reached its deadline, which is shown, and one in use counts down to its own.
+// Mutation: draw the deadline whatever the state and the used link counts
+// down.
+test("an ended credential draws no deadline it will never reach", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  const later = new Date(Date.now() + 86_400_000).toISOString();
+  const earlier = new Date(Date.now() - 86_400_000).toISOString();
+  stubIam((url) =>
+    url.pathname === "/iam/credentials"
+      ? json(200, {
+          credentials: [
+            {
+              id: "c-used",
+              person: "p-ana",
+              method: "reset",
+              revoked: true,
+              revoked_at: earlier,
+              spent: true,
+              expires_at: later,
+            },
+            {
+              id: "c-lapsed",
+              person: "p-ana",
+              method: "token",
+              label: "lapsed",
+              revoked: true,
+              expires_at: earlier,
+            },
+            {
+              id: "c-live",
+              person: "p-ana",
+              method: "token",
+              label: "live",
+              revoked: false,
+              expires_at: later,
+            },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const used = (await screen.findByText("Used")).closest(".grid-row") as HTMLElement;
+  expect(within(used).getByText("Already ended")).toBeTruthy();
+  const lapsed = screen.getByText(/· lapsed/).closest(".grid-row") as HTMLElement;
+  expect(within(lapsed).queryByText("Already ended")).toBeNull();
+  expect(within(lapsed).getByText("Expired")).toBeTruthy();
+  const live = screen.getByText(/· live/).closest(".grid-row") as HTMLElement;
+  expect(within(live).getByText(/^in /)).toBeTruthy();
+});
+
+// AN INVITATION SAYS WHO SENT IT AS THE CHART NAMES THEM, and why its address
+// is gone. A person bound to a seat writes as the seat, so the table read
+// "jane" where the invitation's own page reads "Jane Founder"; and a removal
+// erases the address of the invitation its person redeemed, which left an
+// empty cell. Mutation: draw the recorded author, or nothing for the erased
+// address.
+test("an invitation names its sender by the chart and says its address was erased", async () => {
+  stubIam();
+  mount();
+  await screen.findByText("sam@example.com");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));
+  const erased = await screen.findByText("Erased with the person it invited");
+  const row = erased.closest(".grid-row") as HTMLElement;
+  expect(within(row).getByText("Jane Founder")).toBeTruthy();
 });
 
 // THE INVITATIONS NOBODY REDEEMED, and — asked — every one the estate holds:

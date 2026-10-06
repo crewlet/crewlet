@@ -938,7 +938,9 @@ as `GET /iam/people` pages (`?after=`, `?limit=`). `?all=true` adds the
 expired and the redeemed ones this estate still holds — until the sweep
 collects them — and `state` says which: `open`, `expired`, or `redeemed`, with
 `redeemed_at` and the `person` it created. The address is opened on this
-node's own keyring and a row it cannot open reads `sealed`, as a person's does.
+node's own keyring and a row it cannot open reads `sealed`, as a person's does;
+a redeemed row whose person has since been **removed** carries no `email` and is
+not `sealed`, because a removal erases every value of theirs other rows hold.
 **No row carries the link**, its secret or what the estate keeps of it: the
 link is shown once, and an inviter who lost it cancels and issues another.
 

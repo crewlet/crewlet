@@ -359,6 +359,20 @@ test("a refusal is the engine's sentence and the grants that would admit", async
   expect(second?.key).not.toBe(first?.key);
 });
 
+// CANCELLING AN INVITATION IS NEVER A BUTTON CALLED "CANCEL" BESIDE ANOTHER:
+// the dialog's own dismissal read "Cancel" next to "Cancel invitation", and
+// somebody meaning to cancel the invitation pressed it and kept it. Mutation:
+// leave the dismissal's word at its default.
+test("the cancel dialog's dismissal is not a second Cancel", async () => {
+  engine();
+  mount();
+  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
+  expect(within(dialog).getByRole("button", { name: "Keep it" })).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: "Cancel" })).toBeNull();
+});
+
 // A STALE PROOF IS CONFIRMED AND THE SAME REQUEST REPLAYED, key included.
 test("a step-up refusal is confirmed and the same cancellation replayed", async () => {
   const confirmer = vi.fn(async () => true);

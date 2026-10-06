@@ -92,6 +92,7 @@ import {
   canManagePeople,
   ConfirmDialog,
   endedWord,
+  ExpiresCell,
   GrantTags,
   IamOutcome,
   InviteDialog,
@@ -985,7 +986,17 @@ function Invitations({
               header: "Address",
               floor: "12rem",
               sortValue: (i) => i.email ?? "",
-              cell: (i) => (i.sealed ? <SealedTag /> : <TextCell>{i.email}</TextCell>),
+              cell: (i) =>
+                i.sealed ? (
+                  <SealedTag />
+                ) : i.email ? (
+                  <TextCell>{i.email}</TextCell>
+                ) : (
+                  // NO ADDRESS AND NONE SEALED: a removal erases every value
+                  // of its person's that other rows hold, the invitation
+                  // they redeemed included — the cell was simply empty.
+                  <EmptyValue label="Erased with the person it invited" />
+                ),
             },
             {
               key: "seat",
@@ -1007,8 +1018,7 @@ function Invitations({
               shrink: true,
               drop: 2,
               sortValue: (i) => i.invited_by ?? "",
-              cell: (i) =>
-                i.invited_by ? <KeyCell value={i.invited_by} /> : <EmptyValue label="Unknown" />,
+              cell: (i) => <Inviter author={i.invited_by} index={index} />,
             },
             {
               key: "expires",
@@ -1057,6 +1067,22 @@ function Invitations({
   );
 }
 
+/**
+ * Who issued an invitation, as the chart names them: a person bound to a seat
+ * writes as the seat, so the record holds its handle — "jane-founder" here
+ * beside "Jane Founder" on the invitation's own page. Anybody else, a machine
+ * included, by the login the record holds.
+ */
+function Inviter({ author, index }: { author?: string; index: ReturnType<typeof indexOrg> }) {
+  if (!author) return <EmptyValue label="Unknown" />;
+  const seat = index.byHandle.get(author);
+  return seat ? (
+    <SeatCell handle={author} name={seat.name || author} kind={seat.kind} />
+  ) : (
+    <KeyCell value={author} />
+  );
+}
+
 /** Withdraw an invitation nobody redeemed: its link stops working, and the address is free. */
 function CancelInvitation({
   row,
@@ -1072,6 +1098,7 @@ function CancelInvitation({
     <ConfirmDialog
       title="Cancel this invitation?"
       confirm="Cancel invitation"
+      dismiss="Keep it"
       danger
       write={write}
       onClose={onClose}
@@ -1358,12 +1385,7 @@ function Principal({
               shrink: true,
               drop: 1,
               sortValue: (c) => c.expires_at ?? "",
-              cell: (c) =>
-                c.expires_at ? (
-                  <DateCell at={c.expires_at} now={now} />
-                ) : (
-                  <EmptyValue label="Does not expire" />
-                ),
+              cell: (c) => <ExpiresCell c={c} now={now} />,
             },
             {
               key: "grants",
