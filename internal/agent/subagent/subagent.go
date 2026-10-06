@@ -893,50 +893,51 @@ func newSliceMeter(inner toolloop.BudgetMeter, cap int) *sliceMeter {
 	return &sliceMeter{inner: inner, cap: cap}
 }
 
-// Spend reserves against the slice, then charges the real counter.
+// Spend records a round on the slice and on the parent's counter, and judges
+// it against both.
 //
-// The reservation is taken BEFORE the inner charge and under the lock,
-// because that charge can block: two children of one batch would otherwise
-// both test against the same `used` snapshot, both pass, and both spend —
-// overshooting the slice by a whole child. Reserving first makes the check
-// and the increment one operation, which is the same rule the shared counter
-// itself follows.
+// THE ROUND IS RECORDED WHATEVER THE VERDICT, on both, because a meter is
+// handed tokens a model call has already spent ([toolloop.BudgetMeter]): the
+// vendor billed the round before anything here could judge it. A slice that
+// refused before the parent's counter was asked kept the round off that
+// counter entirely — the seat and the company paid for it and neither heard —
+// and a slice that handed a refused reservation back left its siblings the
+// room the refused round had used, so a smaller round after it was admitted.
+// What a refusal decides is that the worker's round runs no tools and no
+// further round starts.
+//
+// The slice's verdict and its record are ONE step, under the lock, because the
+// parent's charge after it can block: two children of one batch would
+// otherwise both test against the same `used` snapshot, both pass, and both be
+// admitted — overshooting the slice by a whole child. That is the rule the
+// shared counter itself follows.
+//
+// THE PARENT'S REFUSAL OUTRANKS THE SLICE'S. Where both refuse, the answer
+// names the company or the seat: a slice is a share of the seat's room, and an
+// operator told the worker's slice ran out would go looking for a delegation
+// limit while the company is out of tokens — the same outermost-first rule the
+// counter follows between the company and the seat.
 func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	m.mu.Lock()
-	if m.used+tokens > m.cap {
-		used := m.used
-		m.mu.Unlock()
-		return toolloop.SpendOutcome{
-			OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap,
-		}, nil
-	}
+	fits := m.used+tokens <= m.cap
 	m.used += tokens
+	used := m.used
 	m.mu.Unlock()
 
 	outcome, err := m.inner.Spend(ctx, tokens)
 	if err != nil {
-		// The reservation STAYS. An unreachable counter does not say whether
-		// the charge landed, so releasing it would let a sibling spend
-		// tokens that may already be billed. The round is aborted either
-		// way — this only decides what the siblings still running see.
+		// An unreachable counter does not say whether the charge landed.
+		// The slice keeps the round either way: it was spent, and the
+		// round is aborted whatever the slice says.
 		return outcome, err
 	}
 	if !outcome.OK {
-		// A refusal is definite: nothing was charged, so the reservation
-		// goes back. Keeping it would shrink the slice for every sibling
-		// over a charge that never happened.
-		m.mu.Lock()
-		m.used -= tokens
-		m.mu.Unlock()
+		return outcome, nil
+	}
+	if !fits {
+		return toolloop.SpendOutcome{OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap}, nil
 	}
 	return outcome, nil
-}
-
-// Used is what the slice has spent, for a caller reporting on a batch.
-func (m *sliceMeter) Used() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.used
 }
 
 // resolveProvider builds the seat's sub-agent chain.

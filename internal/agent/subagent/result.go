@@ -73,7 +73,10 @@ const (
 	// StatusTimedOut — the task's own cap or the call's expired.
 	StatusTimedOut Status = "timed_out"
 
-	// StatusBudget — the call's shared token slice refused a charge.
+	// StatusBudget — the call's shared token slice refused a charge the
+	// seat's and the company's counters had room for. A round they refuse
+	// is theirs to report, whether or not the slice had room too: see
+	// sliceMeter.Spend.
 	StatusBudget Status = "budget_exhausted"
 
 	// StatusCancelled — the parent turn was torn down under it.

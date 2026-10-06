@@ -107,7 +107,9 @@ func callTool(name string, args map[string]any, in, out int) *llm.Completion {
 	}
 }
 
-// meter is a shared token counter that records every charge it actually saw.
+// meter is a shared token counter that records every charge it is handed —
+// a refused one included, as the fleet's counter records it: a meter is
+// handed tokens a model call has already spent (toolloop.BudgetMeter).
 type meter struct {
 	mu      sync.Mutex
 	charges []int
@@ -126,11 +128,12 @@ func (m *meter) spend(tokens int) (toolloop.SpendOutcome, error) {
 	if m.err != nil {
 		return toolloop.SpendOutcome{}, m.err
 	}
-	if m.refuse {
-		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: m.total, Limit: m.total}, nil
-	}
 	m.charges = append(m.charges, tokens)
 	m.total += tokens
+	if m.refuse {
+		// Refused at the ceiling it already stood at, and counted past it.
+		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: m.total, Limit: m.total - tokens}, nil
+	}
 	return toolloop.SpendOutcome{OK: true, Scope: "org", Used: m.total}, nil
 }
 
@@ -899,8 +902,11 @@ func TestTheSliceIsAFractionOfTheParentsRemaining(t *testing.T) {
 	if !res.Failed() || res.Status != subagent.StatusBudget {
 		t.Fatalf("the slice did not stop the child: %+v", res)
 	}
-	if m.sum() != 150 {
-		t.Errorf("the parent counter was charged %d, want only the round that fit (150)", m.sum())
+	// BOTH ROUNDS, the one the slice refused included: it was billed before
+	// the slice could judge it, and a slice that refused before the parent's
+	// counter was asked kept it off the seat's and the company's counters.
+	if m.sum() != 250 {
+		t.Errorf("the parent counter was charged %d, want both rounds the child spent (250)", m.sum())
 	}
 
 	// The counterfactual: a parent with no per-seat cap imposes none on its
@@ -939,11 +945,11 @@ func TestABatchSharesOneSliceRatherThanOnePerChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// A per-child wrapper would have let all three spend 150 — 450 against
-	// a configured slice of 200, which is the fan-out cost being invisible
-	// until the org budget is gone.
-	if m.sum() > 200 {
-		t.Fatalf("the batch charged %d against a 200-token slice", m.sum())
+	// Every child's round was spent before anything judged it, so all three
+	// are on the parent's counter. What the shared slice decides is how many
+	// get past it: a per-child wrapper would have let all three finish.
+	if m.sum() != 450 {
+		t.Fatalf("the parent counter holds %d, want the 450 the batch's three rounds spent", m.sum())
 	}
 	var ok int
 	for _, r := range results {
@@ -1076,8 +1082,8 @@ func TestConcurrentChildrenCannotOvershootTheSlice(t *testing.T) {
 	close(release)
 	results := <-done
 
-	if m.sum() > 100 {
-		t.Fatalf("charged %d against a 100-token slice", m.sum())
+	if m.sum() != 8*60 {
+		t.Fatalf("the parent counter holds %d, want every child's 60-token round", m.sum())
 	}
 	var ok int
 	for _, r := range results {
@@ -1113,15 +1119,16 @@ func TestAnOrgRefusalIsNotBlamedOnTheChildsSlice(t *testing.T) {
 	}
 }
 
-func TestARefusedChargeGivesTheReservationBack(t *testing.T) {
+func TestARoundTheParentRefusedKeepsItsShareOfTheSlice(t *testing.T) {
 	t.Parallel()
-	// A refusal is DEFINITE: nothing was charged. Keeping the reservation
-	// would shrink the slice for every sibling over a charge that never
-	// happened — which is the opposite polarity from an unreachable
-	// counter, where the charge may well have landed.
+	// A refusal is not a charge that never happened. The round was billed
+	// before the parent's counter judged it, so the counter records it and
+	// the slice keeps it: handing the reservation back left a sibling the
+	// room the refused round had already spent, and a sibling's round that
+	// "fitted" on top of it was paid for out of nothing.
 	//
-	// Observable only through a sibling: the second child fits the slice
-	// exactly when the first child's refused reservation came back.
+	// Observable only through a sibling: the second child would fit the
+	// slice exactly when the first child's refused round came back.
 	w := newWorld(t)
 	m := &meter{}
 	var once sync.Once
@@ -1142,22 +1149,49 @@ func TestARefusedChargeGivesTheReservationBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	var ok, failed int
+	var byParent, bySlice int
 	for _, r := range results {
-		if r.Failed() {
-			failed++
-			if r.Status == subagent.StatusBudget {
-				t.Errorf("the survivor was refused by the slice, not the org: %+v", r)
-			}
-			continue
+		switch {
+		case !r.Failed():
+			t.Errorf("a child finished on a slice its refused sibling had already spent: %+v", r)
+		case r.Status == subagent.StatusBudget:
+			bySlice++
+		default:
+			byParent++
 		}
-		ok++
 	}
-	if ok != 1 || failed != 1 {
-		t.Fatalf("ok=%d failed=%d, want 1 and 1: %+v", ok, failed, results)
+	if byParent != 1 || bySlice != 1 {
+		t.Fatalf("refused by the parent=%d, by the slice=%d, want 1 and 1: %+v",
+			byParent, bySlice, results)
+	}
+	if m.sum() != 20 {
+		t.Errorf("the parent counter was charged %d, want both 10-token rounds", m.sum())
+	}
+}
+
+func TestAParentRefusalOutranksTheSlicesOwn(t *testing.T) {
+	t.Parallel()
+	// A round both the slice and the company refuse is the company's
+	// refusal. A slice is a share of the seat's room, and a worker reported
+	// as out of its slice sends an operator to a delegation limit while the
+	// company is out of tokens — the same outermost-first rule the counter
+	// follows between the company and the seat.
+	w := newWorld(t)
+	m := &meter{refuse: true}
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return answer("answer", 10, 0), nil
+	}}
+	cfg := baseConfig(t, w, p)
+	cfg.Budget = countingMeter{m}
+	cfg.ParentRemaining = 25 // slice = 5, so the 10-token round fits neither
+	cfg.Limits.MinTokensPerTask = 0
+
+	res := one(t, cfg, request("read_file"))
+	if !res.Failed() || res.Status == subagent.StatusBudget {
+		t.Errorf("a round the company refused was reported as the worker's own slice: %+v", res)
 	}
 	if m.sum() != 10 {
-		t.Errorf("the parent counter was charged %d, want 10", m.sum())
+		t.Errorf("the parent counter was charged %d, want the refused round's 10", m.sum())
 	}
 }
 
@@ -1341,8 +1375,10 @@ func TestAnUnreachableCounterKeepsItsReservation(t *testing.T) {
 	if unreachable != 1 || budget != 1 {
 		t.Fatalf("unreachable=%d budget=%d, want 1 and 1: %+v", unreachable, budget, results)
 	}
-	if m.sum() != 0 {
-		t.Errorf("the parent counter was charged %d by a batch that never got through", m.sum())
+	// The round the slice refused still reached the parent's counter: it
+	// was spent. The one whose charge errored is the counter's to know.
+	if m.sum() != 60 {
+		t.Errorf("the parent counter was charged %d, want the 60 the slice refused", m.sum())
 	}
 }
 
@@ -2332,7 +2368,9 @@ func (e errOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutc
 }
 
 // refuseOnceMeter refuses the FIRST charge and serves the rest, so a test can
-// watch what a definite refusal does to a shared reservation.
+// watch what a definite refusal does to a shared reservation. The refused
+// round is recorded on the inner counter like every other, as the fleet's
+// counter records one.
 type refuseOnceMeter struct {
 	inner toolloop.BudgetMeter
 	once  *sync.Once
@@ -2341,10 +2379,11 @@ type refuseOnceMeter struct {
 func (r refuseOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	var refused bool
 	r.once.Do(func() { refused = true })
-	if refused {
-		return toolloop.SpendOutcome{OK: false, Scope: "org", Used: 0, Limit: 0}, nil
+	got, err := r.inner.Spend(ctx, tokens)
+	if err != nil || !refused {
+		return got, err
 	}
-	return r.inner.Spend(ctx, tokens)
+	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: got.Used, Limit: got.Used - tokens}, nil
 }
 
 // skillFor is a one-skill catalogue that fires only when its tool is in
