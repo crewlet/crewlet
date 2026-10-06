@@ -44,8 +44,6 @@ import (
 // cumulative value, so a publish that failed is simply repeated by the next
 // tick that finds the day still unconfirmed.
 //
-// # And at boot
-//
 // # A person's day waits for every reader
 //
 // A [KindPerson] record is version 2, and a node on a build from before the
@@ -54,8 +52,15 @@ import (
 // So a person's record is HELD — kept in memory, never published — until every
 // node applying the log reads version 2 ([PublisherDeps.Readers], the trim's
 // own counted set), and published by the first tick that finds them all
-// reading it. The seats' and schedules' records of the same day go out as
-// usual: they are version 1, which every build reads.
+// reading it — however many days later, back to the history's horizon. The
+// seats' and schedules' records of the same day go out as usual: they are
+// version 1, which every build reads.
+//
+// IN MEMORY, which is the hold's one cost: a node restarted while it holds a
+// day older than yesterday does not derive that day again, so the day is on
+// the counter and the live window and never reaches the named windows.
+//
+// # And at boot
 //
 // A fresh process has published nothing, so its first tick re-derives and
 // republishes today and yesterday in full. That is what covers a node that was
@@ -198,8 +203,14 @@ func (p *Publisher) Flush(ctx context.Context) error {
 			delete(p.published, key)
 		}
 	}
+	// A HELD DAY IS KEPT PAST YESTERDAY, for as long as the history keeps a
+	// day: it is never derived again once it is older than yesterday, so
+	// dropping it with the others would lose a person's day from the named
+	// windows whenever a rolling upgrade outlasted a day. Past the horizon
+	// the applier would expire it on arrival anyway.
+	floor := today.Shift(-HorizonDays).Label
 	for key := range p.held {
-		if day, _, _ := strings.Cut(key, "\x00"); !keep[day] {
+		if day, _, _ := strings.Cut(key, "\x00"); day < floor {
 			delete(p.held, key)
 		}
 	}

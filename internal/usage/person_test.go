@@ -256,3 +256,46 @@ func TestAPersonsDayWaitsForEveryReader(t *testing.T) {
 		t.Fatalf("a released person's day was sent again (%d more)", log.sent()-sent)
 	}
 }
+
+// A HOLD OUTLASTS YESTERDAY. The publisher derives only today and yesterday, so
+// a person's day held through a rolling upgrade longer than that is never
+// derived again — and dropped with the other days' memory, it never reached
+// the named windows at all. It is kept until it is published, back to the
+// history's horizon.
+func TestAPersonsDayHeldPastYesterdayIsStillPublished(t *testing.T) {
+	t.Parallel()
+	own := openStore(t)
+	day1 := time.Date(2026, 9, 23, 12, 0, 0, 0, santiago)
+	(&events{t: t, db: own}).personAsked(day1.Add(-time.Minute), "maya", "Founder", 400, 20)
+
+	now := day1
+	gate := &fixedReaders{readers: map[string]int{"node-a": 2, "node-old": 1}}
+	p, err := usage.NewPublisher(usage.PublisherDeps{
+		Store: own, Log: &loopback{t: t, into: own, node: "node-a"}, NodeID: "node-a",
+		Zone:    func() *time.Location { return santiago },
+		Now:     func() time.Time { return now },
+		Readers: gate.read,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	now = day1.Add(72 * time.Hour)
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	gate.readers = map[string]int{"node-a": 2}
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := usage.PersonSpend(t.Context(), own.Replicated(),
+		usage.PersonQuery{From: "2026-09-23", To: "2026-09-23"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Total != 420 {
+		t.Fatalf("a person's day held three days was published as %+v, want her 420", rows)
+	}
+}
