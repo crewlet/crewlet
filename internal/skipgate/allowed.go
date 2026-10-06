@@ -58,13 +58,6 @@ var allowed = []Allowance{
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/queue/jetstream",
-		Test:    "TestConformance/EventQueue/nak_returns_the_event_to_the_front_of_the_mailbox",
-		When:    Always,
-		Why: "JetStream returns a redelivered message BEHIND never-delivered ones. " +
-			"queue.OrderForDispatch exists because of it. Certified on the memory twin.",
-	},
-	{
-		Package: "internal/queue/jetstream",
 		Test:    "TestConformance/EventQueue/start_stop_lifecycle",
 		When:    Always,
 		Why: "Open establishes the connection and the streams, so Start is a no-op and " +
@@ -88,18 +81,11 @@ var allowed = []Allowance{
 			"memory twin.",
 	},
 
-	// THE SAME FOUR, THROUGH A LEAF. The suite runs a second time against
+	// THE SAME THREE, THROUGH A LEAF. The suite runs a second time against
 	// a client of a JetStream-less leaf, which is the same JetStream client
 	// reaching the members' domain across one link — so each case skips
 	// for the reason its member entry above gives, and the memory twin
 	// certifies it once for both.
-	{
-		Package: "internal/queue/jetstream",
-		Test:    "TestConformanceThroughALeaf/EventQueue/nak_returns_the_event_to_the_front_of_the_mailbox",
-		When:    Always,
-		Why: "The member's reason, across a leaf link: JetStream returns a redelivered " +
-			"message behind never-delivered ones. Certified on the memory twin.",
-	},
 	{
 		Package: "internal/queue/jetstream",
 		Test:    "TestConformanceThroughALeaf/EventQueue/start_stop_lifecycle",
