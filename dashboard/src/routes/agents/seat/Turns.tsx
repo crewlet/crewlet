@@ -71,7 +71,7 @@ export const TURN_PAGE = 50;
 
 const pickTurns = (a: TurnsAnswer) => a.turns ?? [];
 const turnRowId = (t: TurnRow) => t.turn_id;
-/** The turn list's cursor is `next`, on the turn's START — see `usePaged`. */
+/** The turn list's cursor is `next`, an opaque token handed back as `before` — see `usePaged`. */
 const turnsBefore = (a: TurnsAnswer) => a.next ?? "";
 
 /** The window "Where its tokens go" sums: the week the Overview counts. */

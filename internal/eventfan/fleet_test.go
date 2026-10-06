@@ -454,7 +454,7 @@ func TestATokenSortedPageRanksByTheMergedTotal(t *testing.T) {
 		t.Error("a ranking offered a cursor")
 	}
 	if _, _, err := fanFrom(a, "node-a").Turns(t.Context(), store.TurnQuery{
-		Sort: store.TurnSortTokens, Before: at,
+		Sort: store.TurnSortTokens, Before: &store.TurnCursor{Start: at, TurnID: "t"},
 	}); err == nil {
 		t.Error("a cursor on a ranking was accepted")
 	}
@@ -497,7 +497,7 @@ func TestOnlyAPageWithMoreBehindItCarriesACursor(t *testing.T) {
 		if len(cut.Turns) != 1 || cut.Next == nil {
 			t.Fatalf("%s: a page cut at one turn of several offered no cursor", name)
 		}
-		rest, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 10, Before: *cut.Next})
+		rest, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 10, Before: cut.Next})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -509,7 +509,8 @@ func TestOnlyAPageWithMoreBehindItCarriesACursor(t *testing.T) {
 		// node-a holds exactly two and nobody holds anything else: a page of
 		// two FILLS, and a filled page was read as one with more behind it —
 		// a cursor onto an empty page.
-		exact, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 2, Before: at.Add(2 * time.Minute)})
+		exact, _, err := fan.Turns(t.Context(), store.TurnQuery{Limit: 2,
+			Before: &store.TurnCursor{Start: at.Add(2 * time.Minute)}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1841,7 +1842,7 @@ func walkTurns(t *testing.T, fan *eventfan.Fleet, q store.TurnQuery) (map[string
 		if page.Next == nil {
 			return seen, rows
 		}
-		q.Before = *page.Next
+		q.Before = page.Next
 	}
 	t.Fatal("the walk never ended")
 	return nil, nil

@@ -4,6 +4,7 @@ package queries
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -21,9 +22,9 @@ import (
 // on, and wrong at the page boundary, where a turn straddling two pages
 // appeared twice.
 //
-// THE CURSOR IS THE TURN'S START, not an event's, because that is what the
-// listing is ordered by — and it is exactly the defect the browser-side fold
-// had: a keyset on any one event pages a turn twice.
+// THE CURSOR IS ON THE TURN, not on an event, because that is what the listing
+// is ordered by — and it is exactly the defect the browser-side fold had: a
+// keyset on any one event pages a turn twice. It is OPAQUE ([turnCursor]).
 func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	q := store.TurnQuery{
 		SinceDays: p.Int("days", 0),
@@ -99,12 +100,12 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			since.Format(time.RFC3339), until.Format(time.RFC3339))
 	}
 	q.Since, q.Until = since, until
-	before, err := instantParam(p, "before")
+	before, err := turnCursorParam(p)
 	if err != nil {
 		return nil, err
 	}
 	q.Before = before
-	if q.Sort == store.TurnSortTokens && !before.IsZero() {
+	if q.Sort == store.TurnSortTokens && before != nil {
 		// A RANKING HAS NO POSITION TO RESUME FROM, and paging one by
 		// start time would mix two orders on one screen.
 		return nil, fmt.Errorf("%w: sort=%s is a ranking and takes no before=; "+
@@ -125,7 +126,53 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 		// node holding more than its page stopped before any turn above
 		// it could be shown, the cursor is where that node stopped rather
 		// than the end.
-		out["next"] = page.Next.UTC().Format(time.RFC3339Nano)
+		out["next"] = encodeTurnCursor(*page.Next)
 	}
 	return out, nil
+}
+
+// A PAGE OF TURNS RESUMES FROM AN OPAQUE CURSOR: `next` is a token, and `before`
+// takes exactly the token a page answered, and nothing else.
+//
+// OPAQUE, unlike the event list's `before_time`/`before_id`, because the
+// position is not a row's own fields. The event list resumes from its last
+// row's key, which the row carries; a page of turns resumes from where its last
+// turn is LISTED — the earliest start at which any node's page lists it, which
+// is not its `started_at` when its earliest half is a half no node lists — and
+// from that turn's id, without which two turns starting at one microsecond
+// either side of a page's cut were one position, and the one past the cut was
+// on no page. And the fleet's cursor can stand on an empty page, where a node's
+// page stopped, which is no row at all. So a client that composed one from a
+// row would resume from a position the walk did not stop at; one token says
+// "hand this back as it is", and leaves the engine free to say more in it.
+//
+// Its content is the position — the listing instant to the microsecond and the
+// turn id — in URL-safe base64, so it passes through a query string untouched.
+// A token this endpoint did not hand out is refused as `bad_params`, never read
+// as some other position.
+func encodeTurnCursor(c store.TurnCursor) string {
+	return base64.RawURLEncoding.EncodeToString(
+		[]byte(c.Start.UTC().Format(time.RFC3339Nano) + " " + c.TurnID))
+}
+
+// turnCursorParam reads `before`, or nil when it is absent.
+func turnCursorParam(p Params) (*store.TurnCursor, error) {
+	raw := strings.TrimSpace(p.String("before"))
+	if raw == "" {
+		return nil, nil
+	}
+	refused := badParams("before", raw, []string{"the `next` a page of turns answered"})
+	body, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, refused
+	}
+	stamp, id, found := strings.Cut(string(body), " ")
+	if !found || id == "" {
+		return nil, refused
+	}
+	at, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return nil, refused
+	}
+	return &store.TurnCursor{Start: at.UTC(), TurnID: id}, nil
 }

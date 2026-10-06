@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -249,7 +250,9 @@ func TestTurnsRefusesAnUnknownSortAndACursorOnARanking(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: fleetOf(openStore(t).Events())})
 	for _, params := range []map[string]any{
 		{"sort": "-cost"},
-		{"sort": "-tokens", "before": "2026-09-01T00:00:00Z"},
+		// A CURSOR AS A PAGE HANDS IT OUT, so the refusal is the ranking's.
+		{"sort": "-tokens", "before": base64.RawURLEncoding.EncodeToString(
+			[]byte("2026-09-01T00:00:00Z t-1"))},
 	} {
 		if _, err := r.Answer(t.Context(), "turns", params, ""); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("turns %v answered %v, want %v", params, err, queries.ErrBadParams)

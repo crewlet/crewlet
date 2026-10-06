@@ -766,14 +766,18 @@ func TestTheTurnListEchoesItsCursorWhileThereIsMore(t *testing.T) {
 	if len(rows) != 1 || rows[0].TurnID != "t-2" {
 		t.Fatalf("a page of one holds %+v, want the newest turn", rows)
 	}
-	want := rows[0].StartedAt.UTC().Format(time.RFC3339Nano)
-	if cut["next"] != want {
-		t.Fatalf("next = %#v on a page cut at one of two turns, want the row's own start %q",
-			cut["next"], want)
+	next, _ := cut["next"].(string)
+	if next == "" {
+		t.Fatalf("next = %#v on a page cut at one of two turns, want a cursor", cut["next"])
 	}
 	// AND NOTHING TO RESUME FROM AT THE END, so a client walking the list
 	// stops rather than asking for a page that holds nothing.
-	rest := asMap(t, answer(t, src, "turns", map[string]any{"before": want}))
+	rest := asMap(t, answer(t, src, "turns", map[string]any{"before": next}))
+	if older, _ := answer(t, src, "turns", map[string]any{"before": next}).(map[string]any); older == nil {
+		t.Fatal("the page after the cursor is not an answer")
+	} else if rows, _ := older["turns"].([]store.Turn); len(rows) != 1 || rows[0].TurnID != "t-1" {
+		t.Errorf("the page after the cursor holds %+v, want the older turn", older["turns"])
+	}
 	if rest["next"] != nil {
 		t.Errorf("next = %#v on the page holding the last turn", rest["next"])
 	}
@@ -784,6 +788,63 @@ func TestTheTurnListEchoesItsCursorWhileThereIsMore(t *testing.T) {
 	empty := asMap(t, answer(t, queries.Sources{Events: fleetOf(openStore(t).Events())}, "turns", nil))
 	if empty["next"] != nil {
 		t.Errorf("next = %#v on an empty page", empty["next"])
+	}
+}
+
+// TWO TURNS THAT START AT ONE MICROSECOND ARE BOTH ON THE WALK, once each,
+// whichever side of a page's cut they fall.
+//
+// A webhook that wakes two seats starts two turns at one instant. The cursor
+// used to be that instant alone, and a page resumed strictly below it — so a
+// page of one listing the first of them handed the walk a cursor every later
+// page was below the second turn's start for, and the second was on no page.
+// The cursor is the instant and the turn's id now, and opaque: `next` is
+// handed back as `before` as it is, and anything else there is refused rather
+// than read as a position.
+//
+// Mutation: drop the id from the store's keyset (resume strictly below the
+// start), and the walk loses one of the two; drop the id from the ORDER BY,
+// and which of them a page of one holds is the planner's choice.
+func TestTwoTurnsAtOneMicrosecondAreBothOnTheWalk(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	for _, turn := range []string{"t-a", "t-b", "t-c"} {
+		start := at
+		if turn == "t-c" {
+			start = at.Add(-time.Minute)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: turn + "-p0", Type: "agent_phase_completed", Time: start, Category: "lifecycle",
+			Tags: map[string]string{"turn_id": turn, "agent_role": "PM"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := queries.Sources{Events: fleetOf(log)}
+	var walked []string
+	params := map[string]any{"limit": 1}
+	for range 10 {
+		page, _ := answer(t, src, "turns", params).(map[string]any)
+		rows, _ := page["turns"].([]store.Turn)
+		for _, r := range rows {
+			walked = append(walked, r.TurnID)
+		}
+		next, _ := page["next"].(string)
+		if next == "" {
+			break
+		}
+		params = map[string]any{"limit": 1, "before": next}
+	}
+	if !slices.Equal(walked, []string{"t-b", "t-a", "t-c"}) {
+		t.Errorf("walking pages of one listed %v, want t-b and t-a — one microsecond, the higher id "+
+			"first — and then t-c, each once", walked)
+	}
+	for _, before := range []string{at.Format(time.RFC3339Nano), "not-a-cursor", "dC1h"} {
+		if _, err := registryOver(t, src).Answer(t.Context(), "turns",
+			map[string]any{"before": before}, ""); !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("before=%q answered %v, want bad params — a cursor no page handed out", before, err)
+		}
 	}
 }
 

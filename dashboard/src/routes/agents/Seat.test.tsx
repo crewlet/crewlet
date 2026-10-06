@@ -1560,7 +1560,8 @@ test("the turns list says it holds a page, and loads the one before it", async (
           ? { turns: [turnRow(50), turnRow(51)], next: null }
           : {
               turns: Array.from({ length: 50 }, (_, i) => turnRow(i)),
-              next: "2026-09-20T00:00:00Z",
+              // OPAQUE: whatever the engine hands out is handed back as is.
+              next: "MjAyNi0wOS0yMFQwMDowMDowMFogdC00OQ",
             },
     },
   });
@@ -1581,7 +1582,7 @@ test("the turns list says it holds a page, and loads the one before it", async (
   expect(askedFor("turns").find((a) => a.params.before)?.params).toMatchObject({
     seat: "swe",
     days: 30,
-    before: "2026-09-20T00:00:00Z",
+    before: "MjAyNi0wOS0yMFQwMDowMDowMFogdC00OQ",
   });
   expect(card.querySelector(".crewlet-card__header")?.textContent).toContain("52");
   expect(card.querySelector(".crewlet-card__header")?.textContent).not.toContain("52+");

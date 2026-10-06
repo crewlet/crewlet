@@ -72,6 +72,10 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 	}{
 		{"work_key", TurnQuery{WorkKey: "wk-1"}, "crewlet_events_work_key_idx"},
 		{"work_item", TurnQuery{WorkItem: "native:t-1"}, "crewlet_events_work_item_idx"},
+		{"work_key from a cursor", TurnQuery{WorkKey: "wk-1",
+			Before: &TurnCursor{Start: now().Add(-time.Hour), TurnID: "t-1"}}, "crewlet_events_work_key_idx"},
+		{"work_item from a cursor", TurnQuery{WorkItem: "native:t-1",
+			Before: &TurnCursor{Start: now().Add(-time.Hour), TurnID: "t-1"}}, "crewlet_events_work_item_idx"},
 	} {
 		query, args := c.q.partialsSQL(now(), readPage, DefaultTurnPage+1)
 		plan := planOf(t, db, query, args)
@@ -149,6 +153,13 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 		{"the turn list", TurnQuery{}, readPage, ""},
 		{"the turn list by seat", TurnQuery{AgentID: "id-1"}, readPage, "crewlet_events_agent_id_time_idx"},
 		{"the turn list by unit of work", TurnQuery{WorkKey: "wk-1"}, readPage, "crewlet_events_work_key_idx"},
+		// FROM A CURSOR, whose keyset is a HAVING over the groups and must
+		// leave the row read the filter's own.
+		{"the turn list from a cursor", TurnQuery{Before: &TurnCursor{Start: at.Add(-time.Hour), TurnID: "tn-1"}},
+			readPage, ""},
+		{"the turn list by seat from a cursor", TurnQuery{AgentID: "id-1",
+			Before: &TurnCursor{Start: at.Add(-time.Hour), TurnID: "tn-1"}}, readPage,
+			"crewlet_events_agent_id_time_idx"},
 		{"a share of named turns", TurnQuery{IDs: []string{"tn-1", "tn-2"}}, readShare, "crewlet_events_turn_idx"},
 		{"the named turns a page lists", TurnQuery{IDs: []string{"tn-1", "tn-2"}, Failed: &failed},
 			readListed, "crewlet_events_turn_idx"},

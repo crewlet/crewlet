@@ -276,10 +276,12 @@ type TurnQuery struct {
 	// not. Nil is both, which is not the same as false.
 	Failed *bool
 
-	// Before is an exclusive cursor on the turn's START, which is what the
-	// listing is ordered by. Meaningless under [TurnSortTokens], which is a
-	// ranking rather than a walk and has nothing to resume from.
-	Before time.Time
+	// Before is an exclusive cursor on the listing's own order — the turn's
+	// START, and within one instant its id — so a page resumes after
+	// exactly the turn the last one ended on. Nil starts at the newest.
+	// Meaningless under [TurnSortTokens], which is a ranking rather than a
+	// walk and has nothing to resume from.
+	Before *TurnCursor
 
 	// Sort is the order the page is cut in. The zero value is
 	// [TurnSortStarted], newest first, which is what every caller that names
@@ -360,8 +362,9 @@ func (q TurnQuery) Window(now time.Time) (since, until time.Time) {
 type TurnSort string
 
 const (
-	// TurnSortStarted is newest START first, and the only order a cursor
-	// can walk: the start is what [TurnQuery.Before] is a position on.
+	// TurnSortStarted is newest START first, the higher turn id first within
+	// one instant, and the only order a cursor can walk: those two are what
+	// [TurnQuery.Before] is a position on.
 	TurnSortStarted TurnSort = "-started"
 
 	// TurnSortTokens is the most TOTAL TOKENS first — the spend screen's
@@ -382,11 +385,38 @@ func (s TurnSort) Valid() bool {
 
 // orderSQL is the ORDER BY the sort compiles to. The expressions are this
 // file's own constants, never the caller's text.
+//
+// THE TURN ID BREAKS EVERY TIE, so the order is TOTAL: two turns starting at
+// one microsecond — a webhook waking two seats does it — come back in one
+// order on every read, which is what a cursor that names the turn a page
+// ended on resumes from ([TurnCursor]). Without it the planner chose, and a
+// page cut between the two could hand the next page either.
 func (s TurnSort) orderSQL() string {
 	if s == TurnSortTokens {
-		return "SUM(total_tokens) DESC, MIN(event_time) DESC"
+		return "SUM(total_tokens) DESC, MIN(event_time) DESC, turn_id DESC"
 	}
-	return "MIN(event_time) DESC"
+	return "MIN(event_time) DESC, turn_id DESC"
+}
+
+// TurnCursor is a position in a listing of turns by start, newest first: the
+// turn's START and its id, which together order every turn — the start alone
+// does not, since two turns can start at one microsecond.
+//
+// A KEYSET, for the reason [Cursor] is one over the events table: a cursor on
+// the start alone resumed strictly below it, so a turn starting at the very
+// microsecond a page's last turn did, past the page's size, was behind every
+// later page's cursor and on none of them. Resumed from here, the next page is
+// every turn below the start, and every turn AT it whose id is lower.
+type TurnCursor struct {
+	Start  time.Time
+	TurnID string
+}
+
+// Before reports whether a turn listed at (start, id) lies past the cursor —
+// on a later page of a walk newest first.
+func (c TurnCursor) Before(start time.Time, id string) bool {
+	at, cut := EncodeTime(start), EncodeTime(c.Start)
+	return at < cut || (at == cut && id < c.TurnID)
 }
 
 const (
@@ -860,9 +890,13 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 			args = append(args, EncodeTime(until))
 		}
 	}
-	if !q.Before.IsZero() && read == readPage && q.Sort != TurnSortTokens {
-		having = append(having, "MIN(event_time) < ?")
-		args = append(args, EncodeTime(q.Before))
+	if q.Before != nil && read == readPage && q.Sort != TurnSortTokens {
+		// THE KEYSET, on the order's own two terms ([TurnSort.orderSQL]):
+		// below the start, or at it with a lower id — the rule
+		// [TurnCursor.Before] states for a turn in hand.
+		having = append(having, "(MIN(event_time) < ? OR (MIN(event_time) = ? AND turn_id < ?))")
+		at := EncodeTime(q.Before.Start)
+		args = append(args, at, at, q.Before.TurnID)
 	}
 	// ONE EXPRESSION FOR THE COLUMN AND THE FILTER. Spelled twice, a turn
 	// could be selected by `failed=true` and then render without the mark,

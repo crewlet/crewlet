@@ -653,9 +653,10 @@ sequenceDiagram
   paged where a node's page lists it — the earliest such start, which every
   node says of its own share — rather than where it began, which for a turn
   whose earliest half fails the page's filter, or lies under the horizon, is
-  a position no page reaches; so a walk of the pages lists every turn once,
-  bar two listed at the same microsecond across a page's cut, which a cursor
-  that is an instant alone cannot tell apart.
+  a position no page reaches — and within one microsecond by the turn's id, so
+  the order is total. The cursor is that position and that id, opaque to the
+  caller, so a walk of the pages lists every turn once, two that start at one
+  microsecond either side of a page's cut included.
 - **A departed node's detail is gone.** Nothing replicates it: a node that has
   left the fleet cannot be asked, and its turns, phases and events leave with
   it. The **aggregates** do not — spend, turn counts and page reads are the

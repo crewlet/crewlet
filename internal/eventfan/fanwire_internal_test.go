@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // v1ListFields is every listing filter the base protocol carried. A field
@@ -104,6 +106,17 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 	}
 	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7}); got != 1 {
 		t.Errorf("a page of turns by days is asked in v%d, want v1", got)
+	}
+	// THE CURSOR'S ID RAISES NOTHING: a build that reads the start alone
+	// answers a narrower page, never a wider one — see [Protocol] — and it
+	// travels both ways, so a cursor read back is the cursor sent.
+	cursor := &store.TurnCursor{Start: time.Now().UTC().Truncate(time.Microsecond), TurnID: "t-1"}
+	wire := turnsParamsOf(store.TurnQuery{SinceDays: 7, Before: cursor})
+	if got := versionOf(QuestionTurns, wire); got != 1 {
+		t.Errorf("a page of turns from a cursor is asked in v%d, want v1", got)
+	}
+	if back := wire.query(nil).Before; back == nil || *back != *cursor {
+		t.Errorf("the cursor %+v came back off the wire as %+v", cursor, back)
 	}
 	// THE ASKER'S INSTANT RAISES NOTHING: a build that ignores it answers as
 	// of its own clock — floored there on every question but `event`, which

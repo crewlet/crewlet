@@ -101,6 +101,37 @@ func Run(t *testing.T, factory Factory) {
 		}
 	})
 
+	t.Run("turns_at_one_microsecond_are_each_on_one_page", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		// FOUR TURNS AT ONE INSTANT across three nodes, walked in pages of
+		// one: every page is cut between two of them.
+		for i, turn := range []string{"t-a", "t-b", "t-c", "t-d"} {
+			write(t, nodes[i%3], phase(turn+"-p", turn, at, 10, "m"))
+		}
+		fan := asker(nodes)
+		var order []string
+		q := store.TurnQuery{SinceDays: 1, Limit: 1}
+		for range 10 {
+			page, coverage, err := fan.Turns(t.Context(), q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			for _, turn := range page.Turns {
+				order = append(order, turn.TurnID)
+			}
+			if page.Next == nil {
+				break
+			}
+			q.Before = page.Next
+		}
+		if want := []string{"t-d", "t-c", "t-b", "t-a"}; !slices.Equal(order, want) {
+			t.Fatalf("the walk listed %v, want %v — each once, by id within the instant", order, want)
+		}
+	})
+
 	t.Run("an_event_is_found_on_whichever_node_holds_it", func(t *testing.T) {
 		t.Parallel()
 		nodes := fleet(t, factory)

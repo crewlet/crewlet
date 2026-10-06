@@ -267,7 +267,7 @@ func TestTheTurnCursorPagesWithoutRepeating(t *testing.T) {
 		t.Fatalf("the first page has %d turns", len(first))
 	}
 	second, err := log.Turns(t.Context(), store.TurnQuery{
-		Limit: 2, Before: first[len(first)-1].StartedAt,
+		Limit: 2, Before: &store.TurnCursor{Start: first[len(first)-1].StartedAt, TurnID: first[len(first)-1].TurnID},
 	})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
@@ -281,6 +281,60 @@ func TestTheTurnCursorPagesWithoutRepeating(t *testing.T) {
 				t.Fatalf("%s is on both pages", a.TurnID)
 			}
 		}
+	}
+}
+
+// TWO TURNS THAT START AT ONE MICROSECOND ARE BOTH ON THE WALK, once each,
+// whichever side of a page's cut they fall — and in one order on every read.
+//
+// A webhook that wakes two seats starts two turns at one instant. A cursor on
+// the start alone resumed strictly below it, so a page of one that listed the
+// first of them sent the walk past the second for good; and with no tie-break
+// in the order, which of the two that page listed was the planner's choice.
+// The order is (start, turn id) newest first and the cursor names both, so the
+// walk lists the higher id first and then the other, every time.
+//
+// Mutation: drop `turn_id` from [store.TurnSort]'s ORDER BY or from the
+// keyset's HAVING, and the walk either lists one of the two twice or loses it.
+func TestTwoTurnsAtOneMicrosecondAreBothOnTheWalk(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	// Written in the order the ids do NOT sort in, so an order the planner
+	// chose by insertion is not mistaken for the tie-break.
+	for _, turn := range []string{"t-a", "t-c", "t-b"} {
+		seedTurn(t, log, turn, at, "PM", nil)
+	}
+	seedTurn(t, log, "t-early", at.Add(-time.Minute), "PM", nil)
+
+	var walked []string
+	q := store.TurnQuery{Limit: 1}
+	for range 10 {
+		page, more, err := log.TurnPartials(t.Context(), q)
+		if err != nil {
+			t.Fatalf("TurnPartials: %v", err)
+		}
+		for _, p := range page {
+			walked = append(walked, p.TurnID)
+		}
+		if !more {
+			break
+		}
+		last := page[len(page)-1]
+		q.Before = &store.TurnCursor{Start: last.StartedAt, TurnID: last.TurnID}
+	}
+	if want := []string{"t-c", "t-b", "t-a", "t-early"}; !slices.Equal(walked, want) {
+		t.Errorf("walking pages of one listed %v, want %v — the three at one instant by id, "+
+			"newest first, then the earlier one, each once", walked, want)
+	}
+	// A CURSOR WITH NO ID resumes strictly below its start — what an asker
+	// before the id sent, and what it cut its own page by.
+	page, _, err := log.TurnPartials(t.Context(), store.TurnQuery{Before: &store.TurnCursor{Start: at}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 1 || page[0].TurnID != "t-early" {
+		t.Errorf("below the instant alone the page is %+v, want t-early", page)
 	}
 }
 
@@ -742,7 +796,7 @@ func TestALogSaysWhichNamedTurnsItsPageLists(t *testing.T) {
 		"the window":          {store.TurnQuery{Since: since}, []string{"t-clean", "t-failed"}},
 		"the failures":        {store.TurnQuery{Since: since, Failed: &yes}, []string{"t-failed"}},
 		"one model":           {store.TurnQuery{Since: since, Model: "m-cheap"}, []string{"t-clean"}},
-		"a cursor below them": {store.TurnQuery{Since: since, Before: since}, []string{"t-clean", "t-failed"}},
+		"a cursor below them": {store.TurnQuery{Since: since, Before: &store.TurnCursor{Start: since}}, []string{"t-clean", "t-failed"}},
 		"a page of one":       {store.TurnQuery{Since: since, Limit: 1}, []string{"t-clean", "t-failed"}},
 		"an edge above one":   {store.TurnQuery{Since: since, Until: since.Add(90 * time.Second)}, []string{"t-clean"}},
 	} {

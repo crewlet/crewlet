@@ -216,7 +216,8 @@ export function Turns() {
   const rows = turns;
   // THE CURSOR ALONE SAYS WHETHER THERE IS MORE — and it can be present on a
   // page with no row, when a node stopped before any turn above it could be
-  // shown, so "Load older" is offered on an empty page too.
+  // shown, so "Load older" is offered on an empty page too. It is OPAQUE:
+  // handed back as `before` exactly as it came, never built from a row.
   const more = !!last?.next;
 
   const loadOlder = useCallback(async () => {

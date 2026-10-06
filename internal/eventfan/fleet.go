@@ -163,9 +163,11 @@ type TurnDetail struct {
 type TurnPage struct {
 	Turns []store.Turn
 
-	// Next is the start to resume from, or nil at the end — and always nil
-	// for a page ranked by tokens, which is a ranking rather than a walk.
-	Next *time.Time
+	// Next is the position to resume from — where the page's last turn is
+	// listed, and that turn's id ([store.TurnCursor]) — or nil at the end,
+	// and always nil for a page ranked by tokens, which is a ranking rather
+	// than a walk.
+	Next *store.TurnCursor
 }
 
 // ---- the scatter ------------------------------------------------------- //
@@ -633,7 +635,11 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 // half-turns or as whichever half was nearer.
 //
 // A page by START is exact down to the newest point any full page stopped at,
-// for [MergeListing]'s reason, and the cursor resumes from there. A page by
+// for [MergeListing]'s reason, and the cursor resumes from there. A point is a
+// start AND a turn id ([store.TurnCursor]), the order every node's page and
+// this merge share, because two turns can start at one microsecond: a point
+// that was a start alone put the second of two such turns, past a page's cut,
+// behind the cursor and on no page. A page by
 // TOKENS ranks each node's top candidates by their MERGED totals — which is
 // exact for every turn that ran on one node, and can miss a turn split across
 // nodes whose every half fell below every node's cut. That is stated rather
@@ -658,7 +664,7 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			store.ErrTurnSort, q.Sort, store.TurnSorts)
 	}
 	byTokens := q.Sort == store.TurnSortTokens
-	if byTokens && !q.Before.IsZero() {
+	if byTokens && q.Before != nil {
 		return TurnPage{}, Coverage{}, ErrRankedCursor
 	}
 	q.Limit = turnPage(q.Limit)
@@ -698,16 +704,18 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	var turns []pagedTurn
 	coverage := first.coverage
 	more := false
-	var horizon *time.Time
+	// THE HORIZON IS A POSITION, start and id: the newest last turn of any
+	// full node's page, which every node's page orders by both.
+	var horizon *store.TurnCursor
 	for _, part := range first.parts() {
 		if !part.Full {
 			continue
 		}
 		more = true
 		if n := len(part.Turns); n > 0 && !byTokens {
-			last := part.Turns[n-1].StartedAt
-			if horizon == nil || last.After(*horizon) {
-				horizon = &last
+			last := part.Turns[n-1]
+			if horizon == nil || horizon.Before(last.StartedAt, last.TurnID) {
+				horizon = &store.TurnCursor{Start: last.StartedAt, TurnID: last.TurnID}
 			}
 		}
 	}
@@ -795,7 +803,7 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			if t.StartedAt.Before(q.Since) {
 				return true
 			}
-			return !byTokens && !q.Before.IsZero() && !t.listedAt.Before(q.Before)
+			return !byTokens && q.Before != nil && !q.Before.Before(t.listedAt, t.TurnID)
 		})
 		if byTokens {
 			slices.SortStableFunc(turns, func(a, b pagedTurn) int {
@@ -808,7 +816,7 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			})
 			if horizon != nil {
 				turns = slices.DeleteFunc(turns, func(t pagedTurn) bool {
-					return t.listedAt.Before(*horizon)
+					return horizon.Before(t.listedAt, t.TurnID)
 				})
 			}
 		}
@@ -826,12 +834,14 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	// it had loaded could only ever write it as a floor ("47+"), because the
 	// answer never said the walk had ended, which is what a nil `Next` is
 	// documented to say. It is where the page's last turn is LISTED, never
-	// the start shown for it, which may be a position no node's page reaches.
+	// the start shown for it, which may be a position no node's page reaches
+	// — and that turn's id, without which a turn listed at the same instant
+	// past the page's cut lay behind the next page's cursor and on no page.
 	if !byTokens && more {
 		switch {
 		case len(turns) > 0:
-			at := turns[len(turns)-1].listedAt
-			page.Next = &at
+			last := turns[len(turns)-1]
+			page.Next = &store.TurnCursor{Start: last.listedAt, TurnID: last.TurnID}
 		case horizon != nil:
 			// NOTHING BETWEEN THE CURSOR AND THE HORIZON, and more past
 			// it: resume from the horizon rather than report an end.
@@ -847,7 +857,8 @@ type pagedTurn struct {
 	store.TurnPartial
 
 	// listedAt is the earliest start at which a node's page lists the turn:
-	// what it is ordered and cut by, and what a cursor after it is.
+	// what it is ordered and cut by, with its id, and what a cursor after it
+	// is.
 	listedAt time.Time
 }
 

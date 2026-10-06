@@ -65,7 +65,7 @@ import (
 //     them floors the window there and nothing they count needs holding (see
 //     [Fleet.NotificationOutcomes]).
 //
-// THREE ADDITIONS MOVE NO VERSION. The first is the second scatter of `turns`
+// FOUR ADDITIONS MOVE NO VERSION. The first is the second scatter of `turns`
 // saying which of the named turns the node's page lists (`listed`, `judged`),
 // beside its shares: a build before it never sends them, and the asker reads
 // that as "this node did not say" and judges its shares by what they carry
@@ -145,6 +145,21 @@ import (
 // A version would make every such build REFUSE the axis, every trace, every
 // turn and every page of turns for the length of an upgrade — every row it
 // holds, to save a count that a minute's settling ends anyway.
+//
+// The fourth is `before_id` on a page of turns: the cursor's second term, the
+// id of the turn the previous page ended on, beside its start in `before`
+// ([store.TurnCursor]). A node on this build resumes at that start, below the
+// id; a build before it reads the start alone and resumes strictly below it,
+// as it always has. That is a NARROWER answer than was asked, never a wider
+// one — the turns that build holds at the very instant the previous page ended
+// on, with an id below that page's last, are on none of its pages, which is
+// the loss the id ends for every other node — and nothing in it is a row the
+// asker would merge as matching: every turn it sends is one the asker's cursor
+// admits. A version would make that build refuse every page of a walk but the
+// first for the length of an upgrade, every turn it holds, to save the turns
+// it holds at one microsecond. And an earlier ASKER sends no id: its cursor,
+// read here, resumes strictly below its start, which is the page its own merge
+// cut.
 const Protocol = 5
 
 // versionOf is the lowest scatter version that answers one question with
@@ -443,28 +458,43 @@ type turnsParams struct {
 	Since time.Time `json:"since,omitzero"`
 	Until time.Time `json:"until,omitzero"`
 
+	// BeforeID is the cursor's second term, the turn id at `before`
+	// ([store.TurnCursor]). Unversioned — see [Protocol].
+	BeforeID string `json:"before_id,omitempty"`
+
 	// At is the instant the asker cut the window against, which every node
 	// floors it at. Unversioned — see [Protocol].
 	At time.Time `json:"at,omitzero"`
 }
 
 func turnsParamsOf(q store.TurnQuery) turnsParams {
-	return turnsParams{
+	p := turnsParams{
 		Since: q.Since, Until: q.Until, At: q.At,
 		SinceDays: q.SinceDays, AgentRole: q.AgentRole, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
-		Failed: q.Failed, Before: q.Before, Sort: q.Sort, Limit: q.Limit,
+		Failed: q.Failed, Sort: q.Sort, Limit: q.Limit,
 	}
+	if q.Before != nil {
+		p.Before, p.BeforeID = q.Before.Start, q.Before.TurnID
+	}
+	return p
 }
 
+// query is the store's question. A cursor with no id — an earlier asker's —
+// resumes strictly below its start, which is what that asker's own merge cut
+// its page by.
 func (p turnsParams) query(ids []string) store.TurnQuery {
-	return store.TurnQuery{
+	q := store.TurnQuery{
 		Since: p.Since, Until: p.Until, At: p.At,
 		SinceDays: p.SinceDays, AgentRole: p.AgentRole, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
-		Failed: p.Failed, Before: p.Before, Sort: p.Sort, Limit: p.Limit,
+		Failed: p.Failed, Sort: p.Sort, Limit: p.Limit,
 		IDs: ids,
 	}
+	if !p.Before.IsZero() {
+		q.Before = &store.TurnCursor{Start: p.Before, TurnID: p.BeforeID}
+	}
+	return q
 }
 
 // phasesParams is both phase questions' parameters. The company's phases read

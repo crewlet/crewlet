@@ -4163,10 +4163,12 @@ export interface TurnWorkItem {
 
 export interface TurnsAnswer {
   turns: TurnRow[];
-  /** The cursor to resume from, on the turn's START, and `null` on the last
-   *  page — present only while more turns lie past this one. The fleet's, so
-   *  it can be present on an empty page: where a node's page stopped, with
-   *  nothing above it left to show. */
+  /** The cursor to resume from — an OPAQUE token, handed back as `before`
+   *  exactly as it came and never built from a row, since it names where the
+   *  page's last turn is listed and that turn's id rather than any field a row
+   *  carries — and `null` on the last page, present only while more turns lie
+   *  past this one. The fleet's, so it can be present on an empty page: where
+   *  a node's page stopped, with nothing above it left to show. */
   next: string | null;
   /** Which nodes the page was merged from. */
   coverage?: Coverage;
