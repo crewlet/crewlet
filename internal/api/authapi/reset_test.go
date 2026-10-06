@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,7 +147,16 @@ func TestEveryDeadResetLinkIsOneRefusal(t *testing.T) {
 			id: func(string) string { return uuid.Must(uuid.NewV7()).String() }},
 		{name: "a secret that is not the link's", counted: true,
 			status: http.StatusGone,
-			secret: func(s string) string { return s[:len(s)-1] + "0" }},
+			secret: func(s string) string {
+				// FLIPPED, never set: a secret already ending in the
+				// character set is the link's own, and was one run in
+				// sixty-four.
+				last := "0"
+				if strings.HasSuffix(s, last) {
+					last = "1"
+				}
+				return s[:len(s)-1] + last
+			}},
 		{name: "a link past its day", status: http.StatusGone,
 			change: func(c *iamdomain.Credential) { c.ExpiresAt = clock.Add(-time.Minute) }},
 		{name: "a link revoked", status: http.StatusGone,
