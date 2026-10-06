@@ -198,13 +198,29 @@ counter by up to one flush, and a named window by up to two (the flush, and the
 usage publisher's own tick). Every figure's **calls** are provider calls — a
 phase's model rounds, an auxiliary record's coalesced calls — never records.
 
-**What is not counted: embeddings.** The calls that turn text into vectors for
-semantic search — the fleet's embedding duty embedding the pages and tasks that
-changed, a seat's diary and episodes embedding what they store, and each turn's
-one query vector at its start — are metered by neither the counter nor the
-rollup: they run on the embeddings provider rather than a seat's model chain,
-and a token budget does not judge them. A company paying for embeddings sees
-that bill at its embeddings provider.
+**What is not counted: embeddings.** The calls that turn text into vectors are
+metered by neither the counter nor the rollup: they run on the embeddings
+provider rather than a seat's model chain, and a token budget does not judge
+them. A company paying for embeddings sees that bill at its embeddings
+provider, and it is made of these calls:
+
+- **The corpus.** The fleet's embedding duty embeds the pages and tasks that
+  changed, once for the whole fleet.
+- **What a seat stores.** A diary note and an episode are embedded as they are
+  written, and the node holding a seat fills every note that has no vector of
+  the current model — after a change of `providers.embeddings.model`, the whole
+  diary, up to 512 notes a minute per node.
+- **What a turn recalls by.** Each turn embeds its ask once at its start, for
+  its memory and episode recall, and `refresh_memory` and `query_episodes`
+  embed the hint they are given each time a seat calls them.
+- **Every knowledge or work search that ranks by meaning** — `semantic`, or
+  `hybrid`, the default, over the engine's own knowledge base and tracker —
+  embeds its query: the
+  turn-start knowledge prefetch (so a turn start makes this call beside its ask
+  vector), `search_knowledge`, `search_work_items`, the retrieval behind
+  `answer_knowledge`, the operator tools, and the API's and the dashboard's
+  search. A query vector is cached per node (1 024 entries, cleared when the
+  model changes), so a phrase searched again soon costs nothing.
 
 ### Why the counter and the rollup still differ
 
