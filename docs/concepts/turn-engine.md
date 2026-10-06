@@ -1032,6 +1032,17 @@ answer, usage and all, rather than thrown away and asked for again: the
 endpoint billed it, and a second request paid for the round twice while the
 first answer reached no budget counter and no spend rollup.
 
+**A tab is sent what moved.** Five frames a second would otherwise mean the
+whole call five times a second to every open dashboard — the prompt, every
+committed round's narration, every tool call — when only the round being
+written and the call in flight are moving. So a seat's `agents` push carries a
+call's heavy fields only when their version moved since the last push for the
+same call, and names every version always: a tab keeps the copy it holds of a
+field the push left out, and a tab that missed the push which moved one — the
+socket drops a slow tab's oldest frame — knows from the next push, and asks
+for the call whole. See [What the projection carries, and what the wire
+sends](../reference/api-endpoints.md#what-the-projection-carries-and-what-the-wire-sends).
+
 **`response` is a join, so the split travels beside it.** That string is
 every round's assistant turn joined with a blank line, and the join cannot
 be undone — its parts are separated by a blank line and prose contains

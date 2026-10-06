@@ -9,11 +9,11 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { MAX_EVENTS } from "../contract/wire.ts";
+import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import { MAX_PHASES, Store } from "./store.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { nodeCountLabel } from "../lib/format.ts";
-import type { EventEnvelope, FeedRow } from "./types.ts";
+import type { EventEnvelope, FeedRow, Overlay } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -314,6 +314,134 @@ describe("subscriptions", () => {
     store.applyAgents([{ role: "PM" }]);
     expect(store.version("agents")).toBeGreaterThan(before);
     expect(store.version("tokens")).toBe(0);
+  });
+});
+
+describe("a live call's heavy fields", () => {
+  // What the engine pushes for one call: its identity, its light fields, and
+  // every heavy field's version — with only the fields it names carried.
+  function pushed(
+    versions: Partial<Record<keyof typeof LIVE_CALL_DETAIL, number>>,
+    carried: Record<string, unknown>,
+    over: Record<string, unknown> = {},
+  ): Overlay & { role: string } {
+    return {
+      role: "PM",
+      live_call: {
+        turn_id: "t1",
+        phase: "execute",
+        iteration: 0,
+        model: "m",
+        round_num: 2,
+        rounds_used: 3,
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        trigger: null,
+        in_progress: true,
+        updated_at: "2026-10-06T09:00:00Z",
+        versions: { prompt: 0, response: 0, narration: 0, executions: 0, rounds: 0, ...versions },
+        ...carried,
+        ...over,
+      } as never,
+    };
+  }
+  const prompt = { prompt: "fix it", prompt_messages: [{ role: "system", content: "lead" }] };
+  const narration = (n: number) => ({
+    round_narration: Array.from({ length: n }, (_, i) => ({ round: i + 1, content: `r${i + 1}` })),
+  });
+
+  // A PUSH LEAVES OUT WHAT DID NOT MOVE, and the tab keeps the copy it holds:
+  // the prompt the opening frame carried stays on screen through every later
+  // frame that does not, and the narration moves when a frame carries it.
+  //
+  // Mutation: replace the call with the push's, and the prompt is blank from
+  // the second frame on.
+  test("keeps the copy it holds of a field a push leaves out", () => {
+    const store = new Store();
+    expect(
+      store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]),
+    ).toEqual([]);
+    expect(store.applyAgents([pushed({ prompt: 1, narration: 2 }, narration(2))])).toEqual([]);
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.prompt).toBe("fix it");
+    expect(call?.prompt_messages).toEqual(prompt.prompt_messages);
+    expect(call?.round_narration).toHaveLength(2);
+    expect(call?.versions).toMatchObject({ prompt: 1, narration: 2 });
+  });
+
+  // A PUSH NAMING A NEWER VERSION THAN THE ONE HELD, WITHOUT THE FIELD, is a tab
+  // that missed the push which carried it — the server's queue drops a slow
+  // tab's oldest frame. The tab says so, keeps what it holds, and takes the
+  // fetched call whole.
+  test("says when it missed a change, and takes the call fetched whole", () => {
+    const store = new Store();
+    store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
+    // The push carrying narration 2 was dropped; this one names 3 and carries nothing.
+    expect(store.applyAgents([pushed({ prompt: 1, narration: 3 }, {})])).toEqual(["PM"]);
+    expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(1);
+
+    store.applyLiveCall({
+      role: "PM",
+      live_call:
+        pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) }).live_call ?? null,
+    });
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.round_narration).toHaveLength(3);
+    expect(call?.versions?.narration).toBe(3);
+    expect(store.applyAgents([pushed({ prompt: 1, narration: 3 }, {})])).toEqual([]);
+  });
+
+  // AN OLDER COPY NEVER REPLACES A NEWER ONE: a push or an answer overtaken by
+  // what the tab already holds is read for its light fields only.
+  test("never takes a field back to an older copy", () => {
+    const store = new Store();
+    store.applyAgents([pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) })]);
+    store.applyAgents([pushed({ prompt: 1, narration: 2 }, narration(2), { model: "later" })]);
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.round_narration).toHaveLength(3);
+    expect(call?.model).toBe("later");
+  });
+
+  // A CALL OF ITS OWN HOLDS NOTHING OF THE LAST ONE: a new phase whose push
+  // left a field out is not drawn with the previous phase's prompt.
+  test("carries nothing from one call to the next", () => {
+    const store = new Store();
+    store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
+    const stale = store.applyAgents([pushed({ prompt: 1, narration: 0 }, {}, { phase: "review" })]);
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.phase).toBe("review");
+    expect(call?.prompt).toBe("");
+    expect(call?.round_narration).toBeNull();
+    expect(stale).toEqual(["PM"]);
+  });
+
+  // THE SOCKET ASKS FOR THE CALL WHOLE, once a seat while an ask is out, and the
+  // answer lands on the row.
+  test("the socket fetches a call it holds behind, once", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const ask = vi.spyOn(socket, "query");
+    const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
+    frame([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
+    frame([pushed({ prompt: 1, narration: 3 }, {})]);
+    frame([pushed({ prompt: 1, narration: 4 }, {})]);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask).toHaveBeenCalledWith("live_call", { role: "PM" });
+
+    socket.onMessage(
+      JSON.stringify({
+        kind: "result",
+        id: 1,
+        data: {
+          role: "PM",
+          live_call: pushed({ prompt: 1, narration: 4 }, { ...prompt, ...narration(4) }).live_call,
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(4),
+    );
   });
 });
 

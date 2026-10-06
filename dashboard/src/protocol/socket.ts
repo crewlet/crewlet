@@ -139,6 +139,8 @@ export class LiveSocket {
   private isClosed = false;
   private nextQueryId = 1;
   private inflight = new Map<number, Inflight>();
+  /** Seats whose live call is being fetched whole — see `fetchCalls`. */
+  private fetchingCalls = new Set<string>();
   private token = "";
   /** Whether the shell has already been asked to collect a token. */
   private askedForToken = false;
@@ -410,7 +412,7 @@ export class LiveSocket {
         this.store.applyEvent(msg.data as never);
         break;
       case "agents":
-        this.store.applyAgents(msg.data);
+        this.fetchCalls(this.store.applyAgents(msg.data));
         break;
       case "seats":
         this.store.applySeats(msg.data);
@@ -461,6 +463,26 @@ export class LiveSocket {
         // like — and the e2e replay asserts that count is zero.
         this.store.noteUnknownPush((msg as { kind?: unknown }).kind);
         break;
+    }
+  }
+
+  /**
+   * Fetch, whole, each seat's live call this tab holds behind what a push
+   * described — the push that moved one of its heavy fields was dropped by the
+   * server's queue (`mergeLiveCall`). One ask per seat in flight: the pushes
+   * that arrive meanwhile say the same thing, and a failed ask is made again by
+   * the next push that still finds the call behind.
+   */
+  private fetchCalls(roles: string[]): void {
+    for (const role of roles) {
+      if (this.fetchingCalls.has(role)) continue;
+      this.fetchingCalls.add(role);
+      this.query("live_call", { role })
+        .then(
+          (answer) => this.store.applyLiveCall(answer),
+          () => {},
+        )
+        .finally(() => this.fetchingCalls.delete(role));
     }
   }
 

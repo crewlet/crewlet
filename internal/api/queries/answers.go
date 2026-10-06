@@ -393,6 +393,12 @@ var ErrNotFound = errors.New("queries: no such record")
 func Register(r *Registry, s Sources) {
 	if s.State != nil {
 		r.Register("agent", s.agent)
+		// ONE SEAT'S CALL IN FLIGHT, WHOLE: what a tab asks when an `agents`
+		// push names a version of a heavy field newer than the copy it
+		// holds — the push that carried it was dropped. From the projection
+		// alone, so it costs what a push does; `agent` reads the seat's
+		// history from every node as well.
+		r.Register("live_call", s.liveCall)
 		r.Register("tokens", s.tokens)
 	}
 	if s.Events != nil {
@@ -733,6 +739,27 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// exactly the kind of trap that survives until something depends on it.
 	if overlay := s.State.AgentOverlay(role); overlay != nil {
 		answer["live"] = overlay
+	}
+	return answer, nil
+}
+
+// liveCall answers `live_call{role}`: the seat's in-flight call with every
+// field, and the version of each, or null while it has none.
+//
+// The REPAIR for an `agents` push the socket dropped. A push leaves out a heavy
+// field its seat's tabs already hold at the version it names (internal/api/
+// stream's pushAgents), so a tab that missed the push which moved one is
+// holding an older copy than every later push describes, and asks for the call
+// whole here. A seat the projection has not seen is answered null like one
+// between calls: either way there is nothing in flight.
+func (s Sources) liveCall(_ context.Context, p Params) (any, error) {
+	role := s.roleOf(firstOf(p.String("role"), p.String("id")))
+	if role == "" {
+		return nil, fmt.Errorf("%w: live_call needs a role or a handle", ErrBadParams)
+	}
+	answer := map[string]any{"role": role, "live_call": nil}
+	if overlay := s.State.AgentOverlay(role); overlay != nil && overlay.LiveCall != nil {
+		answer["live_call"] = overlay.LiveCall
 	}
 	return answer, nil
 }

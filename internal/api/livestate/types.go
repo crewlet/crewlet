@@ -231,6 +231,13 @@ type LiveCall struct {
 	// it is always about zero. They are different questions and need
 	// different fields.
 	StartedAt string `json:"started_at"`
+
+	// Versions numbers the copy of each heavy field — the prompt, the
+	// response, the narration, the tool calls, the rounds' timing — this
+	// call holds, so an `agents` push can leave out what a tab already has
+	// and a tab can tell when it missed a change (see detail.go). ALWAYS
+	// PRESENT, on every surface that carries a call.
+	Versions CallVersions `json:"versions"`
 }
 
 // BudgetMeter is a seat's or the org's live token meters: one entry per CAPPED

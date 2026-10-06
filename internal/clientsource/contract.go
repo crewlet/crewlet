@@ -199,6 +199,7 @@ var contract = []Entry{
 	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
 	{"QUERY_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastAReadOfTheGroup"},
 	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
+	{"LIVE_CALL_DETAIL", ReadLiteral, "internal/api/livestate.TestTheDashboardMergesEveryVersionedField"},
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},
 	{"SEARCH_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoSearchTheEngineWouldRefuse"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},

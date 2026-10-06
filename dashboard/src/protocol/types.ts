@@ -31,6 +31,7 @@ import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
+import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { AccessAnswer } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
@@ -386,6 +387,22 @@ export interface LiveCall {
   updated_at: string;
   /** When the call began. Unlike `updated_at`, it never moves. */
   started_at?: string;
+  /**
+   * The version of the copy this call holds of each heavy field
+   * (`LIVE_CALL_DETAIL`). A push names every one and carries a field only
+   * when its version moved; the store fills in the rest from what it holds.
+   * Absent from an engine that versions nothing, whose pushes are whole.
+   */
+  versions?: CallVersions;
+}
+
+/** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
+export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
+
+/** The `live_call{role}` answer: one seat's call in flight, whole, or null. */
+export interface LiveCallAnswer {
+  role: string;
+  live_call: LiveCall | null;
 }
 
 /** One calendar window of one scope's token counter — the day, the ISO week or
@@ -4388,6 +4405,7 @@ export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
+  live_call: LiveCallAnswer;
   agent_memory: AgentMemory;
   memory_overview: MemoryOverview;
   events: EventsPage;

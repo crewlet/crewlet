@@ -152,7 +152,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// wired with.
 		{"a node with no sources at all", queries.Sources{}, []string{"viewer"}},
 		{"the live projection alone", queries.Sources{State: state},
-			[]string{"agent", "tokens", "viewer"}},
+			[]string{"agent", "live_call", "tokens", "viewer"}},
 		// `turn` is what made "everything that happened in this unit of
 		// work" askable at all (see migration 0014); `turns` is the list
 		// of them, which the dashboard used to fake by paging the raw
@@ -172,7 +172,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
-		}, []string{"agent", "event", "event_series", "events", "page_reads",
+		}, []string{"agent", "event", "event_series", "events", "live_call", "page_reads",
 			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
@@ -182,6 +182,38 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 }
 
 // --- the projection questions -------------------------------------------- //
+
+// A SEAT'S CALL IN FLIGHT IS ANSWERED WHOLE, by role or handle: every heavy
+// field an `agents` push may leave out, and the versions they are at — what a
+// tab that missed a push asks for. A seat with nothing in flight is null, not
+// an error.
+func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
+	t.Parallel()
+	state := livestate.New()
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z", Category: "task",
+		Payload: map[string]any{
+			"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0),
+			"round_num": float64(-1), "prompt": "fix the build",
+			"prompt_messages": []any{map[string]any{"role": "system", "content": "you are the lead"}},
+		},
+	})
+	r := registryOver(t, queries.Sources{State: state})
+
+	got := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	call, _ := got["live_call"].(*livestate.LiveCall)
+	if got["role"] != "Lead" || call == nil || call.Prompt != "fix the build" ||
+		len(call.PromptMessages) != 1 || call.Versions.Prompt != 1 {
+		t.Fatalf("answer = %+v; want the call whole, its prompt at version 1", got)
+	}
+	idle := ask(t, r, "live_call", map[string]any{"role": "Reviewer"})
+	if idle["live_call"] != nil {
+		t.Errorf("a seat with nothing in flight = %+v; want null", idle)
+	}
+	if _, err := r.Answer(t.Context(), "live_call", map[string]any{}, "operator"); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("live_call with no seat = %v; want a bad-params refusal", err)
+	}
+}
 
 func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	t.Parallel()

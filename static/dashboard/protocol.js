@@ -1,5 +1,27 @@
 //#region src/contract/wire.ts
 /**
+* A live call's HEAVY fields, by the version that numbers each — the engine's
+* `livestate.CallDetail`, held there both ways by `internal/api/livestate`'s
+* `TestTheDashboardMergesEveryVersionedField`.
+*
+* An `agents` push carries these only when their version moved since the last
+* push for the same call — they move once a round or once a tool call, while
+* the row is pushed five times a second as a round streams — and names every
+* version always. The store keeps the copy it holds of a field the push left
+* out, and asks for the call whole (`live_call`) when a push names a version
+* newer than the one it holds: the push that moved it was dropped. A field
+* named here that the engine does not version is one a push never leaves out
+* and the merge waits on for ever; one the engine versions that is not named
+* here is a field the merge drops from the screen.
+*/
+var LIVE_CALL_DETAIL = {
+	prompt: ["prompt", "prompt_messages"],
+	response: ["response"],
+	narration: ["round_narration"],
+	executions: ["tool_executions"],
+	rounds: ["rounds"]
+};
+/**
 * How long a query waits for its answer ONCE SENT.
 *
 * The clock starts when the frame goes out, not when the query is made, so time
@@ -14,6 +36,56 @@
 * that gave up first would report a slow answer as a failed one.
 */
 var QUERY_TIMEOUT_MS = 1e4;
+/** What a heavy field reads as while nothing of it is held. */
+var NOTHING_HELD = {
+	prompt: "",
+	prompt_messages: null,
+	response: "",
+	round_narration: null,
+	tool_executions: null,
+	rounds: null
+};
+/**
+* One seat's live call as a push states it, merged onto the copy a tab holds —
+* and whether the push says the tab missed a change it no longer carries.
+*
+* THE PUSH LEAVES OUT WHAT DID NOT MOVE. A call's heavy fields
+* (`LIVE_CALL_DETAIL`) travel only on the push that moved their version, and
+* every push names every version. So a field the push carries is taken — unless
+* its version is older than the one held, a push overtaken by a snapshot or an
+* answer — and one it leaves out is the copy held, at the version held, for the
+* SAME call (`turn_id`, `phase`, `iteration`); a call of its own holds nothing
+* yet. A push naming a version newer than the one held, without the field, is
+* a tab that missed the push which carried it: `stale`, and the field stays
+* what is held until the call is fetched whole.
+*/
+function mergeLiveCall(held, next) {
+	if (!next) return {
+		call: null,
+		stale: false
+	};
+	const same = !!held && held.turn_id === next.turn_id && held.phase === next.phase && held.iteration === next.iteration;
+	const merged = { ...next };
+	const versions = {};
+	let stale = false;
+	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		const pushed = next.versions?.[detail] ?? 0;
+		const have = same ? held.versions?.[detail] ?? 0 : 0;
+		const carried = fields.every((f) => f in next);
+		if (carried && pushed >= have) {
+			versions[detail] = pushed;
+			continue;
+		}
+		for (const f of fields) merged[f] = same ? held[f] : NOTHING_HELD[f];
+		versions[detail] = have;
+		if (!carried && pushed > have) stale = true;
+	}
+	merged.versions = versions;
+	return {
+		call: merged,
+		stale
+	};
+}
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
@@ -107,9 +179,23 @@ var Store = class {
 		if (snap.health) this.state.health = snap.health;
 		this.emit(...ALL_DATA_SLICES);
 	}
-	/** Changed seat overlays, keyed by role. */
+	/**
+	* Changed seat overlays, keyed by role — and the roles whose live call this
+	* tab now holds behind what the push describes, which the socket fetches
+	* whole (`mergeLiveCall`).
+	*/
 	applyAgents(rows) {
-		if (!Array.isArray(rows) || rows.length === 0) return;
+		if (!Array.isArray(rows) || rows.length === 0) return [];
+		const stale = [];
+		const merge = (held, patch) => {
+			if (!("live_call" in patch)) return patch;
+			const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
+			if (behind) stale.push(patch.role);
+			return {
+				...patch,
+				live_call: call
+			};
+		};
 		const byRole = new Map(rows.map((r) => [r.role, r]));
 		this.state.agents = this.state.agents.map((a) => {
 			const patch = byRole.get(a.role);
@@ -117,14 +203,33 @@ var Store = class {
 			byRole.delete(a.role);
 			return {
 				...a,
-				...patch
+				...merge(a, patch)
 			};
 		});
 		for (const row of byRole.values()) this.state.agents = [...this.state.agents, {
 			id: row.role,
-			...row
+			...merge(void 0, row)
 		}];
 		this.emit("agents");
+		return stale;
+	}
+	/**
+	* One seat's live call, fetched WHOLE because a push said this tab had
+	* missed a change to it. Merged like a push that carries everything, so an
+	* answer overtaken by a later push cannot take a field back to an older copy.
+	*/
+	applyLiveCall(answer) {
+		if (!answer || typeof answer.role !== "string") return;
+		let moved = false;
+		this.state.agents = this.state.agents.map((a) => {
+			if (a.role !== answer.role) return a;
+			moved = true;
+			return {
+				...a,
+				live_call: mergeLiveCall(a.live_call, answer.live_call).call
+			};
+		});
+		if (moved) this.emit("agents");
 	}
 	/**
 	* The complete seat list, replacing what is on screen.
@@ -479,6 +584,8 @@ var LiveSocket = class {
 	isClosed = false;
 	nextQueryId = 1;
 	inflight = /* @__PURE__ */ new Map();
+	/** Seats whose live call is being fetched whole — see `fetchCalls`. */
+	fetchingCalls = /* @__PURE__ */ new Set();
 	token = "";
 	/** Whether the shell has already been asked to collect a token. */
 	askedForToken = false;
@@ -696,7 +803,7 @@ var LiveSocket = class {
 				this.store.applyEvent(msg.data);
 				break;
 			case "agents":
-				this.store.applyAgents(msg.data);
+				this.fetchCalls(this.store.applyAgents(msg.data));
 				break;
 			case "seats":
 				this.store.applySeats(msg.data);
@@ -730,6 +837,20 @@ var LiveSocket = class {
 				break;
 			case "pong": break;
 			default: this.store.noteUnknownPush(msg.kind);
+		}
+	}
+	/**
+	* Fetch, whole, each seat's live call this tab holds behind what a push
+	* described — the push that moved one of its heavy fields was dropped by the
+	* server's queue (`mergeLiveCall`). One ask per seat in flight: the pushes
+	* that arrive meanwhile say the same thing, and a failed ask is made again by
+	* the next push that still finds the call behind.
+	*/
+	fetchCalls(roles) {
+		for (const role of roles) {
+			if (this.fetchingCalls.has(role)) continue;
+			this.fetchingCalls.add(role);
+			this.query("live_call", { role }).then((answer) => this.store.applyLiveCall(answer), () => {}).finally(() => this.fetchingCalls.delete(role));
 		}
 	}
 	settle(id, error, data, retryAfterSeconds = null, detail = null) {

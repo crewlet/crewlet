@@ -18,8 +18,11 @@
 
 import type {
   AgentRow,
+  CallVersions,
   FeedRow,
   EventEnvelope,
+  LiveCall,
+  LiveCallAnswer,
   OrgBudget,
   OrgProjection,
   Overlay,
@@ -31,7 +34,7 @@ import type {
 } from "./types.ts";
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
-import { MAX_EVENTS } from "../contract/wire.ts";
+import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 
 /**
@@ -63,6 +66,64 @@ import type { EngineHealth } from "../contract/health.ts";
  * card that is late, never a turn that is gone.
  */
 export const MAX_PHASES = 200;
+
+/** What a heavy field reads as while nothing of it is held. */
+const NOTHING_HELD: Record<string, unknown> = {
+  prompt: "",
+  prompt_messages: null,
+  response: "",
+  round_narration: null,
+  tool_executions: null,
+  rounds: null,
+};
+
+/**
+ * One seat's live call as a push states it, merged onto the copy a tab holds —
+ * and whether the push says the tab missed a change it no longer carries.
+ *
+ * THE PUSH LEAVES OUT WHAT DID NOT MOVE. A call's heavy fields
+ * (`LIVE_CALL_DETAIL`) travel only on the push that moved their version, and
+ * every push names every version. So a field the push carries is taken — unless
+ * its version is older than the one held, a push overtaken by a snapshot or an
+ * answer — and one it leaves out is the copy held, at the version held, for the
+ * SAME call (`turn_id`, `phase`, `iteration`); a call of its own holds nothing
+ * yet. A push naming a version newer than the one held, without the field, is
+ * a tab that missed the push which carried it: `stale`, and the field stays
+ * what is held until the call is fetched whole.
+ */
+export function mergeLiveCall(
+  held: LiveCall | null | undefined,
+  next: LiveCall | null | undefined,
+): { call: LiveCall | null; stale: boolean } {
+  if (!next) return { call: null, stale: false };
+  const same =
+    !!held &&
+    held.turn_id === next.turn_id &&
+    held.phase === next.phase &&
+    held.iteration === next.iteration;
+  const merged: Record<string, unknown> = { ...next };
+  const versions: Partial<CallVersions> = {};
+  let stale = false;
+  for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL) as [
+    keyof CallVersions,
+    readonly string[],
+  ][]) {
+    const pushed = next.versions?.[detail] ?? 0;
+    const have = same ? (held.versions?.[detail] ?? 0) : 0;
+    const carried = fields.every((f) => f in next);
+    if (carried && pushed >= have) {
+      versions[detail] = pushed;
+      continue;
+    }
+    for (const f of fields) {
+      merged[f] = same ? (held as unknown as Record<string, unknown>)[f] : NOTHING_HELD[f];
+    }
+    versions[detail] = have;
+    if (!carried && pushed > have) stale = true;
+  }
+  merged.versions = versions;
+  return { call: merged as unknown as LiveCall, stale };
+}
 
 export interface StoreState {
   agents: AgentRow[];
@@ -231,13 +292,27 @@ export class Store {
     this.emit(...ALL_DATA_SLICES);
   }
 
-  /** Changed seat overlays, keyed by role. */
-  applyAgents(rows: (Overlay & { role: string })[] | unknown): void {
+  /**
+   * Changed seat overlays, keyed by role — and the roles whose live call this
+   * tab now holds behind what the push describes, which the socket fetches
+   * whole (`mergeLiveCall`).
+   */
+  applyAgents(rows: (Overlay & { role: string })[] | unknown): string[] {
     // `Array.isArray` is load-bearing. The server sent this as an object keyed
     // by role once; every push was silently discarded and seats rendered idle
     // for the whole of a turn, with both sides' own suites green. That is the
     // bug internal/e2e/golden_test.go exists to catch.
-    if (!Array.isArray(rows) || rows.length === 0) return;
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const stale: string[] = [];
+    const merge = (
+      held: AgentRow | undefined,
+      patch: Overlay & { role: string },
+    ): Overlay & { role: string } => {
+      if (!("live_call" in patch)) return patch;
+      const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
+      if (behind) stale.push(patch.role);
+      return { ...patch, live_call: call };
+    };
     const byRole = new Map<string, Overlay & { role: string }>(
       (rows as (Overlay & { role: string })[]).map((r) => [r.role, r]),
     );
@@ -245,14 +320,31 @@ export class Store {
       const patch = byRole.get(a.role);
       if (!patch) return a;
       byRole.delete(a.role);
-      return { ...a, ...patch };
+      return { ...a, ...merge(a, patch) };
     });
     // A seat the roster does not carry yet (a role added by a live revision)
     // still belongs on screen.
     for (const row of byRole.values()) {
-      this.state.agents = [...this.state.agents, { id: row.role, ...row }];
+      this.state.agents = [...this.state.agents, { id: row.role, ...merge(undefined, row) }];
     }
     this.emit("agents");
+    return stale;
+  }
+
+  /**
+   * One seat's live call, fetched WHOLE because a push said this tab had
+   * missed a change to it. Merged like a push that carries everything, so an
+   * answer overtaken by a later push cannot take a field back to an older copy.
+   */
+  applyLiveCall(answer: LiveCallAnswer | null | undefined): void {
+    if (!answer || typeof answer.role !== "string") return;
+    let moved = false;
+    this.state.agents = this.state.agents.map((a) => {
+      if (a.role !== answer.role) return a;
+      moved = true;
+      return { ...a, live_call: mergeLiveCall(a.live_call, answer.live_call).call };
+    });
+    if (moved) this.emit("agents");
   }
 
   /**
