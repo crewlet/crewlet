@@ -911,6 +911,16 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   expect(
     await within(factor).findByText(/You enrol a new factor at your next sign-in/),
   ).toBeTruthy();
+  fireEvent.click(within(factor).getByRole("button", { name: "Cancel" }));
+  // AND A RESET LINK, which said "for Ana Admin … for them" to Ana herself,
+  // and says where a password she knows is changed with no link at all.
+  fireEvent.click(screen.getByRole("button", { name: "Issue password reset link" }));
+  const link = await screen.findByRole("dialog", {
+    name: "Issue a password reset link for yourself?",
+  });
+  expect(within(link).getByText(/^The link lets you choose a new password/)).toBeTruthy();
+  expect(within(link).getByText(/Account › Security needs no link/)).toBeTruthy();
+  expect(within(link).queryByText(/Ana Admin/)).toBeNull();
   cleanup();
 
   administrators = 2;
@@ -930,6 +940,12 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   const theirs = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
   expect(within(theirs).queryByText("This is you")).toBeNull();
   expect(within(theirs).getByText(/^Bo Lang may not act while suspended/)).toBeTruthy();
+  fireEvent.click(within(theirs).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Issue password reset link" }));
+  const theirLink = await screen.findByRole("dialog", {
+    name: "Issue a password reset link for Bo Lang?",
+  });
+  expect(within(theirLink).getByText(/^The link lets Bo Lang choose/)).toBeTruthy();
 });
 
 // A SERVICE ACCOUNT IS A KEYED CREATE OF A MACHINE, offered neither grant a

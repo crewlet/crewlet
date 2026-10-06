@@ -1346,7 +1346,9 @@ function Principal({
       {gesture === "mint" && (
         <MintTokenDialog owner={row} held={held} onClose={close} onDone={changed} />
       )}
-      {gesture === "reset" && <ResetLink row={row} who={who} onClose={close} onDone={changed} />}
+      {gesture === "reset" && (
+        <ResetLink row={row} who={who} you={you} onClose={close} onDone={changed} />
+      )}
       {gesture !== null && typeof gesture === "object" && (
         <PersonWrite
           title={`Revoke this ${METHOD_WORDS[gesture.revoke.method]?.toLowerCase() ?? "credential"}?`}
@@ -1363,7 +1365,7 @@ function Principal({
           {gesture.revoke.method === "token"
             ? `Anything presenting it is refused from now on${gesture.revoke.label ? ` — "${gesture.revoke.label}"` : ""}.`
             : gesture.revoke.method === "reset"
-              ? "The link stops working; issue another if they still need one."
+              ? `The link stops working; issue another if ${you ? "you" : "they"} still need one.`
               : you
                 ? "You can no longer prove who you are with it."
                 : `${who} can no longer prove who they are with it.`}
@@ -1714,15 +1716,22 @@ function PersonWrite({
  * password, ends every session and token the person holds, and signs nobody
  * in. Issuing another revokes this one; the outstanding link is listed among
  * their credentials, where it can be revoked.
+ *
+ * ON THE READER'S OWN ROW IT SPEAKS TO THEM, as every other gesture there
+ * does, and says what they would more likely want: a password they know is
+ * changed on their Account with no link.
  */
 function ResetLink({
   row,
   who,
+  you,
   onClose,
   onDone,
 }: {
   row: DirectoryRow;
   who: string;
+  /** The row is the reader's own. */
+  you: boolean;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -1737,7 +1746,7 @@ function ResetLink({
       <Modal
         open
         size="sm"
-        title={`Password reset link for ${who}`}
+        title={you ? "Your password reset link" : `Password reset link for ${who}`}
         onClose={onClose}
         stackBody
         footer={
@@ -1747,9 +1756,9 @@ function ResetLink({
         }
       >
         <ShownOnce label="Reset link" value={url}>
-          This link sets a new password for {who} once, and expires {fmtDateTime(expires)}. It is
-          shown only now — send it to them yourself. Setting the password ends every session and
-          token they hold; they sign in afterwards, with their second factor if they hold one.
+          {you
+            ? `This link sets a new password for you once, and expires ${fmtDateTime(expires)}. It is shown only now. Setting the password ends every session and token you hold, this browser's included; you sign in afterwards, with your second factor if you hold one.`
+            : `This link sets a new password for ${who} once, and expires ${fmtDateTime(expires)}. It is shown only now — send it to them yourself. Setting the password ends every session and token they hold; they sign in afterwards, with their second factor if they hold one.`}
         </ShownOnce>
         <IamOutcome answer={write.answer} />
       </Modal>
@@ -1757,7 +1766,11 @@ function ResetLink({
   }
   return (
     <ConfirmDialog
-      title={`Issue a password reset link for ${who}?`}
+      title={
+        you
+          ? "Issue a password reset link for yourself?"
+          : `Issue a password reset link for ${who}?`
+      }
       confirm="Issue link"
       write={write}
       onClose={onClose}
@@ -1772,8 +1785,9 @@ function ResetLink({
         if (answer) onDone();
       }}
     >
-      The link lets {who} choose a new password once, within a day. It revokes any link issued for
-      them before.
+      {you
+        ? "The link lets you choose a new password once, within a day, and revokes any link issued for you before. To change a password you know, Account › Security needs no link."
+        : `The link lets ${who} choose a new password once, within a day. It revokes any link issued for them before.`}
     </ConfirmDialog>
   );
 }
