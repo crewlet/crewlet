@@ -660,7 +660,27 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 // A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
 // box its provider reclaimed, and by the time the poll gives a vanished box up
 // it has already waited out that same window.
+//
+// A COLLECTION THIS NODE ITSELF CANCELLED is handed back WITHOUT being
+// counted. A drain, a restart and a seat moving to another node all end the
+// delivery's context mid-read, and that says nothing about the box: counted,
+// it opened the failure window at the moment of the drain, so the first real
+// failure after a restart minutes later was already past the window and gave
+// a reachable run up after one attempt. Only a cancellation is spared — a
+// deadline the delivery ran out of is counted, because a box whose collection
+// always outlasts it would otherwise be retried for ever.
 func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
+			"error", cause.Error(),
+			"detail", "the collection was stopped by this node, not by its box; the claim is "+
+				"handed back uncounted and the completion is retried")
+		if err := c.unclaim(ctx, run, true, collectUnrevertedDetail); err != nil {
+			//nolint:nilerr // As below: the run has been ended and announced.
+			return nil
+		}
+		return fmt.Errorf("sandbox: collecting %s was interrupted: %w", run.TurnID, cause)
+	}
 	now := c.now()
 	facts := run.LaunchFacts()
 	attempts := facts.CollectFailures + 1

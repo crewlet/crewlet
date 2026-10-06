@@ -1,9 +1,11 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 )
@@ -102,6 +104,59 @@ func TestACollectionThatKeepsFailingIsGivenUpAfterThePollsWindow(t *testing.T) {
 	}
 	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Error("the seat stayed parked on a run that was given up")
+	}
+	rig.finished("t1")
+}
+
+// A COLLECTION THIS NODE CANCELLED IS NOT THE BOX'S FAILURE. A drain, a
+// restart or the seat moving away ends the delivery's context mid-read, and
+// counted, that opened the failure window at the drain — so the first real
+// failure after a restart minutes later was already past it, and a reachable
+// run was given up after one attempt. It is handed back uncounted.
+//
+// Mutation: drop the cancellation branch, and the interrupted attempt is
+// counted and dates the window.
+func TestACollectionThisNodeCancelledIsHandedBackUncounted(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true})
+	ctx, cancel := context.WithCancel(t.Context())
+	rig.runner.CollectFunc = func(ctx context.Context) error {
+		cancel() // the drain arrives mid-read
+		return ctx.Err()
+	}
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(ctx, payload, ev); err == nil {
+		t.Fatal("an interrupted collection was not handed back for a retry")
+	}
+	row := rig.get("t1")
+	if got := row.LaunchFacts(); row.Status != StatusRunning || got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
+		t.Fatalf("row %s, record %+v; want running again with nothing counted", row.Status, got)
+	}
+	if len(rig.failures()) != 0 {
+		t.Errorf("an interrupted collection announced %v", rig.failures())
+	}
+
+	// A DEADLINE IS COUNTED: a box whose collection always outlasts the
+	// delivery would otherwise be retried for ever.
+	rig.runner.CollectFunc = func(ctx context.Context) error {
+		<-ctx.Done() // the read outlasts the delivery
+		return ctx.Err()
+	}
+	short, stop := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer stop()
+	payload, ev = rig.completion("t1")
+	_ = rig.coordinator.OnCompleted(short, payload, ev)
+	if got := rig.get("t1").LaunchFacts(); got.CollectFailures != 1 {
+		t.Errorf("record %+v after a collection that ran out of time; want it counted", got)
+	}
+	rig.runner.CollectFunc = nil
+	payload, ev = rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
 	}
 	rig.finished("t1")
 }

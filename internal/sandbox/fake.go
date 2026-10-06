@@ -330,6 +330,10 @@ type FakeRunner struct {
 	PollErr error
 	// CollectErr, when set, fails every Collect.
 	CollectErr error
+	// CollectFunc, when set, is called by every Collect with its context,
+	// and a non-nil answer fails it — for a collection whose failure
+	// depends on what happened to the caller meanwhile.
+	CollectFunc func(ctx context.Context) error
 	// PeekErr, when set, fails every Peek.
 	PeekErr error
 
@@ -384,6 +388,11 @@ func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle)
 	defer r.mu.Unlock()
 	if r.CollectErr != nil {
 		return Result{}, r.CollectErr
+	}
+	if r.CollectFunc != nil {
+		if err := r.CollectFunc(ctx); err != nil {
+			return Result{}, err
+		}
 	}
 	return r.result, nil
 }
