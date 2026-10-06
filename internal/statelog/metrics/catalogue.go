@@ -566,8 +566,9 @@ func Catalogue() []Instrument {
 			Name: AuthAttemptsFailed, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"method", "outcome"},
 			Shows: "Every failed attempt to prove an identity, as it happens: " +
-				"a sign-in, a step-up, an invitation link, " +
-				"or a bearer presented to a route that " +
+				"a sign-in, a step-up, an invitation or password reset " +
+				"link that did not prove itself, or a bearer presented " +
+				"to a route that " +
 				"needs one and refused — a credential an unguarded route " +
 				"verifies itself, such as a webhook relay's own JWT, is " +
 				"never counted (`method`), and whether the attempt was " +
