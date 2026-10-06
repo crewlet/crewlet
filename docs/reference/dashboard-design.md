@@ -1789,7 +1789,10 @@ same access. A tab that was read by somebody (`lib/reader.ts`) and lands here
 holding no session lost it without a sign-out in this tab — one made here
 empties the tab's storage — so the sign-in says **You were signed out** and
 what ends a session elsewhere: a sign-out from another browser or tab, a
-password change, an administrator, its own deadline.
+password change, an administrator, its own deadline. Only a `401` from
+`/auth/session` says so: a node behind on the identity log answers `503`
+precisely so that no browser is told it was signed out when it may not have
+been, and a throttle or a dropped connection says nothing either way.
 
 **`next` is an address on this page, or nothing.** It is the one parameter of
 a sign-in an outsider can choose for somebody else — a `#/login?next=…` link in

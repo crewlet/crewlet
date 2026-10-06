@@ -415,12 +415,25 @@ describe("signing in with the deployment's token", () => {
 // change, or its "Sign out" of this session, dropped this one on the plain
 // sign-in form as though it had never been signed in. The CONTROLS: a tab
 // nobody read (a fresh one, or one a sign-out emptied) is not told, and one
-// whose session is still good is told whose it holds instead. Mutation: drop
-// the notice, or show it whatever the tab was.
+// whose session is still good is told whose it holds instead. Nor is a tab
+// whose node could not say: a 503 from a node behind on the identity log is
+// the engine declining to tell a browser it was signed out, and a page that
+// read it as "nobody" said exactly that. Mutation: drop the notice, show it
+// whatever the tab was, or show it on any refusal rather than a 401.
 describe("a tab whose session ended somewhere else", () => {
   test.each([
     ["a tab somebody read, holding no session now", "p-1", NOBODY, true],
     ["a tab nobody read (the control)", null, NOBODY, false],
+    [
+      "a tab somebody read, on a node that cannot read its identity log",
+      "p-1",
+      {
+        status: 503,
+        body: { error: "unavailable", message: "Try again shortly." },
+        headers: { "Retry-After": "2" },
+      },
+      false,
+    ],
     [
       "a tab whose session is still good (the control)",
       "p-1",

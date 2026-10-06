@@ -53,7 +53,10 @@
  * as though they had never been signed in. The engine answers every refused
  * credential with one `401`, so the sentence names what can end a session
  * rather than guessing which one did; the person's own Account page lists
- * each session with what ended it.
+ * each session with what ended it. ONLY a `401` says so: a node behind on the
+ * identity log answers `503` precisely so a browser is never told its session
+ * ended when it may not have, and a throttle or a dropped connection says
+ * nothing either way.
  *
  * # Already signed in is said, not assumed
  *
@@ -83,7 +86,7 @@ export function SignIn() {
   const [unclaimed, setUnclaimed] = useState(false);
   // UNDEFINED UNTIL `/auth/session` HAS ANSWERED, and null once it answered
   // nobody: a tab holding a good session must not flash "you were signed out"
-  // for the round trip it takes to say so.
+  // for the round trip it takes to say so, nor on an answer that was no answer.
   const [current, setCurrent] = useState<SessionAnswer | null | undefined>(undefined);
   // AS THE PAGE OPENED: a sign-in records the next reader before it moves on.
   const [read] = useState(() => currentReader() !== null);
@@ -97,8 +100,13 @@ export function SignIn() {
     );
     auth.session().then(
       (session) => live && setCurrent(session),
-      // Nobody signed in, which is why this screen is usually open.
-      () => live && setCurrent(null),
+      // NOBODY SIGNED IN is a 401, which is why this screen is usually open.
+      // Anything else — a node behind on the identity log (503), a throttle,
+      // the network — says nothing about this browser's session, so it stays
+      // unanswered and the page claims nothing.
+      (err: unknown) => {
+        if (live && err instanceof RestError && err.status === 401) setCurrent(null);
+      },
     );
     return () => {
       live = false;
