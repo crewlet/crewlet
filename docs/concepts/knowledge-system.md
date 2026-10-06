@@ -274,8 +274,9 @@ vector: a tracker of short items loses almost nothing, a wiki of long runbooks
 may lose most of each page. The window is the corpus's 8 KiB, cut to the
 model's own per-input bound where this build knows a smaller one; the store
 does not carry the company's configuration, so where
-`providers.embeddings.max_input_tokens` lowers the bound, pass the bound the
-duty runs at as `-window BYTES`. This part of the report reads every source's
+`providers.embeddings.max_input_tokens` or `max_batch_tokens` lowers the bound
+(one input must fit one request, so a request total below the window lowers
+the per-input bound too), pass the bound the duty runs at as `-window BYTES`. This part of the report reads every source's
 whole body, which is why it is a command an operator runs and not a gauge the
 engine evaluates.
 

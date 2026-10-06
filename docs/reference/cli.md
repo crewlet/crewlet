@@ -1364,11 +1364,27 @@ same rows — or the node's own file with the engine stopped. With neither
 $ crewlet search eval -store /var/backups/crewlet/2026-09-01/store-replicated.db
 corpus       118432 sources, text-embedding-3-large at 3072 dimensions
 measured     25 queries at depth 150 from 1200 candidates
+first stage  the semantic index: 128 of 1024 lists probed (generation 1099511744562)
+index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its worst shape (container:task), 0 head miss(es)
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-verdict      the two-stage search recovers the exact ranking at the shipped depth
+scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
+window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
+past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
+past window  page  9874 of 14224 sources (69.4%), 402.1 MiB of 518.6 MiB of text (77.5%)
 ```
+
+The last three lines are printed on every run: for each corpus, how many
+sources and how much of their text lie past the window each vector was
+computed from — what a search by meaning cannot see, which a keyword search
+still reads ([Knowledge System](../concepts/knowledge-system.md#what-the-quality-of-this-can-and-cannot-be-promised)).
+That part of the report reads every source's whole body.
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -1379,12 +1395,14 @@ verdict      the two-stage search recovers the exact ranking at the shipped dept
 | `-candidates N` | `1200` | The stage-1 candidate depth — the shipped pair |
 | `-model NAME` | most populated | The embedding model to measure |
 | `-dimensions N` | the model's | The width to measure |
+| `-probes N` | the index's own | How many lists of the semantic index to probe. `0` takes the count the index's own training measured; a larger one shows what probing more lists would recall |
+| `-window BYTES` | the smaller of 8 192 and the model's own per-input bound | The bytes of each source the vectors were computed from, for the report of what lies past them. The store does not carry the company's configuration, so state it when `providers.embeddings.max_input_tokens` or `max_batch_tokens` lowers the per-input bound below the model's own — the embedding duty embeds the smaller of 8 192 bytes and that bound |
 | `-fit` | off | Also print the corpus's own mean pairwise cosine, which is the parameter the engine's seeded fixture is fitted from |
-| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell |
+| `-metrics` | off | Print one `key value` line per metric instead of a report, for a collector or a shell — the window report included, as `search_eval_window_bytes` and, labelled by `source`, `search_eval_window_sources`, `search_eval_window_beyond_sources`, `search_eval_window_text_bytes` and `search_eval_window_beyond_bytes` |
 
 **It exits non-zero** when the recall is below the floor for that corpus size,
-or when any document was dropped from the exact top ten — so it can go in a
-schedule. Both conditions matter: an aggregate of 0.98 is compatible with
+or when any document was dropped from the exact top ten, in any shape — so it
+can go in a schedule. Both conditions matter: an aggregate of 0.98 is compatible with
 losing exactly the documents that mattered, and a semantic-only document the
 first stage drops leaves the fused answer entirely.
 

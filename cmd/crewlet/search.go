@@ -101,7 +101,8 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 		"the bytes of each source the vectors were computed from, for the "+
 			"report of what lies past them; 0 takes the smaller of %d and the "+
 			"measured model's own per-input bound — state it when "+
-			"providers.embeddings.max_input_tokens lowers that bound",
+			"providers.embeddings.max_input_tokens or max_batch_tokens lowers "+
+			"that bound",
 		search.EmbedInputBytes))
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -384,9 +385,11 @@ type windowReport struct {
 //
 // THE STORE DOES NOT SAY. The bound the duty applied is the configuration's —
 // the model's documented window, lowered by any `max_input_tokens` the company
-// stated — and the company configuration is not in the replicated estate this
-// command reads. So a model this build knows is resolved from its table, and a
-// stated lower bound is the operator's to pass.
+// stated, and by any `max_batch_tokens` below it, since one input must fit one
+// request (config.EmbeddingProvider.Limits) — and the company configuration is
+// not in the replicated estate this command reads. So a model this build knows
+// is resolved from its table, and a stated lower bound is the operator's to
+// pass.
 func embeddedWindow(stated int, model string) (int, string) {
 	if stated > 0 {
 		return stated, "as -window states"
