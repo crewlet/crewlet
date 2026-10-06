@@ -1309,7 +1309,9 @@ function Principal({
             ? `Anything presenting it is refused from now on${gesture.revoke.label ? ` — "${gesture.revoke.label}"` : ""}.`
             : gesture.revoke.method === "reset"
               ? "The link stops working; issue another if they still need one."
-              : `${who} can no longer prove who they are with it.`}
+              : you
+                ? "You can no longer prove who you are with it."
+                : `${who} can no longer prove who they are with it.`}
         </PersonWrite>
       )}
       {(gesture === "suspend" || gesture === "reactivate") && (
@@ -1332,12 +1334,14 @@ function Principal({
               withheld, and the sessions a suspension ends stay ended. */}
           {gesture === "reactivate"
             ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions and tokens the suspension ended stay ended.`
-            : `${who} may not act while suspended: every session and token they hold ends and their sign-ins are refused${row.seat ? ", and their seat is withheld" : ""}. Their record is kept, and reactivating lets them sign in again.`}
+            : you
+              ? `You may not act while suspended: every session and token you hold ends and your sign-ins are refused${row.seat ? ", and your seat is withheld" : ""}. Your record is kept, and somebody holding people:manage can reactivate you.`
+              : `${who} may not act while suspended: every session and token they hold ends and their sign-ins are refused${row.seat ? ", and their seat is withheld" : ""}. Their record is kept, and reactivating lets them sign in again.`}
         </PersonWrite>
       )}
       {gesture === "mfa" && (
         <PersonWrite
-          title={`Reset ${who}'s second factor?`}
+          title={you ? "Reset your second factor?" : `Reset ${who}'s second factor?`}
           confirm="Reset second factor"
           danger
           request={{ method: "POST", path: `/iam/people/${id}/mfa/reset` }}
@@ -1345,13 +1349,15 @@ function Principal({
           onDone={changed}
         >
           {you && <OnYourself />}
-          Their authenticator app and recovery codes stop working, and every session and token they
-          hold ends. <AfterFactorReset />
+          {you
+            ? "Your authenticator app and recovery codes stop working, and every session and token you hold ends. "
+            : "Their authenticator app and recovery codes stop working, and every session and token they hold ends. "}
+          <AfterFactorReset you={you} />
         </PersonWrite>
       )}
       {gesture === "sessions" && (
         <PersonWrite
-          title={`End every session ${who} holds?`}
+          title={you ? "End every session you hold?" : `End every session ${who} holds?`}
           confirm="End all sessions"
           danger
           request={{ method: "DELETE", path: `/iam/people/${id}/sessions` }}
@@ -1359,8 +1365,9 @@ function Principal({
           onDone={changed}
         >
           {you && <OnYourself />}
-          They are signed out everywhere, and every personal access token they minted stops working
-          too.
+          {you
+            ? "You are signed out everywhere, and every personal access token you minted stops working too."
+            : "They are signed out everywhere, and every personal access token they minted stops working too."}
         </PersonWrite>
       )}
       {gesture === "remove" && (
@@ -1374,9 +1381,9 @@ function Principal({
           onDone={changed}
         >
           {you && <OnYourself alone={alone} />}
-          Their row, credentials and sessions are deleted, {row.seat ? "their seat is freed, " : ""}
-          and every sealed value of theirs is erased. This cannot be undone: to bring them back,
-          invite them again. The trail keeps what they did.
+          {you
+            ? `Your row, credentials and sessions are deleted, ${row.seat ? "your seat is freed, " : ""}and every sealed value of yours is erased. This cannot be undone: to come back, you must be invited again. The trail keeps what you did.`
+            : `Their row, credentials and sessions are deleted, ${row.seat ? "their seat is freed, " : ""}and every sealed value of theirs is erased. This cannot be undone: to bring them back, invite them again. The trail keeps what they did.`}
         </PersonWrite>
       )}
       <QueryState
@@ -1559,13 +1566,17 @@ function Principal({
  * password alone, and promising an enrolment there was a promise nothing
  * keeps. Said only once the setting is read.
  */
-function AfterFactorReset() {
+function AfterFactorReset({ you }: { you: boolean }) {
   const config = useRest("/auth/config", (signal) => auth.config(signal));
   switch (config.data?.second_factor) {
     case "required":
-      return <>They enrol a new factor at their next sign-in, before anything else opens.</>;
+      return you
+        ? "You enrol a new factor at your next sign-in, before anything else opens."
+        : "They enrol a new factor at their next sign-in, before anything else opens.";
     case "optional":
-      return <>They sign in with their password alone until they set up a new one.</>;
+      return you
+        ? "You sign in with your password alone until you set up a new one."
+        : "They sign in with their password alone until they set up a new one.";
   }
   return null;
 }
@@ -1576,7 +1587,10 @@ function AfterFactorReset() {
  * and nobody else could, that only a Tier A token could afterwards.
  *
  * The panel names a row by its person, in the third person, and a person
- * suspending "Jane Doe" from Jane Doe's own session was told none of it.
+ * suspending "Jane Doe" from Jane Doe's own session was told none of it. AND
+ * THE WHOLE DIALOG SPEAKS TO THEM there, not only this callout and the title:
+ * a body saying "Jane Doe may not act while suspended" under "This is you"
+ * read as two people.
  */
 function OnYourself({ alone = false }: { alone?: boolean }) {
   return (

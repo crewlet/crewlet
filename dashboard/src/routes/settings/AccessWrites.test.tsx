@@ -829,11 +829,13 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
 });
 
 // A GESTURE ON THE READER'S OWN ROW SAYS IT IS THEM and that it signs them out
-// at once; the one administrator left suspending or removing themselves is
-// told that only a Tier A token could administer people afterwards. The
-// CONTROLS: a second administrator takes that sentence away, and somebody
-// else's row says neither. Mutation: compare the row with anything but the
-// session's person, or drop the count, and one side goes red.
+// at once, and the whole dialog speaks to them; the one administrator left
+// suspending or removing themselves is told that only a Tier A token could
+// administer people afterwards. The CONTROLS: a second administrator takes
+// that sentence away, and somebody else's row says neither and names them.
+// Mutation: compare the row with anything but the session's person, drop the
+// count, or word a body in the third person whoever reads it, and one side
+// goes red.
 test("suspending or removing yourself says it is you, and when nobody else administers", async () => {
   const ana = {
     id: "p-ana",
@@ -852,10 +854,26 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   const suspend = await screen.findByRole("dialog", { name: "Suspend yourself?" });
   expect(within(suspend).getByText("This is you")).toBeTruthy();
   expect(await within(suspend).findByText(/Nobody else active holds/)).toBeTruthy();
+  // THE WHOLE DIALOG SPEAKS TO THEM, its body included: "Ana Admin may not
+  // act while suspended" under "This is you" read as two people.
+  expect(within(suspend).getByText(/^You may not act while suspended/)).toBeTruthy();
+  expect(within(suspend).queryByText(/Ana Admin/)).toBeNull();
   fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
   const remove = await screen.findByRole("dialog", { name: "Remove yourself?" });
   expect(within(remove).getByText(/Nobody else active holds/)).toBeTruthy();
+  expect(within(remove).getByText(/^Your row, credentials and sessions are deleted/)).toBeTruthy();
+  fireEvent.click(within(remove).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "End all sessions" }));
+  const sessions = await screen.findByRole("dialog", { name: "End every session you hold?" });
+  expect(within(sessions).getByText(/^You are signed out everywhere/)).toBeTruthy();
+  fireEvent.click(within(sessions).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset second factor" }));
+  const factor = await screen.findByRole("dialog", { name: "Reset your second factor?" });
+  expect(within(factor).getByText(/^Your authenticator app/)).toBeTruthy();
+  expect(
+    await within(factor).findByText(/You enrol a new factor at your next sign-in/),
+  ).toBeTruthy();
   cleanup();
 
   administrators = 2;
@@ -874,6 +892,7 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
   const theirs = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
   expect(within(theirs).queryByText("This is you")).toBeNull();
+  expect(within(theirs).getByText(/^Bo Lang may not act while suspended/)).toBeTruthy();
 });
 
 // A SERVICE ACCOUNT IS A KEYED CREATE OF A MACHINE, offered neither grant a

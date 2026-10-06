@@ -5689,7 +5689,8 @@ this screen is the exception):
   login, since it cannot be undone. Each credential row has **Revoke**. On the
   reader's OWN row — the person `GET /auth/session` names, by id — every
   gesture that ends their sessions says first that it is them and signs this
-  browser out at once, and **Suspend** and **Remove** add, where `GET
+  browser out at once, and speaks to them throughout, its title and body
+  alike ("You may not act while suspended"), and **Suspend** and **Remove** add, where `GET
   /iam/check` counts nobody else active holding `people:manage`, that
   afterwards only this node's API token could administer people.
 
