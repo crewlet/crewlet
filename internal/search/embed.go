@@ -832,12 +832,18 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			break
 		}
 	}
-	if t.refused > 0 && t.accepted == 0 {
+	if t.refusedAlone > 0 && t.accepted == 0 && !t.stopped {
 		// EVERY REQUEST REFUSED, single inputs included, which is the
 		// shape of a provider refusing the CONFIGURATION rather than an
 		// input — a parameter it does not take, a model it does not serve
 		// at that width. Each input it refused alone is named above; this
 		// says what they have in common.
+		//
+		// ONLY WHEN THAT IS WHAT HAPPENED: an input refused alone, nothing
+		// accepted, and no other failure. A tick that met one refusal and
+		// was then stopped by a rate limit sent requests that were not
+		// refused at all, and blaming the configuration for it would send
+		// an operator to fix a setting that is fine.
 		e.deps.Logger.WarnContext(ctx, "search_embed_every_request_refused",
 			"model", e.deps.Model, "requests", t.refused,
 			"detail", "the provider refused every request this tick, inputs "+
@@ -855,8 +861,8 @@ type tickRequests struct {
 	requests, sources int
 
 	// accepted and refused count the requests the provider embedded and
-	// refused.
-	accepted, refused int
+	// refused, and refusedAlone the refused ones that carried one input.
+	accepted, refused, refusedAlone int
 
 	// stopped says a failure that is not about an input ended the tick's
 	// requests.
@@ -924,6 +930,7 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 		// REFUSED ALONE: this input is what the provider will not take.
 		// It costs itself, and is held back until its retry is due.
 		t.refused++
+		t.refusedAlone++
 		p := group[0]
 		e.deps.Refusals.refuse(keyOf(q.source, p), e.deps.Now())
 		e.deps.Logger.WarnContext(ctx, "search_embed_input_refused",

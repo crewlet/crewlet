@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -677,6 +678,49 @@ func TestATransientFailureEndsTheTicksRequests(t *testing.T) {
 	}
 }
 
+// A TICK SAYS THE CONFIGURATION IS REFUSED ONLY WHEN IT IS: inputs refused
+// alone, nothing accepted, and no other failure. Then each input refused alone
+// is named and one line says what they have in common. A tick that met one
+// refusal and was then stopped by a rate limit sent requests nobody refused,
+// and blaming the configuration for it sends an operator to fix a setting
+// that is fine.
+func TestATickSaysTheConfigurationIsRefusedOnlyWhenItIs(t *testing.T) {
+	t.Parallel()
+	seed := map[string]string{}
+	for i := range 8 {
+		seed[fmt.Sprintf("t-%04d", i)] = fmt.Sprintf("document number %d", i)
+	}
+
+	h := newEmbedHarness(t)
+	h.seedTasks(seed)
+	h.embedder.refuse("") // every input, as a refused configuration is
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.logs.count("search_embed_every_request_refused"); got != 1 {
+		t.Fatalf("a tick the provider refused whole said so %d time(s), want once", got)
+	}
+	if h.logs.count("search_embed_input_refused") == 0 {
+		t.Fatal("no input refused alone was named")
+	}
+
+	stopped := newEmbedHarness(t)
+	seed["t-0000"] = "a poison pill the provider never accepts"
+	stopped.seedTasks(seed)
+	stopped.embedder.refuse("poison")
+	stopped.embedder.FailTransiently("document", 1)
+	if _, err := stopped.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if stopped.logs.count("search_embed_request_failed") == 0 {
+		t.Fatal("the case did not reach the transient failure it is about")
+	}
+	if got := stopped.logs.count("search_embed_every_request_refused"); got != 0 {
+		t.Fatalf("a tick stopped by a transient failure blamed the configuration "+
+			"%d time(s)", got)
+	}
+}
+
 // A CORPUS THAT IS ALWAYS BEHIND DOES NOT STARVE THE ONE AFTER IT.
 //
 // The tick's provider requests are one budget shared by every corpus, and
@@ -989,6 +1033,28 @@ type embedHarness struct {
 
 	// now is the duty's clock, moved by [embedHarness.advance].
 	now time.Time
+
+	// logs is what every duty this harness builds logged.
+	logs *lockedBuffer
+}
+
+// lockedBuffer is a log sink a duty may write while a test reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// count is how many logged lines carry msg.
+func (b *lockedBuffer) count(msg string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Count(b.buf.String(), "msg="+msg+" ")
 }
 
 // advance moves the duty's clock.
@@ -1028,6 +1094,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 		embedder: &scriptedEmbedder{Fake: embeddings.NewFake(64), poisonID: -1},
 		refusals: search.NewRefusals(),
 		now:      time.Unix(1_700_000_000, 0).UTC(),
+		logs:     &lockedBuffer{},
 	}
 	rows, err := search.NewRows(db.Replicated().Reader(), search.Domain{}.Stream())
 	if err != nil {
@@ -1059,6 +1126,7 @@ func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 		Now:      func() time.Time { return h.now },
 		Budget:   unbounded{},
 		Refusals: h.refusals,
+		Logger:   slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
 		h.t.Fatalf("build the duty: %v", err)

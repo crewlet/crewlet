@@ -417,8 +417,8 @@ one again once. Any other failure — a rate limit, a timeout, a server down, a
 credential refused — is about the provider rather than an input, so it ends the
 tick's requests and the next tick asks again; nothing is lost, because the
 selection is derived from the rows. A tick in which the provider refused every
-request it was sent, inputs alone included, says so once
-(`search_embed_every_request_refused`): that is the configuration being
+request it was sent, inputs alone included, and nothing else failed, says so
+once (`search_embed_every_request_refused`): that is the configuration being
 refused, not any document.
 
 **A batch response has to say which input each vector answers.** A request
