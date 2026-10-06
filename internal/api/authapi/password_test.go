@@ -120,6 +120,18 @@ func TestAPasswordChangeEndsEveryOtherSessionAndKeepsThisBrowser(t *testing.T) {
 	if len(changed) != 1 || changed[0].Login != "jane.doe" {
 		t.Errorf("announced %+v, want one password change by jane.doe", changed)
 	}
+	// THE CLOSE OF THIS BROWSER'S SESSION NAMES THE CHANGE'S OWN REASON: the
+	// change's epoch move ended that session first, and a row keeps the first
+	// reason, so a close worded otherwise put two reasons on one session — the
+	// person's session list read one and the trail's close row the other.
+	// Mutation: word the close apart from the change and this goes red.
+	r.estate.mu.Lock()
+	closes := slices.Clone(r.estate.closes)
+	r.estate.mu.Unlock()
+	if len(closes) != 1 || closes[0].reason != sets[0].Reason || sets[0].Reason == "" {
+		t.Errorf("the change wrote %q and closed %+v, want one close with "+
+			"the change's own reason", sets[0].Reason, closes)
+	}
 }
 
 // A WRONG CURRENT PASSWORD CHANGES NOTHING, AND IS A COUNTED FAILURE.

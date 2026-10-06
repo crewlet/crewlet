@@ -72,6 +72,17 @@ type passwordChanged struct {
 	Detail string `json:"detail"`
 }
 
+// ownPasswordChanged is why a change ended this person's sessions: the
+// reason its epoch move writes on every session it ends, and the reason the
+// close of the session THIS browser held records too.
+//
+// ONE SENTENCE FOR BOTH, because the move has already ended that session by
+// the time the close is written — a row keeps the first reason that ended it —
+// so the person's own session list read the move's reason while the trail's
+// close row read another ("replaced by a password change") about the same
+// session.
+const ownPasswordChanged = "changed their own password"
+
 // errPasswordMoved refuses a change whose person's password is no longer the
 // one this request verified, in the record's own snapshot: somebody changed or
 // reset it in between, which ended this session too.
@@ -191,7 +202,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 			}
 			return errPasswordMoved
 		},
-		OpID: opID, Reason: "changed their own password",
+		OpID: opID, Reason: ownPasswordChanged,
 	})
 	switch {
 	case errors.Is(err, errPasswordMoved):
@@ -232,7 +243,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		method: types.SignInPassword, stepUp: true,
 		replaces: replaced.Bearer.Lineage.String(),
 		absolute: replaced.Bearer.AbsoluteExpiresAt,
-		because:  "replaced by a password change",
+		because:  ownPasswordChanged,
 	}
 	if holdsSecondFactor(held) {
 		proof := replaced.Session.ProvedAt
