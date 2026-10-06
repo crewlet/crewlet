@@ -1228,7 +1228,7 @@ func TestAToolActsForTheSeatThatCalledIt(t *testing.T) {
 	}
 }
 
-func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
+func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	t.Parallel()
 	// THE SEAM WAS NEVER SUPPLIED. runner.Config.Budget existed and every
 	// turn passed nil, so a company with a `token_budget:` ceiling spent
