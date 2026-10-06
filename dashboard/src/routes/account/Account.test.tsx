@@ -8,7 +8,8 @@
  * read, a mint or a revocation; this browser's own session is marked and
  * offered no named sign-out, while another is ended by its lineage — after a
  * gesture whose step-up replaced this browser's session too; a password
- * change sends the current one as its proof and says what it ended; a wrong
+ * change sends the current one as its proof and says what it ended, and one
+ * that ended this browser's session sends it to sign in saying so; a wrong
  * current password is the engine's sentence and does NOT send the person to
  * sign in; recovery codes are offered only beside an authenticator; and a Tier
  * A token's session is told what it is and asks the directory nothing.
@@ -370,20 +371,33 @@ describe("changing the password", () => {
     expect(currentSessionNeed()).toBeNull();
   });
 
-  test("a change this node has not applied yet says to sign in again", async () => {
-    engine({
+  // THE 202 ENDED THIS BROWSER'S SESSION and cleared its cookie, so every read
+  // after it is refused 401 — which sent the tab to sign in with the page's
+  // own sentence unmounted before anybody read it. It goes to sign in at once
+  // instead, saying why, and reads nothing first.
+  test("a change this node has not applied yet sends this browser to sign in, saying why", async () => {
+    const engineIs = engine({
       writes: {
-        "POST /auth/password": () =>
-          json(202, {
+        "POST /auth/password": () => {
+          engineIs.state.session = null;
+          return json(202, {
             status: "password_changed",
             detail: "this node has not applied the change yet",
-          }),
+          });
+        },
       },
     });
     mount();
+    await screen.findByText("This browser");
+    const before = engineIs.reads("/auth/session").length;
     await fill("the old long passphrase", "a brand new long passphrase");
-    expect(await screen.findByText(/this one included: sign in/)).toBeDefined();
-    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    expect((await screen.findAllByText("Your password is changed")).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/this one included: sign in with the new password/).length,
+    ).toBeGreaterThan(0);
+    await waitFor(() => expect(location.hash.startsWith("#/login")).toBe(true));
+    expect(engineIs.reads("/auth/session").length).toBe(before);
+    expect(currentSessionNeed()).toBeNull();
   });
 });
 

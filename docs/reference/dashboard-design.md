@@ -5511,7 +5511,9 @@ into swapping for somebody else's.
   `/auth/config` names. The change ends every other session and every personal
   access token the person holds and keeps this browser signed in, which the
   page says; a `202` (this node has not applied it yet) ended this browser's
-  session too, and the page says to sign in with the new password. A wrong
+  session too and cleared its cookie, so the tab goes straight to the sign-in
+  with a toast saying the password changed and to sign in with the new one —
+  the page reads nothing more, since every read would be refused. A wrong
   current password is the sign-in surface's one refusal, about what was typed,
   and never sends the person to sign in. **Two-step verification** sets up or
   replaces the authenticator app, and **New recovery codes** issues a set —

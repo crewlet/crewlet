@@ -26,7 +26,9 @@
  * — moves the person's revocation epoch, which ends every other session and
  * every personal token, and answers a fresh session for this browser. Where
  * this node has not applied the change yet it answers no session (`202`): the
- * cookie is cleared, and the page says to sign in with the new password.
+ * cookie is cleared, so the tab goes to the sign-in at once, a toast saying
+ * why — every read here would be refused, and the socket the engine closes
+ * would send it there anyway, with nothing said.
  *
  * # Every gesture re-reads who this browser is
  *
@@ -344,15 +346,15 @@ function Security({
   );
 }
 
-/** What changing the password came to. */
-type Changed =
-  { kind: "kept" } | { kind: "signed-out"; detail: string } | { kind: "refused"; text: string };
+/** What changing the password came to, while this browser stays signed in. */
+type Changed = { kind: "kept" } | { kind: "refused"; text: string };
 
 /**
  * Change your own password: the current one, and the new one twice. The
  * current one IS the proof, so no step-up is asked.
  */
 function ChangePassword({ onChanged }: { onChanged: () => void }) {
+  const toast = useToast();
   const config = useRest("/auth/config", (signal) => auth.config(signal));
   const floor = config.data?.min_password_length ?? null;
   const [current, setCurrent] = useState("");
@@ -376,11 +378,21 @@ function ChangePassword({ onChanged }: { onChanged: () => void }) {
       setPassword("");
       setConfirm("");
       setTried(false);
-      setOutcome(
-        answer.status === "password_changed"
-          ? { kind: "signed-out", detail: answer.detail }
-          : { kind: "kept" },
-      );
+      if (answer.status === "password_changed") {
+        // THIS BROWSER'S SESSION ENDED WITH THE REST and its cookie is
+        // cleared: nothing here is read again — every read would be refused
+        // and send the tab to sign in with nothing said — so it goes now,
+        // saying why.
+        toast.show({
+          variant: "success",
+          title: "Your password is changed",
+          message:
+            "Every session you held has ended, this one included: sign in with the new password.",
+        });
+        goSignIn();
+        return;
+      }
+      setOutcome({ kind: "kept" });
       onChanged();
     } catch (err) {
       // NOBODY KNOWS whether a change nothing confirmed landed: the next
@@ -420,20 +432,6 @@ function ChangePassword({ onChanged }: { onChanged: () => void }) {
         <Callout variant="success" role="status">
           Your password is changed. Every other session and every personal access token you held has
           ended; this browser stays signed in.
-        </Callout>
-      )}
-      {outcome?.kind === "signed-out" && (
-        <Callout
-          variant="warning"
-          role="status"
-          action={
-            <Button size="small" variant="secondary" onClick={goSignIn}>
-              Sign in
-            </Button>
-          }
-        >
-          Your password is changed and every session you held has ended, this one included: sign in
-          again with the new password.
         </Callout>
       )}
       {outcome?.kind === "refused" && (
