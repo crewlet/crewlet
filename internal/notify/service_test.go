@@ -446,6 +446,39 @@ func TestASelfContainedTriggerDoesNotAskForRecon(t *testing.T) {
 	}
 }
 
+// WHETHER A SUBJECT IS WHAT WAS SENT IS THE SOURCE'S ANSWER, stamped on the
+// wake: a chat backend's subject names the surface and is the same on every
+// message, while a tracker's names the item. The turn's ask is built from the
+// stamp, so a service that answered for the source would either lead every
+// chat turn's ask with "Chat message" or drop the item a comment is about.
+func TestTheWakeSaysWhetherItsSubjectIsTheSurfacesLabel(t *testing.T) {
+	h := newService(t, func(o *notify.Options, _ *harness) {
+		o.Prompts = o.Prompts.With(notify.ChatPrompt{Backend: "chat", Label: "Chat"})
+	})
+	chat := to(notify.Recipient{Handle: "engineering-lead"}, "ok, go ahead")
+	chat.Inbound.Source, chat.Inbound.EventType, chat.Inbound.Subject = "chat", "message", "Chat message"
+	item := to(notify.Recipient{Handle: "engineering-lead"}, "Can you look today?")
+	item.Inbound.Subject = "ENG-42 comment: Fix the login redirect"
+	for _, r := range []notify.Routed{chat, item} {
+		h.parser.out = []notify.Routed{r}
+		if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("Handle = %+v, want an ack", got)
+		}
+	}
+
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 2 {
+		t.Fatalf("the seat was woken %d times, want twice", len(woken))
+	}
+	for i, want := range []bool{true, false} {
+		n, _ := events.DataAs[*types.ExternalNotification](woken[i])
+		if n.SubjectIsLabel != want {
+			t.Errorf("wake %d (%s, subject %q): SubjectIsLabel = %v, want %v",
+				i, n.NotificationSource, n.Subject, n.SubjectIsLabel, want)
+		}
+	}
+}
+
 func TestADeliveryThatConcernsNobodyIsQuiet(t *testing.T) {
 	h := newService(t, nil)
 	h.parser.out = nil

@@ -31,6 +31,10 @@ func (tracker) Build(n notify.Inbound, _ notify.Parties) string {
 // branches exist so a hardcoded answer is visible.
 func (tracker) RequiresRecon(n notify.Inbound) bool { return n.EventType != "message" }
 
+// SubjectIsLabel: this third-party app's subjects name the issue, so they are
+// what was sent.
+func (tracker) SubjectIsLabel(notify.Inbound) bool { return false }
+
 // Addressed: this third-party app's assignments name the seat as the one who
 // has to act; everything else it emits is news about something the seat
 // follows.

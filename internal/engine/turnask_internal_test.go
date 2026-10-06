@@ -25,7 +25,22 @@ func TestTheTurnsAskIsWhatWasAskedNotTheWrapping(t *testing.T) {
 		wantNot []string
 	}{
 		{
-			name: "a notification is its subject and its salient body",
+			// A chat subject names the SURFACE, the same on every
+			// message: leading the ask with it handed every relevance
+			// judgement on the surface the same words.
+			name: "a chat message is what was said, without the surface's name",
+			event: events.New(types.ExternalNotification{
+				NotificationSource: "slack", Sender: "U0FOUNDER",
+				Subject: "Slack message", SubjectIsLabel: true, Body: scaffold, SalientBody: &salient,
+			}, events.TraceContext{}),
+			want:    []string{salient},
+			wantNot: []string{"Slack message", "## Triage"},
+		},
+		{
+			// An event from a build that predates the stamp decodes with
+			// a subject that is content, which is how that build read
+			// every subject.
+			name: "a notification from an older build keeps its subject",
 			event: events.New(types.ExternalNotification{
 				NotificationSource: "slack", Sender: "U0FOUNDER",
 				Subject: "Slack message", Body: scaffold, SalientBody: &salient,
@@ -46,14 +61,15 @@ func TestTheTurnsAskIsWhatWasAskedNotTheWrapping(t *testing.T) {
 		},
 		{
 			// An empty salient body is a message with nothing in it, not
-			// one to fall back to the scaffolding for.
+			// one to fall back to the scaffolding for — and with the
+			// surface's name left out it is an EMPTY ask, which the
+			// relevance passes are gated on.
 			name: "an empty salient body does not fall back to the wrapping",
 			event: events.New(types.ExternalNotification{
-				NotificationSource: "slack", Subject: "Slack message",
+				NotificationSource: "slack", Subject: "Slack message", SubjectIsLabel: true,
 				Body: scaffold, SalientBody: ptr(""),
 			}, events.TraceContext{}),
-			want:    []string{"Slack message"},
-			wantNot: []string{"## Triage", salient},
+			wantNot: []string{"## Triage", salient, "Slack message"},
 		},
 		{
 			name: "a schedule's fire is its task without the fire's id",

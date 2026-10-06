@@ -80,6 +80,11 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return true
 }
 
+// SubjectIsLabel implements [notify.Prompt]: never — the subject names the
+// task and its title, which on a comment is the only place the topic is named
+// at all.
+func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
+
 // Addressed implements [notify.Prompt]: somebody is waiting on THIS seat.
 //
 // The eight primary reasons and no others. A watcher is following the task

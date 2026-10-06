@@ -82,6 +82,17 @@ type ExternalNotification struct {
 	// relevance-filter prefetches skip their aux-LLM call when it is set.
 	ContextRequiresRecon bool `json:"context_requires_recon"`
 
+	// SubjectIsLabel is true when Subject is the SURFACE's name for the
+	// event — "Slack message", the same on every message — rather than
+	// part of what was sent, as the source's own [notify.Prompt] says.
+	// The turn's ask leaves such a subject out and keeps every other.
+	//
+	// ADDITIVE AND ABSENT-SAFE, like Addressed: an older build's events
+	// decode with a subject that is content, which is how that build read
+	// every subject — so a mixed fleet reads them as it always did, and
+	// only the turn's ask (never a stored value) differs between builds.
+	SubjectIsLabel bool `json:"subject_is_label,omitempty"`
+
 	// Addressed is true when somebody is waiting on this seat for an
 	// answer — a direct message, a personal mention, an assignment —
 	// as the source's own [notify.Prompt] reads its routing.

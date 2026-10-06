@@ -254,12 +254,18 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 // prompt: the message behind triage guidance, reply instructions and the ids
 // to act on, identical on every turn of the surface. This renders, per event:
 //
-//   - a notification: its SUBJECT and its SALIENT body — the raw message, or a
-//     coalesced burst's messages attributed to their senders with the copies a
-//     source re-sent left out (notify's mergedSalient). The subject is part of
-//     what was sent rather than of the wrapping: an issue's key and title, an
-//     email's subject, the surface a chat message came from — and on a
-//     tracker comment the only place the topic is named at all;
+//   - a notification: its SUBJECT, where the source says the subject is
+//     content, and its SALIENT body — the raw message, or a coalesced burst's
+//     messages attributed to their senders with the copies a source re-sent
+//     left out (notify's mergedSalient). On most sources the subject is part
+//     of what was sent: an issue's key and title, a page's title, a monitor's
+//     alert — and on a tracker comment the only place the topic is named at
+//     all. A chat backend's is not: it names the SURFACE ("Slack message"),
+//     identical on every message, so it is left out
+//     ([types.ExternalNotification.SubjectIsLabel]) and a chat turn's ask is
+//     what was said. Led by it, every chat turn's memory filter, knowledge
+//     query and episode summary were handed the same words, and every chat
+//     turn's vector was pulled towards every other's;
 //   - anything else that states an ask (a schedule's task, a colleague's
 //     question, their answer): its brief, which is already the ask itself —
 //     and for a colleague names who asked, the one sender a turn woken by a
@@ -286,8 +292,11 @@ func turnAsk(evs []*events.Event) string {
 // eventAsk is one trigger event's part of [turnAsk].
 func eventAsk(ev *events.Event) string {
 	if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
-		return strings.TrimSpace(strings.TrimSpace(n.Subject) + "\n\n" +
-			strings.TrimSpace(salientBody(n)))
+		body := strings.TrimSpace(salientBody(n))
+		if n.SubjectIsLabel {
+			return body
+		}
+		return strings.TrimSpace(strings.TrimSpace(n.Subject) + "\n\n" + body)
 	}
 	if brief, ok := ev.Data.(events.Briefer); ok {
 		if b := strings.TrimSpace(brief.Brief()); b != "" {
