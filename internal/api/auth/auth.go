@@ -608,7 +608,8 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			// provider — which is the failure internal/iam/session's
 			// whole three-valued shape exists to prevent, arriving
 			// at the one frame that could still undo it.
-			log.Warn("api_auth_unavailable",
+			//nolint:contextcheck // r is the resolved request; see Resolve above
+			log.Log(r.Context(), UnreadLevel(r.Context()), "api_auth_unavailable",
 				"route", path, "remote", g.Client(r))
 			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
 				RetryIdentitySeconds)

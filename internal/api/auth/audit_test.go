@@ -300,6 +300,43 @@ func TestARequestThatPresentedNothingIsNoFailedAttemptInTheLog(t *testing.T) {
 }
 
 // syncBuffer is a log sink a case reads while the guard writes to it.
+// A READ A REQUEST ABANDONED IS NO STALLED IDENTITY ESTATE IN THE LOG.
+//
+// A page reloading its data after a password change cancels its own reads in
+// flight, and each one was logged `api_session_unavailable` and
+// `api_auth_unavailable` at WARN, carrying `context canceled`, which an
+// operator reads as a node that cannot read its identity estate. The CONTROL
+// is the same failed read under a request still waiting for its answer, which
+// is exactly that and stays a WARN. NOT PARALLEL, for the log sink's reason
+// above. Mutation: log those lines at WARN whatever the request's context
+// says and the abandoned read logs them too.
+func TestAReadARequestAbandonedIsNoStalledEstateInTheLog(t *testing.T) {
+	var out syncBuffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
+	rig := newSignedIn(t)
+	rig.dir.err = context.Canceled
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	rig.call(rig.guard(), http.MethodGet, "/agents", func(r *http.Request) {
+		rig.withCookie(r)
+		*r = *r.WithContext(gone)
+	})
+	if strings.Contains(out.String(), "level=WARN") {
+		t.Errorf("a read its request abandoned logged a WARN:\n%s", out.String())
+	}
+
+	rig.dir.err = context.DeadlineExceeded
+	rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	for _, line := range []string{"api_session_unavailable", "api_auth_unavailable"} {
+		if !strings.Contains(out.String(), "level=WARN msg="+line) {
+			t.Errorf("a read the estate did not answer logged no WARN %s:\n%s",
+				line, out.String())
+		}
+	}
+}
+
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf strings.Builder

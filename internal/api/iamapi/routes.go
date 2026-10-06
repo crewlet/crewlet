@@ -328,7 +328,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (key, seed s
 func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 	what string, err error) {
 
-	log.WarnContext(r.Context(), "api_iam_read_failed",
+	log.Log(r.Context(), auth.UnreadLevel(r.Context()), "api_iam_read_failed",
 		"what", what, "error", err)
 	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 }

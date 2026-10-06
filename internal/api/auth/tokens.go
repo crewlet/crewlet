@@ -139,7 +139,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	now := g.machine.now()
 	row, err := g.machine.directory.MachineToken(ctx, presented.ID)
 	if err != nil {
-		log.WarnContext(ctx, "api_token_unavailable",
+		log.Log(ctx, UnreadLevel(ctx), "api_token_unavailable",
 			"credential", presented.ID, "error", err)
 		return r.WithContext(iam.WithUnresolved(ctx, errTokenUnavailable)), nil
 	}
@@ -147,7 +147,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	switch check.Answer {
 	case credential.TokenValid:
 	case credential.TokenUnknown:
-		log.WarnContext(ctx, "api_token_unavailable",
+		log.Log(ctx, UnreadLevel(ctx), "api_token_unavailable",
 			"credential", presented.ID, "detail", check.Detail)
 		return r.WithContext(iam.WithUnresolved(ctx, errTokenUnavailable)), nil
 	default:
@@ -208,7 +208,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	})
 	switch binding.Answer() {
 	case session.AnswerUnavailable:
-		log.WarnContext(ctx, "api_token_seat_unavailable",
+		log.Log(ctx, UnreadLevel(ctx), "api_token_seat_unavailable",
 			"credential", presented.ID, "seat", owner.Seat,
 			"detail", binding.Detail, "error", errText(binding.Err))
 		return r.WithContext(iam.WithUnresolved(ctx, errBindingUnavailable)), nil
