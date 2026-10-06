@@ -4612,11 +4612,20 @@ A reconcile finding of kind `credential_expiring` carries `expires_at`, the
 instant the credential stops working.
 
 `inbound`, `skipped` and `coalesced` answer one question together and are
-misleading apart. `inbound` counts deliveries the edge accepted — `null` for
-Mattermost, whose posts arrive over a websocket and are woken onto a seat's
-inbox without a delivery row to count, so a `0` there would claim a quiet
-surface nobody measured; `skipped` counts those the routing gate dropped
-without waking anybody; `coalesced`
+misleading apart. `inbound` counts **deliveries** — one delivery presented to
+one seat, counted once across the fleet — that arrived at this row's own
+ingress (`inbound_path`, or the websocket for Mattermost): a message two
+agents' Slack apps both receive is two, a Mattermost post two bots' sockets
+both read is two, and the same post read by every node holding the bot's
+socket is still one, because the fleet claims it before it is published.
+Counted by **ingress**, not by integration: the Forge relay hands Jira and
+Confluence events on under its own token and they belong to those products, so
+a relayed event counts once, under `forge`, and the Atlassian card, which sums
+its surfaces, counts it once — while what became of it (`skipped`,
+`coalesced`) counts under the product it was parsed as. A row written before
+deliveries named their route counts under its integration, as it always did.
+`skipped` counts those the routing gate dropped without waking anybody;
+`coalesced`
 counts merges, where N same-conversation notifications became one turn. "128
 arrived" on its own cannot tell a working integration from one whose every
 delivery reaches nobody — "128 arrived, 30 dropped, 2 merges" can, and a seat
@@ -4640,13 +4649,11 @@ count however many more of them there are than deliveries, and one before
 `traffic_since` or written after the answer was read is not. A row counts
 under the third-party app its `notification_source` tag names; one written
 before the tag existed names none and is not counted. The window is one for
-the whole answer, so a surface whose deliveries leave no inbound row —
-Mattermost, which the engine reads over a websocket rather than receiving at a
-route, so its `inbound` is `null` — has its outcomes counted over the
-window the other surfaces' deliveries leave: the whole 30 days whenever
-nothing lies past the page (a company receiving no webhook at all included),
-and only as far back as the page reaches when the webhook surfaces' traffic
-fills it.
+the whole answer, so a surface whose drops and merges outnumber its deliveries
+has its outcomes counted over the window every surface's deliveries leave: the
+whole 30 days whenever nothing lies past the page (a company receiving nothing
+at all included), and only as far back as the page reaches when the busiest
+surfaces' traffic fills it.
 
 `secret_present` and `secret_usable` are **two different facts**, and the gap
 between them is a silent outage.

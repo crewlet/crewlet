@@ -489,7 +489,7 @@ export function integrationFacts(
       value: (
         <NumberCell
           value={counted((r) => r.inbound)}
-          title="deliveries this engine verified and stored"
+          title="deliveries that reached a seat here: verified webhooks, and chat posts read off a socket — each counted once, where it arrived"
         />
       ),
       note: covered,
@@ -1969,6 +1969,15 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
  * one of them is a click to the event's own page. The `#/model` screen fetched
  * a payload per row and paid sixty-one round trips for one screen.
  */
+/**
+ * A delivery row's event, as the provider named it: the row's type without the
+ * engine's own filing prefix, which says which edge it came in on — a webhook
+ * route, the Forge relay, or a chat socket.
+ */
+export function deliveryEvent(type: string): string {
+  return type.replace(/^(webhook|forge|socket):/, "");
+}
+
 function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
   const now = useNow();
@@ -2048,12 +2057,11 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 header: "Event",
                 shrink: true,
                 sortValue: (e) => e.type,
-                // `webhook:` and `forge:` are the engine's own filing
-                // prefixes, and the provider's event name is what an
-                // operator is matching against their own console.
-                cell: (e) => (
-                  <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
-                ),
+                // `webhook:`, `forge:` and `socket:` are the engine's own
+                // filing prefixes — which edge a delivery came in on — and
+                // the provider's event name is what an operator is matching
+                // against their own console.
+                cell: (e) => <code className="inline nowrap">{deliveryEvent(e.type)}</code>,
               },
               {
                 key: "summary",

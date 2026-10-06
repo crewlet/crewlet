@@ -119,9 +119,15 @@ export interface ReconcileStatus {
 export interface IntegrationRow {
   key: string;
   configured: boolean;
-  /** Deliveries the edge accepted. Null for a surface read over a websocket
-   *  (Mattermost), whose posts leave no delivery row to count. */
-  inbound?: number | null;
+  /**
+   * Deliveries that arrived at this row's own ingress — one delivery presented
+   * to one seat, counted once across the fleet: a verified webhook, or a
+   * Mattermost post its socket claimed. Counted by INGRESS rather than by
+   * integration, so a Forge-relayed Jira event counts once, under `forge`, and
+   * a card summing its surfaces counts it once. Zero when nothing was
+   * measured, which `traffic_known` says.
+   */
+  inbound?: number;
   /**
    * The two OUTCOME counts, three-valued: a number, or null when this process
    * could not read its event log. Reporting that as 0 would claim every

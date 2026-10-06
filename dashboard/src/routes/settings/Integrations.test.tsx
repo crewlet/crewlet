@@ -472,6 +472,7 @@ test("a disconnect in progress offers nothing", () => {
 import {
   actionFor,
   asSentence,
+  deliveryEvent,
   formBlocked,
   sectionsFor,
   tileMeta,
@@ -682,6 +683,48 @@ test("a tile's foot counts agents, credentials and deliveries", () => {
   expect(tileMeta(present, roster, [], false)).toBe("2 agents");
   // AND A TOOL NOBODY CONNECTED HAS NOTHING TO COUNT.
   expect(tileMeta([], roster, [], true)).toBe("");
+});
+
+// A RELAYED DELIVERY IS COUNTED ONCE ON THE CARD. The engine counts each
+// delivery at the ingress it arrived at, so a Jira event the Forge relay
+// carried is in `forge`'s count and not in `jira`'s, and the Atlassian card —
+// which sums its surfaces — counts it once. Counted under the product as well,
+// the card drew every Cloud tenant's relayed traffic twice.
+test("an Atlassian card sums its surfaces' deliveries once each", () => {
+  const present = [
+    { surface: { key: "jira", name: "Jira" }, row: { key: "jira", configured: true, inbound: 1 } },
+    {
+      surface: { key: "confluence", name: "Confluence" },
+      row: { key: "confluence", configured: true, inbound: 0 },
+    },
+    {
+      surface: { key: "forge", name: "Forge relay" },
+      row: { key: "forge", configured: true, inbound: 2 },
+    },
+  ];
+  expect(tileMeta(present, undefined, [], true)).toBe("3 deliveries");
+});
+
+// A MATTERMOST CARD COUNTS ITS POSTS. Its socket records each post it presents
+// to a seat, so the count is a measurement like any other surface's — where it
+// used to be null, and the card drew no count at all over a busy chat.
+test("a socket surface's deliveries are counted like a webhook's", () => {
+  const present = [
+    {
+      surface: { key: "mattermost", name: "Mattermost" },
+      row: { key: "mattermost", configured: true, inbound: 5 },
+    },
+  ];
+  expect(tileMeta(present, undefined, [], true)).toBe("5 deliveries");
+});
+
+// A DELIVERY ROW SHOWS WHAT THE PROVIDER CALLED IT, whichever edge it came in
+// on: the engine files a row under its edge's prefix and the provider's own
+// event name, and the operator is matching the name against their console.
+test("a delivery's event drops the engine's filing prefix", () => {
+  expect(deliveryEvent("webhook:push")).toBe("push");
+  expect(deliveryEvent("forge:avi:jira:created:issue")).toBe("avi:jira:created:issue");
+  expect(deliveryEvent("socket:posted")).toBe("posted");
 });
 
 // --- a per-seat vendor ------------------------------------------------------ //

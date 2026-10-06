@@ -21,10 +21,12 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/search"
@@ -1602,39 +1604,122 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 	}
 }
 
-// A SURFACE READ OVER A SOCKET HAS NO DELIVERY COUNT, rather than a count of
-// zero.
+// appendDelivery files one delivery's record exactly as a node's publish
+// listener does — through observe.Record, the one rule for what a delivery row
+// is — so these cases count the rows production writes rather than rows a
+// fixture imagined.
+func appendDelivery(t *testing.T, log *store.EventLog, source string, d types.InboundDelivery,
+	at time.Time) {
+
+	t.Helper()
+	ev := events.New(d, events.TraceContext{})
+	ev.Source, ev.Timestamp = source, at
+	row, ok := observe.Record(ev)
+	if !ok {
+		t.Fatalf("a %s delivery's record is not filed as a row", source)
+	}
+	if err := log.Append(t.Context(), row); err != nil {
+		t.Fatalf("append %s delivery: %v", source, err)
+	}
+}
+
+// A SURFACE READ OVER A SOCKET COUNTS ITS DELIVERIES like any other.
 //
-// `inbound` counts the rows the webhook edge writes as it accepts a delivery,
-// and a Mattermost post is read off the websocket and woken onto a seat's
-// inbox with no such row. Counted anyway, every Mattermost row read 0 however
-// busy its channels were, and a card drew "nothing delivered" over a surface
-// delivering all day. Null is the answer for a measurement nobody made — while
-// what became of its posts is counted, since those are the engine's own
-// events whichever way a post arrived.
+// A Mattermost post used to be woken straight onto a seat's inbox with no row
+// behind it, so the surface's count was a null — "nothing measured" on the
+// busiest chat surface a company had. Its socket now records each post it
+// presents to a seat, once across the fleet, so the count is the same
+// measurement every surface makes: one post to two bots is two deliveries, as
+// one Slack message to two agents' apps is.
 //
-// Mutation: count Mattermost's delivery rows like any webhook surface's, and
-// its `inbound` is a 0 nothing measured.
-func TestASurfaceReadOverASocketHasNoDeliveryCount(t *testing.T) {
+// Mutation: drop the socket's rows from the count, and its `inbound` reads 0
+// over two posts.
+func TestASurfaceReadOverASocketCountsItsDeliveries(t *testing.T) {
 	t.Parallel()
 	log := openStore(t).Events()
 	at := time.Now().UTC().Add(-time.Hour)
+	for i, handle := range []string{"ceo", "cto"} {
+		appendDelivery(t, log, "mattermost", types.InboundDelivery{
+			Label: "socket:posted", Route: "mattermost", Text: "posted in town-square",
+			Recipient: handle, DeliveryKey: "post-1",
+		}, at.Add(time.Duration(i)*time.Second))
+	}
 	appendOutcome(t, log, "drop", "notification_skipped", "mattermost", at)
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
 	}, "integrations", nil))
 	mattermost := surfacesOf(t, body)["mattermost"]
-	if got, present := mattermost["inbound"]; !present || got != nil {
-		t.Errorf("mattermost inbound = %v (present %v), want null — no delivery row exists "+
-			"for a post read off a websocket", got, present)
+	if got := mattermost["inbound"]; got != float64(2) {
+		t.Errorf("mattermost inbound = %v, want 2 — one post presented to two seats", got)
+	}
+	if mattermost["last_at"] == nil {
+		t.Error("mattermost last_at is null over two recorded posts")
 	}
 	if mattermost["inbound_kind"] != "websocket" || mattermost["skipped"] != float64(1) {
 		t.Errorf("mattermost inbound_kind %v, skipped %v — want the websocket named and its "+
 			"drop counted", mattermost["inbound_kind"], mattermost["skipped"])
 	}
 	if got := surfacesOf(t, body)["gitlab"]["inbound"]; got != float64(0) {
-		t.Errorf("gitlab inbound = %v, want a measured 0 — a webhook surface's rows are counted", got)
+		t.Errorf("gitlab inbound = %v, want a measured 0", got)
+	}
+}
+
+// A RELAYED DELIVERY COUNTS AT THE INGRESS IT ARRIVED AT, and only there.
+//
+// The Forge relay hands Jira and Confluence events on under its own token and
+// files them under the product they belong to, so counted by source the relay's
+// row read 0 and "never" on every Cloud tenant whose relay carried everything.
+// Counted under BOTH, the Atlassian card — which sums its surfaces — would
+// count each relayed event twice. A row written before deliveries named their
+// route counts under its source, where it always did.
+//
+// Mutation: count by source alone, and forge reads 0; count by route AND
+// source, and the three surfaces sum to more deliveries than arrived.
+func TestARelayedDeliveryCountsAtItsIngressOnce(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	appendDelivery(t, log, "jira", types.InboundDelivery{
+		Label: "forge:avi:jira:created:issue", Route: "forge", Text: "issue created",
+	}, at)
+	appendDelivery(t, log, "confluence", types.InboundDelivery{
+		Label: "forge:avi:confluence:created:page", Route: "forge", Text: "page created",
+	}, at.Add(time.Second))
+	appendDelivery(t, log, "jira", types.InboundDelivery{
+		Label: "webhook:jira:issue_updated", Route: "jira", Text: "issue updated",
+	}, at.Add(2*time.Second))
+	// A row from before the route tag: filed under its product, as then.
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "old", Type: "forge:avi:jira:updated:issue", Source: "jira",
+		Category: events.WebhookCategory, Summary: "issue updated", Time: at.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("append an older row: %v", err)
+	}
+	cfg := company(t)
+	cfg.Integrations.ForgeAppID = "app-123"
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
+	}, "integrations", nil))
+	rows := surfacesOf(t, body)
+	if got := rows["forge"]["inbound"]; got != float64(2) {
+		t.Errorf("forge inbound = %v, want the 2 deliveries the relay carried", got)
+	}
+	if rows["forge"]["last_at"] == nil {
+		t.Error("forge last_at is null over two relayed deliveries")
+	}
+	var total float64
+	for _, row := range rows {
+		if n, ok := row["inbound"].(float64); ok {
+			total += n
+		}
+	}
+	// jira is not configured here, so its two direct and older rows are
+	// counted under a surface the answer has no row for: the configured
+	// rows hold exactly the relay's two.
+	if total != 2 {
+		t.Errorf("the rows sum to %v deliveries, want 2 — a relayed delivery counted at "+
+			"its ingress and nowhere else", total)
 	}
 }
 

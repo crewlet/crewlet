@@ -180,7 +180,10 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			"key":        kind,
 			"configured": true,
 			"enabled":    enabled,
-			"inbound":    inboundOf(seen, kind),
+			// AT THIS ROW'S INGRESS — see [traffic.count]. Zero when
+			// nothing was measured, which `traffic_known` beside the
+			// rows says.
+			"inbound": seen.count[kind],
 			// THREE-VALUED like the secret fields, and for the same
 			// reason: null means this node could not read the outcome
 			// events, and reporting that as 0 would say every delivery
@@ -529,6 +532,16 @@ func inboundPath(kind string) string {
 // the counts are reported ONLY alongside a flag saying they were measured.
 type traffic struct {
 	known bool
+
+	// count and last are per INGRESS — the route a delivery arrived at,
+	// which is the row's own `inbound_path` — and not per integration. The
+	// two differ on the Forge relay alone: it hands Jira and Confluence
+	// events on under its own token, and they are filed under the product
+	// they belong to. Counted by that product, the relay's row read 0 and
+	// "never" on every Cloud tenant whose relay was carrying everything;
+	// counted under both, the Atlassian card — which sums its surfaces —
+	// would count every relayed event twice. By ingress, each delivery is
+	// counted once, at the place it arrived, and the card's sum is exact.
 	count map[string]int
 	last  map[string]time.Time
 
@@ -582,13 +595,25 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 		if row.Time.Before(out.since) || !row.Time.Before(at) {
 			continue
 		}
-		out.count[row.Source]++
-		if row.Time.After(out.last[row.Source]) {
-			out.last[row.Source] = row.Time
+		ingress := ingressOf(row)
+		out.count[ingress]++
+		if row.Time.After(out.last[ingress]) {
+			out.last[ingress] = row.Time
 		}
 	}
 	s.countOutcomes(ctx, &out, at)
 	return out
+}
+
+// ingressOf is the route one delivery row arrived at: its `route` tag, or its
+// source for a row written before deliveries named their route — when the
+// only edge that relayed another integration's events filed them under that
+// integration, which is where such a row was always counted.
+func ingressOf(row store.EventRecord) string {
+	if route := row.Tags["route"]; route != "" {
+		return route
+	}
+	return row.Source
 }
 
 // deliveryWindow is where the window a page of deliveries covers starts. Its
@@ -610,10 +635,9 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 //     what the month held, which is a count like any other. Started at the
 //     oldest delivery instead, the window narrowed nothing the deliveries
 //     counted — none arrived before it — and cut away what the outcome counts
-//     beside them had, so a company whose drops and merges come over a
-//     websocket (Mattermost, which writes no delivery row at all) saw its
-//     month of them reported over a stretch somebody else's last delivery
-//     chose, or as zero when nobody's webhook had fired;
+//     beside them had, so a company whose drops and merges outnumber its
+//     deliveries saw its month of them reported over a stretch somebody else's
+//     last delivery chose, or as zero when no delivery had arrived;
 //   - a page with deliveries past it covers what lies AFTER the oldest
 //     instant it reached. Every delivery newer than its last row is on it —
 //     the merge stops at the newest point any node's page stopped at
@@ -885,24 +909,6 @@ func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
 // readOverASocket reports whether a surface's arrivals come over a websocket the
 // engine holds open — Mattermost's, one per seat — rather than to a route.
 func readOverASocket(kind string) bool { return kind == "mattermost" }
-
-// inboundOf renders a surface's delivery count, or null where there is no
-// delivery row to count.
-//
-// NULL FOR A SURFACE READ OVER A SOCKET, because the count is of the rows the
-// webhook edge writes as it accepts a delivery, and a post read off the
-// websocket is woken straight onto a seat's inbox with no such row — the wake
-// is deliberately not stored, since for every other surface the row already
-// is (internal/events). So Mattermost's count was 0 on every company however
-// busy its channels, and the card drew "nothing delivered" over a surface
-// delivering all day: a measurement nobody made, which is what null is for
-// here as it is for the outcome counts beside it.
-func inboundOf(seen traffic, kind string) any {
-	if readOverASocket(kind) {
-		return nil
-	}
-	return seen.count[kind]
-}
 
 // countOrNil renders an outcome count, or null when nothing was counted.
 func countOrNil(counts map[string]int, kind string) any {
