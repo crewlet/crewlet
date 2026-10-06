@@ -841,7 +841,7 @@ for 90 days. The answer is `201` with
 |---|---|
 | `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
 | `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, an owner already holding 64 live credentials — a revoked or expired one gives up its place to the new token, the earliest to lapse first, so revoking a token nothing uses makes room at once |
-| `403` | The request presented a machine token; a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; an owner who may not act |
+| `403` | The request presented a machine token (`token_refused`); a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; an owner who may not act |
 | `404` | Nobody by that id |
 
 **`Idempotency-Key` is ignored here, deliberately.** A retry that landed once

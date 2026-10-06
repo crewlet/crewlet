@@ -135,10 +135,14 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	// asked for, so a token is told it may not mint rather than how to
 	// phrase a mint it may not make.
 	if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			map[string]string{"detail": "a machine token cannot mint another: " +
-				"one minted from a token is one whoever holds a pipeline's " +
-				"environment can renew for ever. Sign in, or use a Tier A token"})
+		// `token_refused`, the code every gesture a token may not make
+		// answers — `unauthorized`'s sentence is about a grant the
+		// credential lacks, which contradicted this detail.
+		detail := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
+		detail["detail"] = "a machine token cannot mint another: one minted " +
+			"from a token is one whoever holds a pipeline's environment can " +
+			"renew for ever. Sign in, or use a Tier A token"
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused, detail)
 		return
 	}
 	// A TIER A TOKEN HOLDS NO TOKENS OF ITS OWN: it is the deployment's
@@ -180,8 +184,8 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "a token may last at most " +
 				strconv.Itoa(int(credential.MaxTokenLifetime/(24*time.Hour))) +
-				" days; `forever` is deliberately unexpressible, because a " +
-				"bearer secret nothing re-proves outlives whoever minted it"})
+				" days: a bearer secret nothing re-proves outlives whoever " +
+				"minted it, so one that never expired cannot be asked for"})
 		return
 	}
 	// NOBODY BY THAT ID is a 404 rather than whatever the decide would

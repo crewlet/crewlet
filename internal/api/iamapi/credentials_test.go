@@ -223,16 +223,22 @@ func TestATokenCannotOutliveTheCeiling(t *testing.T) {
 // One minted from a token is one whoever holds a pipeline's environment can
 // renew for ever, a year at a time, with nobody present. The request goes
 // through the real guard so the credential SHAPE is the guard's own answer.
-// Mutation: drop the check and the writer is asked to mint.
+// And it is `token_refused`, every such gesture's code: answered
+// `unauthorized`, its message said the credential lacked a grant beside a
+// detail saying no grant would do. Mutation: drop the check and the writer is
+// asked to mint; answer `unauthorized` and the code is wrong.
 func TestATokenCannotMintAToken(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	presented, row := aliceToken(t)
 	rec := throughTheGuard(t, r, row, http.MethodPost, "/iam/credentials",
 		presented)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("a token minting a token answered %d, want 403: %s",
-			rec.Code, rec.Body.String())
+	body := decodeBody(t, rec)
+	if rec.Code != http.StatusForbidden ||
+		body["error"] != string(httpjson.CodeTokenRefused) ||
+		body[authz.DetailReason] != string(authz.ReasonTokenRefused) {
+		t.Errorf("a token minting a token answered %d %v, want 403 token_refused",
+			rec.Code, body)
 	}
 	if len(r.writer.calls) != 0 {
 		t.Errorf("the writer was asked for %v", r.writer.calls)
