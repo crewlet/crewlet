@@ -25,7 +25,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { loadChunk } from "./lazyScreen.ts";
 import { Router } from "./router.tsx";
@@ -51,6 +51,14 @@ let sent: Sent[];
 let reloads: ReturnType<typeof vi.spyOn>;
 /** What `GET /auth/session` says the session holds. */
 let grants: string[];
+
+// THE TWO SCREENS' CHUNKS ARE THE SUITE'S TO LOAD, once: imported cold inside
+// the first case they took two of its five seconds alone, and past five under
+// the full suite's load, so that case timed out on whichever run was busiest.
+beforeAll(async () => {
+  await loadChunk("work");
+  await loadChunk("account");
+});
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
@@ -102,13 +110,11 @@ afterEach(() => {
 
 /**
  * The shell, whose socket's questions never answer. The Work screen's chunk
- * is fetched first, so the screen draws rather than suspending inside the
- * render. `refused` is the engine's refusal of the dial the frame makes for a
- * session holding `state:read`, landing once it has made it.
+ * was fetched before the suite, so the screen draws rather than suspending
+ * inside the render. `refused` is the engine's refusal of the dial the frame
+ * makes for a session holding `state:read`, landing once it has made it.
  */
 async function mount(refused: string | null = "your seat is no longer in the chart") {
-  await loadChunk("work");
-  await loadChunk("account");
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
