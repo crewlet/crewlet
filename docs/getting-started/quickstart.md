@@ -469,9 +469,10 @@ is enrolled before anything
 else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
 
 From now on the sign-in screen takes your login or address and your password.
-**Your name at the end of the page bar** is the menu for your session: your
-seat, your second factor, a new set of recovery codes, and signing out — here,
-or everywhere at once. A gesture that changes who may do what, or how somebody
+**The menu beside your name at the sidebar's foot** is your session's: your
+own **Account** — your password, second factor and recovery codes, where you
+are signed in and your personal access tokens — and signing out, here or
+everywhere at once. A gesture that changes who may do what, or how somebody
 proves who they are, asks you to confirm your password first, in one dialog,
 and then carries on. The founder token stays: it is what a pipeline uses, and
 the way back in when nobody who can sign in is available — a machine
@@ -510,9 +511,6 @@ greeting.
 The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
 its page header. `g` then a letter jumps between them, and `?` lists every key.
-Your own **Account** — your password, second factor, where you are signed in
-and your personal access tokens — is in the menu beside your name at the
-sidebar's foot.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**
