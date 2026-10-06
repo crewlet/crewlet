@@ -416,7 +416,7 @@ ceiling by default (see [Tier A](../getting-started/configuration.md#tier-a)).
 So the first person is **invited, like everybody after them**, by whoever holds
 a token declaring `people:manage`. On the dashboard that is: sign in with the
 token (the sign-in page opens its token form while `/health` says nobody has
-been invited), open **Settings › People & access** and press **Invite person**
+joined), open **Settings › People & access** and press **Invite person**
 — your address, your seat, the grants. Or from a shell:
 
 ```sh
@@ -1396,7 +1396,7 @@ access log. Its sign-in surface is four screens outside the frame:
 
 | Screen | What it does |
 |---|---|
-| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Behind **Use an API token instead** — open from the start where `/health` says `identity: unclaimed`, with a line saying to invite yourself from Settings › People & access — it takes **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere; the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
+| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Behind **Use an API token instead** — open from the start where `/health` says `identity: unclaimed` (nobody has joined — an open invitation does not count until it is redeemed), with a line saying to invite yourself from Settings › People & access or open the link of an invitation already issued — it takes **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere; the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
 | `#/invite/<id>.<secret>` | [The invitation link](#everybody-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose, the password typed twice — which signs them in |
 | `#/reset/<id>.<secret>` | [A password reset link](#a-forgotten-password-is-a-one-time-link-from-an-administrator). It says whose password it sets with the secret in the `X-Crewlet-Reset-Secret` header, spends nothing by being opened, and sets the new password — typed twice — once, which signs nobody in, so it ends on the sign-in form |
 | `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` (the key and its `otpauth://` address), the first code, and the recovery codes shown once |

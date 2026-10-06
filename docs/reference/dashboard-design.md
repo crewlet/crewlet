@@ -1855,9 +1855,11 @@ six-digit code or a recovery code and resubmits the same details with it; a
 `429` says how many seconds its `Retry-After` names. The password form is
 always there — password sign-in is always served — and the deployment's API
 token waits behind **Use an API token instead**. Where `/health` says
-`identity: unclaimed`, nobody has been invited yet and the token is the only
-way in, so its form is open from the start and the page says how to begin: sign
-in with the token, then invite yourself from Settings › People & access;
+`identity: unclaimed`, nobody has joined yet — an open invitation does not
+change that, since redeeming it is what creates its person — and the token is
+the only way in, so its form is open from the start and the page says how to
+begin: sign in with the token, then invite yourself from Settings › People &
+access, or open the link of an invitation already issued;
 `unknown` keeps the ordinary page, because a node that cannot read its identity
 estate is not one with nobody in it. Somebody already signed in is told who, and
 offered to continue as them.
@@ -5747,8 +5749,11 @@ admit; a `202` says the change is recorded and this node is catching up; and
 after every answer — a refusal part way and an unknown one included, since
 either may have changed something — the lists the write touches are read
 again. Where `/health` says
-`identity: unclaimed`, a callout says nobody has been invited yet and offers
-**Invite person**. A token is still declared in Tier A (`api.auth.tokens`) and
+`identity: unclaimed`, a callout says nobody has joined yet and what comes
+next: with no invitation open, inviting yourself, and it offers **Invite
+person**; with one open, that its link is where its person chooses a login and
+password — naming the address where there is one invitation — and that a lost
+link is cancelled and issued again, with no second Invite beside it. A token is still declared in Tier A (`api.auth.tokens`) and
 changes at a restart. **It never reads a value back** — not a token's, not a
 password's, not a second factor's.
 

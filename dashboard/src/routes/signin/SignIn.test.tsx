@@ -384,10 +384,12 @@ describe("signing in with the deployment's token", () => {
     expect(sent.some((s) => s.path.includes("the-break-glass"))).toBe(false);
   });
 
-  // NOBODY INVITED YET: the token is the only way in, so its form is open from
+  // NOBODY JOINED YET: the token is the only way in, so its form is open from
   // the start and the page says how to begin — while the password form stays,
   // because password sign-in is always served. The control is a deployment
-  // somebody has been invited to, where the token waits behind the disclosure.
+  // somebody has joined, where the token waits behind the disclosure. And it
+  // never says nobody was INVITED: `unclaimed` is no person enrolled, which an
+  // open invitation does not change, so it said so beside one just issued.
   test("an unclaimed deployment opens the token form and says how to begin", async () => {
     engine({
       "GET /health": { status: 200, body: { status: "ok", identity: "unclaimed" } },
@@ -395,8 +397,10 @@ describe("signing in with the deployment's token", () => {
     });
     mount();
     await answered();
-    screen.getByText(/nobody has been invited to this deployment yet/i);
+    screen.getByText(/nobody has joined this deployment yet/i);
+    expect(screen.queryByText(/nobody has been invited/i)).toBeNull();
     screen.getByText(/invite yourself/i);
+    screen.getByText(/if you have invited yourself already, open that link/i);
     // OPEN, not behind the disclosure a claimed deployment keeps it under.
     expect(screen.queryByText("Use an API token instead")).toBeNull();
     expect(screen.getByLabelText("API token")).toBeDefined();

@@ -121,6 +121,8 @@ let secondFactor = "required";
 let reader: string | null = null;
 /** How many active people `GET /iam/check` counts holding `people:manage`. */
 let administrators = 1;
+/** What `GET /iam/invitations` answers. */
+let invitations: unknown = INVITATIONS;
 
 function engine(writes: Record<string, Response[]> = {}, directory: () => unknown = () => PEOPLE) {
   const sent: Sent[] = [];
@@ -150,7 +152,7 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
       case "/iam/people":
         return Promise.resolve(json(200, directory()));
       case "/iam/invitations":
-        return Promise.resolve(json(200, INVITATIONS));
+        return Promise.resolve(json(200, invitations));
       case "/iam/seats":
         return Promise.resolve(
           json(200, {
@@ -236,6 +238,7 @@ beforeEach(() => {
   secondFactor = "required";
   reader = null;
   administrators = 1;
+  invitations = INVITATIONS;
 });
 
 afterEach(() => {
@@ -1008,18 +1011,36 @@ test("a login outside its kind's grammar is refused under the field and not post
   expect(eng.writes()).toEqual([]);
 });
 
-// FIRST RUN: nobody invited, and the screen says what to do next with the
-// button that does it. The control is a claimed deployment.
+// FIRST RUN: nobody joined and nobody invited, and the screen says what to
+// do next with the button that does it. The control is a claimed deployment.
 test("an unclaimed deployment's screen says to invite yourself, with the button", async () => {
+  invitations = { invitations: [], next: "" };
   engine();
   mount(ADMIN, "unclaimed");
-  const callout = (await screen.findByText("Nobody has been invited yet")).closest(
+  const callout = (await screen.findByText("Nobody has joined yet")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
+  expect(within(callout).getByText(/Invite yourself/)).toBeTruthy();
   expect(await within(callout).findByRole("button", { name: "Invite person" })).toBeTruthy();
   cleanup();
   engine();
   mount(ADMIN, "ready");
   await screen.findByText("Bo Lang");
-  expect(screen.queryByText("Nobody has been invited yet")).toBeNull();
+  expect(screen.queryByText("Nobody has joined yet")).toBeNull();
+});
+
+// AN OPEN INVITATION IS THE NEXT STEP, not another one: `unclaimed` stays
+// until somebody redeems, and keyed on it alone the callout said "Nobody has
+// been invited yet" and offered Invite person directly above the invitation
+// just issued. Mutation: ignore the invitations and the callout invites again.
+test("an unclaimed deployment with an open invitation says to open its link", async () => {
+  engine();
+  mount(ADMIN, "unclaimed");
+  const callout = (await screen.findByText("Nobody has joined yet")).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  await within(callout).findByText(/The invitation to sam@example\.com is waiting to be redeemed/);
+  expect(within(callout).queryByText(/Invite yourself/)).toBeNull();
+  expect(within(callout).queryByRole("button", { name: "Invite person" })).toBeNull();
+  expect(screen.queryByText(/Nobody has been invited/)).toBeNull();
 });

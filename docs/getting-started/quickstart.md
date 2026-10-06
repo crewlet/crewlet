@@ -425,15 +425,15 @@ to go.
 Open the dashboard at <http://localhost:8000/>. **Opening it means signing
 in**: every route needs a credential, reads included, so the first thing it
 shows is its sign-in screen. People sign in with a login and a password, and
-nobody has one yet — nobody has been invited — so the screen says so and opens
-its **API token** form (on a deployment somebody has been invited to, it is
-behind **Use an API token instead**). Paste `$CREWLET_API_TOKEN_FOUNDER`: it is
+nobody has one yet — nobody has joined — so the screen says so and opens its
+**API token** form (on a deployment somebody has joined, it is behind **Use an
+API token instead**). Paste `$CREWLET_API_TOKEN_FOUNDER`: it is
 exchanged for a one-hour session, and the browser keeps the session's cookie
 and never the token, which is sent once, in a header, and held nowhere
 afterwards.
 
 **Invite yourself.** Open **Settings › People & access**: a callout says nobody
-has been invited yet. Press **Invite person** and fill in
+has joined yet. Press **Invite person** and fill in
 
 - **your email address** — what the invitation is held against;
 - **the seat** — yours, the human seat `company.yaml` declares with the handle

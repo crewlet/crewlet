@@ -362,6 +362,55 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
   );
 }
 
+/**
+ * What comes next in a company nobody has joined: invite yourself, or — once
+ * an invitation is open — open its link, which is where its person chooses a
+ * login and password.
+ */
+function FirstPerson({
+  waiting,
+  onInvite,
+}: {
+  /** The open invitations. */
+  waiting: InvitationRow[];
+  /** Opens the invite dialog, for a reader who may invite. */
+  onInvite: (() => void) | undefined;
+}) {
+  if (waiting.length > 0) {
+    const only = waiting.length === 1 ? waiting[0]! : null;
+    const which = only
+      ? only.email && !only.sealed
+        ? `The invitation to ${only.email} is`
+        : "An invitation is"
+      : `${waiting.length} invitations are`;
+    return (
+      <Callout variant="neutral" title="Nobody has joined yet">
+        {which} waiting to be redeemed: {only ? "its" : "an invitation's"} link is where its person
+        chooses a login and password, and until somebody opens one nobody can sign in with a
+        password. A link is shown once, when it is issued — a lost one is cancelled below and issued
+        again. The API token you are using stays the way back in.
+      </Callout>
+    );
+  }
+  return (
+    <Callout
+      variant="neutral"
+      title="Nobody has joined yet"
+      action={
+        onInvite ? (
+          <Button size="small" variant="primary" onClick={onInvite}>
+            Invite person
+          </Button>
+        ) : undefined
+      }
+    >
+      This company has no person in it, so nobody can sign in with a password yet. Invite yourself —
+      your address, your seat and the grants you need — and open the link it shows: that is where
+      you choose your login and password. The API token you are using stays the way back in.
+    </Callout>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
@@ -561,26 +610,19 @@ export function PeopleAndAccess() {
         />
       )}
 
-      {/* FIRST RUN: nobody has been invited, and somebody signed in with an
-          API token is reading this — the one moment the next step is
-          inviting yourself. */}
-      {health?.identity === "unclaimed" && (
-        <Callout
-          variant="neutral"
-          title="Nobody has been invited yet"
-          action={
-            manages ? (
-              <Button size="small" variant="primary" onClick={() => setOpening("invite")}>
-                Invite person
-              </Button>
-            ) : undefined
-          }
-        >
-          This company has no person in it, so nobody can sign in with a password yet. Invite
-          yourself — your address, your seat and the grants you need — and open the link it shows:
-          that is where you choose your login and password. The API token you are using stays the
-          way back in.
-        </Callout>
+      {/* FIRST RUN: nobody has JOINED — `/health`'s `unclaimed` says no person
+          is enrolled, and an invitation creates its person only when it is
+          redeemed — and somebody signed in with an API token is reading
+          this. Which step is next turns on the invitations: with none open,
+          inviting yourself; with one open, its link. Keyed on `unclaimed`
+          alone, the callout said "nobody has been invited" and offered
+          another invitation directly above the one just issued. Drawn once
+          the invitations have answered, so it never says the wrong one first. */}
+      {health?.identity === "unclaimed" && !(invitations.loading && !invitations.data) && (
+        <FirstPerson
+          waiting={(invitations.data ?? []).filter((i) => i.state === "open")}
+          onInvite={manages ? () => setOpening("invite") : undefined}
+        />
       )}
 
       {/* A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: every read here is

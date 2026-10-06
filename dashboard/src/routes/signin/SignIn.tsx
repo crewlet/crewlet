@@ -20,10 +20,11 @@
  * credential — a Tier A token from `crewlet.yaml` — waits behind "Use an API
  * token instead": it is the way in before anybody has been invited, and on
  * the day sign-in itself is broken. On a deployment whose `/health` says
- * `identity: unclaimed` — nobody has been invited yet — it is the ONLY way in,
- * so the token form is open from the start and the page says how to begin:
- * sign in with the token, then invite yourself from Settings › People &
- * access. `unknown` (a node that cannot read its identity estate) and a
+ * `identity: unclaimed` — nobody has JOINED yet, which an open invitation does
+ * not change, since redeeming it is what creates its person — it is the ONLY
+ * way in, so the token form is open from the start and the page says how to
+ * begin: sign in with the token, then invite yourself from Settings › People &
+ * access, or open the link of an invitation already issued. `unknown` (a node that cannot read its identity estate) and a
  * `/health` that did not answer are not "unclaimed": they keep the ordinary
  * page, because telling somebody to invite a founder into a company that has
  * one is the wrong instruction to guess.
@@ -129,7 +130,7 @@ export function SignIn() {
       title="Sign in to Crewlet"
       lede={
         unclaimed
-          ? "Nobody has been invited to this deployment yet."
+          ? "Nobody has joined this deployment yet."
           : reset
             ? "Your password is set. Sign in with it — a second factor you hold is still asked for."
             : "Use the login or email address your invitation was for."
@@ -161,7 +162,7 @@ export function SignIn() {
           <code className="inline">crewlet.yaml</code> declares under{" "}
           <code className="inline">api.auth.tokens</code> — then open Settings › People &amp; access
           and invite yourself. The invitation&rsquo;s link is where you choose your login and
-          password.
+          password; if you have invited yourself already, open that link instead.
         </Callout>
       )}
       <PasswordForm
