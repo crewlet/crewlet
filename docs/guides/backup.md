@@ -477,7 +477,14 @@ carries, so everybody signing in again once lets them straight back:
   revoked, a second factor reset and recovery codes
   regenerated since are all as they were when the artefact was taken — so a
   factor you reset because a phone was lost works again, and so do the
-  recovery codes it replaced.
+  recovery codes it replaced. A password changed since — by its person, or
+  from a reset link — is the one before it again, so a password changed
+  because it leaked signs in once more. (A reset link the artefact holds is
+  not among them: it is ended by the generation, as a machine token is.)
+- **An invitation cancelled since is open again** until its week runs out:
+  cancelling one deletes it, so the artefact's copy comes back with its link
+  working, and whoever holds the link — the stranger an address typo sent it
+  to — can redeem it and be enrolled with what it carries.
 - **A grant or a seat binding taken away since is held again** — never
   above `api.auth.max_grants`, which is Tier A and not in the artefact, but up
   to it.
@@ -488,8 +495,9 @@ log stop at the moment the artefact was taken, exactly like the rows they
 describe. So re-apply each one from a record kept **outside** the estate — your
 own off-boarding and access-change records, or the engine's logs if you ship
 them off the host — with `crewlet iam remove`, `suspend`, `grant`, `unbind`,
-`revoke-credential` and `reset-mfa`. Removals first: a removed person is the
-one the restore handed everything back to.
+`revoke-credential`, `reset-mfa` and `cancel-invite`, and a new reset link
+(`reset-password`) for anybody whose password changed since. Removals first: a
+removed person is the one the restore handed everything back to.
 
 Then read `crewlet iam people`: a restore under a different keyring shows every
 person as *sealed under a key this node's keyring does not hold* rather than as
