@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -101,6 +102,22 @@ type Episode struct {
 	SuccessRate       float64
 	SubjectsInvolved  []string
 	NotablePatterns   string
+}
+
+// DoneCount is how many of the turns a compacted row stands for ended done —
+// COUNTED FROM THE MEMBERS when the row was folded, never the model's word:
+// the fold stores the members' own done share as [Episode.SuccessRate] over
+// [Episode.Count] of them, so rounding the product recovers the count. Zero on
+// a raw row, which stands for one turn and says how it ended in its outcome.
+//
+// ONE RULE for every reader of a compacted row — the query_episodes tool and
+// the memory screen — so "9 of 12 done" cannot read 9 in one and 8 in the
+// other.
+func (e Episode) DoneCount() int {
+	if e.Kind != KindCompacted {
+		return 0
+	}
+	return int(math.Round(e.SuccessRate * float64(max(e.Count, 1))))
 }
 
 // Episodes is the durable episode memory.

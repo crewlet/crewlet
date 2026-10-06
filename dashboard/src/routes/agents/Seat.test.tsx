@@ -1509,6 +1509,63 @@ test("an episode's outcome takes the review decision's own tone", async () => {
   expect(tag("self_iterate").closest(".crewlet-tag")?.className).toContain("warning");
 });
 
+// WHAT WOKE A TURN IS NOT WHAT IT DID. The label of the waking event sat under
+// "What it did", so every chat turn read as having done "Message from Ana";
+// and a compacted row, which has no label, read "The episode recorded no
+// summary" in place of the pattern it was folded into.
+test("an episode says what woke it apart from what it did, and a compacted row its pattern", async () => {
+  mount("#/agents/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          {
+            id: "e1",
+            turn_id: "e1",
+            task_summary: "Message from Ana: Slack message",
+            ask: "The staging deploy keeps failing.",
+            plan_summary: "Rolled staging back to v41.",
+            review_outcome: "done",
+            created_at: "2026-09-21T07:00:00Z",
+          },
+          {
+            id: "c1",
+            turn_id: "",
+            compacted: true,
+            count: 12,
+            done: 9,
+            common_task_pattern: "Triaging a failed staging deploy",
+            notable_patterns: "Two went to the SRE lead.",
+            review_outcome: "done",
+            created_at: "2026-08-01T07:00:00Z",
+          },
+        ],
+        episodes_total: 2,
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("Message from Ana: Slack message")).toBeTruthy());
+  const headers = screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
+  expect(headers).toContain("Woken by");
+  expect(headers).toContain("What it did");
+  const row = (text: string) => screen.getByText(text).closest(".grid-row") as HTMLElement;
+  const cellUnder = (tr: HTMLElement, header: string) =>
+    tr.querySelector(`[data-label="${header}"]`) as HTMLElement;
+  // The turn: its label and its ask under Woken by, its account under What it did.
+  const turn = row("Message from Ana: Slack message");
+  expect(cellUnder(turn, "Woken by").textContent).toContain(
+    "Asked: The staging deploy keeps failing.",
+  );
+  expect(cellUnder(turn, "What it did").textContent).toBe("Rolled staging back to v41.");
+  // The compacted row: how many turns, its pattern and what varied, and its tally.
+  const folded = row("Triaging a failed staging deploy");
+  expect(cellUnder(folded, "Woken by").textContent).toBe("12 turns like this");
+  expect(cellUnder(folded, "What it did").textContent).toContain(
+    "What varied: Two went to the SRE lead.",
+  );
+  expect(cellUnder(folded, "Outcome").textContent).toContain("9 of 12 done");
+  expect(screen.queryByText("The episode recorded no summary")).toBeNull();
+});
+
 // THE CONVERSATION COLUMN IS CAPPED AND A UUID IS CUT TO ITS HEAD: printed
 // whole, a native task's `work:task:<uuid>` took the grid's width and left
 // "What it did" a third of it.

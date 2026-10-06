@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -423,8 +422,7 @@ func renderPastTurn(ep learning.Episode, past learning.PastTurn) string {
 			ep.StartedAt.Format(time.DateOnly), ep.EndedAt.Format(time.DateOnly), count,
 			ep.CommonTaskPattern)
 		if ep.ReviewOutcome != "" {
-			done := int(math.Round(ep.SuccessRate * float64(count)))
-			fmt.Fprintf(&b, "    outcome: %s (%d of %d done)\n", ep.ReviewOutcome, done, count)
+			fmt.Fprintf(&b, "    outcome: %s (%d of %d done)\n", ep.ReviewOutcome, ep.DoneCount(), count)
 		}
 		if notable := strings.TrimSpace(ep.NotablePatterns); notable != "" {
 			fmt.Fprintf(&b, "    what varied: %s\n", notable)

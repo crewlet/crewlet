@@ -41,12 +41,21 @@ interface DiaryEntry {
   retrievals: number;
 }
 
-/** One episode: a completed turn, summarised. */
+/** One episode: a completed turn, summarised — or, compacted, a cluster of
+ *  them, which carries its pattern, its tally and what varied instead of a
+ *  label and an account. */
 interface Episode {
   id: string;
   turn_id: string;
   agent_handle: string;
+  /** The LABEL of the event that woke the turn ("Message from Ana: Slack
+   *  message") — what woke it, never what it did. */
   task_summary: string;
+  /** What the turn was asked: "" for a turn recorded before the ask was
+   *  stored, and on every compacted row. */
+  ask: string;
+  /** What the turn DID: the review's account of what landed, or its final
+   *  answer. */
   plan_summary: string;
   /** "" when the turn ended without a review outcome. */
   review_outcome: string;
@@ -63,6 +72,13 @@ interface Episode {
   /** A compacted row stands for a cluster of turns rather than one. */
   compacted: boolean;
   count: number;
+  /** What a compacted row's turns had in common; "" on a raw row. */
+  common_task_pattern: string;
+  /** How many of a compacted row's `count` turns ended done, counted from the
+   *  members by the engine; 0 on a raw row. */
+  done: number;
+  /** What varied across a compacted row's turns; "" on a raw row. */
+  notable_patterns: string;
 }
 
 /** One skill the seat drafted from its own repeated work. */

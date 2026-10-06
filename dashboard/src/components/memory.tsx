@@ -15,6 +15,7 @@
  * silently disagree.
  */
 
+import type { CSSProperties } from "react";
 import { Card, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -95,6 +96,65 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
   );
 }
 
+/** One episode as the `agent_memory` answer sends it. */
+type EpisodeRow = AgentMemory["episodes"][number];
+
+/** A cell's line held to one line, with its whole text on its title. */
+const ONE_LINE = { "--clamp-lines": 1 } as CSSProperties;
+
+function OneLine({ text, caption = false }: { text: string; caption?: boolean }) {
+  return (
+    <span className={caption ? "t-caption clamp" : "clamp"} style={ONE_LINE} title={text}>
+      {text}
+    </span>
+  );
+}
+
+/**
+ * What woke a turn, and what it was asked — or, for a compacted row, how many
+ * turns it stands for.
+ *
+ * THE LABEL IS SAID AS WHAT WOKE THE TURN, never as what it did: it names the
+ * kind of event ("Message from Ana: Slack message"), and under "What it did"
+ * it told an operator that every chat turn had done "Message from Ana". The
+ * ask under it is what the turn was actually asked, where the row stored one.
+ */
+function EpisodeWokenCell({ episode: e }: { episode: EpisodeRow }) {
+  if (e.compacted) {
+    return <TextCell>{plural(Math.max(e.count, 1), "turn")} like this</TextCell>;
+  }
+  if (!e.task_summary && !e.ask) return <EmptyValue label="Not recorded" />;
+  return (
+    <span className="col" style={{ gap: 2 }}>
+      {e.task_summary ? <OneLine text={e.task_summary} /> : <EmptyValue label="Not recorded" />}
+      {e.ask && <OneLine text={`Asked: ${e.ask}`} caption />}
+    </span>
+  );
+}
+
+/**
+ * What a turn did — its account — or, for a compacted row, what its turns had
+ * in common and what varied: a compacted row has no account of its own, and
+ * drawn as a turn it read "The episode recorded no summary" in place of the
+ * pattern it was folded into.
+ */
+function EpisodeDidCell({ episode: e }: { episode: EpisodeRow }) {
+  if (e.compacted) {
+    if (!e.common_task_pattern) return <EmptyValue label="The compaction recorded no pattern" />;
+    return (
+      <span className="col" style={{ gap: 2 }}>
+        <OneLine text={e.common_task_pattern} />
+        {e.notable_patterns && <OneLine text={`What varied: ${e.notable_patterns}`} caption />}
+      </span>
+    );
+  }
+  return e.plan_summary ? (
+    <OneLine text={e.plan_summary} />
+  ) : (
+    <EmptyValue label="The turn recorded nothing it did" />
+  );
+}
+
 /** One row per completed turn, newest first. */
 export function EpisodesCard({
   memory,
@@ -138,14 +198,14 @@ export function EpisodesCard({
             cell: (e) => <DateCell at={e.created_at} now={now} />,
           },
           {
-            key: "task",
+            key: "woke",
+            header: "Woken by",
+            cell: (e) => <EpisodeWokenCell episode={e} />,
+          },
+          {
+            key: "did",
             header: "What it did",
-            cell: (e) =>
-              e.task_summary ? (
-                <TextCell>{e.task_summary}</TextCell>
-              ) : (
-                <EmptyValue label="The episode recorded no summary" />
-              ),
+            cell: (e) => <EpisodeDidCell episode={e} />,
           },
           {
             key: "outcome",
@@ -158,12 +218,19 @@ export function EpisodesCard({
             // drew it amber.
             cell: (e) =>
               e.review_outcome ? (
-                <Tag
-                  variant={uiletTone(decisionTone("review", e.review_outcome))}
-                  title={decisionLabel("review", e.review_outcome)}
-                >
-                  {e.review_outcome}
-                </Tag>
+                <span className="col" style={{ gap: 2 }}>
+                  <Tag
+                    variant={uiletTone(decisionTone("review", e.review_outcome))}
+                    title={decisionLabel("review", e.review_outcome)}
+                  >
+                    {e.review_outcome}
+                  </Tag>
+                  {e.compacted && (
+                    <span className="t-caption nowrap">
+                      {e.done.toLocaleString()} of {Math.max(e.count, 1).toLocaleString()} done
+                    </span>
+                  )}
+                </span>
               ) : (
                 <EmptyValue label="The turn ended without a review outcome" />
               ),

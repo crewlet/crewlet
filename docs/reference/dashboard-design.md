@@ -2313,7 +2313,11 @@ some, since calls that failed before a model answered recorded none and were a
 bar of nothing named "unknown" — with the way to all of its activity on Live. **Memory** is read from the node HOLDING the seat, whose
 copy is the one kept current, and says which node answered: the diary, the
 episodes (each outcome in the reviewer's own tone — `failed` is red here as on
-a turn), the skills it taught itself and who it has worked with (when last,
+a turn; each turn's **Woken by** — the waking event's label, with what it was
+asked under it — apart from **What it did**, its account, because the label
+under "What it did" said every chat turn had done "Message from Ana"; and a
+compacted row as how many turns it stands for, their pattern and what varied,
+and how many of them ended done), the skills it taught itself and who it has worked with (when last,
 relative, as every list on the profile says it), each header
 the holder's total ("Latest 50 of 142" where the list is a page of it), and the
 **Conversations** it holds a ledger in (`conversation=` opens one) — each

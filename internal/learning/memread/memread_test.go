@@ -682,3 +682,45 @@ func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
 		t.Errorf("the zero Limit read %d of %d: it is the unbounded setting", len(whole), held)
 	}
 }
+
+// AN EPISODE ROW SAYS WHAT IT IS. A raw row carries what woke the turn, what it
+// was asked and what it did under their own names; a compacted row carries its
+// pattern, how many of its turns ended done and what varied — the three things
+// query_episodes answers a seat with, so the screen is not left drawing a
+// compacted row as a turn with no summary.
+func TestAnEpisodeRowSaysWhatItIs(t *testing.T) {
+	t.Parallel()
+	n := newNode(t, "solo:1")
+	for _, ep := range []learning.Episode{{
+		ID: "raw", Handle: "swe", TurnID: "turn-1", WorkKey: "wk-raw", Kind: learning.KindRaw,
+		TaskSummary: "Message from Ana: Slack message", Ask: "The staging deploy keeps failing.",
+		PlanSummary: "Rolled staging back to v41.", ReviewOutcome: "done",
+		StartedAt: pinned, EndedAt: pinned.Add(time.Minute),
+	}, {
+		ID: "folded", Handle: "swe", WorkKey: "wk-folded", Kind: learning.KindCompacted, Count: 12,
+		CommonTaskPattern: "Triaging a failed staging deploy", SuccessRate: 0.75,
+		NotablePatterns: "Two went to the SRE lead.", ReviewOutcome: "done",
+		StartedAt: pinned.Add(-time.Hour), EndedAt: pinned,
+	}} {
+		if _, err := n.stores.Episodes.Append(t.Context(), ep); err != nil {
+			t.Fatalf("episode %s: %v", ep.ID, err)
+		}
+	}
+	got, err := (&memread.Reader{Owner: n.owner, Local: n.stores}).Memory(t.Context(), "swe", 0)
+	if err != nil {
+		t.Fatalf("Memory: %v", err)
+	}
+	rows := map[string]memread.EpisodeRow{}
+	for _, row := range got.Episodes {
+		rows[row.ID] = row
+	}
+	raw, folded := rows["raw"], rows["folded"]
+	if raw.TaskSummary != "Message from Ana: Slack message" || raw.Ask != "The staging deploy keeps failing." ||
+		raw.PlanSummary != "Rolled staging back to v41." || raw.Done != 0 {
+		t.Errorf("the raw row = %+v, want its label, its ask and what it did, and no tally", raw)
+	}
+	if !folded.Compacted || folded.CommonTaskPattern != "Triaging a failed staging deploy" ||
+		folded.Done != 9 || folded.Count != 12 || folded.NotablePatterns != "Two went to the SRE lead." {
+		t.Errorf("the compacted row = %+v, want its pattern, 9 of 12 done and what varied", folded)
+	}
+}
