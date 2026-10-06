@@ -957,10 +957,10 @@ func (n *Node) validate(path Path) error {
 			err, strings.Join(nodeRoleNames, ", "))
 	}
 
-	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: the
-	// object store's failure domain names one of these keys, and a key this
-	// accepted and the placement map refused would be a domain nobody can
-	// spread copies across.
+	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: a
+	// role's placement selector names these keys and matches them exactly,
+	// and a key this accepted and the selector refused would be a label no
+	// seat could ever be placed by.
 	//
 	// Sorted, so a file with several bad keys reports them in the same order
 	// on every run rather than in map order — as role.placement's selector
@@ -1313,11 +1313,12 @@ type Stream struct {
 	// the same broker.
 	//
 	// AT MOST [MaxStreamReplicas], JetStream's own ceiling, and on an
-	// embedded cluster at most the members it names. It is NOT how many
-	// copies the object store keeps of a file: that is the company's
-	// `objects.replicas`, because a count read off whichever node held the
-	// placement map's duty was a count that changed with the lease.
-	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0;max=5" desc:"Copies of every stream and coordination bucket, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members. Not the object store's copies; those are objects.replicas in the company."`
+	// embedded cluster at most the members it names. On the default `nats`
+	// object store it is also how many copies the broker keeps of the
+	// company's FILES, whose bucket is one more stream on it (ADR-0026) —
+	// so they survive exactly what the logs survive; an `s3` bucket keeps
+	// whatever copies its provider promises, and the engine places none.
+	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0;max=5" desc:"Copies of every stream and coordination bucket, and of the company's files on the default nats object store, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members."`
 
 	// EventRetentionHours bounds the event stream. 0 takes the queue's own
 	// default. Unbounded is deliberately not expressible: an event table
