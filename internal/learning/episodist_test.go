@@ -306,7 +306,8 @@ func TestTheGatesThatKeepEpisodesHonest(t *testing.T) {
 }
 
 // A TRANSIENT EMBEDDING OUTAGE MUST NEVER COST AN EPISODE. The row cannot be
-// reconstructed later; the vector can, by nothing more than a re-embed.
+// reconstructed later, and a row without a vector still answers every read
+// but similarity.
 func TestAnUnreachableEmbedderStillWritesTheEpisode(t *testing.T) {
 	t.Parallel()
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
