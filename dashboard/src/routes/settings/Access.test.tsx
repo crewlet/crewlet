@@ -405,6 +405,30 @@ test("a reset link its person used reads used, one withdrawn reads revoked", asy
   expect(screen.getAllByText("Revoked")).toHaveLength(1);
 });
 
+// A RESET LINK CARRIES NO GRANT: it sets a password once and signs nobody in,
+// and the panel said it carried "Its holder's grants". The CONTROL is a
+// password, which signs its holder in with what they hold. Mutation: give the
+// link the password's words and the first expectation goes red.
+test("a reset link says it sets a password, never that it carries grants", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam((url) =>
+    url.pathname === "/iam/credentials"
+      ? json(200, {
+          credentials: [
+            { id: "c-link", person: "p-ana", method: "reset", revoked: false },
+            { id: "c-pw", person: "p-ana", method: "password", revoked: false },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const link = (await screen.findByText("Password reset link")).closest(".grid-row") as HTMLElement;
+  expect(within(link).getByText("Sets a password once")).toBeTruthy();
+  expect(within(link).queryByText("Its holder's grants")).toBeNull();
+  const password = screen.getByText("Password").closest(".grid-row") as HTMLElement;
+  expect(within(password).getByText("Its holder's grants")).toBeTruthy();
+});
+
 // AN ENDED CREDENTIAL DRAWS NO DEADLINE IT WILL NEVER REACH. A used reset
 // link and a revoked token keep the deadline they were issued with, and the
 // person panel read "Used — in 1d". The CONTROLS: a credential that EXPIRED

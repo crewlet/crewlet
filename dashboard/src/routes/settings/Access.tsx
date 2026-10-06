@@ -1437,11 +1437,16 @@ function Principal({
               key: "grants",
               header: "Carries",
               drop: 2,
+              // A RESET LINK CARRIES NO GRANT: it sets a password once and
+              // signs nobody in, and "Its holder's grants" beside it read as a
+              // link that opened the account.
               cell: (c) =>
                 c.method === "token" ? (
                   <GrantTags grants={c.grants} />
                 ) : (
-                  <EmptyValue label="Its holder's grants" />
+                  <EmptyValue
+                    label={c.method === "reset" ? "Sets a password once" : "Its holder's grants"}
+                  />
                 ),
             },
             ...(manages
