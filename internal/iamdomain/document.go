@@ -730,22 +730,72 @@ type Generation struct {
 // [jsoncarry]'s and not this package's: a decode keeps what it has no home
 // for, an encode folds it back, and a carried field loses to a known one.
 
+// # A person and a credential carry at ANY DEPTH, through codecs of their own
+//
+// A person's document travels INSIDE an enrolment and a password change, and
+// every credential travels inside a person's — and encoding/json marshals a
+// nested struct by its fields, where Extra is `-`. So a nested person or
+// credential DROPPED everything it carried, and a credential's carried fields
+// are where the second factor's last accepted step and the recovery codes'
+// verifiers ride: every recovery code was refused for want of a verifier, and
+// a TOTP code verified as often as it was presented inside its window. The
+// two methods on each are the pair rather than a second copy of it, so the
+// rule holds wherever the type is found.
+
+// MarshalJSON folds what a person's document carries back in, at any depth.
+func (p Person) MarshalJSON() ([]byte, error) {
+	type fields Person // the same fields with no methods, or this recurses
+	return jsoncarry.Encode(fields(p), p.Extra)
+}
+
+// UnmarshalJSON keeps what a person's document carries that this build has no
+// home for, at any depth.
+func (p *Person) UnmarshalJSON(data []byte) error {
+	type fields Person
+	var known fields
+	extra, err := jsoncarry.Decode(data, &known, personFields)
+	if err != nil {
+		return err
+	}
+	*p = Person(known)
+	p.Extra = extra
+	return nil
+}
+
+// MarshalJSON folds what a credential carries back in, at any depth.
+func (c Credential) MarshalJSON() ([]byte, error) {
+	type fields Credential
+	return jsoncarry.Encode(fields(c), c.Extra)
+}
+
+// UnmarshalJSON keeps what a credential carries that this build has no home
+// for, at any depth.
+func (c *Credential) UnmarshalJSON(data []byte) error {
+	type fields Credential
+	var known fields
+	extra, err := jsoncarry.Decode(data, &known, credentialFields)
+	if err != nil {
+		return err
+	}
+	*c = Credential(known)
+	c.Extra = extra
+	return nil
+}
+
 // EncodePerson is the bytes a person's document travels as, with every field a
 // newer build wrote folded back in.
-func EncodePerson(p Person) ([]byte, error) { return jsoncarry.Encode(p, p.Extra) }
+func EncodePerson(p Person) ([]byte, error) { return json.Marshal(p) }
 
 // DecodePerson reads a person's document, keeping every field this build has
 // no home for, and refuses one written at a version above [DocumentVersion].
 func DecodePerson(data []byte) (Person, error) {
 	var p Person
-	extra, err := jsoncarry.Decode(data, &p, personFields)
-	if err != nil {
+	if err := json.Unmarshal(data, &p); err != nil {
 		return Person{}, fmt.Errorf("iamdomain: decode a person: %w", err)
 	}
 	if err := checkVersion(p.V); err != nil {
 		return Person{}, err
 	}
-	p.Extra = extra
 	return p, nil
 }
 
@@ -1022,21 +1072,19 @@ func DecodeGeneration(data []byte) (Generation, error) {
 
 // EncodeCredential is the bytes one credential's document travels as, with
 // every field a newer build wrote folded back in.
-func EncodeCredential(c Credential) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
+func EncodeCredential(c Credential) ([]byte, error) { return json.Marshal(c) }
 
 // DecodeCredential reads one credential's document, keeping every field this
 // build has no home for, and refuses one written at a version above
 // [DocumentVersion].
 func DecodeCredential(data []byte) (Credential, error) {
 	var c Credential
-	extra, err := jsoncarry.Decode(data, &c, credentialFields)
-	if err != nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return Credential{}, fmt.Errorf("iamdomain: decode a credential: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
 		return Credential{}, err
 	}
-	c.Extra = extra
 	return c, nil
 }
 
