@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Account } from "./Account.tsx";
+import { fmtDateTime } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -229,6 +230,12 @@ describe("a person's own page", () => {
     expect(await screen.findByText("This browser")).toBeDefined();
     const signOuts = await screen.findAllByRole("button", { name: /^Sign out the session/ });
     expect(signOuts).toHaveLength(1);
+    // NAMED BY A TIME A PERSON READS, never the raw instant a screen reader
+    // spelled out. Mutation: name it by `created_at` as it arrives.
+    expect(signOuts[0]!.getAttribute("aria-label")).toBe(
+      `Sign out the session started ${fmtDateTime("2026-10-05T09:00:00Z")}`,
+    );
+    expect(signOuts[0]!.getAttribute("aria-label")).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
     const before = engineIs.reads("/iam/people/p-1/sessions").length;
     fireEvent.click(signOuts[0]!);
     await waitFor(() =>
@@ -276,12 +283,14 @@ describe("a person's own page", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
     expect(
       await screen.findByRole("button", {
-        name: "Sign out the session started 2026-10-05T20:00:00Z",
+        name: `Sign out the session started ${fmtDateTime("2026-10-05T20:00:00Z")}`,
       }),
     ).toBeDefined();
     expect(screen.getByText("This browser")).toBeDefined();
     expect(
-      screen.queryByRole("button", { name: "Sign out the session started 2026-10-06T01:00:00Z" }),
+      screen.queryByRole("button", {
+        name: `Sign out the session started ${fmtDateTime("2026-10-06T01:00:00Z")}`,
+      }),
     ).toBeNull();
   });
 

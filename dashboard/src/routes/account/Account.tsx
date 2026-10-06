@@ -73,6 +73,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -574,7 +575,10 @@ function Sessions({
                     size="small"
                     variant="ghost"
                     disabled={ending === s.lineage}
-                    aria-label={`Sign out the session started ${s.created_at ?? ""}`}
+                    // A TIME A PERSON READS, in the zone and format the page
+                    // draws every other in: it was the raw ISO instant, so a
+                    // screen reader spelled out "2026-10-06T06:48:15.219Z".
+                    aria-label={`Sign out the session started ${fmtDateTime(s.created_at)}`}
                     onClick={() => void end(s.lineage)}
                   >
                     {ending === s.lineage ? "Signing out" : "Sign out"}
