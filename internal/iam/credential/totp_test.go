@@ -1,6 +1,7 @@
 package credential_test
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -168,5 +169,30 @@ func TestTheOtpauthUriNamesTheIssuerInBothPlaces(t *testing.T) {
 		if !strings.Contains(uri, want) {
 			t.Errorf("the uri %q does not carry %q", uri, want)
 		}
+	}
+}
+
+// AN ISSUER WITH A PORT IS NOT SPLIT AT ITS COLON.
+//
+// The label's colon is the format's separator, and an external URL's host
+// carries one before its port: `localhost:18080:jane.doe` reads as the issuer
+// `localhost` and the account `18080:jane.doe`, disagreeing with the issuer
+// parameter. The CONTROL is the case above, an issuer with no colon, which is
+// written as it is. Mutation: escape the label whole again and its path holds
+// two colons.
+func TestAnIssuerWithAPortIsNotSplitAtItsColon(t *testing.T) {
+	t.Parallel()
+	uri := credential.TOTPURI("localhost:18080", "jane.doe", "GEZDGNBVGY3TQOJQ")
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		t.Fatalf("parse %q: %v", uri, err)
+	}
+	label := strings.TrimPrefix(parsed.Path, "/")
+	issuer, account, _ := strings.Cut(label, ":")
+	if strings.Count(label, ":") != 1 || account != "jane.doe" ||
+		issuer != parsed.Query().Get("issuer") {
+		t.Errorf("the label %q splits into issuer %q and account %q, beside "+
+			"the issuer parameter %q", label, issuer, account,
+			parsed.Query().Get("issuer"))
 	}
 }
