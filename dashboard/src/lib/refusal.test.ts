@@ -41,7 +41,8 @@ test("a refusal with no detail is the engine's own sentence, and nothing else", 
 test("a refusal that names what to change says it, with its hint, as sentences", () => {
   const err = new RestError(400, {
     error: "invalid_body",
-    message: "The request body is not in the shape this endpoint accepts.",
+    message:
+      "The request body is not one this endpoint accepts — its shape, or a value in it — and nothing was changed.",
     detail: "that code does not match the secret",
     hint: "check the authenticator app has the right account",
   });

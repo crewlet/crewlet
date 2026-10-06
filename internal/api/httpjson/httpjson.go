@@ -103,7 +103,9 @@ const (
 	CodeUnreadableBody Code = "unreadable_body"
 
 	// CodeInvalidBody is a body that was read but is not what the route
-	// accepts.
+	// accepts: its shape, or a value in it the route or its domain refused —
+	// a login outside its grammar, a password under the floor, a lifetime
+	// past the cap — which the detail names.
 	CodeInvalidBody Code = "invalid_body"
 
 	// CodeInvalidQuery is a query parameter that is not one of the values
@@ -728,8 +730,9 @@ var codes = map[Code]string{
 	CodeBodyTooLarge: "The request body is larger than this endpoint accepts. " +
 		"Send a smaller document, or split the change across more than one request.",
 	CodeUnreadableBody: "The request body did not arrive in full. Send it again.",
-	CodeInvalidBody:    "The request body is not in the shape this endpoint accepts.",
-	CodeInvalidQuery:   "One of the query parameters is not a value this endpoint accepts.",
+	CodeInvalidBody: "The request body is not one this endpoint accepts — its " +
+		"shape, or a value in it — and nothing was changed.",
+	CodeInvalidQuery: "One of the query parameters is not a value this endpoint accepts.",
 	CodeNonCanonicalPath: "The request path has a dot segment or an empty " +
 		"segment in it. Send the path it resolves to instead.",
 	CodeInternalError: "Something went wrong inside the engine. The reason is " +
