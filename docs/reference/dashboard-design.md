@@ -6300,11 +6300,14 @@ brings that carries a design-system rule.
   opened has no frames, so the browser reports 1006, the same code it gives for
   an engine that is simply down. A plain `GET /ws/stream` runs the same guard
   with the same cookie and stops one line short of the upgrade: 401 is nobody
-  signed in, and sends the reader to the sign-in; 426 means the session was
-  accepted; a `403 second_factor_enrolment_required` stops the dialling and
-  sends them to the enrolment. The loop otherwise keeps dialling on its
-  backoff, because a sign-in in another tab gives this one the cookie too —
-  except that a `503` the engine wrote (a node that cannot read its identity
+  signed in, sends the reader to the sign-in and STOPS the dialling — every
+  dial until somebody signs in is the same 401, two console errors each on a
+  sign-in page left open — until a sign-in in this tab re-dials, or the tab
+  coming back dials once, which is what notices a sign-in made in another tab
+  (it gives this one the cookie too); 426 means the session was accepted; a
+  `403 second_factor_enrolment_required` stops the dialling and sends them to
+  the enrolment. The loop otherwise keeps dialling on its backoff — except that
+  a `503` the engine wrote (a node that cannot read its identity
   estate yet) times the next dial by its `Retry-After`, sooner or later than
   the backoff would have, bounded like every hint. A `503` with no
   `Retry-After`, and one something in front of the engine wrote, keep the

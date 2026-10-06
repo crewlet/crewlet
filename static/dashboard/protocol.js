@@ -1157,6 +1157,12 @@ var LiveSocket = class {
 	* would otherwise schedule the next one.
 	*/
 	refused = false;
+	/**
+	* Whether the latch above is set because NOBODY IS SIGNED IN (see
+	* `authRejected`) — the one refusal the tab coming back may lift, since a
+	* sign-in in another tab gives this one the cookie too.
+	*/
+	signedOut = false;
 	nextQueryId = 1;
 	inflight = /* @__PURE__ */ new Map();
 	/**
@@ -1170,6 +1176,17 @@ var LiveSocket = class {
 	constructor(store) {
 		this.store = store;
 	}
+	/**
+	* The tab came back to a socket stopped because nobody was signed in: dial
+	* ONCE, which is what notices a sign-in made in another tab. A dial that
+	* finds nobody still stops again.
+	*/
+	onVisible = () => {
+		if (!this.signedOut || this.isClosed || document.visibilityState !== "visible") return;
+		this.signedOut = false;
+		this.refused = false;
+		this.connect();
+	};
 	start() {
 		this.connect();
 	}
@@ -1185,6 +1202,7 @@ var LiveSocket = class {
 	*/
 	reconnect() {
 		this.refused = false;
+		this.signedOut = false;
 		this.store.setAuthRejected(false);
 		this.store.setAccessRefused(null);
 		if (this.sock) this.sock.close();
@@ -1192,6 +1210,7 @@ var LiveSocket = class {
 	}
 	stop() {
 		this.isClosed = true;
+		document.removeEventListener("visibilitychange", this.onVisible);
 		clearTimeout(this.reconnectTimer);
 		clearTimeout(this.watchRetry);
 		this.stopPing();
@@ -1439,12 +1458,18 @@ var LiveSocket = class {
 	/**
 	* The engine resolved nobody from this browser's cookie.
 	*
-	* Two things happen, and both are needed. Asking for a sign-in is the repair
-	* — the dashboard is served unauthenticated by design (the page that signs a
-	* person in cannot itself require them to be), so the browser has no other
-	* moment to learn it needs one. The store flag is what the chrome reads while
-	* the loop goes on dialling: a sign-in in another tab gives this one the
-	* cookie too, and the next dial is what notices.
+	* Asking for a sign-in is the repair — the dashboard is served
+	* unauthenticated by design (the page that signs a person in cannot itself
+	* require them to be), so the browser has no other moment to learn it needs
+	* one — and the store flag is what the chrome reads meanwhile.
+	*
+	* AND THE LOOP STOPS, as it does for a refusal: every dial until somebody
+	* signs in is the same 401, and a signed-out tab — the sign-in page, an
+	* invitation's or a reset link's — dialled one on its backoff for as long
+	* as it stayed open, each a failed handshake and a 401 in the console. What
+	* ends it is a sign-in: in this tab, which calls `reconnect()`; or in
+	* another, which gives this one the cookie too and is noticed by ONE dial
+	* when the tab comes back (`onVisible`).
 	*
 	* The socket does not own the screen: the sign-in is a route, and a
 	* transport that reaches into the router is a transport that cannot be
@@ -1453,6 +1478,9 @@ var LiveSocket = class {
 	authRejected() {
 		this.store.setAuthRejected(true);
 		needSession("sign_in");
+		this.stopDialling();
+		this.signedOut = true;
+		document.addEventListener("visibilitychange", this.onVisible);
 	}
 	/**
 	* The dispatch table.

@@ -85,6 +85,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const socket of running) socket.stop();
+  running = [];
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -98,10 +100,15 @@ function dial(n: number): ScriptedWebSocket {
   return sock;
 }
 
+/** Every socket a case started, stopped after it: a stopped socket hears no
+ * `visibilitychange` a later case dispatches. */
+let running: LiveSocket[] = [];
+
 function started(): { socket: LiveSocket; store: Store } {
   const store = new Store();
   const socket = new LiveSocket(store);
   socket.start();
+  running.push(socket);
   return { socket, store };
 }
 
@@ -207,6 +214,35 @@ describe("the engine's close codes", () => {
     expect(store.state.authRejected).toBe(true);
     expect(currentSessionNeed()).toBe("sign_in");
     expect(store.state.accessRefused).toBeNull();
+  });
+
+  // NOBODY SIGNED IN STOPS THE DIALLING: every dial until somebody signs in
+  // is the same 401, and a signed-out tab — the sign-in page, an invitation's
+  // — dialled one on its backoff for as long as it stayed open, two console
+  // errors each. A sign-in here re-dials through reconnect(); one in another
+  // tab is noticed by ONE dial when this tab comes back, which stops again if
+  // it still finds nobody. Mutation: leave the loop running after a 401 and
+  // the dials go on.
+  test("a 401 handshake stops the dialling until a sign-in or the tab's return", async () => {
+    probeStatus = 401;
+    probeBody = { error: "invalid_token" };
+    const { socket } = started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    const dialled = ScriptedWebSocket.dials.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled);
+
+    // THE TAB COMES BACK: one dial, which finds nobody and stops again.
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
+    dial(dialled).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
+
+    // A SIGN-IN HERE re-dials at once.
+    socket.reconnect();
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 2);
   });
 
   // A SESSION THAT MAY ONLY ENROL is refused the socket until it has, and
