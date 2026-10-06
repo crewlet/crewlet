@@ -19,18 +19,18 @@ import (
 // against each other. The controls: what was opened after the counter moved
 // is live in both.
 //
-// AND IT SAYS WHY, since no record named the session and the row holds no
-// reason: an ended session with none was listed beside the deadline it never
-// reached. Where the person's epoch moved, the move that ended it is the one
-// the epoch's row keeps, so it is listed with THAT record's reason and instant
-// — a suspension, a reset link, an administrator ending them all and a
-// password change otherwise all read "ended with every session they held",
-// with no end.
+// AND IT SAYS WHY: an ended session with no reason was listed beside the
+// deadline it never reached. An epoch move writes its record's reason and
+// instant on every session it ends — a suspension, a reset link, an
+// administrator ending them all and a password change otherwise all read
+// "ended with every session they held", with no end — and the company's
+// generation, which writes no row per session, is listed as what it is.
 //
 // Mutation: drop Superseded from SessionRecord.Live, or from
 // CredentialRow.Revoked, and the session or the token minted before the
 // counter moved is listed live; drop the reason and it is listed with none;
-// list the generic reason for an epoch move and the first case goes red.
+// drop the epoch move's write on the sessions it ends and the first case goes
+// red.
 func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -139,49 +139,69 @@ func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 	}
 }
 
-// ONLY THE LAST MOVE IS KEPT, so only a session it ended is listed with it.
+// EACH SESSION KEEPS WHAT ENDED IT, however many moves come after.
 //
-// A session opened before an EARLIER move of the epoch was ended by that one,
-// whose reason the epoch's row no longer holds: it is listed with the generic
-// reason and no end rather than with a later move's, which would name a cause
-// that came after it was already over. The CONTROL is the session the last
-// move ended. Mutation: list the last move for every superseded session and the
-// first one names it.
-func TestOnlyTheEpochsLastMoveIsListedAsWhatEndedASession(t *testing.T) {
+// The epoch's row keeps only its LAST move, and the listing used to derive a
+// session's why from it: a suspension, then a reset link, then an
+// administrator ending them all re-described every session the earlier moves
+// had ended as the last, or as "ended with every session they held" with no
+// end. Each move now writes its reason and instant on the sessions it ends, so
+// the first session reads the first move and the second the second, at two
+// different instants. A session the company's generation ended before the
+// epoch moved is listed as the generation's: the later move came after it was
+// already over. Mutation: derive the reason from the epoch's row again and the
+// first session names the last move or none; drop the generation's exclusion
+// from the epoch's write and the third names the epoch's move.
+func TestEachSessionKeepsTheMoveThatEndedIt(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
 	expires := time.Now().UTC().Add(24 * time.Hour)
-	revoke := func(op, why string) {
+	move := func(write func() error) {
 		t.Helper()
-		if err := rig.draining(func() error {
-			_, err := rig.writer.Revoke(rig.t.Context(), owner, op, why)
-			return err
-		}); err != nil {
+		if err := rig.draining(write); err != nil {
 			t.Fatal(err)
 		}
 		rig.drain()
 	}
+	revoke := func(op, why string) func() error {
+		return func() error {
+			_, err := rig.writer.Revoke(rig.t.Context(), owner, op, why)
+			return err
+		}
+	}
 	first := rig.openSession(owner, expires)
-	revoke("op-first", "changed their own password")
+	move(revoke("op-first", "changed their own password"))
 	second := rig.openSession(owner, expires)
-	revoke("op-second", "signed out everywhere")
+	move(revoke("op-second", "signed out everywhere"))
+	third := rig.openSession(owner, expires)
+	move(func() error {
+		_, err := rig.writer.InvalidateAll(rig.t.Context(), "op-invalidate",
+			"restored from a backup")
+		return err
+	})
+	move(revoke("op-third", "suspended by jane"))
 	sessions, err := rig.reader(t).Sessions(t.Context(), owner)
 	if err != nil {
 		t.Fatalf("list the sessions: %v", err)
 	}
+	why := map[string]string{}
+	at := map[string]time.Time{}
 	for _, s := range sessions {
-		switch s.Lineage {
-		case first:
-			if s.EndedWhy != "ended with every session they held" || !s.EndedAt.IsZero() {
-				t.Errorf("the session an earlier move ended is listed %q at %v",
-					s.EndedWhy, s.EndedAt)
-			}
-		case second:
-			if s.EndedWhy != "signed out everywhere" || s.EndedAt.IsZero() {
-				t.Errorf("the session the last move ended is listed %q at %v",
-					s.EndedWhy, s.EndedAt)
-			}
+		why[s.Lineage], at[s.Lineage] = s.EndedWhy, s.EndedAt
+	}
+	for lineage, want := range map[string]string{
+		first:  "changed their own password",
+		second: "signed out everywhere",
+		third:  "ended with every session in the company",
+	} {
+		if why[lineage] != want {
+			t.Errorf("the session %s is listed ended because %q, want %q",
+				lineage, why[lineage], want)
 		}
+	}
+	if at[first].IsZero() || at[second].IsZero() || !at[first].Before(at[second]) {
+		t.Errorf("the sessions two moves ended are listed ended at %v and %v, "+
+			"want each move's own instant", at[first], at[second])
 	}
 }

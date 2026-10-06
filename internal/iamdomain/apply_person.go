@@ -361,14 +361,36 @@ func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("iamdomain: bump person %s's epoch: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
-	if written > 0 {
-		// EVERY SESSION AND MACHINE TOKEN THEY HOLD is over, which is the
-		// whole of what an epoch bump is for.
-		if err := a.movedPerson(ctx, tx, id); err != nil {
-			return int(written), err
-		}
+	if written == 0 {
+		return 0, nil
 	}
-	return int(written), nil
+	// EVERY SESSION AND MACHINE TOKEN THEY HOLD is over, which is the whole
+	// of what an epoch bump is for.
+	if err = a.movedPerson(ctx, tx, id); err != nil {
+		return int(written), err
+	}
+	// AND EACH SESSION IT ENDED SAYS SO ON ITS OWN ROW, with this record's
+	// reason and instant. The epoch's row keeps only its LAST move, so a
+	// listing that derived the why from it re-described every session an
+	// earlier move had ended — a suspension, then a reset link, then an
+	// administrator ending them all, each listed as the last. Written HERE,
+	// once, it is the reason of the move that actually ended the session,
+	// and no later move rewrites it: the guard is `ended_at = 0`, as a
+	// sign-out's is. A session the company's generation already ended is
+	// left to say that ([Reader.Sessions]), since this move came after it.
+	ended, err := tx.ExecContext(ctx, `
+		UPDATE iam_sessions
+		SET ended_at = ?, ended_reason = ?, version = ?
+		WHERE person_id = ? AND ended_at = 0 AND epoch < ?
+		  AND start_position >= COALESCE((SELECT version
+		      FROM iam_session_generation WHERE singleton = 0), 0)`,
+		at.unix(), at.record.Reason, at.packed, id, int64(epoch))
+	if err != nil {
+		return int(written), fmt.Errorf("iamdomain: end person %s's sessions: %w",
+			id, err)
+	}
+	closed, _ := ended.RowsAffected()
+	return int(written + closed), nil
 }
 
 // errorsIsNoRows is `errors.Is(err, sql.ErrNoRows)` under a name the call

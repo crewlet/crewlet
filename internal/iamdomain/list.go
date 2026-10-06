@@ -473,12 +473,12 @@ type SessionRecord struct {
 	// sessions needs told apart from a whole one.
 	EnrolmentOnly bool
 
-	// Superseded marks a session a COUNTER ended rather than its own row:
-	// opened before the company's last invalidation, or at a revocation
-	// epoch its person has since moved past ([sessionSuperseded]). Neither
-	// writes `ended_at` — a password change, "sign out everywhere" and an
-	// administrator ending somebody's sessions all move the epoch — so a
-	// listing that read the row alone reported every one of them live.
+	// Superseded marks a session a COUNTER ended: opened before the
+	// company's last invalidation, or at a revocation epoch its person has
+	// since moved past ([sessionSuperseded]). The company's invalidation
+	// writes no `ended_at`, and neither does an epoch move on a session
+	// whose start landed after it, so a listing that read the row alone
+	// reported those live.
 	Superseded bool
 }
 
@@ -519,19 +519,9 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 		if err != nil {
 			return err
 		}
-		// THE LAST MOVE OF THE EPOCH, and what it was: a session the
-		// counter ended is listed with that move's reason and instant when
-		// that move is the one that ended it.
-		var (
-			current     uint64
-			movedWhy    string
-			movedMillis int64
-		)
-		err = tx.QueryRowContext(ctx, `
-			SELECT epoch, reason, bumped_at FROM iam_revocation_epochs
-			WHERE person_id = ?`, personID).Scan(&current, &movedWhy, &movedMillis)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("iamdomain: read person %s's epoch: %w", personID, err)
+		current, err := epochOf(ctx, tx, personID)
+		if err != nil {
+			return err
 		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT lineage, person_id, epoch, start_position, created_at,
@@ -568,21 +558,17 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 			row.Superseded = sessionSuperseded(uint64(start), row.Epoch,
 				invalidated, current)
 			if row.Superseded && ended == 0 {
-				// A COUNTER ENDED IT, and no record named this session, so
-				// the row holds no reason: say which, or the listing shows
-				// an ended session with no account of why — beside the
-				// deadline it never reached.
+				// A COUNTER ENDED IT and the row holds no reason: say
+				// which, or the listing shows an ended session with no
+				// account of why — beside the deadline it never reached.
+				// An epoch move writes its own reason on every session it
+				// ends ([Applier.bumpEpoch]), so what is left here is the
+				// company's generation, which ends everybody's at once and
+				// writes no row per session, and a session whose start
+				// landed after the move that had already ended it.
 				switch {
 				case uint64(start) < invalidated:
 					row.EndedWhy = "ended with every session in the company"
-				case row.Epoch+1 == current && movedWhy != "":
-					// THE LAST MOVE ENDED IT, so its record's reason and
-					// instant are this session's: a suspension, a reset
-					// link, an administrator ending them all and a password
-					// change read alike otherwise. An earlier move ended
-					// one opened before that, and only the last is kept.
-					row.EndedWhy = movedWhy
-					ended = movedMillis
 				default:
 					row.EndedWhy = "ended with every session they held"
 				}

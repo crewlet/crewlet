@@ -728,10 +728,13 @@ grant that can lock a company out of its own engine.
 **A listing says what still works.** A session's `live` and a credential's
 `revoked` are the reading the request guard makes: a session or a machine token
 ended by its person's revocation epoch — a password change, signing out
-everywhere, an administrator ending their sessions — or by
-`POST /iam/invalidate-all` is listed ended, although neither gesture writes an
-`ended_at` or a `revoked_at` on it, and a named sign-out of a session listed
-live finds it live.
+everywhere, an administrator ending their sessions, a suspension — or by
+`POST /iam/invalidate-all` is listed ended, and a named sign-out of a session
+listed live finds it live. A session keeps the `ended_reason` and `ended_at` of
+whatever ended it — a revocation writes its own on every session it ends, and a
+later one never rewrites them — while `POST /iam/invalidate-all`, which writes
+nothing per session, lists its sessions ended "with every session in the
+company" and no `ended_at`; neither counter writes a `revoked_at` on a token.
 
 #### Every write answers three ways
 
