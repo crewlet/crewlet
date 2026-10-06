@@ -218,6 +218,21 @@ describe("redeeming it", () => {
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
+  // TYPED TWICE, because a slip in the only copy is an account its owner
+  // cannot sign in to. The CONTROL is the next case, the same password typed
+  // the same way twice, which is posted.
+  test("a password typed differently the second time is refused here, and nothing is posted", async () => {
+    const sent = engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("Login");
+    type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery stable");
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+
+    expect(await screen.findByText("The two passwords are not the same.")).toBeDefined();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([]);
+  });
+
   test("it posts the secret in the body and lands on the Inbox, signed in", async () => {
     const sent = engine({
       [`GET ${PATH}`]: VIEW,
@@ -237,6 +252,7 @@ describe("redeeming it", () => {
     await screen.findByLabelText("Login");
     type(/your name/i, "Jane Doe");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
     await waitFor(() => expect(location.hash).toBe("#/"));
@@ -262,6 +278,7 @@ describe("redeeming it", () => {
     mount();
     await screen.findByLabelText("Login");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
     await waitFor(() =>
@@ -277,6 +294,7 @@ describe("redeeming it", () => {
     mount();
     await screen.findByLabelText("Login");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
     expect(
       await screen.findByText(
@@ -308,6 +326,7 @@ describe("redeeming it", () => {
     // in place the enrolment was sent straight back to the sign-in form.
     needSession("sign_in");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
     const enrol = `#/enrol?next=${encodeURIComponent("#/")}`;

@@ -27,12 +27,13 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Callout, EmptyState, FormField, Input, Skeleton } from "@crewlethq/ui";
+import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
 import { CompassGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { auth, RestError, type ResetView } from "~/protocol/index.ts";
-import { characters, parseLink } from "./link.ts";
+import { parseLink } from "./link.ts";
+import { NewPasswordFields, newPasswordReady } from "./NewPassword.tsx";
 import { SignInPage } from "./SignInPage.tsx";
 
 type Read =
@@ -176,16 +177,16 @@ function Choose({
   onSet: (login: string) => void;
 }) {
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
   const floor = view.min_password_length;
-  const short = characters(password) < floor;
 
   async function submit() {
     setTried(true);
-    if (busy || short) return;
+    if (busy || !newPasswordReady(password, confirm, floor)) return;
     setBusy(true);
     setRefusal(null);
     try {
@@ -229,28 +230,14 @@ function Choose({
           autoComplete="username"
           value={view.login}
         />
-        <FormField
-          label="New password"
-          helper={`At least ${floor} characters. There are no other rules; a long phrase is the strongest password there is.`}
-          error={
-            tried && short
-              ? `This is ${characters(password)} characters, and the minimum is ${floor}.`
-              : undefined
-          }
-        >
-          {(field) => (
-            <Input
-              id={field.id}
-              aria-describedby={field.describedBy}
-              aria-invalid={field.invalid || undefined}
-              type="password"
-              autoComplete="new-password"
-              width="full"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          )}
-        </FormField>
+        <NewPasswordFields
+          floor={floor}
+          password={password}
+          confirm={confirm}
+          onPassword={setPassword}
+          onConfirm={setConfirm}
+          tried={tried}
+        />
         {refusal && (
           <Callout variant="danger" role="alert">
             {refusal}

@@ -160,6 +160,19 @@ describe("spending it", () => {
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
+  // TYPED TWICE, for the invitation's reason. The CONTROL is the next case,
+  // which types it the same way twice and is posted.
+  test("a password typed differently the second time is refused here, and nothing is posted", async () => {
+    const sent = engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("New password");
+    type("New password", "correct horse battery staple");
+    type("Confirm new password", "correct horse battery stable");
+    fireEvent.click(screen.getByRole("button", { name: "Set password" }));
+    expect(await screen.findByText("The two passwords are not the same.")).toBeDefined();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([]);
+  });
+
   // THE CONTROL for the sign-in it does not do: the answer carries no session,
   // so the screen sends the person to the sign-in form rather than in.
   test("it posts the secret in the body and sends the person to sign in", async () => {
@@ -170,6 +183,7 @@ describe("spending it", () => {
     mount();
     await screen.findByLabelText("New password");
     type("New password", "correct horse battery staple");
+    type("Confirm new password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
 
     expect(await screen.findByText("Your password is set")).toBeDefined();
@@ -185,6 +199,7 @@ describe("spending it", () => {
     mount();
     await screen.findByLabelText("New password");
     type("New password", "correct horse battery staple");
+    type("Confirm new password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Set password" }));
     expect(
       await screen.findByText(

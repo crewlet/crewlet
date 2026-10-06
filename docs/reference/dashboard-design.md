@@ -775,8 +775,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs `fleet:operate`)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home |
-| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it and the seat it binds, then a login, a name and a password. The link the engine mints lands here | |
-| `#/reset/{id}.{secret}` | **Password reset** *(outside the frame)* — whose password the link sets, then a new one, once; it ends every session the person held and signs nobody in, so it ends on the sign-in form. The link an administrator issues lands here | |
+| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it and the seat it binds, then a login, a name and a password, typed twice. The link the engine mints lands here | |
+| `#/reset/{id}.{secret}` | **Password reset** *(outside the frame)* — whose password the link sets, then a new one, typed twice, once; it ends every session the person held and signs nobody in, so it ends on the sign-in form. The link an administrator issues lands here | |
 | `#/enrol` | **Second factor** *(outside the frame)* — the authenticator a deployment that requires one asks for before anything else opens, then the first recovery codes | `next=`, as the sign-in's |
 
 **There is no redirect table.** There was one, and it was always a liability: a
@@ -1808,7 +1808,9 @@ whole credential in the fragment, which no browser sends to a server, and the
 screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
 the view, the body on the redemption — never in a request URL. The view names
 who it is for, who sent it and the seat it binds; the form proposes the login
-the engine suggested and states the password length `/auth/config` asks for. A
+the engine suggested, states the password length `/auth/config` asks for and
+takes the password twice — a slip in the only copy is an account nobody can
+sign in to, and the way back is an administrator's reset link. A
 spent, withdrawn or mistyped link is one screen (`410`), and a login or address
 somebody else holds is the engine's own sentence (`409`) over the form as
 typed.
@@ -1817,7 +1819,8 @@ typed.
 in.** The link an administrator issues carries its credential in the fragment
 the same way, and the screen sends the secret beside the id — the
 `X-Crewlet-Reset-Secret` header on the view, the body on the spend. The view
-names whose password it sets and states the length `/auth/config` asks for; a
+names whose password it sets, takes the new one twice and states the length
+`/auth/config` asks for; a
 spent, revoked, expired or mistyped link is one screen (`410`). Setting the
 password ends every session the person held and opens none, so the screen ends
 on a **Sign in** button rather than in the product: a second factor the person
