@@ -255,3 +255,43 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 		t.Errorf("the refusal names the seat's holder: %s", rec.Body)
 	}
 }
+
+// AN INVITATION NAMES WHO SENT IT AS THE CHART NAMES THEM.
+//
+// A person bound to a seat writes as the seat, so the invitation records its
+// author by the seat's handle, and the page said "founder invited you" to
+// somebody who knows that person as "Jane Founder". The CONTROL is an author
+// the chart does not hold, named as the record holds it. Mutation: answer the
+// recorded author and the seat's name is never shown.
+func TestAnInvitationNamesWhoSentItAsTheChartNamesThem(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		seats companySeats
+		want  string
+	}{
+		{"a seat the chart holds", companySeats{"founder": {Handle: "founder",
+			Kind: session.SeatKindHuman, Name: "Jane Founder"}}, "Jane Founder"},
+		{"a seat it does not (the control)", companySeats{}, "founder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+				o.Directory = sealedInvitation{}
+				o.Seats = tc.seats
+				o.Sealer = stubSealer{address: "dana@example.com"}
+			}).Routes(mux)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, viewInvite(invitationID))
+			var view struct {
+				InvitedBy string `json:"invited_by"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil ||
+				rec.Code != http.StatusOK || view.InvitedBy != tc.want {
+				t.Errorf("the view answered %d naming %q (%v), want %q", rec.Code,
+					view.InvitedBy, err, tc.want)
+			}
+		})
+	}
+}

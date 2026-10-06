@@ -67,7 +67,8 @@ type inviteView struct {
 	Email string `json:"email"`
 
 	// InvitedBy is who sent it, which is the first thing somebody
-	// checks before they act on a link.
+	// checks before they act on a link — as they would know them
+	// ([Service.inviterOf]).
 	InvitedBy string `json:"invited_by,omitempty"`
 
 	// Login is the login this form PROPOSES, derived from the address by
@@ -132,7 +133,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := inviteView{
-		Email: email, InvitedBy: held.InvitedBy,
+		Email: email, InvitedBy: s.inviterOf(r.Context(), held.InvitedBy),
 		Login:             iam.LoginFromAddress(email),
 		MinPasswordLength: s.passwordFloor(),
 	}
@@ -140,6 +141,23 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 		view.Seat = s.inviteSeatOf(r.Context(), held.Seat)
 	}
 	httpjson.Write(w, http.StatusOK, view)
+}
+
+// inviterOf is who sent an invitation, as somebody holding the link would know
+// them. The record names its author as every record does, and a person bound
+// to a seat writes AS the seat, by its handle — so the page read "jane-founder
+// invited you" — while the chart names the seat "Jane Founder". A seat is
+// named as the company this node runs names it; anybody else, or a seat this
+// node cannot place, by the name the record holds.
+func (s *Service) inviterOf(ctx context.Context, author string) string {
+	if s.seats == nil || !iam.ValidSeatHandle(author) {
+		return author
+	}
+	seat, found, err := s.seats.Seat(ctx, author)
+	if err != nil || !found || seat.Name == "" {
+		return author
+	}
+	return seat.Name
 }
 
 // inviteSeatOf is the seat an invitation binds, as the company this node runs
