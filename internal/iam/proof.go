@@ -26,10 +26,11 @@ import "slices"
 // A NAMED STRING WHOSE ZERO VALUE MEANS REQUIRED, and never a bool: a bool
 // would default to false, which reads as "optional", so a company that
 // declared nothing would silently be the company with no second factor. The
-// zero is the secure value instead — [SecondFactor.Requires] answers true for
-// it — so `optional` is always somebody's explicit choice. [SecondFactor.Valid]
-// is about the two values a file may write; internal/config accepts the zero
-// beside them as the unset setting.
+// zero is the secure value instead — internal/config's `APIAuth.SecondFactor`
+// reads it, and anything else but `optional`, as required — so `optional` is
+// always somebody's explicit choice. [SecondFactor.Valid] is about the two
+// values a file may write; internal/config accepts the zero beside them as the
+// unset setting.
 type SecondFactor string
 
 const (
@@ -58,14 +59,6 @@ var SecondFactors = []SecondFactor{SecondFactorRequired, SecondFactorOptional}
 
 // Valid reports whether a value off the wire is one this build knows.
 func (s SecondFactor) Valid() bool { return slices.Contains(SecondFactors, s) }
-
-// Requires reports whether a second factor must be enrolled.
-//
-// AN ALLOWLIST OF ONE, for [Stage.MayAct]'s reason turned round: a value
-// this build does not know answers TRUE here, because the safe direction for
-// "must you prove more" is yes. A denylist would have read an unknown value as
-// optional and quietly dropped the requirement on a rolling upgrade.
-func (s SecondFactor) Requires() bool { return s != SecondFactorOptional }
 
 // MinPasswordChars is the shortest password this engine accepts, and the floor
 // under `api.auth.min_password_length`.

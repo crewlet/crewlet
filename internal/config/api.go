@@ -370,7 +370,7 @@ type APIAuth struct {
 	// sat in was itself optional and its absence meant nobody signed in at
 	// all; with password sign-in always on, a refusal of the zero would make
 	// every deployment write the one line that should be the default. See
-	// [iam.SecondFactor.Requires], which reads the zero as required.
+	// [APIAuth.SecondFactor], which reads the zero as required.
 	TOTP iam.SecondFactor `yaml:"totp,omitempty" json:"totp,omitempty" js:"enum=required|optional" desc:"Whether a second factor is required of a person signing in with a password (default required). optional off loopback needs accept_insecure."`
 
 	// AcceptInsecure is the deliberate acknowledgement that this
@@ -407,6 +407,11 @@ type APIAuth struct {
 
 // SecondFactor is whether a second factor is required here, with the default
 // applied: `optional` where the file says so, and `required` everywhere else.
+//
+// AN ALLOWLIST OF ONE, for [iam.Stage.MayAct]'s reason turned round: a value
+// this build does not know reads as REQUIRED, because the safe direction for
+// "must you prove more" is yes. It is the ONE reading of the setting — the
+// sign-in that enforces it and the posture read that reports it both ask it.
 func (a APIAuth) SecondFactor() iam.SecondFactor {
 	if a.TOTP == iam.SecondFactorOptional {
 		return iam.SecondFactorOptional

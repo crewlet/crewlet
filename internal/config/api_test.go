@@ -401,8 +401,13 @@ func TestTheSecondFactorIsRequiredUnlessOptionalIsStatedAndJudgedOnTheExternalUR
 			t.Errorf("an unset second factor reads as %q, want %q", got,
 				iam.SecondFactorRequired)
 		}
-		if !b.API.Auth.TOTP.Requires() {
-			t.Error("an unset second factor does not require one")
+		// AN UNKNOWN VALUE REQUIRES ONE TOO: a denylist would read a newer
+		// peer's value as optional and drop the requirement for the length
+		// of a rolling upgrade.
+		newer := APIAuth{TOTP: "somethingnewer"}
+		if got := newer.SecondFactor(); got != iam.SecondFactorRequired {
+			t.Errorf("a value this build does not know reads as %q, want %q",
+				got, iam.SecondFactorRequired)
 		}
 	})
 	t.Run("a value this build does not know is refused", func(t *testing.T) {

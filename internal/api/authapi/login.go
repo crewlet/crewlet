@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -918,10 +919,11 @@ func (s *Service) enrolmentOnly(how signIn) bool {
 // of somebody who signs in with a password: `api.auth.totp`, whose unset value
 // is required.
 //
-// [iam.SecondFactor.Requires] reads the zero and a value this build does not
-// know as required, which is the safe direction for "must you prove more".
+// THE SAME READING `/auth/config` reports ([config.APIAuth.SecondFactor]), so
+// what the posture read tells a sign-in page and what the sign-in enforces
+// cannot disagree about the default.
 func (s *Service) secondFactorRequired() bool {
-	return s.boot.API.Auth.TOTP.Requires()
+	return s.boot.API.Auth.SecondFactor() == iam.SecondFactorRequired
 }
 
 // proofOf is the instant a sign-in proved who somebody is: the replaced

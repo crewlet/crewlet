@@ -23,22 +23,3 @@ func TestTheZeroSecondFactorIsRefusedRatherThanRead(t *testing.T) {
 		t.Error("a value this build has never heard of validated")
 	}
 }
-
-// AN UNKNOWN VALUE REQUIRES A SECOND FACTOR.
-//
-// The safe direction for "must you prove more" is yes. A denylist would read a
-// newer peer's value as optional and quietly drop the requirement for the
-// length of a rolling upgrade.
-func TestAnUnknownSecondFactorStillRequiresOne(t *testing.T) {
-	t.Parallel()
-	for mode, want := range map[SecondFactor]bool{
-		SecondFactorRequired: true,
-		SecondFactorOptional: false,
-		"":                   true,
-		"somethingnewer":     true,
-	} {
-		if got := mode.Requires(); got != want {
-			t.Errorf("%q requires a second factor %v, want %v", mode, got, want)
-		}
-	}
-}
