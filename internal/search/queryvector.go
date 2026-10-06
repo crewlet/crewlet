@@ -61,7 +61,9 @@ const QueryEmbeddingCacheEntries = 1024
 // single short input to a hosted embeddings endpoint answers in a few hundred
 // milliseconds at the p99, so a healthy provider never meets it — and nor does
 // the one batch request a query past a narrow model's bound is sent as
-// ([queryEmbedding]), which carries at most [knowledge.MaxQueryBytes].
+// ([queryEmbedding]), which carries [knowledge.MaxQueryBytes] as typed and at
+// most three times that as sent — the size a query of nothing but stray bytes
+// reaches once each is a U+FFFD ([embeddings.Prepare]).
 const QueryEmbedBudget = 2 * time.Second
 
 // EmbeddingModel is the company's embedder as a query needs it: the provider,
@@ -172,7 +174,9 @@ func (v *QueryVectors) Vector(ctx context.Context, text string) (QueryVector, kn
 //
 // WHICH ONLY A NARROW MODEL EVER NEEDS. Every surface refuses a query past
 // [knowledge.MaxQueryBytes], and every model this build documents takes at
-// least five times that in one input, so on those this is one [embeddings.Embedder.Embed] call. A
+// least five times that in one input — more than the three times a query can
+// grow to as sent, every byte of it a stray one that [embeddings.Prepare]
+// makes a U+FFFD — so on those this is one [embeddings.Embedder.Embed] call. A
 // local model stated with a smaller window (`max_input_tokens`, a 256-token
 // sentence encoder) would otherwise refuse every query longer than its bound,
 // and each refusal would read as the provider failing.
