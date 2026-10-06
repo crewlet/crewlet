@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -124,6 +125,51 @@ func TestAnUnknownModelStatesEveryLimit(t *testing.T) {
 	if got := e.Limits(); got != want {
 		t.Errorf("Limits() = %+v, want %+v", got, want)
 	}
+}
+
+// THE WAY OUT OF A MISSING LIMIT CLEARS IT. A model this build does not know
+// is refused for each limit it leaves unstated, and the refusal offers naming a
+// model the table carries instead — so every model it offers must be one whose
+// limit the table carries, or the advice is a second refusal for the same
+// field: two of the four models document no request limits at all.
+func TestAMissingLimitSuggestsOnlyModelsThatResolveIt(t *testing.T) {
+	t.Parallel()
+	unknown := &config.EmbeddingProvider{
+		Type: config.EmbeddingOpenAICompatible, Model: "bge-m3",
+		BaseURL: "http://embed.example.com/v1", Dimensions: 1024,
+	}
+	suggestion := regexp.MustCompile(`name a model whose limit it carries \(([^)]+)\)`)
+	for _, field := range []string{"max_input_tokens", "max_batch_inputs", "max_batch_tokens"} {
+		t.Run(field, func(t *testing.T) {
+			refusal, refused := limitRefusals(embeddingCompany(t, unknown).Validate())[field]
+			if !refused {
+				t.Fatalf("an unknown model with no %s was not refused for it", field)
+			}
+			found := suggestion.FindStringSubmatch(refusal)
+			if found == nil {
+				t.Fatalf("refusal %q names no model to switch to", refusal)
+			}
+			for _, model := range strings.Split(found[1], ", ") {
+				switched := &config.EmbeddingProvider{Type: config.EmbeddingOpenAI, Model: model}
+				if again, ok := limitRefusals(embeddingCompany(t, switched).Validate())[field]; ok {
+					t.Errorf("the refusal suggests %s, which is refused for %s too: %s",
+						model, field, again)
+				}
+			}
+		})
+	}
+}
+
+// limitRefusals is each embedding-limit field a validation refused, keyed by
+// the field, with the refusal's message.
+func limitRefusals(err error) map[string]string {
+	out := map[string]string{}
+	for _, p := range config.Problems(err) {
+		if field, ok := strings.CutPrefix(p.Path, "providers.embeddings."); ok {
+			out[field] = p.Message
+		}
+	}
+	return out
 }
 
 // A STATED LIMIT MAY ONLY LOWER A DOCUMENTED ONE — it is for a gateway that

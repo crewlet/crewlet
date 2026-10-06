@@ -1387,21 +1387,22 @@ func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
 	model, known := EmbeddingModels[name]
 	wrap := e.wrapTokens()
 	for _, limit := range []struct {
-		field      string
-		stated     int
-		documented int
-		what       string
+		field  string
+		stated int
+		of     func(EmbeddingModel) int
+		what   string
 	}{
-		{"max_input_tokens", e.MaxInputTokens, model.InputTokens, "tokens one input may hold"},
-		{"max_batch_inputs", e.MaxBatchInputs, model.BatchInputs, "inputs one request may carry"},
-		{"max_batch_tokens", e.MaxBatchTokens, model.BatchTokens, "tokens one request may carry"},
+		{"max_input_tokens", e.MaxInputTokens, func(m EmbeddingModel) int { return m.InputTokens }, "tokens one input may hold"},
+		{"max_batch_inputs", e.MaxBatchInputs, func(m EmbeddingModel) int { return m.BatchInputs }, "inputs one request may carry"},
+		{"max_batch_tokens", e.MaxBatchTokens, func(m EmbeddingModel) int { return m.BatchTokens }, "tokens one request may carry"},
 	} {
+		documented := limit.of(model)
 		switch {
 		case limit.stated < 0:
 			p.add(at(path, limit.field), ErrOutOfRange,
 				"must be 0 (the named model's documented limit) or the most %s, "+
 					"got %d", limit.what, limit.stated)
-		case limit.stated > 0 && limit.documented > 0 && limit.stated > limit.documented:
+		case limit.stated > 0 && documented > 0 && limit.stated > documented:
 			// RAISING A DOCUMENTED LIMIT is refused, not obeyed: the
 			// provider would refuse what the engine then sends, and
 			// the field exists to LOWER one — a gateway or proxy in
@@ -1410,17 +1411,29 @@ func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
 				"%d is above the %d %s for %q as its vendor documents it; this "+
 					"field may only lower a documented limit (for a gateway or a "+
 					"proxy that accepts less) — leave it unset to take %d",
-				limit.stated, limit.documented, limit.what, name, limit.documented)
-		case limit.stated == 0 && limit.documented == 0 && known:
+				limit.stated, documented, limit.what, name, documented)
+		case limit.stated == 0 && documented == 0 && known:
 			p.add(at(path, limit.field), ErrMissing,
 				"this build carries no value for the most %s for %q: %s. State "+
 					"`%s` from the limit your endpoint enforces",
 				limit.what, name, model.Undocumented, limit.field)
-		case limit.stated == 0 && limit.documented == 0:
-			p.add(at(path, limit.field), ErrMissing,
-				"this build does not know the most %s for %q. Either name a model "+
-					"it knows (%s) or state `%s` yourself",
-				limit.what, name, knownModels(), limit.field)
+		case limit.stated == 0 && documented == 0:
+			// THE WAY OUT NAMES ONLY MODELS THAT TAKE IT: a model the
+			// table carries without this limit would be refused for
+			// the same field, so suggesting it is advice that does not
+			// clear the error. With none to name, stating it is the
+			// one way out, and the refusal says only that.
+			if models := modelsDocumenting(limit.of); models != "" {
+				p.add(at(path, limit.field), ErrMissing,
+					"this build does not know the most %s for %q. Either name a "+
+						"model whose limit it carries (%s) or state `%s` yourself",
+					limit.what, name, models, limit.field)
+			} else {
+				p.add(at(path, limit.field), ErrMissing,
+					"this build does not know the most %s for %q, nor for any "+
+						"model it carries. State `%s` from the limit your endpoint "+
+						"enforces", limit.what, name, limit.field)
+			}
 		}
 	}
 	// AN INPUT BOUND THAT CANNOT HOLD A CHARACTER is refused here rather
@@ -1447,9 +1460,18 @@ func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
 // knownModels lists the models this build carries, sorted, for the refusals
 // above.
 func knownModels() string {
+	return modelsDocumenting(func(EmbeddingModel) int { return 1 })
+}
+
+// modelsDocumenting lists, sorted, the models this build carries a value of
+// limit for — the models that name in a refusal of that limit is a way out of
+// it — or "" when none does.
+func modelsDocumenting(limit func(EmbeddingModel) int) string {
 	out := make([]string, 0, len(EmbeddingModels))
-	for model := range EmbeddingModels {
-		out = append(out, model)
+	for name, model := range EmbeddingModels {
+		if limit(model) > 0 {
+			out = append(out, name)
+		}
 	}
 	slices.Sort(out)
 	return strings.Join(out, ", ")
