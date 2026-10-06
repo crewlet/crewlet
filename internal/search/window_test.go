@@ -17,10 +17,13 @@ import (
 // It is the measurement that decides whether a company needs more than one
 // vector a source, so it must count what the semantic half actually cannot
 // see: each source the corpora embed — never a trashed page or a draft — as
-// its title, one space and its whole body with the whitespace collapsed, the
-// way the window is measured when a vector is computed. A whitespace-heavy body
-// is short once prepared and lies inside the window; counted raw, it would
-// report text past the window that the model would never have been sent.
+// its title, one space and its whole body with the whitespace collapsed,
+// against the opening the duty really sends. That opening is formed from the
+// body as the duty READS it — its first [search.EmbedReadChars] characters —
+// so a body that opens on a long run of whitespace sends less than the window
+// even when its whole text is short once collapsed: what follows the run was
+// never read, and is past the window. Measured from the whole body, the report
+// counted it as embedded.
 func TestTheWindowReportMeasuresWhatTheEmbeddedOpeningLeavesOut(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)
@@ -45,9 +48,11 @@ func TestTheWindowReportMeasuresWhatTheEmbeddedOpeningLeavesOut(t *testing.T) {
 	}
 	want := map[search.Source]search.WindowReport{
 		// "Short a short body" (18), "Long abcdefghi …" (10 004, of which the
-		// 8 192-byte opening leaves 1 812), "Ws x y" (6).
-		search.SourceTask: {Source: search.SourceTask, Sources: 3, Beyond: 1,
-			Bytes: 18 + 10_004 + 6, BeyondBytes: 1_812},
+		// 8 192-byte opening leaves 1 812), and "Ws x y" (6), of which the
+		// duty sends "Ws x": it reads "x" and the first 16 383 of the 20 000
+		// spaces, so " y" was never read.
+		search.SourceTask: {Source: search.SourceTask, Sources: 3, Beyond: 2,
+			Bytes: 18 + 10_004 + 6, BeyondBytes: 1_812 + 2},
 		// "Page " and 5 000 two-byte characters (10 005), cut on a character
 		// boundary at 8 191.
 		search.SourcePage: {Source: search.SourcePage, Sources: 1, Beyond: 1,

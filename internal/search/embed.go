@@ -1349,6 +1349,20 @@ func (TaskCorpus) Source() Source { return SourceTask }
 // index only for a statement that states it.
 const taskLive = `t.removed_at IS NULL`
 
+// taskBody is a task's body as a statement reads it — out of the encoded
+// document, where the tracker keeps it ([Document.Body]) — and taskOpening the
+// part of it an opening can need: its first [embedReadChars] characters, bound
+// as the statement's next argument.
+//
+// ONE SPELLING for the selection and the window report ([Window]), because
+// the report's claim is that it measures what the duty sends: a report that
+// cut the body its own way — or not at all, which is what it did — counts as
+// embedded text the duty never read.
+const (
+	taskBody    = `COALESCE(json_extract(t.document, '$.body'), '')`
+	taskOpening = `substr(` + taskBody + `, 1, ?)`
+)
+
 // TaskSelection is the statement [TaskCorpus.Stale] selects stale tasks with,
 // and its arguments; [TaskWithdrawals] and [TaskCoverageCount] are the other
 // two it runs.
@@ -1367,8 +1381,7 @@ func TaskSelection(model string, dim, limit int) (string, []any) {
 // oldest first, each with the opening of its body and the digest of the vector
 // it has there.
 const taskSelectionStatement = `
-	SELECT t.id, t.project_key, t.version, t.title,
-	       substr(COALESCE(json_extract(t.document, '$.body'), ''), 1, ?),
+	SELECT t.id, t.project_key, t.version, t.title, ` + taskOpening + `,
 	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
 	FROM tracker_tasks t
 	LEFT JOIN kb_vectors v

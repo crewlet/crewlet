@@ -37,8 +37,8 @@ type WindowReport struct {
 	Sources, Beyond int
 
 	// Bytes is the corpus's prepared text in all — every source's title and
-	// whole body, whitespace collapsed, as the window is measured on — and
-	// BeyondBytes how much of it lies past the window.
+	// whole body, whitespace collapsed — and BeyondBytes how much of it the
+	// duty does not send.
 	Bytes, BeyondBytes int64
 }
 
@@ -47,9 +47,19 @@ type WindowReport struct {
 // which the caller resolves from the model the vectors were computed with.
 //
 // It counts the sources the corpora embed and nothing else — live tasks, and
-// published pages that are not in the trash — and measures each as the duty
-// prepares it, the title and one space and the body with every run of
-// whitespace collapsed, against the opening [Document.text] would send.
+// published pages that are not in the trash. Each source's whole text is its
+// title, one space and its WHOLE body with every run of whitespace collapsed;
+// what is sent of it is formed exactly as the duty forms it — the body read to
+// the same cut, by the same expression ([taskOpening], [pageOpening]), and
+// then [Document.text] at the window — and everything past that opening is
+// past the window.
+//
+// THE READ CUT IS PART OF WHAT IS SENT, and that is why it is applied here
+// too. The duty reads a body's first [embedReadChars] characters before it
+// prepares anything, so a body whose opening is mostly whitespace — deeply
+// indented code, a padded table — prepares to LESS than the window, and the
+// text past that cut is never sent however short it is once collapsed.
+// Measured from the whole body instead, that text counted as embedded.
 func Window(ctx context.Context, tx *sql.Tx, window int) ([]WindowReport, error) {
 	if window < 1 {
 		return nil, fmt.Errorf("search: a window of %d bytes measures nothing", window)
@@ -63,18 +73,24 @@ func Window(ctx context.Context, tx *sql.Tx, window int) ([]WindowReport, error)
 		{SourcePage, pageTextStatement},
 	} {
 		rep := WindowReport{Source: corpus.source}
-		rows, err := tx.QueryContext(ctx, corpus.statement)
+		rows, err := tx.QueryContext(ctx, corpus.statement, embedReadChars)
 		if err != nil {
 			return nil, fmt.Errorf("search: read the %s corpus's text: %w", corpus.source, err)
 		}
 		for rows.Next() {
-			var doc Document
-			if err = rows.Scan(&doc.Title, &doc.Body); err != nil {
+			var title, body string
+			var read Document
+			if err = rows.Scan(&title, &body, &read.Body); err != nil {
 				_ = rows.Close()
 				return nil, fmt.Errorf("search: read the %s corpus's text: %w", corpus.source, err)
 			}
-			whole := embeddings.Prepare(doc.Title + " " + doc.Body)
-			beyond := len(whole) - len(doc.text(window))
+			read.Title = title
+			whole := embeddings.Prepare(title + " " + body)
+			// THE SENT OPENING IS A PREFIX OF THE WHOLE, so the
+			// difference is exactly what was left out: the read cut is a
+			// prefix of the body, collapsing whitespace keeps a prefix a
+			// prefix, and [embeddings.Opening] cuts a prefix of that.
+			beyond := len(whole) - len(read.text(window))
 			rep.Sources++
 			rep.Bytes += int64(len(whole))
 			if beyond > 0 {
@@ -93,16 +109,17 @@ func Window(ctx context.Context, tx *sql.Tx, window int) ([]WindowReport, error)
 }
 
 // taskTextStatement and pageTextStatement read every source each corpus
-// embeds, whole: the population its selection draws from ([taskLive],
-// [pageLive]), with the body unbounded.
+// embeds — the population its selection draws from ([taskLive], [pageLive]) —
+// with its whole body and with the part of it the duty reads. Bound: the read
+// cut ([embedReadChars]).
 const (
 	taskTextStatement = `
-	SELECT t.title, COALESCE(json_extract(t.document, '$.body'), '')
+	SELECT t.title, ` + taskBody + `, ` + taskOpening + `
 	FROM tracker_tasks t
 	WHERE ` + taskLive
 
 	pageTextStatement = `
-	SELECT p.title, p.body
+	SELECT p.title, ` + pageBody + `, ` + pageOpening + `
 	FROM pages_heads p
 	WHERE ` + pageLive
 )

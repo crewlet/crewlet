@@ -261,8 +261,12 @@ from there).
 **The last lines say what a search by meaning cannot see.** A source is
 embedded as its opening ([below](#where-the-vectors-come-from)), so for each
 corpus the report counts the sources whose text runs past that window and how
-much of the corpus's text lies past it — measured as the vectors are, the
-title and the whole body with the whitespace collapsed. That text is still
+much of the corpus's text lies past it: each source's title and whole body
+with the whitespace collapsed, against the opening the duty really sends —
+formed, as the duty forms it, from the first 16 384 characters of the body, so
+a body that opens on a long run of whitespace (deeply indented code, a padded
+table) counts what follows that run as past the window, because the duty never
+read it. That text is still
 found by the words it uses; it is never found by its meaning, so a `semantic`
 search cannot reach it and a `hybrid` one reaches it only through its keyword
 half. It is the number that decides whether a source needs more than one

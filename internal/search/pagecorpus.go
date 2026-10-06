@@ -62,13 +62,20 @@ func (PageCorpus) Source() Source { return SourcePage }
 // [taskLive]'s reason.
 const pageLive = `p.status = 'published' AND p.trashed_at IS NULL`
 
+// pageBody is a page's body as a statement reads it, and pageOpening the part
+// of it an opening can need — one spelling for the selection and the window
+// report, for [taskOpening]'s reason.
+const (
+	pageBody    = `p.body`
+	pageOpening = `substr(` + pageBody + `, 1, ?)`
+)
+
 // pageSelectionStatement: the published pages whose vector in the asked space
 // is missing or was computed from another body, title or container, oldest
 // first, each with the opening of its body and the digest of the vector it has
 // there. Bound: the body's read length, the space twice, the limit.
 const pageSelectionStatement = `
-	SELECT p.id, p.container, p.edit_version, p.title,
-	       substr(p.body, 1, ?),
+	SELECT p.id, p.container, p.edit_version, p.title, ` + pageOpening + `,
 	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
 	FROM pages_heads p
 	LEFT JOIN kb_vectors v
