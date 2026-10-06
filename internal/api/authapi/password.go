@@ -135,16 +135,25 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attempt := authevents.Failure{Source: source, Method: types.FailPassword}
+	// THE FIELD IS NAMED, in every arm alike: the caller is signed in as the
+	// person whose password this is, so it discloses nothing — and the
+	// sign-in's own sentence, about "sign-in details", left somebody
+	// re-checking the new password on a form that is not a sign-in.
+	refuse := func(why string) {
+		s.refuseSignInWith(w, r, adm, attempt, why, map[string]string{
+			"field":  "current_password",
+			"detail": "your current password was not accepted — check it and try again"})
+	}
 	if held.ID != principal.ID.String() || !stageAdmits(held.Stage) {
 		if s.decoy(w, r, adm, in.CurrentPassword) {
-			s.refuseSignIn(w, r, adm, attempt, "password change: subject not active")
+			refuse("password change: subject not active")
 		}
 		return
 	}
 	current, found := firstCredential(held.Credentials, iamdomain.MethodPassword)
 	if !found {
 		if s.decoy(w, r, adm, in.CurrentPassword) {
-			s.refuseSignIn(w, r, adm, attempt, "password change: no password credential")
+			refuse("password change: no password credential")
 		}
 		return
 	}
@@ -154,7 +163,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !proved {
-		s.refuseSignIn(w, r, adm, attempt, "password change: password mismatch")
+		refuse("password change: password mismatch")
 		return
 	}
 	replaced, ok := s.replacedSession(w, r, held)

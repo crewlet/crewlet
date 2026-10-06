@@ -158,6 +158,14 @@ func TestAWrongCurrentPasswordChangesNothingAndIsCounted(t *testing.T) {
 			if code := codeOf(t, rec); code != string(httpjson.CodeSignInRefused) {
 				t.Errorf("a wrong password answered %q, want the one sign-in refusal", code)
 			}
+			// AND IT NAMES THE FIELD: the caller is signed in as this person,
+			// so it discloses nothing, and the sign-in's own sentence sent
+			// them re-checking the wrong field. Mutation: answer the bare
+			// sign-in refusal.
+			if !strings.Contains(rec.Body.String(), `"field":"current_password"`) ||
+				!strings.Contains(rec.Body.String(), "current password") {
+				t.Errorf("a wrong current password does not name the field: %s", rec.Body)
+			}
 			if len(failures) != 1 || failures[0].Method != types.FailPassword {
 				t.Errorf("counted %+v, want one password failure", failures)
 			}

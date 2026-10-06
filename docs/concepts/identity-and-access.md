@@ -762,7 +762,9 @@ presenting the current one beside the new. **The current password is the
 proof**, verified exactly as a step-up's is: on
 the throttle's curve for the login they are signed in as, under the verify
 cap, and a wrong one is the one refusal every sign-in arm gives and a counted
-failure. That verification is the recent proof the change needs, so the route
+failure — with a detail naming the current password as the field, which tells
+somebody already signed in as that person nothing they did not know. That
+verification is the recent proof the change needs, so the route
 asks for no step-up first. The new password is held to the same floor and
 blocklist as every other.
 

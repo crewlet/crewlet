@@ -610,6 +610,17 @@ func joinNames(names []string) string {
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 	in admission, attempt authevents.Failure, why string) {
 
+	s.refuseSignInWith(w, r, in, attempt, why, nil)
+}
+
+// refuseSignInWith is [Service.refuseSignIn] with a detail beside the one
+// code, for the one route whose caller is already signed in as the person the
+// password is checked for — a password change — so saying WHICH field was not
+// accepted tells them nothing they did not know, and "those sign-in details"
+// on a form that is not a sign-in sent them looking at the wrong field.
+func (s *Service) refuseSignInWith(w http.ResponseWriter, r *http.Request,
+	in admission, attempt authevents.Failure, why string, detail map[string]string) {
+
 	in.ticket.Fail()
 	s.audit.Failed(r.Context(), attempt)
 	log.WarnContext(r.Context(), "api_sign_in_refused",
@@ -619,7 +630,7 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 		// operator's screen renders.
 		"reason", why, "method", string(attempt.Method), "route", r.URL.Path,
 		"source", attempt.Source)
-	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
+	httpjson.FailWith(w, http.StatusUnauthorized, httpjson.CodeSignInRefused, detail)
 }
 
 // admission is one attempt the throttle let through: its ticket, and where it
