@@ -621,6 +621,9 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
   const confirm = within(remove).getByRole("button", { name: "Remove" });
   expect(confirm).toHaveProperty("disabled", true);
+  // THE LOGIN IS SHOWN AS IT IS TYPED, outside the micro-label register, which
+  // sets a label in capitals: read as BO.LANG, typing that was refused.
+  expect(within(remove).getByText("bo.lang").closest(".crewlet-label")).toBeNull();
   fireEvent.change(within(remove).getByLabelText("Type bo.lang to confirm"), {
     target: { value: "bo.lang" },
   });

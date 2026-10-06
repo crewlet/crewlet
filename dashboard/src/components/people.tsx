@@ -21,6 +21,7 @@ import {
   Copyable,
   EmptyValue,
   FormField,
+  InlineCode,
   Input,
   Modal,
   Select,
@@ -413,19 +414,21 @@ export function ConfirmDialog({
     >
       <div className="t-body">{children}</div>
       {typeToConfirm && (
-        <FormField label={`Type ${typeToConfirm} to confirm`}>
-          {(field) => (
-            <Input
-              id={field.id}
-              aria-describedby={field.describedBy}
-              autoFocus
-              width="full"
-              spellCheck={false}
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-            />
-          )}
-        </FormField>
+        // NOT A FormField, whose label is set in capitals: the value is typed
+        // exactly, so it is shown exactly. Read as ROBERT.SMITH, typing that
+        // kept the button disabled with no word why.
+        <label className="col" style={{ gap: 6 }}>
+          <span className="t-caption">
+            Type <InlineCode>{typeToConfirm}</InlineCode> to confirm
+          </span>
+          <Input
+            autoFocus
+            width="full"
+            spellCheck={false}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+          />
+        </label>
       )}
       <IamOutcome answer={write.answer} />
     </Modal>
