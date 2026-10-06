@@ -144,7 +144,8 @@ export type FramedScreen =
   | { screen: "nodes"; node?: string }
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
-  | { screen: "audit" };
+  | { screen: "audit" }
+  | { screen: "account" };
 
 /** Every screen the dashboard draws. */
 export type Screen = FramedScreen | SignInScreen;
@@ -232,6 +233,8 @@ export function resolve(path: string[]): Route {
       return missing("spend", under("Spend"));
     case "settings":
       return settings(rest, screen, under);
+    case "account":
+      return rest.length ? missing("account", under("Account")) : screen({ screen: "account" });
     default:
       return missing("", `the screen “${head}”`);
   }

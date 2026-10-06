@@ -4320,11 +4320,31 @@ export interface SessionAnswer {
   seat?: string;
   /** `person` or `machine`: a machine holds no second factor to manage. */
   kind: string;
+  /** What this node lets the caller do: their grants, cut to its ceiling. */
+  grants?: string[] | null;
   /** The absolute deadline of the session the request carried, or absent for
    *  a credential that is not a session. */
   expires_at?: string;
+  /** The session the request carried, by the id a listing of the person's
+   *  sessions names it by — absent exactly where `expires_at` is. */
+  lineage?: string;
   status: SessionStatus;
 }
+
+/** What a client reads before anybody signs in (`GET /auth/config`). */
+export interface AuthConfig {
+  /** The floor every password is held to, in characters. */
+  min_password_length: number;
+  /** Whether a person signing in with a password must hold a second factor. */
+  second_factor: "required" | "optional";
+}
+
+/**
+ * What changing your own password answers: the new session that keeps this
+ * browser signed in, or — where this node has not applied the change yet — the
+ * plain fact that every session ended, this browser's with them.
+ */
+export type PasswordChanged = SignedIn | { status: "password_changed"; detail: string };
 
 /** One seat a name could mean, and why. */
 export interface ColleagueCandidate {

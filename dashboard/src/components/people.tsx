@@ -1,7 +1,8 @@
 /**
  * The identity directory's writes that more than one screen offers: inviting
- * somebody (Settings › People & access, and a human seat nobody holds), the
- * grants a write confers, a value shown once, and what a write came to.
+ * somebody (Settings › People & access, and a human seat nobody holds), minting
+ * a token (a service account's there, your own on the Account page), the grants
+ * a write confers, a value shown once, and what a write came to.
  *
  * Every write goes through `lib/iamWrite.ts`, so the step-up, the operation key
  * a retry sends and the four answers are decided once. And they are offered to
@@ -12,21 +13,23 @@
  * it all the same.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
   Checkbox,
   Copyable,
+  EmptyValue,
   FormField,
   Input,
   Modal,
   Select,
+  Tag,
   Text,
   type SelectOption,
 } from "@crewlethq/ui";
-import { UserPlusGlyph } from "@crewlethq/icons/glyphs";
-import { GRANTS } from "~/contract/identity.ts";
+import { KeyGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
+import { GRANTS, TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -54,6 +57,20 @@ export const GRANT_WORDS: Record<(typeof GRANTS)[number], string> = {
   "people:manage": "Invite, change and remove people — the grant that grants",
   "sandbox:run": "Start code-sandbox runs",
 };
+
+/** Grants as written — a directory row's, or what a token carries. */
+export function GrantTags({ grants }: { grants?: readonly string[] | null }) {
+  if (!grants || grants.length === 0) return <EmptyValue label="No grants" />;
+  return (
+    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+      {grants.map((g) => (
+        <Tag key={g} size="sm" appearance="outline">
+          <span className="mono">{g}</span>
+        </Tag>
+      ))}
+    </span>
+  );
+}
 
 /**
  * Checkboxes over the grants. One outside `held` is drawn disabled with why —
@@ -396,6 +413,170 @@ export function ConfirmDialog({
             />
           )}
         </FormField>
+      )}
+      <IamOutcome answer={write.answer} />
+    </Modal>
+  );
+}
+
+/** Whose token a mint makes: the directory row, as much of it as a mint needs. */
+export interface TokenOwner {
+  id: string;
+  login?: string;
+  grants?: string[] | null;
+}
+
+/**
+ * Mint a token: a label, a lifetime, and grants out of the owner's own — never
+ * one a token may not carry, nor one the minter does not hold. The value is
+ * shown ONCE; the engine keeps a hash of it.
+ *
+ * TWO OWNERS, ONE DIALOG. An administrator mints for a SERVICE ACCOUNT, named
+ * by `?person=`; a person mints their OWN (`self`) with no `?person=` at all,
+ * from their own session — the route's owner is then the caller, and the
+ * engine refuses anybody minting on another person's account, because whoever
+ * mints a token is shown a value that acts as its owner.
+ */
+export function MintTokenDialog({
+  owner,
+  held,
+  self = false,
+  onClose,
+  onDone,
+}: {
+  owner: TokenOwner;
+  /** The minter's own grants: a token carries nothing its minter does not hold. */
+  held: readonly string[];
+  /** The caller minting their own personal access token. */
+  self?: boolean;
+  onClose: () => void;
+  onDone?: () => void;
+}) {
+  const write = useIamGesture();
+  const [label, setLabel] = useState("");
+  const [days, setDays] = useState("");
+  // WHAT STARTS TICKED is what this mint may send: the owner's grants a token
+  // may carry AND the minter holds — the engine refuses a token carrying a
+  // grant its minter does not hold, and the picker locks such a box, so one
+  // ticked here would be a refusal nobody could clear.
+  const carried = useMemo(
+    () =>
+      (owner.grants ?? []).filter(
+        (g) => !(TOKEN_WITHHELD_GRANTS as readonly string[]).includes(g) && held.includes(g),
+      ),
+    [owner.grants, held],
+  );
+  const [grants, setGrants] = useState<string[]>(carried);
+  const minted = write.answer?.kind === "done" ? write.answer.body : null;
+  const token = typeof minted?.token === "string" ? minted.token : "";
+  const expires = typeof minted?.expires_at === "string" ? minted.expires_at : "";
+  const lifetime = days.trim() === "" ? 0 : Number(days);
+  const badDays = days.trim() !== "" && (!Number.isInteger(lifetime) || lifetime < 1);
+  const actsAs: ReactNode = self ? "you" : owner.login || "the account";
+
+  async function submit() {
+    if (minted || badDays) return;
+    const answer = await write.run(
+      {
+        method: "POST",
+        path: "/iam/credentials",
+        ...(self ? {} : { query: { person: owner.id } }),
+        body: {
+          ...(label.trim() ? { label: label.trim() } : {}),
+          ...(lifetime > 0 ? { expires_in_days: lifetime } : {}),
+          grants,
+        },
+      },
+      // A MINT READS NO KEY: a replay could not hand back a value its first
+      // attempt never showed, so a retry is a new token.
+      false,
+    );
+    if (answer) onDone?.();
+  }
+
+  return (
+    <Modal
+      open
+      size="md"
+      title={self ? "New personal access token" : `Mint a token for ${owner.login || owner.id}`}
+      icon={<KeyGlyph />}
+      onClose={onClose}
+      dismissable={!write.busy}
+      closeDisabledReason="Waiting for the engine to answer."
+      stackBody
+      onSubmit={() => void submit()}
+      footer={
+        minted ? (
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={write.busy}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={write.busy || badDays}>
+              {pressLabel(write, "Mint", "Minting")}
+            </Button>
+          </>
+        )
+      }
+    >
+      {minted ? (
+        <ShownOnce label="Token" value={token}>
+          This token acts as {actsAs}, with what it carries, until {fmtDateTime(expires)}. It is
+          shown only now and cannot be read back; present it as{" "}
+          <span className="mono">Authorization: Bearer …</span>.
+        </ShownOnce>
+      ) : (
+        <>
+          {self && (
+            <Text as="p" variant="body" tone="secondary">
+              A token is for your own assistant or script: it acts as you, never with more than you
+              hold, and stops working when you change your password or sign out everywhere.
+            </Text>
+          )}
+          <FormField label="Label" optional helper="What it is for, as its row will say.">
+            {(field) => (
+              <Input
+                id={field.id}
+                aria-describedby={field.describedBy}
+                autoFocus
+                width="full"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+              />
+            )}
+          </FormField>
+          <FormField
+            label="Expires in days"
+            optional
+            helper="Empty takes the engine's default of 90 days; at most 365."
+            error={badDays ? "A whole number of days, at least one." : undefined}
+          >
+            {(field) => (
+              <Input
+                id={field.id}
+                aria-describedby={field.describedBy}
+                inputMode="numeric"
+                width="full"
+                value={days}
+                onChange={(e) => setDays(e.target.value)}
+              />
+            )}
+          </FormField>
+          <GrantPicker
+            legend="Grants the token carries"
+            value={grants}
+            onChange={setGrants}
+            held={held}
+            only={owner.grants ?? []}
+            withheld={{
+              grants: TOKEN_WITHHELD_GRANTS,
+              reason: "A token never carries this: it needs a person present.",
+            }}
+          />
+        </>
       )}
       <IamOutcome answer={write.answer} />
     </Modal>

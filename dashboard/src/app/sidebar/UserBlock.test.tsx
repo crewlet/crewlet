@@ -13,9 +13,9 @@
  * keep its invariants here: a sign-out ends in a RELOAD at the sign-in —
  * nothing of the last person's company left in the tab — and only once the
  * engine has answered; a revocation nobody can confirm is said rather than
- * reloaded past; the second-factor gestures are offered to a person's session
- * and to nothing else; and a session the viewer never answers for is still
- * offered its sign-outs.
+ * reloaded past; the menu links the Account page, where a person's proof
+ * gestures live, and holds none of them itself; and a session the viewer never
+ * answers for is still offered its sign-outs.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -223,25 +223,12 @@ describe("who the block says this is", () => {
 });
 
 describe("what the account offers", () => {
-  test("a person signed in with a session: their proof and both sign-outs", () => {
-    expect(accountOf(ada, PERSON)).toEqual({
-      kind: "session",
-      login: "ada.lovelace",
-      proof: true,
-    });
-  });
-
-  // A MACHINE HOLDS NO SECOND FACTOR, and a dialog the engine would refuse
-  // is a control that lies — the Tier A token's own session is the case.
-  test("a machine is offered no proof", () => {
-    const machine = { ...PERSON, kind: "machine", expires_at: undefined };
-    expect(accountOf({ ...ada, login: "token:ops", unbound: true }, machine)).toEqual({
+  test("a signed-in reader is offered the menu under their own login", () => {
+    expect(accountOf(ada, PERSON)).toEqual({ kind: "session", login: "ada.lovelace" });
+    expect(accountOf({ ...ada, login: "token:ops", unbound: true }, null)).toEqual({
       kind: "session",
       login: "token:ops",
-      proof: false,
     });
-    // NOR IS A SESSION NOBODY HAS ANSWERED FOR YET.
-    expect(accountOf(ada, null)).toMatchObject({ proof: false });
   });
 
   // THE VIEWER IS A SOCKET QUESTION, and a person the socket refuses — a seat
@@ -250,11 +237,7 @@ describe("what the account offers", () => {
   // to end their own session; the session route still answers them.
   test("a session the viewer never answers for is still offered its sign-outs", () => {
     const waiting = { ...nobody, loading: true };
-    expect(accountOf(waiting, PERSON)).toEqual({
-      kind: "session",
-      login: "ada.lovelace",
-      proof: false,
-    });
+    expect(accountOf(waiting, PERSON)).toEqual({ kind: "session", login: "ada.lovelace" });
     // NOTHING ANSWERED AT ALL IS STILL NOTHING.
     expect(accountOf(waiting, null)).toBeNull();
   });
@@ -266,15 +249,18 @@ describe("what the account offers", () => {
     await waitFor(() => expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/work")}`));
   });
 
-  test("the proof gestures are drawn for a person and for nothing else", () => {
-    const { onFactor, onCodes } = actions({ kind: "session", login: "ada.lovelace", proof: true });
-    fireEvent.click(screen.getByRole("button", { name: "Two-step verification…" }));
-    fireEvent.click(screen.getByRole("button", { name: "New recovery codes…" }));
-    expect(onFactor).toHaveBeenCalledOnce();
-    expect(onCodes).toHaveBeenCalledOnce();
-    cleanup();
-    actions({ kind: "session", login: "token:ops", proof: false });
-    expect(screen.queryByRole("button", { name: "Two-step verification…" })).toBeNull();
+  // THE PROOF GESTURES LIVE ON THE ACCOUNT PAGE, and the menu links it rather
+  // than keeping a second copy of them — a link, so it can open in a tab, that
+  // closes the menu it is in. The CONTROL is the menu still holding both
+  // sign-outs, which stay here for the reader the socket refuses.
+  test("the menu links the Account page and holds no proof gesture of its own", () => {
+    const { onLeave } = actions({ kind: "session", login: "ada.lovelace" });
+    const link = screen.getByRole("link", { name: "Account" });
+    expect(link.getAttribute("href")).toBe("#/account");
+    fireEvent.click(link);
+    expect(onLeave).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: /Two-step verification/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /recovery codes/i })).toBeNull();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Sign out everywhere" })).toBeTruthy();
   });
@@ -282,26 +268,20 @@ describe("what the account offers", () => {
 
 /** The account's gestures, drawn on their own with a toaster to report into. */
 function actions(account: Account) {
-  const onFactor = vi.fn();
-  const onCodes = vi.fn();
+  const onLeave = vi.fn();
   render(
     <Router>
       <ToastProvider>
         <LayerHost>
-          <AccountActions
-            account={account}
-            grants="Holds state:read"
-            onFactor={onFactor}
-            onCodes={onCodes}
-          />
+          <AccountActions account={account} grants="Holds state:read" onLeave={onLeave} />
         </LayerHost>
       </ToastProvider>
     </Router>,
   );
-  return { onFactor, onCodes };
+  return { onLeave };
 }
 
-const signedIn: Account = { kind: "session", login: "ada.lovelace", proof: true };
+const signedIn: Account = { kind: "session", login: "ada.lovelace" };
 
 describe("signing out", () => {
   // THE TAB'S OWN STORAGE GOES WITH THE SESSION, because a reload keeps it:

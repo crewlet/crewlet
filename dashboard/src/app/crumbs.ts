@@ -162,6 +162,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "live":
     case "knowledge":
     case "spend":
+    case "account":
       return [root(row, false)];
     case "general":
       // SETTINGS' LANDING IS ONE OF ITS SECTIONS, unlike every other

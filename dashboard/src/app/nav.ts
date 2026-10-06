@@ -52,9 +52,18 @@ import type { GRANTS } from "~/contract/identity.ts";
  */
 export type Grant = (typeof GRANTS)[number];
 
-/** The workspaces, which are the sidebar's navigation rows. */
+/** The workspaces: the sidebar's navigation rows, and the reader's own Account. */
 export type Workspace =
-  "home" | "inbox" | "me" | "work" | "agents" | "live" | "knowledge" | "spend" | "settings";
+  | "home"
+  | "inbox"
+  | "me"
+  | "work"
+  | "agents"
+  | "live"
+  | "knowledge"
+  | "spend"
+  | "settings"
+  | "account";
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
@@ -64,8 +73,12 @@ export type Workspace =
  */
 export type SectionRenderer = "tabs" | "column" | "tree" | "none";
 
-/** Where a workspace's row sits in the sidebar. */
-export type SidebarPlace = "you" | "workspace" | "foot";
+/**
+ * Where a workspace's row sits in the sidebar — or `menu`, for the one with no
+ * row: the reader's own Account, which the user block at the sidebar's foot
+ * links from its menu, since that block already IS the reader.
+ */
+export type SidebarPlace = "you" | "workspace" | "foot" | "menu";
 
 /**
  * One section of a workspace: a place with its own path.
@@ -578,6 +591,22 @@ export const WORKSPACES: WorkspaceRow[] = [
         grants: ["audit:read"],
       },
     ],
+  },
+  {
+    // THE READER'S OWN, AND NO ROW: the user block at the sidebar's foot is
+    // the reader, and its menu is where this is opened — a row beside it would
+    // be the same person twice. A workspace all the same, so the palette and
+    // `g u` reach it. No grant: every signed-in reader has an account, and
+    // the page says what a credential that is not a person's can do there.
+    key: "account",
+    label: "Account",
+    icon: "user",
+    path: ["account"],
+    hint: "Your profile, password, second factor, sessions and personal access tokens",
+    chord: "u",
+    place: "menu",
+    renderer: "none",
+    sections: [],
   },
 ];
 

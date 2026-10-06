@@ -786,6 +786,9 @@ password_changed` and **no session**: the epoch a new session is opened at is
 read from rows that do not hold the move yet, so the person signs in again with
 the new password. Each change is an `iam_password_changed` event.
 
+In the dashboard it is the Account page's **Change password** (`#/account`):
+the current password, and the new one typed twice.
+
 ### A forgotten password is a one-time link from an administrator
 
 Somebody who cannot sign in at all has no current password to present, so an
@@ -1158,8 +1161,10 @@ its value, and the token acts as its owner — so one minted on somebody else's
 account is a credential that acts as them, held by somebody who is not them.
 `people:manage` therefore mints for **service accounts** and for nobody else;
 a person mints their own from their own session, which is `POST
-/iam/credentials` with no `?person=` — and `crewlet iam token -login` is that
-request, signing in for it exactly as the dashboard does —
+/iam/credentials` with no `?person=` — the dashboard's Account page
+(`#/account`, **Personal access tokens › New token**) makes that request from
+the signed-in session, and `crewlet iam token -login` is that request too,
+signing in for it exactly as the dashboard does —
 the password from the terminal without echo or the first line piped in, a
 second-factor code the same way or the line after it, and never either as a
 flag, because a recovery code on a command line stays good in the shell's
@@ -1387,8 +1392,8 @@ step_up_required` opens **one** "Confirm it is you" dialog however many
 requests it refused, posts the password (and the code where a second factor is
 held) to `POST /auth/step-up`, and replays each refused request once — see
 [Some gestures ask how recently you proved who you
-are](#some-gestures-ask-how-recently-you-proved-who-you-are). The page bar's
-identity menu signs out — `POST /auth/logout`, or `POST /auth/logout/all` for
+are](#some-gestures-ask-how-recently-you-proved-who-you-are). The sidebar's
+user block signs out — `POST /auth/logout`, or `POST /auth/logout/all` for
 every session the person holds — and then reloads into the sign-in with the
 tab's `sessionStorage` emptied, because a route change would leave the last
 person's company in the tab's memory for whoever sits down next. A session
@@ -1397,6 +1402,23 @@ sign-in there by anybody other than the person the tab was read by hands it
 over the same way; the same person signing back in carries on where they were.
 [Dashboard Design](../reference/dashboard-design.md#signing-in-is-a-screen-outside-the-frame)
 has the whole of it.
+
+### Your own account is `#/account`
+
+The user block's menu opens the signed-in person's **Account** page, where
+everything this page says a person does about *themselves* is a control, each
+asking about the caller and nobody else:
+
+| Section | What it does, and what it ends |
+|---|---|
+| **Profile** | Their login, name, address, seat and grants, read-only — an administrator changes them |
+| **Change password** | [The current password and the new one](#changing-your-own-password-ends-everything-else), typed twice. Ends every other session and every personal token; this browser stays signed in |
+| **Two-step verification** | Sets up or replaces the authenticator app, and issues new [recovery codes](#a-code-is-spent-when-it-is-used) — only beside an app |
+| **Where you are signed in** | Their live sessions, this browser marked (`GET /auth/session`'s `lineage`); any other signed out by name with `POST /auth/logout/{lineage}`, or all of them — and every personal token — with **Sign out everywhere** |
+| **Personal access tokens** | [Their machine tokens](#machine-tokens-a-persons-own-and-a-service-accounts): minted with no `?person=`, the value shown once, and revoked |
+
+A session exchanged from a Tier A token is no person's, so its Account page
+names the token and offers none of this.
 
 ### People are managed from Settings › People & access
 

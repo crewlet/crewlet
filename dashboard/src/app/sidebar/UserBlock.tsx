@@ -18,20 +18,20 @@
  *
  * # The popover holds the session's own gestures
  *
- * The reader's second factor and recovery codes — only for a PERSON signed in
- * with a session, which `GET /auth/session` says: a machine credential holds
- * no second factor, and a dialog the engine refuses would be a control that
- * lies. And signing out, here or everywhere: the two ways a session ends by
- * its owner's hand, both of which end in a reload at the sign-in
- * (`lib/session.ts`).
+ * The way to the reader's own Account — the one workspace with no sidebar row
+ * (`place: "menu"` in `nav.ts`), because this block already IS the reader —
+ * where their password, second factor, recovery codes, sessions and personal
+ * tokens are. And signing out, here or everywhere: the two ways a session ends
+ * by its owner's hand, both of which end in a reload at the sign-in
+ * (`lib/session.ts`), kept here because the Account page is a screen and this
+ * menu is reached even by a person the socket refuses.
  *
  * SIGNING OUT DOES NOT WAIT FOR THE SOCKET. The viewer is a socket question,
  * and a person the socket refuses — a seat taken out of the chart (`403
  * seat_unavailable`), a session without `state:read` — never has it answered:
  * the socket stops dialling on a refusal. So `GET /auth/session` is asked
  * whatever the viewer says, and while the viewer has not answered, a session
- * it names is offered the two sign-outs under its own login — nothing about
- * a seat or a factor, which that answer does not settle.
+ * it names is offered the two sign-outs under its own login.
  *
  * # Preferences are per-browser, and they are here
  *
@@ -48,7 +48,7 @@
  * theme is on — the command palette sets it too.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Button,
   DensitySwitcher,
@@ -71,15 +71,8 @@ import { useRest } from "~/lib/useRest.ts";
 import { goSignIn, signOut, signOutEverywhere } from "~/lib/session.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { auth, type SessionAnswer } from "~/protocol/index.ts";
-import { LayerBoundary } from "../boundaries.tsx";
-import { lazyScreen } from "../lazyScreen.ts";
-
-/**
- * The two dialogs a person manages their proof in, out of the sign-in chunk:
- * every signed-in reader carries this block, and few of them open either.
- */
-const AuthenticatorDialog = lazyScreen("signin", (m) => m.AuthenticatorDialog);
-const RecoveryCodesDialog = lazyScreen("signin", (m) => m.RecoveryCodesDialog);
+import { WORKSPACES } from "../nav.ts";
+import { preload } from "../lazyScreen.ts";
 
 /** The grants a principal carries, as one line. */
 export function grantsLine(grants: readonly string[]): string {
@@ -146,7 +139,6 @@ export function UserBlock({
 }) {
   const prefs = useViewerPrefs();
   const session = useSessionAnswer(!viewer.anonymous, viewer.login);
-  const [dialog, setDialog] = useState<"factor" | "codes" | null>(null);
   const who = whoLine(viewer, seatName);
   const resolved = !viewer.loading && !viewer.anonymous;
   const person = resolved && !viewer.unbound;
@@ -217,72 +209,48 @@ export function UserBlock({
           />
         )}
       >
-        {account && (
-          <AccountActions
-            account={account}
-            grants={who.grants}
-            onFactor={() => setDialog("factor")}
-            onCodes={() => setDialog("codes")}
-          />
+        {(close) => (
+          <>
+            {account && <AccountActions account={account} grants={who.grants} onLeave={close} />}
+            <Preferences />
+          </>
         )}
-        <Preferences />
       </Popover>
-      {/* OUTSIDE THE POPOVER, which closes as a dialog opens over it. */}
-      {dialog === "factor" && (
-        <LayerBoundary title="Two-step verification" onClose={() => setDialog(null)}>
-          <AuthenticatorDialog onClose={() => setDialog(null)} />
-        </LayerBoundary>
-      )}
-      {dialog === "codes" && (
-        <LayerBoundary title="Recovery codes" onClose={() => setDialog(null)}>
-          <RecoveryCodesDialog onClose={() => setDialog(null)} />
-        </LayerBoundary>
-      )}
     </div>
   );
 }
 
 /** What the popover may offer about the session behind this browser. */
-export type Account = { kind: "nobody" } | { kind: "session"; login: string; proof: boolean };
+export type Account = { kind: "nobody" } | { kind: "session"; login: string };
 
 /**
  * What the popover may offer, from the viewer and the session's own answer —
  * or null for nothing at all.
  *
  * A SESSION THE VIEWER HAS NOT ANSWERED FOR (it may never, for a person the
- * socket refuses) is offered its two sign-outs under its own login, and
- * nothing that needs a seat or a factor settled. A PERSON'S SESSION — the
- * session answer says `person` and carries a deadline — is offered its proof
- * besides; a machine's never, since it holds no second factor.
+ * socket refuses) is offered its two sign-outs and its Account under its own
+ * login.
  */
 export function accountOf(viewer: ViewerState, session: SessionAnswer | null): Account | null {
   if (viewer.anonymous) return { kind: "nobody" };
-  if (viewer.loading)
-    return session ? { kind: "session", login: session.login, proof: false } : null;
-  return {
-    kind: "session",
-    login: viewer.login,
-    proof: session?.kind === "person" && session.expires_at !== undefined,
-  };
+  if (viewer.loading) return session ? { kind: "session", login: session.login } : null;
+  return { kind: "session", login: viewer.login };
 }
 
-/**
- * The session's own gestures. Exported for its suite.
- *
- * `proof` is whether a person's second factor and recovery codes are
- * offered: a session's, and a person's.
- */
+/** The menu's own rows: the workspaces no sidebar row draws (`place: "menu"`). */
+const MENU_ROWS = WORKSPACES.filter((ws) => ws.place === "menu");
+
+/** The session's own gestures. Exported for its suite. */
 export function AccountActions({
   account,
   grants,
-  onFactor,
-  onCodes,
+  onLeave,
 }: {
   account: Account;
   /** The grants line, said under the login — empty where nothing settles it. */
   grants: string;
-  onFactor: () => void;
-  onCodes: () => void;
+  /** Close the menu: a link out of it leads to a page the menu would cover. */
+  onLeave?: () => void;
 }) {
   const toast = useToast();
   if (account.kind === "nobody") {
@@ -306,16 +274,20 @@ export function AccountActions({
       <span className="t-label">Signed in as</span>
       <span className="mono truncate">{account.login}</span>
       {grants && <span className="t-caption">{grants}</span>}
-      {account.proof && (
-        <>
-          <Button size="small" variant="ghost" onClick={onFactor}>
-            Two-step verification…
-          </Button>
-          <Button size="small" variant="ghost" onClick={onCodes}>
-            New recovery codes…
-          </Button>
-        </>
-      )}
+      {/* A LINK, not a button: it is a page, so ⌘-click opens it in a tab. */}
+      {MENU_ROWS.map((ws) => (
+        <a
+          key={ws.key}
+          className="t-link"
+          href={href(ws.path)}
+          title={ws.hint}
+          onPointerEnter={() => preload(ws.path)}
+          onFocus={() => preload(ws.path)}
+          onClick={onLeave}
+        >
+          {ws.label}
+        </a>
+      ))}
       <Button size="small" variant="secondary" onClick={run(signOut, "Signing out")}>
         Sign out
       </Button>

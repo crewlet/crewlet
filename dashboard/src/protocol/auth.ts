@@ -16,7 +16,9 @@
 import type { EngineHealth } from "../contract/health.ts";
 import { rest } from "./rest.ts";
 import type {
+  AuthConfig,
   InvitationView,
+  PasswordChanged,
   PasswordSet,
   RecoveryCodes,
   ResetView,
@@ -49,6 +51,10 @@ export const auth = {
    */
   firstPerson: async (): Promise<EngineHealth["identity"]> =>
     ((await rest.get("/health")) as EngineHealth | null)?.identity,
+
+  /** The password floor and the second-factor posture — unguarded, like `/health`. */
+  config: async (signal?: AbortSignal): Promise<AuthConfig> =>
+    (await rest.get("/auth/config", signal)) as AuthConfig,
 
   /**
    * Sign in with a login or an address and a password — and, once the engine
@@ -127,6 +133,16 @@ export const auth = {
     (await rest.post("/auth/step-up", body)) as SignedIn,
 
   /**
+   * Change your own password. The current one is the proof, so no step-up is
+   * asked; the change ends every other session and personal token you hold,
+   * and answers a fresh session for this browser.
+   */
+  changePassword: async (body: {
+    current_password: string;
+    new_password: string;
+  }): Promise<PasswordChanged> => (await rest.post("/auth/password", body)) as PasswordChanged,
+
+  /**
    * Who this browser is signed in as — ended by `signal` where the caller
    * passes one, for a read a newer one has superseded.
    */
@@ -139,6 +155,14 @@ export const auth = {
    */
   logout: async (): Promise<void> => {
     await rest.post("/auth/logout", {});
+  },
+
+  /**
+   * End ONE named session of yours — a laptop left signed in somewhere —
+   * without ending this browser's.
+   */
+  logoutOne: async (lineage: string): Promise<void> => {
+    await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
   },
 
   /**

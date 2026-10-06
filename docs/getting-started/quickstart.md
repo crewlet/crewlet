@@ -508,6 +508,9 @@ greeting.
 The sidebar is the product in nine rows — Home, Inbox, My work, Work, Agents,
 Live, Knowledge, Spend, Settings — and each workspace's sections are tabs in
 its page header. `g` then a letter jumps between them, and `?` lists every key.
+Your own **Account** — your password, second factor, where you are signed in
+and your personal access tokens — is in the menu beside your name at the
+sidebar's foot.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**

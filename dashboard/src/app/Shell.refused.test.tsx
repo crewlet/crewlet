@@ -118,10 +118,10 @@ test("the user block offers both sign-outs though the viewer never answers", asy
   await mount();
   fireEvent.click(await screen.findByRole("button", { name: "Account and preferences" }));
   const popover = await screen.findByRole("dialog", { name: "Account and preferences" });
-  // UNDER THE SESSION'S OWN LOGIN, and nothing that needs a seat or a factor
-  // settled — the viewer that would settle them never answers.
+  // UNDER THE SESSION'S OWN LOGIN, the viewer that would name a seat never
+  // answering — with the way to their Account, which reads no socket.
   await waitFor(() => expect(within(popover).getByText("jane.doe")).toBeDefined());
-  expect(within(popover).queryByRole("button", { name: "Two-step verification…" })).toBeNull();
+  expect(within(popover).getByRole("link", { name: "Account" })).toBeDefined();
   expect(within(popover).getByRole("button", { name: "Sign out everywhere" })).toBeDefined();
   expect(within(popover).getByRole("button", { name: "Sign out" })).toBeDefined();
 });

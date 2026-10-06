@@ -700,9 +700,11 @@ ordinary, never a fault), or nobody (a **Sign in** button) — beside the theme
 flip and the **preferences**: theme (light, dark, match the system), density,
 the zone timestamps are drawn in (`Intl.supportedValuesOf` plus UTC, which the
 runtime's canonical list omits, or the browser's own) and how a date is
-written. Its popover also holds the session's own gestures — the second
-factor, new recovery codes and both sign-outs; see
-[Signing in](#signing-in-is-a-screen-outside-the-frame). The preferences are per browser and none is the company's: every key the
+written. Its popover also holds the session's own gestures — a link to the
+reader's [Account](#account-the-readers-own-page), the one workspace with no
+sidebar row of its own (`place: "menu"` in `app/nav.ts`), and both sign-outs,
+which stay in the popover because it is reached even by a person the socket
+refuses; see [Signing in](#signing-in-is-a-screen-outside-the-frame). The preferences are per browser and none is the company's: every key the
 dashboard keeps in browser storage is declared in one table
 (`lib/storage.ts`), and a key no build reads any more is listed there as
 retired and removed at boot, so a stale value does not sit in a reader's
@@ -720,7 +722,7 @@ it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
-`g l`, `g k`, `g t`, `g s`). A chord rather than a modifier, because every
+`g l`, `g k`, `g t`, `g s`, and `g u` for your Account). A chord rather than a modifier, because every
 single-modifier combination worth having is already the browser's. Every key
 the dashboard answers is in [one table](#the-keys), and `?` shows it.
 
@@ -774,6 +776,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs `config:read`)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs `fleet:operate`)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
+| `#/account` | **Account** — the signed-in reader's own page, opened from the user block's menu at the sidebar's foot (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home |
 | `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it and the seat it binds, then a login, a name and a password, typed twice. The link the engine mints lands here | |
 | `#/reset/{id}.{secret}` | **Password reset** *(outside the frame)* — whose password the link sets, then a new one, typed twice, once; it ends every session the person held and signs nobody in, so it ends on the sign-in form. The link an administrator issues lands here | |
@@ -1830,9 +1833,9 @@ holds is asked for there, which a session handed out by the link would skip.
 asks `POST /auth/totp` for a seed — shown as the key, grouped for typing, and
 the `otpauth://` address, with no QR code: a QR library is a dependency for
 what an authenticator app's "enter a key" field already does — confirms a code
-from the app, and shows the first recovery codes once. The sidebar's user block
-offers the same two steps, and a new set of recovery codes, to a person who wants to
-add or replace one later.
+from the app, and shows the first recovery codes once. The
+[Account](#account-the-readers-own-page) page offers the same two steps, and a
+new set of recovery codes, to a person who wants to add or replace one later.
 
 **A step-up is one modal, and the refused request is replayed.** A
 `403 step_up_required` is not a screen's to handle: `protocol/rest.ts` asks the
@@ -5487,6 +5490,48 @@ when it turns over, or now by raising its ceiling. Home's and the Inbox's
 **Raise budget** open the same write as a dialog of one scope's three ceilings
 (`RaiseBudgetDialog`), each field captioned with what that window has spent and
 when it resets.
+
+## Account: the reader's own page
+
+`#/account` is the signed-in reader's own page, opened from the user block's
+menu at the sidebar's foot, from the palette or with `g u`. It has **no
+sidebar row**: the user block already is the reader, and a row beside it would
+be the same person twice. **Every read and write on it names the caller and
+nobody else** — `GET /auth/session` for who this browser is, the self arm of
+`/iam/people/{id}` and its sessions, `GET /iam/credentials` and a token's mint
+and revocation with no `?person=` — so the page holds no id it could be talked
+into swapping for somebody else's.
+
+- **Profile** — login, name, address, kind, seat (linking to its page) and
+  grants, read-only, with the line that an administrator changes them: a
+  person changing their own would be the escalation the directory exists to
+  close. A sealed value reads *sealed*, never blank.
+- **Security** — **Change password**: the current one, which is the proof (no
+  step-up is asked), and the new one typed twice against the floor
+  `/auth/config` names. The change ends every other session and every personal
+  access token the person holds and keeps this browser signed in, which the
+  page says; a `202` (this node has not applied it yet) ended this browser's
+  session too, and the page says to sign in with the new password. A wrong
+  current password is the sign-in surface's one refusal, about what was typed,
+  and never sends the person to sign in. **Two-step verification** sets up or
+  replaces the authenticator app, and **New recovery codes** issues a set —
+  offered only beside an app, because recovery codes held alone are a second
+  factor of their own, which the engine refuses to issue.
+- **Where you are signed in** — the live sessions, with **This browser**
+  marked by the lineage `/auth/session` names; any other is signed out by name
+  (`POST /auth/logout/{lineage}`), and **Sign out everywhere** says it ends
+  every personal access token too, which it does.
+- **Personal access tokens** — the tokens that act as the reader, each with
+  what it carries and when it expires, **Revoke** on a live one, and **New
+  token**: a label, a lifetime (empty takes the engine's default) and grants
+  out of the reader's own, the value shown once with the sentence that it acts
+  as them. It is the same dialog Settings › People & access mints a service
+  account's token with (`components/people.tsx`), minting with no `?person=`.
+
+A session exchanged from a Tier A token is the deployment's credential, not a
+person: the page names it (*signed in with this deployment's API token
+`ops`*) with its grants, and draws none of the sections above, each of which
+the engine would refuse.
 
 ## Settings: the frame, people, secrets, nodes and configuration
 

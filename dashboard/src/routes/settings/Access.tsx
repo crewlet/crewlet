@@ -87,7 +87,14 @@ import {
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { canManagePeople, ConfirmDialog, InviteDialog, ShownOnce } from "~/components/people.tsx";
+import {
+  canManagePeople,
+  ConfirmDialog,
+  GrantTags,
+  InviteDialog,
+  MintTokenDialog,
+  ShownOnce,
+} from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -104,7 +111,7 @@ import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
-import { EditPersonDialog, MintTokenDialog, ServiceAccountDialog } from "./AccessDialogs.tsx";
+import { EditPersonDialog, ServiceAccountDialog } from "./AccessDialogs.tsx";
 
 // ---------------------------------------------------------------------------
 // The wire, as internal/api/iamapi writes it
@@ -661,7 +668,7 @@ export function PeopleAndAccess() {
                   header: "Grants",
                   drop: 1,
                   sortValue: (p) => (p.grants ?? []).length,
-                  cell: (p) => <Grants grants={p.grants} />,
+                  cell: (p) => <GrantTags grants={p.grants} />,
                 },
               ]}
             />
@@ -824,20 +831,6 @@ function PersonName({ row }: { row: DirectoryRow }) {
   return <TextCell>{row.name || row.login || row.id}</TextCell>;
 }
 
-/** A row's declared grants, as written. */
-function Grants({ grants }: { grants?: string[] | null }) {
-  if (!grants || grants.length === 0) return <EmptyValue label="No grants" />;
-  return (
-    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
-      {grants.map((g) => (
-        <Tag key={g} size="sm" appearance="outline">
-          <span className="mono">{g}</span>
-        </Tag>
-      ))}
-    </span>
-  );
-}
-
 /** Whoever holds a seat, by login and stage — or the plain fact that nobody does. */
 function Holder({ holder }: { holder: SeatRow["holder"] }) {
   if (!holder) return <EmptyValue label="Nobody holds it" />;
@@ -997,7 +990,7 @@ function Invitations({
               header: "Grants",
               drop: 1,
               sortValue: (i) => (i.grants ?? []).length,
-              cell: (i) => <Grants grants={i.grants} />,
+              cell: (i) => <GrantTags grants={i.grants} />,
             },
             {
               key: "by",
@@ -1348,7 +1341,7 @@ function Principal({
               drop: 2,
               cell: (c) =>
                 c.method === "token" ? (
-                  <Grants grants={c.grants} />
+                  <GrantTags grants={c.grants} />
                 ) : (
                   <EmptyValue label="Its holder's grants" />
                 ),

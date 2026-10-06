@@ -1706,6 +1706,8 @@ var auth = {
 	* sign-in page asks it rather than `/iam`.
 	*/
 	firstPerson: async () => (await rest.get("/health"))?.identity,
+	/** The password floor and the second-factor posture — unguarded, like `/health`. */
+	config: async (signal) => await rest.get("/auth/config", signal),
 	/**
 	* Sign in with a login or an address and a password — and, once the engine
 	* has answered `second_factor_required`, the code.
@@ -1752,6 +1754,12 @@ var auth = {
 	*/
 	stepUp: async (body) => await rest.post("/auth/step-up", body),
 	/**
+	* Change your own password. The current one is the proof, so no step-up is
+	* asked; the change ends every other session and personal token you hold,
+	* and answers a fresh session for this browser.
+	*/
+	changePassword: async (body) => await rest.post("/auth/password", body),
+	/**
 	* Who this browser is signed in as — ended by `signal` where the caller
 	* passes one, for a read a newer one has superseded.
 	*/
@@ -1762,6 +1770,13 @@ var auth = {
 	*/
 	logout: async () => {
 		await rest.post("/auth/logout", {});
+	},
+	/**
+	* End ONE named session of yours — a laptop left signed in somewhere —
+	* without ending this browser's.
+	*/
+	logoutOne: async (lineage) => {
+		await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
 	},
 	/**
 	* End every session the caller holds, on every device, by moving their

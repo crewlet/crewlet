@@ -3,7 +3,7 @@
  *
  * ONE COMPONENT FOR BOTH DOORS: the enrolment a deployment REQUIRES before a
  * password session may do anything else (`#/enrol`), and the one a person
- * opens from their own menu to add or replace an authenticator. The steps are
+ * opens from their Account page to add or replace an authenticator. The steps are
  * the engine's and identical either way; only what surrounds them differs.
  *
  * # Two requests, and nothing is stored until the second
@@ -214,7 +214,7 @@ export function RecoveryCodeList({ codes }: { codes: readonly string[] }) {
  * first authenticator holds no other way back in: a phone lost next week is
  * an account nobody but an administrator can reopen. A set that cannot be
  * issued is said, with the way to try again, and the way on without it —
- * the codes can be issued later from the person's own menu.
+ * the codes can be issued later from the person's Account page.
  */
 export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -268,7 +268,7 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
 }
 
 /**
- * Adding or replacing an authenticator, from a person's own menu.
+ * Adding or replacing an authenticator, from a person's Account page.
  *
  * THE ENGINE ASKS FOR A FRESH PROOF FIRST — the one step-up window, because
  * this is the gesture that decides whether a stolen session becomes a
@@ -311,7 +311,7 @@ export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * Issuing a fresh set of recovery codes, from a person's own menu.
+ * Issuing a fresh set of recovery codes, from a person's Account page.
  *
  * ASKED FOR, never issued on opening: a new set RETIRES the old one, so a
  * person who opened this to look and closed it again must still hold the set
