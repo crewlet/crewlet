@@ -233,11 +233,10 @@ func TestBudgetsShowListsEveryWindowOfEachScope(t *testing.T) {
 	}
 }
 
-// A REFUSING WINDOW SAYS SO. A refused charge increments nothing, so a seat
-// charged in rounds stalls short of its ceiling and its row reads as headroom:
-// 497 of 500 looks nearly healthy on a table with no other column. The state is
-// the engine's word and the refusal stamp is the gate's, and the table prints
-// both.
+// A REFUSING WINDOW SAYS SO. The state is the engine's word and the refusal
+// stamp is the gate's record of when it said no, and the table prints both:
+// USED against LIMIT is a figure, and a reader should not have to work out
+// from it which windows the park is holding a seat on.
 func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
 	node := newFakeNode(t)
 	node.budgets = []byte(budgetsAnswer)

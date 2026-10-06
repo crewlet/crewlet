@@ -261,9 +261,9 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 	// another zone would otherwise read "2026-09-23" as their own day.
 	fmt.Fprintf(stdout, "Windows on the company clock: %s\n\n", dashIfEmpty(answer.Timezone))
 	// STATE is the engine's own judgement (ok, near, refusing), and
-	// REFUSING SINCE is the gate's record of saying no: a refused charge
-	// increments nothing, so a seat charged in rounds stalls short of its
-	// ceiling and USED against LIMIT alone would read as headroom.
+	// REFUSING SINCE is the gate's record of when it said no. USED carries
+	// the round the gate refused, which the vendor billed, so a refusing
+	// window reads past its LIMIT.
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SCOPE\tPERIOD\tWINDOW\tUSED\tLIMIT\tSTATE\tRESETS AT\tREFUSING SINCE")
 	rows := func(scope string, windows []budgetWindow) {

@@ -379,16 +379,19 @@ func (f *Fleet) ExpireApplies(cutoff time.Time) {
 
 // ---- the token counters ------------------------------------------------ //
 
-// Charge checks and increments the org's counter and the seat's, in every
-// window.
+// Charge records a round in the org's counter and the seat's, in every
+// window, and judges whether it fitted.
 //
 // The twin holds ONE mutex for the whole call, so the compensation the KV
-// backend needs never runs here. That is not a shortcut around the contract —
-// the observable behaviour is identical, and the suite asserts the behaviour
-// — it is what a single process can honestly offer: there is no second writer
-// to race, so building a compensation nothing could ever exercise would be a
-// path with no test that could reach it. The arithmetic is [coord.Tally]'s,
-// the same the KV backend runs.
+// backend needs for a seat write that fails never runs here. That is not a
+// shortcut around the contract — the observable behaviour is identical, and
+// the suite asserts the behaviour — it is what a single process can honestly
+// offer: there is no second writer to race and no write that can fail, so
+// building a compensation nothing could ever exercise would be a path with no
+// test that could reach it. The arithmetic is [coord.Tally]'s, the same the KV
+// backend runs: the company counted and judged first, then the seat — with no
+// verdict of its own when the company refused, since the round is counted
+// there all the same.
 func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		return coord.Spend{OK: true}, nil
@@ -399,27 +402,23 @@ func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// ORG FIRST for the REFUSAL, whichever order the writes go in: "the
-	// company is out" is the fact an operator has to see when both scopes
-	// are out of room.
 	now := time.Now().UTC()
-	org := f.budgets[coord.OrgScope].Roll(req.Windows)
-	seat := f.budgets[req.Seat].Roll(req.Windows)
-	for _, scope := range []struct {
-		name, key string
-		tally     coord.Tally
-		caps      coord.Caps
-	}{{"org", coord.OrgScope, org, req.OrgCaps}, {"agent", req.Seat, seat, req.SeatCaps}} {
-		if refusing := scope.tally.Refusing(req.Tokens, scope.caps); len(refusing) > 0 {
-			// The refusal is recorded on the windows of the scope that
-			// made it, and on no other: see coord.WindowUsage.RefusedAt.
-			f.budgets[scope.key] = scope.tally.Stamp(refusing, scope.tally, now)
-			return scope.tally.Refusal(scope.name, refusing, scope.caps, req.Windows), nil
-		}
+	org, refusing := f.budgets[coord.OrgScope].Count(req.Tokens, req.OrgCaps, req.Windows, now)
+	f.budgets[coord.OrgScope] = org
+	if len(refusing) > 0 {
+		// The refusal is stamped on the windows of the scope that made it,
+		// and on no other: see coord.WindowUsage.RefusedAt.
+		f.budgets[req.Seat], _ = f.budgets[req.Seat].Count(req.Tokens, nil, req.Windows, now)
+		return org.Refusal("org", refusing, req.OrgCaps, req.Windows), nil
+	}
+	seat, refusing := f.budgets[req.Seat].Count(req.Tokens, req.SeatCaps, req.Windows, now)
+	if len(refusing) > 0 {
+		f.budgets[req.Seat] = seat
+		return seat.Refusal("agent", refusing, req.SeatCaps, req.Windows), nil
 	}
 	// ADMITTED, which is also what clears both scopes' refusals: each has
 	// just had room in every window.
-	org, seat = org.Add(req.Tokens, now).ClearAll(), seat.Add(req.Tokens, now).ClearAll()
+	org, seat = org.ClearAll(), seat.ClearAll()
 	f.budgets[coord.OrgScope], f.budgets[req.Seat] = org, seat
 	return coord.Spend{
 		OK: true, Org: org.Usage(coord.OrgScope, req.Windows), Agent: seat.Usage(req.Seat, req.Windows),

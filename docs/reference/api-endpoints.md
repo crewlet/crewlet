@@ -1877,11 +1877,12 @@ in the same shape.
   (`engine.BudgetNearFraction`, served as `near_fraction` on
   [`GET /budgets`](#get-budgets)), and `ok` otherwise.
 - `refused_at` is when the window last turned a charge away, in UTC, and
-  **absent** while it has not. That, and not `used >= limit`, is what the gate
-  said: a refused charge increments nothing, so the counter stops short of the
-  ceiling by the size of the round that would not fit. The stamp is kept in the
-  shared counter beside the spend, so every node reports the same one, and it
-  clears on the scope's next admitted charge or when the window turns over.
+  **absent** while it has not. The round it turned away is counted in `used`
+  like any other — the vendor billed it — so a window that refused one reads
+  past its `limit` by that round, and every later charge is refused against
+  that figure. The stamp is kept in the shared counter beside the spend, so
+  every node reports the same one, and it clears on the scope's next admitted
+  charge or when the window turns over.
 
 Every node publishes a `budget_meters` snapshot of the counters as soon as its
 seat host is running and every **15 seconds** (`engine.BudgetReportInterval`)
@@ -4198,7 +4199,7 @@ today's ceiling across two restarts".
       "agent_id": "<uuid>", "role": "Engineer", "handle": "eng",
       "windows": [
         {"period": "day", "window": "2026-06-08", "starts_at": "2026-06-07T22:00:00Z",
-         "resets_at": "2026-06-08T22:00:00Z", "used": 99120, "limit": 100000,
+         "resets_at": "2026-06-08T22:00:00Z", "used": 102120, "limit": 100000,
          "refused_at": "2026-06-08T07:29:51Z", "state": "refusing"},
         {"period": "week", "window": "2026-W24", "starts_at": "2026-06-07T22:00:00Z",
          "resets_at": "2026-06-14T22:00:00Z", "used": 301877, "state": "ok"},
@@ -4217,12 +4218,12 @@ every seat at the bottom of its ceiling, which is the most reassuring possible
 picture drawn at the moment nothing is known. Human seats have no row, because
 they spend nothing.
 
-Exhaustion is the engine's `refusing`, never a ratio a client computes. The
-gate refuses a charge that would exceed the ceiling and increments nothing, so
-a seat charged in 3k-token rounds against a 100k ceiling stalls near 99k and
-never compares equal to its own limit: a ratio test shows a permanently blocked
-seat at 99% and calls it healthy, and the Engineer above is refusing at 99 120
-of 100 000.
+Exhaustion is the engine's `refusing`, never a ratio a client computes, so
+every surface and the [budget park](../concepts/agent-runtime.md#the-budget-park)
+agree on which windows can take another round. A refused round is counted like
+any other — the vendor billed it — so a window that refused one reads past its
+ceiling by that round: the Engineer above had 99 120 of 100 000 when a
+3 000-token round was refused, and reads 102 120.
 
 ### `POST /backup`
 

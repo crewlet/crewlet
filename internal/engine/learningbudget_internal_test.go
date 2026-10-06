@@ -147,11 +147,12 @@ func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 
 // SPEND PAST THE CEILING IS RECORDED, AND IT IS WHAT CLOSES THE GATE.
 //
-// The record used to go through the gate's own Charge, which REFUSED a
-// completion that did not fit and so recorded nothing: the counter stayed
-// under the ceiling, the pre-flight gate still read room, and every later
-// reflection pass ran and went uncounted in its turn. The spend has happened
-// at the vendor, so it is recorded whole — and the gate then reads no room.
+// The record used to go through the gate's own Charge, which, when a refused
+// charge counted nothing, REFUSED a completion that did not fit and so
+// recorded nothing: the counter stayed under the ceiling, the pre-flight gate
+// still read room, and every later reflection pass ran and went uncounted in
+// its turn. The spend has happened at the vendor, so it is recorded whole —
+// and the gate then reads no room.
 func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

@@ -37,11 +37,11 @@ func dayUsed(ctx context.Context, t *testing.T, fleet *coordmem.Fleet, scope str
 // A COLLECTED RUN'S SPEND IS RECORDED EVEN WHEN IT OVERRAN THE CAP.
 //
 // The run already spent it, minutes or hours earlier and possibly on another
-// node, so no answer can un-spend it. Charging it through the gate recorded
-// NOTHING whenever it did not fit, which is exactly when the cap binds: the
-// counter under-stated the company's spend by the whole run, the next round was
-// admitted against room the run had already used, and the refusal the gate
-// stamped told the dashboard the seat was refusing charges it would still take.
+// node, so no answer can un-spend it. Charging it through the gate, when a
+// refused charge counted nothing, recorded NOTHING whenever it did not fit,
+// which is exactly when the cap binds: the counter under-stated the company's
+// spend by the whole run and the next round was admitted against room the run
+// had already used. It is post-charged, which records it with no verdict.
 func TestACollectedRunIsRecordedEvenPastTheCap(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

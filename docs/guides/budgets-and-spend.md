@@ -7,10 +7,10 @@ screen draws it.
 
 | | The **budget counter** | The **spend rollup** |
 |---|---|---|
-| What it is | The fleet's shared counter the budget gate charges before every model round | A breakdown of what the calls consumed, by phase, model, provider entry, worker and seat |
+| What it is | The fleet's shared counter the budget gate charges with every model round, the moment its reply arrives | A breakdown of what the calls consumed, by phase, model, provider entry, worker and seat |
 | Its window | One calendar window — the day, the ISO week or the month — on the company's clock | The live 24 hours, or any run of 1 to 90 company days |
 | Where it lives | The coordination store (`budgets`), one record per scope | The live projection for the last 24 hours; the replicated `usage` domain for every named window |
-| What it is for | Refusing a charge that does not fit a ceiling | Understanding where the tokens went |
+| What it is for | Stopping a turn whose round did not fit a ceiling, and every round after it | Understanding where the tokens went |
 | Read by | `GET /budgets`, the `budget` push, the meters on the Spend and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the Spend screen's figures and chart |
 
 They are never comparable. The counter is the one figure a ceiling can be divided
@@ -29,8 +29,20 @@ token_budget: {day: 3000000, month: 40000000}
 Every window is cut on the company's one [clock](../getting-started/configuration.md#the-companys-clock):
 a day runs from local midnight to local midnight, a week is the ISO week from
 Monday, a month runs from the 1st. Every model round is charged in all three
-windows it falls in at once, against the company and against its seat, and it
-runs only while every capped window of both has room.
+windows it falls in at once, against the company and against its seat, as soon
+as its reply arrives, and what it asked for runs only while every capped window
+of both had room for it.
+
+A round's size is known only from its reply, so by the time it is judged the
+vendor has billed it, and **a refused round is counted like any other**. The
+window that refused it therefore reads **over its ceiling** by that round — a
+day at 98 000 of 100 000 whose next 4 000-token round is refused reads 102 000
+of 100 000 on `GET /budgets`, the meters on the Spend and seat screens and
+`crewlet budgets show`, and that is the figure the budget park judges — and
+every later round is refused against it until the window turns over or the
+ceiling is raised. The figure is what the company was billed; a counter that
+left the refused round out read lower than the invoice and let the next, smaller
+round in on room that was already spent.
 
 A window's allowance comes back when the window turns over, rolled inside the
 first charge after the boundary — nothing has to run at midnight. There is no

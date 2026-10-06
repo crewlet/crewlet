@@ -1218,57 +1218,75 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		return false
 	})
 
-	orgToday, err := budgets.Used(t.Context(), coord.OrgScope, today())
-	if err != nil {
-		t.Fatalf("used: %v", err)
-	}
-	used := orgToday.In(period.Day).Used
-	// THE CAP GOVERNS WHAT THE LOOP ADMITS, and only that. The counter also
-	// holds every AUXILIARY completion — the prefetch's knowledge query
-	// here, a reflection pass after a turn — and those are RECORDED whole
-	// after they return, past the ceiling included, because their size is
-	// known only from the answer and no refusal can un-spend them
-	// (coord.Budgets.PostCharge). So `used <= limit` is not the engine's
-	// promise, and it failed a correct engine the moment the prefetch was
-	// charged. The promise is that no charge the loop's gate ADMITTED took
-	// the company past its cap: what was recorded before the loop began
-	// counts against the room its rounds had, and only what was recorded
-	// after the loop's first call can stand above the cap.
+	// EVERY COMPLETION THE MODEL ANSWERED IS ON THE COUNTER, ONCE — the
+	// rounds the gate refused included. A round is charged once its reply is
+	// in, so a refused round was billed, and the counter counts it
+	// (coord.Budgets.Charge); the auxiliary completions — the prefetch's
+	// knowledge query here — are recorded whole after they return
+	// (coord.Budgets.PostCharge). So the counter reads past the cap by every
+	// round the gate refused, and `used <= limit` is not the engine's promise:
+	// what it promises is that the counter is what the company was billed. A
+	// counter that dropped a refused round read short of that, and let the
+	// next, smaller round in on room the refused one had already used.
 	//
-	// Ordered by what the model ANSWERED, read after the counter: the turn
-	// is sequential, so a completion answered before the loop's first call
-	// was recorded before any of its rounds, and an auxiliary call answered
-	// after it but not yet recorded only makes the bound looser, never one
-	// a correct engine fails.
-	calls := n.model.seen()
-	loopBegan, auxAfter := false, 0
+	// What the gate ADMITS is certified where it can be judged charge by
+	// charge — the contract suite on the real broker (coordtest's budget
+	// cases, a refused round followed by a smaller one among them) and the
+	// tool loop's refused-round case — because here every charge, admitted or
+	// refused, lands on the one figure.
+	//
+	// WAITED FOR, re-reading the model's log and the counter together on
+	// every poll: a completion's charge lands a moment after its answer, so
+	// the two agree once the charges are through, and the poll that sees them
+	// agree is a snapshot in which every refused round so far is counted.
+	// Every round of the loop here is a tool-use reply, and every auxiliary
+	// pass a text reply, so each call's cost is known from its kind. Only
+	// the calls whose answer the engine was handed are summed (see
+	// [scriptedModel.kept]).
+	var used, want int
+	var calls []string
+	waitFor(t, "the counter to hold every completion the model answered", func() bool {
+		calls = n.model.kept()
+		org, err := budgets.Used(t.Context(), coord.OrgScope, today())
+		if err != nil {
+			return false
+		}
+		used, want = org.In(period.Day).Used, 0
+		for _, call := range calls {
+			if strings.HasPrefix(call, "aux:") {
+				want += aux
+			} else {
+				want += round
+			}
+		}
+		return used == want
+	}, func() string {
+		return fmt.Sprintf("the counter reads %d against a cap of %d, and the model "+
+			"answered %d tokens' worth: %v", used, limit, want, calls)
+	})
+	loop := 0
 	for _, call := range calls {
-		switch {
-		case !strings.HasPrefix(call, "aux:"):
-			loopBegan = true
-		case loopBegan:
-			auxAfter++
+		if !strings.HasPrefix(call, "aux:") {
+			loop++
 		}
 	}
-	if !loopBegan {
-		t.Fatalf("the cap refused a charge but the model answered no round of "+
-			"the turn's own loop: %v", calls)
-	}
-	if atLastAdmit := used - auxAfter*aux; atLastAdmit > limit {
-		t.Errorf("the turn loop admitted charges up to %d against a cap of %d a "+
-			"day (the counter reads %d, %d of it recorded by auxiliary calls "+
-			"after the loop began); model calls %v",
-			atLastAdmit, limit, used, auxAfter*aux, calls)
+	// PARTWAY THROUGH THE TURN: the loop ran at least the round that fitted
+	// and the round that did not, and the counter holds the second past the
+	// cap.
+	if loop < 2 || used <= limit {
+		t.Errorf("the cap refused a charge after %d round(s) of the turn's own loop with "+
+			"the counter at %d of %d, want a round that fitted and a refused one counted "+
+			"past the cap; model calls %v", loop, used, limit, calls)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
 	//
 	// WAITED FOR rather than read once, because the two counters are two
 	// KEYS AND NO TRANSACTION — [coord/kv.FleetStore.Charge] says so and
-	// builds the all-or-nothing property out of ordering instead: the org
-	// is charged first and compensated if the seat then refuses. So there
-	// is a real window in which the org has moved and the seat has not,
-	// and the wait above lands inside it whenever the org's bump is what
-	// satisfied it.
+	// builds its order out of sequence instead: the org is counted and
+	// judged first, then the seat, which a round the company refused is
+	// counted on all the same. So there is a real window in which the org
+	// has moved and the seat has not, and the wait above lands inside it
+	// whenever the org's write is what satisfied it.
 	//
 	// Read synchronously, this asserted an ATOMICITY the design does not
 	// claim, and CI caught it: `seat spent 0 and the org 150`. The

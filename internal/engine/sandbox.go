@@ -240,11 +240,14 @@ func secondsPtr(v *float64) *time.Duration {
 // The charge happens AFTER the spend, which is why it cannot refuse: a refusal
 // cannot un-spend a run that already ran, and recording it anyway is the only
 // way the meter stays true when the cap is binding. So it goes through
-// [coord.Budgets.PostCharge], never the gate: charged through
-// [coord.Budgets.Charge], a run that did not fit was recorded not at all,
-// which under-stated the company's spend by the whole run at exactly the
-// moment the cap bound, and stamped a refusal on a seat that would still
-// admit its next round.
+// [coord.Budgets.PostCharge], never the gate. Charged through
+// [coord.Budgets.Charge] when a refused charge counted nothing, a run that did
+// not fit was recorded not at all, which under-stated the company's spend by
+// the whole run at exactly the moment the cap bound. Charge counts what it
+// refuses now, but its verdict is still the wrong thing to ask for: nothing
+// waits on it — the work the run bought is done — and a refusal would stamp
+// the seat's window as the gate turning a round away, and an admission clear
+// every stamp, for a charge nobody was deciding about.
 //
 // The run is counted in the windows of COLLECTION — the day, week and month
 // it was collected in, on the company's clock — because that is the only

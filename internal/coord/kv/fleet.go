@@ -1111,14 +1111,14 @@ func decodeTally(raw []byte) (coord.Tally, error) {
 	return t, nil
 }
 
-// Charge checks and increments the org's counter and the seat's, in every
-// window.
+// Charge records a round in the org's counter and the seat's, in every
+// window, and judges whether it fitted. See [coord.Budgets.Charge].
 //
-// Two keys and no transaction, so the all-or-nothing property is BUILT: the
-// org is charged first and compensated if the seat then refuses. See
-// [coord.Budgets.Charge] for why that order and not the reverse. Each scope's
-// windows are ONE record, so each scope is still one compare-and-swap, and the
-// roll onto a new window happens inside it.
+// Two keys and no transaction, so the order is BUILT: the org is counted and
+// judged first, then the seat. Each scope is one compare-and-swap that rolls
+// its windows, counts the round, and stamps the windows that refused it, so a
+// refusal and the record of the round it refused land in the same write and
+// no reader ever sees one without the other.
 func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		// Not an error and not a charge. A phase whose provider reported
@@ -1130,85 +1130,67 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 		return coord.Spend{}, fmt.Errorf("coord/kv: %w", err)
 	}
 
-	// A charge larger than a whole ceiling can never fit, so it is screened
-	// before anything is written, and a seat whose own ceiling is smaller
-	// than the charge never costs the org a bump and an unwind.
-	if req.OrgCaps.Exceeds(req.Tokens) {
-		org, err := f.tally(ctx, coord.OrgScope, req.Windows)
-		if err != nil {
-			return coord.Spend{}, err
-		}
-		return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
-	}
-	if req.SeatCaps.Exceeds(req.Tokens) {
-		// ORG FIRST even here, which is why the screen reads the org's
-		// counter before naming the seat. Testing each ceiling alone
-		// reported the seat for a charge the company had no room for
-		// either, and the contract's ordering rule exists for exactly that
-		// case: an operator who raised this seat's ceiling would still be
-		// refused.
-		if len(req.OrgCaps) > 0 {
-			org, err := f.tally(ctx, coord.OrgScope, req.Windows)
-			if err != nil {
-				return coord.Spend{}, err
-			}
-			if len(org.Refusing(req.Tokens, req.OrgCaps)) > 0 {
-				return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
-			}
-		}
-		seat, err := f.tally(ctx, req.Seat, req.Windows)
-		if err != nil {
-			return coord.Spend{}, err
-		}
-		return f.refuse(ctx, req.Seat, "agent", seat, req.Tokens, req.SeatCaps, req.Windows), nil
-	}
-
-	org, fits, err := f.bump(ctx, coord.OrgScope, req.Tokens, req.Windows, req.OrgCaps)
+	org, refusing, err := f.count(ctx, coord.OrgScope, req.Tokens, req.Windows, req.OrgCaps, false)
 	if err != nil {
 		return coord.Spend{}, err
 	}
-	if !fits {
-		return f.refuse(ctx, coord.OrgScope, "org", org, req.Tokens, req.OrgCaps, req.Windows), nil
+	if len(refusing) > 0 {
+		// THE COMPANY REFUSED, and the round is the seat's all the same:
+		// it is counted there with no verdict of its own, so the seat's
+		// stamps stay whatever they were (see coord.WindowUsage.RefusedAt).
+		//
+		// A seat write that fails here is LOGGED, never returned and never
+		// unwound. The refusal is decided — on a counter this call wrote —
+		// and turning it into an error would report an outage for a company
+		// that is simply out of budget; the company's record of the round
+		// is true, so taking it back would only make the counter wrong in a
+		// second place. On a context that outlives the caller's, for the
+		// reason [FleetStore.unwindOrg] gives: the round is spent whatever
+		// the caller does next.
+		if _, _, seatErr := f.count(context.WithoutCancel(ctx), req.Seat, req.Tokens, req.Windows, nil, false); seatErr != nil {
+			log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", req.Seat,
+				"tokens", req.Tokens, "error", seatErr,
+				"detail", "the company refused this round and counted it; the seat's own "+
+					"counter understates its spend by the round")
+		}
+		return org.Refusal("org", refusing, req.OrgCaps, req.Windows), nil
 	}
 
-	seat, fits, err := f.bump(ctx, req.Seat, req.Tokens, req.Windows, req.SeatCaps)
-	switch {
-	case err != nil, !fits:
-		// COMPENSATE, which is what a single SQL transaction used to do
-		// for free: charging the company for a turn that never ran lets
-		// it exhaust its budget on work it did not do.
+	seat, refusing, err := f.count(ctx, req.Seat, req.Tokens, req.Windows, req.SeatCaps, true)
+	if err != nil {
+		// COMPENSATE: the seat's verdict is unknown, so the charge is an
+		// error, and an error is all or nothing — the company's half is
+		// taken back rather than left counting a round the caller was told
+		// failed.
 		f.unwindOrg(ctx, req.Tokens, org)
-		if err != nil {
-			return coord.Spend{}, err
-		}
-		return f.refuse(ctx, req.Seat, "agent", seat, req.Tokens, req.SeatCaps, req.Windows), nil
+		return coord.Spend{}, err
 	}
-	// ADMITTED, so each scope that carried a refusal has just had room in
-	// every window. The counter writes above deliberately kept the stamps:
-	// the org is written before the seat is tested, and clearing them there
-	// would let a charge that was refused overall erase the company's
-	// refusal.
-	for _, scope := range []struct {
-		key  string
-		seen coord.Tally
-	}{{coord.OrgScope, org}, {req.Seat, seat}} {
-		if scope.seen.Refused() {
-			f.clearRefusal(ctx, scope.key, scope.seen)
-		}
+	if len(refusing) > 0 {
+		// Refused by the seat. The company's half stays counted, and its
+		// stamps stay too: the company had room, but the charge was
+		// refused overall, so it is not the company's refusal to clear.
+		return seat.Refusal("agent", refusing, req.SeatCaps, req.Windows), nil
+	}
+	// ADMITTED, so the company has just had room in every window too. Its
+	// write above deliberately kept its stamps: it was counted before the
+	// seat was judged, and clearing them there would let a charge the seat
+	// refused erase the company's refusal. The seat's were cleared inside
+	// its own write, where the verdict was known.
+	if org.Refused() {
+		f.clearRefusal(ctx, coord.OrgScope, org)
 	}
 	return coord.Spend{
 		OK:    true,
 		Org:   org.ClearAll().Usage(coord.OrgScope, req.Windows),
-		Agent: seat.ClearAll().Usage(req.Seat, req.Windows),
+		Agent: seat.Usage(req.Seat, req.Windows),
 	}, nil
 }
 
 // PostCharge adds spend that already happened to the org's counter and the
 // seat's, refusing nothing. See [coord.Budgets.PostCharge].
 //
-// The same two writes as an admitted [FleetStore.Charge], org first, with no
-// ceiling to test and no refusal stamp cleared: [FleetStore.bump] carries a
-// stamp through, and nothing here decided the scope had room.
+// The same two writes as [FleetStore.Charge], org first, with no ceiling to
+// judge and no refusal stamp touched: nothing here decided the scope had room.
 func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error) {
 	if tokens <= 0 {
 		return coord.Spend{OK: true}, nil
@@ -1219,11 +1201,11 @@ func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, wi
 	if err := windows.Validate(); err != nil {
 		return coord.Spend{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	org, _, err := f.bump(ctx, coord.OrgScope, tokens, windows, nil)
+	org, _, err := f.count(ctx, coord.OrgScope, tokens, windows, nil, false)
 	if err != nil {
 		return coord.Spend{}, err
 	}
-	agent, _, err := f.bump(ctx, seat, tokens, windows, nil)
+	agent, _, err := f.count(ctx, seat, tokens, windows, nil, false)
 	if err != nil {
 		f.unwindOrg(ctx, tokens, org)
 		return coord.Spend{}, err
@@ -1237,8 +1219,8 @@ func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, wi
 // alone, refusing nothing. See [coord.Budgets.PostChargeOrg].
 //
 // ONE write, so there is no half to compensate: the company's record is the
-// only key it touches, and [FleetStore.bump] with no caps carries its refusal
-// stamps through untouched.
+// only key it touches, and a count with no caps carries its refusal stamps
+// through untouched.
 func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error) {
 	if tokens <= 0 {
 		return coord.Usage{}, nil
@@ -1246,7 +1228,7 @@ func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coor
 	if err := windows.Validate(); err != nil {
 		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	org, _, err := f.bump(ctx, coord.OrgScope, tokens, windows, nil)
+	org, _, err := f.count(ctx, coord.OrgScope, tokens, windows, nil, false)
 	if err != nil {
 		return coord.Usage{}, err
 	}
@@ -1259,9 +1241,10 @@ func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coor
 // On a context that OUTLIVES the caller's. The failure being undone is often
 // the caller's own cancellation (a turn stopped mid-charge, a node draining),
 // and an unwind that inherited that dead context failed with it: the company
-// was billed for a round that never ran, and refused early until the window
-// turned over. It cannot hang in the caller's place: the client bounds every
-// request made on a context with no deadline by its own API timeout.
+// was billed for a charge its caller was told had failed, and refused early
+// until the window turned over. It cannot hang in the caller's place: the
+// client bounds every request made on a context with no deadline by its own
+// API timeout.
 //
 // Logged rather than returned: the caller's answer is already decided, and a
 // compensation that failed leaves the org over-stated, which trips a cap
@@ -1282,53 +1265,13 @@ func (f *FleetStore) unwindOrg(ctx context.Context, tokens int, charged coord.Ta
 	}
 }
 
-// refuse stamps a refusal on the windows of the scope that made it and
-// answers with it.
-//
-// rolled is the scope's counter rolled to the charge's windows, which is what
-// the refusal was found on. A stamp that cannot be written is LOGGED and the
-// refusal still stands. The decision was taken from a counter this call read,
-// so it is true whether or not the stamp lands; turning it into an error
-// would report an outage for a company that is simply out of budget, and
-// those send an operator to different places. What the failure costs is one
-// dashboard not saying "refusing charges" until the next refusal writes.
-func (f *FleetStore) refuse(ctx context.Context, scope, name string, rolled coord.Tally, tokens int,
-	caps coord.Caps, windows coord.Windows) coord.Spend {
-
-	refusing := rolled.Refusing(tokens, caps)
-	if err := f.stampRefusal(ctx, scope, refusing, rolled, windows); err != nil {
-		log.WarnContext(ctx, "coord_kv_budget_refusal_not_recorded", "scope", scope, "error", err,
-			"detail", "the charge was still refused; the live meter will not show "+
-				"this refusal until the scope refuses another charge")
-	}
-	return rolled.Refusal(name, refusing, caps, windows)
-}
-
-// stampRefusal records now as the last refusal of each refusing window,
-// under a compare-and-swap that leaves the spend untouched.
-//
-// A scope with no record yet gets one at zero spend: a seat refused on its
-// first charge has refused a charge, and that is worth listing. The record is
-// rolled to the charge's windows first, so a stamp never lands on a slot still
-// counting a window that is over.
-func (f *FleetStore) stampRefusal(ctx context.Context, scope string, refusing []period.Period,
-	refused coord.Tally, windows coord.Windows) error {
-
-	_, err := f.casTally(ctx, scope, "record the budget refusal",
-		func(stored coord.Tally, _ bool) (coord.Tally, bool) {
-			return stored.Roll(windows).Stamp(refusing, refused, time.Now().UTC()), true
-		})
-	return err
-}
-
-// clearRefusal drops the refusals an admitted charge found on the scope.
+// clearRefusal drops the refusals an admitted charge found on a scope.
 //
 // ONLY THE STAMPS IT SAW. Between the charge's write and this one another
 // caller may have been refused and stamped a newer instant, and that refusal
 // is still true; clearing it would hide a scope that is refusing right now.
-// A failure is logged for the reason [FleetStore.refuse] gives: the charge
-// already happened, and the stamp is what a dashboard reads, not what the gate
-// decides with.
+// A failure is logged rather than returned: the charge already happened, and
+// the stamp is what a dashboard reads, not what the gate decides with.
 //
 // On a context that OUTLIVES the caller's, for the reason [FleetStore.unwindOrg]
 // gives: this runs AFTER both counters have been written, so the charge is a
@@ -1353,31 +1296,35 @@ func (f *FleetStore) clearRefusal(ctx context.Context, scope string, seen coord.
 	}
 }
 
-// bump rolls one scope's counter to the charge's windows and counts tokens in
-// every one of them, under a compare-and-swap — or reports that a capped
-// window has no room and writes nothing. It answers the counter it wrote, or
-// the rolled counter the refusal was found on.
+// count is one scope's share of a charge under a compare-and-swap: the
+// counter rolled to the charge's windows, the round counted in every one of
+// them, and the windows that had no room for it stamped — [coord.Tally.Count].
+// It answers the counter it wrote and the periods that refused.
 //
-// The record's refusal stamps are CARRIED through, never cleared here: see
-// [FleetStore.Charge] for who clears them and why this cannot.
-func (f *FleetStore) bump(ctx context.Context, scope string, tokens int, windows coord.Windows,
-	caps coord.Caps) (coord.Tally, bool, error) {
+// Nil caps judge nothing, which is the record with no verdict a post-charge
+// makes and a seat the company refused for is given. clearOnAdmit clears every
+// stamp the scope carried when it was judged and had room, which only the LAST
+// scope a charge judges may do, inside its own write: it is the one write that
+// knows the whole charge was admitted. Every other write CARRIES the stamps
+// through — see [FleetStore.Charge] for who clears the company's, and why its
+// own write cannot.
+func (f *FleetStore) count(ctx context.Context, scope string, tokens int, windows coord.Windows,
+	caps coord.Caps, clearOnAdmit bool) (coord.Tally, []period.Period, error) {
 
-	fits := true
+	var refusing []period.Period
 	tally, err := f.casTally(ctx, scope, "charge the token counter",
 		func(stored coord.Tally, _ bool) (coord.Tally, bool) {
-			rolled := stored.Roll(windows)
-			if len(rolled.Refusing(tokens, caps)) > 0 {
-				fits = false
-				return rolled, false
+			var counted coord.Tally
+			counted, refusing = stored.Count(tokens, caps, windows, time.Now().UTC())
+			if clearOnAdmit && len(refusing) == 0 {
+				counted = counted.ClearAll()
 			}
-			fits = true
-			return rolled.Add(tokens, time.Now().UTC()), true
+			return counted, true
 		})
 	if err != nil {
-		return coord.Tally{}, false, err
+		return coord.Tally{}, nil, err
 	}
-	return tally, fits, nil
+	return tally, refusing, nil
 }
 
 // casTally is one read-modify-write of a scope's counter under a

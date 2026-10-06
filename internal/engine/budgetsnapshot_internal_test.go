@@ -76,11 +76,11 @@ func limitOf(w types.BudgetWindow) int {
 // A FRAME CARRIES EVERY CAPPED WINDOW'S REFUSAL, ON THE WINDOW THAT MADE IT.
 //
 // "Refusing charges" is what the dashboard's attention rows and the budget
-// badges key on, and a refused charge increments nothing, so a counter never
-// reads as full. The live projection used to drop the stamp on its way to the
-// push, which left every one of those surfaces unreachable while the gate was
-// turning turns away; and a frame that stated one window per scope showed a
-// seat capped by the day and the month as one bar jumping between them.
+// badges key on, and the stamp is when the gate said no. The live projection
+// used to drop the stamp on its way to the push, which left every one of those
+// surfaces without it while the gate was turning turns away; and a frame that
+// stated one window per scope showed a seat capped by the day and the month as
+// one bar jumping between them.
 func TestABudgetFrameCarriesEveryCappedWindowAndItsRefusal(t *testing.T) {
 	t.Parallel()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 400, period.Month: 9000}}

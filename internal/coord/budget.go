@@ -20,9 +20,9 @@ import (
 // slot per period: the day, the ISO week and the month, each carrying the LABEL
 // of the window it counts (`2026-09-23`, `2026-W39`, `2026-09`), what has been
 // spent in it and when it last refused a charge. A charge is therefore still
-// one compare-and-swap per scope, and the org-first, seat-compensates protocol
-// that makes two keys all-or-nothing is unchanged from the counter that knew no
-// calendar.
+// one compare-and-swap per scope, the company's first and the seat's second,
+// exactly as it was on the counter that knew no calendar (see
+// [Budgets.Charge]).
 //
 // # The roll is the reset
 //
@@ -134,18 +134,6 @@ func (c Caps) Validate() error {
 	return nil
 }
 
-// Exceeds reports whether a charge of tokens is larger than a whole ceiling,
-// which no counter can ever fit however little it has spent — so a backend can
-// refuse it before writing anything.
-func (c Caps) Exceeds(tokens int) bool {
-	for _, ceiling := range c {
-		if tokens > ceiling {
-			return true
-		}
-	}
-	return false
-}
-
 // ChargeRequest is one round's charge, and what it is judged against.
 //
 // A STRUCT rather than positional arguments, for the reason
@@ -155,8 +143,9 @@ type ChargeRequest struct {
 	// Seat is the seat's counter key, [AgentScope] of its derived id.
 	Seat string
 
-	// Tokens is what the round is about to spend. Zero or less is not a
-	// charge at all: see [Budgets.Charge].
+	// Tokens is what the round SPENT, read off the model's reply: a
+	// round's size is known only once it has happened. Zero or less is not
+	// a charge at all: see [Budgets.Charge].
 	Tokens int
 
 	// Windows is the current window of each period on the company clock.
@@ -211,8 +200,14 @@ type Spend struct {
 	// rule, so none of them names a window the refusal did not.
 	RefusedPeriod period.Period
 	RefusedWindow period.Window
-	RefusedUsed   int
-	RefusedLimit  int
+
+	// RefusedUsed is that window's spend AS THE CHARGE LEFT IT — the
+	// refused round included, since a refusal records the round
+	// ([Budgets.Charge]) — and RefusedLimit its ceiling. So a refusal
+	// reads past its ceiling by the round that crossed it, and states the
+	// same figure every reader of the counter is shown afterwards.
+	RefusedUsed  int
+	RefusedLimit int
 
 	// Org and Agent are both counters after an admitted charge or a
 	// post-charge, read against the request's windows. Zero on a refusal.
@@ -235,13 +230,21 @@ type WindowUsage struct {
 	// RefusedAt is when this window last turned a charge away, and zero
 	// once it has admitted one since.
 	//
-	// It is what "exhausted" means, and Used compared against the cap is
-	// not: a refused charge increments nothing, so a seat charged in
-	// 3 000-token rounds against a 100 000 cap stops near 99 000 and never
-	// reads as full. Kept HERE, in the shared counter, because the refusal
-	// is the gate's own decision and every node reports this counter: a
-	// stamp one node kept in memory would appear and vanish on a dashboard
-	// as the reports of different nodes arrived.
+	// It is WHEN the gate said no, and it is not what decides whether the
+	// window has room: Used against the ceiling is. A refused round is
+	// counted like an admitted one ([Budgets.Charge]), so a window that
+	// refused reads past its ceiling by the round that crossed it, and
+	// every later charge is refused against that figure. The two part only
+	// where the stamp is the stale one: a ceiling raised since leaves a
+	// stamp on a window that has room again, until the next admitted
+	// charge clears it, so a reader that took the stamp for "no room"
+	// would hold a seat back from the very room the raise made. And a
+	// window can be full with no stamp at all — a post-charge took it
+	// there, or no charge has been refused against it yet. Kept HERE, in
+	// the shared counter, because the refusal is the gate's own decision
+	// and every node reports this counter: a stamp one node kept in memory
+	// would appear and vanish on a dashboard as the reports of different
+	// nodes arrived.
 	//
 	// Stamped on each window that could not fit the charge and on no
 	// other, of the scope that refused and of no other. Cleared by an
@@ -259,9 +262,9 @@ type WindowUsage struct {
 type Usage struct {
 	Scope string
 
-	// UpdatedAt is when the counter last moved — a charge, a post-charge
-	// or an unwind. A refusal does not move it, so a scope known only for
-	// a refusal has none.
+	// UpdatedAt is when the counter last moved — a charge, admitted or
+	// refused, since both count the round; a post-charge; or an unwind.
+	// Zero only for a scope nothing has charged.
 	UpdatedAt time.Time
 
 	// Windows is one slot per period, in [period.Periods] order, each
@@ -345,32 +348,46 @@ func SortUsage(rows []Usage) {
 // silently N x 500 000. So the ceilings and the windows travel IN on every
 // call and the store holds only what has been spent, and in which window.
 type Budgets interface {
-	// Charge checks and increments the seat's counter and the org's in
-	// every window, and a refusal by either leaves NEITHER charged.
+	// Charge records a round in the seat's counter and the org's, in every
+	// window, and judges whether it FIT: it is admitted only while EVERY
+	// capped window of BOTH scopes had room for it before it was counted.
 	//
-	// A charge is admitted only while EVERY capped window of BOTH scopes
-	// has room for it. There is no transaction here — two keys, and a KV
-	// store has no way to write both at once — so the atomicity is built
-	// rather than borrowed: the ORG is charged first and compensated if
-	// the seat then refuses. The windows cost no extra write: a scope's
-	// windows share its one record, and a slot on an earlier window is
-	// rolled inside the same write that counts the charge.
+	// A REFUSAL RECORDS THE ROUND TOO. A round is charged once its reply
+	// has arrived — its size is read off the reply and known no sooner —
+	// so by the time it is judged the vendor has already billed it, and
+	// what a refusal decides is what comes AFTER: the round's tool calls
+	// do not run and no further round starts. A counter that wrote nothing
+	// on a refusal under-stated the company by the round that crossed the
+	// cap, and since a refusal is decided on room, the next round SMALLER
+	// than the room left was admitted against tokens the refused one had
+	// already spent — a seat at 98 000 of a 100 000 cap whose 3 000-token
+	// round was refused stayed at 98 000, and its next 900-token round was
+	// admitted on top of the 3 000 it had paid for. So a refused window reads
+	// past its ceiling by the round that crossed it, and refuses every
+	// charge after it until it turns over or its ceiling is raised.
 	//
-	// Org first, and not the reverse, for two reasons that point the same
-	// way. It makes the refusal report ORG-FIRST for free when both scopes
-	// are out of room, and "the company is out" is the fact that matters —
-	// raising one seat's ceiling against an exhausted org changes nothing,
-	// and an operator sent to the seat first finds that out the slow way.
-	// And it puts the compensation on the path a seat refusal ALWAYS
-	// takes, rather than on a race between two nodes: an unwind that only
-	// a race can reach is an unwind nothing ever proves works.
+	// There is no transaction here — two keys, and a KV store has no way
+	// to write both at once — so the order is built rather than borrowed:
+	// the ORG is counted and judged first, then the seat. The windows cost
+	// no extra write: a scope's windows share its one record, a slot on an
+	// earlier window is rolled inside the same write that counts the round,
+	// and the refusal stamp of a scope that refused rides that write too.
 	//
-	// What the compensation cannot cover is a process that dies between
-	// the two writes. The org is then over-stated by one round in the
-	// windows it was charged in, which trips a cap EARLY — the fail-closed
-	// direction, bounded by how often a node dies mid-charge and by the
-	// windows turning over, and visible in the counter rather than
-	// silently absorbed.
+	// Org first, and not the reverse, because it makes the refusal report
+	// ORG-FIRST for free when both scopes are out of room, and "the company
+	// is out" is the fact that matters — raising one seat's ceiling against
+	// an exhausted org changes nothing, and an operator sent to the seat
+	// first finds that out the slow way. A seat that the org refused for is
+	// still counted, without a verdict of its own: the round was the seat's.
+	//
+	// What the order costs is the one compensation left: a seat write that
+	// FAILS after the org's landed takes the org's half back (on a context
+	// that outlives the caller's), so an error is all or nothing. It cannot
+	// cover a process that dies between the two writes; the org is then
+	// over-stated by one round in the windows it was counted in, which
+	// trips a cap EARLY — the fail-closed direction, bounded by how often a
+	// node dies mid-charge and by the windows turning over, and visible in
+	// the counter rather than silently absorbed.
 	//
 	// FAILS CLOSED: an error stops the round. It is NOT a refusal, and a
 	// caller must not report it as one — "the company is out of tokens"
@@ -387,7 +404,8 @@ type Budgets interface {
 	//
 	// A refusal stamps the refusing windows' [WindowUsage.RefusedAt], and
 	// an admitted charge clears every stamp on both scopes it charged. See
-	// that field for why nothing weaker clears one.
+	// that field for why nothing weaker clears one, and for why the stamp
+	// is not what says a window has room.
 	Charge(ctx context.Context, req ChargeRequest) (Spend, error)
 
 	// PostCharge adds spend that has ALREADY HAPPENED to the seat's counter
@@ -397,16 +415,12 @@ type Budgets interface {
 	// and answers OK with both counters empty rather than reading two
 	// counters to report what it did not change.
 	//
-	// Charge is the gate: it decides whether a round may run, before the
-	// round has spent anything. Some spend is only known after it happened
-	// (a detached coding run is collected minutes or hours after it
-	// started, possibly on another node), and no answer can un-spend it.
-	// Put through the gate, it was recorded NOT AT ALL whenever it did not
-	// fit, which is exactly when a cap binds: the counter under-stated the
-	// company's spend by the whole run, and the next round was admitted
-	// against room the run had already used. The windows are the ones the
-	// spend is COLLECTED in, which is the only instant the store is told
-	// about.
+	// Charge is the gate: it records a round AND decides whether what the
+	// round asked for may follow. Some spend has nothing waiting on a
+	// verdict — a detached coding run is collected minutes or hours after
+	// it started, possibly on another node, and the work it bought is done
+	// — so it is recorded without one. The windows are the ones the spend
+	// is COLLECTED in, which is the only instant the store is told about.
 	//
 	// It leaves both scopes' refusal stamps alone, because it is not a
 	// decision about room: it neither says the gate turned a charge away
@@ -529,7 +543,8 @@ func (t Tally) Roll(w Windows) Tally {
 
 // Refusing is every capped period whose slot has no room for tokens more, in
 // [period.Periods] order. The tally must already be rolled to the charge's
-// windows.
+// windows, and must be the counter as it stood BEFORE the tokens were added:
+// the verdict is whether they fitted the room there was.
 func (t Tally) Refusing(tokens int, caps Caps) []period.Period {
 	var out []period.Period
 	for i, p := range period.Periods {
@@ -555,6 +570,26 @@ func (t Tally) Add(delta int, at time.Time) Tally {
 	return t
 }
 
+// Count is one scope's share of a charge: the tally rolled to w, tokens counted
+// in every slot at instant at, and the verdict — every capped period whose
+// window had no room for them, judged on the counter as it stood BEFORE they
+// were added — stamped on those windows. Nil caps judge nothing, which is a
+// record with no verdict: a post-charge, and a seat counted for a round the
+// company refused.
+//
+// THE ROUND IS COUNTED WHATEVER THE VERDICT, because it has already been spent
+// (see [Budgets.Charge]); what the verdict decides is the answer and the
+// stamps. An admission leaves the stamps the tally carried, because only the
+// caller knows whether the charge was admitted OVERALL: the company's share is
+// counted before the seat is judged, and a refusal by the seat must not erase
+// the company's own. A caller that knows the whole charge fitted clears them
+// ([Tally.ClearAll], [Tally.Clear]).
+func (t Tally) Count(tokens int, caps Caps, w Windows, at time.Time) (Tally, []period.Period) {
+	rolled := t.Roll(w)
+	refusing := rolled.Refusing(tokens, caps)
+	return rolled.Add(tokens, at).Stamp(refusing, rolled, at), refusing
+}
+
 // Undo takes back a charge of tokens from the slots it was counted in: those
 // still on the window charged holds. A slot that has since rolled on is left
 // alone, because what the charge spent belongs to a window that is over, and
@@ -573,8 +608,8 @@ func (t Tally) Undo(tokens int, charged Tally, at time.Time) Tally {
 // still on the window refused holds for it. A slot that has rolled on since
 // the refusal is left alone: the refusal was of a window that is over.
 //
-// It does not move the counter's clock, so a scope known only for a refusal
-// has no charge time.
+// It does not move the counter's clock: the [Tally.Add] of the refused round
+// beside it does that.
 func (t Tally) Stamp(periods []period.Period, refused Tally, at time.Time) Tally {
 	for _, p := range periods {
 		i := slotOf(p)
@@ -662,9 +697,11 @@ func (t Tally) window(i int, w Windows) period.Window {
 // name the longer period.
 //
 // scope is the name the answer reports ("org" or "agent"), periods what
-// [Tally.Refusing] found, and the tally the one rolled to w that it was found
-// on. A slot a peer's clock already moved onto a later window is named as that
-// window, read on w's clock.
+// [Tally.Refusing] found, and the tally the counter as the charge LEFT it —
+// rolled to w, with the refused round added — so [Spend.RefusedUsed] is the
+// spend every later reader of the counter is shown. A slot a peer's clock
+// already moved onto a later window is named as that window, read on w's
+// clock.
 //
 // The choice turns on each window's END and, at a tie, on the period's length
 // — never on the order periods arrive in, so a caller that listed them in any

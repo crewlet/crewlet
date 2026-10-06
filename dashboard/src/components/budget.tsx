@@ -10,9 +10,9 @@
  * a tone from the fraction when it is given none, which is a threshold of its
  * own; every bar here is handed the window's `state` itself, so a
  * window reads the same here as in the attention queue and on the Budgets
- * screen. A refusing window below its ceiling is the case that matters: a
- * refused charge increments nothing, so the fraction alone would draw the one
- * window the gate is turning turns away as the calmest bar on the screen.
+ * screen, and the fraction is never a second opinion beside it. A window that
+ * refused a round reads past its ceiling, because the refused round is counted
+ * (the vendor billed it), and its figures say so rather than the ceiling.
  */
 
 import { Meter } from "@crewlethq/ui";

@@ -560,7 +560,7 @@ SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             R
 org    day     2026-09-23  2710450  3000000    near      2026-09-23T22:00:00Z  -
 org    week    2026-W39    9120045  unlimited  ok        2026-09-27T22:00:00Z  -
 org    month   2026-09     31004188 unlimited  ok        2026-09-30T22:00:00Z  -
-eng    day     2026-09-23  99120    100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
+eng    day     2026-09-23  102120   100000     refusing  2026-09-23T22:00:00Z  2026-09-23T07:29:51Z
 …
 ```
 
@@ -568,11 +568,12 @@ A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
 `STATE` is the engine's own judgement, the one every surface shows: `refusing`
 when the gate has turned a charge away in the window or no charge fits, `near`
 at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
-window last turned a charge away, or `-` while it has not. Read those rather
-than `USED` against `LIMIT`, because a refused charge increments nothing: a seat
-charged in 3 000-token rounds against a 100 000 ceiling stops near 99 000 and
-its row would otherwise read as headroom. The next charge the scope admits
-clears the stamp, and so does the window turning over.
+window last turned a charge away, or `-` while it has not. A refused round is
+counted like any other, because the vendor billed it, so a window that refused
+one reads `USED` past `LIMIT` by that round — the `eng` day above refused a
+3 000-token round at 99 120 — and every later charge is refused against that
+figure. The next charge the scope admits clears the stamp, and so does the
+window turning over.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody

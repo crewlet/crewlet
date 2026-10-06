@@ -4044,13 +4044,13 @@ to decide a colour.
 There were three before. The Budgets table restated the 75% the old `Meter`
 primitive derived from the fill, the attention queue warned at 90%, and the
 kit's `Meter` ramp had its own — so one window read as healthy, nearly spent
-and full at once, depending on which screen it was drawn on. And a ratio is the
-wrong question at the one moment that matters: a refused charge increments
-nothing, so a scope the gate is turning away sits just below its ceiling and a
-fill-derived colour draws it as the calmest bar on the screen. `refusing` is the
+and full at once, depending on which screen it was drawn on. `refusing` is the
 gate's own word — a refusal stamped in the window, or no room left for a single
 token — and it is the condition a seat is parked on, so a parked seat's bar can
-never read as merely near.
+never read as merely near. A window that refused a round reads past its
+ceiling, because the refused round is counted like any other (the vendor billed
+it), and its figures say so — 102 120 of 100 000, the spend the company was
+billed for, rather than the ceiling it crossed.
 
 Each capped window is its own bar: a scope capped by the day and by the month
 has two ceilings, and one bar can only be drawn against one of them. `ok` is

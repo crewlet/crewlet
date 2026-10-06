@@ -1427,17 +1427,22 @@ An absent window is uncapped, and a ceiling of `0` is refused rather than read
 as unlimited. See [Configuration § Token budgets](../getting-started/configuration.md#token-budgets)
 for the rules and for the ceilings `crewlet validate` warns can never bind.
 
-Every model round is charged against both before it runs, in every window at
-once — the day, the week and the month it falls in on the company's clock —
-and it is admitted only while every capped window of both has room. A charge
-that does not fit is refused: the turn stops and the engine publishes a
-`budget_exhausted` event naming the scope that refused, the window
-(`period`, `window`, `resets_at`) and its figures, beside the turn's own
-`agent_turn_completed`. The
-check is atomic: if the agent's budget refuses, the org-level consumption it
-had already charged is rolled back. In a fleet the counters live in the
-coordination slot, so an org cap of 500 k is 500 k across every node rather
-than per process.
+Every model round is charged against both the moment its reply arrives (its
+size is known no sooner) and before any tool it asked for runs, in every
+window at once — the day, the week and the month it falls in on the company's
+clock — and it is admitted only while every capped window of both had room for
+it. A round that does not fit is refused: its tool calls do not run, the turn
+stops, and the engine publishes a `budget_exhausted` event naming the scope that
+refused, the window (`period`, `window`, `resets_at`) and its figures, beside
+the turn's own `agent_turn_completed`. The refused round is **counted all the
+same**, on the seat's counter and the company's, because the vendor has
+already billed it: the refusing window reads past its ceiling by the round that
+crossed it, and every later round is refused against that figure until the
+window turns over or the ceiling is raised. Each scope's check is atomic, and
+an error is all or nothing: a seat write that fails after the company's landed
+takes the company's back. In a fleet the counters live in the coordination
+slot, so an org cap of 500 k is 500 k across every node rather than per
+process.
 
 A window's allowance comes back when the window turns over — at local
 midnight, on Monday, on the 1st — rolled inside the first charge after the
@@ -1468,14 +1473,18 @@ A refusal is also recorded beside the counter, as when that window last
 refused a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
 and the next charge the scope admits clears it, as does the window turning
-over. That, not a counter at its cap,
-is what exhausted means: a refused charge increments nothing, so the counter
-stops short of the cap by the size of the round that did not fit.
+over. Because the counter carries the refused round, `GET /budgets`, the live
+meter and the [budget park](../concepts/agent-runtime.md#the-budget-park) all
+read a refusing window **over** its ceiling by the round that crossed it, never
+just short of it; `refused_at` is when the gate said no.
 
-Three spends cannot be checked by their own size first, because their size is
-known only once they have happened, and each is **post-charged** — added to the
-counters in the windows it is recorded in, without a check, because no answer
-can un-spend it — behind a gate that reads the room left *before* it starts:
+No model call can be checked by its own size first, because its size is known
+only once it has happened. A turn's round is judged when it is charged, as
+above, because a verdict still has something to stop: the tools it asked for
+and the rounds after it. Four other spends have nothing left to stop by the
+time their size is known, so each is **post-charged** — added to the counters
+in the windows it is recorded in, without a verdict — behind a gate that reads
+the room left *before* it starts:
 
 - **A coding run.** Its box spends while the turn is suspended, so its tokens
   are known only when the run is collected, and they reach both the seat's

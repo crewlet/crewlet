@@ -811,11 +811,10 @@ token_budget: {month: 10000}
 
 func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	t.Parallel()
-	// "Exhausted" is a refusal, never used >= limit alone: a refused charge
-	// increments nothing, so a seat charged in rounds stalls short of its
-	// cap and never reads as full. The stamp is what says the gate is
-	// turning turns away, so the answer carries it on the window that
-	// refused and on no other, and the window's state says `refusing`.
+	// A refused round is COUNTED, so the window that refused it reads past
+	// its ceiling by that round, and the stamp says when the gate said no.
+	// The answer carries both on the window that refused and on no other,
+	// and the window's state says `refusing`.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -856,10 +855,11 @@ token_budget: {day: 10000}
 	if _, err := time.Parse(time.RFC3339Nano, day.RefusedAt); err != nil {
 		t.Errorf("seat's day refused_at = %q, want the refusal's instant: %v", day.RefusedAt, err)
 	}
-	// 70 of 100 is below the near mark, and still refusing: the stamp, not
-	// the arithmetic, is the gate's word.
-	if day.Used != 70 || day.State != types.BudgetRefusing {
-		t.Errorf("seat's day = %+v, want the 70 that fit and refusing", day)
+	// 110 of 100: the 70 that fit and the 40 that were refused, all of it
+	// spent — which is what an operator is shown and what every later
+	// charge is refused against.
+	if day.Used != 110 || day.State != types.BudgetRefusing {
+		t.Errorf("seat's day = %+v, want the 70 that fit and the 40 refused, refusing", day)
 	}
 	if w := window(t, got.Seats[0].Windows, period.Week); w.RefusedAt != "" || w.State != types.BudgetOK {
 		t.Errorf("seat's week = %+v, want no refusal: nothing caps it", w)

@@ -2146,11 +2146,11 @@ func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
 // accounting
 // ---------------------------------------------------------------------
 
-// A cap cannot un-spend a collected run, so a charge it refuses does not stop
-// the turn: the tokens are spent and the work they bought continues. The
-// refusal itself moves no counter, which is the shared counter's answer to
-// every charge it refuses; this case used to assert the opposite of a spy
-// that recorded refused charges, which the real accountant never did.
+// A cap cannot un-spend a collected run, so a run that takes its seat past a
+// ceiling does not stop the turn: the tokens are spent and the work they
+// bought continues. The accountant post-charges — it records the run whole and
+// only reports that the counter went over — so "over" is a fact about the
+// counter, never a refusal of the run.
 func TestAnOverBudgetChargeDoesNotStopTheResume(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
