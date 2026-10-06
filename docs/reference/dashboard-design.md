@@ -5645,7 +5645,9 @@ this screen is the exception):
   grant the person already holds may be unticked whoever edits, since the
   engine checks only what an edit adds, while one neither holds stays
   disabled),
-  **Suspend** / **Reactivate**, and for a person **Issue password reset link**
+  **Suspend** / **Reactivate** (which of the two is fixed when the dialog
+  opens, so its **Try again** after an unknown answer sends the same stage
+  even once the re-read shows it landed), and for a person **Issue password reset link**
   (shown once; the outstanding link is listed among their credentials),
   **Reset second factor** (when they hold one) and **End all sessions** — or,
   for a machine, **Mint token** — and **Remove**, confirmed by typing their

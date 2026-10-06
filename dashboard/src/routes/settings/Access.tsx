@@ -1100,9 +1100,24 @@ function SealedTag() {
   );
 }
 
-/** A gesture on one opened principal. */
+/**
+ * A gesture on one opened principal.
+ *
+ * A STAGE GESTURE NAMES ITS DIRECTION when it opens, never from the live row:
+ * an unknown answer re-reads the directory, and a suspension that did land
+ * would turn the dialog's "Try again" — the same key, which promises the same
+ * operation — into a reactivation the engine takes as a new one.
+ */
 type PersonGesture =
-  "edit" | "stage" | "mfa" | "reset" | "sessions" | "remove" | "mint" | { revoke: CredentialRow };
+  | "edit"
+  | "suspend"
+  | "reactivate"
+  | "mfa"
+  | "reset"
+  | "sessions"
+  | "remove"
+  | "mint"
+  | { revoke: CredentialRow };
 
 /**
  * One principal opened: the credentials they prove themselves with and the
@@ -1163,7 +1178,11 @@ function Principal({
             Edit login, seat and grants
           </Button>
           {(row.stage === "active" || suspended) && (
-            <Button size="small" variant="secondary" onClick={() => setGesture("stage")}>
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => setGesture(suspended ? "reactivate" : "suspend")}
+            >
               {suspended ? "Reactivate" : "Suspend"}
             </Button>
           )}
@@ -1222,20 +1241,20 @@ function Principal({
               : `${who} can no longer prove who they are with it.`}
         </PersonWrite>
       )}
-      {gesture === "stage" && (
+      {(gesture === "suspend" || gesture === "reactivate") && (
         <PersonWrite
-          title={suspended ? `Reactivate ${who}?` : `Suspend ${who}?`}
-          confirm={suspended ? "Reactivate" : "Suspend"}
-          danger={!suspended}
+          title={gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${who}?`}
+          confirm={gesture === "reactivate" ? "Reactivate" : "Suspend"}
+          danger={gesture === "suspend"}
           request={{
             method: "PATCH",
             path: `/iam/people/${id}`,
-            body: { stage: suspended ? "active" : "suspended" },
+            body: { stage: gesture === "reactivate" ? "active" : "suspended" },
           }}
           onClose={close}
           onDone={changed}
         >
-          {suspended
+          {gesture === "reactivate"
             ? `${who} may act again, with what they held; nothing has to be enrolled again.`
             : `${who} may not act while suspended: their sign-ins are refused and their seat is withheld. Their record is kept, and reactivating restores it.`}
         </PersonWrite>

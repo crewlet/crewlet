@@ -497,6 +497,51 @@ test("a grant change sends the ticks alone, whatever another administrator chang
   expect(eng.writes().map((w) => w.body)).toEqual([{ add_grants: ["work:write"] }]);
 });
 
+// A SUSPENSION RETRIED IS A SUSPENSION: it is answered unknown, the directory
+// read after it shows it landed, and "Try again" sends the same stage under
+// the key the engine handed back — the dialog still asks to suspend. Mutation:
+// build the request from the live row and the retry sends `stage: "active"`
+// under that key, which the engine takes as a new operation and reactivates
+// the person just suspended.
+test("a suspension retried after an unknown answer sends the suspension again", async () => {
+  let people: unknown = PEOPLE;
+  const eng = engine(
+    {
+      "PATCH /iam/people/p-bo": [
+        json(503, {
+          error: "unavailable",
+          outcome: "unknown",
+          op_id: "0192f4c8-0000-7000-8000-000000000002",
+          message: "This node cannot answer that right now.",
+        }),
+        json(200, { id: "p-bo", outcome: "applied", op_id: "k" }),
+      ],
+    },
+    () => people,
+  );
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
+  const dialog = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
+  people = {
+    ...PEOPLE,
+    people: PEOPLE.people.map((p) => (p.id === "p-bo" ? { ...p, stage: "suspended" } : p)),
+  };
+  const before = eng.reads("/iam/people");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Suspend" }));
+  await settle();
+  expect(within(dialog).getByText(/could not confirm whether this landed/)).toBeTruthy();
+  expect(eng.reads("/iam/people")).toBeGreaterThan(before);
+  expect(screen.getByRole("button", { name: "Reactivate" })).toBeTruthy();
+  expect(screen.getByRole("dialog", { name: "Suspend Bo Lang?" })).toBe(dialog);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
+  await settle();
+  expect(eng.writes().map((w) => [w.body, w.key])).toEqual([
+    [{ stage: "suspended" }, expect.stringMatching(UUID7)],
+    [{ stage: "suspended" }, "0192f4c8-0000-7000-8000-000000000002"],
+  ]);
+});
+
 // AN EDIT MAY TAKE AWAY A GRANT THE EDITOR DOES NOT HOLD, as the engine
 // allows (it checks only what an edit adds): Di's secrets:write is enabled
 // and unticking it sends its removal. The CONTROL is a grant
