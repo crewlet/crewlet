@@ -107,7 +107,7 @@ const (
 
 	// MaxBody bounds a page.
 	//
-	// Five hundred and twelve kibibytes, eight times a work item's, because
+	// Five hundred and twelve kibibytes, sixteen times a work item's, because
 	// a runbook or a design document genuinely is that long. It is also
 	// the number the broker's max_payload has to clear: the embedded
 	// server allows 8 MiB, but an external NATS cluster defaults to 1 MiB,
