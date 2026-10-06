@@ -316,8 +316,14 @@ func (b *directBox) resolve(path string) (string, error) {
 		}
 	}
 	resolved, err := hostbox.SafeJoin(b.layout.root, rel)
-	if err != nil {
+	switch {
+	case errors.Is(err, hostbox.ErrEscape):
 		return "", b.escapeError(path)
+	case err != nil:
+		// NOT AN ESCAPE: a path that could not be resolved at all — one
+		// under a file, say — and reporting it as outside the box sent its
+		// reader looking for a symlink that was never there.
+		return "", localErrorf("local sandbox %s could not resolve %q: %v", b.layout.id, path, err)
 	}
 	return resolved, nil
 }
@@ -482,9 +488,14 @@ func (b *containerBox) hostPath(path string) (string, error) {
 			"setup-step command instead of a file entry", path, DefaultHome)
 	}
 	resolved, err := hostbox.SafeJoin(b.layout.root, rel)
-	if err != nil {
+	switch {
+	case errors.Is(err, hostbox.ErrEscape):
 		return "", localErrorf("%q resolves outside the sandbox home mount at %s — it would be "+
 			"written to the engine host itself", path, b.layout.root)
+	case err != nil:
+		// Not an escape — see [directBox.resolve].
+		return "", localErrorf("%q could not be resolved under the sandbox home mount at %s: %v",
+			path, b.layout.root, err)
 	}
 	return resolved, nil
 }
@@ -667,7 +678,7 @@ func (b *containerBox) ReadTail(ctx context.Context, path string, n int) (FileTa
 func openHostFile(target, path string) (io.ReadCloser, error) {
 	f, err := os.Open(target)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case absent(err):
 		return io.NopCloser(strings.NewReader("")), nil
 	case err != nil:
 		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
@@ -684,7 +695,7 @@ func openHostFile(target, path string) (io.ReadCloser, error) {
 func readHostTail(target, path string, n int) (FileTail, error) {
 	f, err := os.Open(target)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case absent(err):
 		return FileTail{}, nil
 	case err != nil:
 		return FileTail{}, fmt.Errorf("local sandbox: open %s: %w", path, err)
@@ -708,26 +719,35 @@ func readHostTail(target, path string, n int) (FileTail, error) {
 // [readCapped] gives — which a plain os.ReadFile skipped, so a job that looped
 // printing errors into its stderr file put all of it in the engine's memory on
 // the host it shares, where a remote box's identical file was refused.
+//
+// ONLY ABSENCE IS EMPTY, as for [openHostFile]. Every failure to open or read
+// used to answer empty too, so a findings report the engine was not permitted
+// to read — a container writing its mount as a user the engine is not —
+// collected as a run that wrote none, and a question file as a run that asked
+// nothing; a remote box's envd answers the same failure as an error, which
+// is what a collection retries and a person can act on.
 func readHostFile(target, path string) ([]byte, error) {
 	f, err := os.Open(target)
-	if err != nil {
-		//nolint:nilerr // Empty-on-missing IS the contract here: the
-		// detached runner polls for marker and result files that do not
-		// exist until the job finishes, and a poll is not an error.
+	switch {
+	case absent(err):
+		// Empty-on-missing IS the contract here: the detached runner
+		// polls for marker and result files that do not exist until the
+		// job finishes, and a poll is not an error.
 		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 	content, err := readCapped(f, path)
-	if errors.Is(err, ErrFileTooLarge) {
-		return nil, err
+	if err != nil && !errors.Is(err, ErrFileTooLarge) {
+		return nil, fmt.Errorf("local sandbox: read %s: %w", path, err)
 	}
-	if err != nil {
-		//nolint:nilerr // A file that vanished or turned unreadable
-		// mid-read is a poll that found nothing yet, as above.
-		return nil, nil
-	}
-	return content, nil
+	return content, err
 }
+
+// absent is whether an open failed because there is no file at the path —
+// the one failure a read answers as an empty file.
+func absent(err error) bool { return errors.Is(err, fs.ErrNotExist) }
 
 // SetTimeout refreshes the box's keepalive stamp — see [directBox.SetTimeout].
 func (b *containerBox) SetTimeout(ctx context.Context, seconds float64) error {
