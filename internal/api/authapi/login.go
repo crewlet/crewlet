@@ -1041,6 +1041,16 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 			unresolved(w, r, "api_step_up_close_unresolved", closed)
 			return loginResponse{}, false
 		}
+	} else {
+		// A FRESH SIGN-IN ENDS WHATEVER SESSION THIS BROWSER HELD, as a
+		// sign-out does: the cookie set below replaces it, so the session
+		// it named is held by no browser — and was left live on every node
+		// until its absolute deadline, listed as "signed in" on its
+		// person's Account. An invitation redeemed in a browser signed in
+		// as somebody else did exactly that to them. Best effort, as a
+		// sign-out is: the sign-in asked for is not refused over a close
+		// of somebody's other session.
+		s.endEveryHeld(r)
 	}
 	restricted := s.enrolmentOnly(how)
 	// THE PERSON SIGNING IN IS THE AUTHOR, through the session it opens;

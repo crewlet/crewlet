@@ -173,6 +173,29 @@ describe("what the screen shows before anything is spent", () => {
     expect(screen.getByText(/At least 12 characters/)).toBeDefined();
   });
 
+  // REDEEMING ENDS THE SESSION THIS BROWSER HOLDS, so the form says whose it
+  // is before Join is pressed. The CONTROL is the view above, which names no
+  // session and draws no notice.
+  test("a browser already signed in as somebody else is told joining signs them out", async () => {
+    engine({
+      [`GET ${PATH}`]: {
+        status: 200,
+        body: { ...(VIEW.body as object), signed_in_as: "dave.lee" },
+      },
+    });
+    mount();
+    await screen.findByLabelText("Login");
+    expect(screen.getByText("dave.lee")).toBeDefined();
+    expect(screen.getByText(/Joining signs that session out/)).toBeDefined();
+  });
+
+  test("a browser signed in as nobody is told nothing about a session", async () => {
+    engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("Login");
+    expect(screen.queryByText(/Joining signs that session out/)).toBeNull();
+  });
+
   // ONE ANSWER for redeemed, withdrawn, expired and a wrong secret — in the
   // engine's own words, and with no form to fill in for nothing.
   test("a link that no longer works is one answer, with nothing to fill in", async () => {

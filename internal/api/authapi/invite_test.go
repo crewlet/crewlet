@@ -13,8 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -379,5 +383,134 @@ func TestARedemptionToldItsLoginIsTakenCanTryAnother(t *testing.T) {
 	}
 	if got := writer.enrolled[1].Login; got != "dana.ops" {
 		t.Errorf("the retry enrolled login %q, want the one it chose", got)
+	}
+}
+
+// lineageAt mints a uuid7 whose embedded instant is at, as a session begun then
+// carries.
+func lineageAt(t *testing.T, at time.Time) uuid.UUID {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("mint a lineage: %v", err)
+	}
+	millis := at.UnixMilli()
+	for i := range 6 {
+		id[i] = byte(millis >> (8 * (5 - i)))
+	}
+	return id
+}
+
+// redeemingWriter is a [recordingWriter] that also records every session close.
+type redeemingWriter struct {
+	recordingWriter
+	closed [][2]string
+}
+
+func (w *redeemingWriter) CloseSession(_ context.Context, lineage, person, _,
+	_ string) (statelog.Result, error) {
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.closed = append(w.closed, [2]string{lineage, person})
+	return applied(statelog.Position{}), nil
+}
+
+// A REDEMPTION IN A BROWSER SIGNED IN AS SOMEBODY ELSE ENDS THAT SESSION.
+//
+// The redemption sets its own cookie over the one the browser held, so the
+// session that cookie named was held by no browser any more — and was left
+// live on every node until its absolute deadline, listed as "signed in" on its
+// person's Account for a week. A fresh sign-in now ends it as a sign-out
+// would, closing it under its own person. The CONTROL is a browser holding no
+// session, whose redemption closes nothing. Mutation: drop the close from the
+// fresh sign-in and the held session stays open.
+func TestARedemptionInABrowserSignedInAsSomebodyElseEndsThatSession(t *testing.T) {
+	t.Parallel()
+	const dave = "018f3a9c-0000-7000-8000-0000000000d4"
+	lineage := lineageAt(t, clock)
+	held, err := fixtureSigner(t).Mint(session.Mint{
+		Lineage: lineage, Person: dave, StartPosition: 1,
+		AbsoluteExpiresAt: clock.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		cookie string
+		want   [][2]string
+	}{
+		{"signed in as dave", held, [][2]string{{lineage.String(), dave}}},
+		{"signed in as nobody (the control)", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			writer := &redeemingWriter{}
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+				o.Directory = liveInvitation{}
+				o.Writer = writer
+			}).Routes(mux)
+			req := httptest.NewRequest(http.MethodPost, "/auth/invite/"+invitationID,
+				strings.NewReader(`{"secret":"`+invitationSecret+
+					`","login":"frank.o","password":"a-perfectly-fine-passphrase"}`))
+			if tc.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: tc.cookie})
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
+			}
+			if !slices.Equal(writer.closed, tc.want) {
+				t.Errorf("closed %v, want %v", writer.closed, tc.want)
+			}
+			if len(writer.opened()) != 1 {
+				t.Errorf("opened %d sessions, want the redeemer's one",
+					len(writer.opened()))
+			}
+		})
+	}
+}
+
+// THE INVITATION'S VIEW SAYS WHO THIS BROWSER IS SIGNED IN AS.
+//
+// Redeeming ends the session the browser holds, and the form used to say
+// nothing about it: Join silently switched the browser from one person to
+// another. The view names the login of the session the request resolved to,
+// and nothing for a browser signed in as nobody — the CONTROL. Mutation: drop
+// the field and the form has nothing to warn with.
+func TestTheInvitationsViewSaysWhoThisBrowserIsSignedInAs(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+		o.Directory = sealedInvitation{}
+		o.Sealer = stubSealer{address: "frank@example.com"}
+	}).Routes(mux)
+	for _, tc := range []struct {
+		name string
+		as   *iam.Principal
+		want any
+	}{
+		{"signed in as dave.lee", &iam.Principal{ID: uuid.New(), Login: "dave.lee",
+			Kind: iam.KindPerson, Stage: iam.StageActive}, "dave.lee"},
+		{"signed in as nobody (the control)", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := viewInvite(invitationID)
+			if tc.as != nil {
+				req = req.WithContext(iam.WithPrincipal(req.Context(), *tc.as))
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			var view map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+				t.Fatalf("decode %d: %v", rec.Code, err)
+			}
+			if view["signed_in_as"] != tc.want {
+				t.Errorf("signed_in_as %v, want %v", view["signed_in_as"], tc.want)
+			}
+		})
 	}
 }

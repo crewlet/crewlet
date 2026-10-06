@@ -269,10 +269,17 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // the sign-out merely forgot.
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	s.clearSession(w)
+	s.endEveryHeld(r)
+	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
+}
+
+// endEveryHeld closes every session this browser holds a cookie for, under
+// either name — see [Service.Logout] and, for a sign-in that replaces them,
+// [Service.openSignIn].
+func (s *Service) endEveryHeld(r *http.Request) {
 	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
 		s.endHeld(r, s.signer.Validate(r.Context(), s.directoryFor(), cookie))
 	}
-	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
 }
 
 // endHeld closes and announces one session a sign-out found, when this node's

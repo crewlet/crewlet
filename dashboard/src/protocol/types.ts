@@ -4272,6 +4272,9 @@ export interface InvitationView {
   /** The seat redeeming it binds the person to, as the chart calls it now, or
    *  absent for an invitation that binds none. */
   seat?: { handle?: string; name?: string };
+  /** The login this BROWSER is signed in as, or absent for nobody: redeeming
+   *  ends that session, so the form says so first. */
+  signed_in_as?: string;
 }
 
 /** What a password reset link's screen renders from, before anything is spent. */

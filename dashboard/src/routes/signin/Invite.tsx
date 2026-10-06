@@ -35,6 +35,14 @@
  * The redemption can be retried until it lands: it is one record, so an
  * attempt the engine refused wrote nothing and the next has nothing in its
  * way — what keeps the link single-use is the record that spends it.
+ *
+ * # A browser already signed in is told so
+ *
+ * The view names the login this browser's session is signed in as, and
+ * redeeming ends that session before the new one opens — so the form says
+ * both before Join is pressed. It switched a browser from one person to
+ * another with no word, and left the first person's session live on the
+ * engine for its whole deadline.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -218,6 +226,12 @@ function Redeem({
         </>
       }
     >
+      {view.signed_in_as && (
+        <Callout variant="warning">
+          This browser is signed in as <strong>{view.signed_in_as}</strong>. Joining signs that
+          session out and signs you in as the person this invitation is for.
+        </Callout>
+      )}
       {seat &&
         (seat.handle ? (
           <Callout variant="neutral">

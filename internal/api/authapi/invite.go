@@ -88,6 +88,14 @@ type inviteView struct {
 	// binds none. It is part of what the person is agreeing to, so the
 	// form shows it before anything is spent.
 	Seat *inviteSeat `json:"seat,omitempty"`
+
+	// SignedInAs is the login of the session this BROWSER is signed in
+	// with, or absent for one signed in as nobody. Redeeming ends that
+	// session ([Service.openSignIn]), so the form says so before anybody
+	// presses Join: it switched a browser from one person to another with
+	// no word. About the caller's own cookie, and nothing about anybody
+	// the link names.
+	SignedInAs string `json:"signed_in_as,omitempty"`
 }
 
 // inviteSeat is the seat an invitation binds, as its view shows it.
@@ -139,6 +147,12 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	if held.Seat != "" {
 		view.Seat = s.inviteSeatOf(r.Context(), held.Seat)
+	}
+	// RESOLVED HERE ONLY THROUGH A SESSION COOKIE: an unguarded route
+	// compares no bearer ([auth.Guard]), so whoever it resolved is the
+	// session this browser holds.
+	if p, how := iam.From(r.Context()); how == iam.Resolved {
+		view.SignedInAs = p.Login
 	}
 	httpjson.Write(w, http.StatusOK, view)
 }

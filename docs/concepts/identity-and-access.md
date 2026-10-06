@@ -1343,6 +1343,16 @@ checked against, because a lineage is not a secret. So a node that cannot read
 its rows answers `503 identity_unavailable` with a `Retry-After` and writes
 nothing, rather than ending a session it cannot say is the caller's.
 
+**A sign-in signs the browser out first.** Every way in that opens a fresh
+session — the password form, an invitation's redemption, a Tier A token's
+exchange — replaces whatever cookie the browser held, so it ends the session
+that cookie named exactly as a sign-out would before it opens its own. A
+browser signed in as one person that redeemed another person's invitation used
+to switch to the new person and leave the first one's session live, listed as
+signed in on their Account, with no browser holding it until its deadline. The
+invitation's screen says which session it is about to end before anything is
+pressed.
+
 Every field is there because a node has to answer with it and has no other way
 to know it:
 
