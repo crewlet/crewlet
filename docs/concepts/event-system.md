@@ -722,7 +722,7 @@ the span above. A turn does not republish its trigger's span id as its own;
 that made every event in a turn look like the same span and collapsed the
 dashboard's tree onto the wake that started it.
 
-**When notifications are dropped** (own message, not following thread, rate limit), a `NotificationSkipped` event is emitted with the skip reason — visible in the trace so you can see why a webhook didn't reach an agent.
+**When a delivery addressed to somebody is dropped** — no seat matches its recipient, the routing gate refuses it, the rate valve is shut, nothing parses its source, or its source was disconnected — a `NotificationSkipped` event is emitted with the reason, visible in the trace so you can see why a webhook didn't reach an agent. A chat parser's own filtering is **not** a skip: an agent's own post, a thread reply the seat does not follow, a system post or a deleted one concerns nobody, so it is logged at debug (`slack_event_skipped`, `mattermost_post_skipped`) rather than recorded — recording each would bury the drops that matter under the ordinary traffic of a busy channel.
 
 The dashboard groups events by `trace_id` into collapsible trace trees. See [Deployment — Tracing](../guides/deployment.md#tracing) for OTLP export configuration.
 

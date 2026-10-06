@@ -565,8 +565,12 @@ FAIL  seat swe         agent-swe authenticates and opens a socket but has joined
 Only `posted` events carrying user-visible content — **edits do not**, the
 same call the [Slack](slack.md) transport makes: an edit of a message the
 agent has already triaged is not a new request, and re-answering it costs
-a full turn. Skipped with a recorded reason (a `NotificationSkipped`
-event):
+a full turn. Skipped without waking anyone, and logged at debug as
+`mattermost_post_skipped` with the reason rather than recorded as a
+`NotificationSkipped` event — those concern nobody, the same rule every
+integration's parser follows, and a skip row for each would bury the drops
+that do matter (a seat no recipient matches, the routing gate, the rate valve)
+under the ordinary traffic of a busy channel:
 
 - **`system_*` posts** — joins, leaves, header/purpose changes, channel
   renames. They carry text, but the text is *about* the channel rather than
