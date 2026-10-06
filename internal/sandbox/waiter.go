@@ -383,10 +383,7 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 			"turn_id", run.TurnID, "coding_agent", run.CodingAgent, "error", err.Error())
 		return pollGone
 	}
-	done, err := runner.Poll(ctx, box, RunHandle{
-		CommandID: run.CommandID,
-		SessionID: run.SessionID,
-	})
+	done, err := runner.Poll(ctx, box, run.Handle())
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_poll_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())

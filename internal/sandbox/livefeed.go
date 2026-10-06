@@ -347,7 +347,7 @@ func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
 	}
 	f.mu.Lock()
 	if f.reading == nil {
-		f.reading = runner.Follow(RunHandle{CommandID: run.CommandID, SessionID: run.SessionID})
+		f.reading = runner.Follow(run.Handle())
 	}
 	reading := f.reading
 	f.mu.Unlock()

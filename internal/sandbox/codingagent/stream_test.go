@@ -129,7 +129,7 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded\nOpened https://github.com/acme/api/pull/12")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 		`{"type":"text","part":{"text":"Built it."}}`,
 	}, "\n"))
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 	b.Put(p.Err(), strings.Repeat(strings.Repeat("e", 99)+"\n", 3<<20/100)+"FATAL: the last line")
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T
 	b.Put(p.Err(), "a warning\nthe last line")
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	b.Put(p.Err(), "a warning")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v; want the refusal to stay inside its piece", err)
 	}
@@ -337,7 +337,7 @@ func TestAQuestionPastTheCapIsNotParkedOn(t *testing.T) {
 	b.Put(p.Ask(), `{"question":"`+strings.Repeat("q", sandbox.MaxFileBytes)+`","to":"team"}`)
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 			}
 			return nil
 		}
-		if _, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}); !errors.Is(err, errBoxUnreadable) {
+		if _, err := runner.Collect(t.Context(), b, launched(runner)); !errors.Is(err, errBoxUnreadable) {
 			t.Errorf("an unreadable %s collected with %v; want the read's error", path, err)
 		}
 	}

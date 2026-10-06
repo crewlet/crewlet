@@ -52,7 +52,7 @@ func TestTheAskShimRecordsAQuestionFromInsideARealBox(t *testing.T) {
 	}
 
 	// And the runner reads it back as a parked run.
-	result, err := runner.Collect(t.Context(), box, sandbox.RunHandle{})
+	result, err := runner.Collect(t.Context(), box, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

@@ -1181,6 +1181,11 @@ type BoxRef struct {
 	CodingAgent string
 	SessionID   string
 	PauseTTLSec float64
+
+	// Layout is the job's output layout, from its handle ([RunHandle.Layout]):
+	// written onto the job's own record, since a box attached before its job
+	// starts has none to name.
+	Layout int
 }
 
 // Fence is the ownership token a mutation carries.
@@ -1298,6 +1303,20 @@ type LaunchRecord struct {
 	// written with the question ([PendingStore.MarkAwaiting]) and paid by
 	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
 	Condensed AuxTokens `json:"parked_condensed,omitzero"`
+
+	// Layout is which of its runner's output layouts the job was launched
+	// with ([RunHandle.Layout]), written by [PendingStore.AttachSandbox]
+	// once the job has started.
+	//
+	// ON THE JOB'S RECORD, and that is what makes it safe to read: a box is
+	// reused across the jobs of a turn, by whichever build holds the seat,
+	// and a layout that named no job would tell the next one — launched by
+	// a build that writes elsewhere — to read a file this job left behind.
+	// An older build that knows the record but not this field drops it on
+	// its own rewrite, and the job then reads as layout zero: its result
+	// still parses, from the file every layout writes it to, and only its
+	// transcript is lost — never another job's shown as its own.
+	Layout int `json:"output_layout,omitempty"`
 }
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split the way
@@ -1360,6 +1379,12 @@ func (s EngineSpend) Plus(o EngineSpend) EngineSpend {
 func (s EngineSpend) Newest(o EngineSpend) EngineSpend {
 	return EngineSpend{Aux: s.Aux.newest(o.Aux), Workers: max(s.Workers, o.Workers),
 		WorkerInput: max(s.WorkerInput, o.WorkerInput), WorkerOutput: max(s.WorkerOutput, o.WorkerOutput)}
+}
+
+// Handle is the job this row holds now, as every read of its box is handed
+// it: its command, its session and the output layout it was launched with.
+func (r PendingRun) Handle() RunHandle {
+	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID, Layout: r.LaunchFacts().Layout}
 }
 
 // LaunchFacts is the [LaunchRecord] of the job this row holds now, and the

@@ -244,7 +244,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
-		PauseTTLSec: req.Spec.PauseTTLSec,
+		PauseTTLSec: req.Spec.PauseTTLSec, Layout: handle.Layout,
 	}, req.Fence); err != nil {
 		abandon(ctx, m, store, req, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)

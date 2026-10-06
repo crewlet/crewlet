@@ -76,6 +76,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
 		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
 		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
+		{"AJobsLayoutIsOnItsOwnRecord", testAJobsLayoutIsOnItsOwnRecord},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -1035,6 +1036,37 @@ func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run("t1"))
 	if got := mustGet(t, s, "t1").LaunchFacts(); got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
 		t.Errorf("a new launch inherited the last job's failed collections: %+v", got)
+	}
+}
+
+func testAJobsLayoutIsOnItsOwnRecord(t *testing.T, s sandbox.PendingStore) {
+	// WHERE A JOB'S OUTPUT LANDED IS THE JOB'S, written when it starts and
+	// handed to every read of it — and never the next job's, which a reused
+	// box's next launch may write somewhere else.
+	mustBeginLaunch(t, s, run("t1"))
+	attach := func(layout int) {
+		t.Helper()
+		if err := s.AttachSandbox(t.Context(), "t1", sandbox.BoxRef{
+			SandboxID: "box-1", CommandID: "cmd-1", CodingAgent: "claude-code", Layout: layout,
+		}, sandbox.Fence{}); err != nil {
+			t.Fatalf("AttachSandbox: %v", err)
+		}
+	}
+	attach(0) // the box, before its job starts
+	attach(2) // the job, started
+	got := mustGet(t, s, "t1")
+	if h := got.Handle(); h.Layout != 2 || h.CommandID != "cmd-1" {
+		t.Errorf("the row hands back %+v; want the job's command and layout 2", h)
+	}
+	if got.LaunchFacts().Layout != 2 {
+		t.Errorf("the job's record holds layout %d; want 2", got.LaunchFacts().Layout)
+	}
+
+	// The next launch on the same row is another job, with no layout until
+	// it declares one.
+	mustBeginLaunch(t, s, run("t1"))
+	if h := mustGet(t, s, "t1").Handle(); h.Layout != 0 {
+		t.Errorf("a new launch inherited the last job's layout: %+v", h)
 	}
 }
 

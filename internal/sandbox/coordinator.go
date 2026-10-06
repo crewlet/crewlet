@@ -781,9 +781,7 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	result, err := runner.Collect(ctx, box, RunHandle{
-		CommandID: run.CommandID, SessionID: run.SessionID,
-	})
+	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
 		return Result{}, err
 	}

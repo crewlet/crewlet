@@ -22,6 +22,12 @@ func box(t *testing.T, runner *codingagent.Runner) *sandbox.FakeSandbox {
 
 func paths(b sandbox.Sandbox) codingagent.Paths { return codingagent.PathsFor(b) }
 
+// launched is the handle a job this build launched hands every read: its
+// output layout, which [codingagent.Runner.Start] declares.
+func launched(runner *codingagent.Runner) sandbox.RunHandle {
+	return sandbox.RunHandle{Layout: runner.Layout()}
+}
+
 // ---------------------------------------------------------------------
 // paths
 // ---------------------------------------------------------------------
@@ -262,7 +268,7 @@ func TestTheFindingsFileIsTheResultCarrierOfRecord(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded\nOpened https://github.com/acme/api/pull/42")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -285,7 +291,7 @@ func TestACrashOverridesTheReportsSuccessSignal(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: partial")
 	b.Put(p.ExitCode(), "137")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -302,7 +308,7 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 	b.Put(p.Err(), "claude: command not found")
 	b.Put(p.ExitCode(), "127")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -326,7 +332,7 @@ func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 	b.Put(p.Err(), "error: unknown option '--output-formt'")
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -346,7 +352,7 @@ func TestEverythingCollectedIsRedacted(t *testing.T) {
 	b.Put(p.Err(), "git clone https://"+secret+"@example.com/acme/api")
 	b.Put(p.Ask(), `{"question":"is `+secret+` right?","to":"requester"}`)
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -367,7 +373,7 @@ func TestARecordedQuestionSurfacesAsNeedingInput(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: blocked")
 	b.Put(p.Ask(), `{"question":"which branch should I target?","to":"team"}`)
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -385,7 +391,7 @@ func TestAQuestionWithNoAudienceDefaultsToTheRequester(t *testing.T) {
 	b := box(t, runner)
 	b.Put(paths(b).Ask(), `{"question":"which branch?"}`)
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -402,7 +408,7 @@ func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded")
 	b.Put(p.Ask(), "{not json")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -427,7 +433,7 @@ func TestTheTranscriptLeavesTheRunnerWholeAndRedacted(t *testing.T) {
 	b.Put(p.Findings(), "Outcome: succeeded")
 	b.Put(p.Err(), stderr)
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -455,7 +461,7 @@ func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -479,7 +485,7 @@ func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 	b.Put(p.Err(), "warning: a deprecated flag")
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -499,7 +505,7 @@ func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	b.Put(p.Findings(), report)
 	b.Put(p.ExitCode(), "0")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	res, err := runner.Collect(t.Context(), b, launched(runner))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

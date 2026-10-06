@@ -39,7 +39,7 @@ func TestALiveReadingIsTheTranscriptRedacted(t *testing.T) {
 	b.Put(p.Result(), textEvent("cloning the repository")+textEvent("exporting "+secret+" and running go test"))
 	b.Put(p.Err(), "stderr is not what a parsed transcript run shows")
 
-	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
+	got := read(t, runner.Follow(launched(runner)), b)
 	if got.Source != sandbox.SourceTranscript || got.Origin != "transcript@0" || got.Front {
 		t.Errorf("source %q, origin %q, front %v; want the transcript, read from its start",
 			got.Source, got.Origin, got.Front)
@@ -68,7 +68,7 @@ func TestALiveReadingTakesOnlyWhatWasWrittenSince(t *testing.T) {
 	runner := codingagent.NewOpenCode()
 	b := box(t, runner)
 	p := paths(b)
-	reading := runner.Follow(sandbox.RunHandle{})
+	reading := runner.Follow(launched(runner))
 	stream := textEvent("first")
 	b.Put(p.Result(), stream)
 	if got := read(t, reading, b); got.Text != "first\n" {
@@ -101,7 +101,7 @@ func TestALiveReadingIsTheWholeTextRedactedHoweverItArrives(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	reading := runner.Follow(sandbox.RunHandle{})
+	reading := runner.Follow(launched(runner))
 
 	var shown strings.Builder
 	for at := 0; at < len(stderr); at += 37 {
@@ -136,7 +136,7 @@ func TestALiveReadingOfALongStreamBeginsAtItsEnd(t *testing.T) {
 	b.Put(paths(b).Result(), bigToolStream(
 		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"go vet ./..."}}}}`))
 
-	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
+	got := read(t, runner.Follow(launched(runner)), b)
 	if got.Source != sandbox.SourceTranscript || got.Text != "[tool] bash: go vet ./...\n" {
 		t.Errorf("source %q, text %q; want the stream's newest event", got.Source, got.Text)
 	}
@@ -154,7 +154,7 @@ func TestALiveReadingOfTheErrorStreamStartsOnALine(t *testing.T) {
 	b := box(t, runner)
 	b.Put(paths(b).Err(), strings.Repeat("progress 0123456789\n", 80_000)+"now compiling")
 
-	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
+	got := read(t, runner.Follow(launched(runner)), b)
 	if !strings.HasPrefix(got.Text, "progress 0123456789\n") || !strings.HasSuffix(got.Text, "progress 0123456789\n") {
 		t.Errorf("the reading = %.40q … %q; want whole lines", got.Text, tailOf(got.Text, 20))
 	}
@@ -174,7 +174,7 @@ func TestAStreamThatOutrunsTheReadingBeginsAgain(t *testing.T) {
 	runner := codingagent.NewOpenCode()
 	b := box(t, runner)
 	p := paths(b)
-	reading := runner.Follow(sandbox.RunHandle{})
+	reading := runner.Follow(launched(runner))
 	b.Put(p.Result(), textEvent("before the burst"))
 	first := read(t, reading, b)
 
@@ -197,7 +197,7 @@ func TestAReadingSwitchesToTheTranscriptWhenItSpeaks(t *testing.T) {
 	runner := codingagent.NewOpenCode()
 	b := box(t, runner)
 	p := paths(b)
-	reading := runner.Follow(sandbox.RunHandle{})
+	reading := runner.Follow(launched(runner))
 
 	if got := read(t, reading, b); got.Source != sandbox.SourceNone || got.Text != "" {
 		t.Fatalf("an empty box = %+v; want nothing to show", got)
@@ -226,8 +226,8 @@ func TestTwoReadingsOfOneStreamAgree(t *testing.T) {
 	}
 	b.Put(paths(b).Result(), stream.String())
 
-	one := read(t, runner.Follow(sandbox.RunHandle{}), b)
-	other := read(t, runner.Follow(sandbox.RunHandle{}), b)
+	one := read(t, runner.Follow(launched(runner)), b)
+	other := read(t, runner.Follow(launched(runner)), b)
 	if one.Origin != other.Origin || one.Text != other.Text {
 		t.Errorf("two readings disagree: %q/%d bytes and %q/%d bytes",
 			one.Origin, len(one.Text), other.Origin, len(other.Text))
@@ -245,7 +245,7 @@ func TestALiveReadingShowsARunningClaudeRun(t *testing.T) {
 	b.Put(p.Stream(), strings.Join(claudeRunStream[:7], "\n")+"\n")
 	b.Put(p.Err(), "not what a run that streams shows")
 
-	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
+	got := read(t, runner.Follow(launched(runner)), b)
 	want := "I'll run the suite first.\n[tool] Bash: go test ./...\n[tool] Read: /home/user/repo/flaky_test.go\n" +
 		"[tool] Bash: go test -run TestFlaky -count=20 ./...\n"
 	if got.Source != sandbox.SourceTranscript || got.Text != want || got.Finished {

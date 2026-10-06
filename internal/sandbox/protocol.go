@@ -182,6 +182,21 @@ type RunHandle struct {
 	CommandID string
 	PID       int
 	SessionID string
+
+	// Layout is which of its runner's OUTPUT LAYOUTS the job was launched
+	// with — where its stdout landed and how its result is read back — as
+	// the runner that started it declares it, recorded on the job's own
+	// record ([LaunchRecord.Layout]) and handed back to every read of it.
+	//
+	// THE LAUNCH SAYS, BECAUSE THE BOX CANNOT. A rolling upgrade puts jobs
+	// launched by two builds into boxes both reuse, and a build that wrote
+	// its stdout somewhere else leaves the file this one streams to as the
+	// PREVIOUS job's: read by layout rather than by what the box holds, a
+	// stale stream was collected as the new job's transcript and shown on
+	// its live view. Each runner numbers its own layouts from ZERO, which is
+	// the layout every build before the declaration launched with, so a job
+	// whose record declares none is read the way it was written.
+	Layout int
 }
 
 // Result is one coding run's outcome.

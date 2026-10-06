@@ -120,18 +120,43 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// Output is this CLI's layout under stream-json: the EVENT STREAM goes to its
-// own file, read as a stream and from its end, and the RESULT is the stream's
-// last line, which the wrapper copies to the result file after the CLI exits
-// — so the result is read whole from a file of one line however long the
-// stream grew. It exits cleanly, so the done marker is its only completion
-// signal and the poll reads nothing of the stream.
+// The layouts a Claude Code job has been launched with.
+const (
+	// claudeJSONLayout is `--output-format json`: ONE object, the result,
+	// printed when the run ends, the CLI's whole stdout in the result file
+	// and nothing streamed. Every build before the layouts were numbered.
+	claudeJSONLayout = 0
+
+	// claudeStreamLayout is stream-json: every message as it happens into
+	// its own file, the result its last line, copied out after the CLI
+	// exits.
+	claudeStreamLayout = 1
+)
+
+// Layout is stream-json's ([claudeStreamLayout]).
+func (ClaudeCode) Layout() int { return claudeStreamLayout }
+
+// Output is where a job of each layout wrote.
 //
-// THE RESULT FILE KEEPS ITS NAME across the switch from `json`, and that is
-// what a rolling upgrade rests on: a run an older build launched has its one
-// object there, and a build that predates this layout collecting a run this
-// one launched reads its result line there, and both parse the same fields.
-func (ClaudeCode) Output(paths Paths) Output {
+// Under stream-json the EVENT STREAM goes to its own file, read as a stream
+// and from its end, and the RESULT is the stream's last line, which the
+// wrapper copies to the result file after the CLI exits — so the result is
+// read whole from a file of one line however long the stream grew. It exits
+// cleanly, so the done marker is its only completion signal and the poll
+// reads nothing of the stream.
+//
+// A `json` job wrote its stdout to the result file and streamed nothing, so
+// nothing is read as its stream: a build of that layout clears no stream
+// file, and the one in a box it reused is the previous job's.
+//
+// THE RESULT FILE KEEPS ITS NAME across the switch, and that is what a
+// rolling upgrade rests on: a run an older build launched has its one object
+// there, and a build that predates this layout collecting a run this one
+// launched reads its result line there, and both parse the same fields.
+func (ClaudeCode) Output(paths Paths, layout int) Output {
+	if layout <= claudeJSONLayout {
+		return Output{Stdout: paths.Result(), Result: paths.Result()}
+	}
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result()}
 }
 

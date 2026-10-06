@@ -60,11 +60,19 @@ const liveReadFloor = 64 << 10
 const liveBacklog = 8 << 20
 
 // Follow implements [sandbox.Runner].
-func (r *Runner) Follow(sandbox.RunHandle) sandbox.LiveReading { return &follower{cli: r.cli} }
+//
+// The reading follows the layout the job was LAUNCHED with, as its collection
+// does — a stream a build that writes elsewhere left in a reused box is the
+// previous job's, and shown live it was that job's activity for the whole of
+// this one.
+func (r *Runner) Follow(handle sandbox.RunHandle) sandbox.LiveReading {
+	return &follower{cli: r.cli, layout: handle.Layout}
+}
 
 // follower is one live reading of one job.
 type follower struct {
-	cli CLI
+	cli    CLI
+	layout int
 
 	// events is the event stream, decoded by dec into transcript entries
 	// that wait in transcript until they settle.
@@ -86,7 +94,7 @@ type follower struct {
 // Read implements [sandbox.LiveReading].
 func (f *follower) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.LiveRead, error) {
 	paths := PathsFor(box)
-	out := f.cli.Output(paths)
+	out := f.cli.Output(paths, f.layout)
 	marker, err := box.ReadFile(ctx, paths.Done())
 	if err != nil {
 		return sandbox.LiveRead{}, err
