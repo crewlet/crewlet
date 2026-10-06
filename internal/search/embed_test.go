@@ -1,6 +1,7 @@
 package search_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -208,6 +209,140 @@ func TestASelectionReadsOnlyTheOpeningOfABody(t *testing.T) {
 				search.EmbedReadChars)
 		}
 	}
+}
+
+// A SOURCE WHOSE TEXT DID NOT CHANGE IS RESTAMPED, NOT SENT AGAIN.
+//
+// Every task record bumps the task's version — a status, an assignee, a move to
+// another project — and each one used to buy a provider call and a new vector
+// for the very text the stored vector was computed from, while the digest
+// every record carries was documented as what stopped exactly that. Now the
+// stored vector is republished under the new version and the new container: no
+// request, the same bytes, and the container a scoped search filters on moved
+// with the task. And the control: a changed text IS sent.
+func TestAnUnchangedTextIsRestampedNotSentAgain(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.seedTitled("t-a", "Rate limits", "429 backoff in the GitLab client")
+	if published, err := h.duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the first tick published %d (%v)", published, err)
+	}
+	h.drain()
+	sent := len(h.embedder.sent())
+	first := h.storedRow(search.SourceTask, "t-a")
+
+	h.moveTask("t-a", "OPS")
+	published, err := h.duty.Tick(t.Context())
+	if err != nil || published != 1 {
+		t.Fatalf("the tick after a move published %d (%v), want the restamp", published, err)
+	}
+	if again := len(h.embedder.sent()); again != sent {
+		t.Fatalf("a move that left the text alone sent %d request(s) — the stored "+
+			"vector is that text's vector", again-sent)
+	}
+	h.drain()
+	moved := h.storedRow(search.SourceTask, "t-a")
+	if moved.rev != h.version || moved.container != "OPS" || moved.binContainer != "OPS" {
+		t.Fatalf("after the restamp the rows say version %d in %q (sign code in %q), "+
+			"want version %d in OPS on both", moved.rev, moved.container,
+			moved.binContainer, h.version)
+	}
+	if !bytes.Equal(moved.embedding, first.embedding) || moved.sha != first.sha {
+		t.Fatal("the restamp changed the vector or its digest; it must republish " +
+			"the vector the text already has")
+	}
+	if current, total, err := (search.TaskCorpus{DB: h.db.Replicated().Reader()}).Coverage(
+		t.Context(), embedModel, h.embedder.Width()); err != nil || current != total || total != 1 {
+		t.Fatalf("coverage after the restamp is %d of %d (%v)", current, total, err)
+	}
+
+	// THE CONTROL: a new body is a new text, and is sent.
+	h.seedTitled("t-a", "Rate limits", "a body somebody rewrote")
+	if published, err := h.duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the tick after an edit published %d (%v)", published, err)
+	}
+	if again := len(h.embedder.sent()); again != sent+1 {
+		t.Fatalf("an edited text went in %d request(s), want one", again-sent)
+	}
+}
+
+// A RESTAMP NEVER CROSSES AN EMBEDDING SPACE.
+//
+// A digest says which text a vector was computed from and nothing about WHICH
+// MODEL computed it: after a model change at the same width, the text's digest
+// is unchanged and the stored vector is the old model's — a point in a space
+// no query of the new model ranks against. Restamped, the refill would never
+// happen. The stored digest is read only where the stored row is in the space
+// being embedded.
+func TestARestampNeverCrossesAnEmbeddingSpace(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.seedTitled("t-a", "Rate limits", "429 backoff in the GitLab client")
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	h.drain()
+	sent := len(h.embedder.sent())
+
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
+		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Embedder: h.embedder, Model: "another-model-at-the-same-width",
+		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Budget:  unbounded{}, Refusals: search.NewRefusals(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published, err := duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the tick under a new model published %d (%v)", published, err)
+	}
+	if again := len(h.embedder.sent()); again != sent+1 {
+		t.Fatalf("a source under a new model went in %d request(s), want one — "+
+			"its stored vector is the old model's", again-sent)
+	}
+}
+
+// A RESTAMP PUBLISHES ONLY A VECTOR WHOSE DIGEST STILL MATCHES.
+//
+// The selection names the digest; the vector is read again, with its digest, in
+// a statement of its own — and published only where that digest is still the
+// one the text would be sent under. A corpus that claims a match the store no
+// longer holds (a newer vector landed between the two reads) restamps nothing,
+// rather than publish a record asserting a text for a vector computed from
+// another.
+func TestARestampPublishesOnlyAVectorWhoseDigestStillMatches(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.seedTitled("t-a", "Rate limits", "the first body")
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	h.drain()
+	h.seedTitled("t-a", "Rate limits", "a body somebody rewrote")
+	sent := len(h.embedder.sent())
+
+	claims := h.dutyOver(claimedMatch{TaskCorpus: search.TaskCorpus{DB: h.db.Replicated().Reader()}})
+	published, err := claims.Tick(t.Context())
+	if err != nil || published != 0 {
+		t.Fatalf("a restamp the store no longer matches published %d (%v)", published, err)
+	}
+	if again := len(h.embedder.sent()); again != sent {
+		t.Fatalf("a restamp sent %d request(s)", again-sent)
+	}
+}
+
+// claimedMatch is the task corpus claiming every source's stored vector is its
+// text's — the selection a racing write leaves behind.
+type claimedMatch struct{ search.TaskCorpus }
+
+func (c claimedMatch) Stale(ctx context.Context, model string, dim, limit int) ([]search.Document, []string, error) {
+	docs, gone, err := c.TaskCorpus.Stale(ctx, model, dim, limit)
+	for i, doc := range docs {
+		sum := sha256.Sum256([]byte(embeddings.Opening(doc.Title+" "+doc.Body, search.EmbedInputBytes)))
+		docs[i].StoredSHA = hex.EncodeToString(sum[:])
+	}
+	return docs, gone, err
 }
 
 // A REMOVED TASK'S VECTOR IS WITHDRAWN, and this is the direction nothing else
@@ -996,6 +1131,46 @@ func (h *embedHarness) seedTitled(id, title, body string) {
 	}); err != nil {
 		h.t.Fatalf("seed: %v", err)
 	}
+}
+
+// moveTask files a task in another project, at its next version, with its text
+// left as it is.
+func (h *embedHarness) moveTask(id, project string) {
+	h.t.Helper()
+	h.version++
+	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(h.t.Context(), `
+			UPDATE tracker_tasks SET project_key = ?, version = ?, updated_at = ?
+			WHERE id = ?`, project, h.version, h.version, id)
+		return err
+	}); err != nil {
+		h.t.Fatalf("move %s: %v", id, err)
+	}
+}
+
+// vectorRow is what the vector tables hold for one source.
+type vectorRow struct {
+	rev                     int64
+	container, binContainer string
+	sha                     string
+	embedding               []byte
+}
+
+// storedRow reads both vector rows for one source.
+func (h *embedHarness) storedRow(source search.Source, id string) vectorRow {
+	h.t.Helper()
+	var row vectorRow
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(), `
+			SELECT v.source_rev, v.container, b.container, v.text_sha, v.embedding
+			FROM kb_vectors v
+			JOIN kb_vectors_bin b ON b.source = v.source AND b.source_id = v.source_id
+			WHERE v.source = ? AND v.source_id = ?`, string(source), id).Scan(
+			&row.rev, &row.container, &row.binContainer, &row.sha, &row.embedding)
+	}); err != nil {
+		h.t.Fatalf("read the vector rows of %s %s: %v", source, id, err)
+	}
+	return row
 }
 
 // storedSHA is the text digest the vector row for one source carries.

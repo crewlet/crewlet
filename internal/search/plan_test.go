@@ -66,6 +66,8 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			       OR v.model <> ? OR v.dim <> ?)
 			ORDER BY t.updated_at LIMIT ?`,
 			[]any{model, dim, 100}},
+		"the embed duty's read of the vectors it restamps": {
+			search.StoredVectorStatement, []any{"page", "s00001", model, dim}},
 		"the index duty's count of the space": {search.SpaceCountStatement,
 			[]any{model, dim}},
 		"the training's codes": {search.TrainingCodesStatement, []any{model, dim}},
@@ -237,6 +239,14 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		"USING COVERING INDEX kb_vectors_bin_ivf_idx (model=? AND dim=? AND ivf_gen=? AND ivf_list=?") {
 		t.Fatalf("a narrowed probe's count does not seek each list on the "+
 			"covering index:\n%s", joined)
+	}
+	// A RESTAMP READS EACH VECTOR BY ITS PRIMARY KEY — never the space's
+	// rows through the model index, which is every twelve-kilobyte row the
+	// company holds to find a hundred and twenty-eight of them.
+	if joined := strings.Join(plans["the embed duty's read of the vectors it restamps"], "\n"); !strings.Contains(joined,
+		"sqlite_autoindex_kb_vectors_1 (source=? AND source_id=?)") {
+		t.Fatalf("the duty's read of the vectors it restamps does not seek "+
+			"kb_vectors' primary key:\n%s", joined)
 	}
 	// AND THE DUTY COUNTS ITS SPACE ON kb_vectors' MODEL INDEX, every tick —
 	// never by walking the wide table or the covering one.

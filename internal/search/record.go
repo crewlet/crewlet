@@ -337,9 +337,11 @@ type VectorRecord struct {
 	// the duty knows a row is stale without re-embedding it.
 	SourceRev uint64 `json:"source_rev,omitempty"`
 
-	// TextSHA is the digest of the exact text that was embedded. A source
-	// rewritten into the same words — a re-file, a label, a parent move —
-	// is what this stops the duty paying for.
+	// TextSHA is the digest of the exact text that was embedded — the bytes
+	// the provider received. A source rewritten into the same words — a
+	// re-file, a label, a parent move — is what this stops the duty paying
+	// for: its stored vector is republished rather than computed again
+	// ([Embedder.restamp]).
 	TextSHA string `json:"text_sha,omitempty"`
 
 	// Embedding is the vector as PACKED LITTLE-ENDIAN FLOAT32, which is

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+
 	"errors"
 	"fmt"
 	"log/slog"
@@ -220,9 +221,10 @@ type Corpus interface {
 	Source() Source
 
 	// Stale returns up to limit documents whose vector is missing or
-	// computed from an older version, oldest first, together with the
-	// sources whose vectors must be FORGOTTEN because the document is
-	// gone.
+	// computed from an older version, oldest first — each carrying the
+	// digest of the vector it already has in the asked space
+	// ([Document.StoredSHA]) — together with the sources whose vectors
+	// must be FORGOTTEN because the document is gone.
 	Stale(ctx context.Context, model string, dim, limit int) (stale []Document, gone []string, err error)
 
 	// Coverage is how many of this corpus's sources carry a CURRENT
@@ -293,6 +295,14 @@ type Document struct {
 	// allocations per pass.
 	Title string
 	Body  string
+
+	// StoredSHA is the text digest of the vector this source already has in
+	// the space being embedded — the model and width the selection was asked
+	// for — or "" when it has none there. A digest equal to the one its
+	// text would be sent under says the stored vector IS this text's
+	// vector, and the source is restamped rather than embedded again
+	// ([Embedder.Tick]).
+	StoredSHA string
 }
 
 // text is what is actually sent for this source: the [embeddings.Opening] of
@@ -552,6 +562,21 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 // the section above [pending]: a refusal is split until the input it refuses
 // is alone, and that input is held back ([Refusals]).
 //
+// # A source whose text did not move is RESTAMPED, never sent
+//
+// A task's every record bumps its version — a status, an assignee, a label, a
+// due date, a move to another project — and most of those leave the embedded
+// text exactly as it was. The selection carries the digest of the vector each
+// source already has in the space being embedded ([Document.StoredSHA]), and
+// where it equals the digest of the text this tick would send, that stored
+// vector is republished under the source's current version and container
+// ([Embedder.restamp]): one record, no provider call. What costs a provider
+// call is the TEXT changing, which is what the digest every record carries
+// was always documented to decide. A digest stored under the older definition
+// — over the raw cut, before the opening was prepared first — never equals
+// one taken now, so each such source is embedded once more the first time it
+// is selected: money, not correctness.
+//
 // # Why a failure is counted rather than returned
 //
 // A REFUSAL costs the input refused and nothing else. ANY OTHER FAILURE — a
@@ -693,6 +718,13 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 		held := 0
 		for _, doc := range docs {
 			p := pendingOf(doc, bound)
+			if doc.StoredSHA != "" && doc.StoredSHA == p.sha {
+				// THE STORED VECTOR IS THIS TEXT'S VECTOR — same model,
+				// same width, same bytes sent — so the source is
+				// restamped, never sent again ([Embedder.restamp]).
+				q.restamps = append(q.restamps, p)
+				continue
+			}
 			switch e.deps.Refusals.standing(keyOf(q.source, p), now) {
 			case refusalHeld:
 				held++
@@ -742,16 +774,35 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	limits := e.deps.Embedder.Limits()
 	limits.BatchInputs = min(limits.BatchInputs, EmbedBatch)
 	t := tickRequests{requests: EmbedRequestsPerTick, sources: EmbedSourcesPerTick}
-	for t.open() {
-		// ONE PASS OVER THE CORPORA, ONE REQUEST EACH. A pass that hands
-		// out nothing means no corpus has work left, which is the only way
-		// out of this loop other than the ceilings and a provider that
-		// stopped answering: a caught-up company must cost one selection
-		// per corpus and stop.
+	for t.sources > 0 {
+		// ONE PASS OVER THE CORPORA, ONE TURN EACH: a run of restamps, or
+		// one request. A pass that hands out nothing means no corpus has
+		// work left it may do, which is the only way out of this loop
+		// other than the sources ceiling: a caught-up company must cost
+		// one selection per corpus and stop.
 		spent := false
 		for _, q := range queues {
-			if !t.open() {
+			if t.sources == 0 {
 				break
+			}
+			if len(q.restamps) > 0 {
+				// A RESTAMP TURN costs no request, so it is taken
+				// whatever the provider answered this tick; it costs
+				// records, so it is a turn in the same round robin.
+				spent = true
+				n, err := e.restamp(ctx, q, dim, &t)
+				published += n
+				switch {
+				case errors.Is(err, errStoredUnreadable):
+					failed = append(failed, err)
+				case err != nil:
+					failed = append(failed, err)
+					return published, errors.Join(failed...)
+				}
+				continue
+			}
+			if !t.open() {
+				continue
 			}
 			group, err := q.next(limits, t.sources)
 			if err != nil {
@@ -763,7 +814,7 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 				e.deps.Logger.WarnContext(ctx, "search_embed_unplannable",
 					"source", string(q.source), "error", err.Error())
 				t.stopped = true
-				break
+				continue
 			}
 			if len(group) == 0 {
 				continue
@@ -951,11 +1002,126 @@ func (e *Embedder) publishAll(ctx context.Context, source Source, dim int, group
 
 // publish writes one embed record for p, its digest over the text sent.
 func (e *Embedder) publish(ctx context.Context, source Source, dim int, p pending, vector []float32) error {
-	subject := Subject{Source: source, ID: p.doc.ID}
 	packed, err := pack(vector, dim)
 	if err != nil {
-		return fmt.Errorf("search: %s: %w: %w", subject, errUnusableVector, err)
+		return fmt.Errorf("search: %s: %w: %w", Subject{Source: source, ID: p.doc.ID},
+			errUnusableVector, err)
 	}
+	return e.publishPacked(ctx, source, dim, p, packed)
+}
+
+// restamp publishes, for one turn's run of the corpus's restamps, the vector
+// each source ALREADY HAS — read back from the estate — under the source's
+// current version and container: no provider call, one record each.
+//
+// # Why a restamp is an embed record
+//
+// What it says is exactly what an embed says — this source, at this version,
+// in this container, has this vector computed from this text in this space —
+// and the vector really is the one its text produces, because the digest the
+// stored row carries is of the same bytes this text would be sent as, at the
+// same model and width. So it is an [OpEmbed] at the version that has always
+// carried one: every build applies it, writes both rows exactly as a fresh
+// embed would (the sign code and the index filing are functions of the same
+// bytes), and needs no reader gate. Its operation id differs from the record
+// it replaces because the source version is in it, so the broker's duplicate
+// window does not collapse it.
+//
+// # Why the vector is read again rather than carried from the selection
+//
+// The selection names the stored digest so the duty knows which sources to
+// restamp; the VECTOR is read here, with its digest, by primary key in one
+// statement, and published only where that digest still matches. Read in a
+// separate transaction from the selection, a vector paired with the
+// selection's digest could be a newer one written in between — a record
+// asserting a text for a vector computed from another.
+func (e *Embedder) restamp(ctx context.Context, q *corpusQueue, dim int, t *tickRequests) (int, error) {
+	run := q.restamps[:min(len(q.restamps), EmbedBatch, t.sources)]
+	q.restamps = q.restamps[len(run):]
+	stored, err := e.storedVectors(ctx, q.source, run, dim)
+	if err != nil {
+		// A STORE THAT CANNOT BE READ costs this corpus's restamps and
+		// not the tick, as a selection that fails does: they are
+		// selected again next tick.
+		q.restamps = nil
+		e.deps.Logger.WarnContext(ctx, "search_embed_restamp_unreadable",
+			"source", string(q.source), "error", err.Error())
+		return 0, err
+	}
+	published := 0
+	for _, p := range run {
+		vector, ok := stored[p.doc.ID]
+		if !ok {
+			// MOVED SINCE THE SELECTION: a newer vector, or none. The
+			// next tick's selection decides afresh.
+			continue
+		}
+		err := e.publishPacked(ctx, q.source, dim, p, vector)
+		// EACH PUBLISH IS PROGRESS ([Budget]), as an embed's is.
+		e.deps.Budget.Advanced()
+		if err != nil {
+			return published, err
+		}
+		published++
+		t.sources--
+	}
+	return published, nil
+}
+
+// errStoredUnreadable marks a restamp's read of the stored vectors failing,
+// which costs the corpus's restamps this tick and not the tick.
+var errStoredUnreadable = errors.New("the stored vectors could not be read")
+
+// storedVectors reads the vectors run's sources already have in the space
+// being embedded, keyed by source id — only those whose stored digest is still
+// the one this tick would send them under.
+func (e *Embedder) storedVectors(ctx context.Context, source Source, run []pending, dim int) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(run))
+	err := e.deps.Estate.Read(ctx, func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, storedVectorStatement)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stmt.Close() }()
+		for _, p := range run {
+			var sha string
+			var embedding []byte
+			err := stmt.QueryRowContext(ctx, string(source), p.doc.ID,
+				e.deps.Model, dim).Scan(&sha, &embedding)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				continue
+			case err != nil:
+				return err
+			}
+			if sha == p.sha && len(embedding) == 4*dim {
+				out[p.doc.ID] = embedding
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search: %w for %d %s source(s): %w",
+			errStoredUnreadable, len(run), source, err)
+	}
+	return out, nil
+}
+
+// storedVectorStatement reads one source's stored vector by PRIMARY KEY, in
+// one space. Bound: the source, its id, the model, the width.
+//
+// ONE SOURCE A STATEMENT, prepared once a run, never one statement over a
+// list: handed `source_id IN (?, …)`, or a join from a JSON list of ids, this
+// engine's planner seeks the key on `source` alone and reads every row of that
+// source — every twelve-kilobyte vector of half the corpus, to find a hundred
+// and twenty-eight — where this seeks each one (the plan gate holds it there).
+const storedVectorStatement = `
+	SELECT text_sha, embedding FROM kb_vectors
+	WHERE source = ? AND source_id = ? AND model = ? AND dim = ?`
+
+// publishPacked writes one embed record for p over an already packed vector.
+func (e *Embedder) publishPacked(ctx context.Context, source Source, dim int, p pending, packed []byte) error {
+	subject := Subject{Source: source, ID: p.doc.ID}
 	rec := VectorRecord{
 		RecordEnvelope: RecordEnvelope{
 			Subject:   subject,
@@ -1150,7 +1316,8 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.project_key, t.version, t.title,
-			       substr(COALESCE(json_extract(t.document, '$.body'), ''), 1, ?)
+			       substr(COALESCE(json_extract(t.document, '$.body'), ''), 1, ?),
+			       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
 			FROM tracker_tasks t
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'task' AND v.source_id = t.id
@@ -1159,7 +1326,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			       OR v.source_rev <> t.version
 			       OR v.model <> ? OR v.dim <> ?)
 			ORDER BY t.updated_at
-			LIMIT ?`, embedReadChars, model, dim, limit)
+			LIMIT ?`, embedReadChars, model, dim, model, dim, limit)
 		if err != nil {
 			return err
 		}
@@ -1169,7 +1336,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			var version int64
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := rows.Scan(&doc.ID, &doc.Container, &version,
-				&doc.Title, &doc.Body); err != nil {
+				&doc.Title, &doc.Body, &doc.StoredSHA); err != nil {
 				return err
 			}
 			doc.Version = uint64(version)

@@ -80,4 +80,5 @@ const (
 	TrainingCodesStatement = trainingCodesStatement
 	StaleKeysStatement     = staleKeysStatement
 	StaleRowsStatement     = staleRowsStatement
+	StoredVectorStatement  = storedVectorStatement
 )

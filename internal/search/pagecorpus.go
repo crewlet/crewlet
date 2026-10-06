@@ -47,7 +47,8 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT p.id, p.container, p.edit_version, p.title,
-			       substr(p.body, 1, ?)
+			       substr(p.body, 1, ?),
+			       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
 			FROM pages_heads p
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'page' AND v.source_id = p.id
@@ -56,7 +57,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			       OR v.source_rev <> p.edit_version
 			       OR v.model <> ? OR v.dim <> ?)
 			ORDER BY p.updated_at
-			LIMIT ?`, embedReadChars, model, dim, limit)
+			LIMIT ?`, embedReadChars, model, dim, model, dim, limit)
 		if err != nil {
 			return err
 		}
@@ -66,7 +67,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			var edit int64
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := rows.Scan(&doc.ID, &doc.Container, &edit,
-				&doc.Title, &doc.Body); err != nil {
+				&doc.Title, &doc.Body, &doc.StoredSHA); err != nil {
 				return err
 			}
 			doc.Version = uint64(edit)

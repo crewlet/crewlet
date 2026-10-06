@@ -328,6 +328,15 @@ only what the opening can need — the first 16 384 characters of a body — rat
 than the whole of every page it considers, and the digest each vector carries
 is of exactly the bytes the provider received.
 
+**A change that leaves the text alone costs no provider call.** Every change to
+a work item moves its version — a status, an assignee, a label, a move to
+another project — and the duty selects it; but where the vector it already has
+was computed from exactly the text it would send now, at the same model and
+width, it republishes that vector under the item's new version and container
+rather than asking the provider again. A status change costs one replicated
+record, and a project move takes the container a scoped search filters on with
+it. Only a changed title or body is embedded again.
+
 Both source kinds are covered: the tracker's work items and the knowledge
 base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename

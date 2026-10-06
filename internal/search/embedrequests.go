@@ -87,9 +87,14 @@ func digestText(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// corpusQueue is one corpus's share of a tick: what it has left to send.
+// corpusQueue is one corpus's share of a tick: what it has left to do.
 type corpusQueue struct {
 	source Source
+
+	// restamps are the sources whose stored vector is already their text's
+	// vector, oldest first: republished under their current version and
+	// container, never sent ([Embedder.restamp]).
+	restamps []pending
 
 	// split are the halves of the corpus's refused requests, sent before
 	// anything else it holds, the first half first.
