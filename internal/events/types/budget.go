@@ -96,9 +96,12 @@ const (
 	// beside every answer that carries a state).
 	BudgetNear BudgetState = "near"
 	// BudgetRefusing is a capped window the gate is turning charges away
-	// in: it has refused one since it began, or it has no room left for a
-	// single token. The same predicate the budget park waits on, so a
-	// seat is never parked under a meter that reads as merely near.
+	// in: it has no room left for a single token, which is what every
+	// window that refused a round has, since the refused round is
+	// counted. Never the refusal stamp alone — a ceiling raised since
+	// leaves one on a window with room again. The same predicate the
+	// budget park waits on, so a seat is never parked under a meter that
+	// reads as merely near.
 	BudgetRefusing BudgetState = "refusing"
 )
 

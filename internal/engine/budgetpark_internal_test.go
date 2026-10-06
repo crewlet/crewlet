@@ -381,8 +381,11 @@ func TestTheParkWaitsOutTheWindowThatEndsLast(t *testing.T) {
 		})
 	}
 
-	// A window the gate has STAMPED refuses although spend is below its
-	// ceiling: the round that did not fit was larger than the room left.
+	// A STAMP BELOW THE CEILING IS A CEILING RAISED SINCE, and parks nothing.
+	// The gate counts the round it refuses, so the window it refused in read
+	// past the old ceiling; under one raised since, it has room again, and the
+	// stamp stays until an admitted charge clears it. A park taken on the
+	// stamp would hold the seat back from the only charge that could.
 	stamped := u(coord.OrgScope, map[period.Period]int{period.Day: 60})
 	stamped.Windows[0].RefusedAt = parkedAt.Add(-time.Minute)
 	m := &meter{
@@ -390,8 +393,58 @@ func TestTheParkWaitsOutTheWindowThatEndsLast(t *testing.T) {
 		agentScope: "agent:x", basis: budgetBasis{org: coord.Caps{period.Day: 100}, zone: berlin},
 		now: func() time.Time { return parkedAt },
 	}
-	if got, refusing, err := m.refusing(t.Context()); err != nil || !refusing || got.Window.Label != "2026-09-23" {
-		t.Fatalf("a stamped day = (%+v, %v, %v), want it refusing", got, refusing, err)
+	if got, refusing, err := m.refusing(t.Context()); err != nil || refusing {
+		t.Fatalf("a stamped day with room = (%+v, %v, %v), want it not refusing", got, refusing, err)
+	}
+}
+
+// A SEAT PARKED ON A REFUSED ROUND RUNS ONCE ITS CEILING IS RAISED.
+//
+// The ordinary way a seat is parked: its turn's round is refused, which stamps
+// the window and counts the round past the ceiling. Raising the ceiling is the
+// documented way out before the window turns over, and the release asks the
+// counters again under the new ceiling. While the park read the stamp as
+// "refusing", that second ask parked the seat again on the stamp alone — and a
+// stamp is cleared only by an admitted charge, which a parked seat can never
+// make — so the raise released nothing until midnight.
+func TestARaisedCeilingReleasesASeatParkedOnARefusedRound(t *testing.T) {
+	t.Parallel()
+	r := newParkRig(t, "100")
+	m, ok := r.e.meterFor(r.e.Company(), "lead").(*meter)
+	if !ok {
+		t.Fatal("the Lead has no meter")
+	}
+	m.now = r.clock
+	r.mu.Lock()
+	r.turnFn = func() (turn.Result, error) {
+		r.mu.Lock()
+		r.turnFn = nil
+		r.mu.Unlock()
+		// The round that did not fit, through the real meter: refused,
+		// stamped and counted.
+		got, err := m.Spend(t.Context(), 150)
+		if err != nil || got.OK {
+			t.Errorf("the round = (%+v, %v), want it refused", got, err)
+		}
+		return turn.Result{}, &toolloop.BudgetError{Scope: got.Scope, Used: got.Used, Limit: got.Limit}
+	}
+	r.mu.Unlock()
+	r.deliver(t)
+	if r.runs() != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("precondition: the refused turn did not park the seat (runs %d, holds %v)",
+			r.runs(), r.holds())
+	}
+	r.renew(t)
+
+	raised := companyFor(t, strings.Replace(leadDoc, "%d", "1000", 1))
+	r.e.epoch.current.Store(raised)
+	r.e.reconcileBudgetParks(t.Context(), raised)
+	if got := r.runs(); got != 2 {
+		t.Fatalf("after the ceiling was raised %d turns ran, want the held delivery run at "+
+			"once (holds %v): the park held the seat on the refusal stamp", got, r.holds())
+	}
+	if slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Errorf("the budget hold outlived the raise: %v", r.holds())
 	}
 }
 

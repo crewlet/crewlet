@@ -57,8 +57,9 @@ func AnswerBudget(e *Engine) builtin.AnswerBudget {
 // orgCounter is the slice of the fleet's counters an answer uses: the
 // [budgetCounter] a [meter] reads the company's windows through — so the gate
 // is the very rule the budget park applies, not a copy of it — and the
-// after-the-fact charge. Nothing here calls Charge: an answer's size is known
-// only from its reply, so it is never put through the gate.
+// after-the-fact charge. Nothing here calls Charge: an answer is one call
+// whose reply is already in hand when it is charged, so nothing waits on a
+// verdict, and Charge judges a seat's scope a person does not have.
 type orgCounter interface {
 	budgetCounter
 	PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error)
@@ -74,9 +75,9 @@ type answerBudget struct {
 func (b answerBudget) basis() budgetBasis { return basisOf(b.engine.Company(), nil) }
 
 // Refusing reports the company window that turns an answer away, by the same
-// rule the budget park and the live meter use ([windowRefuses]): a window
-// whose gate refused a charge and has admitted none since, or one with no
-// room for a single token.
+// rule the budget park and the live meter use ([windowRefuses]): a window with
+// no room for a single token, which every window the gate refused a round in
+// has, since the refused round is counted.
 func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool, error) {
 	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.now}
 	r, found, err := m.refusing(ctx)

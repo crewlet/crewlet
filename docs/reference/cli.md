@@ -566,7 +566,8 @@ eng    day     2026-09-23  102120   100000     refusing  2026-09-23T22:00:00Z  2
 
 A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
 `STATE` is the engine's own judgement, the one every surface shows: `refusing`
-when the gate has turned a charge away in the window or no charge fits, `near`
+when no charge fits — which every window that refused a round reaches, since
+the refused round is counted — `near`
 at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
 window last turned a charge away, or `-` while it has not. A refused round is
 counted like any other, because the vendor billed it, so a window that refused

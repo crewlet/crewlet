@@ -1870,10 +1870,11 @@ in the same shape.
 - Only **capped** windows are listed, each with its `limit`; a scope that caps
   none carries `windows: []`, and a seat that caps none carries no meter.
 - `state` is the engine's own judgement, computed once beside the counter so
-  no screen holds a threshold of its own: `refusing` when the gate has turned a
-  charge away in the window or it has no room left for a single token — the
-  condition a seat is [parked](../concepts/agent-runtime.md#the-budget-park) on
-  — `near` once `used` reaches **nine tenths** of `limit`
+  no screen holds a threshold of its own: `refusing` when the window has no
+  room left for a single token — which every window that refused a round has,
+  since the refused round is counted, and the condition a seat is
+  [parked](../concepts/agent-runtime.md#the-budget-park) on — `near` once
+  `used` reaches **nine tenths** of `limit`
   (`engine.BudgetNearFraction`, served as `near_fraction` on
   [`GET /budgets`](#get-budgets)), and `ok` otherwise.
 - `refused_at` is when the window last turned a charge away, in UTC, and
@@ -1882,7 +1883,9 @@ in the same shape.
   past its `limit` by that round, and every later charge is refused against
   that figure. The stamp is kept in the shared counter beside the spend, so
   every node reports the same one, and it clears on the scope's next admitted
-  charge or when the window turns over.
+  charge or when the window turns over. A window whose ceiling was raised
+  after a refusal keeps its `refused_at` until then, under a `state` of `ok`
+  or `near`: it has room again, and the stamp is history.
 
 Every node publishes a `budget_meters` snapshot of the counters as soon as its
 seat host is running and every **15 seconds** (`engine.BudgetReportInterval`)

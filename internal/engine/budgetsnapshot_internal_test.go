@@ -91,9 +91,11 @@ func TestABudgetFrameCarriesEveryCappedWindowAndItsRefusal(t *testing.T) {
 	leadRefused := time.Date(2026, 6, 14, 12, 0, 5, 250_000_000, time.FixedZone("CEST", 2*3600))
 
 	report := budgetSnapshot(c, snapshotWindows, []coord.Usage{
-		row(coord.OrgScope, map[period.Period]int{period.Day: 120, period.Week: 990, period.Month: 2000},
+		// Each refused window past its ceiling by the round it refused,
+		// which the counter counts.
+		row(coord.OrgScope, map[period.Period]int{period.Day: 120, period.Week: 1010, period.Month: 2000},
 			orgRefused, period.Week),
-		row(scopeOf(t, c, lead), map[period.Period]int{period.Day: 390, period.Week: 700, period.Month: 8950},
+		row(scopeOf(t, c, lead), map[period.Period]int{period.Day: 390, period.Week: 700, period.Month: 9050},
 			leadRefused, period.Month),
 		row(scopeOf(t, c, dev), map[period.Period]int{period.Day: 50, period.Week: 50, period.Month: 50}, time.Time{}),
 		// Ops caps nothing, so a stamp on its counter is no meter.
@@ -109,10 +111,10 @@ func TestABudgetFrameCarriesEveryCappedWindowAndItsRefusal(t *testing.T) {
 	if len(report.Org.Windows) != 2 || report.Org.Windows[0].Period != "week" || report.Org.Windows[1].Period != "month" {
 		t.Fatalf("org windows = %+v, want the week then the month: the day caps nothing", report.Org.Windows)
 	}
-	if w := orgWindows["week"]; w.Used != 990 || limitOf(w) != 1000 || w.RefusedAt != "2026-06-14T12:00:00Z" ||
+	if w := orgWindows["week"]; w.Used != 1010 || limitOf(w) != 1000 || w.RefusedAt != "2026-06-14T12:00:00Z" ||
 		w.State != types.BudgetRefusing || w.Window != "2026-W24" ||
 		w.StartsAt != "2026-06-08T00:00:00Z" || w.ResetsAt != "2026-06-15T00:00:00Z" {
-		t.Errorf("org week = %+v, want 990 of 1000, refusing since 12:00Z, W24 from the 8th to the 15th", w)
+		t.Errorf("org week = %+v, want 1010 of 1000, refusing since 12:00Z, W24 from the 8th to the 15th", w)
 	}
 	if w := orgWindows["month"]; w.Used != 2000 || limitOf(w) != 30000 || w.RefusedAt != "" || w.State != types.BudgetOK {
 		t.Errorf("org month = %+v, want 2000 of 30000 and ok", w)
@@ -131,9 +133,9 @@ func TestABudgetFrameCarriesEveryCappedWindowAndItsRefusal(t *testing.T) {
 	}
 	// In UTC whatever zone the store handed back, so two nodes' frames
 	// for one refusal are the same string.
-	if w := leadWindows["month"]; w.Used != 8950 || limitOf(w) != 9000 ||
+	if w := leadWindows["month"]; w.Used != 9050 || limitOf(w) != 9000 ||
 		w.RefusedAt != "2026-06-14T10:00:05.25Z" || w.State != types.BudgetRefusing {
-		t.Errorf("Lead's month = %+v, want 8950 of 9000 refusing since 2026-06-14T10:00:05.25Z", w)
+		t.Errorf("Lead's month = %+v, want 9050 of 9000 refusing since 2026-06-14T10:00:05.25Z", w)
 	}
 	if w := leadWindows["day"]; w.Used != 390 || limitOf(w) != 400 || w.RefusedAt != "" || w.State != types.BudgetNear {
 		t.Errorf("Lead's day = %+v, want 390 of 400, near and not refusing", w)
@@ -170,10 +172,11 @@ func TestABudgetFrameStatesTheCompanysClock(t *testing.T) {
 }
 
 // ONE THRESHOLD, THE ENGINE'S. A window is near at nine tenths of its ceiling
-// and not a token before; it is refusing when the gate has said so or when it
-// has no room for a single token — the predicate the budget park waits on,
-// so a parked seat's meter never reads as merely near. A window nothing caps
-// is ok whatever its counter says.
+// and not a token before; it is refusing when it has no room for a single
+// token — the predicate the budget park waits on, so a parked seat's meter
+// never reads as merely near. A refusal stamp below the ceiling is a ceiling
+// raised since the refusal, and refuses nothing: the window has room again. A
+// window nothing caps is ok whatever its counter says.
 func TestTheBudgetStateIsTheEnginesAndItsNearFractionIsNineTenths(t *testing.T) {
 	t.Parallel()
 	stamped := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
@@ -190,7 +193,9 @@ func TestTheBudgetStateIsTheEnginesAndItsNearFractionIsNineTenths(t *testing.T) 
 		{"a token of room is near", 999, time.Time{}, 1000, true, types.BudgetNear},
 		{"no room for a token refuses", 1000, time.Time{}, 1000, true, types.BudgetRefusing},
 		{"past the ceiling refuses", 1200, time.Time{}, 1000, true, types.BudgetRefusing},
-		{"a stamp refuses below the ceiling", 10, stamped, 1000, true, types.BudgetRefusing},
+		{"a stamp past the ceiling refuses", 1030, stamped, 1000, true, types.BudgetRefusing},
+		{"a stamp below a raised ceiling is ok", 10, stamped, 1000, true, types.BudgetOK},
+		{"a stamp near a raised ceiling is near", 950, stamped, 1000, true, types.BudgetNear},
 		{"nothing capped is ok", 5000, stamped, 0, false, types.BudgetOK},
 	} {
 		slot := coord.WindowUsage{Used: tc.used, RefusedAt: tc.refused}

@@ -205,15 +205,17 @@ type refusal struct {
 // refusing reports the capped window of either scope that turns the seat's
 // next charge away, if any.
 //
-// A window REFUSES when the gate has said so — its refusal stamp is set, and
-// only an admitted charge or the window turning over clears one — or when it
-// has no room left for a single token, which the gate would refuse on the next
-// charge whatever its size. Where several windows refuse it is the one that
-// ENDS LAST, across every capped window of both scopes, by [coord.Outlasts] —
-// the tie-break the counter's own refusal names its window by: the seat can run
-// nothing until that one turns over, and naming an earlier one would wake it
-// into a refusal. Every window rather than only the stamped ones, because a
-// full window that ends later may carry no stamp yet — a month a collected
+// A window REFUSES when it has no room left for a single token, which the gate
+// would refuse on the next charge whatever its size ([windowRefuses]) — and a
+// window the gate has refused a round in always has none, because the refused
+// round is counted. Never on the refusal stamp alone: after a ceiling is
+// raised the stamp outlives the refusal until an admitted charge clears it,
+// and a park taken on it would hold the seat back from every charge that
+// could. Where several windows refuse it is the one that ENDS LAST, across
+// every capped window of both scopes, by [coord.Outlasts] — the tie-break the
+// counter's own refusal names its window by: the seat can run nothing until
+// that one turns over, and naming an earlier one would wake it into a
+// refusal. A full window need carry no stamp at all — a month a collected
 // coding run post-charged past its ceiling carries none until a charge is
 // refused against it.
 //

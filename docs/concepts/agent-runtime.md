@@ -299,11 +299,13 @@ stateDiagram-v2
 ```
 
 - **Asked.** The node reads the seat's counters and the company's, in the
-  current windows. A window is refusing when the gate has refused a charge in it
-  (its refusal stamp, cleared only by an admitted charge or the window turning
-  over) or when it has no room left for a single token. A counter that cannot be
-  read parks nothing: the turn runs and its own meter, which fails closed, is
-  the gate.
+  current windows. A window is refusing when it has no room left for a single
+  token — and a window that refused a round always has none, because the
+  refused round is counted past its ceiling. The refusal stamp is not asked:
+  after a ceiling is raised it stays until an admitted charge clears it, and a
+  park taken on it would hold the seat back from the very charge that could. A
+  counter that cannot be read parks nothing: the turn runs and its own meter,
+  which fails closed, is the gate.
 - **Parked.** The seat's inbox takes a pause hold (`budget_window`), the
   delivery is **deferred** — handed back unacked, for one of its deliveries,
   with a reason naming the window: `budget: day window 2026-09-23 resets
