@@ -340,6 +340,13 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string, epoch uint64) (int, error) {
 
+	// THE EPOCH THIS MOVE LEAVES, read before it is replaced: a session at
+	// it or above is one this move ends, and one below it an earlier move
+	// had already ended.
+	previous, err := epochOf(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
 	// THE GUARD IS THE EPOCH ITSELF AND NOT THE VERSION, which is the one
 	// place this domain guards on a payload value. An epoch is MONOTONE by
 	// its own meaning — it only ever ends more sessions — so a redelivered
@@ -376,15 +383,22 @@ func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
 	// administrator ending them all, each listed as the last. Written HERE,
 	// once, it is the reason of the move that actually ended the session,
 	// and no later move rewrites it: the guard is `ended_at = 0`, as a
-	// sign-out's is. A session the company's generation already ended is
-	// left to say that ([Reader.Sessions]), since this move came after it.
+	// sign-out's is.
+	//
+	// ONLY ON A SESSION LIVE AT THIS MOVE — at the epoch it leaves — because
+	// `ended_at = 0` alone also holds for a session an earlier move ended
+	// without writing it: a start decided before that move whose record
+	// landed after it, and every row an estate held before moves wrote
+	// their reasons. Stamped here, the next move would re-describe it as its
+	// own for good. Those, and a session the company's generation already
+	// ended, are left to say what the counters can ([Reader.Sessions]).
 	ended, err := tx.ExecContext(ctx, `
 		UPDATE iam_sessions
 		SET ended_at = ?, ended_reason = ?, version = ?
-		WHERE person_id = ? AND ended_at = 0 AND epoch < ?
+		WHERE person_id = ? AND ended_at = 0 AND epoch >= ? AND epoch < ?
 		  AND start_position >= COALESCE((SELECT version
 		      FROM iam_session_generation WHERE singleton = 0), 0)`,
-		at.unix(), at.record.Reason, at.packed, id, int64(epoch))
+		at.unix(), at.record.Reason, at.packed, id, int64(previous), int64(epoch))
 	if err != nil {
 		return int(written), fmt.Errorf("iamdomain: end person %s's sessions: %w",
 			id, err)

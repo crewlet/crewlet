@@ -477,8 +477,9 @@ type SessionRecord struct {
 	// company's last invalidation, or at a revocation epoch its person has
 	// since moved past ([sessionSuperseded]). The company's invalidation
 	// writes no `ended_at`, and neither does an epoch move on a session
-	// whose start landed after it, so a listing that read the row alone
-	// reported those live.
+	// whose start landed after it or that an estate held before moves wrote
+	// their reasons, so a listing that read the row alone reported those
+	// live.
 	Superseded bool
 }
 
@@ -564,8 +565,10 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 				// An epoch move writes its own reason on every session it
 				// ends ([Applier.bumpEpoch]), so what is left here is the
 				// company's generation, which ends everybody's at once and
-				// writes no row per session, and a session whose start
-				// landed after the move that had already ended it.
+				// writes no row per session, and a session a move had
+				// already ended without saying so on its row — its start
+				// landed after that move, or the row predates moves writing
+				// their reasons — which no later move re-describes.
 				switch {
 				case uint64(start) < invalidated:
 					row.EndedWhy = "ended with every session in the company"

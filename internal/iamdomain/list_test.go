@@ -1,6 +1,7 @@
 package iamdomain_test
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -203,5 +204,66 @@ func TestEachSessionKeepsTheMoveThatEndedIt(t *testing.T) {
 	if at[first].IsZero() || at[second].IsZero() || !at[first].Before(at[second]) {
 		t.Errorf("the sessions two moves ended are listed ended at %v and %v, "+
 			"want each move's own instant", at[first], at[second])
+	}
+}
+
+// A MOVE NEVER RE-DESCRIBES A SESSION AN EARLIER MOVE ENDED.
+//
+// `ended_at = 0` does not mean live: a session an earlier move ended without
+// writing it on the row holds it too — a start decided before that move whose
+// record landed after it, and every row an estate held before moves wrote
+// their reasons. The next move must leave such a session alone, or it stamps
+// its own reason and instant on a session that was over before it, and that
+// account is permanent. The row is put in that state by taking the first
+// move's reason back off it, which is what a row predating that write holds.
+// The control: a session opened after the first move is ended by the second,
+// with the second's reason. Mutation: end every session below the new epoch
+// rather than those at the one it leaves, and the stale session reads the
+// second move.
+func TestAMoveLeavesASessionAnEarlierMoveEnded(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	expires := time.Now().UTC().Add(24 * time.Hour)
+	revoke := func(op, why string) {
+		t.Helper()
+		if err := rig.draining(func() error {
+			_, err := rig.writer.Revoke(rig.t.Context(), owner, op, why)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		rig.drain()
+	}
+	stale := rig.openSession(owner, expires)
+	revoke("op-first", "changed their own password")
+	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE iam_sessions
+			SET ended_at = 0, ended_reason = '' WHERE lineage = ?`, stale)
+		return err
+	}); err != nil {
+		t.Fatalf("take the first move's reason off its row: %v", err)
+	}
+	live := rig.openSession(owner, expires)
+	revoke("op-second", "suspended by jane")
+
+	sessions, err := rig.reader(t).Sessions(t.Context(), owner)
+	if err != nil {
+		t.Fatalf("list the sessions: %v", err)
+	}
+	listed := map[string]iamdomain.SessionRecord{}
+	for _, s := range sessions {
+		listed[s.Lineage] = s
+	}
+	if got := listed[stale]; got.EndedWhy != "ended with every session they held" ||
+		!got.EndedAt.IsZero() {
+		t.Errorf("the session the first move ended is listed ended at %v "+
+			"because %q, want no instant and %q", got.EndedAt, got.EndedWhy,
+			"ended with every session they held")
+	}
+	if got := listed[live]; got.EndedWhy != "suspended by jane" || got.EndedAt.IsZero() {
+		t.Errorf("the session the second move ended is listed ended at %v "+
+			"because %q, want that move's instant and reason",
+			got.EndedAt, got.EndedWhy)
 	}
 }

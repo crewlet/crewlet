@@ -736,7 +736,10 @@ listed live finds it live. A session keeps the `ended_reason` and `ended_at` of
 whatever ended it — a revocation writes its own on every session it ends, and a
 later one never rewrites them — while `POST /iam/invalidate-all`, which writes
 nothing per session, lists its sessions ended "with every session in the
-company" and no `ended_at`; neither counter writes a `revoked_at` on a token.
+company" and no `ended_at`; neither counter writes a `revoked_at` on a token. A
+session a revocation had already ended when its start landed is listed ended
+"with every session they held", with no `ended_at`, and no later revocation
+claims it.
 
 #### Every write answers three ways
 
