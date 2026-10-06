@@ -51,7 +51,10 @@ import (
 //   - v4: `failed` on a listing's filters — the event log's "Failures only",
 //     which used to narrow the rows a tab had paged in rather than the rows
 //     it was sent.
-const Protocol = 4
+//   - v5: `feed_only` on a listing's filters — the activity feed's seed,
+//     which leaves out a stored type the feed does not carry
+//     (`auxiliary_spend`).
+const Protocol = 5
 
 // versionOf is the lowest scatter version that answers one question with
 // these parameters.
@@ -93,6 +96,8 @@ func versionOf(q Question, params any) int {
 // version is the lowest scatter version that honours every filter set.
 func (p listParams) version() int {
 	switch {
+	case p.FeedOnly:
+		return 5
 	case p.Failed != nil:
 		return 4
 	case p.Suspended != nil:
@@ -234,6 +239,14 @@ type listParams struct {
 
 	// v4.
 	Failed *bool `json:"failed,omitempty"`
+
+	// v5: [store.ListQuery.FeedOnly], the live projection's seed of its
+	// activity feed, which leaves out the types the feed does not carry.
+	// RAISED LIKE EVERY OTHER FILTER although an older peer's log rarely
+	// holds one of those types: a node rolled back from a build that wrote
+	// them does, and its unfiltered answer would put a page of accounting
+	// rows into a restarted node's feed.
+	FeedOnly bool `json:"feed_only,omitempty"`
 }
 
 func listParamsOf(q store.ListQuery) listParams {
@@ -243,7 +256,7 @@ func listParamsOf(q store.ListQuery) listParams {
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
 		ChannelID: q.ChannelID, AgentID: q.AgentID, Suspended: q.Suspended,
-		Failed: q.Failed,
+		Failed: q.Failed, FeedOnly: q.FeedOnly,
 	}
 }
 
@@ -254,7 +267,7 @@ func (p listParams) query() store.ListQuery {
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
 		ChannelID: p.ChannelID, AgentID: p.AgentID, Suspended: p.Suspended,
-		Failed: p.Failed,
+		Failed: p.Failed, FeedOnly: p.FeedOnly,
 	}
 }
 

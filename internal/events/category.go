@@ -26,6 +26,8 @@ import (
 // clicked.
 //
 // So the exclusions below are deliberate, and stated, rather than left as gaps.
+// So is the one narrowing of the other half: a type in [unfed] is persisted
+// like every other entry here and is kept out of the activity feed.
 var categories = map[string]string{
 	// Lifecycle: the org coming and going, plus the config changes an
 	// operator is most likely to go looking for after the fact — and the
@@ -117,6 +119,9 @@ var categories = map[string]string{
 	"provider_fallback":            "system",
 	"skill_telemetry_write_failed": "system",
 	"subagent_batched":             "system",
+	// What the auxiliary model cost, coalesced per key per flush — PERSISTED
+	// and NOT FED: see [unfed].
+	"auxiliary_spend": "system",
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -208,6 +213,32 @@ var excluded = map[string]string{
 		"thing under a different id",
 }
 
+// unfed are the PERSISTED types the activity feed does not carry, each with the
+// reason.
+//
+// A RULE CHANGE, made once and here rather than as a special case in a reader:
+// "persisted" and "fed" were one fact — a categorised type was a row AND a
+// line of the feed — and the feed is a ring of a few hundred rows (livestate.EventFeedLimit)
+// for the WHOLE COMPANY, because every node's projection is fed by a fleet-wide
+// broadcast. A type that is accounting rather than activity takes those rows
+// from the events a person watching the feed is there for, and a projection
+// that skipped it on its own would leave the startup seed, which reads the
+// feed back out of the store, disagreeing with the stream about what the feed
+// holds. So the class is declared beside the admission list, and every feed
+// path asks [KeptOutOfFeed].
+//
+// An unfed type is still a row with a category: it is in the event log, in a
+// turn's and a trace's history, and filterable by its category.
+var unfed = map[string]string{
+	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
+		"the auxiliary model cost for one key, several per turn beside the " +
+		"turn's own phases and a burst of them when a compaction runs. In " +
+		"the feed they would push the turns, failures and deliveries a " +
+		"reader watches out of a ring that holds the whole company's last " +
+		"few hundred events; their spend reaches every spend figure through " +
+		"the rollups, and a turn's page reads them by its turn id",
+}
+
 // liveOnly is the subset of [excluded] that still drives the live projection.
 //
 // A subset rather than the same set: agent_turn_progress, the two seat
@@ -233,6 +264,26 @@ func Category(eventType string) (string, bool) {
 // LiveOnly reports whether a type is excluded from the store while still
 // driving the live projection.
 func LiveOnly(eventType string) bool { return liveOnly[eventType] }
+
+// KeptOutOfFeed reports whether a type is one of the [unfed]: persisted, and
+// deliberately not a line of the activity feed.
+//
+// THE NARROWING, NOT THE ADMISSION. A reader holding a categorised envelope
+// asks this and nothing else, so the category stays the one statement that a
+// type is persisted — a type this build does not know, which a newer peer's
+// stored row can be, is a feed row exactly as it was.
+func KeptOutOfFeed(eventType string) bool {
+	_, kept := unfed[eventType]
+	return kept
+}
+
+// Unfed returns every persisted type the activity feed does not carry, sorted —
+// for a reader of the store that rebuilds the feed and has to name them in a
+// filter.
+func Unfed() []string { return slices.Sorted(maps.Keys(unfed)) }
+
+// UnfedReasons returns every unfed type with its reason.
+func UnfedReasons() map[string]string { return maps.Clone(unfed) }
 
 // Excluded reports why a type is kept out of the event store, or "" if it is
 // not deliberately excluded — which, for a type with no category either, means

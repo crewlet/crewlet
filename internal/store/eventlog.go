@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -291,6 +292,14 @@ type ListQuery struct {
 	// It over-fetches and post-filters, so a page shorter than Limit does
 	// NOT mean history is exhausted here; only a zero-row page does.
 	RelatedAgent string
+
+	// FeedOnly selects the rows the ACTIVITY FEED carries: every stored type
+	// but the ones [events.Unfed] keeps out of it. It is the live
+	// projection's startup seed, which rebuilds the feed from the store and
+	// must fill it with what the stream would have put there — a page of the
+	// newest rows filtered afterwards would hand back fewer than it asked for
+	// whenever a burst of accounting rows was newest.
+	FeedOnly bool
 
 	// Since and Until bound the window a caller is asking about, as a
 	// half-open interval `[Since, Until)`.
@@ -636,6 +645,13 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 		}
 		where = append(where, expr)
 		args = append(args, failedArgs...)
+	}
+	if unfed := events.Unfed(); q.FeedOnly && len(unfed) > 0 {
+		where = append(where, col("event_type")+" NOT IN ("+
+			strings.TrimSuffix(strings.Repeat("?,", len(unfed)), ",")+")")
+		for _, name := range unfed {
+			args = append(args, name)
+		}
 	}
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a

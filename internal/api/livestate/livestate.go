@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -526,7 +527,13 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 	// already listed came out of the store without its payload, and the
 	// envelope is the only frame that carries it: a client keeps a completed
 	// phase's payload beside its feed, and dedupes the feed row itself by id.
-	if env.Category != "" {
+	//
+	// EXCEPT A TYPE THE FEED DOES NOT CARRY ([events.KeptOutOfFeed]): persisted, and
+	// accounting rather than activity, so it neither takes a row of the
+	// company's feed nor goes out as an `event` frame. The rule is the event
+	// catalogue's, asked here and by the startup seed's read alike, so the two
+	// halves of the feed cannot disagree about what it holds.
+	if env.Category != "" && !events.KeptOutOfFeed(env.Type) {
 		s.recordEvent(env)
 		change.Events = true
 	}

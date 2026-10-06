@@ -4231,7 +4231,13 @@ it, so a delegate fan-out of eight rendered as eight siblings of the turn's
 own two phases, and both the "N phases" badge and the token total disagreed
 with the feed's card for the same turn. The token tile now counts the turn's
 own phases and reports worker spend beside it, which is what the engine's own
-`total_tokens` / `subagent_tokens` split means.
+`total_tokens` / `subagent_tokens` split means — and, the same way, the
+**auxiliary** spend inside the turn (`+N auxiliary`: its turn-start context,
+its ledgers' rewrites, its card), read off the turn's `auxiliary_spend`
+records of the `turn` stage. The figure and its notes add up to the turn
+list's tokens for the same turn. The reflection after the turn is never in
+it: that is the seat's learning rather than the work's cost, and it is drawn
+in the Timeline's Reflection lane instead.
 
 ---
 
@@ -4765,7 +4771,9 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
   answer and says it was *placed*), a delegate's workers and the round-cap
   judge under the round that spawned them (`host_round`), each coding run as
   its own span keyed by its job's `launch_id`, the reflection pass after the
-  last phase, and *review pending* while an executor has finished and no
+  last phase — its workers drawn from what each SPENT, one span per
+  `auxiliary_spend` record of the `reflection` stage from its first call to
+  its last, marked where a call failed — and *review pending* while an executor has finished and no
   reviewer has started. The ROUND IN FLIGHT is drawn only from a start the
   engine announced for it: every round publishes a frame as its provider call
   is made, and `round_started_at` stays the previous round's while that

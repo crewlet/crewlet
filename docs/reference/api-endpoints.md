@@ -1271,6 +1271,14 @@ one list differently:
 listing deliberately never selects it, because a page of events with every
 payload attached is the query that makes a live screen slow.
 
+Every stored type reaches the activity feed — the snapshot's `events` and each
+`event` frame — except `auxiliary_spend`, which is accounting rather than
+activity: what the auxiliary model cost, coalesced per key per flush. It is a
+row like any other in `GET /events`, a turn's `turn` answer and a trace, and it
+reaches every spend figure through the rollups; it is never pushed as an
+`event` frame and never takes a row of the feed (see
+[Event System](../concepts/event-system.md)).
+
 ### A seat's LLM history
 
 `llm_history` is the seat's **finished** phases, read from the event store of

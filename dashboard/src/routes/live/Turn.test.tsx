@@ -236,6 +236,7 @@ describe("turnFacts", () => {
       tokens: 0,
       workerTokens: 0,
       workerCount: 0,
+      auxTokens: 0,
       iterations: 0,
       traceIds: [],
       story: tellStory([]),
@@ -313,6 +314,17 @@ describe("turnFacts", () => {
       "+400 in 3 workers",
     );
     expect(fact(view({ own }), "Tokens")?.note).toBe(undefined);
+  });
+
+  // THE AUXILIARY SPEND INSIDE THE TURN IS ITS COST AND NO PHASE'S, so it is
+  // noted beside the figure as the workers are — and the figure with its notes
+  // is the turn list's for the same turn.
+  test("tokens name the auxiliary spend inside the turn beside the workers", () => {
+    const own = [phaseRecord({ inputTokens: 1_200, outputTokens: 300 })];
+    expect(fact(view({ own, auxTokens: 640 }), "Tokens")?.note).toBe("+640 auxiliary");
+    expect(
+      fact(view({ own, workerTokens: 400, workerCount: 1, auxTokens: 640 }), "Tokens")?.note,
+    ).toBe("+400 in 1 worker · +640 auxiliary");
   });
 
   test("the cache is a share of the input, and absent — never 0% — when none was reported", () => {

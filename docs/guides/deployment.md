@@ -942,7 +942,7 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | *No event type.* The [webhook receiver](../reference/api-endpoints.md) writes the delivery's row itself, under its own id with the provider's exact bytes as the payload |
 
@@ -963,7 +963,17 @@ test rather than vanishing quietly.
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
 | `reflection_due` | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
 | `custody_batch` | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
-| `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+| `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows and per auxiliary purpose in the `auxiliary_spend` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
+
+**Stored is not always fed.** One class of type is written like every other row
+and kept out of the dashboard's activity feed — a ring of the whole company's
+last few hundred events, since every node's feed is fed fleet-wide. It is in
+`GET /events`, a turn's history and a trace like any row, and filterable by its
+category.
+
+| Stored, not in the activity feed | Why |
+|---|---|
+| `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush. A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
 
 #### Querying events
 

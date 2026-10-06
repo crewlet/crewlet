@@ -38,6 +38,8 @@ func catalogue() []events.Payload {
 		A2AChannelOpened{}, A2AMessageSent{}, A2AChannelClosed{},
 		// budget.go
 		BudgetExhausted{}, BudgetMeters{},
+		// auxiliary.go
+		AuxiliarySpend{},
 		// provider.go
 		LLMUnavailable{}, ProviderFallback{},
 		// agent.go
@@ -89,6 +91,7 @@ var wireTypes = []string{
 	"agent_turn_started",
 	"agent_turn_steered",
 	"agent_turn_stopped",
+	"auxiliary_spend",
 	"backup_requested",
 	"budget_exhausted",
 	"budget_meters",
@@ -311,6 +314,7 @@ var wireTags = map[string][]string{
 	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
 	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
 	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
+	"auxiliary_spend":                 {"actor_role", "actor_seat", "agent_handle", "agent_id", "cache_read_tokens", "cache_write_tokens", "calls", "day", "duration_ms", "ended_at", "failed_calls", "input_tokens", "model", "output_tokens", "provider_key", "purpose", "role", "stage", "started_at", "total_tokens", "turn_id", "work_key"},
 	"custody_batch":                   {"events"},
 	"reflection_due":                  {"turn"},
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},

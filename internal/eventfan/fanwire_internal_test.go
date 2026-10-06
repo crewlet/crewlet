@@ -47,6 +47,10 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 			// value is a filter too: `suspended: false` narrows as much as
 			// `true` does, so it is the value an older peer must not drop.
 			v.Set(reflect.New(v.Type().Elem()))
+		case reflect.Bool:
+			// A TWO-VALUED ONE NARROWS WHEN TRUE, its zero value being the
+			// whole log.
+			v.SetBool(true)
 		default:
 			t.Fatalf("listParams.%s is a %s; teach this test to set it", field.Name, v.Kind())
 		}
