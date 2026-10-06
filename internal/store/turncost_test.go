@@ -103,6 +103,27 @@ func TestATurnsCostLeavesItsReflectionOut(t *testing.T) {
 		t.Errorf("by tokens = %v, want t-2 (820) above t-1 (520): the reflection's "+
 			"5000 is no part of t-1's cost", turnIDs(ranked))
 	}
+
+	// AND THE MODEL FILTER IS THE MODELS COLUMN'S OWN PREDICATE: a turn is
+	// listed for a model its row names, and for no model only its
+	// reflection used — the reader filtered for it would find a row saying
+	// it never ran on it.
+	for _, tc := range []struct {
+		model string
+		want  []string
+	}{
+		{"a-reflection-model", nil},
+		{"claude-haiku-4-5", []string{"t-1"}},
+		{"claude-opus-5", []string{"t-2", "t-1"}},
+	} {
+		filtered, err := log.Turns(t.Context(), store.TurnQuery{Model: tc.model})
+		if err != nil {
+			t.Fatalf("Turns model=%s: %v", tc.model, err)
+		}
+		if got := turnIDs(filtered); !slices.Equal(got, tc.want) {
+			t.Errorf("model=%s lists %v, want %v", tc.model, got, tc.want)
+		}
+	}
 }
 
 func turnIDs(turns []store.Turn) []string {

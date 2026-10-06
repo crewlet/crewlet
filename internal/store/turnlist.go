@@ -256,7 +256,8 @@ type TurnQuery struct {
 	AgentRole string
 	AgentID   string
 
-	// Model narrows to turns that used one.
+	// Model narrows to turns whose COST used one — a phase or an in-turn
+	// auxiliary call, the rows the turn's Models lists.
 	Model string
 
 	// WorkKey narrows to every RUN of one unit of work — the attempts at a
@@ -799,11 +800,17 @@ func (q TurnQuery) turnWhere(floor time.Time, shares bool) ([]string, []any) {
 	}
 	if q.Model != "" && !shares {
 		// ON THE TURN, not on the row: a turn is selected when ANY of
-		// its phases used the model, which is what a reader means by
-		// "turns on the cheap model".
+		// its phases or its in-turn auxiliary calls used the model, which
+		// is what a reader means by "turns on the cheap model".
+		//
+		// OVER THE ROWS OF ITS COST ([inTurnCost]), the predicate the
+		// turn's `models` column is folded over: a reflection files its
+		// rows under the turn's id with the auxiliary model on them, and
+		// without the term a turn whose only cheap call was its seat's
+		// learning was listed for a model its own row says it never used.
 		where = append(where,
 			"turn_id IN (SELECT turn_id FROM crewlet_events "+
-				"WHERE model = ? AND event_time >= ? AND turn_id != '')")
+				"WHERE model = ? AND "+inTurnCost+" AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.Model, EncodeTime(floor))
 	}
 	if q.WorkItem != "" && !shares {
