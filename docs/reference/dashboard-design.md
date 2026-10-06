@@ -780,7 +780,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
 | `#/account` | **Account** — the signed-in reader's own page, opened from the user block's menu at the sidebar's foot (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home; `login=` fills the login, and `after=reset` says the password was just set — what a reset link's own **Sign in** sends. Neither is a credential |
-| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it and the seat it binds, then a login, a name and a password, typed twice. The link the engine mints lands here | |
+| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it (a person, never a machine: an invitation a Tier A token or a service account issued names no sender) and the seat it binds, then a login, a name and a password, typed twice. The link the engine mints lands here | |
 | `#/reset/{id}.{secret}` | **Password reset** *(outside the frame)* — whose password the link sets, then a new one, typed twice, once; it ends every session the person held and signs nobody in, so it ends on the sign-in form. The link an administrator issues lands here | |
 | `#/enrol` | **Second factor** *(outside the frame)* — the authenticator a deployment that requires one asks for before anything else opens, then the first recovery codes | `next=`, as the sign-in's |
 
@@ -1828,7 +1828,10 @@ offered to continue as them.
 whole credential in the fragment, which no browser sends to a server, and the
 screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
 the view, the body on the redemption — never in a request URL. The view names
-who it is for, who sent it and the seat it binds; the form proposes the login
+who it is for, who sent it — when a person did: one a Tier A token or a service
+account issued, the company's first person's above all, names no sender, since
+`token:founder` is nothing its reader would recognise — and the seat it binds;
+the form proposes the login
 the engine suggested — held to the login grammar, and said under the field,
 before anything is posted — says which session it signs out when the browser
 is already signed in as somebody, states the password length `/auth/config`

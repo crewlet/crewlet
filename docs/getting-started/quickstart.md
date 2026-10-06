@@ -448,8 +448,10 @@ engine sends no mail; for anybody else you invite, getting it to them is
 yours.
 
 **Open the link** (this browser is fine). It is the dashboard's invitation
-screen: it names who the invitation is for, who sent it and the seat it binds,
-and asks for a login — it proposes one from your address, dotted like
+screen: it names who the invitation is for and the seat it binds — and who
+sent it when a person did; this one was issued under the founder token, a
+machine nobody holding the link would recognise, so it names no sender — and
+asks for a login — it proposes one from your address, dotted like
 `jane.doe`, the name your changes are recorded under — your name, and a
 password of at least twelve characters (`api.auth.min_password_length` raises
 that). Redeeming it signs you in. The secret after the `.` never leaves the
