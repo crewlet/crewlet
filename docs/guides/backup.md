@@ -495,9 +495,12 @@ log stop at the moment the artefact was taken, exactly like the rows they
 describe. So re-apply each one from a record kept **outside** the estate — your
 own off-boarding and access-change records, or the engine's logs if you ship
 them off the host — with `crewlet iam remove`, `suspend`, `grant`, `unbind`,
-`revoke-credential`, `reset-mfa` and `cancel-invite`, and a new reset link
-(`reset-password`) for anybody whose password changed since. Removals first: a
-removed person is the one the restore handed everything back to.
+`revoke-credential`, `reset-mfa` and `cancel-invite`. Removals first: a
+removed person is the one the restore handed everything back to. Anybody whose
+password changed since needs a new reset link (`reset-password`), and that one
+comes **after** `invalidate-all`, not before it: a reset link is ended by the
+generation as a machine token is, so a link issued before the generation
+moves is `410 reset_spent` by the time its person opens it.
 
 Then read `crewlet iam people`: a restore under a different keyring shows every
 person as *sealed under a key this node's keyring does not hold* rather than as
