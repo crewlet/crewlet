@@ -627,7 +627,11 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	}
 
 	// Carried on the claimed row from here, so that handing the claim back
-	// hands the record back with it — both of them.
+	// hands the record back with it — every one of them. The first is that
+	// the box answered, which ends any run of failed collections behind this
+	// one: a park or a resume that fails from here hands the claim back with
+	// the job collected, not still failing ([Release.Collected]).
+	run.Collected = true
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishPhase(ctx, run, result)
 
@@ -673,10 +677,14 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 // was the failure.
 //
 // THE BOUND IS THE WAITER'S OWN, so the engine has one answer to "how long
-// may a box be unreachable": at least [MinConnectFailures] attempts spanning
-// [ConnectGiveUp], counted on the job's record so a retry on another node, or
-// after a restart, does not start a fresh allowance. Past it the run is
-// settled as unreachable, as it always was.
+// may a box be unreachable": at least [MinConnectFailures] CONSECUTIVE
+// attempts spanning [ConnectGiveUp] since the last collection that read the
+// box, counted on the job's record so a retry on another node, or after a
+// restart, does not start a fresh allowance. Past it the run is settled as
+// unreachable, as it always was. A collection that read the box ends the run
+// of failures behind it, as the waiter's reconnect that succeeds ends its
+// streak: a box collected and then handed back because its resume failed is a
+// box that answered, and its next failure starts a run of its own.
 //
 // A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
 // box its provider reclaimed, and by the time the poll gives a vanished box up
@@ -1752,7 +1760,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
 		Published: run.LaunchFacts().Published, CollectFailedAt: collectFailedAt,
-		Fence: fenceOf(run),
+		Collected: run.Collected, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:

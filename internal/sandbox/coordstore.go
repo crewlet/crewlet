@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -231,6 +232,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		return false, fmt.Errorf("sandbox: a claim is never taken out of %q, so it cannot be released to it",
 			release.To)
 	}
+	if release.Collected && !release.CollectFailedAt.IsZero() {
+		return false, errors.New("sandbox: a release cannot report a collection that both read its box " +
+			"back and failed to")
+	}
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
 			return false
@@ -254,6 +259,14 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			if run.Launch.CollectFailingSince.IsZero() {
 				run.Launch.CollectFailingSince = at.UTC()
 			}
+		}
+		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX, and
+		// only on this job's own record: one kept for another job is not
+		// this one's to clear, and [PendingRun.LaunchFacts] already reads
+		// it as nothing.
+		if release.Collected && run.Launch.ID == run.LaunchID {
+			run.Launch.CollectFailures = 0
+			run.Launch.CollectFailingSince = time.Time{}
 		}
 		return true
 	})

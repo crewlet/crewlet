@@ -1001,6 +1001,36 @@ func testAReleaseCountsAFailedCollectionOntoTheJob(t *testing.T, s sandbox.Pendi
 		t.Errorf("an ordinary hand-back moved the count to %d", got)
 	}
 
+	// A COLLECTION THAT READ THE BOX ENDS THE RUN: the bound is on
+	// consecutive failures, and a later failure starts a run of its own.
+	collected := releaseOf(mustClaim(t, s, "t1"))
+	collected.Collected = true
+	if released, err := s.ReleaseClaim(t.Context(), "t1", collected); err != nil || !released {
+		t.Fatalf("release after a collection: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1").LaunchFacts(); got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
+		t.Errorf("a release after a collection that read the box left %+v", got)
+	}
+	later := first.Add(2 * time.Minute)
+	failed := releaseOf(mustClaim(t, s, "t1"))
+	failed.CollectFailedAt = later
+	if released, err := s.ReleaseClaim(t.Context(), "t1", failed); err != nil || !released {
+		t.Fatalf("release after the run ended: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1").LaunchFacts(); got.CollectFailures != 1 || !got.CollectFailingSince.Equal(later) {
+		t.Errorf("the job's record = %d failures since %v; want 1 since %v",
+			got.CollectFailures, got.CollectFailingSince, later)
+	}
+
+	// A release cannot say a collection both read the box and failed to.
+	claimed := mustClaim(t, s, "t1")
+	both := releaseOf(claimed)
+	both.Collected, both.CollectFailedAt = true, later
+	if _, err := s.ReleaseClaim(t.Context(), "t1", both); err == nil {
+		t.Error("a release claiming a collection both read and failed was accepted")
+	}
+	mustRelease(t, s, claimed)
+
 	// And the next launch is a new job, with an allowance of its own.
 	mustBeginLaunch(t, s, run("t1"))
 	if got := mustGet(t, s, "t1").LaunchFacts(); got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {

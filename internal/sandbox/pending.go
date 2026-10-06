@@ -153,6 +153,21 @@ type Release struct {
 	// from the first. Zero for a release that is not a failed collection.
 	CollectFailedAt time.Time
 
+	// Collected is whether the claim being handed back READ THE JOB'S BOX
+	// BACK — a collection that succeeded, whose park or resume then failed
+	// — and it ENDS the job's run of failed collections: the release clears
+	// [LaunchRecord.CollectFailures] and [LaunchRecord.CollectFailingSince].
+	//
+	// The bound is on CONSECUTIVE failures, the waiter's own rule (a
+	// reconnect that succeeds clears its streak), and nothing else wrote the
+	// end of one: a box that failed once, was then collected, and was handed
+	// back because its resume failed kept the count and the first failure's
+	// instant, so the next single failure of its re-collection was measured
+	// from before the success and gave a box that had just answered up as
+	// lost. A release cannot say both — a collection either read the box or
+	// it did not — and one that does is refused.
+	Collected bool
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -645,6 +660,14 @@ type PendingRun struct {
 	// redelivery. Inferring it from the other fields is unsound — a reused
 	// run keeps its old question.
 	ClaimedFrom string `json:"-"`
+
+	// Collected is TRANSIENT too: set on a claimed row by the completion
+	// tail once THIS claim's collection read the box back, so whichever
+	// hand-back follows — a park or a resume that failed — ends the job's
+	// run of failed collections ([Release.Collected]). Never persisted,
+	// because it is a fact about one claim and the next claim starts
+	// without it.
+	Collected bool `json:"-"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -1236,10 +1259,12 @@ type LaunchRecord struct {
 	// reaches the publish again.
 	Published bool `json:"published,omitempty"`
 
-	// CollectFailures is how many collections of this job could not read
-	// its box back, and CollectFailingSince when the first of them did —
-	// the run of failures [Coordinator.OnCompleted] bounds before it gives
-	// the job up as unreachable (see [Coordinator.collectFailed]).
+	// CollectFailures is how many collections of this job have failed to
+	// read its box back SINCE THE LAST ONE THAT DID, and CollectFailingSince
+	// when the first of those failed — the run of consecutive failures
+	// [Coordinator.OnCompleted] bounds before it gives the job up as
+	// unreachable (see [Coordinator.collectFailed]). A collection that read
+	// the box ends the run ([Release.Collected]).
 	//
 	// ON THE JOB'S RECORD for the reason Published is: each failure hands
 	// the claim back, and the retry that follows may run on another node or

@@ -108,6 +108,68 @@ func TestACollectionThatKeepsFailingIsGivenUpAfterThePollsWindow(t *testing.T) {
 	rig.finished("t1")
 }
 
+// A COLLECTION THAT READ THE BOX ENDS THE RUN OF FAILURES BEHIND IT. The bound
+// is on consecutive failures, as the poll's is: a box that failed once, then
+// answered, and was handed back only because the turn could not be resumed is
+// a box that is reachable, and its next failure starts a run of its own. The
+// record kept the first failure's instant through the success, so one failure
+// of the re-collection a minute later was already "past the window" and a box
+// that had answered seconds before was given up as lost.
+//
+// Mutation: drop Collected from the release (or its clear in the store), and
+// the last failure settles the run.
+func TestACollectionThatReadTheBoxEndsTheRunOfFailures(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "Outcome: succeeded"})
+	start := rig.now
+	collect := func() error {
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+
+	// A blip: counted.
+	rig.runner.CollectErr = errBoxBlip
+	if err := collect(); !errors.Is(err, errBoxBlip) {
+		t.Fatalf("the first collection = %v; want it handed back", err)
+	}
+	// Fifteen seconds on the box answers, and the RESUME fails retryably:
+	// the claim goes back with the job collected.
+	rig.now = start.Add(15 * time.Second)
+	rig.runner.CollectErr = nil
+	rig.resumer.err = errors.New("the node lost the seat mid-resume")
+	if err := collect(); err == nil {
+		t.Fatal("a failed resume was not handed back for a retry")
+	}
+	if got := rig.get("t1").LaunchFacts(); got.CollectFailures != 0 || !got.CollectFailingSince.IsZero() {
+		t.Fatalf("record %+v after a collection that read the box; want the run of failures ended", got)
+	}
+
+	// Past the window from the FIRST failure, one more blip: the start of a
+	// new run, not the end of the old one.
+	rig.now = start.Add(ConnectGiveUp + 10*time.Second)
+	rig.runner.CollectErr = errBoxBlip
+	if err := collect(); !errors.Is(err, errBoxBlip) {
+		t.Fatalf("one failure after a collection that read the box = %v; want it retried", err)
+	}
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("a box that answered %s earlier was given up: %+v",
+			ConnectGiveUp-5*time.Second, failed)
+	}
+	if got := rig.get("t1").LaunchFacts(); got.CollectFailures != 1 ||
+		!got.CollectFailingSince.Equal(rig.now.UTC()) {
+		t.Errorf("record %+v; want one failure dated from now", got)
+	}
+
+	rig.runner.CollectErr, rig.resumer.err = nil, nil
+	if err := collect(); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	rig.finished("t1")
+}
+
 // A COLLECTION THIS NODE CANCELLED IS NOT THE BOX'S FAILURE. A drain, a
 // restart or the seat moving away ends the delivery's context mid-read, and
 // counted, that opened the failure window at the drain — so the first real
