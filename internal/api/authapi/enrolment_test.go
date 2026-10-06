@@ -147,11 +147,17 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 // not who holds it, so dating the replacement at the enrolment handed whoever
 // held the restricted cookie a fresh step-up window.
 //
+// And an UNSET `api.auth.totp` is required HERE, where a sign-in enforces it —
+// not only in what `/auth/config` reports — since that default is the one a
+// deployment that says nothing runs on.
+//
 // The CONTROL is the same person under `totp: optional`, whose sign-in is a
 // whole session from the start. Mutation: drop the mark at the sign-in, or the
 // guard's check, and the restricted cookie reaches /iam; replace nothing at
 // the enrolment and the old cookie still works; date the replacement at the
-// enrolment and its proof is five minutes younger than the password's.
+// enrolment and its proof is five minutes younger than the password's; read
+// only an explicit `required` as required and the unset case is a whole
+// session on a password alone.
 func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -160,6 +166,7 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 		restricted bool
 	}{
 		{"required", iam.SecondFactorRequired, true},
+		{"unset is required", "", true},
 		{"optional (the control)", iam.SecondFactorOptional, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -371,6 +378,7 @@ func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {
 		restricted bool
 	}{
 		{"required", iam.SecondFactorRequired, true},
+		{"unset is required", "", true},
 		{"optional (the control)", iam.SecondFactorOptional, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
