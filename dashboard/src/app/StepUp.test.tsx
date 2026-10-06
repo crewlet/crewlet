@@ -151,18 +151,42 @@ describe("a gesture that needs a fresher proof", () => {
 
     await waitFor(() => expect(outcome).toEqual({ stored: true }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(sent.map((s) => s.path)).toEqual([
+    // AND THE DIALOG'S OWN READ of whether a code is held, beside them.
+    const asked = sent.filter((s) => s.path !== "/iam/credentials");
+    expect(asked.map((s) => s.path)).toEqual([
       "/secrets/GITHUB_TOKEN",
       "/auth/step-up",
       "/secrets/GITHUB_TOKEN",
     ]);
-    expect(sent[1]?.body).toEqual({ password: "correct horse battery staple" });
+    expect(asked[1]?.body).toEqual({ password: "correct horse battery staple" });
     // THE REPLAY IS THE REQUEST THAT WAS REFUSED, which is what keeps a form.
-    expect(sent[2]?.body).toEqual(sent[0]?.body);
+    expect(asked[2]?.body).toEqual(asked[0]?.body);
     // THE SESSION WAS REPLACED, and NOTHING HERE RE-DIALS the socket opened on
     // the old one: the engine closes it `4401`, and the socket dials again
     // itself once this tab's requests have settled, with the new cookie.
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  // A PERSON WHO HOLDS AN AUTHENTICATOR IS ASKED FOR ITS CODE, not offered it:
+  // the field read "Code (optional)" and a password-only Confirm was refused
+  // for the code. Confirm waits for one. The CONTROL is a person who holds
+  // none, for whom it stays optional. Mutation: leave the field optional
+  // whatever the person holds.
+  test.each([
+    ["holds an authenticator", [{ method: "totp", revoked: false }], true],
+    ["holds none (the control)", [{ method: "password", revoked: false }], false],
+  ])("a person who %s is asked for the code accordingly", async (_, credentials, required) => {
+    engine({
+      "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
+      "/iam/credentials": [{ status: 200, body: { credentials } }],
+    });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("dialog", { name: "Confirm it is you" });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a password" } });
+    const confirm = screen.getByRole("button", { name: "Confirm" });
+    await waitFor(() => expect(confirm).toHaveProperty("disabled", required));
+    expect(screen.queryByText(/optional/i) === null).toBe(required);
   });
 
   // ONE WINDOW, so the dialog names none: every sensitive gesture is held to

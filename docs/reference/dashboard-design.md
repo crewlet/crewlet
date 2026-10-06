@@ -1841,9 +1841,10 @@ new set of recovery codes, to a person who wants to add or replace one later.
 `403 step_up_required` is not a screen's to handle: `protocol/rest.ts` asks the
 one confirmer the app installed (`app/StepUp.tsx`), which opens a single
 "Confirm it is you" dialog however many requests were refused at once, posts
-the password — and a code where the person holds a second factor — to
-`POST /auth/step-up`, and on success replays each refused request exactly
-once. Cancelled, each request fails with the refusal it had. A refusal of
+the password — and a code where the person holds a second factor, which the
+dialog reads from their own credentials (`GET /iam/credentials`) so the code is
+asked for rather than offered as optional — to `POST /auth/step-up`, and on
+success replays each refused request exactly once. Cancelled, each request fails with the refusal it had. A refusal of
 `/auth/step-up` itself is never confirmed, so a confirmation cannot ask for
 another.
 
