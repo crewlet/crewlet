@@ -316,8 +316,12 @@ export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
  * ASKED FOR, never issued on opening: a new set RETIRES the old one, so a
  * person who opened this to look and closed it again must still hold the set
  * they came with.
+ *
+ * `held` is whether they hold a set now, which is what every sentence about
+ * an earlier set turns on: told "your earlier codes no longer work" on their
+ * first set, a person went looking for codes they never had.
  */
-export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
+export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose: () => void }) {
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -335,13 +339,14 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
       // would have retired the one held. Saying "still works" there is the
       // claim a person would find out was false on the day they need it.
       const unknown = err instanceof RestError && (err.status === 503 || err.status === 0);
-      setRefusal(
-        `${refusalText(err)} ${
-          unknown
-            ? "It is not known whether a new set was stored, which would retire the one you hold — issue a new set to be sure."
-            : "No codes were issued; the set you hold still works."
-        }`,
-      );
+      const aftermath = unknown
+        ? held
+          ? "It is not known whether a new set was stored, which would retire the one you hold — issue a new set to be sure."
+          : "It is not known whether a set was stored — issue a new set to be sure."
+        : held
+          ? "No codes were issued; the set you hold still works."
+          : "No codes were issued.";
+      setRefusal(`${refusalText(err)} ${aftermath}`);
     } finally {
       setBusy(false);
     }
@@ -377,7 +382,7 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
       {codes ? (
         <>
           <Text as="p" variant="body">
-            Your earlier codes no longer work. Keep these somewhere safe:{" "}
+            {held && "Your earlier codes no longer work. "}Keep these somewhere safe:{" "}
             <strong>they are shown this once</strong>.
           </Text>
           <RecoveryCodeList codes={codes} />
@@ -385,7 +390,7 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
       ) : (
         <Text as="p" variant="body" tone="secondary">
           Each recovery code signs you in once in place of a code from your authenticator, for the
-          day you do not have it. Issuing a new set retires the one you hold now.
+          day you do not have it.{held && " Issuing a new set retires the one you hold now."}
         </Text>
       )}
       {refusal && (

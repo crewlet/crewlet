@@ -339,7 +339,7 @@ function Security({
       )}
       {dialog === "codes" && (
         <LayerBoundary title="Recovery codes" onClose={close}>
-          <RecoveryCodesDialog onClose={close} />
+          <RecoveryCodesDialog held={codes} onClose={close} />
         </LayerBoundary>
       )}
     </Card>
