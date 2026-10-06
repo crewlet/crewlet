@@ -546,6 +546,46 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 // reattaches to must be runnable immediately. That is exactly why the pause
 // reaper must use Kill instead.
 func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) {
+	box, err := l.reattach(sandboxID)
+	if err != nil {
+		return nil, err
+	}
+	switch b := box.(type) {
+	case *directBox:
+		b.resume()
+	case *containerBox:
+		b.unpause(ctx)
+	}
+	return box, nil
+}
+
+// Attach implements [Provider]: the box as it is, never resumed.
+//
+// A DIRECT BOX IS READ WHILE STOPPED. Its files are the engine host's own and
+// its liveness probe asks the kernel about a host pid, neither of which needs
+// the job to run, so a paused direct box is handed back paused.
+//
+// A CONTAINER IS REFUSED WHILE PAUSED. Its files are read on the host side of
+// the mount too, but its liveness probe is an exec into it, which a paused
+// container refuses — so a reader handed one would report a finished job as
+// unreadable. Whether it is paused is the runtime's answer, read without
+// changing it; a runtime that cannot say is not taken for a pause, since the
+// files are still readable and the probe's own error is the honest report.
+func (l *Local) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
+	box, err := l.reattach(sandboxID)
+	if err != nil {
+		return nil, err
+	}
+	if b, ok := box.(*containerBox); ok && b.paused(ctx) {
+		return nil, boxPaused{localErrorf("container sandbox %q is paused, and a paused container "+
+			"cannot be read without unpausing it", sandboxID)}
+	}
+	return box, nil
+}
+
+// reattach is a box by id, rebuilt from its own directory, with nothing about
+// its job changed.
+func (l *Local) reattach(sandboxID string) (Sandbox, error) {
 	layout, err := l.layout(sandboxID)
 	if err != nil {
 		return nil, err
@@ -554,7 +594,8 @@ func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) 
 	switch {
 	case errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir()):
 		return nil, boxGone{localErrorf("local sandbox %q is gone (its box directory %s no longer "+
-			"exists) — the engine host was rebuilt, or the box was reaped", sandboxID, layout.root)}
+			"exists on this host) — a local box lives on the engine host that made it, the host "+
+			"was rebuilt, or the box was reaped", sandboxID, layout.root)}
 	case err != nil:
 		// NOT "gone": a directory that could not be inspected may well
 		// still hold a running job, and answering it as gone would settle
@@ -565,16 +606,12 @@ func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) 
 	// teardown still writes a refreshed login back.
 	credentials := readCredentialMap(layout)
 	if l.opts.Placement == Direct {
-		box := &directBox{layout: layout, credentials: credentials}
-		box.resume()
-		return box, nil
+		return &directBox{layout: layout, credentials: credentials}, nil
 	}
-	box := &containerBox{
+	return &containerBox{
 		layout: layout, runtime: l.runtime,
 		container: l.containerName(sandboxID), credentials: credentials,
-	}
-	box.unpause(ctx)
-	return box, nil
+	}, nil
 }
 
 // Kill terminates a box by id WITHOUT resuming it.

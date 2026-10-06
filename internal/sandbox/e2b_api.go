@@ -168,7 +168,15 @@ type e2bBox struct {
 	// the template. Read so a wire mismatch is visible in a log line
 	// rather than as an unexplained 404 from inside a box.
 	EnvdVersion string `json:"envdVersion"`
+
+	// State is `running` or `paused` — the SandboxState of E2B's own
+	// spec, on its `GET /sandboxes/{sandboxID}` answer only ([getBox]);
+	// a create or a connect answers a running box and does not carry it.
+	State string `json:"state,omitempty"`
 }
+
+// e2bPaused is the [e2bBox.State] of a snapshot.
+const e2bPaused = "paused"
 
 // host is the per-box envd hostname.
 //
@@ -245,6 +253,26 @@ func (a *e2bAPI) connectBox(ctx context.Context, sandboxID string, seconds float
 	err := a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/connect",
 		request{Timeout: int(seconds)}, &out)
 	if err != nil {
+		return e2bBox{}, err
+	}
+	if out.SandboxID == "" {
+		out.SandboxID = sandboxID
+	}
+	return out, nil
+}
+
+// getBox reads one sandbox as it is, WITHOUT resuming it or touching its
+// timer: E2B's `GET /sandboxes/{sandboxID}` ("Get a sandbox by id"), whose
+// SandboxDetail answer carries the box's `state` — `running` or `paused` —
+// beside the client id its envd hostname is built from. The read a reader
+// needs, where /connect is the read a resume needs: /connect wakes a paused
+// box ("If the sandbox is paused, it will be resumed") and extends its timer.
+//
+// Source: the SandboxDetail and SandboxState schemas of E2B's OpenAPI spec,
+// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
+func (a *e2bAPI) getBox(ctx context.Context, sandboxID string) (e2bBox, error) {
+	var out e2bBox
+	if err := a.do(ctx, http.MethodGet, "/sandboxes/"+sandboxID, nil, &out); err != nil {
 		return e2bBox{}, err
 	}
 	if out.SandboxID == "" {

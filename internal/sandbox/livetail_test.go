@@ -279,6 +279,40 @@ func TestTheOwnerReadsItsOwnBoxDirectly(t *testing.T) {
 	}
 }
 
+// A PEEK NEVER WAKES A BOX. A running record whose box is paused — the moment
+// between a collection pausing the box and the record moving on — is answered
+// as what it is, `box_paused`, and the box is left paused, on the owner's own
+// read and across the fleet alike.
+//
+// Mutation: peek through Reconnect, and the box is woken to be read.
+func TestAPeekNeverWakesAPausedBox(t *testing.T) {
+	t.Parallel()
+	rig := newTailRig(t)
+	rig.runner.SetOutput(Output{Text: "never read", Source: SourceTranscript})
+	run, _, err := rig.pending.Get(t.Context(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	box := rig.provider.Box(run.SandboxID)
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rig.serve(t, boxOwner)
+	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Manager: func() *Manager { return rig.manager }}
+	for name, reader := range map[string]*TailReader{
+		"across the fleet": rig.reader(t, everyBuildServes{}),
+		"on the owner":     local,
+	} {
+		got, err := reader.Tail(t.Context(), "t1", rig.launch)
+		if err != nil || got.Outcome != TailBoxPaused || got.Output != nil {
+			t.Errorf("%s: answer = %+v, %v; want box_paused with no output", name, got, err)
+		}
+	}
+	if !box.Paused() || rig.runner.Peeks() != 0 {
+		t.Errorf("paused=%v peeks=%d; want the box left paused and unread", box.Paused(), rig.runner.Peeks())
+	}
+}
+
 var errFakeBox = fakeBoxError("the box stopped answering")
 
 type fakeBoxError string

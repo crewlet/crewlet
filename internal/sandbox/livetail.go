@@ -119,12 +119,19 @@ const (
 	// TailOwnerUpgrading is an owning node whose build serves no tail
 	// request ([coord.FeatureSandboxTail]).
 	TailOwnerUpgrading TailOutcome = "owner_upgrading"
+	// TailBoxPaused is a running record whose box is PAUSED, which its
+	// backend cannot read without waking it ([ErrBoxPaused]) — and a peek
+	// never wakes a box. Its job has finished: only a collection pauses a
+	// running run's box, so this is the moment between that collection and
+	// the record moving on, or a collection whose claim was handed back to
+	// be tried again. NOT terminal: the next answer says which.
+	TailBoxPaused TailOutcome = "box_paused"
 )
 
 // Valid reports whether this build knows the outcome.
 func (o TailOutcome) Valid() bool {
 	switch o {
-	case TailRunning, TailNotRunning, TailOwnerSilent, TailOwnerUpgrading:
+	case TailRunning, TailNotRunning, TailOwnerSilent, TailOwnerUpgrading, TailBoxPaused:
 		return true
 	}
 	return false
@@ -261,10 +268,14 @@ func (r *TailReader) Tail(ctx context.Context, turnID, launchID string) (TailAns
 		return answer, nil
 	case run.Owner == r.Owner || r.Queue == nil:
 		out, err := peekLocal(ctx, r.Manager, run, r.now())
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrBoxPaused):
+			answer.Outcome = TailBoxPaused
+		case err != nil:
 			return TailAnswer{}, err
+		default:
+			answer.Outcome, answer.Output = TailRunning, &out
 		}
-		answer.Outcome, answer.Output = TailRunning, &out
 		return answer, nil
 	}
 	return r.ask(ctx, run, answer)
@@ -310,6 +321,8 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, answer TailAnswer)
 		case rep.Error != "":
 			return TailAnswer{}, fmt.Errorf("sandbox: %s owns run %s and answered: %s",
 				answer.Node, run.TurnID, rep.Error)
+		case rep.Paused:
+			answer.Outcome = TailBoxPaused
 		case rep.Output != nil:
 			answer.Outcome, answer.Output = TailRunning, rep.Output
 		default:
@@ -333,7 +346,10 @@ func peekLocal(ctx context.Context, manager func() *Manager, run PendingRun, now
 		return Output{}, errors.New("sandbox: this node owns the run and has no sandbox " +
 			"backend to reach its box with — providers.sandbox was removed by an apply")
 	}
-	box, runner, err := m.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
+	// ATTACHED, NEVER RECONNECTED: a peek changes nothing, and Connect wakes a
+	// paused box — which a peek that read a running record a moment before
+	// the collection paused the box would have done ([Provider.Attach]).
+	box, runner, err := m.Attach(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
 	if err != nil {
 		return Output{}, fmt.Errorf("sandbox: reach the box of run %s: %w", run.TurnID, err)
 	}
@@ -386,10 +402,13 @@ func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingR
 				stamp = now().UTC()
 			}
 			out, err := peekLocal(ctx, manager, run, stamp)
-			if err != nil {
+			switch {
+			case errors.Is(err, ErrBoxPaused):
+				reply.Paused = true
+			case err != nil:
 				log.WarnContext(ctx, "sandbox_tail_failed", "turn_id", run.TurnID, "error", err.Error())
 				reply.Error = err.Error()
-			} else {
+			default:
 				reply.Output = &out
 			}
 		}
@@ -427,4 +446,9 @@ type tailReply struct {
 	Output  *Output `json:"output,omitempty"`
 	Status  string  `json:"status,omitempty"`
 	Error   string  `json:"error,omitempty"`
+
+	// Paused is [TailBoxPaused]: the box is paused and was left so.
+	// ADDITIVE: an older asker reads a reply with nothing else on it as a
+	// launch that stopped running, which is what it nearly always is.
+	Paused bool `json:"paused,omitempty"`
 }

@@ -60,6 +60,8 @@ type e2bStub struct {
 	connectStatus int
 	// clientID is what create reports; empty exercises the short hostname.
 	clientID string
+	// state is what a read of the box reports: "running" when empty.
+	state string
 	// trailingGarbage appends an unreadable frame after the real ones, so
 	// a client that should have stopped reading is caught doing so.
 	trailingGarbage bool
@@ -137,6 +139,17 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "` + s.clientID +
 			`", "templateID": "claude", "envdVersion": "0.1.0"}`))
+
+	// A read of one box: E2B's SandboxDetail, its state among it.
+	case strings.HasPrefix(r.URL.Path, "/sandboxes/") && r.Method == http.MethodGet:
+		s.mu.Lock()
+		state := s.state
+		s.mu.Unlock()
+		if state == "" {
+			state = "running"
+		}
+		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "` + s.clientID +
+			`", "templateID": "claude", "envdVersion": "0.1.0", "state": "` + state + `"}`))
 
 	case strings.HasPrefix(r.URL.Path, "/sandboxes/") && r.Method == http.MethodDelete:
 		if s.killStatus != 0 {
@@ -885,6 +898,50 @@ func TestE2BConnectToAVanishedBoxFails(t *testing.T) {
 	}
 	if _, err := provider.Connect(context.Background(), "sbx-gone"); err == nil {
 		t.Fatal("connecting to a vanished box succeeded")
+	}
+	if _, err := provider.Attach(context.Background(), "sbx-gone"); !errors.Is(err, sandbox.ErrBoxGone) {
+		t.Fatalf("attaching to a vanished box = %v; want ErrBoxGone", err)
+	}
+}
+
+// A READER NEVER WAKES A BOX. Attach READS the box (`GET /sandboxes/{id}`):
+// a running one is reached through envd exactly as a connected one is, and a
+// paused one is refused — never /connect, which resumes a paused box and
+// moves its timer, so a peek that raced the collection's pause woke the box,
+// and nothing renewed it again.
+//
+// Mutation: attach through /connect, and the box is woken.
+func TestE2BAttachReadsTheBoxAndNeverWakesIt(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	ctx := context.Background()
+
+	box, err := provider.Attach(ctx, "sbx1")
+	if err != nil {
+		t.Fatalf("attaching to a running box: %v", err)
+	}
+	stub.mu.Lock()
+	stub.files["/home/user/.crewlet/done"] = []byte("0\n")
+	stub.mu.Unlock()
+	if got, err := box.ReadFile(ctx, "/home/user/.crewlet/done"); err != nil || string(got) != "0\n" {
+		t.Fatalf("an attached box read %q, %v; want its file through envd", got, err)
+	}
+
+	stub.mu.Lock()
+	stub.state = "paused"
+	stub.mu.Unlock()
+	if _, err := provider.Attach(ctx, "sbx1"); !errors.Is(err, sandbox.ErrBoxPaused) {
+		t.Fatalf("attaching to a paused box = %v; want ErrBoxPaused", err)
+	}
+
+	if !stub.saw("GET /sandboxes/sbx1") {
+		t.Errorf("the box was never read: %v", stub.requests)
+	}
+	for _, woke := range []string{"POST /sandboxes/sbx1/connect", "POST /sandboxes/sbx1/timeout"} {
+		if stub.saw(woke) {
+			t.Errorf("an attach called %s: %v", woke, stub.requests)
+		}
 	}
 }
 

@@ -410,6 +410,20 @@ type boxGone struct{ err error }
 func (g boxGone) Error() string   { return g.err.Error() }
 func (g boxGone) Unwrap() []error { return []error{g.err, ErrBoxGone} }
 
+// ErrBoxPaused is a [Provider.Attach] that found the box PAUSED where its
+// backend cannot read a paused box without waking it — an E2B snapshot, which
+// has no envd to answer, or a paused container, which takes no exec. The box
+// is there; reading it would mean resuming it, which is the one thing the
+// caller asked not to do.
+var ErrBoxPaused = errors.New("sandbox: the box is paused")
+
+// boxPaused is a backend's own sentence saying a box is paused, which is also
+// [ErrBoxPaused].
+type boxPaused struct{ err error }
+
+func (p boxPaused) Error() string   { return p.err.Error() }
+func (p boxPaused) Unwrap() []error { return []error{p.err, ErrBoxPaused} }
+
 // Provider mints sandboxes. Configured under providers.sandbox and swapped
 // wholesale on an apply, mirroring the LLM providers beside it.
 type Provider interface {
@@ -423,8 +437,25 @@ type Provider interface {
 	// The detached lifecycle rests on this: the completion turn — possibly
 	// in a fresh engine after a restart — reattaches to the box that ran the
 	// job, collects its result and tears it down. A PAUSED box auto-resumes
-	// on connect, which is why the reaper must not use it.
+	// on connect, which is why the reaper must not use it, and why neither
+	// may a reader ([Provider.Attach]).
 	Connect(ctx context.Context, sandboxID string) (Sandbox, error)
+
+	// Attach reattaches to an existing box by id WITHOUT RESUMING IT, for a
+	// caller that only reads: a peek at a running job's output, and the
+	// completion poll.
+	//
+	// THE READ MUST CHANGE NOTHING, and through Connect it could not: a
+	// reader that took a running record, then reached the box after the
+	// collection had read it and paused it, woke the box back up — and on
+	// E2B, where nothing renews a box once its record stops running, the
+	// woken box was killed at its TTL and the parked run lost the snapshot
+	// it had been paused to keep. A box this backend cannot read while it
+	// is paused is refused with [ErrBoxPaused]; one whose files the engine
+	// host reads directly is handed back as it is, paused or not. A box
+	// that is gone is [ErrBoxGone], as for Connect. Nothing about the box's
+	// timer or its state moves.
+	Attach(ctx context.Context, sandboxID string) (Sandbox, error)
 
 	// Kill terminates a box by id WITHOUT resuming it.
 	//

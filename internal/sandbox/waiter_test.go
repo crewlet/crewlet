@@ -451,6 +451,65 @@ func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 	}
 }
 
+// THE POLL NEVER WAKES A BOX ITS RUN HAS MOVED ON FROM. A poll that listed a
+// running run, then reached its box after the collection had claimed the run
+// and paused the box, used to resume it — Connect wakes whatever it reaches —
+// and nothing kept it alive again, so on E2B it was killed at its timer and
+// the run lost its snapshot. The poll attaches without resuming, and a paused
+// box sends it to the record, which says the run has moved on.
+//
+// Mutation: poll through Connect, and the box is woken and heart-beaten.
+func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
+	rig := newWaiterRig(t)
+	listed := rig.launch("t1")
+	box := rig.provider.Box(listed.SandboxID)
+	rig.runner.Finish(Result{Text: "done", Success: true})
+
+	// The collection claimed the run off running, read the box and paused
+	// it, between the poll's listing and its reach.
+	if _, ok, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(listed.LaunchID)); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := rig.waiter.pollOne(t.Context(), rig.manager, listed); got != pollRunning {
+		t.Errorf("the poll of a run that moved on = %v; want nothing done", got)
+	}
+	if !box.Paused() {
+		t.Fatal("the poll woke a box its run no longer runs")
+	}
+	if box.Keepalives() != 0 {
+		t.Errorf("the poll heart-beat a box its run no longer runs %d time(s)", box.Keepalives())
+	}
+}
+
+// A PAUSED BOX UNDER A RUN STILL RUNNING IS WOKEN, because that is the run's
+// box again: a collection that read and paused it and then could not resume
+// the turn hands the claim back to running, and the box has to be kept alive
+// and collected anew. The read-only attach must not cost that.
+//
+// Mutation: leave every paused box alone, and the handed-back run's box is
+// never heart-beaten or polled again.
+func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	box := rig.provider.Box(run.SandboxID)
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.Finish(Result{Text: "done", Success: true})
+
+	if fired := rig.tick(); fired != 1 {
+		t.Errorf("the handed-back run fired %d completion(s); want its job collected anew", fired)
+	}
+	if box.Paused() || box.Keepalives() != 1 {
+		t.Errorf("paused=%v keepalives=%d; want the run's box woken and kept alive",
+			box.Paused(), box.Keepalives())
+	}
+}
+
 // A run parked on a question is not running: the seat is free and the box is
 // deliberately NOT heart-beaten, because the pause TTL is what bounds it.
 func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {

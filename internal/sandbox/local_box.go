@@ -774,6 +774,17 @@ func (b *containerBox) unpause(ctx context.Context) {
 	_, _ = runHost(ctx, hostCommand{argv: []string{b.runtime, "unpause", b.container}})
 }
 
+// paused reports whether the runtime says the container is paused: its own
+// `.State.Paused`, read without changing it — the same field on Docker and
+// Podman. Anything but a plain "true" is not a pause, a failed inspection
+// included: see [Local.Attach].
+func (b *containerBox) paused(ctx context.Context) bool {
+	res, err := runHost(ctx, hostCommand{
+		argv: []string{b.runtime, "inspect", "--format", "{{.State.Paused}}", b.container},
+	})
+	return err == nil && res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "true"
+}
+
 func (b *containerBox) Close(ctx context.Context) error {
 	// A removal that failed LEAKS a container on the engine host, which is
 	// the one outcome here an operator has to be able to see: nothing else

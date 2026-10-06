@@ -361,6 +361,96 @@ func TestPauseStopsTheTreeAndConnectResumesIt(t *testing.T) {
 		"Connect did not resume the paused box")
 }
 
+// A READER NEVER WAKES A BOX. Attach hands a stopped direct box back STOPPED —
+// its files are the host's and its probe asks the host's kernel, so neither
+// needs the job to run — where Connect would SIGCONT it.
+//
+// Mutation: resume in Attach, and the paused job ticks again.
+func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
+	local := newDirect(t)
+	box := mustCreate(t, local, Spec{})
+	counter := filepath.Join(box.Home(), WorkspaceSubdir, "ticks")
+	handle, err := box.StartBackground(t.Context(),
+		"while true; do echo x >> ticks; sleep 0.02; done", ExecOptions{})
+	if err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return fileSize(counter) > 0 }, "the job never started ticking")
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	stopped := fileSize(counter)
+
+	attached, err := local.Attach(t.Context(), box.ID())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if running, err := attached.JobRunning(t.Context(), handle); err != nil || !running {
+		t.Fatalf("the stopped job reads as running=%v, %v; want it alive and readable", running, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if after := fileSize(counter); after != stopped {
+		t.Fatalf("attaching resumed the paused box: %d bytes of work ran after it", after-stopped)
+	}
+}
+
+// A PAUSED CONTAINER IS REFUSED, NEVER UNPAUSED. Its liveness probe is an exec
+// into it, which a paused container refuses, so it cannot be read as it is —
+// and Attach reads the runtime's own state rather than unpausing to find out.
+// The fake runtime here logs every call it is handed and answers `inspect` from
+// a file the test writes.
+//
+// Mutation: unpause in Attach, and the log shows it.
+func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
+	dir := t.TempDir()
+	calls, state := filepath.Join(dir, "calls"), filepath.Join(dir, "paused")
+	runtime := filepath.Join(dir, "runtime")
+	script := "#!/bin/sh\necho \"$@\" >> " + calls + "\n" +
+		"if [ \"$1\" = inspect ]; then read s < " + state + "; echo \"$s\"; fi\n"
+	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	local := &Local{opts: LocalOptions{Placement: Container}, root: filepath.Join(dir, "boxes"), runtime: runtime}
+	layout, err := local.layout("box1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.meta(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logged := func() string {
+		raw, _ := os.ReadFile(calls)
+		return string(raw)
+	}
+
+	if err := os.WriteFile(state, []byte("true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Attach(t.Context(), "box1"); !errors.Is(err, ErrBoxPaused) {
+		t.Fatalf("attaching to a paused container = %v; want ErrBoxPaused", err)
+	}
+	if err := os.WriteFile(state, []byte("false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Attach(t.Context(), "box1"); err != nil {
+		t.Fatalf("attaching to a running container: %v", err)
+	}
+	if strings.Contains(logged(), "unpause") {
+		t.Fatalf("an attach unpaused the container: %q", logged())
+	}
+	if !strings.Contains(logged(), "inspect --format {{.State.Paused}} "+ContainerPrefix+"box1") {
+		t.Fatalf("the runtime was never asked whether the container is paused: %q", logged())
+	}
+	// The log is real: Connect's unpause shows up in it.
+	if _, err := local.Connect(t.Context(), "box1"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !strings.Contains(logged(), "unpause "+ContainerPrefix+"box1") {
+		t.Fatalf("Connect's unpause is not in the log, so the log proves nothing: %q", logged())
+	}
+}
+
 // Teardown of a PAUSED box is the case SIGCONT-first exists for: a stopped
 // process never runs again to handle SIGTERM.
 func TestAPausedBoxCanStillBeTornDown(t *testing.T) {

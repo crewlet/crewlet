@@ -178,6 +178,30 @@ func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, e
 	return p.box(box), nil
 }
 
+// Attach implements [Provider]: the box READ, never resumed.
+//
+// A paused box is a snapshot with no envd running to answer, so there is
+// nothing to read without waking it, and waking it is what a reader must not
+// do — it is refused with [ErrBoxPaused]. A running one is reached exactly as
+// a connected one is, through envd on its own hostname, and its timer is left
+// where the waiter's keepalive set it: /connect would have moved it to its own
+// 900 seconds on every read.
+func (p *E2BProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
+	box, err := p.api.getBox(ctx, sandboxID)
+	if err != nil {
+		var apiErr *E2BError
+		if errors.As(err, &apiErr) && apiErr.Gone() {
+			return nil, boxGone{fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)}
+		}
+		return nil, fmt.Errorf("e2b: sandbox %s could not be read: %w", sandboxID, err)
+	}
+	if box.State == e2bPaused {
+		return nil, boxPaused{fmt.Errorf("e2b: sandbox %s is paused, and a paused box cannot be "+
+			"read without resuming it", sandboxID)}
+	}
+	return p.box(box), nil
+}
+
 // defaultSandboxTTLSeconds is the kill timer a resumed box wakes with.
 //
 // It matches the config layer's own default box TTL. The value is repeated

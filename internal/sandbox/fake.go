@@ -279,6 +279,23 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 	return box, nil
 }
 
+// Attach returns a previously created box WITHOUT resuming it, and refuses a
+// paused one with [ErrBoxPaused] — what the remote backend does, and the
+// stricter of the two real answers, so a reader certified here is one that
+// copes with a box it may not read.
+func (p *FakeProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	box, ok := p.boxes[sandboxID]
+	if p.Vanished[sandboxID] || !ok {
+		return nil, boxGone{fmt.Errorf("sandbox %q is gone", sandboxID)}
+	}
+	if box.Paused() {
+		return nil, boxPaused{fmt.Errorf("sandbox %q is paused", sandboxID)}
+	}
+	return box, nil
+}
+
 // Kill records the id and forgets the box.
 // Kill HONOURS ctx, like every real provider: E2B's is an HTTP call and the
 // local one waits on a process group, so both fail on a dead context. A fake

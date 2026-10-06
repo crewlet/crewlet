@@ -344,7 +344,14 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
 		return pollGone
 	}
-	box, err := provider.Connect(ctx, run.SandboxID)
+	box, err := w.reach(ctx, provider, run)
+	if box == nil && err == nil {
+		// The run moved on between the listing and the read, and its box
+		// was paused by whatever moved it — or its record could not be
+		// read to say: nothing to keep alive, nothing to poll this tick,
+		// and not a failure to reach the box.
+		return pollRunning
+	}
 	if err != nil {
 		streak, giveUp := w.fail(run.TurnID)
 		log.WarnContext(ctx, "sandbox_connect_failed",
@@ -389,6 +396,46 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 		return pollDone
 	}
 	return pollRunning
+}
+
+// reach is a running run's box, for the poll: attached WITHOUT resuming it
+// ([Provider.Attach]), and resumed only where the run's own record says a
+// paused box is the running run's.
+//
+// THE POLL'S RECORD IS A MOMENT OLD. The collection claims a run off running,
+// reads its box and pauses it, and a poll that listed the run before the
+// claim and reconnected after the pause used to RESUME it — through Connect,
+// which wakes whatever it reaches. Nothing touched the box again, since the
+// poll keeps alive only running records, so on E2B the woken box ran out its
+// timer and the parked run lost the snapshot it had been paused to keep.
+//
+// A PAUSED BOX UNDER A RECORD THAT IS STILL RUNNING is the one the poll must
+// wake: a collection that read and paused the box, then could not resume the
+// turn, hands the claim back to running — and that box is the run's again,
+// to be kept alive and collected anew. So a paused box sends the poll to the
+// record, and only a record still running the same job, in the same box, has
+// it resumed. Anything else answers no box and no error: the run moved on.
+func (w *Waiter) reach(ctx context.Context, provider Provider, run PendingRun) (Sandbox, error) {
+	box, err := provider.Attach(ctx, run.SandboxID)
+	if !errors.Is(err, ErrBoxPaused) {
+		return box, err
+	}
+	current, ok, err := w.pending.Get(ctx, run.TurnID)
+	switch {
+	case err != nil:
+		// The STORE did not answer, which says nothing about the box: not
+		// counted against reaching it, and the next tick asks again.
+		log.WarnContext(ctx, "sandbox_poll_record_unread", "turn_id", run.TurnID,
+			"sandbox_id", run.SandboxID, "error", err.Error())
+		return nil, nil
+	case !ok || current.LaunchID != run.LaunchID || current.Status != StatusRunning ||
+		current.SandboxID != run.SandboxID:
+		log.DebugContext(ctx, "sandbox_poll_left_paused", "turn_id", run.TurnID,
+			"sandbox_id", run.SandboxID, "detail", "the box is paused and its run is no "+
+				"longer running it, so the poll leaves it as it is")
+		return nil, nil
+	}
+	return provider.Connect(ctx, run.SandboxID)
 }
 
 // fail records one more failed reconnect and reports whether the streak has
