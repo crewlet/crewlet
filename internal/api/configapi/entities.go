@@ -528,14 +528,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			refuseBody(w, err)
 			return
 		}
-		// The same rule the whole-document write has, and for the same
-		// reason: a list of revisions with no summaries is a list of
-		// uuids. A per-entity write can say more, so the hint does. A
-		// check stores nothing, so it needs none.
-		summary, sent, ok := takeSummary(w, r, body, !dryRun,
-			"this write needs an audit summary: the X-Summary header, "+
-				"or a top-level _summary key in the body. Name what changed "+
-				"about "+kind+"/"+id)
+		summary, sent, ok := takeSummary(w, r, body)
 		if !ok {
 			return
 		}
@@ -595,6 +588,14 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		}
 		if dryRun {
 			writeChecked(w, prepared)
+			return
+		}
+		// The same rule the whole-document write has, and for the same
+		// reason, asked as late: a per-entity write can say more, so the
+		// hint does.
+		if !requireSummary(w, summary, "this write needs an audit summary: "+
+			"the X-Summary header, or a top-level _summary key in the body. "+
+			"Name what changed about "+kind+"/"+id) {
 			return
 		}
 		applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))

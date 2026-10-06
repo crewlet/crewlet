@@ -583,10 +583,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, sent, ok := takeSummary(w, r, body, !dryRun,
-		"PUT /config needs an audit summary: the X-Summary header, "+
-			"or a top-level _summary key in the body. The revision history "+
-			"is the record of who changed what and why")
+	summary, sent, ok := takeSummary(w, r, body)
 	if !ok {
 		return
 	}
@@ -621,6 +618,11 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	if dryRun {
 		writeChecked(w, prepared)
+		return
+	}
+	if !requireSummary(w, summary, "PUT /config needs an audit summary: the "+
+		"X-Summary header, or a top-level _summary key in the body. The "+
+		"revision history is the record of who changed what and why") {
 		return
 	}
 	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
@@ -663,11 +665,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, sent, ok := takeSummary(w, r, body, !dryRun,
-		"PATCH /config needs an audit summary: the X-Summary "+
-			"header, or a top-level _summary key in the body. A patch is "+
-			"the change least visible in a diff, so the sentence saying "+
-			"what it was for matters most here")
+	summary, sent, ok := takeSummary(w, r, body)
 	if !ok {
 		return
 	}
@@ -702,6 +700,12 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	if dryRun {
 		writeChecked(w, prepared)
+		return
+	}
+	if !requireSummary(w, summary, "PATCH /config needs an audit summary: the "+
+		"X-Summary header, or a top-level _summary key in the body. A patch "+
+		"is the change least visible in a diff, so the sentence saying what "+
+		"it was for matters most here") {
 		return
 	}
 	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))

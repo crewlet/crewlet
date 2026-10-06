@@ -138,23 +138,22 @@ func rootMapping(doc *yaml.Node) *yaml.Node {
 }
 
 // takeSummary takes the summary for a write, lifting `_summary` out of the
-// body, and answers the request itself when a required summary is missing.
+// body.
 //
 // ONE FUNCTION FOR EVERY ROUTE THAT READS A BODY, and the reason is the
 // precedence rather than the boilerplate: several copies of "split the body,
-// then let the header win, then refuse if empty" are several chances for one
-// of them to read the header FIRST and never lift `_summary` out, which
-// parses green and then fails at the document parser, by name, as an unknown
-// field. Only the hint differs per route, so only the hint is a parameter.
+// then let the header win" are several chances for one of them to read the
+// header FIRST and never lift `_summary` out, which parses green and then
+// fails at the document parser, by name, as an unknown field.
 //
-// required is false for a dry run, which stores nothing and so records no
-// summary. The key is still lifted out, because the document a check reads
-// has to be the one the write will read.
+// The key is lifted out of a dry run's body too, because the document a check
+// reads has to be the one the write will read. Whether a summary is REQUIRED
+// is [requireSummary]'s, asked later.
 //
 // It returns the remaining body, because splitting is what removes the key:
 // a caller that ignored the second result would hand the parser a document
 // with a `_summary` in it. ok is false when the request has been answered.
-func takeSummary(w http.ResponseWriter, r *http.Request, body []byte, required bool, hint string) (summary string, rest submitted, ok bool) {
+func takeSummary(w http.ResponseWriter, r *http.Request, body []byte) (summary string, rest submitted, ok bool) {
 	summary, rest, err := splitSummary(body)
 	if err != nil {
 		refuseDocument(w, httpjson.CodeInvalidBody, err.Error(), "", &DocumentError{Err: err})
@@ -166,13 +165,28 @@ func takeSummary(w http.ResponseWriter, r *http.Request, body []byte, required b
 		// in version control long after it stopped describing the write.
 		summary = header
 	}
-	if summary == "" && required {
-		// Required, because the history is what an operator reads at 3am
-		// to find the change that broke something. A list of revisions
-		// with no summaries is a list of uuids.
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeSummaryRequired,
-			map[string]string{"hint": hint})
-		return "", submitted{}, false
-	}
 	return summary, rest, true
+}
+
+// requireSummary refuses a write that would store a revision with no audit
+// summary, answering the request itself; it reports whether the write may go
+// on. Only the hint differs per route, so only the hint is a parameter.
+//
+// Required, because the history is what an operator reads at 3am to find the
+// change that broke something: a list of revisions with no summaries is a list
+// of uuids. A dry run stores nothing, records no summary and never asks.
+//
+// ASKED LAST, once the write has been admitted and its document checked, and
+// never as the body is read: a caller who may not make the change is told so,
+// rather than first asked to describe it. Asked first, a credential with no
+// grant to write the configuration was answered `400 summary_required`, and
+// met the `403` that was the real answer only once it had written a sentence
+// for a change it could never make.
+func requireSummary(w http.ResponseWriter, summary, hint string) bool {
+	if summary != "" {
+		return true
+	}
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeSummaryRequired,
+		map[string]string{"hint": hint})
+	return false
 }
