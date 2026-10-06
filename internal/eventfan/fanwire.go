@@ -57,7 +57,10 @@ import (
 //     (`auxiliary_spend`). A listing carries the same field at its other
 //     filters' version, because the asker re-applies it to every row a peer
 //     sent ([reapplied]); a bar it cannot re-apply to.
-const Protocol = 5
+//   - v6: `before` on a phase-token read — the live spend window's seed,
+//     read in pages so that no one node's reply carries its whole day
+//     ([Fleet.PhaseTokens]).
+const Protocol = 6
 
 // versionOf is the lowest scatter version that answers one question with
 // these parameters.
@@ -91,6 +94,10 @@ func versionOf(q Question, params any) int {
 	case QuestionPhases:
 		if p, ok := params.(phasesParams); ok && p.AgentID != "" {
 			return 3
+		}
+	case QuestionPhaseTokens:
+		if p, ok := params.(phaseTokenParams); ok && p.Before != nil {
+			return 6
 		}
 	case QuestionTurns:
 		// A PEER THAT READS ONLY `since_days` would answer the last week
@@ -379,14 +386,21 @@ type phaseTokenParams struct {
 	Until     time.Time `json:"until"`
 	AgentRole string    `json:"role,omitempty"`
 	Limit     int       `json:"limit,omitempty"`
+
+	// v6: the page a paged read resumes below — see [Fleet.PhaseTokens].
+	// An older peer ignoring it would answer the FIRST page again, which
+	// the merge would dedupe into a page that stops where that one did.
+	Before *cursorWire `json:"before,omitempty"`
 }
 
 func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
-	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole, Limit: q.Limit}
+	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole, Limit: q.Limit,
+		Before: cursorOf(q.Before)}
 }
 
 func (p phaseTokenParams) query() store.PhaseTokenQuery {
-	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole, Limit: p.Limit}
+	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole, Limit: p.Limit,
+		Before: p.Before.cursor()}
 }
 
 // ---- serving --------------------------------------------------------- //
@@ -584,7 +598,11 @@ func fit(self string, part any, limit, version int) ([]byte, error) {
 		return encodeError(self, ErrTooLarge.Error())
 	}
 	// THE LARGEST PREFIX THAT FITS, by bisection: each probe is a full
-	// encode, and a page is at most a few hundred rows.
+	// encode, about log2(rows) of them. A listing is a page of at most a few
+	// hundred rows and a spend read one of [PhaseTokenPage] records sized to
+	// fit, so this runs only for rows far larger than their page was sized
+	// for — a cut every question still answers correctly, at the cost of
+	// those encodes inside the fleet read budget.
 	lo, hi := 0, c.rows()-1 // hi: the most rows known NOT to be required to fail
 	var best []byte
 	for lo <= hi {

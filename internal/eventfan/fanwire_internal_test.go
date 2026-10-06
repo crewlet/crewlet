@@ -117,4 +117,13 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7}); got != 1 {
 		t.Errorf("a page of turns by days is asked in v%d, want v1", got)
 	}
+	// A LATER PAGE OF SPEND is v6: an older peer ignoring the cursor would
+	// answer the first page again. The first page is v1, so every build
+	// answers it.
+	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{Before: &cursorWire{ID: "x"}}); got != 6 {
+		t.Errorf("a later page of spend is asked in v%d, want v6", got)
+	}
+	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{Limit: 10}); got != 1 {
+		t.Errorf("the first page of spend is asked in v%d, want v1 — every build answers it", got)
+	}
 }

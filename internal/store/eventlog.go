@@ -1205,6 +1205,16 @@ type PhaseTokenQuery struct {
 	// the projection's record cap was read in full, into memory, inside the
 	// seed's time budget, only to be cut down to that cap on arrival.
 	Limit int
+
+	// Before resumes a read below a record already held: only records
+	// strictly older than it in the read's own (event_time, event_id)
+	// order. Nil reads from the top of the window.
+	//
+	// A KEYSET, for the reason [ListQuery.Before] is one: records share a
+	// microsecond in a burst, and a cursor on the instant alone skips or
+	// repeats whatever collided with it — and a repeated spend record is a
+	// double count.
+	Before *Cursor
 }
 
 // Window reports the instants this query actually covers, after the floor.
@@ -1518,6 +1528,10 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	if q.AgentRole != "" {
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
+	}
+	if q.Before != nil {
+		sql += " AND (event_time, event_id) < (?, ?)"
+		args = append(args, EncodeTime(q.Before.Time), q.Before.ID)
 	}
 	// Newest first, which is the order the breakdown renders in, and the
 	// order a Limit keeps the head of. No LIMIT unless the caller asked for

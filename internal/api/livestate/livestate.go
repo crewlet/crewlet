@@ -93,10 +93,20 @@ const (
 	// per turn-start call, per compaction kind and per reflection worker,
 	// coalesced per flush — so nine records a turn would have halved that
 	// to about 900. Three times the records keeps the same 2 600 turns. A
-	// record held here is about 400 bytes with its parsed stamp and its
-	// index entry, so the cap is about 10 MB at most; the fold the stream
+	// record held here is several hundred bytes with its parsed stamp and
+	// its index entry, so the cap is under 20 MB; the fold the stream
 	// makes on its five-second tick measured 12 ms on one core at the cap
-	// (24 000 records over 2 700 turns), outside this projection's lock.
+	// (24 000 records over 2 700 turns), outside this projection's lock,
+	// and an arrival past the cap trims by reslicing rather than copying
+	// the window (see pruneSpend).
+	//
+	// THE TRANSPORT IS NOT WHAT BOUNDS IT. A spend record crosses the
+	// history scatter as about 590 bytes of JSON, so the whole cap is about
+	// 13.5 MiB — past the 8 MiB one reply carries (queue.MaxPayloadBytes),
+	// which a single node holding more than about 14 000 of the day's
+	// records reached on its own. So the seed reads the window in pages of
+	// eventfan.PhaseTokenPage records a node, each well under the ceiling,
+	// and this cap is free to be sized by memory and the fold alone.
 	//
 	// Exported because the startup seed reads no more than this from the
 	// store: a record past the cap would be dropped on arrival, so reading

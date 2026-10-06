@@ -1473,7 +1473,7 @@ starts**, after the broadcast subscription is attached and before the HTTP
 listener binds. The seed makes three bounded reads, side by side, and each read is bounded by the projection's own limit:
 
 - the newest 400 persisted events, for the feed;
-- the newest 24 000 spend records — phases and auxiliary records — inside the 24-hour spend window;
+- the newest 24 000 spend records — phases and auxiliary records — inside the 24-hour spend window, read in pages of 4 096 records a node, because a busy node's whole day is more than one reply of the scatter carries (8 MiB) — asked whole, its reply was cut, and every node's records were cut with it;
 - the newest three turns of every agent seat, for the seat's `last_turn` and for a turn it left parked.
 
 Each read goes to **every live data node**, through the same scatter the
@@ -1715,7 +1715,13 @@ answers carries one shape:
   only the role name that question used to carry, and would answer every
   seat's), and `event_series` always is at least the version that added its
   `failed` split, a field an older node never sends: its bars would be summed
-  in as though none of its events failed.
+  in as though none of its events failed. `feed_only` is the one filter a
+  LISTING asks in no version of its own: it is on each row's own type, so the
+  node that asked drops what an older node sent wider rather than losing that
+  node's whole answer — while an axis narrowed by it, a count nothing can
+  narrow afterwards, is asked in the version that introduced it. A later page
+  of the projection's spend seed carries its cursor in a version of its own,
+  which an older build would otherwise ignore and answer the first page again.
 - It sits at the top of each answer — beside the record's own fields on
   `event` and on `event_series` — and is `null` on `agent` and `integrations`
   when the history could not be read at all.

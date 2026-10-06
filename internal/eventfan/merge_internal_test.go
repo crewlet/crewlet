@@ -299,13 +299,20 @@ func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
 		{EventID: "pa-10", Timestamp: at(10)},
 	}}
 	var got []string
-	for _, r := range MergeSpend([]spendPart{cut, whole}, 10) {
+	merged, more := MergeSpend([]spendPart{cut, whole}, 10)
+	if !more {
+		t.Error("a merge with a full part says nothing lies past it")
+	}
+	for _, r := range merged {
 		got = append(got, r.EventID)
 	}
 	if !slices.Equal(got, []string{"pb-12", "pa-10", "pa-9"}) {
 		t.Fatalf("merged %v, want pb-12, pa-10, pa-9 and nothing past the cut", got)
 	}
-	if n := len(MergeSpend([]spendPart{whole}, 1)); n != 1 {
-		t.Errorf("a merge cut at one kept %d", n)
+	if kept, more := MergeSpend([]spendPart{whole}, 1); len(kept) != 1 || !more {
+		t.Errorf("a merge cut at one kept %d (more %v), want one and more behind it", len(kept), more)
+	}
+	if _, more := MergeSpend([]spendPart{whole}, 10); more {
+		t.Error("a merge of one whole part says more lies past it")
 	}
 }

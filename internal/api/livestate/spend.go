@@ -115,10 +115,20 @@ func (s *LiveState) pruneSpend(nowISO string) {
 		// than the cap in a day. Truncating the OLDEST is what makes a
 		// rollup past the cap cover slightly less than a window rather
 		// than report a wrong total.
+		//
+		// RESLICED FROM THE FRONT, never copied: once the cap binds this
+		// runs on EVERY arrival, under the projection's lock, and a fresh
+		// slice of the whole window per arrival was a 24 000-entry copy
+		// (about 10 MB) for each spend record the company published. The
+		// dropped entries are cleared so their strings are not held, and
+		// the backing array is replaced by append's own growth — which
+		// copies only the live records, once per quarter of the cap's
+		// worth of arrivals — so the work per arrival is constant and the
+		// memory at most a growth step past the window.
 		cut := len(s.spend) - SpendRecordLimit
 		s.forgetSpend(s.spend[:cut])
-		s.spend = append(make([]spendEntry, 0, SpendRecordLimit),
-			s.spend[cut:]...)
+		clear(s.spend[:cut])
+		s.spend = s.spend[cut:]
 	}
 	now := newStamp(nowISO)
 	if !now.valid {

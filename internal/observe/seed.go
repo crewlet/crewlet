@@ -74,7 +74,9 @@ const seedTurnReads = 16
 //     [livestate.LiveSpendWindow], read from the promoted token columns rather
 //     than the payloads. The count is the projection's record cap, applied at
 //     the READ, on every node: a busy day past it was otherwise read in full
-//     inside the seed's time budget, only to be cut to the cap on arrival;
+//     inside the seed's time budget, only to be cut to the cap on arrival.
+//     Read in pages ([eventfan.Fleet.PhaseTokens]), because the cap is more
+//     than one node's reply carries;
 //   - each seat's newest [SeedTurnsPerRole] turns, for the seat's last turn
 //     and a turn it left parked on a coding run.
 //

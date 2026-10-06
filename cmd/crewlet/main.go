@@ -2032,15 +2032,18 @@ const apiReadHeaderTimeout = 10 * time.Second
 // The reads run side by side, so the budget is the slowest of them rather than
 // their sum. On a healthy fleet each is milliseconds: indexed range scans of
 // every node's own file, stopping at the projection's own bounds (the newest
-// 400 event rows without their payloads, the newest 8 000 phase records of one
-// day, three turns a seat), plus one listing of the run record. What sizes the
-// budget is a peer that does NOT answer, which every scatter waits
+// 400 event rows without their payloads, the newest 24 000 spend records of
+// one day, three turns a seat), plus one listing of the run record. What sizes
+// the budget is a peer that does NOT answer, which every scatter waits
 // [eventfan.FleetReadBudget] for — and a seat's turn read is two scatters, so
-// five seconds is those two and a second of headroom. It stays a ceiling on
-// the one case that matters: a fleet that will not answer must not hold the
-// listener shut, since nothing else can accept a webhook while the bind is
-// waiting. A seed that times out costs history on a screen, never a delivery,
-// and the warning it logs says which reads it cost.
+// five seconds is those two and a second of headroom. The spend read is one
+// scatter per [eventfan.PhaseTokenPage] records, six at the cap; with a peer
+// silent each of them waits that budget, so the read stops where the budget
+// ends and seeds the window's newest records, its coverage saying it is short.
+// It stays a ceiling on the one case that matters: a fleet that will not
+// answer must not hold the listener shut, since nothing else can accept a
+// webhook while the bind is waiting. A seed that times out costs history on a
+// screen, never a delivery, and the warning it logs says which reads it cost.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between
