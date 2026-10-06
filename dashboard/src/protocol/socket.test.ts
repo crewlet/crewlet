@@ -138,6 +138,41 @@ describe("the engine's close codes", () => {
     expect(fetches.filter((u) => u.endsWith("/ws/stream"))).toHaveLength(0);
   });
 
+  // A SIGN-OUT HOLDS THE SOCKET, because the engine closes this session's
+  // socket 4401 as it applies the sign-out, and that close re-dialled before
+  // the sign-out's reload — a handshake refused 401 on the way out. The
+  // CONTROL is the case above, unheld, which dials again; and a sign-out that
+  // failed releases it, which dials. Mutation: drop the hold and the close
+  // dials; drop the release and nothing does.
+  test("4401 on a socket a sign-out holds dials nothing until it is released", async () => {
+    const { socket } = started();
+    dial(0).open();
+    socket.hold();
+    dial(0).closeWith(4401, "signed out");
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
+    expect(fetches).toHaveLength(0);
+
+    socket.release();
+    expect(ScriptedWebSocket.dials).toHaveLength(2);
+  });
+
+  // A RELEASE IS NOT A RECONNECT: a sign-out that failed from the panel a
+  // refused person reads leaves the refusal standing, where a reconnect would
+  // clear it and draw every screen until the next dial was refused again.
+  test("releasing a socket a refusal stopped keeps the refusal", async () => {
+    const { socket, store } = started();
+    dial(0).open();
+    dial(0).closeWith(4403, "grant withdrawn: state:read");
+    socket.hold();
+    socket.release();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(store.state.accessRefused).toBe("grant withdrawn: state:read");
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
+  });
+
   // A STEP-UP REPLACES THE SESSION IT WAS MADE FROM, so the engine closes
   // every socket the old one opened — and the answer that sets the new cookie
   // may still be on its way. A dial before it lands carries the ended cookie,

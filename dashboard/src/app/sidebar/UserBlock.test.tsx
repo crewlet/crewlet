@@ -300,36 +300,56 @@ describe("what the account offers", () => {
   });
 });
 
+/**
+ * The live socket a sign-out holds, recording what it was asked: `hold` before
+ * the request, `release` after one nothing answered.
+ */
+function heldSocket() {
+  const asked: string[] = [];
+  const socket = {
+    hold: () => asked.push("hold"),
+    release: () => asked.push("release"),
+  };
+  const value = { store: new Store(), socket } as unknown as { store: Store; socket: LiveSocket };
+  return { asked, value };
+}
+
 /** The account's gestures, drawn on their own with a toaster to report into. */
 function actions(account: Account) {
   const onLeave = vi.fn();
   const onSignOutEverywhere = vi.fn();
+  const client = heldSocket();
   render(
-    <Router>
-      <ToastProvider>
-        <LayerHost>
-          <AccountActions
-            account={account}
-            grants="Holds state:read"
-            onLeave={onLeave}
-            onSignOutEverywhere={onSignOutEverywhere}
-          />
-        </LayerHost>
-      </ToastProvider>
-    </Router>,
+    <ClientContext.Provider value={client.value}>
+      <Router>
+        <ToastProvider>
+          <LayerHost>
+            <AccountActions
+              account={account}
+              grants="Holds state:read"
+              onLeave={onLeave}
+              onSignOutEverywhere={onSignOutEverywhere}
+            />
+          </LayerHost>
+        </ToastProvider>
+      </Router>
+    </ClientContext.Provider>,
   );
-  return { onLeave, onSignOutEverywhere };
+  return { onLeave, onSignOutEverywhere, asked: client.asked };
 }
 
 /** The confirmation signing out everywhere asks, drawn on its own. */
 function everywhere() {
   const onClose = vi.fn();
+  const client = heldSocket();
   render(
-    <LayerHost>
-      <SignOutEverywhereDialog onClose={onClose} />
-    </LayerHost>,
+    <ClientContext.Provider value={client.value}>
+      <LayerHost>
+        <SignOutEverywhereDialog onClose={onClose} />
+      </LayerHost>
+    </ClientContext.Provider>,
   );
-  return { onClose };
+  return { onClose, asked: client.asked };
 }
 
 const signedIn: Account = { kind: "session", login: "ada.lovelace" };
@@ -346,10 +366,14 @@ describe("signing out", () => {
     for (const key of [recentsKey("p-1"), starsKey("p-1"), recentsKey("p-9")]) {
       localStorage.setItem(key, "[]");
     }
-    actions(signedIn);
+    const { asked } = actions(signedIn);
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
     expect(sent).toContainEqual({ method: "POST", path: "/auth/logout" });
+    // THE SOCKET STOPS DIALLING FIRST: the engine closes this session's socket
+    // as it applies the sign-out, and that close re-dialled before the reload,
+    // a handshake refused 401 on the way out.
+    expect(asked).toEqual(["hold"]);
     expect(sessionStorage.length).toBe(0);
     for (const key of [recentsKey("p-1"), starsKey("p-1"), recentsKey("p-9")]) {
       expect(localStorage.getItem(key), key).toBeNull();
@@ -363,10 +387,12 @@ describe("signing out", () => {
     engine({ "POST /auth/logout": "offline" });
     sessionStorage.setItem("crewlet_org_draft", "{}");
     localStorage.setItem(recentsKey("p-1"), "[]");
-    actions(signedIn);
+    const { asked } = actions(signedIn);
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByText(/Signing out did not go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
+    // AND THE SOCKET IT HELD IS GIVEN BACK: the person is still signed in here.
+    expect(asked).toEqual(["hold", "release"]);
     expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
     expect(localStorage.getItem(recentsKey("p-1"))).toBe("[]");
   });

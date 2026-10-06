@@ -147,8 +147,29 @@ export const page = {
  * nothing, and reloading would put the person straight back where they were
  * while telling them they had left. That throws, for the caller to say so.
  */
-export async function signOut(): Promise<void> {
-  await auth.logout();
+export async function signOut(socket: Dialler): Promise<void> {
+  await leaving(socket, () => auth.logout());
+}
+
+/** What a sign-out needs of the live socket — see `LiveSocket.hold`. */
+export interface Dialler {
+  hold(): void;
+  release(): void;
+}
+
+/**
+ * Sign out by `gesture`, with the socket held so the close the engine sends
+ * this session's socket dials nothing on the way out; a sign-out nothing
+ * answered stays, and the socket is released.
+ */
+async function leaving(socket: Dialler, gesture: () => Promise<void>): Promise<void> {
+  socket.hold();
+  try {
+    await gesture();
+  } catch (err) {
+    socket.release();
+    throw err;
+  }
   leave();
 }
 
@@ -214,9 +235,8 @@ function handOver(person: string, hash: string): void {
  * laptop left open somewhere, when nothing can say it was, is the one claim
  * this gesture exists to make true.
  */
-export async function signOutEverywhere(): Promise<void> {
-  await auth.logoutEverywhere();
-  leave();
+export async function signOutEverywhere(socket: Dialler): Promise<void> {
+  await leaving(socket, () => auth.logoutEverywhere());
 }
 
 /**

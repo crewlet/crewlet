@@ -16,8 +16,10 @@ import { useState } from "react";
 import { Button, Callout, Modal, Text } from "@crewlethq/ui";
 import { refusalText } from "~/lib/refusal.ts";
 import { signOutEverywhere } from "~/lib/session.ts";
+import { useClient } from "~/lib/store-hooks.ts";
 
 export function SignOutEverywhereDialog({ onClose }: { onClose: () => void }) {
+  const { socket } = useClient();
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -27,7 +29,7 @@ export function SignOutEverywhereDialog({ onClose }: { onClose: () => void }) {
     setRefusal(null);
     try {
       // A SIGN-OUT THAT LANDED LEAVES THE PAGE, so nothing here settles it.
-      await signOutEverywhere();
+      await signOutEverywhere(socket);
     } catch (err) {
       setRefusal(`Signing out everywhere did not go through. ${refusalText(err)}`);
       setBusy(false);

@@ -257,6 +257,12 @@ export class LiveSocket {
    * sign-in in another tab gives this one the cookie too.
    */
   private signedOut = false;
+  /**
+   * Whether a sign-out holds the socket (see `hold`). Not `refused`, because
+   * a sign-out that fails gives the socket back as it found it — still
+   * refused, if it was.
+   */
+  private held = false;
   private nextQueryId = 1;
   private inflight = new Map<number, Inflight>();
   /**
@@ -305,6 +311,31 @@ export class LiveSocket {
     this.store.setAccessRefused(null);
     if (this.sock) this.sock.close();
     else this.connect();
+  }
+
+  /**
+   * Dial nothing while this tab signs out, until `release()`.
+   *
+   * The engine ends this session's socket (4401) as it applies the sign-out,
+   * and that close re-dialled once this tab's own requests had settled — which
+   * is before the sign-out's reload — so every sign-out made one more
+   * handshake the engine refused.
+   */
+  hold(): void {
+    this.held = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = 0;
+    this.stopFallback();
+  }
+
+  /**
+   * Give back what `hold` took: a sign-out nothing answered stays on the page,
+   * and the socket dials again — unless a refusal had already stopped it,
+   * which the sign-out did not change.
+   */
+  release(): void {
+    this.held = false;
+    this.connect();
   }
 
   stop(): void {
@@ -433,6 +464,7 @@ export class LiveSocket {
     if (
       this.isClosed ||
       this.refused ||
+      this.held ||
       (this.sock &&
         (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING))
     ) {
@@ -488,6 +520,9 @@ export class LiveSocket {
         entry.timer = 0;
       }
       this.store.setConnected(false);
+      // A SIGN-OUT IS UNDER WAY: neither a re-dial nor the fallback's read,
+      // both of which would carry the cookie it is ending.
+      if (this.held) return;
       const code = e ? e.code : 0;
       if (code === CLOSE_FORBIDDEN) {
         // No reconnect and no REST fallback: both would be answered 403 by

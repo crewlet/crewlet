@@ -58,7 +58,7 @@ export function AccessRefused({ reason }: { reason: string }) {
           <Button
             variant="ghost"
             onClick={() => {
-              signOut().catch((err: unknown) =>
+              signOut(socket).catch((err: unknown) =>
                 toast.failed(`Signing out did not go through. ${refusalText(err)}`),
               );
             }}

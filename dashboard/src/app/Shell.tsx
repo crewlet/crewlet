@@ -75,7 +75,7 @@ import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
-import type { FleetAnswer } from "~/protocol/index.ts";
+import { auth, RestError, type FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
@@ -324,11 +324,27 @@ export function FrameReadings({ children }: { children: ReactNode }) {
  * refusal and the degraded-mode snapshot: three `401`s in the console of a page
  * that needs nobody. A sign-in dials on its own (`reconnect`); this is a
  * no-op on a socket already dialling, and on one a refusal stopped.
+ *
+ * AND ONLY ONCE THE ENGINE HAS SAID A SESSION EXISTS. A browser that opened
+ * `/dashboard` signed out mounted the frame, and its dial, its refusal and the
+ * degraded-mode snapshot were three `401`s on the way to the sign-in. So the
+ * frame asks `GET /auth/session` first: a `401` is nobody, which `rest.ts`
+ * turns into the sign-in the app follows, and nothing is dialled; any other
+ * failure says nothing about a session, and the dial's own handshake decides.
  */
 export function Shell({ children }: { children: ReactNode }) {
   const { socket } = useClient();
   useEffect(() => {
-    socket.start();
+    let live = true;
+    auth.session().then(
+      () => live && socket.start(),
+      (err: unknown) => {
+        if (live && !(err instanceof RestError && err.status === 401)) socket.start();
+      },
+    );
+    return () => {
+      live = false;
+    };
   }, [socket]);
   return (
     <FrameReadings>

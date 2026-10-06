@@ -1765,10 +1765,15 @@ Four routes draw no sidebar and no page header — `#/login`,
 `#/invite/{id}.{secret}`, `#/reset/{id}.{secret}` and `#/enrol` (`FRAMELESS` in
 `app/nav.ts`): a frame whose every row is locked is a frame showing a person
 what they cannot open. **And they dial nothing that needs a session**: the
-socket is made at boot and dialled by the frame (`app/Shell.tsx`) or by a
-sign-in, so a browser that opens one of these four sends no handshake, no
-refusal probe and no degraded-mode snapshot. The sign-in asks
-`GET /auth/session` once, to say whose session the browser already holds.
+socket is made at boot and dialled by a sign-in or by the frame
+(`app/Shell.tsx`) — and by the frame only once `GET /auth/session` has not
+answered `401` — so a browser that opens one of these four, or opens
+`/dashboard` signed out, sends no handshake, no refusal probe and no
+degraded-mode snapshot on its way to the sign-in. The sign-in asks
+`GET /auth/session` once, to say whose session the browser already holds. **A
+sign-out holds the socket** until it is answered (`LiveSocket.hold`): the
+engine closes the session's socket as it applies the sign-out, and that close
+re-dialled before the reload, one more refused handshake on the way out.
 
 **The session cookie is the browser's only credential.** The dashboard keeps
 no token anywhere — not in storage, not in a URL — and every REST call and the

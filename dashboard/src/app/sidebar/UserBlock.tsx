@@ -69,6 +69,7 @@ import { refusalText } from "~/lib/refusal.ts";
 import { adoptReader } from "~/lib/reader.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { goSignIn, signOut } from "~/lib/session.ts";
+import { useClient } from "~/lib/store-hooks.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { auth, type SessionAnswer } from "~/protocol/index.ts";
@@ -290,6 +291,7 @@ export function AccountActions({
   onSignOutEverywhere: () => void;
 }) {
   const toast = useToast();
+  const { socket } = useClient();
   if (account.kind === "nobody") {
     return (
       <div className="preferences-account">
@@ -325,7 +327,7 @@ export function AccountActions({
           {ws.label}
         </a>
       ))}
-      <Button size="small" variant="secondary" onClick={run(signOut, "Signing out")}>
+      <Button size="small" variant="secondary" onClick={run(() => signOut(socket), "Signing out")}>
         Sign out
       </Button>
       <Button

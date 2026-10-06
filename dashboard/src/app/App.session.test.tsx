@@ -74,15 +74,19 @@ afterEach(() => {
 // at boot, so the sign-in, an invitation's and a reset link's page each sent a
 // refused handshake, a refused probe of it and a refused degraded-mode
 // snapshot — console errors on a page that needs nobody. The frame dials it
-// now. The CONTROL is a screen in the frame, which does. Mutation: dial at boot
-// again, or not from the frame, and one side goes red.
+// now, and only once `GET /auth/session` has said somebody is signed in: a
+// browser that opened `/dashboard` signed out still sent all three on its way
+// to the sign-in. The CONTROL is a screen in the frame with a session, which
+// dials. Mutation: dial at boot again, from the frame before the session has
+// answered, or not at all, and one side goes red.
 describe("the socket", () => {
   test.each([
-    ["the sign-in", "#/login", 0],
-    ["an invitation's page", "#/invite/abc.def", 0],
-    ["a reset link's page", "#/reset/abc.def", 0],
-    ["a screen in the frame (the control)", "#/inbox", 1],
-  ])("%s dials it %d times", async (_, hash, dials) => {
+    ["the sign-in", "#/login", true, 0],
+    ["an invitation's page", "#/invite/abc.def", true, 0],
+    ["a reset link's page", "#/reset/abc.def", true, 0],
+    ["a screen in the frame, nobody signed in", "#/inbox", false, 0],
+    ["a screen in the frame, signed in (the control)", "#/inbox", true, 1],
+  ])("%s, at %s, signed in %s, dials %d times", async (_, hash, signedIn, dials) => {
     const dialled: string[] = [];
     Object.defineProperty(globalThis, "WebSocket", {
       writable: true,
@@ -93,10 +97,31 @@ describe("the socket", () => {
         }
       },
     });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = new URL(String(input), "http://engine.test").pathname;
+        if (signedIn && path === "/auth/session") {
+          return new Response(
+            JSON.stringify({
+              person: "p-1",
+              login: "jane.doe",
+              kind: "person",
+              status: "signed_in",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 });
+      }),
+    );
     mount(hash);
-    await act(async () => {
-      for (let i = 0; i < 6; i++) await Promise.resolve();
-    });
+    if (dials > 0) await waitFor(() => expect(dialled).toHaveLength(dials));
+    else {
+      await act(async () => {
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+      });
+    }
     expect(dialled).toHaveLength(dials);
     const asked = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
     expect(asked.filter((url) => /\/(ws|stream)\//.test(url))).toHaveLength(0);
