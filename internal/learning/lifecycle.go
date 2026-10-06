@@ -107,14 +107,11 @@ type Summary struct {
 	// and the handoffs, which is the part a single exemplar cannot show.
 	NotablePatterns string
 
-	// Embedding is the summary's vector, or nil when none could be made.
-	//
-	// It comes from the summarizer because that is the component already
-	// talking to a model — and it is optional for the same reason the raw
-	// rows' vectors are: a compacted row with no vector is skipped by
-	// recall and still read by every time-window query. Losing the summary
-	// because its vector could not be computed would be the worse trade.
-	Embedding []float32
+	// THERE IS NO VECTOR HERE, and a compacted row is never embedded. A
+	// field for one sat here with nothing that filled it and nothing that
+	// read it: similarity recall reads raw turns only, because a summary of
+	// a cluster reads in a prompt like one turn that did all of them. Every
+	// time-window and outcome query still reads a compacted row.
 }
 
 // Summarizer folds a cluster of similar turns into one summary.
@@ -949,7 +946,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	row := l.buildCompacted(handle, cluster, exemplars, summary)
 	deleted, err := l.tx(ctx, "fold episode cluster", func(tx *sql.Tx) (int64, error) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := insertEpisodeTx(ctx, tx, l.db, row); err != nil {
+		if err := insertSummaryTx(ctx, tx, row); err != nil {
 			return 0, err
 		}
 		return deleteEpisodes(ctx, tx, handle, ids)
@@ -1066,7 +1063,6 @@ func (l *Lifecycle) buildCompacted(handle string, cluster, exemplars []Episode, 
 		// column is per-turn everywhere else that reads it.
 		ReviewOutcome:     outcome,
 		Duration:          total,
-		Embedding:         s.Embedding,
 		Kind:              KindCompacted,
 		Count:             len(cluster),
 		WorkKey:           foldKey(ids),
@@ -1166,31 +1162,20 @@ func toolJaccard(a, b []string) float64 {
 
 // ---- storage helpers ------------------------------------------------- //
 
-// insertEpisodeTx writes one episode inside a caller's transaction.
+// insertSummaryTx writes one compacted row inside a caller's transaction.
 //
 // It binds [episodeInsertSQL], the same statement Episodes.Append uses, so a
 // summary row is written through exactly the columns every reader scans. The
 // conflict clause on that statement is what makes a repeated fold a no-op.
-func insertEpisodeTx(ctx context.Context, tx *sql.Tx, db *store.DB, ep Episode) error {
-	var blob any
-	if len(ep.Embedding) > 0 {
-		packed, err := db.EncodeVector(ep.Embedding)
-		if err != nil {
-			// The summary is what the LLM call bought; its vector only
-			// decides whether recall can reach the row. Refusing the row
-			// here would spend the call again next pass and fail the same
-			// way, so the row lands unembedded and the reason is logged.
-			log.WarnContext(ctx, "compacted_episode_not_embedded",
-				"episode", ep.ID, "error", err)
-		} else {
-			blob = packed
-		}
-	}
+//
+// WITH NO VECTOR, whatever the row carries: a summary is never embedded (see
+// [Summary]), and similarity recall reads raw turns only.
+func insertSummaryTx(ctx context.Context, tx *sql.Tx, ep Episode) error {
 	_, err := tx.ExecContext(ctx, episodeInsertSQL,
 		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
 		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
 		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,
+		ep.ReviewOutcome, ep.Duration.Milliseconds(), nil,
 		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
 		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
 		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
@@ -1307,10 +1292,6 @@ func (f EpisodeField) Valid() bool { return f == FieldTask || f == FieldOutcome 
 
 // NewSummarizer builds the model-backed [Summarizer]: it renders the cluster,
 // makes one call, and parses what comes back.
-//
-// It attaches no embedding. The caller that has an embeddings provider can
-// wrap this one and fill [Summary.Embedding]; a compacted row without it is
-// read by every query except similarity recall.
 //
 // fit condenses a turn's field past [perTurnDetail] before the cluster is
 // rendered — see [RenderCluster]. Nil condenses nothing, and such a field is

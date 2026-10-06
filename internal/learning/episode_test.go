@@ -326,15 +326,6 @@ func TestRecallIsScopedToTheSeatAndToRawEpisodes(t *testing.T) {
 	if len(hits) != 1 || hits[0].Episode.ID != "mine" {
 		t.Errorf("hits = %v, want only this seat's raw episode", hitIDs(hits))
 	}
-	// Asking for clusters explicitly returns them, or the compaction
-	// worker's output would be unreadable.
-	hits, _ = e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
-		Kinds: []learning.Kind{learning.KindCompacted},
-	})
-	if len(hits) != 1 || hits[0].Episode.ID != "cluster" {
-		t.Errorf("hits = %v, want the cluster", hitIDs(hits))
-	}
 }
 
 func TestRecallIsStableAcrossTies(t *testing.T) {

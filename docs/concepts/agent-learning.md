@@ -400,10 +400,10 @@ After the migration `episodes` rows distinguish on `kind`:
 | `exemplar_turn_ids` | empty | 2-3 raw rows kept as drill-down anchors |
 | `consolidated_into_skill_id` | set when a skill drafted from this row | always NULL |
 
-Vector similarity returns both kinds in one query. Callers branch on `kind` at render time:
+**Similarity recall reads raw rows only.** A compacted row summarises a cluster of turns and reads in a prompt like one turn that did all of them, so it is never embedded and `learning.Episodes.Recall` filters on `kind = 'raw'`. The time-window reads return both kinds, and their callers branch on `kind`:
 
-- **`query_episodes` builtin**: both kinds; renders raw entries as single past turns, compacted entries as `[pattern, observed N×]` aggregates.
-- **`## Similar prior work` prefetch block**: both kinds; the auxiliary summarization step (`learning.summarize_episodes`) has a kind-aware prompt that emits the right bullet shape per row.
+- **`query_episodes` builtin**: its `query` path is similarity, so raw turns only; its recency and `conversation` paths return both kinds.
+- **`## Similar prior work` prefetch block**: similarity, so raw turns only.
 - **`Synthesizer`**: raw rows only, on both paths. Compacted aggregates are too coarse to draft a clean skill body from, and the clustered pass would count one fold as one turn.
 - **`Refiner`**: reads no episodes at all. It is shown the skills the turn was offered and the turn itself (task, plan, tool sequence, outcome), which is the whole question it answers.
 

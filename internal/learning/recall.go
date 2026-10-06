@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -32,11 +31,6 @@ type RecallQuery struct {
 	// nearest N rows always come back — a seat with three episodes recalls
 	// all three on every turn, however irrelevant.
 	MinSimilarity float64
-
-	// Kinds filters row shapes. Empty means raw episodes only: a compacted
-	// cluster summarises many turns and reads in a prompt like one turn
-	// that did all of them.
-	Kinds []Kind
 }
 
 const (
@@ -74,6 +68,11 @@ const (
 // during an embeddings outage, and treating a missing vector as a zero vector
 // would score them as maximally dissimilar to everything and rank them
 // consistently last — which reads as a judgment about their content.
+//
+// RAW TURNS ONLY. A compacted row summarises a cluster of turns and reads in
+// a prompt like one turn that did all of them, and it carries no vector (see
+// [Summary]); the `kind` predicate states that rather than leaning on the
+// vector being absent.
 func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if q.Handle == "" {
 		return nil, fmt.Errorf("learning: recall needs a seat")
@@ -88,10 +87,6 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	floor := q.MinSimilarity
 	if floor == 0 {
 		floor = defaultMinSimilarity
-	}
-	kinds := q.Kinds
-	if len(kinds) == 0 {
-		kinds = []Kind{KindRaw}
 	}
 	probe, width, err := vectorProbe(e.db, q.Embedding)
 	if err != nil {
@@ -113,10 +108,6 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	// order the database gave. That was already true — it is written down
 	// at rank — and this shape is what makes it load-bearing rather than
 	// belt-and-braces.
-	//
-	// The kind filter is a bound list of short literals rather than
-	// placeholders because it comes from a typed enum this package owns —
-	// see kindList.
 	rows, err := e.db.SQL().QueryContext(ctx,
 		`SELECT `+episodeColumns+` FROM episodes WHERE id IN (
 		    SELECT id FROM (
@@ -126,13 +117,13 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 		        WHERE agent_handle = ?
 		          AND embedding IS NOT NULL
 		          AND length(embedding) = ?
-		          AND kind IN (`+kindList(kinds)+`)
+		          AND kind = ?
 		    )
 		    WHERE distance <= ?
 		    ORDER BY distance ASC, ended_at DESC, id DESC
 		    LIMIT ?
 		 )`,
-		probe, q.Handle, width, 1-floor, limit)
+		probe, q.Handle, width, string(KindRaw), 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
@@ -165,24 +156,6 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	}
 	rank(hits)
 	return hits, nil
-}
-
-// kindList renders a kind filter as SQL literals.
-//
-// The values are this package's own typed enum — [KindRaw] and
-// [KindCompacted], both fixed identifiers — so there is no caller input in the
-// statement. Placeholders would be safer against a future where that stops
-// being true, and would also make the statement text vary with the number of
-// kinds, which costs a prepared-statement entry per shape; the enum being
-// closed is what makes the trade honest. A value outside it renders as a
-// quoted string that matches no row, which is the same answer a placeholder
-// would give.
-func kindList(kinds []Kind) string {
-	out := make([]string, 0, len(kinds))
-	for _, k := range kinds {
-		out = append(out, "'"+strings.ReplaceAll(string(k), "'", "''")+"'")
-	}
-	return strings.Join(out, ", ")
 }
 
 // vectorProbe packs a query embedding for binding, and reports the byte width

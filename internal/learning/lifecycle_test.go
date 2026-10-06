@@ -1150,7 +1150,6 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 			CommonOutcome:     "done",
 			SubjectsInvolved:  []string{"finance", "legal"},
 			NotablePatterns:   "escalated twice",
-			Embedding:         []float32{0.1, 0.2, 0.3, 0.4},
 		}, nil
 	}
 	mustPass(t, l)
@@ -1172,47 +1171,16 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 	if c.NotablePatterns != "escalated twice" || c.CommonOutcome != "done" {
 		t.Errorf("prose fields: %+v", c)
 	}
-	if len(c.Embedding) != 4 || c.Embedding[3] != 0.4 {
-		t.Errorf("embedding = %v", c.Embedding)
+	// A SUMMARY IS NEVER EMBEDDED: similarity recall reads raw turns only,
+	// so a vector here would be bytes nothing reads.
+	if c.Embedding != nil {
+		t.Errorf("a compacted row carries a vector: %v", c.Embedding)
 	}
 	if c.ConsolidatedInto != "" || c.ConversationKey != "" {
 		t.Errorf("a summary spans conversations and belongs to no skill: %+v", c)
 	}
 	if len(c.SkillsUsed) != 0 || c.TaskSummary != "" || c.PlanSummary != "" {
 		t.Errorf("per-turn fields leaked onto a summary: %+v", c)
-	}
-	// And it is recallable, which is the only reason the vector is carried.
-	hits, err := e.Recall(context.Background(), RecallQuery{
-		Handle: "ceo", Embedding: []float32{0.1, 0.2, 0.3, 0.4},
-		Kinds: []Kind{KindCompacted},
-	})
-	if err != nil || len(hits) != 1 || hits[0].Episode.ID != c.ID {
-		t.Errorf("recall over summaries = %d hits, %v", len(hits), err)
-	}
-}
-
-func TestASummaryLandsEvenWhenItsVectorCannot(t *testing.T) {
-	t.Parallel()
-	l, e, sum := newLife(t, Options{}, func(o *store.Options) { o.EmbeddingDim = 4 })
-	sixSimilar(e, t)
-	sum.reply = func(Cluster) (Summary, error) {
-		// The company changed embedding model between the turns and the
-		// fold. The summary is what the call bought; refusing the row would
-		// spend it again next pass and fail the same way.
-		return Summary{CommonTaskPattern: "still useful", Embedding: []float32{1, 2}}, nil
-	}
-
-	res := mustPass(t, l)
-
-	if res.ClustersCompacted != 1 {
-		t.Fatalf("result = %+v, want the fold to land", res)
-	}
-	_, compacted := snapshot(t, e)
-	if len(compacted) != 1 || compacted[0].CommonTaskPattern != "still useful" {
-		t.Fatalf("summary = %+v", compacted)
-	}
-	if compacted[0].Embedding != nil {
-		t.Errorf("embedding = %v, want none stored", compacted[0].Embedding)
 	}
 }
 
