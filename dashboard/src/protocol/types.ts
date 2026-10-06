@@ -612,7 +612,8 @@ export interface AgentSpendRow extends Bucket {
   agent_id: string;
   /** A PERSON's row rather than a seat's: what the auxiliary model spent for
    *  the human seat `handle` names — a question answered on the operator
-   *  surface. No `agent_id`, and on a named window no `turns`. */
+   *  surface, or a background pass of a unit they lead. No `agent_id`, and on
+   *  a named window no `turns`. */
   person?: boolean;
   by_phase: Record<string, Bucket>;
   /** How many of the seat's turns ENDED in the window, and how many failed —

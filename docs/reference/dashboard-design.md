@@ -5124,9 +5124,9 @@ export.
 - **By agent** — turns, tokens, share, **budget today** (the seat's daily window
   from its overlay, `exhausted` where the engine says `refusing`) and tokens per
   ended turn. A PERSON the auxiliary model spent for (`person: true` — their
-  questions answered with `answer_knowledge`) is a row of their own, keyed by
-  their handle, and says in its turns and per-turn cells that a person takes
-  no turns. A row opens the seat in the peek; on a phone a seat is one
+  questions answered with `answer_knowledge`, and the background passes of a
+  unit they lead) is a row of their own, keyed by their handle, and says in its
+  turns and per-turn cells that a person takes no turns. A row opens the seat in the peek; on a phone a seat is one
   compact row — name, tokens and share, then turns · today · per turn, each
   with its unit. **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
   over the same window where the turn list has it (a quarter goes to its thirty

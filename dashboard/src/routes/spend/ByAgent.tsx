@@ -58,7 +58,8 @@ export function turnsLink(w: Window): { path: string; clamped: string | null } {
 }
 
 /** What a person's row says where a seat's counts its turns. */
-export const PERSON_TAKES_NO_TURNS = "A person takes no turns — this is what their questions cost";
+export const PERSON_TAKES_NO_TURNS =
+  "A person takes no turns — this is what the auxiliary model spent for them";
 
 export function ByAgent({
   lines,
