@@ -1175,8 +1175,9 @@ a person mints their own from their own session, which is `POST
 (`#/account`, **Personal access tokens › New token**) makes that request from
 the signed-in session — with **no grant ticked** to start, so a token carries
 what its holder chose rather than everything they hold (minted with none, it
-reaches only what takes no grant — its owner's own inbox, queue, pins and
-priorities, which the dialog says), and with a lifetime
+only keeps its owner's own record — marks their inbox read, pins views and
+orders their priorities — and reads nothing, that record included, since
+reading takes `state:read`; the dialog says so), and with a lifetime
 past the 365-day ceiling refused before it is sent — and `crewlet iam token
 -login` is that request too,
 signing in for it exactly as the dashboard does —
@@ -1792,7 +1793,7 @@ unlocks.
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even the admin grant |
 | **Colleague write** | Filing, commenting, updating, merging; declaring a project's tags; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
 | **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
-| **Own or lead** | Priorities, a person's day, reading their queue; whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — and answering the question a coding run parked on (`answer_run`) | The owner, whoever leads them, or `fleet:operate`. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
+| **Own or lead** | Priorities, a person's day, reading their queue; whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — and answering the question a coding run parked on (`answer_run`) | The owner, whoever leads them, or `fleet:operate` — and READING a person's day or queue (`work_inbox`, `my_work`, `get_person`) takes `state:read` beside that, the owner's own included, because it lists the company's tasks: one row with two grants, as ending every session in the company is, so `GET /work/inbox` and the operator surface's `work_inbox` give one answer. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
 | **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — re-routing a task to another team, and a page container's own settings | The project's lead or, for pages, the lead of the unit whose `space:` the container is; or `fleet:operate` |
 | **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `config:read` to read and `config:write` to write anything in it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |

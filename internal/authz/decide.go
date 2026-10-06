@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -232,7 +233,7 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if throughToken && r.presence == PresenceRequired {
 		return Decision{Reason: ReasonTokenRefused}
 	}
-	d := decideClass(ctx, p, r, o, chart)
+	d := withAlso(p, r, decideClass(ctx, p, r, o, chart))
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
 	// the answer, and an unknown is already "ask me again". See the
 	// package doc and [rule.recency].
@@ -463,6 +464,27 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 	// than a panic for the reason the unknown action above is: the safe
 	// answer to "I have no rule" is no.
 	return Decision{Reason: ReasonUnknownAction}
+}
+
+// withAlso holds a RELATION row's decision to the capability it asks beside
+// the relation ([rule.also]); an operator row asks its own inside its class.
+//
+// AFTER THE CLASS, so the refusal names exactly what would admit: the self
+// arm, a lead and the admin path are each one grant short, and a caller the
+// relation refused is short of the admin grant AND this one — a conjunction,
+// as [grantedBoth] names one. A refusal that consulted no grant (nobody
+// named) is no closer for holding it, and an unknown is still unknown.
+func withAlso(p iam.Principal, r rule, d Decision) Decision {
+	if r.also == "" || r.class == ClassOperator || d.Unknown() || p.Can(r.also) {
+		return d
+	}
+	if d.Allowed {
+		return consulting(Decision{Reason: ReasonNoGrant}, r.also)
+	}
+	if len(d.Grants) == 0 {
+		return d
+	}
+	return consulting(d, append(slices.Clone(d.Grants), r.also)...)
 }
 
 // granted is the capability check, with the two reasons it produces.

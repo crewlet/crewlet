@@ -496,9 +496,15 @@ describe("personal access tokens", () => {
     // record, which takes none — rather than reading as one that does nothing.
     // The CONTROL is the same dialog with a grant ticked, which says nothing.
     // Mutation: drop the sentence and the first expectation goes red.
-    expect(within(dialog).getByText(/reaches only what takes none: your own inbox/)).toBeDefined();
+    // And it is what the engine does: KEEPING the record takes no grant and
+    // READING it takes state:read, so it no longer promises the inbox and
+    // queue reads every one of which a token like this was refused.
+    expect(within(dialog).getByText(/only keeps your own record/)).toBeDefined();
+    expect(
+      within(dialog).getByText(/reads nothing, your own inbox and queue included/),
+    ).toBeDefined();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
-    expect(within(dialog).queryByText(/reaches only what takes none/)).toBeNull();
+    expect(within(dialog).queryByText(/only keeps your own record/)).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Mint" }));
     expect(await within(dialog).findByText(/This token acts as you/)).toBeDefined();
     const mint = engineIs.writes().find((w) => w.path === "/iam/credentials")!;

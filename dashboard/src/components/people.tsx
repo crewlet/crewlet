@@ -706,15 +706,18 @@ export function MintTokenDialog({
             }}
           />
           {/* A TOKEN CARRYING NO GRANT IS STILL A CREDENTIAL, and says what it
-              reaches: the verbs about its owner's own record take no grant,
-              so it reads and keeps that record and nothing else. Unsaid, a
-              person holding none was offered "Nothing to offer." beside an
-              enabled Mint, and read the token it minted as one that could do
-              nothing at all. */}
+              reaches: KEEPING its owner's own record takes no grant, and
+              READING anything — that record included — takes state:read
+              (`authz`'s read rows). Unsaid, a person holding none was offered
+              "Nothing to offer." beside an enabled Mint; said as "your own
+              inbox, queue, pins and priorities", it promised a script reads
+              every one of which was refused. */}
           {grants.length === 0 && (
             <Text as="p" variant="caption" tone="secondary">
-              With no grant ticked, the token reaches only what takes none:{" "}
-              {self ? "your" : "the account's"} own inbox, queue, pins and priorities.
+              With no grant ticked, the token only keeps {self ? "your" : "the account's"} own
+              record — marks {self ? "your" : "its"} inbox read, pins views and orders{" "}
+              {self ? "your" : "its"} priorities — and reads nothing, {self ? "your" : "its"} own
+              inbox and queue included: reading takes state:read.
             </Text>
           )}
         </>
