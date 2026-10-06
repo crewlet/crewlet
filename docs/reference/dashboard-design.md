@@ -3050,8 +3050,8 @@ rules fix it, and each one names a specific mechanism:
    document keeps its newlines and gains no margin. That reading is also what keeps the
    output linear: indentation is quadratic in nesting depth, and the depth
    here belongs to whichever MCP server answered, with Go's decoder accepting
-   ten thousand levels. And a LIVE result over four thousand characters is
-   sent with a leading ellipsis, which is not a JSON document — so a long
+   ten thousand levels. And a LIVE result over four thousand bytes is
+   sent as its last four thousand, with a leading ellipsis, which is not a JSON document — so a long
    result renders flat while the phase runs and indented once it completes.
    The text already changes at that moment; the shape changing with it is the
    same fact, not a second one.

@@ -7,7 +7,9 @@
 // appended "…" and two appended "...", so the same cut read differently
 // depending on which subsystem made it. Copies that agree today are copies
 // that can stop agreeing. A fifth, the sandbox runner's private tail cut and
-// the only one that kept the END, became [Tail].
+// the only one that kept the END, became [Tail] — and so did a sixth, the
+// in-flight progress frame's own end-of-round cut in internal/agent/runner,
+// the same rule written out again under the name of the bound it served.
 //
 // The rule they each re-derive is this: a plain s[:n] splits whatever
 // multi-byte character straddles the boundary and yields invalid UTF-8. What
