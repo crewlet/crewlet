@@ -734,7 +734,10 @@ func TestAQuestionIsAskedAsTheLastDecisionResolved(t *testing.T) {
 	s := serve(t, svc, socketCase{principal: ana, opened: sessionOf(ana),
 		decide: decide.answer,
 		query: func(ctx context.Context, _ string, _ map[string]any) (any, error) {
-			p, _ := iam.From(ctx)
+			p, how := iam.From(ctx)
+			if how != iam.Resolved {
+				return nil, errors.New("the question was asked as nobody resolved")
+			}
 			seen <- p.ReauthAt
 			return nil, nil
 		}})
