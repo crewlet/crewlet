@@ -600,6 +600,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// The runtime, and the note box it decides — see [steerBox].
 	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
 	box := steerBox(agentRun)
+	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
+	// the run was post-charged a moment ago, and a window it took past its
+	// ceiling refuses every call this segment would make.
+	budget := e.resumeMeterFor(ctx, company, in.Turn.Handle())
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
 			Task:    resumeTask(in),
@@ -623,7 +627,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// same turn running again, and a note sent while it parked
 			// was answered `closed` — the box that segment had is gone.
 			Steer:  box,
-			Budget: e.meterFor(company, in.Turn.Handle()),
+			Budget: budget,
 			// A resumed Execute loop can exhaust its rounds like any other,
 			// and it is the phase most likely to: it comes back mid-task with
 			// its budget already partly spent.

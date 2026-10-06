@@ -445,6 +445,47 @@ func TestARefusalAnsweredToACallerThatHungUpIsHeld(t *testing.T) {
 	}
 }
 
+// A RESUMED TURN'S METER KNOWS WHAT THE COUNTER ALREADY REFUSES.
+//
+// A coding run's completion resumes its turn straight from the sandbox
+// coordinator, with no budget park asked first, and the coordinator has just
+// post-charged the run — which never refuses, so it can take a window past its
+// ceiling with no refusal answered to anybody. The resumed executor's first
+// round was then sent, billed and refused. Its meter reads the counter once
+// now and holds the full window before any call is made; a counter it cannot
+// read leaves it holding nothing, so the first charge stays the gate.
+func TestAResumedTurnsMeterHoldsWhatTheCounterAlreadyRefuses(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	scope := scopeOf(t, c, lead)
+	// The collected run, post-charged past the seat's day.
+	if _, err := fleet.PostCharge(ctx, scope, 140, coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+
+	got, held := e.resumeMeterFor(ctx, c, lead.Handle()).Refused()
+	if !held || got.Scope != "agent" || got.Period != period.Day || got.Used != 140 || got.Limit != 100 {
+		t.Fatalf("Refused = (%+v, %v), want the seat's day the run took past its ceiling", got, held)
+	}
+	// A fresh turn's meter asks nothing: the park has already asked.
+	if got, held := e.meterFor(c, lead.Handle()).Refused(); held {
+		t.Errorf("a fresh meter holds %+v without a charge or a read", got)
+	}
+
+	unreadable := &meter{
+		budgets: counters{err: errors.New("the counter is unreachable")}, agentScope: scope,
+		basis: basisOf(c, lead), now: time.Now,
+	}
+	unreadable.observe(ctx)
+	if got, held := unreadable.Refused(); held {
+		t.Errorf("an unreadable counter left the meter holding %+v", got)
+	}
+}
+
 // deadContextRefused is the in-memory counter with the one property of the
 // broker's it lacks: a request on a context that is done fails, as every
 // compare-and-swap the KV backend makes does.

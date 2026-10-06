@@ -227,24 +227,59 @@ func (m *meter) keepFull(full toolloop.SpendOutcome) {
 // after it either, and this is the one moment the meter is told so without
 // paying for a call to find out.
 func (m *meter) keepFilled(got coord.Spend) {
-	for _, scope := range []struct {
-		name  string
-		usage coord.Usage
-		caps  coord.Caps
-	}{
-		{"org", got.Org, m.basis.org},
-		{"agent", got.Agent, m.basis.seat},
-	} {
-		for p, ceiling := range scope.caps {
-			slot := scope.usage.In(p)
-			if !windowRefuses(slot, ceiling) {
-				continue
-			}
-			m.keepFull(toolloop.SpendOutcome{
-				Scope: scope.name, Used: slot.Used, Limit: ceiling,
-				Period: p, Window: slot.Window.Label, ResetsAt: slot.Window.End,
-			})
+	m.keepFullIn("org", got.Org, m.basis.org)
+	m.keepFullIn("agent", got.Agent, m.basis.seat)
+}
+
+// keepFullIn records every window of one scope's usage that its caps leave no
+// room in, under the name a refusal by that scope carries ("org", "agent").
+func (m *meter) keepFullIn(name string, usage coord.Usage, caps coord.Caps) {
+	for p, ceiling := range caps {
+		slot := usage.In(p)
+		if !windowRefuses(slot, ceiling) {
+			continue
 		}
+		m.keepFull(toolloop.SpendOutcome{
+			Scope: name, Used: slot.Used, Limit: ceiling,
+			Period: p, Window: slot.Window.Label, ResetsAt: slot.Window.End,
+		})
+	}
+}
+
+// observe reads both scopes' counters once and keeps every capped window
+// already full, so a turn whose meter has charged nothing yet still knows a
+// refusal the counter has made certain.
+//
+// FOR A RESUMED TURN, which is the one segment the budget park does not ask
+// first: a fresh delivery is parked before its turn starts when a window is
+// refusing, but a coding run's completion resumes its turn straight from the
+// sandbox coordinator — and the coordinator has just post-charged the run,
+// which can take a window past its ceiling with no refusal (a post-charge
+// never refuses). The resumed executor's first round was then billed and
+// refused. Read here, it is refused before it is sent.
+//
+// AN UNREADABLE COUNTER KEEPS NOTHING, for the reason the park lets a turn
+// run on one: this is a saving, never the gate, and the next charge fails
+// closed on the same counter.
+func (m *meter) observe(ctx context.Context) {
+	windows := m.windows()
+	for _, scope := range []struct {
+		name, key string
+		caps      coord.Caps
+	}{
+		{"org", coord.OrgScope, m.basis.org},
+		{"agent", m.agentScope, m.basis.seat},
+	} {
+		if len(scope.caps) == 0 {
+			continue
+		}
+		usage, err := m.budgets.Used(ctx, scope.key, windows)
+		if err != nil {
+			log.DebugContext(ctx, "budget_observe_unreadable", "scope", scope.key, "error", err,
+				"detail", "the resumed turn's first charge is the gate")
+			continue
+		}
+		m.keepFullIn(scope.name, usage, scope.caps)
 	}
 }
 
@@ -382,6 +417,17 @@ func (e *Engine) remainingFor(c *Company, handle string) runner.Remaining {
 		return nil
 	}
 	return m
+}
+
+// resumeMeterFor is the meter for a RESUMED segment of a seat's turn:
+// [Engine.meterFor]'s, having read the counters once ([meter.observe]), since
+// a resume is the one segment the budget park does not ask before it runs.
+func (e *Engine) resumeMeterFor(ctx context.Context, c *Company, handle string) toolloop.BudgetMeter {
+	budget := e.meterFor(c, handle)
+	if m, ok := budget.(*meter); ok && m != nil {
+		m.observe(ctx)
+	}
+	return budget
 }
 
 // meterFor builds the meter for one seat's turn, or nil.
