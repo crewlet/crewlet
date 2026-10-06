@@ -391,13 +391,11 @@ func embeddedWindow(stated int, model string) (int, string) {
 	if stated > 0 {
 		return stated, "as -window states"
 	}
-	bound := (&config.EmbeddingProvider{Model: model}).Limits().InputBytes
-	if known, ok := config.EmbeddingModels[model]; ok && bound == 0 && known.InputTokens > 0 {
-		// A MODEL WHOSE REQUEST LIMITS ARE UNDOCUMENTED still documents its
-		// window, and the per-input bound is that window less the wrap
-		// allowance, as config.EmbeddingProvider.Limits takes it.
-		bound = known.InputTokens - known.WrapTokens
-	}
+	// THE BOUND, NOT THE LIMITS: a model whose request limits are
+	// undocumented still documents its window, and InputBound is the
+	// conversion the embedder's own limits take — so this says what the duty
+	// embedded at rather than a second idea of it.
+	bound := (&config.EmbeddingProvider{Model: model}).InputBound()
 	if bound > 0 && bound < search.EmbedInputBytes {
 		return bound, model + "'s own per-input bound"
 	}

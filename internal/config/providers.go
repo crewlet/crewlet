@@ -999,8 +999,8 @@ type EmbeddingProvider struct {
 	// would refuse what this engine then sends.
 	//
 	// Tokens, because that is the unit every vendor documents a limit in;
-	// what the engine counts is bytes, and [EmbeddingProvider.Limits] is the
-	// one conversion.
+	// what the engine counts is bytes, and [EmbeddingProvider.InputBound] is
+	// the one conversion, which [EmbeddingProvider.Limits] carries.
 	//
 	// AN OLDER BUILD REFUSES A REVISION CARRYING THESE. Tier B is decoded
 	// strictly, so a node on a build that predates the fields reports the
@@ -1233,39 +1233,73 @@ func (e *EmbeddingProvider) Width() int {
 	return EmbeddingModels[strings.TrimSpace(e.Model)].Width
 }
 
-// Limits is what the embedder enforces for this provider, and the zero value
-// when any limit is unknown — which validation refuses, so no caller meets it.
+// InputBound is the most PREPARED BYTES one input to this provider may hold,
+// and 0 when the model's window is unknown — which validation refuses, so no
+// caller of [EmbeddingProvider.Limits] meets it.
 //
 // THE ONE CONVERSION from what a vendor documents (tokens) to what the engine
 // counts (bytes), by the argument at [EmbeddingModels]: a prepared text of N
 // bytes is at most N tokens plus the wrap allowance, so an input of
-// InputTokens − wrap bytes is inside the window, and a request whose inputs'
-// bytes plus one allowance each sum to BatchTokens is inside the request's.
+// window − wrap bytes is inside the window. The window is the model's
+// documented one, lowered by a stated `max_input_tokens`, and — because one
+// input must fit one request — lowered again to the request's own token total
+// where that is known and smaller: a gateway whose request is smaller than the
+// model's window bounds the input too.
+//
+// Its own method rather than a field of [EmbeddingProvider.Limits], because
+// the bound is known wherever the window is, and the request limits are not:
+// a model whose vendor documents its window but nothing per request still has
+// a per-input bound a reader of its vectors needs — the window a stored corpus
+// was embedded at — while it has no limits an embedder could be built from.
+// Limits takes this value; nothing re-derives it.
 //
 // A stated limit LOWERS a documented one and never raises it — validation
 // refuses the attempt, and this takes the lower of the two regardless, so a
-// limit the provider would refuse is not enforced even by a caller that skipped
-// validation. And one input must fit one request, so the input bound is cut to
-// the request's where a gateway's request is smaller than the model's window.
-func (e *EmbeddingProvider) Limits() EmbeddingLimits {
-	model, known := EmbeddingModels[strings.TrimSpace(e.Model)]
-	wrap := EmbeddingWrapTokens
-	if known {
-		wrap = model.WrapTokens
+// bound the provider would refuse is not enforced even by a caller that
+// skipped validation.
+func (e *EmbeddingProvider) InputBound() int {
+	model := EmbeddingModels[strings.TrimSpace(e.Model)]
+	window := limitOf(e.MaxInputTokens, model.InputTokens)
+	if tokens := limitOf(e.MaxBatchTokens, model.BatchTokens); tokens > 0 {
+		window = min(window, tokens)
 	}
-	input := limitOf(e.MaxInputTokens, model.InputTokens)
+	if bound := window - e.wrapTokens(); window > 0 && bound >= MinEmbeddingInputBytes {
+		return bound
+	}
+	return 0
+}
+
+// Limits is what the embedder enforces for this provider, and the zero value
+// when any limit is unknown — which validation refuses, so no caller meets it.
+//
+// The per-input bound is [EmbeddingProvider.InputBound], the one conversion;
+// the request half is counted in the same unit — a request whose inputs'
+// bytes plus one wrap allowance each sum to the request's token total is
+// inside that total. A stated limit lowers a documented one and never raises
+// it, as there.
+func (e *EmbeddingProvider) Limits() EmbeddingLimits {
+	model := EmbeddingModels[strings.TrimSpace(e.Model)]
+	bound := e.InputBound()
 	inputs := limitOf(e.MaxBatchInputs, model.BatchInputs)
 	tokens := limitOf(e.MaxBatchTokens, model.BatchTokens)
-	bound := min(input, tokens) - wrap
-	if bound < MinEmbeddingInputBytes || inputs <= 0 {
+	if bound == 0 || inputs <= 0 || tokens <= 0 {
 		return EmbeddingLimits{}
 	}
 	return EmbeddingLimits{
 		InputBytes:    bound,
 		BatchInputs:   inputs,
 		BatchBytes:    tokens,
-		InputOverhead: wrap,
+		InputOverhead: e.wrapTokens(),
 	}
+}
+
+// wrapTokens is the model's wrap allowance: the table's for a model it
+// carries, [EmbeddingWrapTokens] for one it does not.
+func (e *EmbeddingProvider) wrapTokens() int {
+	if model, known := EmbeddingModels[strings.TrimSpace(e.Model)]; known {
+		return model.WrapTokens
+	}
+	return EmbeddingWrapTokens
 }
 
 // limitOf is a limit as stated over the documented one: the stated value where
@@ -1351,10 +1385,7 @@ func (e *EmbeddingProvider) validate(path Path) error {
 func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
 	name := strings.TrimSpace(e.Model)
 	model, known := EmbeddingModels[name]
-	wrap := EmbeddingWrapTokens
-	if known {
-		wrap = model.WrapTokens
-	}
+	wrap := e.wrapTokens()
 	for _, limit := range []struct {
 		field      string
 		stated     int

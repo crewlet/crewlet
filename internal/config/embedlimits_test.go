@@ -195,6 +195,57 @@ func TestTheInputBoundFitsInsideOneRequest(t *testing.T) {
 	}
 }
 
+// THE PER-INPUT BOUND IS RESOLVED ONCE, and the limits carry it.
+//
+// InputBound is the conversion from a window in tokens to a bound in bytes;
+// Limits takes it rather than computing its own, so a reader that needs only
+// the bound — the search eval, which knows the model and not the company's
+// request limits — reports what the embedder enforces. It is known wherever
+// the window is: a model documenting its window and nothing per request still
+// has a bound, though it has no limits to build an embedder from.
+func TestThePerInputBoundIsResolvedOnceAndTheLimitsCarryIt(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		provider config.EmbeddingProvider
+		bound    int
+		complete bool
+	}{
+		"OpenAI's own window": {
+			config.EmbeddingProvider{Model: "text-embedding-3-small"}, 8192, true},
+		"a lowered window": {
+			config.EmbeddingProvider{Model: "text-embedding-3-small", MaxInputTokens: 2000}, 2000, true},
+		"a request total under the window bounds the input too": {
+			config.EmbeddingProvider{Model: "text-embedding-3-small", MaxBatchTokens: 4000}, 4000, true},
+		"a documented window with no request limits": {
+			config.EmbeddingProvider{Model: "gemini-embedding-001"}, 2048 - config.EmbeddingWrapTokens, false},
+		"the same window once the request limits are stated": {
+			config.EmbeddingProvider{Model: "gemini-embedding-001", MaxBatchInputs: 8, MaxBatchTokens: 20_000},
+			2048 - config.EmbeddingWrapTokens, true},
+		"a stated request total under that window": {
+			config.EmbeddingProvider{Model: "gemini-embedding-001", MaxBatchInputs: 8, MaxBatchTokens: 1000},
+			1000 - config.EmbeddingWrapTokens, true},
+		"an unknown model's stated window": {
+			config.EmbeddingProvider{Model: "bge-m3", MaxInputTokens: 512}, 512 - config.EmbeddingWrapTokens, false},
+		"an unknown model stating nothing": {
+			config.EmbeddingProvider{Model: "bge-m3"}, 0, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := tc.provider
+			if got := e.InputBound(); got != tc.bound {
+				t.Errorf("InputBound() = %d, want %d", got, tc.bound)
+			}
+			limits := e.Limits()
+			if tc.complete != (limits != config.EmbeddingLimits{}) {
+				t.Fatalf("Limits() = %+v; complete should be %v", limits, tc.complete)
+			}
+			if tc.complete && limits.InputBytes != e.InputBound() {
+				t.Errorf("Limits().InputBytes = %d but InputBound() = %d — two "+
+					"conversions where there is one", limits.InputBytes, e.InputBound())
+			}
+		})
+	}
+}
+
 // ZERO IS "THE MODEL'S OWN", so a negative number is not a setting, and a
 // window too small to hold a character past the wrap allowance is refused at
 // the field rather than built into an embedder that refuses all text.

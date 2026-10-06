@@ -155,8 +155,9 @@ type BatchEmbedder interface {
 // Limits is what one model accepts, in the unit this package counts without a
 // tokenizer: BYTES of [Prepare]d text.
 //
-// A vendor documents its limits in tokens; config.EmbeddingProvider.Limits is
-// the one conversion, and its argument is that every tokenizer these models use
+// A vendor documents its limits in tokens; config.EmbeddingProvider.Limits
+// resolves these from them through config.EmbeddingProvider.InputBound, the one
+// conversion, and its argument is that every tokenizer these models use
 // emits at most one token per byte of its input plus the special tokens a
 // server wraps it in — so a text of N bytes is at most N tokens plus
 // [Limits.InputOverhead], with no tokenizer anywhere.
