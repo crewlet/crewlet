@@ -156,6 +156,16 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 		return 0, nil
 	}
 
+	// A CREDENTIAL KEEPS THE INSTANT IT WAS CREATED. Every record about a
+	// person restates all of their credentials, and the document holds no
+	// creation time, so a credential's is its row's: one the set already
+	// held keeps it, and only a new one is stamped with this record's. It
+	// was every row restamped, so each change to a person — a revocation
+	// included — read as having created every credential they held.
+	created, err := credentialsCreated(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
 	result, err := tx.ExecContext(ctx,
 		`DELETE FROM iam_credentials WHERE person_id = ?`, id)
 	if err != nil {
@@ -170,6 +180,10 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 			return written, fmt.Errorf("iamdomain: encode a credential for "+
 				"%s: %w", id, err)
 		}
+		createdAt, held := created[credential.ID]
+		if !held {
+			createdAt = at.unix()
+		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO iam_credentials
 				(id, person_id, method, verifier,
@@ -178,7 +192,7 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 			credential.ID, id, string(credential.Method),
 			[]byte(credential.Verifier),
 			millis(credential.ExpiresAt), millis(credential.RevokedAt),
-			at.bucket(), at.unix(), at.packed, document)
+			at.bucket(), createdAt, at.packed, document)
 		if err != nil {
 			return written, fmt.Errorf("iamdomain: write a credential for "+
 				"%s: %w", id, err)
@@ -186,6 +200,32 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 		written++
 	}
 	return written, nil
+}
+
+// credentialsCreated is when each credential a person's rows hold was
+// created, by id.
+func credentialsCreated(ctx context.Context, tx *sql.Tx, id string) (
+	map[string]int64, error) {
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, created_at FROM iam_credentials WHERE person_id = ?`, id)
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: read person %s's credentials: %w", id, err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var (
+			credential string
+			at         int64
+		)
+		if err := rows.Scan(&credential, &at); err != nil {
+			return nil, fmt.Errorf("iamdomain: scan person %s's credential: %w",
+				id, err)
+		}
+		out[credential] = at
+	}
+	return out, rows.Err()
 }
 
 // writeStage moves a person between enrolment stages.
