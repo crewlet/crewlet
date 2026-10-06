@@ -75,9 +75,11 @@ longer one is **refused, never cut** — a query is a question, and a search on
 its first part answers another one; past four hundred bytes it is a pasted
 thread, which no ranker turns into a better search. This is the opposite of
 what the corpus does with a long page, and deliberately: a source is embedded
-as its opening because one vector stands for one source, while a query never
-goes through that cut, and need not: every model this build knows takes at
-least 2 032 bytes an input.
+as its opening because one vector stands for one source, while a query's
+vector is always computed from the **whole** query. Every model this build
+knows takes at least 2 032 bytes an input; on a model stated with a narrower
+window (`max_input_tokens`), a query longer than one input is embedded in
+pieces at the model's bound, in one request, and the pieces' vectors pooled.
 
 **A mode asked for is not always a mode served, and every answer says which.**
 It carries `served_mode` (the ranking the hits actually came from), `modes`

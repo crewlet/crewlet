@@ -301,6 +301,53 @@ func TestAQueryPastTheBoundIsRefusedBeforeAnythingRuns(t *testing.T) {
 	}
 }
 
+// A QUERY PAST A NARROW MODEL'S OWN BOUND IS EMBEDDED WHOLE, never by its
+// opening and never refused for its length.
+//
+// Every documented model takes five times [knowledge.MaxQueryBytes] in one
+// input, but a local model stated with a 256-token window does not, and a
+// query past it used to be refused by the provider's own bound — read as the
+// provider failing, so every longer query on that company quietly ranked by
+// its words alone. Represented by its opening it would rank the answers to the
+// first half of the question instead.
+func TestAQueryPastANarrowModelsBoundIsEmbeddedWhole(t *testing.T) {
+	t.Parallel()
+	p := newProvider()
+	p.embed.SetLimits(embeddings.Limits{InputBytes: 64, BatchInputs: 16, BatchBytes: 4096})
+	local := &recordingScan{slice: bothHalves("n1", search.Everything())}
+	fan := &search.FanOut{Self: "n1", Local: local, Vectors: search.NewQueryVectors(p.read)}
+
+	words := make([]string, 0, 40)
+	for i := range cap(words) {
+		words = append(words, fmt.Sprintf("term%02d", i))
+	}
+	query := strings.Join(words, " ")
+	answer, err := fan.Search(t.Context(), search.FanQuery{Text: query, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.Served != knowledge.ModeHybrid || answer.Degraded != knowledge.NotDegraded {
+		t.Fatalf("a %d-byte query on a 64-byte model served %q degraded %q, want hybrid",
+			len(query), answer.Served, answer.Degraded)
+	}
+	requests := p.embed.Requests()
+	if len(requests) != 1 || len(requests[0]) < 2 {
+		t.Fatalf("the query went out as %d requests, want ONE carrying every piece: %q",
+			len(requests), requests)
+	}
+	if sent := strings.Join(requests[0], " "); sent != query {
+		t.Fatalf("the pieces sent are not the whole query:\n got %q\nwant %q", sent, query)
+	}
+	asked := local.queries()
+	want, err := embeddings.EmbedWhole(t.Context(), p.embed.Fake, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || len(asked[0].Vector) == 0 || !slices.Equal(asked[0].Vector, pack(want)) {
+		t.Fatal("the scan was not handed the pooled vector of the whole query")
+	}
+}
+
 // A FAILED QUERY EMBEDDING IS A DEGRADATION, and a different one from having
 // no provider: nothing is misconfigured, and the next search asks again —
 // which is why a failure is never cached.

@@ -29,9 +29,9 @@ import (
 // source and an opening already says what a source is about; a query is a
 // question, and a search on its first part is a different search whose answer
 // the asker would read as the answer to theirs. So a query never goes through
-// the corpus's cut. It does not need to: every model this build knows takes at
-// least 2 032 bytes an input, so a query inside this bound is never refused by
-// a provider for its length either.
+// the corpus's cut: its vector is the whole query's, in one input on every
+// model this build knows (each takes at least 2 032 bytes) and in pieces
+// pooled on a model stated narrower (internal/search's queryEmbedding).
 const MaxQueryBytes = 400
 
 // ErrQueryTooLong is a search whose text is past [MaxQueryBytes].
