@@ -291,14 +291,20 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	written, _ := result.RowsAffected()
 	if written > 0 {
-		// A STAGE THAT IS NOT `active` ends every credential acting for
+		// A STAGE THAT IS NOT `active` refuses every credential acting for
 		// them, and one that is admits them again.
 		a.moved.Seats = true
 		if err := a.movedPerson(ctx, tx, id); err != nil {
 			return int(written), err
 		}
 	}
-	return int(written), nil
+	if change.Epoch == 0 {
+		return int(written), nil
+	}
+	// AND ENDS THEM, whether or not the stage was this record's to write:
+	// an epoch only ever moves forward, so a bump is never stale.
+	bumped, err := a.bumpEpoch(ctx, tx, at, id, change.Epoch)
+	return int(written) + bumped, err
 }
 
 // restage is a stored person document with its stage replaced.

@@ -417,7 +417,7 @@ variable at all.
 | `bind ID SEAT` | Bind a person to a chart seat, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle. A Tier A token acts under the login `token:<id>`, so binding one is `create -kind machine -login token:<id>` and then `bind` on the id it prints. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take the binding back |
 | `grant ID` | Change what somebody carries: `-grants` |
-| `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way |
+| `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session and token they hold, which activating does not bring back |
 | `remove ID` | Tombstone them and erase every sealed value of theirs — name, address, second factor — from every node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows) |
 | `revoke ID` | End every session and token they hold, by bumping their revocation epoch |
 | `sessions ID` | Their sessions, newest first, ended ones included |

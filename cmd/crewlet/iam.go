@@ -64,7 +64,8 @@ Usage:
   crewlet iam bind ID SEAT                             Bind a person to a chart seat
   crewlet iam unbind ID                                Take the binding back
   crewlet iam grant ID -grants G,...                   Change what somebody carries
-  crewlet iam suspend ID                               Stop them acting, keep the row
+  crewlet iam suspend ID                               Stop them acting and end their
+                                                       sessions and tokens; keep the row
   crewlet iam activate ID                              Let them act again
   crewlet iam remove ID                                Tombstone them and erase what is theirs
   crewlet iam revoke ID                                End every session and token they hold

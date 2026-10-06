@@ -578,6 +578,15 @@ type StatusChange struct {
 
 	Stage iam.Stage `json:"stage"`
 
+	// Epoch is the revocation epoch a stage that may not act moves the
+	// person to, STATED for [Revocation]'s reason, and zero for one that
+	// may: a suspension ENDS every session and machine token they hold.
+	// Refused only while the stage stood, they came back with a
+	// reactivation — and the browser that had been told so had already
+	// dropped its cookie, so the one copy a reactivation revived was a copy
+	// somebody else kept.
+	Epoch uint64 `json:"epoch,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 

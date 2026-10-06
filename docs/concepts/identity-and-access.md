@@ -344,7 +344,7 @@ from that node's own rows:
 | What | When | How |
 |---|---|---|
 | Signing in | refused from the apply on | the stage is read from the row, and only `active` may act |
-| Every session they hold | refused at the next request, `401 session_revoked` | the same stage check, on every request |
+| Every session and machine token they hold | ended, and refused at the next request, `401 session_revoked` | the record moves their revocation epoch as a `crewlet iam revoke` does, so reactivating them revives none: they sign in again and mint new tokens. Refused only while the stage stood, a reactivation brought back every session — whose browser had been told `401` and dropped its cookie, so the one copy revived was a copy somebody else kept |
 | An open dashboard tab | closed `4401` as the record applies — or `1013` on a node that cannot read the record yet, whose reconnect answers that person `503` until it can | each node's identity applier says whose credentials a committed batch moved — the person, the login they hold, the session it ended — and the node decides again exactly the sockets opened with one; a move that can name nobody (the company's session generation, a record the node retains instead of applying, its identity log passing the stall grace) closes every open tab `1013` without reading anything, and each reconnect's handshake decides |
 | Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply, with a 30-second re-read behind it | the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory |
 | What agents are shown of them — a lead's roster, `lookup_colleague` | their accounts left out from the next turn | every turn pins the registry's reading beside its org, so the prompt and the tools leave out the same people |
@@ -353,7 +353,8 @@ from that node's own rows:
 So a message the person sends from Slack stops being attributed to their
 seat — a suspended lead's DM to an agent no longer arrives as "your lead
 says" — and nothing about the seat has to be edited to make that true.
-Reinstating them (`crewlet iam activate`) restores all of it on the same terms. See
+Reinstating them (`crewlet iam activate`) restores all of it on the same terms
+— all but their sessions and tokens, which the suspension ended. See
 [Humans in the Org Chart: A suspended holder is
 withdrawn](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change)
 for the routing rule for every stage, removal included.
@@ -1436,7 +1437,7 @@ read-only. What each gesture ends is the route's:
 | **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address |
 | **New service account** · **Mint token** | A machine with a coloned login and grants, then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants — never `secrets:read` or `people:manage` — shown once |
 | **Edit login, seat and grants** | One edit carrying only what changed. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
-| **Suspend** · **Reactivate** | A suspended person may not act and their seat is withheld; reactivating restores what they held |
+| **Suspend** · **Reactivate** | A suspended person may not act, every session and token they hold ends, and a seat they hold is withheld; reactivating restores the seat and lets them sign in again |
 | **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold |
 | **Reset second factor** | Clears their authenticator and recovery codes and ends every session and token they hold; they enrol again at their next sign-in |
 | **End all sessions** | Moves their revocation epoch: every session — and every personal token — they hold ends |

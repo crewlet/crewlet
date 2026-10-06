@@ -894,16 +894,27 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 			"stage this build cannot name would suspend somebody by accident",
 			ErrInvalid, stage)
 	}
-	mutation, err := EncodeStatus(StatusChange{V: DocumentVersion, Stage: stage})
-	if err != nil {
-		return statelog.Result{}, err
-	}
 	rec, err := w.record(PersonSubject(personID), OpStatus, personID,
-		PeopleScope(personID), mutation, reason)
+		PeopleScope(personID), nil, reason)
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	result, err := w.publish(ctx, w.request(ctx, &rec, opID, statelog.PatternArbitrated, nil))
+	decide := func(tx *sql.Tx) (err error) {
+		change := StatusChange{V: DocumentVersion, Stage: stage}
+		if !stage.MayAct() {
+			// A STAGE THAT MAY NOT ACT ENDS WHAT THEY HOLD, at the next
+			// epoch — see [StatusChange.Epoch].
+			current, err := epochOf(ctx, tx, personID)
+			if err != nil {
+				return err
+			}
+			change.Epoch = current + 1
+		}
+		rec.Mutation, err = EncodeStatus(change)
+		return err
+	}
+	result, err := w.publish(ctx,
+		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
 	return result, err
 }
 
