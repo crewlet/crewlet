@@ -12,7 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The USAGE RECORD: one node's day for one seat or one schedule, whole.
+// The USAGE RECORD: one node's day for one seat, one schedule or one person,
+// whole.
 //
 // # A record is the object's current value, never a delta
 //
@@ -25,11 +26,35 @@ import (
 // It is also what makes a lost or repeated publish harmless: the next flush
 // carries the whole day again.
 
-// RecordVersion is the record shape this build reads.
+// RecordVersion is the record shape this build reads: the highest
+// [versionedFields] names, which the conformance suite holds it to.
 //
 // A record above it is RETAINED at its position rather than skipped, so a
-// newer peer's shape survives a rolling upgrade in both directions.
-const RecordVersion = 1
+// newer peer's shape survives a rolling upgrade in both directions. Version 2
+// is the PERSON kind. A record is stamped with the LOWEST version that reads
+// it ([statelog.RecordFields.Minimum]), so a seat's or a schedule's record is
+// version 1 still and every older peer applies it as before.
+const RecordVersion = 2
+
+// versionedFields is every field the record gained since the base format.
+//
+// A NEW KIND IS A VALUE of a field every record has carried, so its row names
+// the key and the value: a person's record is `subject.kind` equal to
+// "person". A build reading 1 has no applier for it — and, before
+// [Subject.validateFor], no envelope either — which is why [Publisher] holds a
+// person's record back until every node applying the log reads version 2
+// (PublisherDeps.Readers).
+var versionedFields = statelog.RecordFields{
+	{Name: "Subject.Kind=person", Since: 2,
+		Path: []string{"subject", "kind"}, Equals: string(KindPerson)},
+}
+
+// VersionedFields is the table, for the conformance suite.
+func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
+
+// PersonVersion is the record version that introduced [KindPerson]: what every
+// node applying the log must read before a person's record is published.
+const PersonVersion = 2
 
 // Kind is what a usage record is about.
 //
@@ -47,10 +72,18 @@ const (
 
 	// KindSchedule is one schedule's fires.
 	KindSchedule Kind = "schedule"
+
+	// KindPerson is one PERSON's auxiliary spend: what the seats' cheap
+	// model spent for a human seat — a question answered on the operator
+	// surface, a background pass on a unit a person leads. A person is no
+	// seat: no agent id to key a seat's record on, no turns and no reads,
+	// so its spend was in no seat's day and therefore in no named spend
+	// window. Introduced at [PersonVersion].
+	KindPerson Kind = "person"
 )
 
 // Kinds is every kind this build writes.
-var Kinds = []Kind{KindSeat, KindSchedule}
+var Kinds = []Kind{KindSeat, KindSchedule, KindPerson}
 
 // Valid reports whether a kind off the wire is one this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
@@ -76,6 +109,12 @@ type Subject struct {
 	// Seat is the seat's agent id, on a seat record.
 	Seat string `json:"seat,omitempty"`
 
+	// Person is the person's seat HANDLE, on a person record — the name
+	// the person's credential is bound to. A handle rather than an id,
+	// because a human seat has none: identity is derived for agent seats
+	// alone.
+	Person string `json:"person,omitempty"`
+
 	// ScopeType, ScopeID and Schedule name a schedule, on a schedule
 	// record — the three halves of a schedule's identity the dispatch
 	// ledger keys on.
@@ -97,8 +136,15 @@ func (s Subject) Validate() error {
 		if strings.TrimSpace(s.Seat) == "" {
 			return fmt.Errorf("usage: a seat record names no seat")
 		}
-		if s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" {
-			return fmt.Errorf("usage: a seat record names a schedule")
+		if s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" || s.Person != "" {
+			return fmt.Errorf("usage: a seat record names a schedule or a person")
+		}
+	case KindPerson:
+		if strings.TrimSpace(s.Person) == "" {
+			return fmt.Errorf("usage: a person record names no person")
+		}
+		if s.Seat != "" || s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" {
+			return fmt.Errorf("usage: a person record names a seat or a schedule")
 		}
 	case KindSchedule:
 		if strings.TrimSpace(s.ScopeType) == "" || strings.TrimSpace(s.ScopeID) == "" ||
@@ -107,8 +153,8 @@ func (s Subject) Validate() error {
 				"scope id and schedule, and names %q/%q/%q",
 				s.ScopeType, s.ScopeID, s.Schedule)
 		}
-		if s.Seat != "" {
-			return fmt.Errorf("usage: a schedule record names a seat")
+		if s.Seat != "" || s.Person != "" {
+			return fmt.Errorf("usage: a schedule record names a seat or a person")
 		}
 	}
 	return nil
@@ -154,8 +200,11 @@ func (s Subject) validateFor(v int) error {
 // segments is the object's identity below its kind, in the order the subject
 // is built: node, day, then the object.
 func (s Subject) segments() []string {
-	if s.Kind == KindSchedule {
+	switch s.Kind {
+	case KindSchedule:
 		return []string{s.Node, s.Day, s.ScopeType, s.ScopeID, s.Schedule}
+	case KindPerson:
+		return []string{s.Node, s.Day, s.Person}
 	}
 	return []string{s.Node, s.Day, s.Seat}
 }
@@ -227,12 +276,13 @@ type Record struct {
 
 	// Handle and Role name a seat as its day knew it. A seat's id is
 	// derived and outlives both, so a reader that has only the id — a seat
-	// removed since — still has a name to show.
+	// removed since — still has a name to show. On a person's record Role
+	// is the person's seat's role, and the handle is the subject's own.
 	Handle string `json:"handle,omitempty"`
 	Role   string `json:"role,omitempty"`
 
-	// Tokens are a seat's spend, one entry per (phase, worker, model,
-	// provider key).
+	// Tokens are a seat's or a person's spend, one entry per (phase,
+	// worker, model, provider key).
 	Tokens []Tokens `json:"tokens,omitempty"`
 
 	// Turns are a seat's turn statistics. Present on every seat record,
@@ -407,14 +457,43 @@ func (r Record) validateBody() error {
 			return fmt.Errorf("usage: the schedule record on %s carries a seat's "+
 				"spend, turns or reads", r.Subject)
 		}
+	case KindPerson:
+		if r.Turns != nil || len(r.Reads) > 0 || r.ReadsElided != 0 || len(r.Fires) > 0 ||
+			r.Handle != "" {
+			return fmt.Errorf("usage: the person record on %s carries a seat's turns, "+
+				"reads or handle, or a schedule's fires — a person's day is its spend "+
+				"alone, named by its subject", r.Subject)
+		}
 	}
 	return nil
 }
 
-// Encode writes a record.
+// minimumVersion is the lowest version r may be stamped at under
+// [versionedFields]: one where it carries nothing the base format lacked.
+func (r Record) minimumVersion() (int, error) {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return 0, err
+	}
+	return versionedFields.Minimum("", body)
+}
+
+// Encode writes a record, stamped with the lowest version that reads it.
+//
+// A RECORD STAMPED BELOW ITS FIELDS IS REFUSED: a person's record at version
+// 1 is one a version-1 peer would read as a writer fault on every redelivery
+// rather than defer, which is the opposite of what a rolling upgrade promises.
 func (r Record) Encode() ([]byte, error) {
+	want, stampErr := r.minimumVersion()
+	if stampErr != nil {
+		return nil, fmt.Errorf("usage: stamp the record on %s: %w", r.Subject, stampErr)
+	}
 	if r.V == 0 {
-		r.V = RecordVersion
+		r.V = want
+	}
+	if r.V < want {
+		return nil, fmt.Errorf("usage: the %s record on %s is version %d, and that "+
+			"kind was introduced at version %d", r.Subject.Kind, r.Subject, r.V, want)
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err

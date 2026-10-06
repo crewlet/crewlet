@@ -4733,6 +4733,17 @@ Notes:
   [`GET /turns?sort=-tokens`](#queries).
 - A seat is one row per derived agent id, named by the newest day's record: a
   role renamed mid-window is one row under its current name.
+- A **person** is a row of their own with `person: true`, on both windows:
+  what the auxiliary model spent for a human seat — a question answered with
+  `answer_knowledge`, a background pass on a unit a person leads — named by
+  that seat's `handle` and `role`, with no `agent_id` and, on a named window,
+  no `turns` or `failed`, since a person takes no turns. `seat=<handle>`
+  narrows a window to one person as it does to one seat. A person's spend
+  reaches the named windows as its own usage record (version 2), which a node
+  publishes only once every node applying the usage log reads that version —
+  so during a rolling upgrade from a build without it, a person's spend is on
+  the live window and the company's counter and joins the named windows when
+  the last node is upgraded.
 - All lists are sorted by `total_tokens` descending, ties on the name.
 - Every bucket also carries `cache_read_tokens` and `cache_write_tokens`:
   the share of `input_tokens` the providers' prompt caches served and

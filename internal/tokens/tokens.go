@@ -70,6 +70,14 @@ type Record struct {
 	AgentID   string `json:"agent_id"`
 	AgentRole string `json:"agent_role"`
 
+	// Person is the PERSON an auxiliary record was spent for — the handle
+	// of the human seat a person's question was asked from, or of the one
+	// leading a unit whose pass ran on its chain — and empty on every other
+	// record. A person is no agent seat: no agent id, no seat budget and no
+	// turns, so the per-seat rollup files the spend under the person
+	// rather than under an empty id every person would share.
+	Person string `json:"person,omitempty"`
+
 	// Phase is the phase that ran, and [PhaseAuxiliary] on an auxiliary
 	// record — the `auxiliary_spend` event, which carries no phase of its
 	// own because it is none.
@@ -310,6 +318,11 @@ type AgentRow struct {
 	Role    string `json:"role"`
 	Handle  string `json:"handle"`
 	AgentID string `json:"agent_id"`
+	// Person marks a PERSON's row rather than a seat's: what the auxiliary
+	// model spent for the human seat named by Handle ([Record.Person]). It
+	// has no agent id, and on a named window no turns, since a person takes
+	// none.
+	Person bool `json:"person,omitempty"`
 	Bucket
 	ByPhase map[string]*Bucket `json:"by_phase"`
 
@@ -481,8 +494,12 @@ func Aggregate(records []Record, opts Options) Rollup {
 		bucketFor(byModel, model).add(r)
 		// The seat a provider row names is its HANDLE where the org has
 		// one, which is what every other surface links by, and the role
-		// otherwise — a name, never a blank entry in "used by".
+		// otherwise — a name, never a blank entry in "used by". A person
+		// is named by their own handle.
 		seat := opts.Handles[role]
+		if r.Person != "" {
+			seat = r.Person
+		}
 		if seat == "" {
 			seat = role
 		}
@@ -494,10 +511,19 @@ func Aggregate(records []Record, opts Options) Rollup {
 			bucketFor(byWorker, r.Worker).add(r)
 		}
 
-		agent := byAgent[role]
+		// A PERSON IS KEYED APART from every seat, by their own handle: a
+		// person's record names no agent role of its own, only the role of
+		// their seat, and a seat's row keyed on that role would take a
+		// person's spend as the seat's.
+		key, handle := role, opts.Handles[role]
+		if r.Person != "" {
+			key, handle = personKey(r.Person), r.Person
+		}
+		agent := byAgent[key]
 		if agent == nil {
-			agent = &AgentRow{Role: role, Handle: opts.Handles[role], ByPhase: map[string]*Bucket{}}
-			byAgent[role] = agent
+			agent = &AgentRow{Role: role, Handle: handle, Person: r.Person != "",
+				ByPhase: map[string]*Bucket{}}
+			byAgent[key] = agent
 		}
 		// The LATEST id seen wins: a seat's runtime id changes across
 		// sessions, and the current one is what a cross-link must use.
@@ -650,6 +676,10 @@ func ranked(m map[string]int) []string {
 	})
 	return keys
 }
+
+// personKey is a person's key in a per-seat fold: apart from every seat's,
+// whose keys are roles and agent ids, neither of which contains a NUL.
+func personKey(handle string) string { return "person\x00" + handle }
 
 // PhaseAuxiliary is the phase an auxiliary record is filed under, and the one
 // whose records carry a worker. Named here rather than imported from the event

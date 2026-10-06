@@ -2,6 +2,7 @@ package usage_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,9 +27,14 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			// already has them — a schema created from test code would
 			// be one the suite proved and the migration did not.
 			Encode: encodeSuiteRecord,
-			Kinds:  []string{string(usage.KindSeat), string(usage.KindSchedule)},
-			Rows:   usage.NewRows,
-			Write:  suiteWrite,
+			// THE PERSON KIND, at version 2: the one field the domain
+			// gained, carried by a person's record.
+			Fields:   usage.VersionedFields(),
+			Carrying: carryingSuiteField,
+			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
+				string(usage.KindPerson)},
+			Rows:  usage.NewRows,
+			Write: suiteWrite,
 		}
 	})
 }
@@ -87,7 +93,21 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		subject.ScopeType, subject.ScopeID, subject.Schedule = "role", "Dev", id
 		rec.Fires = []usage.Fire{{At: time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC),
 			Target: "dev", Outcome: "fired"}}
+	case usage.KindPerson:
+		subject.Person = id
+		rec.Role = "Founder"
+		rec.Tokens = []usage.Tokens{{Phase: "auxiliary", Worker: "answer_knowledge",
+			Model: "m", Input: 40, Output: 2, Total: 42, Calls: 1}}
 	}
 	rec.Subject = subject
 	return rec.Encode()
+}
+
+// carryingSuiteField is a record carrying one versioned field: the person
+// kind, through a person's day.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	if field.Name == "Subject.Kind=person" {
+		return encodeSuiteRecord(string(usage.KindPerson), "maya", "", 0)
+	}
+	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it", field.Name)
 }

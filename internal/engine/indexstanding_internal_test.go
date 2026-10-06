@@ -31,9 +31,10 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 	s.publishPositions(t.Context())
 
 	vectors := s.Domain(search.Domain{}.Name())
-	duty := &embedDuty{engine: e, log: vectors, register: e.backends.Fleet.Positions,
+	duty := &embedDuty{engine: e, log: vectors, counted: countedReaders{
+		register: e.backends.Fleet.Positions,
 		holders:  presenceHolders{leases: e.backends.Coord},
-		identity: s.identityDomains(), db: e.backends.Store}
+		identity: s.identityDomains(), db: e.backends.Store}}
 	standing, err := duty.standing(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +77,7 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 	for _, running := range s.identityDomains() {
 		waitApplied(t, running)
 	}
-	tombs, err := duty.evicted(t.Context())
+	tombs, err := duty.counted.evicted(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,15 +87,15 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 	// AN EVICTION STILL GOING ROUND THE LOGS is not yet the fleet's word: one
 	// identity log that has not applied it keeps the node counted. And a log
 	// whose evictions cannot be read is an error, never "evicted nowhere".
-	lagging := &embedDuty{engine: e, db: e.backends.Store, identity: append(
-		slices.Clone(duty.identity),
+	lagging := countedReaders{db: e.backends.Store, identity: append(
+		slices.Clone(duty.counted.identity),
 		&runningLog{domain: noEvictions{s.identityDomains()[0].domain}})}
 	if partial, err := lagging.evicted(t.Context()); err != nil || len(partial) != 0 {
 		t.Fatalf("an eviction one identity log has not applied read as %+v (%v), "+
 			"want none yet", partial, err)
 	}
-	unreadable := &embedDuty{engine: e, db: e.backends.Store, identity: append(
-		slices.Clone(duty.identity), &runningLog{domain: search.Domain{}})}
+	unreadable := countedReaders{db: e.backends.Store, identity: append(
+		slices.Clone(duty.counted.identity), &runningLog{domain: search.Domain{}})}
 	if _, err := unreadable.evicted(t.Context()); err == nil {
 		t.Fatal("a log that lists no evictions read as one that holds none")
 	}

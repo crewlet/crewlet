@@ -93,3 +93,59 @@ func TestAnAuxiliaryRecordIsPartOfItsSeatsDay(t *testing.T) {
 			"on haiku via cheap", c)
 	}
 }
+
+// A PERSON'S SPEND IS THEIR OWN DAY, NEVER A SEAT'S. A question answered on
+// the operator surface is spent for the person whose credential asked it: the
+// record names no agent, so it is no seat's cell, and it names the person as
+// its envelope's actor. Folded with the seats it would vanish (no agent id to
+// file it under) — which is how a person's questions were missing from every
+// named spend window — so the day carries it as the person's.
+func TestAPersonsAuxiliarySpendIsTheirDayNotASeats(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	log := db.Events()
+	day := time.Now().UTC().Truncate(24 * time.Hour)
+	w := store.UsageWindow{Start: day, End: day.Add(24 * time.Hour)}
+	for i, rec := range []types.AuxiliarySpend{
+		{ActorSeat: "maya", ActorRole: "Founder", Stage: types.AuxStageOperator,
+			Purpose: types.AuxAnswerKnowledge, Model: "haiku", ProviderKey: "cheap",
+			Calls: 1, InputTokens: 400, OutputTokens: 20, TotalTokens: 420},
+		{ActorSeat: "maya", ActorRole: "Founder", Stage: types.AuxStageOperator,
+			Purpose: types.AuxAnswerKnowledge, Model: "haiku", ProviderKey: "cheap",
+			Calls: 2, InputTokens: 100, OutputTokens: 10, TotalTokens: 110},
+		{Agent: "seat-1", RoleName: "Dev", Stage: types.AuxStageTurn,
+			Purpose: types.AuxMemoryFilter, Model: "haiku", ProviderKey: "cheap",
+			Calls: 1, InputTokens: 50, OutputTokens: 5, TotalTokens: 55},
+	} {
+		payload, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: "aux" + string(rune('a'+i)), Type: rec.EventType(), Actor: rec.Actor(),
+			Time: day.Add(time.Duration(i+1) * time.Hour), Category: "system",
+			Tags: store.ExtractTags(payload), Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := db.UsageForDay(t.Context(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Seats) != 1 || got.Seats[0].AgentID != "seat-1" {
+		t.Fatalf("seats = %+v, want the one seat's day alone", got.Seats)
+	}
+	if len(got.People) != 1 {
+		t.Fatalf("people = %+v, want maya's day", got.People)
+	}
+	maya := got.People[0]
+	if maya.Handle != "maya" || maya.Role != "Founder" || len(maya.Tokens) != 1 {
+		t.Fatalf("maya = %+v, want her one cell under her seat's role", maya)
+	}
+	cell := maya.Tokens[0]
+	if cell.Phase != "auxiliary" || cell.Worker != string(types.AuxAnswerKnowledge) ||
+		cell.Total != 530 || cell.Calls != 3 || cell.Input != 500 {
+		t.Fatalf("maya's cell = %+v, want both questions' 530 tokens over 3 calls", cell)
+	}
+}

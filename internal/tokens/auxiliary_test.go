@@ -2,6 +2,7 @@ package tokens_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -85,5 +86,59 @@ func TestTheTurnStageIsTheCataloguesOwn(t *testing.T) {
 	if tokens.StageTurn != string(types.AuxStageTurn) {
 		t.Fatalf("tokens.StageTurn = %q, the catalogue publishes %q",
 			tokens.StageTurn, types.AuxStageTurn)
+	}
+}
+
+// A PERSON IS NOBODY'S SEAT. A person's auxiliary spend — a question answered
+// on the operator surface — names no agent and no agent role of its own, only
+// the role of the person's seat; keyed as seats are, every person would share
+// one empty id on a named window, and on the live one a person would be folded
+// into whatever seat carried their role. Each person is their own row, marked
+// as one, named by their handle, and — on a named window — with no turn counts,
+// since a person takes no turns.
+func TestAPersonsSpendIsTheirOwnRowOnBothWindows(t *testing.T) {
+	t.Parallel()
+	person := func(handle string, total int) tokens.Record {
+		r := auxRec("operator", "answer_knowledge", "", "2026-06-14T12:00:09Z", 1, total)
+		r.AgentID, r.AgentRole, r.Person = "", "Founder", handle
+		r.EventID += handle
+		return r
+	}
+	founderSeat := rec("Founder", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30)
+	live := tokens.Aggregate([]tokens.Record{founderSeat, person("maya", 70), person("ana", 20)},
+		tokens.Options{Since: since, Until: until})
+	byName := map[string]tokens.AgentRow{}
+	for _, a := range live.ByAgent {
+		byName[a.Handle+"/"+a.Role] = a
+	}
+	if len(live.ByAgent) != 3 {
+		t.Fatalf("live by_agent = %+v, want the seat and each person apart", live.ByAgent)
+	}
+	if maya := byName["maya/Founder"]; !maya.Person || maya.TotalTokens != 70 {
+		t.Errorf("live maya = %+v, want her own person row of 70", maya)
+	}
+
+	r := days(t, "2026-06-14", "2026-06-14", time.UTC)
+	named := tokens.FoldDaily([]tokens.Cell{
+		cell("2026-06-14", "ceo", "execute", "sonnet", 60),
+		{Day: "2026-06-14", Handle: "maya", Role: "Founder", Person: true,
+			Phase: tokens.PhaseAuxiliary, Worker: "answer_knowledge", Model: "haiku",
+			Bucket: tokens.Bucket{TotalTokens: 70, Calls: 2}},
+		{Day: "2026-06-14", Handle: "ana", Role: "Founder", Person: true,
+			Phase: tokens.PhaseAuxiliary, Worker: "answer_knowledge", Model: "haiku",
+			Bucket: tokens.Bucket{TotalTokens: 20, Calls: 1}},
+	}, nil, tokens.DailyOptions{Range: r})
+	people := 0
+	for _, a := range named.ByAgent {
+		if !a.Person {
+			continue
+		}
+		people++
+		if a.AgentID != "" || a.Turns != nil || a.Failed != nil || a.Role != "Founder" {
+			t.Errorf("named person row %+v, want a person with no id and no turn counts", a)
+		}
+	}
+	if people != 2 || named.Totals.TotalTokens != 150 {
+		t.Fatalf("named by_agent = %+v, want two person rows beside the seat", named.ByAgent)
 	}
 }

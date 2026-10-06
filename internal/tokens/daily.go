@@ -155,12 +155,26 @@ type Cell struct {
 	Handle  string
 	Role    string
 
+	// Person marks a PERSON's cell: the usage domain's `usage_person_tokens`
+	// row, named by the human seat's Handle and its Role, with no AgentID
+	// ([Record.Person]).
+	Person bool
+
 	Phase       string
 	Worker      string
 	Model       string
 	ProviderKey string
 
 	Bucket
+}
+
+// who is the cell's spender as a set of seats counts it: the agent id, or the
+// person's handle apart from every id.
+func (c Cell) who() string {
+	if c.Person {
+		return personKey(c.Handle)
+	}
+	return orUnknown(c.AgentID)
 }
 
 // SeatDay is one seat's ended turns on one company day, on one node: the
@@ -200,7 +214,9 @@ type DailyOptions struct {
 // A seat is keyed on its AGENT ID — the identity every node derives alike from
 // the org name and the handle — and named by the newest row that named it,
 // because the cells arrive in day order and a renamed role's newest name is
-// the one a reader recognises.
+// the one a reader recognises. A PERSON is keyed on their handle, apart from
+// every seat, and carries no turn counts: a person takes no turns, and a zero
+// would read as a seat that ended none.
 func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 	h := opts.Horizon
 	out := Rollup{
@@ -224,12 +240,18 @@ func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 	byAgent := map[string]*AgentRow{}
 	providers := providerFold{}
 
-	agentFor := func(id, handle, role string) *AgentRow {
+	agentFor := func(id, handle, role string, person bool) *AgentRow {
 		key := orUnknown(id)
+		if person {
+			key = personKey(handle)
+		}
 		a := byAgent[key]
 		if a == nil {
-			zero, none := 0, 0
-			a = &AgentRow{AgentID: id, ByPhase: map[string]*Bucket{}, Turns: &zero, Failed: &none}
+			a = &AgentRow{AgentID: id, Person: person, ByPhase: map[string]*Bucket{}}
+			if !person {
+				zero, none := 0, 0
+				a.Turns, a.Failed = &zero, &none
+			}
 			byAgent[key] = a
 		}
 		if handle != "" {
@@ -253,12 +275,12 @@ func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 		}
 		providers.add(c.ProviderKey, model, seatName(c.Handle, c.Role, c.AgentID), c.Bucket)
 
-		a := agentFor(c.AgentID, c.Handle, c.Role)
+		a := agentFor(c.AgentID, c.Handle, c.Role, c.Person)
 		a.merge(c.Bucket)
 		bucketFor(a.ByPhase, phase).merge(c.Bucket)
 	}
 	for _, s := range seats {
-		a := agentFor(s.AgentID, s.Handle, s.Role)
+		a := agentFor(s.AgentID, s.Handle, s.Role, false)
 		*a.Turns += s.Turns
 		*a.Failed += s.Failed
 	}

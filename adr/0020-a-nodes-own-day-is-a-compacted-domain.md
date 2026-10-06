@@ -18,9 +18,10 @@ seat's memory.
 
 **The node is part of the subject**, and that is the whole design. A node can
 only derive what its own event log holds, so each node publishes its own days
-and nothing else: one record per (node, day, seat) and per (node, day,
-schedule), re-derived from that node's records and republished WHOLE every time
-it moves. Every object therefore has exactly one writer, so nothing arbitrates
+and nothing else: one record per (node, day, seat), per (node, day, schedule)
+and per (node, day, person) — a human seat the auxiliary model spent for, which
+has no agent id to be a seat's — re-derived from that node's records and
+republished WHOLE every time it moves. Every object therefore has exactly one writer, so nothing arbitrates
 and nothing merges at write time; the reader sums across nodes. An apply
 REPLACES the object's rows under a monotone position guard. Every node's
 applier writes every node's days into its replicated estate, so any node

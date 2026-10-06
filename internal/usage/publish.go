@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -44,6 +45,17 @@ import (
 // tick that finds the day still unconfirmed.
 //
 // # And at boot
+//
+// # A person's day waits for every reader
+//
+// A [KindPerson] record is version 2, and a node on a build from before the
+// kind does not defer it: its envelope refused a kind it did not know, which
+// is a STOP of its whole usage applier rather than a deferral of one record.
+// So a person's record is HELD — kept in memory, never published — until every
+// node applying the log reads version 2 ([PublisherDeps.Readers], the trim's
+// own counted set), and published by the first tick that finds them all
+// reading it. The seats' and schedules' records of the same day go out as
+// usual: they are version 1, which every build reads.
 //
 // A fresh process has published nothing, so its first tick re-derives and
 // republishes today and yesterday in full. That is what covers a node that was
@@ -87,6 +99,14 @@ type PublisherDeps struct {
 	// Now is the clock. Nil is [time.Now].
 	Now func() time.Time
 
+	// Readers is the record version every node applying the usage log
+	// reads, by node — the trim's counted set ([statelog.Readers]) — which
+	// a person's record waits on: it is published only once every one of
+	// them reads [PersonVersion]. An error is UNKNOWN, and holds the record
+	// for the next tick rather than publishing it to a node that may stop
+	// on it. Nil is a log with no other reader to wait for — a test's.
+	Readers func(ctx context.Context) (map[string]int, error)
+
 	Logger *slog.Logger
 }
 
@@ -105,6 +125,12 @@ type Publisher struct {
 	// published is the op id — the content digest — this process last
 	// published for each object, keyed by the object's subject.
 	published map[string]string
+
+	// held is each person's record this process derived and has not
+	// published, because a node applying the log does not read it yet —
+	// keyed as published is, so a newer derivation of a person's day
+	// replaces the one it held.
+	held map[string]Record
 }
 
 // NewPublisher builds a node's publisher, refusing a dependency set that
@@ -130,7 +156,7 @@ func NewPublisher(d PublisherDeps) (*Publisher, error) {
 		d.Logger = log
 	}
 	return &Publisher{deps: d, marks: map[string]store.UsageMark{},
-		published: map[string]string{}}, nil
+		published: map[string]string{}, held: map[string]Record{}}, nil
 }
 
 // Run flushes at once and then every [FlushInterval] until ctx ends.
@@ -172,19 +198,85 @@ func (p *Publisher) Flush(ctx context.Context) error {
 			delete(p.published, key)
 		}
 	}
+	for key := range p.held {
+		if day, _, _ := strings.Cut(key, "\x00"); !keep[day] {
+			delete(p.held, key)
+		}
+	}
 
+	// THE GATE IS READ ONCE A TICK, and only on a tick that has a person's
+	// record to send — a fleet whose people ask nothing pays nothing for it.
+	gate := &personGate{p: p}
 	var failed error
 	for _, day := range days {
-		if err := p.flushDay(ctx, day); err != nil {
+		if err := p.flushDay(ctx, day, gate); err != nil {
 			failed = err
+		}
+	}
+	if err := p.release(ctx, gate); err != nil {
+		failed = err
+	}
+	return failed
+}
+
+// personGate is one tick's answer to "does every node applying the log read a
+// person's record", asked at most once.
+type personGate struct {
+	p      *Publisher
+	asked  bool
+	open   bool
+	reason string
+}
+
+// readable reports whether a person's record may be published this tick.
+func (g *personGate) readable(ctx context.Context) bool {
+	if g.asked {
+		return g.open
+	}
+	g.asked = true
+	if g.p.deps.Readers == nil {
+		g.open = true
+		return true
+	}
+	readers, err := g.p.deps.Readers(ctx)
+	if err != nil {
+		g.reason = "the nodes applying the log could not be read: " + err.Error()
+		return false
+	}
+	for node, reads := range readers {
+		if reads < PersonVersion {
+			g.reason = fmt.Sprintf("node %s reads record version %d and a person's "+
+				"record is version %d", node, reads, PersonVersion)
+			return false
+		}
+	}
+	g.open = true
+	return true
+}
+
+// release publishes every held person's record once the gate is open.
+func (p *Publisher) release(ctx context.Context, gate *personGate) error {
+	if len(p.held) == 0 || !gate.readable(ctx) {
+		return nil
+	}
+	var failed error
+	for _, key := range slices.Sorted(maps.Keys(p.held)) {
+		rec := p.held[key]
+		day, _, _ := strings.Cut(key, "\x00")
+		sent, err := p.publish(ctx, day, rec)
+		if err != nil {
+			failed = err
+		}
+		if sent {
+			delete(p.held, key)
 		}
 	}
 	return failed
 }
 
 // flushDay re-derives one day if it moved and publishes each object that
-// changed.
-func (p *Publisher) flushDay(ctx context.Context, day period.Window) error {
+// changed — holding a person's record the gate does not let out yet.
+func (p *Publisher) flushDay(ctx context.Context, day period.Window, gate *personGate) error {
 	w := store.UsageWindow{Start: day.Start, End: day.End,
 		Accepted: string(phase.Done), SentBack: string(phase.SelfIterate)}
 	mark, err := p.deps.Store.UsageMark(ctx, w)
@@ -205,6 +297,26 @@ func (p *Publisher) flushDay(ctx context.Context, day period.Window) error {
 	var failed error
 	settled := true
 	for _, rec := range records {
+		if rec.Subject.Kind == KindPerson {
+			key := day.Label + "\x00" + rec.Subject.String()
+			if p.unchanged(key, rec) {
+				continue
+			}
+			if !gate.readable(ctx) {
+				// HELD, AND THE DAY STILL SETTLES: the record waits in
+				// memory for the gate, so an unchanged day is not
+				// re-derived every tick while a node is on an older build.
+				if _, already := p.held[key]; !already {
+					p.deps.Logger.InfoContext(ctx, "usage_person_held",
+						"subject", rec.Subject.String(), "reason", gate.reason,
+						"detail", "published once every node applying the usage log "+
+							"reads it; the company's counter already holds this spend")
+				}
+				p.held[key] = rec
+				continue
+			}
+			delete(p.held, key)
+		}
 		sent, err := p.publish(ctx, day.Label, rec)
 		if err != nil {
 			failed = err
@@ -266,6 +378,25 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 		rec.Reads, rec.ReadsElided = capReads(s.Reads)
 		out = append(out, rec)
 	}
+	for _, person := range d.People {
+		rec := Record{
+			RecordEnvelope: RecordEnvelope{
+				Subject: Subject{Kind: KindPerson, Node: p.deps.NodeID, Day: day,
+					Person: person.Handle},
+				Writer: p.deps.NodeID,
+			},
+			Role: person.Role,
+		}
+		for _, t := range person.Tokens {
+			rec.Tokens = append(rec.Tokens, Tokens{
+				Phase: t.Phase, Worker: t.Worker, Model: t.Model,
+				ProviderKey: t.ProviderKey, Input: t.Input, Output: t.Output,
+				CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, Total: t.Total,
+				Calls: t.Calls,
+			})
+		}
+		out = append(out, rec)
+	}
 	for _, s := range d.Schedules {
 		rec := Record{
 			RecordEnvelope: RecordEnvelope{
@@ -325,21 +456,34 @@ func compareReadKey(a, b Read) int {
 		cmp.Compare(a.Via, b.Via))
 }
 
+// digest is an object's op id: the digest of its content, taken over the record
+// before the id is stamped on it. An unchanged object carries the same id on
+// every derivation, which is what lets the broker collapse a repeat, and a
+// changed one carries a new id, which is what stops the broker collapsing a
+// real update into the one before it.
+func digest(rec Record) (string, error) {
+	body, err := rec.Encode()
+	if err != nil {
+		return "", fmt.Errorf("usage: encode %s: %w", rec.Subject, err)
+	}
+	sum := sha256.Sum256(body)
+	return "usage-" + hex.EncodeToString(sum[:16]), nil
+}
+
+// unchanged reports an object this process already published as it is now.
+func (p *Publisher) unchanged(key string, rec Record) bool {
+	opID, err := digest(rec)
+	return err == nil && p.published[key] == opID
+}
+
 // publish sends one object if its content changed since this process last
 // did, reporting whether the object is settled — published and confirmed, or
 // unchanged — so the day's fingerprint may be kept.
 func (p *Publisher) publish(ctx context.Context, day string, rec Record) (bool, error) {
-	body, err := rec.Encode()
+	opID, err := digest(rec)
 	if err != nil {
-		return false, fmt.Errorf("usage: encode %s: %w", rec.Subject, err)
+		return false, err
 	}
-	// THE OP ID IS THE CONTENT'S DIGEST, taken over the record before the
-	// id is stamped on it: an unchanged object carries the same id on
-	// every derivation, which is what lets the broker collapse a repeat,
-	// and a changed one carries a new id, which is what stops the broker
-	// collapsing a real update into the one before it.
-	sum := sha256.Sum256(body)
-	opID := "usage-" + hex.EncodeToString(sum[:16])
 	key := day + "\x00" + rec.Subject.String()
 	if p.published[key] == opID {
 		return true, nil
@@ -349,7 +493,8 @@ func (p *Publisher) publish(ctx context.Context, day string, rec Record) (bool, 
 	// here before the stamp exists, so the subject, the scope and the op id
 	// are the record's rather than a second spelling of them. The stamp
 	// moves none of the three.
-	if body, err = rec.Encode(); err != nil {
+	body, err := rec.Encode()
+	if err != nil {
 		return false, fmt.Errorf("usage: encode %s: %w", rec.Subject, err)
 	}
 	env, err := Domain{}.Envelope(body)

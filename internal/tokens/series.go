@@ -410,7 +410,7 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 			if seats[key] == nil {
 				seats[key] = map[string]bool{}
 			}
-			seats[key][orUnknown(c.AgentID)] = true
+			seats[key][c.who()] = true
 		}
 	}
 

@@ -1272,15 +1272,16 @@ const (
 // rows, and json_extract runs only on the ones they keep.
 //
 // BOTH SPEND TYPES — a phase's record and an auxiliary record — and one more
-// payload read on the second alone: a PERSON's auxiliary spend (the operator
-// stage) names no agent role, since a person is not an agent seat, and carries
-// the role of the person's seat as `actor_role`, which the per-seat breakdown
-// names it by.
+// payload read on the second alone: a PERSON's auxiliary spend names no agent
+// and no agent role, since a person is not an agent seat, and carries the role
+// of the person's seat as `actor_role`, which the per-seat breakdown names it
+// by. The person themselves is the envelope's ACTOR, a column already.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id,
        CASE WHEN agent_role = '' AND event_type = 'auxiliary_spend'
             THEN COALESCE(json_extract(payload, '$.actor_role'), '')
             ELSE agent_role END,
+       CASE WHEN agent_id = '' AND event_type = 'auxiliary_spend' THEN actor ELSE '' END,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
        cache_read_tokens, cache_write_tokens, provider_key,
@@ -1525,7 +1526,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			at  int64
 			rec tokens.Record
 		)
-		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
+		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole, &rec.Person,
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,

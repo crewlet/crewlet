@@ -61,7 +61,10 @@ func TestTheLiveAndStoredProducersAgreeOnAnAuxiliaryRecord(t *testing.T) {
 			log := open(t).Events()
 			if err := log.Append(t.Context(), store.EventRecord{
 				ID: "x1", Type: rec.EventType(), Source: "engine", Category: "system",
-				Time: at, Tags: store.ExtractTags(payload),
+				// THE ENVELOPE'S ACTOR, as the publish listener writes it:
+				// the person a person's record was spent for.
+				Actor: rec.Actor(),
+				Time:  at, Tags: store.ExtractTags(payload),
 				Spend: store.SpendFor(rec.EventType(), payload), Payload: payload,
 			}); err != nil {
 				t.Fatal(err)
@@ -85,6 +88,9 @@ func TestTheLiveAndStoredProducersAgreeOnAnAuxiliaryRecord(t *testing.T) {
 			if stored[0].Calls != rec.Calls || stored[0].Phase != "auxiliary" {
 				t.Errorf("the record is %+v, want the auxiliary phase with its %d calls",
 					stored[0], rec.Calls)
+			}
+			if stored[0].Person != rec.ActorSeat {
+				t.Errorf("the record names person %q, want %q", stored[0].Person, rec.ActorSeat)
 			}
 		})
 	}

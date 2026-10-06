@@ -73,12 +73,15 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	if env.Type == auxiliarySpendType {
 		// THE AUXILIARY MODEL'S SPEND, filed as the store's writer files
 		// it: the auxiliary phase, its purpose as the worker, its stage,
-		// the calls it coalesced — and a PERSON's under their seat's
-		// role, since a person is no agent role.
+		// the calls it coalesced — and a PERSON's as the person, under
+		// their seat's role, since a person is no agent role.
 		rec.Phase, rec.HostPhase, rec.Iteration = tokens.PhaseAuxiliary, "", 0
 		rec.Worker = str(payload, "purpose")
 		rec.Stage = str(payload, "stage")
 		rec.Calls = max(num(payload, "calls"), 1)
+		if rec.AgentID == "" {
+			rec.Person = str(payload, "actor_seat")
+		}
 		if rec.AgentRole == "" {
 			rec.AgentRole = str(payload, "actor_role")
 		}

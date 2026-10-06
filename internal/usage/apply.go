@@ -13,8 +13,8 @@ import (
 )
 
 // Applier is the usage domain's deterministic state machine: the ONLY writer of
-// `usage_turns`, `usage_tokens`, `usage_reads` and `usage_schedule_runs`, on
-// every node.
+// `usage_turns`, `usage_tokens`, `usage_reads`, `usage_schedule_runs` and
+// `usage_person_tokens`, on every node.
 //
 // # An apply REPLACES
 //
@@ -30,8 +30,8 @@ import (
 // monotone and a pure function of the record, so a redelivery, or an older
 // message replayed after a newer one was applied, is a no-op by arithmetic.
 // A seat's guard lives on its head row in `usage_turns`, which every seat
-// record writes; a schedule has no head row, so its guard is the newest version
-// among its own rows.
+// record writes; a schedule and a person have no head row, so each one's guard
+// is the newest version among its own rows.
 //
 // # The horizon is applied here, by the record
 //
@@ -72,6 +72,8 @@ func (a Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opt
 		wrote, err = a.seat(ctx, tx, r, rec.Position, opts.MaxVariables)
 	case KindSchedule:
 		wrote, err = a.schedule(ctx, tx, r, rec.Position, opts.MaxVariables)
+	case KindPerson:
+		wrote, err = a.person(ctx, tx, r, rec.Position, opts.MaxVariables)
 	default:
 		// UNREACHABLE past Decode, which refuses an unknown kind — kept so
 		// a kind added to the enum without an apply is a failure here
@@ -90,7 +92,8 @@ func (a Applier) expire(ctx context.Context, tx *sql.Tx, day string) (int, error
 	}
 	cutoff := w.Shift(-HorizonDays).Label
 	var n int
-	for _, table := range []string{"usage_tokens", "usage_reads", "usage_turns", "usage_schedule_runs"} {
+	for _, table := range []string{"usage_tokens", "usage_reads", "usage_turns",
+		"usage_schedule_runs", "usage_person_tokens"} {
 		res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE day < ?`, cutoff)
 		if err != nil {
 			return 0, fmt.Errorf("usage: expire %s below %s: %w", table, cutoff, err)
@@ -229,6 +232,42 @@ func (a Applier) schedule(ctx context.Context, tx *sql.Tx, r Record, at statelog
 		})
 	if err != nil {
 		return 0, fmt.Errorf("usage: write the fires of %s: %w", s, err)
+	}
+	return n, nil
+}
+
+// person replaces one person-day.
+func (a Applier) person(ctx context.Context, tx *sql.Tx, r Record, at statelog.Position, maxVars int) (int, error) {
+	s := r.Subject
+	version := at.Packed()
+	var held sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT MAX(version) FROM usage_person_tokens
+		 WHERE day = ? AND node = ? AND person = ?`,
+		s.Day, s.Node, s.Person).Scan(&held); err != nil {
+		return 0, fmt.Errorf("usage: read the newest version of %s: %w", s, err)
+	}
+	if held.Valid && held.Int64 >= version {
+		return 0, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM usage_person_tokens WHERE day = ? AND node = ? AND person = ?`,
+		s.Day, s.Node, s.Person); err != nil {
+		return 0, fmt.Errorf("usage: clear the spend of %s: %w", s, err)
+	}
+	n, err := store.InsertRows(ctx, tx, maxVars, `
+		INSERT INTO usage_person_tokens
+			(day, node, person, role, phase, worker, model, provider_key, input,
+			 output, cache_read, cache_write, total, calls, version) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``, len(r.Tokens),
+		func(i int) []any {
+			t := r.Tokens[i]
+			return []any{s.Day, s.Node, s.Person, r.Role, t.Phase, t.Worker, t.Model,
+				t.ProviderKey, t.Input, t.Output, t.CacheRead, t.CacheWrite, t.Total,
+				t.Calls, version}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("usage: write the spend of %s: %w", s, err)
 	}
 	return n, nil
 }
