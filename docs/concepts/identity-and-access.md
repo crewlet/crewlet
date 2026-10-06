@@ -832,11 +832,16 @@ confers what it carries — so whoever demotes them revokes it with `DELETE
 **It ends with the person's sessions and tokens.** A link is stamped with the
 person's revocation epoch and the company's session generation when it is
 issued, as a machine token is, and refused once either moves: suspending them,
-signing them out everywhere or ending their sessions, and the restore
-runbook's `crewlet iam invalidate-all` all end it, and it is listed as revoked.
-Reactivating somebody does not bring it back — it was sent out of band, and the
-copy somebody else kept is exactly the one a reactivation would revive — so an
-administrator issues a fresh one.
+resetting their second factor, signing them out everywhere or ending their
+sessions, and the restore runbook's `crewlet iam invalidate-all` all end it,
+and it is listed as revoked. Reactivating somebody does not bring it back — it
+was sent out of band, and the copy somebody else kept is exactly the one a
+reactivation would revive — so an administrator issues a fresh one. **Issue
+the link after any of those, never before**: somebody who lost both their phone
+and their password needs their second factor reset *and* a link, and a link
+sent first is ended by the reset and opens nothing but `410 reset_spent`. The
+dashboard's **Suspend**, **Reset second factor** and **End all sessions**
+dialogs say so, and the link's own says to issue it after them.
 
 **It is good for one day.** It travels out of band — by chat or mail, where a
 link sits unread and gets forwarded — to somebody locked out *today*, so it
@@ -1479,10 +1484,10 @@ read-only. What each gesture ends is the route's:
 | **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address |
 | **New service account** · **Mint token** | A machine with a coloned login and grants — never `secrets:read` or `people:manage`, which no token carries and so no machine is given — then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants, shown once |
 | **Edit login, seat and grants** | One edit carrying only what changed. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
-| **Suspend** · **Reactivate** | A suspended person may not act, every session and token they hold ends, and a seat they hold is withheld; reactivating restores the seat and lets them sign in again |
-| **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold |
-| **Reset second factor** | Clears their authenticator and recovery codes and ends every session and token they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
-| **End all sessions** | Moves their revocation epoch: every session — and every personal token — they hold ends |
+| **Suspend** · **Reactivate** | A suspended person may not act, every session, token and password reset link they hold ends, and a seat they hold is withheld; reactivating restores the seat and lets them sign in again, and brings back none of what the suspension ended |
+| **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold. Every gesture that ends their sessions ends it too, so it is issued after them |
+| **Reset second factor** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
+| **End all sessions** | Moves their revocation epoch: every session — and every personal token and password reset link — they hold ends |
 | **Revoke** (a credential) | Ends that one credential — a token, a reset link, or how they prove who they are |
 | **Remove** | Typed back by login. Deletes the person and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-nodes-rows); undone only by inviting them again |
 

@@ -625,6 +625,63 @@ test.each([
   },
 );
 
+// WHAT ENDS A PERSON'S SESSIONS ENDS THEIR RESET LINK, and each gesture that
+// does says so: an administrator who sent the link and then reset the second
+// factor of somebody who lost both handed them a link that answered 410, with
+// nothing on either dialog to say why. The link's own dialog names the order
+// that works, and a reactivation says the link it ended stays ended. Mutation:
+// drop the link from any one dialog and its assertion goes red.
+test("every gesture that ends a reset link says so, and the link comes after them", async () => {
+  engine();
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
+  const factor = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
+  expect(
+    within(factor).getByText(
+      /every session, token and password reset link they hold ends — if they need a new password too, issue the link after this/,
+    ),
+  ).toBeTruthy();
+  fireEvent.click(within(factor).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "End all sessions" }));
+  const sessions = await screen.findByRole("dialog", { name: "End every session Bo Lang holds?" });
+  expect(
+    within(sessions).getByText(
+      /any password reset link issued for them stop working too — if they need a new password, issue the link after this/,
+    ),
+  ).toBeTruthy();
+  fireEvent.click(within(sessions).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
+  const suspend = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
+  expect(
+    within(suspend).getByText(/every session, token and password reset link they hold ends/),
+  ).toBeTruthy();
+  fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Issue password reset link" }));
+  const link = await screen.findByRole("dialog", {
+    name: "Issue a password reset link for Bo Lang?",
+  });
+  expect(
+    within(link).getByText(
+      /resetting their second factor, ending their sessions or suspending them ends it too — so issue it after those/,
+    ),
+  ).toBeTruthy();
+  cleanup();
+
+  engine({}, () => ({
+    ...PEOPLE,
+    people: PEOPLE.people.map((p) => (p.id === "p-bo" ? { ...p, stage: "suspended" } : p)),
+  }));
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Reactivate" }));
+  const reactivate = await screen.findByRole("dialog", { name: "Reactivate Bo Lang?" });
+  expect(
+    within(reactivate).getByText(
+      /password reset link the suspension ended stay ended, so issue a new link if they need one/,
+    ),
+  ).toBeTruthy();
+});
+
 // AN EDIT SENDS ONLY WHAT CHANGED, and a suspension is the stage alone.
 test("an opened person's edit sends what changed, and suspending sends the stage", async () => {
   const eng = engine({

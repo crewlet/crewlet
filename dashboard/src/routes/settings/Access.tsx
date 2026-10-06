@@ -1396,12 +1396,14 @@ function Principal({
         >
           {gesture === "suspend" && you && <OnYourself alone={alone} />}
           {/* WHAT THIS PERSON HOLDS, said: a seat they do not hold is not
-              withheld, and the sessions a suspension ends stay ended. */}
+              withheld, and the sessions a suspension ends stay ended — a
+              password reset link among them, which a reactivation does not
+              bring back either. */}
           {gesture === "reactivate"
-            ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions and tokens the suspension ended stay ended.`
+            ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions, tokens and password reset link the suspension ended stay ended, so issue a new link if they need one.`
             : you
-              ? `You may not act while suspended: every session and token you hold ends and your sign-ins are refused${row.seat ? ", and your seat is withheld" : ""}. Your record is kept, and somebody holding people:manage can reactivate you.`
-              : `${who} may not act while suspended: every session and token they hold ends and their sign-ins are refused${row.seat ? ", and their seat is withheld" : ""}. Their record is kept, and reactivating lets them sign in again.`}
+              ? `You may not act while suspended: every session, token and password reset link you hold ends and your sign-ins are refused${row.seat ? ", and your seat is withheld" : ""}. Your record is kept, and somebody holding people:manage can reactivate you.`
+              : `${who} may not act while suspended: every session, token and password reset link they hold ends and their sign-ins are refused${row.seat ? ", and their seat is withheld" : ""}. Their record is kept, and reactivating lets them sign in again.`}
         </PersonWrite>
       )}
       {gesture === "mfa" && (
@@ -1414,9 +1416,12 @@ function Principal({
           onDone={changed}
         >
           {you && <OnYourself />}
+          {/* A RESET LINK ENDS WITH THE SESSIONS, so one already sent is dead
+              by the time it is opened: said here, where the order that works
+              — the factor first, then the link — is still a choice. */}
           {you
-            ? "Your authenticator app and recovery codes stop working, and every session and token you hold ends. "
-            : "Their authenticator app and recovery codes stop working, and every session and token they hold ends. "}
+            ? "Your authenticator app and recovery codes stop working, and every session, token and password reset link you hold ends. "
+            : "Their authenticator app and recovery codes stop working, and every session, token and password reset link they hold ends — if they need a new password too, issue the link after this. "}
           <AfterFactorReset you={you} />
         </PersonWrite>
       )}
@@ -1431,8 +1436,8 @@ function Principal({
         >
           {you && <OnYourself />}
           {you
-            ? "You are signed out everywhere, and every personal access token you minted stops working too."
-            : "They are signed out everywhere, and every personal access token they minted stops working too."}
+            ? "You are signed out everywhere, and every personal access token you minted and any password reset link issued for you stop working too."
+            : "They are signed out everywhere, and every personal access token they minted and any password reset link issued for them stop working too — if they need a new password, issue the link after this."}
         </PersonWrite>
       )}
       {gesture === "remove" && (
@@ -1696,7 +1701,9 @@ function PersonWrite({
  * Issue a one-time password reset link, and show it ONCE: it sets a new
  * password, ends every session and token the person holds, and signs nobody
  * in. Issuing another revokes this one; the outstanding link is listed among
- * their credentials, where it can be revoked.
+ * their credentials, where it can be revoked. Whatever ends their sessions —
+ * a second factor's reset, ending them, a suspension — ends it too, so the
+ * dialog says to issue it after those rather than leave a dead link in flight.
  *
  * ON THE READER'S OWN ROW IT SPEAKS TO THEM, as every other gesture there
  * does, and says what they would more likely want: a password they know is
@@ -1768,7 +1775,7 @@ function ResetLink({
     >
       {you
         ? "The link lets you choose a new password once, within a day, and revokes any link issued for you before. To change a password you know, Account › Security needs no link."
-        : `The link lets ${who} choose a new password once, within a day. It revokes any link issued for them before.`}
+        : `The link lets ${who} choose a new password once, within a day. It revokes any link issued for them before, and resetting their second factor, ending their sessions or suspending them ends it too — so issue it after those.`}
     </ConfirmDialog>
   );
 }

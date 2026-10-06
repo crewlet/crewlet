@@ -996,8 +996,11 @@ spent it is listed `revoked` and `spent: true`, since setting the password
 revokes every link the person held, the one they used included. It also ends
 with the person's sessions and tokens: stamped with their revocation epoch and
 the company's session generation, it is refused — and listed `revoked` — once
-a suspension, signing them out everywhere, ending their sessions or `POST
-/iam/invalidate-all` moves either, and a reactivation does not bring it back. A
+a suspension, a second factor's reset (`POST /iam/people/{id}/mfa/reset`),
+signing them out everywhere, ending their sessions or `POST
+/iam/invalidate-all` moves either, and a reactivation does not bring it back —
+so a link needed beside any of those is issued after it, or it is `410
+reset_spent` by the time it is opened. A
 machine is `409` (it has no password; mint it a token), and so is a person
 `suspended` or `retired`, naming the `stage`, because a link would hand back an
 account somebody stopped: reactivate them first. A person holding a grant the

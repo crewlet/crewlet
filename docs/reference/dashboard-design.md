@@ -5748,7 +5748,11 @@ this screen is the exception):
   **Reset second factor** (when they hold one) and **End all sessions** — or,
   for a machine, **Mint token** — and **Remove**, confirmed by typing their
   login, since it cannot be undone, which closes the panel once it lands and
-  says who was removed. Each credential row has **Revoke**. On the
+  says who was removed. Each credential row has **Revoke**. **Suspend**,
+  **Reset second factor** and **End all sessions** each say that an
+  outstanding password reset link ends with the sessions, **Reactivate**
+  that it stays ended, and **Issue password reset link** that it is issued
+  after those — a link sent first is dead by the time it is opened. On the
   reader's OWN row — the person `GET /auth/session` names, by id — every
   gesture that ends their sessions says first that it is them and signs this
   browser out at once, and speaks to them throughout, its title and body
