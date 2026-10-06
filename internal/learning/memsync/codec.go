@@ -208,13 +208,13 @@ func (t table) subject(handle string, values map[string]any) string {
 // written, so a row already here is that row and DO NOTHING is exact — but for
 // the one column pair a holder fills afterwards, a diary note's vector, which
 // the carry takes over a stored vector of no model or another
-// (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one whose UPDATE IS THE CONTENT — a counterparty
-// profile rewritten as the seat learns, a skill archived, an onboarding
-// marker flipped — and DO NOTHING there discards precisely what the table is
-// republished every cycle to carry. A node that held the seat, lost it while
-// a peer kept learning, and took it back would keep its own stale profile and
-// then publish it back over the peer's, regressing the seat's memory for the
-// whole fleet.
+// (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one whose
+// UPDATE IS THE CONTENT — a counterparty profile rewritten as the seat
+// learns, a skill archived, an onboarding marker flipped — and DO NOTHING
+// there discards precisely what the table is republished every cycle to
+// carry. A node that held the seat, lost it while a peer kept learning, and
+// took it back would keep its own stale profile and then publish it back over
+// the peer's, regressing the seat's memory for the whole fleet.
 //
 // Last writer wins is safe rather than merely convenient: a seat is held by
 // ONE node at a time, so the changelog's latest value for a subject is by
