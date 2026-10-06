@@ -295,6 +295,10 @@ describe("a person's own page", () => {
       0,
     );
     fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    // ASKED FIRST: nothing is sent until the person confirms.
+    const ask = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
+    expect(engineIs.writes()).toEqual([]);
+    fireEvent.click(within(ask).getByRole("button", { name: "Sign out everywhere" }));
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
     expect(engineIs.writes().map((w) => w.path)).toEqual(["/auth/logout/all"]);
   });

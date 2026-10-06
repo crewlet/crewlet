@@ -32,6 +32,7 @@ import {
   type Account,
 } from "./UserBlock.tsx";
 import { Router } from "~/app/router.tsx";
+import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { dates, reloadForTest, zone, zoneIsChosen } from "~/lib/prefs.ts";
 import { currentReader, noteReader } from "~/lib/reader.ts";
 import { recentsKey } from "~/lib/recents.ts";
@@ -269,16 +270,33 @@ describe("what the account offers", () => {
 /** The account's gestures, drawn on their own with a toaster to report into. */
 function actions(account: Account) {
   const onLeave = vi.fn();
+  const onSignOutEverywhere = vi.fn();
   render(
     <Router>
       <ToastProvider>
         <LayerHost>
-          <AccountActions account={account} grants="Holds state:read" onLeave={onLeave} />
+          <AccountActions
+            account={account}
+            grants="Holds state:read"
+            onLeave={onLeave}
+            onSignOutEverywhere={onSignOutEverywhere}
+          />
         </LayerHost>
       </ToastProvider>
     </Router>,
   );
-  return { onLeave };
+  return { onLeave, onSignOutEverywhere };
+}
+
+/** The confirmation signing out everywhere asks, drawn on its own. */
+function everywhere() {
+  const onClose = vi.fn();
+  render(
+    <LayerHost>
+      <SignOutEverywhereDialog onClose={onClose} />
+    </LayerHost>,
+  );
+  return { onClose };
 }
 
 const signedIn: Account = { kind: "session", login: "ada.lovelace" };
@@ -320,6 +338,18 @@ describe("signing out", () => {
     expect(localStorage.getItem(recentsKey("p-1"))).toBe("[]");
   });
 
+  // EVERYWHERE IS ASKED FIRST, because it ends every personal token too: the
+  // menu closes and asks, and nothing is sent until the person confirms.
+  // Mutation: post from the menu's own click and the revocation is sent.
+  test("everywhere: the menu closes and asks, sending nothing", () => {
+    const sent = engine({ "POST /auth/logout/all": { status: 200, body: {} } });
+    const { onLeave, onSignOutEverywhere } = actions(signedIn);
+    fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    expect(onLeave).toHaveBeenCalledOnce();
+    expect(onSignOutEverywhere).toHaveBeenCalledOnce();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([]);
+  });
+
   test("everywhere: a revocation nobody can confirm is said, never reloaded past", async () => {
     engine({
       "POST /auth/logout/all": {
@@ -331,16 +361,19 @@ describe("signing out", () => {
         },
       },
     });
-    actions(signedIn);
-    fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    everywhere();
+    const ask = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
+    expect(within(ask).getByText(/every personal access token you\s+minted/)).toBeDefined();
+    fireEvent.click(within(ask).getByRole("button", { name: "Sign out everywhere" }));
     expect(await screen.findByText(/Signing out everywhere did not go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
   });
 
   test("everywhere, confirmed, reloads into the sign-in too", async () => {
     engine({ "POST /auth/logout/all": { status: 200, body: {} } });
-    actions(signedIn);
-    fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    everywhere();
+    const ask = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
+    fireEvent.click(within(ask).getByRole("button", { name: "Sign out everywhere" }));
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
   });
 });

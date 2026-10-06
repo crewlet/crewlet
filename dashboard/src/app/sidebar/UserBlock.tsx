@@ -48,7 +48,7 @@
  * theme is on — the command palette sets it too.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Button,
   DensitySwitcher,
@@ -68,7 +68,8 @@ import { browserZone, useViewerPrefs, type DateFormat } from "~/lib/prefs.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { adoptReader } from "~/lib/reader.ts";
 import { useRest } from "~/lib/useRest.ts";
-import { goSignIn, signOut, signOutEverywhere } from "~/lib/session.ts";
+import { goSignIn, signOut } from "~/lib/session.ts";
+import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { auth, type SessionAnswer } from "~/protocol/index.ts";
 import { WORKSPACES } from "../nav.ts";
@@ -138,6 +139,7 @@ export function UserBlock({
   seatName: string;
 }) {
   const prefs = useViewerPrefs();
+  const [everywhere, setEverywhere] = useState(false);
   const session = useSessionAnswer(!viewer.anonymous, viewer.login);
   const who = whoLine(viewer, seatName);
   const resolved = !viewer.loading && !viewer.anonymous;
@@ -194,6 +196,7 @@ export function UserBlock({
           is a kit defect, raised against uilet; the test beside this block
           lays the sidebar out at its real coordinates so a return to `end`
           goes red while the kit still has it. */}
+      {everywhere && <SignOutEverywhereDialog onClose={() => setEverywhere(false)} />}
       <Popover
         label="Account and preferences"
         side="top"
@@ -211,7 +214,14 @@ export function UserBlock({
       >
         {(close) => (
           <>
-            {account && <AccountActions account={account} grants={who.grants} onLeave={close} />}
+            {account && (
+              <AccountActions
+                account={account}
+                grants={who.grants}
+                onLeave={close}
+                onSignOutEverywhere={() => setEverywhere(true)}
+              />
+            )}
             <Preferences />
           </>
         )}
@@ -245,12 +255,15 @@ export function AccountActions({
   account,
   grants,
   onLeave,
+  onSignOutEverywhere,
 }: {
   account: Account;
   /** The grants line, said under the login — empty where nothing settles it. */
   grants: string;
   /** Close the menu: a link out of it leads to a page the menu would cover. */
   onLeave?: () => void;
+  /** Ask whether to sign out everywhere, outside the menu — see `SignOutEverywhereDialog`. */
+  onSignOutEverywhere: () => void;
 }) {
   const toast = useToast();
   if (account.kind === "nobody") {
@@ -294,8 +307,11 @@ export function AccountActions({
       <Button
         size="small"
         variant="ghost"
-        title="Ends every session you hold, on every device"
-        onClick={run(signOutEverywhere, "Signing out everywhere")}
+        title="Ends every session you hold, on every device, and every personal access token"
+        onClick={() => {
+          onLeave?.();
+          onSignOutEverywhere();
+        }}
       >
         Sign out everywhere
       </Button>

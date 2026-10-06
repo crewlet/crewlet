@@ -69,7 +69,8 @@ import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { refusalText } from "~/lib/refusal.ts";
-import { goSignIn, signOutEverywhere } from "~/lib/session.ts";
+import { goSignIn } from "~/lib/session.ts";
+import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
@@ -492,6 +493,7 @@ function Sessions({
   const now = useNow();
   const toast = useToast();
   const [ending, setEnding] = useState<string | null>(null);
+  const [everywhere, setEverywhere] = useState(false);
   const live = (sessions.data ?? []).filter((s) => s.live);
 
   async function end(lineage: string) {
@@ -512,15 +514,7 @@ function Sessions({
         icon={<MonitorGlyph size="sm" />}
         count={sessions.data ? live.length : undefined}
         actions={
-          <Button
-            size="small"
-            variant="secondary"
-            onClick={() =>
-              void signOutEverywhere().catch((err: unknown) =>
-                toast.failed(`Signing out everywhere did not go through. ${refusalText(err)}`),
-              )
-            }
-          >
+          <Button size="small" variant="secondary" onClick={() => setEverywhere(true)}>
             Sign out everywhere
           </Button>
         }
@@ -584,6 +578,7 @@ function Sessions({
           ]}
         />
       </QueryState>
+      {everywhere && <SignOutEverywhereDialog onClose={() => setEverywhere(false)} />}
     </Card>
   );
 }

@@ -5521,8 +5521,9 @@ into swapping for somebody else's.
   factor of their own, which the engine refuses to issue.
 - **Where you are signed in** — the live sessions, with **This browser**
   marked by the lineage `/auth/session` names; any other is signed out by name
-  (`POST /auth/logout/{lineage}`), and **Sign out everywhere** says it ends
-  every personal access token too, which it does. Every gesture on the page
+  (`POST /auth/logout/{lineage}`), and **Sign out everywhere** asks first —
+  here and in the user menu, which closes to ask — saying it ends every
+  personal access token too, which it does. Every gesture on the page
   reads `/auth/session` again before the lists, because one the engine asked a
   step-up for replaced this browser's session under a new lineage, and a mark
   read before it would offer this browser a named sign-out.
