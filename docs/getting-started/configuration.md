@@ -561,19 +561,30 @@ a backlog, and the duty asks again on its next tick. What the provider gives
 every caller instead is *which* failure it was, in three classes: **refused**
 (HTTP 400, 413 or 422, or an input past the bound — sent again unchanged it
 will be refused again, so a caller can set that one input aside rather than
-resend its whole batch for ever), **transient** (429, 5xx, a timeout, a network
-failure — asking again later may succeed) and **configuration** (401, 403, 404
-and the other 4xx, or a vector of the wrong width — nothing will succeed until
-`providers.embeddings` is fixed).
+resend its whole batch for ever), **transient** (408, 409, 425, 429 and 5xx, a
+timeout or a network failure — asking again later may succeed) and
+**configuration** (401, 402, 403, 404 and the remaining 4xx, or a vector of the
+wrong width — nothing will succeed until `providers.embeddings` is fixed).
 
-**One call's ceiling is not another's.** A single embedding — a query, a turn's
-ask — is held to 15 seconds, because a turn start is waiting on it; a batch
-request carries up to the model's request total (300 000 tokens on OpenAI) and
-is held to 60 seconds, a fifth of the five minutes a corpus tick may go without
-progress. Nothing has measured how long a server takes over a full request —
-OpenAI's or a self-hosted one on CPU, the deployment most likely to need longer.
-If batches time out against a slow server, lower `max_batch_tokens`: a smaller
-request is a shorter one, and the ceiling a stuck call is held to does not move.
+**One call's ceiling is not another's.** A single embedding is held to 15
+seconds where nothing else bounds it — an episode embedded after its turn, for
+one. What a person or a starting turn waits on is held to a budget of its own,
+two seconds: a search's query vector, a turn's ask, the hint a recall tool
+passes and a note as it is written. Past it they degrade rather than wait — the
+search serves its keyword half and says so, the turn's recall falls back to
+recency, the note is kept without a vector until the next fill — so a slow
+embeddings server shows up as `embedding_failed` searches and recency-only
+recall, not as slow searches and slow turn starts. A batch request carries up to
+the model's request total (300 000 tokens on OpenAI) and is held to 60 seconds,
+a fifth of the five minutes a corpus tick may go without progress. Nothing has
+measured how long a server takes over a full request — OpenAI's or a self-hosted
+one on CPU, the deployment most likely to need longer. If batches time out
+against a slow server, lower `max_batch_tokens`: a smaller request is a shorter
+one, and the ceiling a stuck call is held to does not move. Keep it at or above
+the model's per-input window (`max_input_tokens`, or the model's own) — one
+input must fit one request, so a request total below the window is also the most
+one input may hold, and the knowledge corpus would then embed a shorter opening
+of every long source, each under a new digest and so embedded again.
 
 ## Tier A (`crewlet.yaml`)
 

@@ -21,24 +21,28 @@ import (
 const (
 	DefaultBaseURL = "https://api.openai.com/v1"
 
-	// EmbedTimeout bounds one [Provider.Embed] request.
+	// EmbedTimeout bounds one [Provider.Embed] request: the ceiling for a
+	// caller that sets no deadline of its own, such as an episode embedded
+	// after its turn has ended.
 	//
-	// SHORT, and much shorter than a completion's, because of who calls
-	// it: a turn-start prefetch runs it before a person sees anything, and
-	// the caller's fallback for a slow embedder — no similarity search —
-	// is cheap. Waiting two minutes to avoid it would be the wrong trade
-	// in the one place the trade is obvious. A caller with a tighter
-	// budget sets a deadline on its context, which wins (a search's query
-	// vector has two seconds); this is the ceiling for one that sets none.
+	// SHORT, and much shorter than a completion's, because every caller of
+	// a single embedding has something waiting behind it and a cheap answer
+	// to a slow embedder — no vector, so no similarity search — while
+	// waiting two minutes to avoid that would be the wrong trade. A caller
+	// with a tighter budget sets a deadline on its context, which wins: a
+	// search's query vector, a turn's ask at turn start, the hint a recall
+	// tool passes and a note as it is written are each held to two seconds
+	// (search.QueryEmbedBudget, and the budgets anchored to it), because a
+	// person or a starting turn is waiting on them.
 	EmbedTimeout = 15 * time.Second
 
 	// BatchTimeout bounds one request of a [Provider.EmbedBatch] call.
 	//
 	// ITS OWN, because the two calls have nothing in common but the wire:
-	// a single Embed carries a query or a turn's ask, while a batch
-	// request carries up to the model's request total — 300 000 tokens on
-	// OpenAI — and the fifteen seconds a turn start can afford is not a
-	// figure about how long a server takes over that many.
+	// a single Embed carries one short text, while a batch request carries
+	// up to the model's request total — 300 000 tokens on OpenAI — and a
+	// ceiling chosen for one input is not a figure about how long a server
+	// takes over that many.
 	//
 	// SIXTY SECONDS, derived from what the batch caller's tick allows. The
 	// knowledge corpus duty (internal/search) plans its own requests and
@@ -54,7 +58,13 @@ const (
 	// most likely to need longer. The lever for a slow server is not this
 	// ceiling but the request's size: `max_batch_tokens` lowers what one
 	// request carries, and with it how long the server takes over it,
-	// without moving the bound a wedged call is held to.
+	// without moving the bound a wedged call is held to. It is a timing
+	// lever only while it stays at or above the model's per-input window:
+	// one input must fit one request, so a request total below the window
+	// is also the bound one input may hold
+	// (config.EmbeddingProvider.InputBound), and lowering it there
+	// shortens the opening the corpus embeds of every long source — a new
+	// digest for each, and each embedded again.
 	BatchTimeout = time.Minute
 )
 
