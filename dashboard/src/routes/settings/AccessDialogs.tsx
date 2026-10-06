@@ -23,6 +23,7 @@ import {
 } from "~/components/people.tsx";
 import { TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
+import { loginProblem } from "~/lib/login.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 
 /**
@@ -63,6 +64,8 @@ export function ServiceAccountDialog({
   const [name, setName] = useState("");
   const [grants, setGrants] = useState<string[]>([]);
   const [minting, setMinting] = useState(false);
+  const [tried, setTried] = useState(false);
+  const loginWrong = loginProblem("machine", login.trim());
   const created = write.answer?.kind === "done" ? write.answer.body : null;
   const id = typeof created?.id === "string" ? created.id : "";
 
@@ -73,7 +76,8 @@ export function ServiceAccountDialog({
   }
 
   async function submit() {
-    if (login.trim() === "" || created) return;
+    setTried(true);
+    if (login.trim() === "" || loginWrong || created) return;
     const answer = await write.run({
       method: "POST",
       path: "/iam/people",
@@ -125,11 +129,13 @@ export function ServiceAccountDialog({
           <FormField
             label="Login"
             helper="Lowercase words joined by colons, such as ci:release — at most 64 characters. The colon is what tells a machine from a person (jane.doe) and a seat (jane)."
+            error={tried ? (loginWrong ?? undefined) : undefined}
           >
             {(field) => (
               <Input
                 id={field.id}
                 aria-describedby={field.describedBy}
+                aria-invalid={field.invalid || undefined}
                 autoFocus
                 width="full"
                 spellCheck={false}
@@ -200,6 +206,13 @@ export function EditPersonDialog({
   const [login, setLogin] = useState(row.login ?? "");
   const [seat, setSeat] = useState(row.seat ?? NO_SEAT);
   const [grants, setGrants] = useState<string[]>(row.grants ?? []);
+  const [tried, setTried] = useState(false);
+  // THE KIND'S OWN GRAMMAR, asked only of a login this edit changes: the
+  // one the row holds is the engine's already.
+  const changesLogin = login.trim() !== (row.login ?? "");
+  const loginWrong = changesLogin
+    ? loginProblem(row.kind === "machine" ? "machine" : "person", login.trim())
+    : null;
   // WHAT THIS EDIT MAY CONFER is the engine's rule: only a grant it ADDS needs
   // the editor to hold it, so one the person already holds may be kept or
   // taken away by an administrator who does not hold it — stripping a
@@ -220,7 +233,7 @@ export function EditPersonDialog({
   const added = grants.filter((g) => !before.includes(g));
   const removed = before.filter((g) => !grants.includes(g));
   const change: Record<string, unknown> = {
-    ...(login.trim() !== (row.login ?? "") ? { login: login.trim() } : {}),
+    ...(changesLogin ? { login: login.trim() } : {}),
     ...(seat !== (row.seat ?? NO_SEAT) ? { seat } : {}),
     ...(added.length > 0 ? { add_grants: added } : {}),
     ...(removed.length > 0 ? { remove_grants: removed } : {}),
@@ -228,7 +241,8 @@ export function EditPersonDialog({
   const nothing = Object.keys(change).length === 0;
 
   async function submit() {
-    if (nothing || login.trim() === "") return;
+    setTried(true);
+    if (nothing || login.trim() === "" || loginWrong) return;
     const answer = await write.run({
       method: "PATCH",
       path: `/iam/people/${encodeURIComponent(row.id)}`,
@@ -272,11 +286,13 @@ export function EditPersonDialog({
             ? "Words joined by colons, such as ci:release."
             : "Words joined by dots, such as jane.doe. Their changes are recorded under it while they hold no seat."
         }
+        error={tried ? (loginWrong ?? undefined) : undefined}
       >
         {(field) => (
           <Input
             id={field.id}
             aria-describedby={field.describedBy}
+            aria-invalid={field.invalid || undefined}
             width="full"
             spellCheck={false}
             value={login}

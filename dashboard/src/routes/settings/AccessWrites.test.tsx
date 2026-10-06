@@ -855,6 +855,32 @@ test("a service account is created keyed and its token minted unkeyed from its g
   expect(screen.getByText("cwl_pat_c-tok_1_secret")).toBeTruthy();
 });
 
+// A LOGIN OUTSIDE ITS HOLDER'S GRAMMAR IS SAID UNDER THE FIELD, and nothing is
+// posted: a service account named like a person, and a person renamed like a
+// machine, each came back a 400 carrying the domain's own sentence. The
+// CONTROLS are the cases above, whose logins fit and are posted.
+test("a login outside its kind's grammar is refused under the field and not posted", async () => {
+  const eng = engine({});
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
+  const create = await screen.findByRole("dialog", { name: "New service account" });
+  fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "deploybot" } });
+  fireEvent.click(within(create).getByRole("button", { name: "Create" }));
+  await settle();
+  expect(within(create).getByText(/Use lowercase words joined by a colon/)).toBeTruthy();
+  fireEvent.click(within(create).getByRole("button", { name: "Cancel" }));
+
+  location.hash = "#/settings/access?person=p-bo";
+  await settle();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "ci:bo" } });
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(within(edit).getByText(/Use lowercase words joined by dots/)).toBeTruthy();
+  expect(eng.writes()).toEqual([]);
+});
+
 // FIRST RUN: nobody invited, and the screen says what to do next with the
 // button that does it. The control is a claimed deployment.
 test("an unclaimed deployment's screen says to invite yourself, with the button", async () => {

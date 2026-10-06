@@ -28,10 +28,11 @@
  *
  * # A refusal the person can fix keeps their form
  *
- * A login somebody already holds is `409`, a password under the floor or a
- * login outside the grammar `400` naming the rule; both are shown in the
- * engine's words above a form that keeps everything typed, because a person
- * told to choose another login should not have to type their password again.
+ * A login outside the grammar is said under the field before anything is
+ * posted (`lib/login.ts`, the engine's grammar). A login somebody already
+ * holds is `409`, shown in the engine's words above a form that keeps
+ * everything typed, because a person told to choose another login should not
+ * have to type their password again.
  * The redemption can be retried until it lands: it is one record, so an
  * attempt the engine refused wrote nothing and the next has nothing in its
  * way — what keeps the link single-use is the record that spends it.
@@ -50,6 +51,7 @@ import { Button, Callout, EmptyState, FormField, Input, Skeleton, Text } from "@
 import { CompassGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
+import { loginProblem } from "~/lib/login.ts";
 import { LANDING, useSignedIn } from "~/lib/session.ts";
 import { auth, RestError, type InvitationView } from "~/protocol/index.ts";
 import { parseLink } from "./link.ts";
@@ -184,10 +186,11 @@ function Redeem({
 
   const floor = view.min_password_length;
   const loginMissing = login.trim() === "";
+  const loginWrong = loginProblem("person", login.trim());
 
   async function submit() {
     setTried(true);
-    if (busy || !newPasswordReady(password, confirm, floor) || loginMissing) return;
+    if (busy || !newPasswordReady(password, confirm, floor) || loginMissing || loginWrong) return;
     setBusy(true);
     setRefusal(null);
     try {
@@ -272,7 +275,7 @@ function Redeem({
         <FormField
           label="Login"
           helper="What your changes are recorded under while you hold no seat, and one way to sign in. Lowercase words joined by dots, such as jane.doe."
-          error={tried && loginMissing ? "Choose a login." : undefined}
+          error={tried ? (loginMissing ? "Choose a login." : (loginWrong ?? undefined)) : undefined}
         >
           {(field) => (
             <Input

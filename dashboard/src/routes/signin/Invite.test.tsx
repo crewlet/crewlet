@@ -241,6 +241,23 @@ describe("redeeming it", () => {
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
+  // THE ENGINE'S GRAMMAR, said under the field before anything is posted:
+  // somebody who types their own name used to get the domain's refusal at the
+  // foot of the form. The CONTROL is the redemption below, whose proposed
+  // login fits and is posted.
+  test("a login outside the grammar is refused under the field, and nothing is posted", async () => {
+    const sent = engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("Login");
+    type("Login", "Frank");
+    type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+
+    expect(await screen.findByText(/Use lowercase words joined by dots/)).toBeDefined();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([]);
+  });
+
   // TYPED TWICE, because a slip in the only copy is an account its owner
   // cannot sign in to. The CONTROL is the next case, the same password typed
   // the same way twice, which is posted.

@@ -196,6 +196,11 @@ var contract = []Entry{
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
 	{"TOKEN_WITHHELD_GRANTS", ReadLiteral,
 		"internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+	{"PERSON_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"MACHINE_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"CREDENTIAL_CLASSES", ReadLiteral,
+		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},
