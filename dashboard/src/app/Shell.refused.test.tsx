@@ -1,14 +1,19 @@
 /**
- * A person the socket refuses can still end their own session.
+ * A person the socket refuses is told who they are, and can still reach their
+ * Account and end their own session.
  *
  * The engine refuses a person whose seat was taken out of the chart `403
  * seat_unavailable` everywhere but `/auth/`, and a person without `state:read`
  * the socket — and the socket then stops dialling, so the `viewer` question,
  * which is asked over it, is never answered. The identity menu (now the
  * sidebar's user block) drew nothing until it was and the refusal's banner
- * offered only a retry, so the people
- * the engine had shut out were exactly the people left with no way to sign
- * out: on a shared machine their cookie stayed live until its own deadline.
+ * offered only a retry, so the people the engine had shut out were exactly the
+ * people left with no way to sign out: on a shared machine their cookie stayed
+ * live until its own deadline. And every screen mounted anyway — Home said it
+ * was "not connected" and showing "the last state it sent" when nothing was
+ * ever sent, beside figures that never resolved, while the sidebar's foot said
+ * "Checking who you are" for good. So every screen but the Account is replaced
+ * by one panel that says who they are, what they hold and why.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -59,6 +64,7 @@ beforeEach(() => {
           person: "p-1",
           login: "jane.doe",
           kind: "person",
+          grants: [],
           expires_at: "2026-10-05T00:00:00Z",
           status: "signed_in",
         });
@@ -90,6 +96,7 @@ afterEach(() => {
  */
 async function mount() {
   await loadChunk("work");
+  await loadChunk("account");
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
@@ -103,15 +110,32 @@ async function mount() {
   );
 }
 
-test("the refusal's banner offers a sign-out, and it signs out", async () => {
+test("every screen is one panel naming who you are, and it signs out", async () => {
   await mount();
-  const banner = (await screen.findByText(/will not serve this dashboard to you/)).closest(
-    ".crewlet-callout",
+  const panel = (await screen.findByText("The engine will not serve this screen to you")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
-  fireEvent.click(within(banner).getByRole("button", { name: "Sign out" }));
+  await waitFor(() => expect(within(panel).getByText("jane.doe")).toBeDefined());
+  expect(within(panel).getByText(/you hold no grants yet/)).toBeDefined();
+  expect(within(panel).getByText(/your seat is no longer in the chart/)).toBeDefined();
+  // NOTHING SAYS IT IS RECONNECTING, and nothing the screen would have asked
+  // is drawn: the socket was refused and stopped.
+  expect(screen.queryByText(/Reconnecting|Not connected/)).toBeNull();
+  // AND THE FOOT NAMES THEM, from the session, though the viewer never answers.
+  expect(screen.queryByText("Checking who you are")).toBeNull();
 
+  fireEvent.click(within(panel).getByRole("button", { name: "Sign out" }));
   await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
   expect(sent.some((s) => s.method === "POST" && s.path === "/auth/logout")).toBe(true);
+});
+
+test("the panel's Account is the one screen it does not replace", async () => {
+  await mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Account" }));
+  await waitFor(() => expect(location.hash).toBe("#/account"));
+  await waitFor(() =>
+    expect(screen.queryByText("The engine will not serve this screen to you")).toBeNull(),
+  );
 });
 
 test("the user block offers both sign-outs though the viewer never answers", async () => {

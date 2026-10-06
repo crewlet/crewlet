@@ -50,8 +50,10 @@ import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import { resolve, type Resolved, type Route } from "./routes.ts";
-import { framelessOf, grantsOpen, sectionOf } from "./nav.ts";
+import { framelessOf, grantsOpen, sectionOf, workspaceOf } from "./nav.ts";
+import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
+import { useConnection } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
@@ -287,7 +289,13 @@ function Frame() {
 
 function Screen({ where, path }: { where: Route; path: string[] }) {
   const viewer = useViewer();
+  const { accessRefused } = useConnection();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
+  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE is told so in place of every
+  // screen but its Account, which reads no socket — see `AccessRefused`.
+  if (accessRefused !== null && workspaceOf(path) !== "account") {
+    return <AccessRefused reason={accessRefused} />;
+  }
   // A SECTION FOR A VIEWER THE ENGINE HAS SAID HOLDS NONE OF ITS GRANTS is
   // its refusal and nothing else — see `GrantRequired`. Only on an ANSWER,
   // and the first one is waited for: until it is in, the section asks

@@ -298,6 +298,19 @@ test("an invitation is sent keyed and its link is shown once", async () => {
   expect(eng.reads("/iam/invitations")).toBeGreaterThan(before);
 });
 
+// AN INVITATION WITHOUT `state:read` IS SAID BEFORE IT IS SENT: its person can
+// open nothing but their own Account, and it went out with no word. The
+// CONTROL is the same dialog with `state:read` ticked, which says nothing.
+test("an invitation without state:read says its person can open only their Account", async () => {
+  engine({});
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
+  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
+  expect(within(dialog).getByText(/can open nothing but their own/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
+  expect(within(dialog).queryByText(/can open nothing but their own/)).toBeNull();
+});
+
 // AN UNKNOWN ANSWER IS RETRIED UNDER THE SAME KEY — the one the engine handed
 // back — so the retry is the first attempt's write. Mutation: mint a key per
 // press and the second request carries another.

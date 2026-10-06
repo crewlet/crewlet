@@ -81,17 +81,29 @@ export function grantsLine(grants: readonly string[]): string {
 }
 
 /**
- * What the block says about who this browser is. `ownName` is the person's own
- * name, as `GET /auth/session` answers it, for one no seat names.
+ * What the block says about who this browser is. `session` is what `GET
+ * /auth/session` answered: the person's own name, for one no seat names —
+ * and, while the viewer has not answered, who this browser is at all.
+ *
+ * THE SESSION STANDS IN FOR A VIEWER THAT NEVER ANSWERS. The viewer is a
+ * socket question, and the socket stops dialling for a person the engine will
+ * not serve (no `state:read`, a seat taken out of the chart), so the foot said
+ * "Checking who you are" for good while the menu beside it named them.
  */
 export function whoLine(
   viewer: ViewerState,
   seatName: string,
-  ownName = "",
+  session: Pick<SessionAnswer, "login" | "name" | "grants"> | null = null,
 ): { name: string; detail: string; grants: string } {
   if (viewer.loading) {
+    if (session) {
+      return session.name
+        ? { name: session.name, detail: session.login, grants: grantsLine(session.grants ?? []) }
+        : { name: session.login, detail: "Signed in", grants: grantsLine(session.grants ?? []) };
+    }
     return { name: "Checking who you are", detail: "Asking the engine", grants: "" };
   }
+  const ownName = session?.name ?? "";
   if (viewer.anonymous) {
     return { name: "Not signed in", detail: "Sign in to read and act", grants: "" };
   }
@@ -150,9 +162,12 @@ export function UserBlock({
   const prefs = useViewerPrefs();
   const [everywhere, setEverywhere] = useState(false);
   const session = useSessionAnswer(!viewer.anonymous, viewer.login);
-  const who = whoLine(viewer, seatName, session?.name);
+  const who = whoLine(viewer, seatName, session);
   const resolved = !viewer.loading && !viewer.anonymous;
   const person = resolved && !viewer.unbound;
+  // WHO THIS IS IS SETTLED by the viewer, or by the session while the viewer
+  // has not answered (see [whoLine]).
+  const known = resolved || (!viewer.anonymous && session !== null);
   const account = accountOf(viewer, session);
 
   const identity = (
@@ -163,10 +178,10 @@ export function UserBlock({
           nobody, or for an answer still out, is not the reader and is not
           ringed. */}
       <SeatAvatar
-        name={resolved ? who.name || "?" : "?"}
+        name={known ? who.name || "?" : "?"}
         size="sm"
         kind="human"
-        ring={resolved ? "brand" : undefined}
+        ring={known ? "brand" : undefined}
         decorative
       />
       <span className="user-block-text">

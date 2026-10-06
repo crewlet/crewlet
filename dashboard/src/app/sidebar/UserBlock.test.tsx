@@ -174,11 +174,10 @@ describe("who the block says this is", () => {
   // the foot drew the login alone. The login stays beside it, as who the
   // engine records them as. Mutation: drop the name and the login is drawn.
   test("an unbound person is their own name, beside their login", () => {
-    const r = whoLine(
-      { ...nobody, login: "bob.smith", unbound: true, grants: [] },
-      "",
-      "Bob Smith",
-    );
+    const r = whoLine({ ...nobody, login: "bob.smith", unbound: true, grants: [] }, "", {
+      login: "bob.smith",
+      name: "Bob Smith",
+    });
     expect(r).toEqual({
       name: "Bob Smith",
       detail: "bob.smith · Not bound to a seat",
@@ -189,6 +188,24 @@ describe("who the block says this is", () => {
   test("nobody and not-yet-known are their own sentences", () => {
     expect(whoLine({ ...nobody, anonymous: true }, "").name).toBe("Not signed in");
     expect(whoLine({ ...nobody, loading: true }, "").name).toBe("Checking who you are");
+  });
+
+  // A VIEWER THAT NEVER ANSWERS — the socket refused a person without
+  // `state:read` — is no reason to keep asking: the session names them, and
+  // what they hold. The CONTROL is the case above, with no session either.
+  test("a session stands in for a viewer that has not answered", () => {
+    expect(whoLine({ ...nobody, loading: true }, "", { login: "erin.ng", grants: [] })).toEqual({
+      name: "erin.ng",
+      detail: "Signed in",
+      grants: "Holds no grants",
+    });
+    expect(
+      whoLine({ ...nobody, loading: true }, "", {
+        login: "erin.ng",
+        name: "Erin Ng",
+        grants: ["work:write"],
+      }),
+    ).toEqual({ name: "Erin Ng", detail: "erin.ng", grants: "Holds work:write" });
   });
 
   test("only a person is a link, and it goes to their seat", () => {

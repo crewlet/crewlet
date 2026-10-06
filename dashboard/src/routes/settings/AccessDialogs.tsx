@@ -17,6 +17,7 @@ import {
   MintTokenDialog,
   NO_SEAT,
   pressLabel,
+  ReachNote,
   seatOptions,
   useSeatEntry,
   useUnheldSeats,
@@ -330,6 +331,7 @@ export function EditPersonDialog({
             : undefined
         }
       />
+      {row.kind !== "machine" && <ReachNote grants={grants} />}
       <IamOutcome answer={write.answer} />
     </Modal>
   );

@@ -671,7 +671,9 @@ without a sound.
 in precedence order: nobody is signed in (the card is then the button that
 goes to the sign-in), the engine knows who this is and will not serve them (a
 seat taken out of the chart, a session without `state:read` — a statement, with
-the state bar beside it carrying the retry and the sign-out), reconnecting,
+every screen but the reader's Account replaced by one panel that names who they
+are from `GET /auth/session`, what they hold and the engine's reason, and offers
+the Account, a retry and the sign-out), reconnecting,
 draining, no configuration, a posture that
 diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
 ("Waiting for the engine" — nothing reported is not healthy), and serving —
@@ -5645,7 +5647,9 @@ this screen is the exception):
 
 - **Invite person** — an address, a human seat nobody holds (or none) and the
   grants, each grant the reader does not hold disabled with why, since nobody
-  confers what they do not hold. The link comes back **once**, with its expiry
+  confers what they do not hold — and, while `state:read` is not ticked, a
+  warning that the person will open nothing but their own Account. An edit of a
+  person's grants says the same. The link comes back **once**, with its expiry
   and the sentence that it is the credential: it works once and the engine keeps
   only a hash of its secret. Opening it is where the person chooses a login and
   a password.
@@ -6362,10 +6366,15 @@ brings that carries a design-system rule.
   `401`. `4403` means the person resolves and may not have this surface —
   their seat is gone, or `state:read` was withdrawn: the socket STOPS (no
   reconnect, no REST fallback, both of which the same decision would refuse)
-  and the state strip says why, with a *Try again* for after an administrator
-  has acted and a *Sign out* beside it — the person refused is the person who
-  needs to leave, and the engine keeps `/auth/` open to their session for
-  exactly that. A handshake refused `403` is the same state, read through the
+  and every screen but the Account, which reads no socket, is replaced by one
+  panel saying who they are (`GET /auth/session`), what they hold and why,
+  with the *Account*, a *Try again* for after an administrator has acted and a
+  *Sign out* — the person refused is the person who needs to leave, and the
+  engine keeps `/auth/` open to their session for exactly that. Drawn as
+  they were, the screens said the engine was "not connected" and showed
+  figures that never resolved, and the sidebar's foot, which names the reader
+  from the same session while the viewer question goes unanswered, said
+  "Checking who you are" for good. A handshake refused `403` is the same state, read through the
   plain-HTTP re-ask. `1013` — the standard's *try again later* — means the
   engine will not vouch for the credential on this socket now (it could not
   read what decides it, an identity move named nobody, or the person's seat

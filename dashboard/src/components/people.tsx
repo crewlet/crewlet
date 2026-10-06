@@ -179,6 +179,23 @@ export function GrantPicker({
 }
 
 /**
+ * What a person conferred these grants will be able to open, said where it is
+ * only their Account: every other screen reads the live view, and the engine
+ * refuses its socket to anybody without `state:read`. An invitation issued
+ * with nothing ticked used to go out with no word, and its person landed on a
+ * dashboard that could show them nothing.
+ */
+export function ReachNote({ grants }: { grants: readonly string[] }) {
+  if (grants.includes("state:read")) return null;
+  return (
+    <Callout variant="warning">
+      Without <span className="mono">state:read</span> they can open nothing but their own Account:
+      every other screen reads the company&apos;s live state, which needs it.
+    </Callout>
+  );
+}
+
+/**
  * A value the engine shows once — an invitation's link, a reset link, a token —
  * with a copy control and the sentence saying what it is. Nothing keeps it:
  * closing the dialog is the last anybody sees of it.
@@ -411,6 +428,7 @@ export function InviteDialog({
             </Text>
           )}
           <GrantPicker value={grants} onChange={setGrants} held={held} />
+          <ReachNote grants={grants} />
         </>
       )}
       <IamOutcome answer={write.answer} />

@@ -49,7 +49,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { AppShell, useToast } from "@crewlethq/ui";
+import { AppShell } from "@crewlethq/ui";
 import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
@@ -73,8 +73,7 @@ import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
-import { goSignIn, signOut } from "~/lib/session.ts";
-import { refusalText } from "~/lib/refusal.ts";
+import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
@@ -343,7 +342,6 @@ function Frame({ children }: { children: ReactNode }) {
   const peek = usePeek();
   const nav = useNavigator();
   const { socket } = useClient();
-  const toast = useToast();
   const { connected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
@@ -465,14 +463,6 @@ function Frame({ children }: { children: ReactNode }) {
     connected,
     configured: engine?.configured,
     onSignIn: goSignIn,
-    onRetry: () => socket.reconnect(),
-    // A FAILED SIGN-OUT IS SAID, as the user block says it: a sign-out nothing
-    // answered must not look like one that worked.
-    onSignOut: () => {
-      signOut().catch((err: unknown) =>
-        toast.failed(`Signing out did not go through. ${refusalText(err)}`),
-      );
-    },
     onConfig: () => nav.to(["settings", "config"]),
   });
 
