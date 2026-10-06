@@ -233,8 +233,10 @@ type Turn struct {
 	// can tell it too: the filter's one hard rule is per subject — a
 	// preference about somebody not party to the task does not apply — and
 	// a filter that does not know who is asking cannot enforce it. Empty
-	// for a turn no identifiable sender woke, and for a resumed turn,
-	// which re-reads no trigger.
+	// for a turn no identifiable sender woke. A resumed turn re-reads no
+	// trigger, so it carries the senders its turn PARKED with
+	// (execstate.State.Senders), and none for a row parked by a build that
+	// predates them.
 	Senders []types.CanonicalIdentity
 
 	// Phase is the phase session this value was bound for, and empty on

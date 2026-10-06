@@ -757,7 +757,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry, tel.ask))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry, tel.ask, tel.senders))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -902,9 +902,13 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // segments so far spent and charged to nothing (execstate.State.Uncharged),
 // for that same finishing segment to pay — see turnspend.go. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
-// completed-turn event carries and is woken by something else entirely.
+// completed-turn event carries and is woken by something else entirely — and
+// WHO asked it (execstate.State.Senders), which a refresh_memory call in any
+// later segment tells the memory filter, since no later segment has the
+// interactions to read them off.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
 	written *turnctx.Written, uncharged *execstate.Uncharged, ask string,
+	senders []types.CanonicalIdentity,
 ) (bool, error) {
 	rt := e.sandbox.Load()
 	if rt == nil {
@@ -921,6 +925,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Written, suspension.State.WrittenMany = written.Items()
 	suspension.State.Uncharged = uncharged
 	suspension.State.Ask = ask
+	suspension.State.Senders = senders
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",

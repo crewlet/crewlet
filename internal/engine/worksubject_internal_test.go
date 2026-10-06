@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -398,6 +399,12 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if want := turnAsk([]*events.Event{chatTrigger("D0ANA")}); want == "" || state.Ask != want {
 		t.Errorf("the suspension parks the ask %q, want %q", state.Ask, want)
 	}
+	// AND WHO ASKED IT, for a refresh_memory call in the segment that
+	// finishes the turn: that segment has no interactions to read them off.
+	if want := sendersSpoken(e.interactionsOf([]*events.Event{chatTrigger("D0ANA")})); len(want) == 0 ||
+		!slices.Equal(state.Senders, want) {
+		t.Errorf("the suspension parks the senders %+v, want %+v", state.Senders, want)
+	}
 	// AND WHAT THE HALF BEFORE THE PARK SPENT, charged to nothing yet: a
 	// chat wake names no item, so the segment that finishes the turn is the
 	// one that may charge it by its sole write — and it pays this half too,
@@ -463,6 +470,40 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 	}
 	if got := resumed.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Requester; got != "ceo" {
 		t.Errorf("a resumed turn's requester = %q, want the one its row recorded", got)
+	}
+}
+
+// WHO ASKED REACHES THE TURN CONTEXT ON EVERY SEGMENT, which is what a
+// refresh_memory call tells the memory filter. A dispatch reads them off its
+// interactions; a resumed segment has none, so it reads the ones its turn
+// parked with — read off the interactions there, every resumed segment told
+// the filter nobody was asking, and a note about one person could be applied
+// to a turn somebody else started.
+func TestTheTurnContextCarriesWhoAskedOnEverySegment(t *testing.T) {
+	t.Parallel()
+	e, _ := starting(t, refusingModels(t))
+	company := e.Company()
+	tel, err := e.describeTurn(t.Context(), company, Request{
+		RunID: "run-1", Handle: "swe", Events: []*events.Event{chatTrigger("D0ANA")},
+	})
+	if err != nil {
+		t.Fatalf("describeTurn: %v", err)
+	}
+	spoke := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Senders
+	if len(spoke) == 0 {
+		t.Fatal("a chat turn's context names no sender, so this asserts nothing")
+	}
+	run := sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe"}
+	resumed, err := e.describeResume(t.Context(), company, resumeInput{
+		Run:   run,
+		State: execstate.State{Senders: spoke},
+		Turn:  resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org),
+	})
+	if err != nil {
+		t.Fatalf("describeResume: %v", err)
+	}
+	if got := resumed.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Senders; !slices.Equal(got, spoke) {
+		t.Errorf("a resumed segment's senders = %+v, want the %+v its turn parked with", got, spoke)
 	}
 }
 

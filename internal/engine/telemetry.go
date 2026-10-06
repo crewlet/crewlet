@@ -95,6 +95,13 @@ type turnTelemetry struct {
 	// suspension to park beside the conversation.
 	ask string
 
+	// senders is who spoke to this seat ([sendersSpoken] over the
+	// interactions) — read off the trigger on a dispatch and off the parked
+	// conversation on a resume, for the reason ask is: a resumed segment
+	// has no interactions, and a tool that re-runs the turn-start memory
+	// filter is judged against this list ([turnctx.Turn.Senders]).
+	senders []types.CanonicalIdentity
+
 	// requester is the seat whose wake started this turn — see
 	// [turnctx.Turn.Requester] — resolved off the same first event the
 	// trigger is described from, or off the parked row on a resume.
@@ -206,6 +213,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// partition held and the one place a merge combined them.
 	t.interactions = e.interactionsOf(req.Ask())
 	t.ask = turnAsk(req.Ask())
+	t.senders = sendersSpoken(t.interactions)
 	t.requester = requesterOf(req.Events, t.interactions)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
@@ -306,8 +314,11 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// "the requester" long after this frame is gone.
 			Requester: t.requester,
 			// AND WHO SPOKE, for a tool that re-runs the turn-start memory
-			// filter — see [turnctx.Turn.Senders].
-			Senders: sendersSpoken(t.interactions),
+			// filter — see [turnctx.Turn.Senders]. Off the telemetry rather
+			// than the interactions, which a resumed segment does not have:
+			// read off them here, every resumed segment told the filter
+			// nobody was asking.
+			Senders: t.senders,
 			// THE ITEM THIS TURN IS ON, and the set its writes report
 			// into. The item rides every phase event and the row of any
 			// coding run this turn detaches; the set is the one mutable
@@ -738,6 +749,9 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// resumed it is a collection or a reply, and its ask is not the
 		// turn's.
 		ask: in.State.Ask,
+		// AND WHO ASKED IT, off the same parked conversation and for the
+		// same reason.
+		senders: in.State.Senders,
 		// The resumed turn's OWN span, opened by resumeTurn under the
 		// reconstructed suspended one. This used to be built by hand as
 		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID
