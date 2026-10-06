@@ -76,8 +76,14 @@ func TestARunsAccountPastTheRecordIsCondensedNotCut(t *testing.T) {
 
 // NO MODEL, NO CUT. A piece no model could condense keeps WHOLE lines up to
 // the bound and says how many it left out — the report its opening, where its
-// summary is, and the failure its end, where the line naming what broke is.
-// A rewrite that came back past the bound is no rewrite.
+// summary is, and the failure BOTH ENDS: its end, where the line naming what
+// broke is, and its start, where the engine states the exit status and the
+// CLI's own error before the error stream. Kept from its end alone, a failure
+// with a long error stream lost those. A rewrite that came back past the
+// bound is no rewrite.
+//
+// Mutation: keep a failure's end alone, as it was, and the exit status is
+// gone.
 func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -97,7 +103,8 @@ func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 			t.Parallel()
 			c := &Coordinator{condense: tc.condense}
 			report := "Outcome: succeeded\n" + lines("report", 8000)
-			failure := lines("noise", 8000) + "FATAL: migrations/0007.sql is missing"
+			const status = "the coding agent exited with status 1:\n"
+			failure := status + lines("noise", 8000) + "FATAL: migrations/0007.sql is missing"
 			got := c.fitResult(t.Context(), PendingRun{AgentHandle: "dev"}, Result{Text: report, Error: failure})
 
 			head, note, ok := strings.Cut(got.Text, "\n(")
@@ -111,15 +118,22 @@ func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 				t.Errorf("the report kept %d bytes, past the bound", len(head))
 			}
 
-			note, tail, ok := strings.Cut(got.Error, ")\n")
-			if !ok || !strings.Contains(note, "earlier line(s)") {
+			start, rest, ok := strings.Cut(got.Error, "(")
+			note, tail, ok2 := strings.Cut(rest, ")\n")
+			if !ok || !ok2 || !strings.Contains(note, "intervening line(s)") {
 				t.Fatalf("the failure's left-out lines are not announced: %.200q", got.Error)
+			}
+			if !strings.HasPrefix(start, status) || !strings.HasPrefix(failure, start) || !strings.HasSuffix(start, "\n") {
+				t.Errorf("the failure did not keep whole lines from its start, the exit status first: %.120q", start)
+			}
+			if len(start) > MaxRunTextBytes/failureHeadShare {
+				t.Errorf("the failure's start kept %d bytes, past its share", len(start))
 			}
 			if !strings.HasSuffix(failure, "\n"+tail) || !strings.HasSuffix(tail, "FATAL: migrations/0007.sql is missing") {
 				t.Error("the failure did not keep whole lines from its end")
 			}
-			if len(tail) > MaxRunTextBytes {
-				t.Errorf("the failure kept %d bytes, past the bound", len(tail))
+			if len(start)+len(tail) > MaxRunTextBytes {
+				t.Errorf("the failure kept %d bytes, past the bound", len(start)+len(tail))
 			}
 			if f, ok := tc.condense.(*fakeCondenser); ok && len(f.calls) != 2 {
 				t.Errorf("condense asked %d times, want once per piece", len(f.calls))

@@ -179,14 +179,17 @@ type Condenser interface {
 // publish an unbounded transcript, and the record carrying the run's only
 // spend would be refused whole.
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
+	// THE QUESTION FIRST, because a question nobody can be asked becomes
+	// part of the failure — fitted after it, the refusal rode past the
+	// failure's bound.
+	if result.NeedsInput {
+		result = c.fitQuestion(ctx, run, result)
+	}
 	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes)
 	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes)
 	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
 		boundTranscript(result.Transcript)
 	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
-	if result.NeedsInput {
-		result = c.fitQuestion(ctx, run, result)
-	}
 	return result
 }
 
@@ -396,35 +399,56 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 // wholeLines is a piece that could not be condensed, held to budget by
 // leaving WHOLE LINES out and saying how many — never by cutting one.
 //
-// From the END of a report (and of a question), because each is written to be
-// read from the top and its point is where it starts; from the START of a
-// failure, because
-// its conclusion — the line naming what broke — is the last thing a process
-// prints, after everything that led to it. The note stands where
-// the left-out lines were and is not counted against the budget, for the
-// reason [github.com/crewlet/crewlet/internal/textcut] gives: the budget
-// bounds the content. A single line past the whole budget leaves nothing, and
-// the note then says so rather than showing a fragment of it.
+// A report (and a question) keeps its START, because each is written to be
+// read from the top and its point is where it starts. A failure keeps BOTH
+// ENDS: its end, for most of the budget, because the line naming what broke
+// is the last thing a process prints; and its start, up to an eighth of it
+// ([failureHeadShare]), because that is where the ENGINE speaks — a piece it
+// could not read, a question nobody could be asked, the exit status and the
+// CLI's own error all come before the error stream they introduce. Kept from
+// its end alone, a failure with a long error stream lost every one of them.
+//
+// The note stands where the left-out lines were and is not counted against
+// the budget, for the reason [github.com/crewlet/crewlet/internal/textcut]
+// gives: the budget bounds the content. A single line past the whole budget
+// leaves nothing, and the note then says so rather than showing a fragment
+// of it.
 func wholeLines(part RunPart, text string, budget int) string {
 	lines := strings.SplitAfter(text, "\n")
-	kept, size := 0, 0
+	head, size := 0, 0
 	if part != PartFailure {
-		for kept < len(lines) && size+len(lines[kept]) <= budget {
-			size += len(lines[kept])
-			kept++
+		for head < len(lines) && size+len(lines[head]) <= budget {
+			size += len(lines[head])
+			head++
 		}
-		left := lines[kept:]
-		return strings.Join(lines[:kept], "") + omittedLines(left, "later", budget)
+		return strings.Join(lines[:head], "") + omittedLines(lines[head:], "later", budget)
 	}
-	for kept < len(lines) && size+len(lines[len(lines)-1-kept]) <= budget {
-		size += len(lines[len(lines)-1-kept])
-		kept++
+	for head < len(lines) && size+len(lines[head]) <= budget/failureHeadShare {
+		size += len(lines[head])
+		head++
 	}
-	left := lines[:len(lines)-kept]
-	return omittedLines(left, "earlier", budget) + strings.Join(lines[len(lines)-kept:], "")
+	tail := len(lines)
+	for tail > head && size+len(lines[tail-1]) <= budget {
+		size += len(lines[tail-1])
+		tail--
+	}
+	which := "earlier"
+	if head > 0 {
+		which = "intervening"
+	}
+	return strings.Join(lines[:head], "") + omittedLines(lines[head:tail], which, budget) +
+		strings.Join(lines[tail:], "")
 }
 
-// omittedLines is the note standing where whole lines were left out.
+// failureHeadShare is the fraction of a failure's budget its START keeps when
+// no model could condense it: an eighth, 32 KiB of [MaxRunTextBytes]. The
+// engine's own sentences at its start are a few hundred bytes each, so this
+// holds every one of them and the opening of a long error the CLI reported;
+// the other seven eighths are the end, where a process names what broke.
+const failureHeadShare = 8
+
+// omittedLines is the note standing where whole lines were left out: after
+// what was kept for "later" lines, before it otherwise.
 func omittedLines(left []string, which string, budget int) string {
 	if len(left) == 0 {
 		return ""

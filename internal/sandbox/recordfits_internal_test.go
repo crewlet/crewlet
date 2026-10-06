@@ -66,6 +66,30 @@ func TestAnUncondensedQuestionKeepsWholeLinesOrIsNotAsked(t *testing.T) {
 	if !strings.Contains(refused.Error, "nobody was asked it") || refused.Text != "Outcome: blocked" {
 		t.Errorf("the run does not say why it was not parked: error %q, report %q", refused.Error, refused.Text)
 	}
+
+	// THE REFUSAL IS INSIDE THE FAILURE'S BOUND, beside a failure already at
+	// it: the question is fitted first, so the failure that carries the
+	// refusal is fitted after. Fitted the other way round, the refusal rode
+	// past the bound the record's arithmetic counts on.
+	//
+	// Mutation: fit the question after the failure, and this goes red.
+	full := strings.Repeat("a failing line\n", MaxRunTextBytes/len("a failing line\n")+1)
+	refused = c.fitResult(t.Context(), PendingRun{},
+		Result{NeedsInput: true, Question: oneLine, Error: full})
+	if !strings.HasPrefix(refused.Error, "the question the coding agent asked") {
+		t.Errorf("the failure lost the refusal it begins with: %.120q", refused.Error)
+	}
+	// The bound counts content; the note standing for what was left out
+	// is not counted against it ([wholeLines]).
+	content := refused.Error
+	if i := strings.Index(content, "\n("); i >= 0 {
+		if j := strings.Index(content[i+1:], ")\n"); j >= 0 {
+			content = content[:i+1] + content[i+1+j+2:]
+		}
+	}
+	if len(content) > MaxRunTextBytes {
+		t.Errorf("the failure carrying the refusal is %d bytes of content, past its %d", len(content), MaxRunTextBytes)
+	}
 }
 
 // THE REFS ARE DEDUPLICATED AND BOUNDED, the rest counted. They are scraped
