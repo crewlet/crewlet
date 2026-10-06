@@ -51,6 +51,7 @@ import {
 } from "~/lib/models.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import { introducedWarnings, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import { dryRunEntity, getEntity, putEntity } from "~/protocol/configWrite.ts";
 import { isAbort } from "~/protocol/rest.ts";
@@ -104,6 +105,7 @@ export function EditModelDialog({
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const access = useConfigWriteAccess();
   const { names: secrets, refresh } = useSecretNames();
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
@@ -251,7 +253,7 @@ export function EditModelDialog({
     : loaded.kind !== "entity"
       ? "The model has not been read."
       : busy
-        ? "Waiting for the engine to answer."
+        ? waiting.reason
         : unchanged
           ? "Nothing has changed."
           : undefined;

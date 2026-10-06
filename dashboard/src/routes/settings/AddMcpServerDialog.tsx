@@ -41,6 +41,7 @@ import {
 } from "~/lib/mcpServers.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import { introducedWarnings, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import { createEntity, dryRunCreate, dryRunPatch, getConfig } from "~/protocol/configWrite.ts";
 import { isAbort } from "~/protocol/rest.ts";
@@ -105,6 +106,7 @@ export function AddMcpServerDialog({
   onAdded: (name: string) => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const access = useConfigWriteAccess();
   const { names: secrets, refresh } = useSecretNames();
   const [form, setForm] = useState<ServerForm>(emptyServerForm);
@@ -213,11 +215,7 @@ export function AddMcpServerDialog({
   };
 
   const warned = state.kind === "warned";
-  const blocked = !access.can
-    ? access.reason
-    : busy
-      ? "Waiting for the engine to answer."
-      : undefined;
+  const blocked = !access.can ? access.reason : busy ? waiting.reason : undefined;
   const press = () => {
     if (blocked) return;
     if (warned) confirm();

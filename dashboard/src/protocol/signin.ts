@@ -113,6 +113,28 @@ export type StepUpConfirmer = () => Promise<boolean>;
 
 let confirmer: StepUpConfirmer | null = null;
 let confirming: Promise<boolean> | null = null;
+const asking = new Set<() => void>();
+
+/**
+ * Whether a step-up is being asked of the person right now — what a dialog
+ * whose write is held behind it says it is waiting for: the person, not the
+ * engine.
+ */
+export function stepUpAsked(): boolean {
+  return confirming !== null;
+}
+
+/** Subscribe to a step-up starting or ending. Returns the unsubscribe. */
+export function onStepUpAsked(listener: () => void): () => void {
+  asking.add(listener);
+  return () => {
+    asking.delete(listener);
+  };
+}
+
+function toldAsking(): void {
+  for (const listener of asking) listener();
+}
 
 /**
  * Install what confirms a step-up. Returns the uninstall, which leaves a
@@ -142,7 +164,9 @@ export function confirmStepUp(): Promise<boolean> {
       .catch(() => false)
       .finally(() => {
         confirming = null;
+        toldAsking();
       });
+    toldAsking();
   }
   return confirming;
 }

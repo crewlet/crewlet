@@ -398,6 +398,37 @@ test("a step-up refusal is confirmed and the same cancellation replayed", async 
   expect(eng.reads("/iam/invitations")).toBeGreaterThan(before);
 });
 
+// WHILE "CONFIRM IT IS YOU" ASKS, THE DIALOG BEHIND SAYS IT WAITS FOR THE
+// PERSON: it pressed "Working" and could not be closed "waiting for the
+// engine", while nothing was waiting on the engine at all. Once confirmed it
+// is the engine's to answer again. Mutation: drop the step-up from the label
+// and the button reads "Working" throughout.
+test("a write held for a step-up says it waits for the person", async () => {
+  let release!: (confirmed: boolean) => void;
+  uninstall = setStepUpConfirmer(
+    () =>
+      new Promise<boolean>((resolve) => {
+        release = resolve;
+      }),
+  );
+  engine({
+    "DELETE /iam/invitations/inv-1": [
+      json(403, { error: "step_up_required", message: "Confirm who you are." }),
+      json(200, { id: "inv-1", outcome: "applied", op_id: "k", position: "p" }),
+    ],
+  });
+  mount();
+  const row = (await screen.findByText("sam@example.com")).closest(".grid-row") as HTMLElement;
+  fireEvent.click(within(row).getByRole("button", { name: /^Cancel the invitation/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel invitation" }));
+  await settle();
+  expect(within(dialog).getByRole("button", { name: "Waiting for you" })).toBeTruthy();
+  await act(async () => release(true));
+  await settle();
+  expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
+});
+
 // THE DIALOGS SAY WHAT THIS PERSON HOLDS AND WHAT THIS DEPLOYMENT ASKS. Bo
 // holds no seat, so none is withheld or freed; where a second factor is
 // optional, a reset promises no enrolment the next sign-in never asks for. The

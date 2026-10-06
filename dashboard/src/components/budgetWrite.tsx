@@ -45,6 +45,7 @@ import { useOrgBudget } from "~/lib/store-hooks.ts";
 import { useCeilingWrite, type CeilingWrite, type TypedCeilings } from "~/lib/useCeilingWrite.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 
 /** What changing a scope's ceilings is a change to: one seat, or the company. */
@@ -335,6 +336,7 @@ export function RaiseBudgetDialog({
   onClose: () => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const access = useOrgWriteAccess(targetOf(scope));
   const budgets = useQuery("budgets", undefined);
   const write = useCeilingWrite(scope);
@@ -406,7 +408,7 @@ export function RaiseBudgetDialog({
         : !changed
           ? "Change a ceiling first."
           : write.busy
-            ? "Waiting for the engine to answer."
+            ? waiting.reason
             : undefined;
 
   const warned = write.state.kind === "warned";

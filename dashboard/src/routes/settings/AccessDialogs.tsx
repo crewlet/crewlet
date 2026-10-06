@@ -23,6 +23,7 @@ import {
 } from "~/components/people.tsx";
 import { TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 
 /**
  * Why a machine is offered neither of the grants a token never carries: it has
@@ -57,6 +58,7 @@ export function ServiceAccountDialog({
   onDone: () => void;
 }) {
   const write = useIamGesture();
+  const waiting = useWaiting();
   const [login, setLogin] = useState("");
   const [name, setName] = useState("");
   const [grants, setGrants] = useState<string[]>([]);
@@ -88,7 +90,7 @@ export function ServiceAccountDialog({
       icon={<UserPlusGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={waiting.reason}
       stackBody
       onSubmit={() => void submit()}
       footer={
@@ -107,7 +109,7 @@ export function ServiceAccountDialog({
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={write.busy || login.trim() === ""}>
-              {pressLabel(write, "Create", "Creating")}
+              {pressLabel(write, "Create", "Creating", waiting.asked)}
             </Button>
           </>
         )
@@ -192,6 +194,7 @@ export function EditPersonDialog({
   onDone: () => void;
 }) {
   const write = useIamGesture();
+  const waiting = useWaiting();
   const seats = useUnheldSeats();
   const [row] = useState(live);
   const [login, setLogin] = useState(row.login ?? "");
@@ -244,7 +247,7 @@ export function EditPersonDialog({
       icon={<PencilGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={waiting.reason}
       stackBody
       onSubmit={() => void submit()}
       footer={
@@ -257,7 +260,7 @@ export function EditPersonDialog({
             variant="primary"
             disabled={write.busy || nothing || login.trim() === ""}
           >
-            {pressLabel(write, "Save", "Saving")}
+            {pressLabel(write, "Save", "Saving", waiting.asked)}
           </Button>
         </>
       }

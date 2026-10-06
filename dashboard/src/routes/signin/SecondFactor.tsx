@@ -35,6 +35,7 @@ import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { CopyButton, DownloadButton } from "~/ui/primitives.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import {
   auth,
   RestError,
@@ -322,6 +323,7 @@ export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
  * first set, a person went looking for codes they never had.
  */
 export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose: () => void }) {
+  const waiting = useWaiting();
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -359,7 +361,7 @@ export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose:
       icon={<KeyGlyph size="md" />}
       onClose={onClose}
       dismissable={!busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={waiting.reason}
       size="md"
       stackBody
       footer={

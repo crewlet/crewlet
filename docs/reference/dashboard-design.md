@@ -1844,7 +1844,10 @@ one confirmer the app installed (`app/StepUp.tsx`), which opens a single
 the password — and a code where the person holds a second factor, which the
 dialog reads from their own credentials (`GET /iam/credentials`) so the code is
 asked for rather than offered as optional — to `POST /auth/step-up`, and on
-success replays each refused request exactly once. Cancelled, each request fails with the refusal it had. A refusal of
+success replays each refused request exactly once. While it asks, a dialog
+whose write it holds says it is waiting for the person (`lib/waiting.ts`) —
+its button "Waiting for you", its close "Waiting for you to confirm who you
+are." — rather than for the engine, which has nothing in hand. Cancelled, each request fails with the refusal it had. A refusal of
 `/auth/step-up` itself is never confirmed, so a confirmation cannot ask for
 another.
 

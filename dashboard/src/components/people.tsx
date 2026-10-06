@@ -36,6 +36,7 @@ import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { rest } from "~/protocol/index.ts";
 
@@ -225,8 +226,14 @@ export function IamOutcome({ answer }: { answer: IamAnswer | null }) {
 }
 
 /** The label a write's button carries: a retry after an unknown answer says so. */
-export function pressLabel(write: IamGesture, idle: string, busy: string): string {
-  if (write.busy) return busy;
+export function pressLabel(
+  write: IamGesture,
+  idle: string,
+  busy: string,
+  /** A step-up is asking the person (`useWaiting`), which is what the write waits on. */
+  asked = false,
+): string {
+  if (write.busy) return asked ? "Waiting for you" : busy;
   return write.answer?.kind === "unknown" ? "Try again" : idle;
 }
 
@@ -299,6 +306,7 @@ export function InviteDialog({
   onDone: () => void;
 }) {
   const write = useIamGesture();
+  const waiting = useWaiting();
   const seats = useUnheldSeats();
   const entry = useSeatEntry();
   const [email, setEmail] = useState("");
@@ -334,7 +342,7 @@ export function InviteDialog({
       icon={<UserPlusGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={waiting.reason}
       stackBody
       onSubmit={() => void submit()}
       footer={
@@ -348,7 +356,7 @@ export function InviteDialog({
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={write.busy || email.trim() === ""}>
-              {pressLabel(write, "Invite", "Inviting")}
+              {pressLabel(write, "Invite", "Inviting", waiting.asked)}
             </Button>
           </>
         )
@@ -438,6 +446,7 @@ export function ConfirmDialog({
   children: React.ReactNode;
 }) {
   const [typed, setTyped] = useState("");
+  const waiting = useWaiting();
   const ready = !typeToConfirm || typed.trim() === typeToConfirm;
   return (
     <Modal
@@ -446,7 +455,7 @@ export function ConfirmDialog({
       title={title}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={waiting.reason}
       stackBody
       onSubmit={() => ready && onConfirm()}
       footer={
@@ -459,7 +468,7 @@ export function ConfirmDialog({
             variant={danger ? "danger" : "primary"}
             disabled={write.busy || !ready}
           >
-            {pressLabel(write, confirm, "Working")}
+            {pressLabel(write, confirm, "Working", waiting.asked)}
           </Button>
         </>
       }
@@ -521,6 +530,7 @@ export function MintTokenDialog({
   onDone?: () => void;
 }) {
   const write = useIamGesture();
+  const waiting = useWaiting();
   const [label, setLabel] = useState("");
   const [days, setDays] = useState("");
   // WHAT STARTS TICKED is what this mint may send: the owner's grants a token
@@ -570,7 +580,7 @@ export function MintTokenDialog({
       icon={<KeyGlyph />}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={waiting.reason}
       stackBody
       onSubmit={() => void submit()}
       footer={
@@ -584,7 +594,7 @@ export function MintTokenDialog({
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={write.busy || badDays}>
-              {pressLabel(write, "Mint", "Minting")}
+              {pressLabel(write, "Mint", "Minting", waiting.asked)}
             </Button>
           </>
         )

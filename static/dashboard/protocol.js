@@ -323,6 +323,25 @@ function onSessionNeed(listener) {
 }
 var confirmer = null;
 var confirming = null;
+var asking = /* @__PURE__ */ new Set();
+/**
+* Whether a step-up is being asked of the person right now — what a dialog
+* whose write is held behind it says it is waiting for: the person, not the
+* engine.
+*/
+function stepUpAsked() {
+	return confirming !== null;
+}
+/** Subscribe to a step-up starting or ending. Returns the unsubscribe. */
+function onStepUpAsked(listener) {
+	asking.add(listener);
+	return () => {
+		asking.delete(listener);
+	};
+}
+function toldAsking() {
+	for (const listener of asking) listener();
+}
 /**
 * Install what confirms a step-up. Returns the uninstall, which leaves a
 * later installation in place.
@@ -345,9 +364,13 @@ function setStepUpConfirmer(fn) {
 */
 function confirmStepUp() {
 	if (!confirmer) return Promise.resolve(false);
-	if (!confirming) confirming = confirmer().catch(() => false).finally(() => {
-		confirming = null;
-	});
+	if (!confirming) {
+		confirming = confirmer().catch(() => false).finally(() => {
+			confirming = null;
+			toldAsking();
+		});
+		toldAsking();
+	}
 	return confirming;
 }
 //#endregion
@@ -2508,4 +2531,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, unavailableRetryMs, whenRequestsSettle };
+export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
