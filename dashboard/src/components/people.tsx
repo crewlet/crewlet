@@ -220,7 +220,7 @@ export function InviteDialog({
   /** A seat to propose — the seat page's own. */
   seat?: string;
   onClose: () => void;
-  /** After an invitation landed, so the lists are read again. */
+  /** After every answer, so the lists are read again. */
   onDone: () => void;
 }) {
   const write = useIamGesture();
@@ -247,7 +247,7 @@ export function InviteDialog({
       path: "/iam/invitations",
       body: { email: email.trim(), grants, ...(bind ? { seat: bind } : {}) },
     });
-    if (answer?.kind === "done") onDone();
+    if (answer) onDone();
   }
 
   return (

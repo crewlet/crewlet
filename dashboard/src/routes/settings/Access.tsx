@@ -1078,10 +1078,9 @@ function CancelInvitation({
           method: "DELETE",
           path: `/iam/invitations/${encodeURIComponent(row.id)}`,
         });
-        if (answer?.kind === "done") {
-          onChanged();
-          if (!answer.pending) onClose();
-        }
+        if (!answer) return;
+        onChanged();
+        if (answer.kind === "done" && !answer.pending) onClose();
       }}
     >
       The link sent to {row.sealed ? "this address" : <strong>{row.email}</strong>} stops working at
@@ -1464,10 +1463,9 @@ function PersonWrite({
       onClose={onClose}
       onConfirm={async () => {
         const answer = await write.run(request);
-        if (answer?.kind === "done") {
-          onDone();
-          if (!answer.pending) onClose();
-        }
+        if (!answer) return;
+        onDone();
+        if (answer.kind === "done" && !answer.pending) onClose();
       }}
     >
       {children}
@@ -1527,7 +1525,7 @@ function ResetLink({
           { method: "POST", path: `/iam/people/${encodeURIComponent(row.id)}/password-reset` },
           false,
         );
-        if (answer?.kind === "done") onDone();
+        if (answer) onDone();
       }}
     >
       The link lets {who} choose a new password once, within a day. It revokes any link issued for

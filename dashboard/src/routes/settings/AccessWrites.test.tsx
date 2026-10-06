@@ -400,6 +400,36 @@ test("an opened person's edit sends what changed, and suspending sends the stage
   for (const w of eng.writes()) expect(w.key).toMatch(UUID7);
 });
 
+// A REFUSAL PART WAY IS READ AGAIN TOO: the login and seat landed before the
+// grants were refused, so the directory is re-read and the dialog says what
+// changed. Mutation: re-read only after a `done` answer and the directory
+// keeps the old login until the poll.
+test("an edit refused part way reads the directory again", async () => {
+  const eng = engine({
+    "PATCH /iam/people/p-bo": [
+      json(403, {
+        error: "unauthorized",
+        message: "The credential you presented does not carry the grant this request needs.",
+        id: "p-bo",
+        landed: ["identity"],
+      }),
+    ],
+  });
+  location.hash = "#/settings/access?person=p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "bo.lange" } });
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "work:write" }));
+  const before = eng.reads("/iam/people");
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(within(edit).getByRole("alert").textContent).toMatch(
+    /What did change: the login and seat\./,
+  );
+  expect(eng.reads("/iam/people")).toBeGreaterThan(before);
+});
+
 // AN EDIT MAY TAKE AWAY A GRANT THE EDITOR DOES NOT HOLD, as the engine
 // allows (it checks only what an edit adds): Di's secrets:write is enabled
 // and unticking it sends the grants without it. The CONTROL is a grant

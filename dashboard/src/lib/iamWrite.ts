@@ -24,6 +24,11 @@
  * person to confirm who they are and REPLAYS the same request, key included, so
  * a gesture refused for a stale proof is made once they have confirmed.
  *
+ * EVERY ANSWER IS FOLLOWED BY A RE-READ of the lists the write touches, not
+ * only a `done` one: a refused edit may have landed its login and seat first
+ * (`landed`), and an unknown one may have landed whole — the re-read is what
+ * shows which.
+ *
  * ONE KEY PER GESTURE ([useIamGesture]): minted when the gesture starts, kept
  * for the retry an `unknown` asks for, and replaced after any answer that
  * settled it — a create's key sent again with another body is refused as a

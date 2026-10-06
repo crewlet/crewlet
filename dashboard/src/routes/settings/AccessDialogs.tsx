@@ -72,7 +72,7 @@ export function ServiceAccountDialog({
       path: "/iam/people",
       body: { kind: "machine", login: login.trim(), name: name.trim(), grants },
     });
-    if (answer?.kind === "done") onDone();
+    if (answer) onDone();
   }
 
   return (
@@ -205,7 +205,7 @@ export function MintTokenDialog({
       // attempt never showed, so a retry is a new token.
       false,
     );
-    if (answer?.kind === "done") onDone?.();
+    if (answer) onDone?.();
   }
 
   return (
@@ -341,10 +341,9 @@ export function EditPersonDialog({
       path: `/iam/people/${encodeURIComponent(row.id)}`,
       body: change,
     });
-    if (answer?.kind === "done") {
-      onDone();
-      if (!answer.pending) onClose();
-    }
+    if (!answer) return;
+    onDone();
+    if (answer.kind === "done" && !answer.pending) onClose();
   }
 
   return (

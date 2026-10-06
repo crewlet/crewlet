@@ -5599,7 +5599,9 @@ answer asks for — **Try again** sends the key the engine handed back, so it
 lands once — while a token's mint and a reset link read no key and a retry
 issues another; a refusal is the engine's sentence with the grants that would
 admit; a `202` says the change is recorded and this node is catching up; and
-every list the write moved is read again. Where `/health` says
+after every answer — a refusal part way and an unknown one included, since
+either may have changed something — the lists the write touches are read
+again. Where `/health` says
 `identity: unclaimed`, a callout says nobody has been invited yet and offers
 **Invite person**. A token is still declared in Tier A (`api.auth.tokens`) and
 changes at a restart. **It never reads a value back** — not a token's, not a
