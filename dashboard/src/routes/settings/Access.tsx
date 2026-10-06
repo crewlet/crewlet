@@ -689,6 +689,25 @@ export function PeopleAndAccess() {
             />
           </Card>
 
+          {/* A PERSON THE LINK NAMES AND THE DIRECTORY DOES NOT HOLD — removed
+              while their row was open, or a saved link to somebody since
+              removed — is said, with the way back to the list: drawn as
+              nothing, the address named somebody the page said nothing
+              about. */}
+          {opened !== "" && !openedRow && (
+            <Callout
+              variant="neutral"
+              title="Nobody in the directory has this id"
+              action={
+                <Button size="small" variant="secondary" onClick={() => setOpened("")}>
+                  Close
+                </Button>
+              }
+            >
+              <InlineCode>{opened}</InlineCode> is not a person or service account here: they were
+              removed, or the link was mistyped.
+            </Callout>
+          )}
           {openedRow && (
             <Principal
               row={openedRow}

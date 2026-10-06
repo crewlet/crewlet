@@ -313,6 +313,29 @@ test("an opened person shows the credentials and sessions read for them", async 
   expect(credentials?.searchParams.get("person")).toBe("p-ana");
 });
 
+// A PERSON THE LINK NAMES AND THE DIRECTORY DOES NOT HOLD is said, and Close
+// takes the address back to the list: a saved link to somebody since removed
+// drew the list with no panel and no word. The CONTROL is the case above, a
+// person the directory holds, which draws no such note. Mutation: drop the
+// note and the first half goes red.
+test("a link to a person the directory does not hold says so, and closes", async () => {
+  location.hash = "#/settings/access?person=p-gone";
+  stubIam();
+  mount();
+  expect(await screen.findByText("Nobody in the directory has this id")).toBeTruthy();
+  expect(screen.getByText("p-gone")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(location.hash).not.toContain("person=");
+  expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
+  cleanup();
+
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam();
+  mount();
+  await screen.findByText("Authenticator app");
+  expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
+});
+
 // AN ENDED SESSION SAYS WHY, AND NOT WHEN IT WOULD HAVE ENDED. One a counter
 // ended carries a reason and no ended_at; its reason rode in a tooltip and its
 // deadline read as "in 6d" beside "Ended". Mutation: show the expiry for every
