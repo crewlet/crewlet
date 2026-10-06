@@ -338,7 +338,11 @@ func (s *Service) CredentialsMoved(m Moved) {
 // audience the decision resolved, because the screen has to lose what it was
 // showing under a narrowed grant rather than keep it until a reload. rewatch
 // decides the watched seat again, as whoever is asking now. seatOf is the
-// published company's word on a seat.
+// published company's word on a seat. now is the service's clock, which the
+// credential's end is measured against — the one the guard deciding it reads,
+// rather than a second, private reading of the wall clock: a node whose guard
+// was handed a clock this timer did not read re-decided every socket once a
+// second, its deadline long past by one clock and hours off by the other.
 func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 	l *listener, cred credential, seatOf SeatOfFunc, now func() time.Time,
 	resync func(Audience) map[string]any, rewatch func(context.Context)) {
@@ -352,11 +356,11 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 	// clock stepped back after the arming (an NTP correction, a VM resumed)
 	// fires the timer while the guard still sees the credential live, and a
 	// timer dropped there left the socket with no deadline at all. Re-armed
-	// for the wall clock's own distance, floored at [expiryRetry].
+	// for that clock's own distance, floored at [expiryRetry].
 	var timer *time.Timer
 	var expiry <-chan time.Time
 	if !cred.ends.IsZero() {
-		timer = time.NewTimer(time.Until(cred.ends))
+		timer = time.NewTimer(cred.ends.Sub(now()))
 		defer timer.Stop()
 		expiry = timer.C
 	}
@@ -406,7 +410,7 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 			if !decide() {
 				return
 			}
-			timer.Reset(max(time.Until(cred.ends), expiryRetry))
+			timer.Reset(max(cred.ends.Sub(now()), expiryRetry))
 		}
 	}
 }

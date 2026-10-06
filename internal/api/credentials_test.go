@@ -161,7 +161,13 @@ func newSocketNode(t *testing.T, now func() time.Time) *socketNode {
 		t.Fatalf("auth.NewSessions: %v", err)
 	}
 	feed := &fakeCredentials{}
-	app := newApp(t, api.Options{Bootstrap: &b, Sessions: arm, Credentials: feed})
+	// ONE CLOCK for the guard and the socket's own deadline timer: with the
+	// app on the wall clock, a session ending hours after the fixed clock had
+	// ended months ago by the timer's reading, which re-decided every socket
+	// once a second — and a tab the case had not named closed between two
+	// steps of it, now and then.
+	app := newApp(t, api.Options{Bootstrap: &b, Sessions: arm, Credentials: feed,
+		Now: now})
 	srv := httptest.NewServer(app)
 	t.Cleanup(srv.Close)
 	return &socketNode{b: b, signer: signer, rows: rows, feed: feed, srv: srv,

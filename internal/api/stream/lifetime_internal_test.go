@@ -512,6 +512,51 @@ func TestASocketIsClosedAtItsCredentialsOwnEnd(t *testing.T) {
 	lasting.open(t)
 }
 
+// A CREDENTIAL'S END IS MEASURED ON THE SERVICE'S CLOCK.
+//
+// The guard deciding the socket reads the clock the node was handed, and the
+// timer read the wall clock of its own: on a node whose clock was not the wall
+// clock — every suite with a fixed one — an end hours away by the guard's
+// reading had passed months ago by the timer's, so the socket was decided
+// once a second for as long as it stayed open, and a tab the case had not
+// named closed between two of its steps now and then. The end here is an hour
+// past the service's clock and long past by the wall clock: nothing decides the
+// socket again after it starts listening.
+//
+// Mutation: arm the timer with time.Until and it is decided again at once.
+func TestACredentialsEndIsMeasuredOnTheServicesClock(t *testing.T) {
+	t.Parallel()
+	fixed := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	svc, err := NewService(livestate.New(), Options{
+		Health:    func() Health { return nodeHealth{Status: "ok"} },
+		Posture:   func(Health) FramePosture { return FrameLive },
+		Seats:     func() tokens.Seats { return tokens.Seats{} },
+		Roster:    func() []map[string]any { return nil },
+		Org:       func() any { return map[string]any{} },
+		Tools:     func() []map[string]any { return nil },
+		Schedules: func() any { return []any{} },
+		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
+		Chart:     authz.NoChart{},
+		Holders:   blindHolders{},
+		SeatOf:    func(string) (SeatState, bool) { return SeatState{Human: true}, true },
+		Now:       func() time.Time { return fixed },
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+	ana := person("ana")
+	s := serve(t, svc, socketCase{principal: ana, opened: sessionOf(ana),
+		ends: fixed.Add(time.Hour), decide: resolvedAs(ana)})
+	s.settled(t, 1)
+	time.Sleep(1500 * time.Millisecond)
+	if got := s.decisions.Load(); got != 1 {
+		t.Fatalf("the socket was decided %d times, want only as it started "+
+			"listening", got)
+	}
+	s.open(t)
+}
+
 // AN END THE GUARD STILL SERVES IS DECIDED AGAIN, and the socket still closes.
 //
 // The timer runs on the monotonic clock and the guard compares the wall clock,
