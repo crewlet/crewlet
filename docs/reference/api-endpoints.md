@@ -1713,6 +1713,18 @@ answers carries one shape:
 - **A node that has left the fleet is not asked**, because it is not live:
   its turn-level detail left with it. The spend and turn counts it recorded
   are answered by the replicated `usage` domain instead.
+- **A stateless node's row is listed and counted once**, though for a moment
+  two data nodes can hold it — a
+  [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
+  batch the second keeper wrote before the first had settled it. A listing
+  holds it once by its `(timestamp, id)`; every count — `event_series`'s bars,
+  `total`, `failed` and `by_category`, `trace`'s and `turn`'s `total`, a
+  `turns` row's tokens, `phases` and `duration_ms`, and the outcome counts on
+  `integrations` — counts it once, because each node counts the rows it keeps
+  and names the ones it has not settled, and the serving node asks which node
+  keeps each named row before it adds it. A data node on an earlier build
+  counts every row it holds, and during an upgrade can count such a row a
+  second time until its batch settles.
 - **`event` not found** answers `not_found` naming any node that did not
   answer, because a link whose node was merely silent is a different fact
   from a dead one. An event older than the 30-day history is not found

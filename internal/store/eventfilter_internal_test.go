@@ -234,16 +234,18 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 // THE CUSTODY READS SEEK THE LOG BY IDENTITY, driven from the few rows they
 // name rather than from the log.
 //
-// The outcome count names the window's rows of a custody batch in flight, and
-// a node says which of some named rows it keeps; each is a handful of rows
-// against a log of a month, so each must start from what it names — the
-// unsettled batches, or the names it was handed — and seek the log for every
-// one. Started from the log, either would read every outcome the window holds,
-// or every row the log holds, and probe the names for each. Read back for the
-// EXACT statements both run.
+// Every count names its rows of a custody batch in flight — the outcome
+// counts, the axis at every filter it takes, a trace's and a turn's extent, a
+// turn's sums — and a node says which of some named rows it keeps; each is a
+// handful of rows against a log of a month, so each must start from what it
+// names — the unsettled batches, or the names it was handed — and seek the log
+// for every one. Started from the log, any of them would read every row its
+// count reads, or every row the log holds, and probe the names for each. Read
+// back for the EXACT statements each runs.
 //
-// Mutation: join the log first in either statement, and its plan starts from
-// the log — a seek of the window's outcomes by type, or a scan of every row.
+// Mutation: join the log first in [unsettledSQL] or [keptSQL], and the plan
+// starts from the log — a seek of the count's own index, or a scan of every
+// row.
 func TestTheCustodyReadsSeekTheLogByIdentity(t *testing.T) {
 	t.Parallel()
 	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
@@ -252,18 +254,57 @@ func TestTheCustodyReadsSeekTheLogByIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	at := now()
-	unsettled, unsettledArgs := OutcomeQuery{Since: at.Add(-time.Hour), At: at}.unsettledSQL(at)
-	kept, keptArgs, err := keptSQL([]OutcomeRow{{Time: at, ID: "ev-1"}, {Time: at, ID: "ev-2"}})
+	floor := []any{"ev-1", EncodeTime(at.Add(-EventHistory))}
+	reads := []struct {
+		name  string
+		where []string
+		args  []any
+	}{
+		{name: "the trace's extent", where: []string{"trace_id = ?", "event_time >= ?"}, args: floor},
+		{name: "the turn's extent", where: []string{"turn_id = ?", "event_time >= ?"}, args: floor},
+	}
+	where, args := OutcomeQuery{Since: at.Add(-time.Hour), At: at}.unsettledWhere(at)
+	reads = append(reads, struct {
+		name  string
+		where []string
+		args  []any
+	}{"the outcome counts", where, args})
+	yes := true
+	for _, h := range []HistogramQuery{
+		{Bucket: BucketHour},
+		{Bucket: BucketMinute, ListQuery: ListQuery{Since: at.Add(-time.Hour), Until: at, Category: "agent"}},
+		{Bucket: BucketDay, ListQuery: ListQuery{AgentID: "a-1", WorkItem: "native:1", Failed: &yes}},
+	} {
+		where, args := h.unsettledWhere(at)
+		reads = append(reads, struct {
+			name  string
+			where []string
+			args  []any
+		}{fmt.Sprintf("the axis by %s", h.Bucket), where, args})
+	}
+	share := TurnQuery{IDs: []string{"t-1", "t-2"}, AgentID: "a-1", WorkKey: "k-1"}
+	where, args = share.turnWhere(at.Add(-EventHistory), readShare)
+	reads = append(reads, struct {
+		name  string
+		where []string
+		args  []any
+	}{"a turn's share", where, args})
+
+	kept, keptArgs, err := keptSQL([]UnsettledRow{{Time: at, ID: "ev-1"}, {Time: at, ID: "ev-2"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range []struct {
+	type statement struct {
 		name, query, first string
 		args               []any
-	}{
-		{"the unsettled outcomes", unsettled, "SCAN custody_unsettled", unsettledArgs},
-		{"the kept outcomes", kept, "SCAN json_each", keptArgs},
-	} {
+	}
+	statements := []statement{{"the kept rows", kept, "SCAN json_each", keptArgs}}
+	for _, r := range reads {
+		query, args := unsettledSQL(r.where, r.args)
+		statements = append(statements, statement{"the unsettled rows of " + r.name, query,
+			"SCAN custody_unsettled", args})
+	}
+	for _, r := range statements {
 		plan := planOf(t, db, r.query, r.args)
 		steps := strings.Split(plan, "\n")
 		if !strings.HasPrefix(steps[0], r.first) {

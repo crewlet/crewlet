@@ -136,7 +136,7 @@ func outcomeRecord(id, kind, app string, at time.Time) store.EventRecord {
 }
 
 // rowIDs is the ids of some outcome rows, sorted.
-func rowIDs(rows []store.OutcomeRow) []string {
+func rowIDs(rows []store.UnsettledRow) []string {
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r.ID)
@@ -197,7 +197,7 @@ func TestAnUnsettledCustodyRowIsNamedRatherThanCounted(t *testing.T) {
 		t.Errorf("unsettled %v, want the window's three batch rows that name an app", ids)
 	}
 	for _, r := range got.Unsettled {
-		want := map[string]store.OutcomeRow{
+		want := map[string]store.UnsettledRow{
 			"c-skip":  {Type: "notification_skipped", App: "gitlab"},
 			"c-merge": {Type: "notifications_coalesced", App: "slack"},
 			"r-skip":  {Type: "notification_skipped", App: "jira"},
@@ -236,7 +236,7 @@ func TestAnUnsettledCustodyRowIsNamedRatherThanCounted(t *testing.T) {
 // Mutation: answer every row the log holds, unsettled or not, and the row of
 // the batch in flight is answered as kept; match by id alone, and the row at
 // another instant is.
-func TestKeptOutcomesAreTheRowsThisNodeKeeps(t *testing.T) {
+func TestKeptRowsAreTheRowsThisNodeKeeps(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
@@ -254,7 +254,7 @@ func TestKeptOutcomesAreTheRowsThisNodeKeeps(t *testing.T) {
 	if err := log.SettleCustody(t.Context(), "batch-kept", true); err != nil {
 		t.Fatal(err)
 	}
-	got, err := log.KeptOutcomes(t.Context(), []store.OutcomeRow{
+	got, err := log.KeptRows(t.Context(), []store.UnsettledRow{
 		{Time: at, ID: "own"}, {Time: at, ID: "kept"}, {Time: at, ID: "open"},
 		{Time: at, ID: "absent"}, {Time: at.Add(time.Microsecond), ID: "own"},
 	})
@@ -264,7 +264,7 @@ func TestKeptOutcomesAreTheRowsThisNodeKeeps(t *testing.T) {
 	if ids := rowIDs(got); !slices.Equal(ids, []string{"kept", "own"}) {
 		t.Errorf("kept %v, want this node's own row and the batch it settled as its own", ids)
 	}
-	if none, err := log.KeptOutcomes(t.Context(), nil); err != nil || none == nil || len(none) != 0 {
+	if none, err := log.KeptRows(t.Context(), nil); err != nil || none == nil || len(none) != 0 {
 		t.Errorf("naming nothing answered %v (%v), want an empty list", none, err)
 	}
 }

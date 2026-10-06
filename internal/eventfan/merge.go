@@ -123,21 +123,29 @@ func MergeListing(parts []listPart, limit int) (rows []store.EventRecord, more b
 // EXACT FOR [MergeListing]'s REASON, and cut at the same place: a node whose
 // part is FULL holds older records nobody has seen, so nothing older than its
 // last record can be placed, and the merge stops at the newest point any full
-// part stopped at. The records are disjoint — each phase is written once, to
-// the store of the node that published it — so the union needs no dedupe to be
-// exact; it takes one by event id anyway, because a record is SUMMED and the
-// cost of a duplicate is a double count rather than a repeated row.
+// part stopped at. A record is a ROW, and the union holds each row once by the
+// event log's own identity — its instant and its event id — because a record
+// is SUMMED and the cost of a duplicate is a double count rather than a
+// repeated row: a stateless node's phase sits in two data nodes' stores while
+// its custody batch is in flight (see the package doc), and both send it. By
+// the id alone the union would drop a second row sharing an id at another
+// instant, which the log's key allows.
 func MergeSpend(parts []spendPart, limit int) []tokens.Record {
 	var all []tokens.Record
 	var horizon *tokens.Record
-	seen := map[string]bool{}
+	type key struct{ at, id string }
+	seen := map[key]bool{}
 	for _, p := range parts {
 		for _, r := range p.Records {
 			if r.EventID != "" {
-				if seen[r.EventID] {
+				k := key{at: r.Timestamp, id: r.EventID}
+				if at, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
+					k.at = at.UTC().Format(time.RFC3339Nano)
+				}
+				if seen[k] {
 					continue
 				}
-				seen[r.EventID] = true
+				seen[k] = true
 			}
 			all = append(all, r)
 		}
@@ -210,37 +218,136 @@ func MergeRelated(direct, siblings []store.EventRecord, limit int, more bool) []
 	return out
 }
 
-// MergeSeries sums several nodes' histograms of ONE window into the fleet's.
+// Counted is one node's part of an answer that COUNTS — the axis, a trace's or
+// a turn's extent, a page of turns' sums, the outcome counts — beside which of
+// the rows the fleet's parts named unsettled the node keeps.
+//
+// Each such part counts the rows its node KEEPS and NAMES the rows it holds of
+// a custody batch it has written and not settled, which a second data node may
+// hold too (see the package doc and internal/store's unsettled.go). The merge
+// adds what every part counted and then each named row once ([once]), by the
+// rule the part's own count applies to a row.
+type Counted[T any] struct {
+	Node string
+	Part T
+
+	// Kept is the node's answer to [QuestionKept]: which of every part's
+	// named rows it keeps. Nil when nothing was named, or it did not answer.
+	Kept []store.UnsettledRow
+}
+
+// once is every row a part named unsettled, once each, that no part counted
+// already — what a merge adds to the counts it summed, by `named`, which reads
+// a part's named rows.
+//
+// EXACT, for two reasons that are both needed. A row a node COUNTED is one it
+// keeps, and no two nodes keep one row: its own rows are written once, inline,
+// by the node that published them, and a stateless node's by the one data node
+// the fleet's custody claim chose (internal/observe). And a row a node holds
+// WITHOUT knowing it keeps it is NAMED rather than counted, and counted here
+// once — unless a node that keeps it, and did not name it, counted it already.
+// That node is the batch's keeper, which settled first; a node that named the
+// row and keeps it by the second question settled between the two, and counted
+// it in neither, so the row is still counted here.
+//
+// What that leaves is a batch written and settled by its keeper BETWEEN the two
+// questions while another node held it unsettled: the keeper counted it in
+// neither answer, and keeps it by the second — so it is in no count. That is a
+// redelivery landing inside one read, and the next read counts it.
+//
+// Only the parts handed in are counted from and judged by: a node whose part a
+// merge left out — one that refused the first question, or whose axis was cut
+// over another window — counted nothing the merge holds, so what it keeps
+// cannot say a row was counted, and the merge does not hand its part in.
+func once[T any](parts []Counted[T], named func(T) []store.UnsettledRow) []store.UnsettledRow {
+	rows := map[store.RowKey]store.UnsettledRow{}
+	var order []store.RowKey
+	namedBy := map[store.RowKey]map[string]bool{}
+	for _, p := range parts {
+		for _, r := range named(p.Part) {
+			k := r.Key()
+			if _, seen := rows[k]; !seen {
+				rows[k], namedBy[k] = r, map[string]bool{}
+				order = append(order, k)
+			}
+			namedBy[k][p.Node] = true
+		}
+	}
+	counted := map[store.RowKey]bool{}
+	for _, p := range parts {
+		for _, r := range p.Kept {
+			if by, isNamed := namedBy[r.Key()]; isNamed && !by[p.Node] {
+				counted[r.Key()] = true
+			}
+		}
+	}
+	out := make([]store.UnsettledRow, 0, len(order))
+	for _, k := range order {
+		if !counted[k] {
+			out = append(out, rows[k])
+		}
+	}
+	return out
+}
+
+// identities is every row any part named unsettled, once each, by identity
+// alone — what the second question asks every node about.
+func identities[T any](parts []Counted[T], named func(T) []store.UnsettledRow) []store.UnsettledRow {
+	var out []store.UnsettledRow
+	seen := map[store.RowKey]bool{}
+	for _, p := range parts {
+		for _, r := range named(p.Part) {
+			if !seen[r.Key()] {
+				seen[r.Key()] = true
+				out = append(out, r.Identity())
+			}
+		}
+	}
+	return out
+}
+
+// MergeSeries sums several nodes' histograms of ONE window into the fleet's —
+// the first part's window, which is the asker's — and names the nodes whose
+// part it could not sum.
 //
 // Summable because the window is PINNED — every node was handed the asker's
-// clock, so every node snapped the same edges and produced the same bars —
-// and because no event is in two stores, but for a stateless node's custody
-// batch in the moments before it is settled, which a bar counts once per node
-// holding it (see the package doc). Every build cuts that window alike
+// clock, so every node snapped the same edges and produced the same bars — and
+// because every row is counted once: each part counts the rows its node keeps,
+// and the rows a custody batch still in flight puts on two nodes are named and
+// added once, by the rule the counts placed them by ([once],
+// [store.EventHistogram.Count]). Every build cuts that window alike
 // ([store.HistogramQuery.Window]), a window the history clips included: down
 // to the bucket the floor falls in, partial first bar and all, which the asker
 // drops only after this sum ([store.EventHistogram.InsideHistory]) — so a node
 // on an earlier build is summed rather than named, though such a node floors
 // what it counts at its own clock, and one running ahead of the asker's leaves
 // its rows between the two horizons out of every bar (see [Protocol]). A part
-// whose window differs
-// anyway (a peer on a build that ignores the pinned clock) cannot be summed bar
-// for bar without adding one node's minute to another's next one; it is left
-// out and its index reported, so the caller names that node rather than
-// drawing a wrong bar.
-func MergeSeries(base store.EventHistogram, others []store.EventHistogram) (store.EventHistogram, []int) {
+// whose window differs anyway (a peer on a build that ignores the pinned
+// clock) cannot be summed bar for bar without adding one node's minute to
+// another's next one; it is left out and its node reported, so the caller names
+// that node rather than drawing a wrong bar — and its named rows and what it
+// keeps are left out with it.
+func MergeSeries(q store.HistogramQuery, parts []Counted[store.EventHistogram]) (store.EventHistogram, []string) {
+	if len(parts) == 0 {
+		return store.EventHistogram{}, nil
+	}
+	base := parts[0].Part
 	out := base
 	out.Bars = slices.Clone(base.Bars)
 	out.ByCategory = make(map[string]int, len(base.ByCategory))
 	for k, v := range base.ByCategory {
 		out.ByCategory[k] = v
 	}
-	var refused []int
-	for i, h := range others {
+	out.Unsettled = nil
+	summed := []Counted[store.EventHistogram]{parts[0]}
+	var refused []string
+	for _, p := range parts[1:] {
+		h := p.Part
 		if !aligned(base, h) {
-			refused = append(refused, i)
+			refused = append(refused, p.Node)
 			continue
 		}
+		summed = append(summed, p)
 		for j := range out.Bars {
 			out.Bars[j].Count += h.Bars[j].Count
 			out.Bars[j].Failed += h.Bars[j].Failed
@@ -251,8 +358,13 @@ func MergeSeries(base store.EventHistogram, others []store.EventHistogram) (stor
 			out.ByCategory[k] += v
 		}
 	}
+	for _, r := range once(summed, histogramNamed) {
+		out.Count(q, r, 1)
+	}
 	return out, refused
 }
+
+func histogramNamed(h store.EventHistogram) []store.UnsettledRow { return h.Unsettled }
 
 // aligned reports whether two histograms are bars of one window.
 func aligned(a, b store.EventHistogram) bool {
@@ -268,98 +380,33 @@ func aligned(a, b store.EventHistogram) bool {
 	return true
 }
 
-// OutcomePart is one node's share of the outcome count: its answer to the
-// count, and — when the asker asked — which of the rows any node named
-// unsettled it keeps.
-type OutcomePart struct {
-	Node string
-
-	// Counted is the node's answer to `notification_outcomes`: the rows it
-	// keeps, counted, and the rows it holds unsettled, named.
-	Counted store.NotificationOutcomes
-
-	// Kept is the node's answer to `kept_outcomes` — nil when it was not
-	// asked or did not answer.
-	Kept []store.OutcomeRow
-}
-
 // MergeOutcomes sums several nodes' notification outcome counts into the
 // fleet's, counting every row once.
 //
-// EXACT, for three reasons that are all needed. Every node counted the SAME
-// window: the asker sent both its edges, the bottom one and its own instant,
+// EXACT, for [once]'s two reasons and one more: every node counted the SAME
+// window. The asker sent both its edges, the bottom one and its own instant,
 // which is also where every node floored the history, so no node's count
-// reaches a second further than another's. A row a node COUNTED is one it
-// keeps, and no two nodes keep one row: its own rows are written once, inline,
-// by the node that published them, and a stateless node's rows by the one data
-// node the fleet's custody claim chose (internal/observe). And a row a node
-// holds WITHOUT knowing it keeps it — a custody batch it has written and not
-// settled, which a second keeper may hold too — is NAMED rather than counted,
-// and counted here once: unless a node that keeps it, and did not name it,
-// counted it already. That node is the batch's keeper, which settled first;
-// a node that named the row and keeps it by the second question settled
-// between the two, and counted it in neither, so the row is still counted
-// here.
-//
-// What that leaves is a batch written and settled by its keeper BETWEEN the
-// two questions while another node held it unsettled: the keeper counted it in
-// neither answer, and keeps it by the second — so it is in no count. That is a
-// redelivery landing inside one read, and the next read counts it.
+// reaches a second further than another's.
 //
 // The maps are never nil, so an answer that counted nothing still marshals as
 // two empty objects; Unsettled is empty, every row of it having been counted.
-func MergeOutcomes(parts []OutcomePart) store.NotificationOutcomes {
+func MergeOutcomes(parts []Counted[store.NotificationOutcomes]) store.NotificationOutcomes {
 	out := store.NotificationOutcomes{Skipped: map[string]int{}, Coalesced: map[string]int{}}
-	named := map[store.OutcomeKey]store.OutcomeRow{}
-	var order []store.OutcomeKey
-	namedBy := map[store.OutcomeKey]map[string]bool{}
 	for _, p := range parts {
-		for app, n := range p.Counted.Skipped {
+		for app, n := range p.Part.Skipped {
 			out.Skipped[app] += n
 		}
-		for app, n := range p.Counted.Coalesced {
+		for app, n := range p.Part.Coalesced {
 			out.Coalesced[app] += n
 		}
-		for _, r := range p.Counted.Unsettled {
-			k := r.Key()
-			if _, seen := named[k]; !seen {
-				named[k], namedBy[k] = r, map[string]bool{}
-				order = append(order, k)
-			}
-			namedBy[k][p.Node] = true
-		}
 	}
-	counted := map[store.OutcomeKey]bool{}
-	for _, p := range parts {
-		for _, r := range p.Kept {
-			if by, isNamed := namedBy[r.Key()]; isNamed && !by[p.Node] {
-				counted[r.Key()] = true
-			}
-		}
-	}
-	for _, k := range order {
-		if !counted[k] {
-			out.Add(named[k])
-		}
+	for _, r := range once(parts, outcomesNamed) {
+		out.Add(r)
 	}
 	return out
 }
 
-// unsettledOf is every row any part named unsettled, once each, by identity
-// alone — what the second question asks every node about.
-func unsettledOf(parts []store.NotificationOutcomes) []store.OutcomeRow {
-	var out []store.OutcomeRow
-	seen := map[store.OutcomeKey]bool{}
-	for _, p := range parts {
-		for _, r := range p.Unsettled {
-			if !seen[r.Key()] {
-				seen[r.Key()] = true
-				out = append(out, store.OutcomeRow{Time: r.Time, ID: r.ID})
-			}
-		}
-	}
-	return out
-}
+func outcomesNamed(o store.NotificationOutcomes) []store.UnsettledRow { return o.Unsettled }
 
 // FirstFound is the one event several nodes were asked for: the NEWEST copy
 // any of them holds, which is what a single store's lookup by id answers too
@@ -399,20 +446,22 @@ func FirstFound(parts []eventPart) (store.EventRecord, bool) {
 // part that sent FEWER rows than the cap and holds more: a reply cut to fit
 // the transport ([fit]), or a capped read the asker's horizon cut rows off the
 // front of ([heldTo]) — whose unsent rows sit inside the cap's cut, where the
-// obvious merge filled the gap with other nodes' newer rows. The total is a
-// sum because no event is in two stores — but for a custody batch in the
-// moments before it is settled (see the package doc) — and it is never cut, so
-// the answer still says what it does not show.
-func MergeTrace(parts []tracePart) (rows []store.EventRecord, total int) {
+// obvious merge filled the gap with other nodes' newer rows. The total is what
+// every node keeps of the trace and every row a custody batch in flight puts on
+// two nodes once ([once]), and it is never cut, so the answer still says what
+// it does not show.
+func MergeTrace(parts []Counted[tracePart]) (rows []store.EventRecord, total int) {
 	groups := make([][]store.EventRecord, 0, len(parts))
 	var known opening
-	for _, p := range parts {
+	for _, c := range parts {
+		p := c.Part
 		groups = append(groups, p.Rows)
 		total += p.Total
 		if last, held := p.unsent(); held {
 			known.stopAt(last)
 		}
 	}
+	total += len(once(parts, func(p tracePart) []store.UnsettledRow { return p.Unsettled }))
 	rows = union(groups...)
 	slices.SortFunc(rows, oldestFirst)
 	rows = known.cut(rows)
@@ -469,12 +518,15 @@ func (o opening) cut(rows []store.EventRecord) []store.EventRecord {
 // because a node holding nothing it did not send is known whole. The newest
 // rows are among the nodes' closings — or their heads, where a head held the
 // whole of that node's share and no closing was needed. What lies between is
-// the gap the total reports, which is never cut.
-func MergeTurn(parts []turnPart) (rows []store.EventRecord, total int, traces []string) {
+// the gap the total reports, which is never cut — and which counts each row
+// once, for [MergeTrace]'s reason.
+func MergeTurn(parts []Counted[turnPart]) (rows []store.EventRecord, total int, traces []string) {
 	everything := make([][]store.EventRecord, 0, 2*len(parts))
 	firsts := map[string]time.Time{}
 	var known opening
-	for _, p := range parts {
+	total = len(once(parts, func(p turnPart) []store.UnsettledRow { return p.Unsettled }))
+	for _, c := range parts {
+		p := c.Part
 		everything = append(everything, p.Head, p.Closing)
 		total += p.Total
 		if last, held := p.unsent(); held {
@@ -507,6 +559,32 @@ func MergeTurn(parts []turnPart) (rows []store.EventRecord, total int, traces []
 		return cmp.Or(firsts[a].Compare(firsts[b]), cmp.Compare(a, b))
 	})
 	return rows, max(total, len(rows)), traces
+}
+
+// MergeTurnShares folds every node's share of a page's turns into one partial
+// per turn, in the order the turns were first seen ([MergeTurnPartials]), and
+// adds to each turn's sums the rows of it a custody batch in flight puts on two
+// nodes, once each ([once], [store.TurnPartial.Add]) — every share's sums
+// being of the rows its node keeps.
+func MergeTurnShares(parts []Counted[turnsPart]) []store.TurnPartial {
+	shares := make([][]store.TurnPartial, 0, len(parts))
+	for _, p := range parts {
+		shares = append(shares, p.Part.Turns)
+	}
+	merged := MergeTurnPartials(shares...)
+	byID := make(map[string]int, len(merged))
+	for i, p := range merged {
+		byID[p.TurnID] = i
+	}
+	for _, r := range once(parts, func(p turnsPart) []store.UnsettledRow { return p.Unsettled }) {
+		// A NAMED ROW IS OF A TURN ITS NODE'S SHARE FOLDED — the store names
+		// none other, and a share cut to fit the transport drops the names
+		// of the turns it cut ([turnsPart.keep]) — so its turn is merged.
+		if i, ok := byID[r.TurnID]; ok {
+			merged[i].Add(r, 1)
+		}
+	}
+	return merged
 }
 
 // MergeTurnPartials folds every node's partials into one partial per turn, in

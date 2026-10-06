@@ -393,6 +393,49 @@ type EventLog struct{ db *DB }
 // Events returns the audit log backed by this database.
 func (d *DB) Events() *EventLog { return &EventLog{db: d} }
 
+// EventSnapshot is the event log read at ONE SNAPSHOT: every read on it sees
+// the log exactly as the others do, whatever is written or settled between
+// them.
+//
+// For a reader that assembles one answer from several reads — a trace's rows,
+// how many it holds and which of them are unsettled; a turn's opening, its
+// count, its ending, its traces and its unsettled rows. Read one statement at a
+// time, a custody batch settled between two of them is counted by one and named
+// by the other, and the answer counts it twice or not at all (see unsettled.go).
+// Read-only by construction: it carries reads and nothing else, so nothing
+// written inside one is mistaken for part of the snapshot it was read at.
+type EventSnapshot struct{ q querier }
+
+// Snapshot runs fn against one snapshot of the log. fn may run more than once —
+// a read that met a transient conflict is retried on a fresh snapshot — so it
+// builds its answer afresh each time.
+func (l *EventLog) Snapshot(ctx context.Context, fn func(EventSnapshot) error) error {
+	return l.db.Read(ctx, func(tx *sql.Tx) error { return fn(EventSnapshot{q: tx}) })
+}
+
+// live is the log read one statement at a time, each at its own snapshot —
+// what every read answered by a single statement needs and no more.
+func (l *EventLog) live() EventSnapshot { return EventSnapshot{q: l.db.sql} }
+
+// Unsettled is the rows of one trace or one turn — `column` is `trace_id` or
+// `turn_id` — inside the history at `at` that this node holds of a custody
+// batch it has written and not settled: the rows a count of the trace's or the
+// turn's extent leaves to the asker (see unsettled.go). Read at this snapshot,
+// beside the count it is taken out of. Never nil.
+func (s EventSnapshot) Unsettled(ctx context.Context, column, id string, at time.Time) ([]UnsettledRow, error) {
+	switch column {
+	case "turn_id", "trace_id":
+	default:
+		return nil, fmt.Errorf("store: unsettled rows: %q is not a countable column", column)
+	}
+	rows, err := readUnsettled(ctx, s.q, []string{column + " = ?", "event_time >= ?"},
+		[]any{id, EncodeTime(askedAt(at).Add(-EventHistory))})
+	if err != nil {
+		return nil, fmt.Errorf("store: unsettled rows of %s %s: %w", column, id, err)
+	}
+	return rows, nil
+}
+
 const eventInsertSQL = `
 INSERT INTO crewlet_events (
 	event_time, event_id, event_type, source, category,
@@ -889,7 +932,12 @@ func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
 // [EventLog.TraceEventCount] at the SAME `at`, or the count is floored
 // elsewhere than the rows it counts.
 func (l *EventLog) Trace(ctx context.Context, traceID string, at time.Time) ([]EventRecord, error) {
-	return l.scanRows(ctx,
+	return l.live().Trace(ctx, traceID, at)
+}
+
+// Trace is [EventLog.Trace] read at this snapshot.
+func (s EventSnapshot) Trace(ctx context.Context, traceID string, at time.Time) ([]EventRecord, error) {
+	return s.scanRows(ctx,
 		"SELECT "+listColumns+" FROM crewlet_events "+
 			"WHERE trace_id = ? AND event_time >= ? "+
 			"ORDER BY event_time ASC, event_id ASC LIMIT ?",
@@ -915,7 +963,12 @@ func (l *EventLog) Trace(ctx context.Context, traceID string, at time.Time) ([]E
 // the traces are floored where these rows are, or a row crossing the floor
 // between two of them makes the count come back short of the rows it counts.
 func (l *EventLog) Turn(ctx context.Context, turnID string, at time.Time) ([]EventRecord, error) {
-	return l.scanPayloads(ctx,
+	return l.live().Turn(ctx, turnID, at)
+}
+
+// Turn is [EventLog.Turn] read at this snapshot.
+func (s EventSnapshot) Turn(ctx context.Context, turnID string, at time.Time) ([]EventRecord, error) {
+	return s.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? "+
 			"ORDER BY event_time ASC, event_id ASC LIMIT ?",
@@ -938,7 +991,12 @@ const MaxTurnEvents = MaxTraceEvents
 // filled. It is a range scan of the same (turn_id, event_time, event_id)
 // index the read walked.
 func (l *EventLog) TurnEventCount(ctx context.Context, turnID string, at time.Time) (int, error) {
-	return l.countEvents(ctx, "turn_id", turnID, at)
+	return l.live().TurnEventCount(ctx, turnID, at)
+}
+
+// TurnEventCount is [EventLog.TurnEventCount] read at this snapshot.
+func (s EventSnapshot) TurnEventCount(ctx context.Context, turnID string, at time.Time) (int, error) {
+	return s.countEvents(ctx, "turn_id", turnID, at)
 }
 
 // TurnTraces is every trace one turn touched, in the order it first touched
@@ -959,8 +1017,13 @@ func (l *EventLog) TurnEventCount(ctx context.Context, turnID string, at time.Ti
 // appearance, because that is the order a reader follows them in: the trace
 // the turn started under comes first.
 func (l *EventLog) TurnTraces(ctx context.Context, turnID string, at time.Time) ([]TurnTrace, error) {
+	return l.live().TurnTraces(ctx, turnID, at)
+}
+
+// TurnTraces is [EventLog.TurnTraces] read at this snapshot.
+func (s EventSnapshot) TurnTraces(ctx context.Context, turnID string, at time.Time) ([]TurnTrace, error) {
 	query, args := turnTracesSQL(turnID, at)
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+	rows, err := s.q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
 	}
@@ -1009,7 +1072,12 @@ type TurnTrace struct {
 
 // TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].
 func (l *EventLog) TraceEventCount(ctx context.Context, traceID string, at time.Time) (int, error) {
-	return l.countEvents(ctx, "trace_id", traceID, at)
+	return l.live().TraceEventCount(ctx, traceID, at)
+}
+
+// TraceEventCount is [EventLog.TraceEventCount] read at this snapshot.
+func (s EventSnapshot) TraceEventCount(ctx context.Context, traceID string, at time.Time) (int, error) {
+	return s.countEvents(ctx, "trace_id", traceID, at)
 }
 
 // countEvents counts one id's rows inside the history window.
@@ -1018,14 +1086,14 @@ func (l *EventLog) TraceEventCount(ctx context.Context, traceID string, at time.
 // parameter a request can reach: it is interpolated into the statement, which
 // is the one place in this package where that would be an injection rather
 // than a convenience.
-func (l *EventLog) countEvents(ctx context.Context, column, id string, at time.Time) (int, error) {
+func (s EventSnapshot) countEvents(ctx context.Context, column, id string, at time.Time) (int, error) {
 	switch column {
 	case "turn_id", "trace_id":
 	default:
 		return 0, fmt.Errorf("store: count events: %q is not a countable column", column)
 	}
 	var n int
-	err := l.db.sql.QueryRowContext(ctx,
+	err := s.q.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM crewlet_events WHERE "+column+" = ? AND event_time >= ?",
 		id, EncodeTime(askedAt(at).Add(-EventHistory))).Scan(&n)
 	if err != nil {
@@ -1058,6 +1126,11 @@ func (l *EventLog) countEvents(ctx context.Context, column, id string, at time.T
 // — they are the same rows from the other end — so a caller merges on the
 // event id rather than concatenating.
 func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int, at time.Time) ([]EventRecord, error) {
+	return l.live().TurnClosing(ctx, turnID, limit, at)
+}
+
+// TurnClosing is [EventLog.TurnClosing] read at this snapshot.
+func (s EventSnapshot) TurnClosing(ctx context.Context, turnID string, limit int, at time.Time) ([]EventRecord, error) {
 	if limit <= 0 {
 		// ALLOCATED, like every other list read here — asking for no rows is
 		// still a read that succeeded, and the contract on [EventLog] does
@@ -1065,7 +1138,7 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int, at
 		// a computed limit; today's one caller passes a constant.
 		return []EventRecord{}, nil
 	}
-	out, err := l.scanPayloads(ctx,
+	out, err := s.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? "+
 			"ORDER BY event_time DESC, event_id DESC LIMIT ?",
@@ -1200,7 +1273,11 @@ func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 }
 
 func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
-	return l.scan(ctx, false, query, args...)
+	return l.live().scanRows(ctx, query, args...)
+}
+
+func (s EventSnapshot) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
+	return s.scan(ctx, false, query, args...)
 }
 
 // scanPayloads is scanRows for a query whose SELECT ends in `payload`.
@@ -1210,11 +1287,15 @@ func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]E
 // column added to `listColumns` comes to be read into the wrong field by one
 // of them.
 func (l *EventLog) scanPayloads(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
-	return l.scan(ctx, true, query, args...)
+	return l.live().scanPayloads(ctx, query, args...)
 }
 
-func (l *EventLog) scan(ctx context.Context, withPayload bool, query string, args ...any) ([]EventRecord, error) {
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+func (s EventSnapshot) scanPayloads(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
+	return s.scan(ctx, true, query, args...)
+}
+
+func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string, args ...any) ([]EventRecord, error) {
+	rows, err := s.q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: query events: %w", err)
 	}

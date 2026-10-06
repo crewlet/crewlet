@@ -216,7 +216,7 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 			return zero, fmt.Errorf("eventfan: encode the %s parameters: %w", q, err)
 		}
 		req, err := json.Marshal(request{
-			Version: version, Asker: f.Self, Question: q, Params: body, TurnIDs: ids,
+			Version: version, Asker: f.Self, Question: q, Params: body, TurnIDs: ids, Names: true,
 		})
 		if err != nil {
 			return zero, fmt.Errorf("eventfan: encode a %s request: %w", q, err)
@@ -360,6 +360,53 @@ func (g gathered[T]) parts() []T {
 	return out
 }
 
+// settle is the second question an answer that COUNTS needs when some node
+// named a row rather than counting it: every node's part, from the first
+// scatter, beside which of the named rows each node keeps, and the coverage of
+// both scatters. `named` reads a part's named rows.
+//
+// TWO SCATTERS WHEN A ROW IS IN FLIGHT, and one otherwise. Each node counts the
+// rows it KEEPS and names the ones it holds of a custody batch it has not
+// settled — a row a second data node may hold too, kept or not. When any node
+// named one, every node is asked which of them it keeps ([QuestionKept]), and
+// the merge counts each once ([once]). Nothing is named on a fleet with no
+// stateless node, nor between batches on one that has them, which is nearly
+// always, so the second question is the exception; and a node alone needs
+// none, since a row only it holds is counted once by naming it.
+//
+// A NODE THAT ANSWERED ONLY THE SECOND counted nothing the merge holds — the
+// coverage names it for the first — so what it keeps is not read: taken as
+// evidence that a row was counted, a row it keeps and nobody counted would be
+// in no count at all.
+func settle[T any](ctx context.Context, f *Fleet, first gathered[T],
+	named func(T) []store.UnsettledRow,
+) ([]Counted[T], Coverage, error) {
+	parts := make([]Counted[T], 0, 1+len(first.peers))
+	parts = append(parts, Counted[T]{Node: f.Self, Part: first.mine})
+	for _, p := range first.peers {
+		parts = append(parts, Counted[T]{Node: p.node, Part: p.part})
+	}
+	rows := identities(parts, named)
+	if len(rows) == 0 || !first.fanned {
+		return parts, first.coverage, nil
+	}
+	second, err := gather(ctx, f, QuestionKept, keptParams{Rows: rows}, nil,
+		func(ctx context.Context) (keptPart, error) {
+			kept, err := f.Local.KeptRows(ctx, rows)
+			return keptPart{Rows: kept}, err
+		})
+	if err != nil {
+		return nil, Coverage{}, err
+	}
+	parts[0].Kept = second.mine.Rows
+	for _, p := range second.peers {
+		if i := slices.IndexFunc(parts, func(c Counted[T]) bool { return c.Node == p.node }); i >= 0 {
+			parts[i].Kept = p.part.Rows
+		}
+	}
+	return parts, first.coverage.And(second.coverage), nil
+}
+
 // ---- the questions ----------------------------------------------------- //
 
 // List answers a page of the log.
@@ -429,15 +476,14 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 	if err != nil {
 		return store.EventHistogram{}, Coverage{}, err
 	}
-	others := make([]store.EventHistogram, 0, len(g.peers))
-	for _, p := range g.peers {
-		others = append(others, p.part)
+	parts, coverage, err := settle(ctx, f, g, histogramNamed)
+	if err != nil {
+		return store.EventHistogram{}, Coverage{}, err
 	}
-	merged, refused := MergeSeries(g.mine, others)
-	coverage := g.coverage
-	for _, i := range refused {
+	merged, refused := MergeSeries(q, parts)
+	for _, node := range refused {
 		coverage = coverage.And(Coverage{Complete: false, Nodes: []NodeCoverage{{
-			ID: g.peers[i].node, Error: "it answered a different window, so its bars " +
+			ID: node, Error: "it answered a different window, so its bars " +
 				"cannot be summed with this node's; it is running a different build",
 		}}})
 	}
@@ -482,9 +528,14 @@ func (f *Fleet) Trace(ctx context.Context, id string) (Trace, Coverage, error) {
 	if err != nil {
 		return Trace{}, Coverage{}, err
 	}
-	rows, total := MergeTrace(heldTo(g, at).parts())
-	f.report(QuestionTrace, g.coverage, started)
-	return Trace{Rows: rows, Total: total}, g.coverage, nil
+	parts, coverage, err := settle(ctx, f, heldTo(g, at),
+		func(p tracePart) []store.UnsettledRow { return p.Unsettled })
+	if err != nil {
+		return Trace{}, Coverage{}, err
+	}
+	rows, total := MergeTrace(parts)
+	f.report(QuestionTrace, coverage, started)
+	return Trace{Rows: rows, Total: total}, coverage, nil
 }
 
 // Turn answers every event of one turn, from every node that ran part of it.
@@ -497,10 +548,15 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 		return TurnDetail{}, Coverage{}, err
 	}
 	g = heldTo(g, at)
-	rows, total, traces := MergeTurn(g.parts())
-	f.report(QuestionTurn, g.coverage, started)
+	parts, coverage, err := settle(ctx, f, g,
+		func(p turnPart) []store.UnsettledRow { return p.Unsettled })
+	if err != nil {
+		return TurnDetail{}, Coverage{}, err
+	}
+	rows, total, traces := MergeTurn(parts)
+	f.report(QuestionTurn, coverage, started)
 	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g), At: at},
-		g.coverage, nil
+		coverage, nil
 }
 
 // turnNodes is every node that answered with part of the turn.
@@ -685,9 +741,7 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			if err != nil {
 				return TurnPage{}, Coverage{}, err
 			}
-			shares := make([][]store.TurnPartial, 0, 1+len(second.peers))
 			for _, part := range second.parts() {
-				shares = append(shares, part.Turns)
 				lister := listerOf(part, q, reachesHistory)
 				for _, p := range part.Turns {
 					if lister(p) {
@@ -695,8 +749,15 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 					}
 				}
 			}
-			partials = MergeTurnPartials(shares...)
-			coverage = coverage.And(second.coverage)
+			// EACH SHARE SUMS THE ROWS ITS NODE KEEPS, and a row a custody
+			// batch in flight puts on two nodes is added once ([settle]).
+			shares, sharesCoverage, err := settle(ctx, f, second,
+				func(p turnsPart) []store.UnsettledRow { return p.Unsettled })
+			if err != nil {
+				return TurnPage{}, Coverage{}, err
+			}
+			partials = MergeTurnShares(shares)
+			coverage = coverage.And(sharesCoverage)
 		}
 		for _, p := range partials {
 			// NO TURN WITH NOTHING INSIDE THE ASKER'S HISTORY. Only a node
@@ -868,15 +929,9 @@ func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tok
 // `at` — the question arrived in the version that sent it (see [Protocol]), and
 // an older build refuses it and is named in the coverage instead.
 //
-// TWO SCATTERS WHEN A ROW IS IN FLIGHT, and one otherwise. Each node counts
-// the rows it KEEPS and names the ones it holds of a custody batch it has not
-// settled ([store.NotificationOutcomes.Unsettled]) — a row a second data node
-// may hold too, kept or not. When any node named one, every node is asked which
-// of them it keeps (`kept_outcomes`), and [MergeOutcomes] counts each once.
-// Nothing is named on a fleet with no stateless node, nor between batches on
-// one that has them, which is nearly always, so the second question is the
-// exception; and a node alone needs none, since a row only it holds is
-// counted once by naming it.
+// Each node counts the rows it KEEPS and names the ones it holds of a custody
+// batch it has not settled ([store.NotificationOutcomes.Unsettled]), and the
+// asker counts each named row once ([settle], [MergeOutcomes]).
 func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, Coverage, error) {
 	started := time.Now()
 	q.At = f.askedAt(q.At)
@@ -887,32 +942,9 @@ func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) 
 	if err != nil {
 		return store.NotificationOutcomes{}, Coverage{}, err
 	}
-	parts := []OutcomePart{{Node: f.Self, Counted: first.mine}}
-	for _, p := range first.peers {
-		parts = append(parts, OutcomePart{Node: p.node, Counted: p.part})
-	}
-	coverage := first.coverage
-	if named := unsettledOf(first.parts()); len(named) > 0 && first.fanned {
-		second, err := gather(ctx, f, QuestionKeptOutcomes, keptParams{Rows: named}, nil,
-			func(ctx context.Context) (keptPart, error) {
-				rows, err := f.Local.KeptOutcomes(ctx, named)
-				return keptPart{Rows: rows}, err
-			})
-		if err != nil {
-			return store.NotificationOutcomes{}, Coverage{}, err
-		}
-		parts[0].Kept = second.mine.Rows
-		for _, p := range second.peers {
-			i := slices.IndexFunc(parts, func(o OutcomePart) bool { return o.Node == p.node })
-			if i < 0 {
-				// ANSWERED ONLY THE SECOND: it counted nothing the merge
-				// holds, and the coverage names it for the first.
-				parts = append(parts, OutcomePart{Node: p.node})
-				i = len(parts) - 1
-			}
-			parts[i].Kept = p.part.Rows
-		}
-		coverage = coverage.And(second.coverage)
+	parts, coverage, err := settle(ctx, f, first, outcomesNamed)
+	if err != nil {
+		return store.NotificationOutcomes{}, Coverage{}, err
 	}
 	merged := MergeOutcomes(parts)
 	f.report(QuestionNotificationOutcomes, coverage, started)

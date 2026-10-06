@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -193,6 +194,64 @@ type EventHistogram struct {
 	// absent, and a caller rendering a closed set reads a missing key as
 	// the zero it is.
 	ByCategory map[string]int `json:"by_category"`
+
+	// Unsettled is the rows ONE NODE'S PART holds of a custody batch it has
+	// written and not settled, which its bars, its totals and its facets
+	// leave out: another data node may hold the same rows, so they are named
+	// rather than counted, and whoever sums the fleet adds each once
+	// ([EventHistogram.Count]; see unsettled.go). Read with every filter but
+	// the category, across both the bars' window and the facets', so each
+	// row is placed by the rule of each count. Empty on a node with no batch
+	// in flight, which is nearly always, and on an answer that already
+	// counted them — the fleet's.
+	Unsettled []UnsettledRow `json:"unsettled,omitempty"`
+}
+
+// Count adds one row to the axis n times — n is -1 to take a row back out —
+// wherever the counts that read it would have put it: in the bar its instant
+// falls in, its failed share and the totals when it matches the category the
+// bars are narrowed to, and in its category's facet when it lies in the window
+// that was ASKED for. [EventLog.Histogram] takes its unsettled rows out with
+// it, and a fleet's merge adds each named row back once, so both apply one
+// rule — the bars' and the facets', which differ in exactly the category and
+// the window (see [EventHistogram.ByCategory]).
+//
+// A row is assumed to pass every other filter q carries and to lie above the
+// history floor, since that is how it was read ([HistogramQuery.unsettledWhere]).
+func (h *EventHistogram) Count(q HistogramQuery, r UnsettledRow, n int) {
+	at := EncodeTime(r.Time)
+	asked := (q.Since.IsZero() || at >= EncodeTime(q.Since)) &&
+		(q.Until.IsZero() || at < EncodeTime(q.Until))
+	if asked {
+		if h.ByCategory == nil {
+			h.ByCategory = map[string]int{}
+		}
+		// A CATEGORY WITH NO ROWS IS ABSENT, as the facet count reads it.
+		if h.ByCategory[r.Category] += n; h.ByCategory[r.Category] == 0 {
+			delete(h.ByCategory, r.Category)
+		}
+	}
+	if q.Category != "" && r.Category != q.Category {
+		return
+	}
+	since, err := time.Parse(time.RFC3339, h.Since)
+	if err != nil {
+		return
+	}
+	// THE BARS' OWN BUCKETING: integer division of the stored microseconds
+	// ([HistogramQuery.barsSQL]), so a row lands in the bar the statement
+	// put it in, to the microsecond.
+	step := h.Bucket.Step().Microseconds()
+	bar := (at/step*step - EncodeTime(since)) / step
+	if bar < 0 || bar >= int64(len(h.Bars)) {
+		return
+	}
+	h.Bars[bar].Count += n
+	h.Total += n
+	if r.Failed {
+		h.Bars[bar].Failed += n
+		h.Failed += n
+	}
 }
 
 // Window reports the instants one node's part of the axis covers, after the
@@ -334,7 +393,26 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 			ErrHistogramSpan, q.Bucket, until.Sub(since), bars, MaxHistogramBuckets)
 	}
 
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+	// ONE SNAPSHOT for the bars, the facets and the rows they leave out, for
+	// the reason unsettled.go gives: read apart, a custody batch settled
+	// between two of them is counted by one and named by another.
+	var out EventHistogram
+	if err := l.db.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		out, err = q.read(ctx, tx, at, since, until, bars, query, args)
+		return err
+	}); err != nil {
+		return EventHistogram{}, err
+	}
+	return out, nil
+}
+
+// read is [EventLog.Histogram]'s answer, read in one transaction.
+func (q HistogramQuery) read(ctx context.Context, tx *sql.Tx, at, since, until time.Time,
+	bars int, query string, args []any,
+) (EventHistogram, error) {
+	step := q.Bucket.Step()
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 	}
@@ -344,12 +422,12 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	counts := make(map[int64]cell, bars)
 	total, failedTotal := 0, 0
 	for rows.Next() {
-		var at int64
+		var bucket int64
 		var c cell
-		if err = rows.Scan(&at, &c.count, &c.failed); err != nil {
+		if err = rows.Scan(&bucket, &c.count, &c.failed); err != nil {
 			return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 		}
-		counts[at] = c
+		counts[bucket] = c
 		total += c.count
 		failedTotal += c.failed
 	}
@@ -363,7 +441,7 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// caller's own edges. Counted over the snapped window it would include
 	// up to two buckets the list will never show, and on a busy hour that
 	// is thousands of rows a chip claims and the list does not have.
-	byCategory, err := l.countBy(ctx, q.ListQuery, "category", at)
+	byCategory, err := countBy(ctx, tx, q.ListQuery, "category", at)
 	if err != nil {
 		return EventHistogram{}, err
 	}
@@ -385,15 +463,49 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	// engine returns the whole window so a quiet hour is a gap of full
 	// width rather than a bar the chart squeezed out, and filling it here
 	// is what stops every caller writing the same loop.
-	for at := since; at.Before(until); at = at.Add(step) {
-		c := counts[EncodeTime(at)]
+	for bar := since; bar.Before(until); bar = bar.Add(step) {
+		c := counts[EncodeTime(bar)]
 		out.Bars = append(out.Bars, EventBar{
-			At:     at.Format(time.RFC3339),
+			At:     bar.Format(time.RFC3339),
 			Count:  c.count,
 			Failed: c.failed,
 		})
 	}
+	// THE ROWS THIS NODE DOES NOT KNOW IT KEEPS come back out of every count,
+	// and are named instead (see unsettled.go).
+	where, whereArgs := q.unsettledWhere(at)
+	named, err := readUnsettled(ctx, tx, where, whereArgs)
+	if err != nil {
+		return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
+	}
+	for _, r := range named {
+		out.Count(q, r, -1)
+	}
+	if len(named) > 0 {
+		out.Unsettled = named
+	}
 	return out, nil
+}
+
+// unsettledWhere is the predicate [unsettledSQL] narrows the custody rows to for
+// one node's part of the axis, asked at `at`, and its arguments: every filter
+// but the CATEGORY, over a window holding both the bars' snapped window and the
+// facets' asked one — because the two counts differ in exactly those, and each
+// row is placed the way each count placed it ([EventHistogram.Count]). The
+// history floor is the predicate's own, as it is both counts'.
+func (q HistogramQuery) unsettledWhere(at time.Time) ([]string, []any) {
+	since, until := q.Window(at)
+	filters := q.ListQuery
+	filters.Category = ""
+	// THE SNAPPED EDGES CONTAIN THE ASKED ONES, being snapped outward — but
+	// with no top edge named the facets' is open, and the bars' is the end of
+	// the bucket in progress, so the read's is left open too.
+	filters.Since, filters.Until = since, until
+	if q.Until.IsZero() {
+		filters.Until = time.Time{}
+	}
+	_, where, args, _ := filters.predicate(at)
+	return where, args
 }
 
 // barsSQL is the statement [EventLog.Histogram] counts its bars with when it is
@@ -452,7 +564,7 @@ func (q HistogramQuery) barsSQL(at time.Time) (since, until time.Time, query str
 //
 // `at` is the instant the answer it belongs to is asked at, so the chips are
 // floored where the bars beside them are — see [ListQuery.predicate].
-func (l *EventLog) countBy(ctx context.Context, filters ListQuery, column string, at time.Time) (map[string]int, error) {
+func countBy(ctx context.Context, q querier, filters ListQuery, column string, at time.Time) (map[string]int, error) {
 	switch column {
 	case "category":
 		filters.Category = ""
@@ -461,7 +573,7 @@ func (l *EventLog) countBy(ctx context.Context, filters ListQuery, column string
 	}
 	query, args := filters.facetSQL(column, at)
 
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: event facet %s: %w", column, err)
 	}

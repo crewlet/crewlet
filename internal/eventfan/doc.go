@@ -39,19 +39,27 @@
 // # The merges are exact, and each says why
 //
 // The merges are pure functions over values ([MergeListing], [MergeSeries],
-// [MergeTurnPartials], [MergeOutcomes], [FirstFound]), and they rest on each
-// node's store being disjoint from every other's — which every row of a node's
-// own is, and a stateless node's row is once its custody batch is settled. A
-// batch whose claim failed is written by a second keeper before the first has
-// learned it is not its own, so until the first settles it — a pass a minute,
-// and for as long as that node cannot reach coordination — two logs hold the
-// same rows. A merge that unions rows by identity holds such a row once (a
-// listing, a trace's or a turn's rows, the spend records by event id), and the
-// outcome counts name such rows rather than count them and count each once
-// ([MergeOutcomes]); the axis's bars, a trace's or a turn's total and a page of
-// turns' folded sums add each node's part, and count such a row once per node
-// holding it until its batch is settled. Each merge is otherwise exact for a
-// reason it states:
+// [MergeTurnShares], [MergeOutcomes], [MergeSpend], [FirstFound]), and they
+// rest on each node's store being disjoint from every other's — which every row
+// of a node's own is, and a stateless node's row is once its custody batch is
+// settled. A batch whose claim failed is written by a second keeper before the
+// first has learned it is not its own, so until the first settles it — a pass
+// a minute, and for as long as that node cannot reach coordination — two logs
+// hold the same rows. A merge that unions rows holds such a row once by its
+// identity, `(time, id)`: a listing, a trace's or a turn's rows, the spend
+// records. A merge that ADDS — the axis's bars, totals, failed share and
+// facets, a trace's and a turn's total, a page of turns' sums, the outcome
+// counts — adds parts that each COUNT WHAT THEIR NODE KEEPS and NAME the rows
+// it holds of a batch it has not settled, by identity and with what each count
+// adds them in by ([store.UnsettledRow]); when any node named one, every node
+// is asked which of them it keeps ([QuestionKept]), and the merge adds each
+// named row once — unless a node that keeps it, and did not name it, counted
+// it already ([Counted], [once]). One shape and one resolution for every
+// count, because what makes a row unsettled is a property of the row, never of
+// the question that met it. A node on a build before the names counts every
+// row it holds and names none, and is summed as it always was — see [Protocol]
+// for the one count that leaves. Each merge is otherwise exact for a reason it
+// states:
 // a keyset page is merged k-way on (time, id) and cut at the newest position
 // any FULL page stopped at, a histogram's bars are summed over one pinned
 // window that every build cuts alike — the partial bar a window the history

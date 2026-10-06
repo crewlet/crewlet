@@ -1348,7 +1348,8 @@ func TestThisBuildsAxisIsSummedByAnEarlierBuildsAsker(t *testing.T) {
 	for bar := since; bar.Before(until); bar = bar.Add(time.Hour) {
 		own.Bars = append(own.Bars, store.EventBar{At: bar.Format(time.RFC3339)})
 	}
-	merged, refused := eventfan.MergeSeries(own, []store.EventHistogram{reply.Answer})
+	merged, refused := eventfan.MergeSeries(store.HistogramQuery{Bucket: store.BucketHour},
+		[]eventfan.Counted[store.EventHistogram]{{Node: "node-old", Part: own}, {Node: "node-b", Part: reply.Answer}})
 	if len(refused) != 0 {
 		t.Fatalf("the earlier asker refused node-b's part: it answered %s .. %s with %d bars, "+
 			"and that build cut %s .. %s with %d", reply.Answer.Since, reply.Answer.Until,

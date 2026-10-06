@@ -225,6 +225,65 @@ func Run(t *testing.T, factory Factory) {
 		}
 	})
 
+	t.Run("every_count_holds_a_custody_row_two_nodes_hold_once", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		// ONE STATELESS NODE'S TURN, written by two keepers that the asker is
+		// neither of — so every count, its names and the second question
+		// cross the broker.
+		first, done := phase("x-phase", "t-x", at.Add(-2*time.Minute), 40, "m"),
+			completion("x-done", "t-x", at.Add(-time.Minute), false, 25)
+		first.TraceID, done.TraceID = "tr-x", "tr-x"
+		batch := store.CustodyBatch{ID: "batch-x", Origin: "seats-1",
+			Records: []store.EventRecord{first, done}}
+		for _, n := range nodes[1:] {
+			if err := n.log.WriteCustody(t.Context(), batch, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		check := func(state string) {
+			t.Helper()
+			fan := asker(nodes)
+			fan.Clock = func() time.Time { return at }
+			axis, coverage, err := fan.Histogram(t.Context(), store.HistogramQuery{
+				Bucket: store.BucketHour, ListQuery: store.ListQuery{Since: at.Add(-time.Hour)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			trace, coverage, err := fan.Trace(t.Context(), "tr-x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			turn, coverage, err := fan.Turn(t.Context(), "t-x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			page, coverage, err := fan.Turns(t.Context(), store.TurnQuery{SinceDays: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			complete(t, coverage)
+			if axis.Total != 2 || trace.Total != 2 || turn.Total != 2 {
+				t.Errorf("%s: the axis counts %d, the trace %d and the turn %d, want the batch's two "+
+					"rows once in each", state, axis.Total, trace.Total, turn.Total)
+			}
+			if len(page.Turns) != 1 || page.Turns[0].TotalTokens != 40 || page.Turns[0].Phases != 1 ||
+				page.Turns[0].DurationMS != 25 {
+				t.Errorf("%s: the page is %+v, want the turn's 40 tokens, its phase and its 25 ms once",
+					state, page.Turns)
+			}
+		}
+		check("both copies unsettled")
+		if err := nodes[1].log.SettleCustody(t.Context(), batch.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		check("node 1 kept it, node 2 not yet settled")
+	})
+
 	t.Run("a_node_that_stops_answering_is_named", func(t *testing.T) {
 		t.Parallel()
 		nodes := fleet(t, factory)

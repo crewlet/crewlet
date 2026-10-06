@@ -936,11 +936,15 @@ kept would bill a stateless node's spend twice.
 Until the node that lost the claim has settled its copy — at once when its
 claim is answered, and otherwise at its next pass, a minute later or as soon
 as it can reach the coordination store again — both logs hold the batch's
-rows. The fleet's history reads hold such a row once wherever they list rows,
-and the integrations' drop and merge counts count it once; the event axis's
-bars, a trace's or a turn's total and a page of turns' summed tokens count it
-once per node holding it for that while
+rows. The fleet's history reads hold such a row once, wherever they list rows
+and wherever they count them — the event axis's bars and category counts, a
+trace's or a turn's total, a page of turns' tokens, and the integrations' drop
+and merge counts: each data node counts the rows it keeps and names the ones it
+has not settled, and the node you asked counts each named row once
 ([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+During a rolling upgrade a data node still on an earlier build counts every row
+it holds, so a batch in flight on it can be counted twice until it settles or
+the node is upgraded.
 
 #### What gets stored, and under which category
 

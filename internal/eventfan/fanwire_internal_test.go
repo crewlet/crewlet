@@ -129,8 +129,8 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 			t.Errorf("the outcome count over %s is asked in v%d, want v5", name, got)
 		}
 	}
-	if got := versionOf(QuestionKeptOutcomes, keptParams{}); got != 5 {
-		t.Errorf("the outcome count's second question is asked in v%d, want v5", got)
+	if got := versionOf(QuestionKept, keptParams{}); got != 5 {
+		t.Errorf("every count's second question is asked in v%d, want v5", got)
 	}
 	for q, p := range map[Question]any{
 		QuestionEvent: idParams{ID: "e", At: time.Now()}, QuestionTrace: idParams{ID: "t", At: time.Now()},

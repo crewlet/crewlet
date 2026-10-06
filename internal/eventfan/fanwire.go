@@ -65,7 +65,7 @@ import (
 //     them floors the window there and nothing they count needs holding (see
 //     [Fleet.NotificationOutcomes]).
 //
-// TWO ADDITIONS MOVE NO VERSION. The first is the second scatter of `turns`
+// THREE ADDITIONS MOVE NO VERSION. The first is the second scatter of `turns`
 // saying which of the named turns the node's page lists (`listed`, `judged`),
 // beside its shares: a build before it never sends them, and the asker reads
 // that as "this node did not say" and judges its shares by what they carry
@@ -125,6 +125,26 @@ import (
 // the whole question for the length of an upgrade, costing every row it
 // holds to save that strip. The axis has carried its `at` since v1, for the
 // window it cuts.
+//
+// The third is what every other answer that COUNTS does with a stateless
+// node's row two data nodes hold for a moment (see the package doc): the axis
+// (`event_series`), a `trace`'s and a `turn`'s `total`, and the shares of a
+// page of `turns` count what the node KEEPS and name the rest in `unsettled`,
+// as the outcome counts have since the version that added them — when the
+// request says, in `names`, that its asker reads them. Unasked, a node counts
+// every row it holds and names none, which is all an asker on an earlier build
+// reads: a count with the named rows taken out would be short by exactly the
+// rows nobody adds back. And a build before the field ignores the request's
+// and sends none, which the asker reads as exactly what that build did —
+// counted everything it holds — so its part is summed as it always was. What
+// that leaves is the double count this field exists to end, for that one node
+// and only while a custody batch it holds is in flight: the asker cannot tell
+// a row it holds unsettled from one it keeps, and counts again a row another
+// node names; the second question (`kept_outcomes`, v5) is refused by a build
+// before v5, and such a node is named in the coverage whenever it is asked.
+// A version would make every such build REFUSE the axis, every trace, every
+// turn and every page of turns for the length of an upgrade — every row it
+// holds, to save a count that a minute's settling ends anyway.
 const Protocol = 5
 
 // versionOf is the lowest scatter version that answers one question with
@@ -141,7 +161,7 @@ const Protocol = 5
 // carries: no earlier build can answer it at all.
 func versionOf(q Question, params any) int {
 	switch q {
-	case QuestionNotificationOutcomes, QuestionKeptOutcomes:
+	case QuestionNotificationOutcomes, QuestionKept:
 		return 5
 	case QuestionSeries:
 		if p, ok := params.(seriesParams); ok {
@@ -216,18 +236,25 @@ const (
 	// fleet's — beside the rows it holds unsettled, named. v5 — see
 	// [Protocol].
 	QuestionNotificationOutcomes Question = "notification_outcomes"
-	// QuestionKeptOutcomes is the outcome count's second question: which of
-	// the rows some node named rather than counted — a custody batch it has
-	// written and not settled — each node KEEPS, so the asker counts each
-	// such row once whichever data nodes hold it (see [MergeOutcomes]). v5.
-	QuestionKeptOutcomes Question = "kept_outcomes"
+	// QuestionKept is every count's second question: which of the rows some
+	// node named rather than counted — a custody batch it has written and not
+	// settled — each node KEEPS, so the asker counts each such row once
+	// whichever data nodes hold it ([once]). It asks about a row by its
+	// identity alone, so one question answers for every count. v5.
+	//
+	// ITS WIRE NAME IS THE FIRST COUNT'S that asked it: v5 added it beside the
+	// outcome counts as `kept_outcomes`, and a build on v5 asks and answers it
+	// by that name. Renamed, the outcome counts of a fleet half way through an
+	// upgrade would name every node on the other build as one that did not
+	// answer — in both directions — for an answer both builds give alike.
+	QuestionKept Question = "kept_outcomes"
 )
 
 // Questions is the closed set.
 var Questions = []Question{
 	QuestionEvents, QuestionEvent, QuestionSeries, QuestionTrace, QuestionTurn,
 	QuestionTurns, QuestionPhases, QuestionSeatPhases, QuestionTraceRows,
-	QuestionPhaseTokens, QuestionNotificationOutcomes, QuestionKeptOutcomes,
+	QuestionPhaseTokens, QuestionNotificationOutcomes, QuestionKept,
 }
 
 // Valid reports whether q is a question this build answers.
@@ -257,6 +284,12 @@ type request struct {
 	// TurnIDs is the second scatter of `turns`: every node's share of
 	// exactly these turns.
 	TurnIDs []string `json:"turn_ids,omitempty"`
+
+	// Names says the asker reads the rows an answer that counts NAMES:
+	// count what you keep, and name what you hold of a custody batch you
+	// have not settled. Absent, every row held is counted and none named,
+	// which is what an earlier asker reads. Unversioned — see [Protocol].
+	Names bool `json:"names,omitempty"`
 }
 
 // reply is one node's answer.
@@ -490,15 +523,15 @@ func (p outcomeParams) query() store.OutcomeQuery {
 	return store.OutcomeQuery{Since: p.Since, At: p.At}
 }
 
-// keptParams names the rows `kept_outcomes` asks about, by the event log's
+// keptParams names the rows [QuestionKept] asks about, by the event log's
 // identity alone: their instant and their id.
 type keptParams struct {
-	Rows []store.OutcomeRow `json:"rows"`
+	Rows []store.UnsettledRow `json:"rows"`
 }
 
-// keptPart is one node's answer to `kept_outcomes`: the named rows it keeps.
+// keptPart is one node's answer to [QuestionKept]: the named rows it keeps.
 type keptPart struct {
-	Rows []store.OutcomeRow `json:"rows"`
+	Rows []store.UnsettledRow `json:"rows"`
 }
 
 // ---- serving --------------------------------------------------------- //
@@ -532,7 +565,7 @@ func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.Ev
 			return encodeError(self, fmt.Sprintf("this node speaks history protocol "+
 				"up to v%d and was asked in v%d; it is running a different build", Protocol, req.Version))
 		}
-		part, err := answer(ctx, local, req.Question, req.Params, req.TurnIDs)
+		part, err := answer(ctx, local, req.Question, req.Params, req.TurnIDs, req.Names)
 		if err != nil {
 			return encodeError(self, err.Error())
 		}
@@ -555,7 +588,13 @@ func encodeError(self, why string) ([]byte, error) {
 // THE SAME FUNCTION FOR THE ASKER AND FOR EVERY PEER, so the asker's own share
 // and a peer's are the same shape by construction rather than by two readers
 // agreeing.
-func answer(ctx context.Context, log *store.EventLog, q Question, params json.RawMessage, ids []string) (any, error) {
+//
+// AS ITS ASKER READS IT: a count whose asker does not read the rows it names
+// ([request.Names]) counts every row the node holds and names none, which is
+// what an asker on an earlier build reads ([Protocol]). The outcome counts name
+// whoever asks, since they did from the version that added them.
+func answer(ctx context.Context, log *store.EventLog, q Question, params json.RawMessage, ids []string, names bool) (any, error) {
+	old := !names
 	decode := func(into any) error {
 		if err := json.Unmarshal(params, into); err != nil {
 			return fmt.Errorf("the %s parameters do not decode: %w", q, err)
@@ -574,7 +613,15 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		return log.Histogram(ctx, p.query())
+		h, err := log.Histogram(ctx, p.query())
+		if err != nil || !old {
+			return h, err
+		}
+		for _, r := range h.Unsettled {
+			h.Count(p.query(), r, 1)
+		}
+		h.Unsettled = nil
+		return h, nil
 	case QuestionEvent:
 		var p idParams
 		if err := decode(&p); err != nil {
@@ -586,19 +633,31 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		return tracePartOf(ctx, log, p.ID, p.At)
+		part, err := tracePartOf(ctx, log, p.ID, p.At)
+		if err != nil || !old {
+			return part, err
+		}
+		return part.folded(), nil
 	case QuestionTurn:
 		var p idParams
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		return turnPartOf(ctx, log, p.ID, p.At)
+		part, err := turnPartOf(ctx, log, p.ID, p.At)
+		if err != nil || !old {
+			return part, err
+		}
+		return part.folded(), nil
 	case QuestionTurns:
 		var p turnsParams
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		return turnsPartOf(ctx, log, p.query(ids))
+		part, err := turnsPartOf(ctx, log, p.query(ids))
+		if err != nil || !old {
+			return part, err
+		}
+		return part.folded(), nil
 	case QuestionPhases:
 		var p phasesParams
 		if err := decode(&p); err != nil {
@@ -631,12 +690,12 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 			return nil, err
 		}
 		return log.NotificationOutcomes(ctx, p.query())
-	case QuestionKeptOutcomes:
+	case QuestionKept:
 		var p keptParams
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		rows, err := log.KeptOutcomes(ctx, p.Rows)
+		rows, err := log.KeptRows(ctx, p.Rows)
 		if err != nil {
 			return nil, err
 		}

@@ -620,14 +620,20 @@ sequenceDiagram
   written by a second keeper before the first has learned it is not its own —
   so until the first settles it (a pass a minute, and longer while that node
   cannot reach the coordination store) both stores hold the same rows. A merge
-  of rows holds such a row once, by its `(timestamp, id)`. The outcome counts
-  count it once too: each node counts the rows it **keeps** and names, by
-  identity, the rows of a batch it has written and not settled, and when any
-  node names one the asker asks every node which of those it keeps
-  (`kept_outcomes`) and adds each named row once — unless a node that keeps it,
-  the batch's keeper, counted it already. The axis's bars, a trace's or a
-  turn's total and a page of turns' summed tokens add every node's part, and
-  count such a row once per node holding it until its batch is settled.
+  of rows holds such a row once, by its `(timestamp, id)` — a listing, a
+  trace's or a turn's rows, the spend window's records. Every count holds it
+  once too — the axis's bars, totals, failed share and category counts, a
+  trace's and a turn's total, a page of turns' tokens, phases and duration, and
+  the outcome counts: each node counts the rows it **keeps** and names, by
+  identity, the rows of a batch it has written and not settled, with whatever
+  that count adds them in by; when any node names one, the asker asks every
+  node which of those it keeps (`kept_outcomes`) and adds each named row once —
+  unless a node that keeps it, the batch's keeper, counted it already. That
+  second question is asked only while a batch is in flight, so a fleet with no
+  stateless node never asks it. A node on a build before this counts every row
+  it holds, and is summed as before; while a batch it holds is in flight, a row
+  another node names is counted a second time for that node alone, until it is
+  upgraded.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
   visits every row once; a histogram's window is cut at the asker's instant

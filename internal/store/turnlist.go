@@ -559,6 +559,95 @@ func CombineTurnPartials(parts ...TurnPartial) TurnPartial {
 	return out
 }
 
+// Add folds one row into the partial's SUMS n times — n is -1 to take a row
+// back out — by the terms [TurnQuery.partialsSQL] sums: a phase completion is a
+// phase, every row's tokens are the turn's, and a completion's own measurement
+// is its duration. Beside that statement and [CombineTurnPartials] for their
+// reason: a sum added to the SELECT and not here is a sum a custody row two
+// data nodes hold is counted in twice.
+//
+// THE SUMS ALONE. Every other aggregate a partial carries is a minimum, a
+// maximum or a union, which a row held twice cannot move — so a share keeps
+// those from every row it holds, and a fleet adds back only what a sum
+// counts (see unsettled.go).
+func (p *TurnPartial) Add(r UnsettledRow, n int) {
+	if r.Type == phaseCompleted {
+		p.Phases += n
+	}
+	p.InputTokens += n * r.InputTokens
+	p.OutputTokens += n * r.OutputTokens
+	p.TotalTokens += n * r.TotalTokens
+	p.CacheRead += n * r.CacheRead
+	p.CacheWrite += n * r.CacheWrite
+	p.DurationMS += n * r.DurationMS
+}
+
+// TurnShares is a fleet's second question about a page of turns, answered from
+// ONE SNAPSHOT: this log's share of each of [TurnQuery.IDs] — [EventLog.TurnPartials]
+// for those turns, with the rows it KEEPS in their sums — which of them its page
+// selects ([EventLog.ListedTurns]), and the rows of them it holds of a custody
+// batch it has written and not settled, which the sums leave out and name
+// instead (see unsettled.go). One snapshot, because the sums are taken off by
+// exactly the rows named: read apart, a batch settled between the two is
+// counted twice or not at all.
+type TurnShares struct {
+	Partials  []TurnPartial
+	Listed    []string
+	Unsettled []UnsettledRow
+}
+
+// TurnShares answers [TurnShares] for q, whose IDs name the turns. Nil IDs ask
+// about nothing, and every slice of the answer is non-nil.
+func (l *EventLog) TurnShares(ctx context.Context, q TurnQuery) (TurnShares, error) {
+	out := TurnShares{Partials: []TurnPartial{}, Listed: []string{}, Unsettled: []UnsettledRow{}}
+	if len(q.IDs) == 0 {
+		return out, nil
+	}
+	if !q.Sort.Valid() {
+		return TurnShares{}, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+	}
+	at := q.at()
+	err := l.db.Read(ctx, func(tx *sql.Tx) error {
+		partials, err := turnPartials(ctx, tx, q, readShare, len(q.IDs))
+		if err != nil {
+			return err
+		}
+		listed, err := turnPartials(ctx, tx, q, readListed, len(q.IDs))
+		if err != nil {
+			return err
+		}
+		where, args := q.turnWhere(at.Add(-EventHistory), readShare)
+		named, err := readUnsettled(ctx, tx, where, args)
+		if err != nil {
+			return fmt.Errorf("store: list turns: %w", err)
+		}
+		byID := make(map[string]int, len(partials))
+		for i, p := range partials {
+			byID[p.TurnID] = i
+		}
+		// Every named row is of a turn the share folded — one statement's
+		// predicate over one snapshot — so none is left without its partial;
+		// one that were would be named and taken out of nothing.
+		kept := named[:0]
+		for _, r := range named {
+			if i, ok := byID[r.TurnID]; ok {
+				partials[i].Add(r, -1)
+				kept = append(kept, r)
+			}
+		}
+		out.Partials, out.Unsettled = partials, kept
+		out.Listed = out.Listed[:0]
+		for _, p := range listed {
+			out.Listed = append(out.Listed, p.TurnID)
+		}
+		return nil
+	})
+	if err != nil {
+		return TurnShares{}, err
+	}
+	return out, nil
+}
+
 // laterOf is MAX over two instants either of which may be absent.
 func laterOf(a, b *time.Time) *time.Time {
 	switch {
@@ -608,7 +697,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 		// turns and is asking for all of them.
 		read, limit, probe = readShare, len(q.IDs), len(q.IDs)
 	}
-	out, err := l.turnPartials(ctx, q, read, probe)
+	out, err := turnPartials(ctx, l.db.sql, q, read, probe)
 	if err != nil {
 		return nil, false, err
 	}
@@ -637,7 +726,7 @@ func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, erro
 	if !q.Sort.Valid() {
 		return nil, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
 	}
-	listed, err := l.turnPartials(ctx, q, readListed, len(q.IDs))
+	listed, err := turnPartials(ctx, l.db.sql, q, readListed, len(q.IDs))
 	if err != nil {
 		return nil, err
 	}
@@ -647,10 +736,11 @@ func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, erro
 	return out, nil
 }
 
-// turnPartials runs one of the turn reads and folds what it answers.
-func (l *EventLog) turnPartials(ctx context.Context, q TurnQuery, read turnRead, probe int) ([]TurnPartial, error) {
+// turnPartials runs one of the turn reads on one connection and folds what it
+// answers.
+func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, probe int) ([]TurnPartial, error) {
 	query, args := q.partialsSQL(q.at(), read, probe)
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list turns: %w", err)
 	}

@@ -136,7 +136,8 @@ func TestSeriesSumsAcrossNodes(t *testing.T) {
 	skewed := axis(9, 9, 9)
 	skewed.Since = "2026-09-01T01:00:00Z"
 
-	got, refused := MergeSeries(a, []store.EventHistogram{b, skewed})
+	got, refused := MergeSeries(store.HistogramQuery{Bucket: store.BucketHour},
+		named(a, b, skewed))
 	if want := []int{3, 3, 4}; !slices.Equal(counts(got), want) {
 		t.Errorf("bars = %v, want %v — each bar is the sum of the same bar on every node",
 			counts(got), want)
@@ -144,14 +145,27 @@ func TestSeriesSumsAcrossNodes(t *testing.T) {
 	if got.Total != 10 || got.ByCategory["task"] != 10 {
 		t.Errorf("total %d, task facet %d; want both 10", got.Total, got.ByCategory["task"])
 	}
-	if !slices.Equal(refused, []int{1}) {
-		t.Errorf("refused %v, want the skewed window (index 1) and only it — adding "+
+	if !slices.Equal(refused, []string{"node-2"}) {
+		t.Errorf("refused %v, want the skewed window (node-2) and only it — adding "+
 			"a node's bars to another's next hour is a chart nobody can read", refused)
 	}
 	if counts(a)[0] != 1 {
 		t.Error("the merge wrote through to the asker's own answer")
 	}
 }
+
+// named is several nodes' parts, node-0 first, none of them naming a row
+// another holds.
+func named[T any](parts ...T) []Counted[T] {
+	out := make([]Counted[T], 0, len(parts))
+	for i, p := range parts {
+		out = append(out, Counted[T]{Node: fmt.Sprintf("node-%d", i), Part: p})
+	}
+	return out
+}
+
+// alone is [named] for the merges that are about something else.
+func alone[T any](parts ...T) []Counted[T] { return named(parts...) }
 
 func counts(h store.EventHistogram) []int {
 	out := make([]int, 0, len(h.Bars))
@@ -179,9 +193,9 @@ func TestAMergedTurnKeepsBothEndsAndCountsTheMiddle(t *testing.T) {
 	for i := 400; i < 700; i++ {
 		b = append(b, row(i))
 	}
-	rows, total, _ := MergeTurn([]turnPart{
-		{Head: a, Total: len(a)}, {Head: b, Total: len(b)},
-	})
+	rows, total, _ := MergeTurn(alone(
+		turnPart{Head: a, Total: len(a)}, turnPart{Head: b, Total: len(b)},
+	))
 	if total != 700 {
 		t.Fatalf("total = %d, want 700", total)
 	}
@@ -343,6 +357,37 @@ func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
 	}
 }
 
+// A SPEND RECORD IS ONE ROW BY THE LOG'S OWN IDENTITY — its instant and its id
+// together.
+//
+// A stateless node's phase is in two data nodes' stores while its custody batch
+// is in flight, and both send it: one row, however its instant is spelled. And
+// the log's key lets one id stand at two instants, which are two rows a sum has
+// to count both of.
+//
+// Mutation: key the union by the id alone, and the second instant's row is
+// dropped from the sum; key it by the stamp's text, and one row spelled two
+// ways is counted twice.
+func TestASpendRecordIsOneRowByItsInstantAndItsID(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	got := MergeSpend([]spendPart{
+		{Records: []tokens.Record{{EventID: "p-1", Timestamp: at.Format(time.RFC3339Nano), TotalTokens: 5}}},
+		{Records: []tokens.Record{
+			{EventID: "p-1", Timestamp: at.In(time.FixedZone("x", 3600)).Format(time.RFC3339Nano), TotalTokens: 5},
+			{EventID: "p-1", Timestamp: at.Add(time.Microsecond).Format(time.RFC3339Nano), TotalTokens: 7},
+		}},
+	}, 0)
+	total := 0
+	for _, r := range got {
+		total += r.TotalTokens
+	}
+	if len(got) != 2 || total != 12 {
+		t.Errorf("merged %d records of %d tokens, want the one row two nodes sent once and the "+
+			"id's row at another instant: 2 of 12", len(got), total)
+	}
+}
+
 // A TURN PART HELD TO THE HORIZON COUNTS EVERY ROW IT KEPT ONCE.
 //
 // A node holding 501 to 519 rows of a turn sends its oldest 500 and its newest
@@ -373,7 +418,7 @@ func TestATurnPartHeldToTheHorizonCountsEachRowOnce(t *testing.T) {
 		t.Fatalf("held to the horizon the part counts %d over %d distinct rows, want %d of each",
 			held.Total, len(union(held.Head, held.Closing)), want)
 	}
-	rows, total, _ := MergeTurn([]turnPart{held})
+	rows, total, _ := MergeTurn(alone(held))
 	if total != len(rows) || rows[0].ID != "r0004" || rows[len(rows)-1].ID != "r0509" {
 		t.Errorf("the merged turn shows %d rows (%s … %s) of %d — a turn held whole reported "+
 			"as cut", len(rows), rows[0].ID, rows[len(rows)-1].ID, total)
@@ -434,7 +479,7 @@ func TestAMergedTraceStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			parts := []tracePart{mine.within(c.floor), c.part.within(c.floor)}
-			rows, total := MergeTrace(parts)
+			rows, total := MergeTrace(alone(parts...))
 			if len(rows) == 0 || rows[len(rows)-1].ID != c.last || len(rows) != c.shown {
 				t.Fatalf("the merged trace shows %d rows ending at %v, want %d ending at %s — "+
 					"the peer's last sent row, with nothing past its unsent rows", len(rows),
@@ -451,14 +496,14 @@ func TestAMergedTraceStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 	// did not send lie above it, older than every row the asker holds.
 	floor := base.Add(500*time.Second + 500*time.Millisecond)
 	allUnder := tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)}.within(floor)
-	rows, total := MergeTrace([]tracePart{mine.within(floor), allUnder})
+	rows, total := MergeTrace(alone(mine.within(floor), allUnder))
 	if len(rows) != 0 || total != 20+10 {
 		t.Errorf("with every row the peer sent under the horizon, the merge shows %v of %d, "+
 			"want nothing placeable of 30", ids(rows), total)
 	}
 	// AND A NODE HOLDING NOTHING IT DID NOT SEND BOUNDS NOTHING: two whole
 	// parts are merged whole, oldest first, up to the cap.
-	rows, total = MergeTrace([]tracePart{mine, {Rows: peer[:5], Total: 5}})
+	rows, total = MergeTrace(alone(mine, tracePart{Rows: peer[:5], Total: 5}))
 	if len(rows) != 15 || total != 15 {
 		t.Errorf("two whole parts merged to %d rows of %d, want all 15", len(rows), total)
 	}
@@ -496,7 +541,7 @@ func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rows, total, _ := MergeTurn([]turnPart{mine.within(c.floor), c.part.within(c.floor)})
+			rows, total, _ := MergeTurn(alone(mine.within(c.floor), c.part.within(c.floor)))
 			var shown []string
 			for _, r := range rows {
 				if strings.HasPrefix(r.ID, "b") {
@@ -542,27 +587,26 @@ func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 func TestEveryOutcomeRowIsCountedOnce(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-	skip := func(id string, at time.Time) store.OutcomeRow {
-		return store.OutcomeRow{Time: at, ID: id, Type: "notification_skipped", App: "gitlab"}
+	skip := func(id string, at time.Time) store.UnsettledRow {
+		return store.UnsettledRow{Time: at, ID: id, Type: "notification_skipped", App: "gitlab"}
 	}
-	merge := func(id string, at time.Time) store.OutcomeRow {
-		return store.OutcomeRow{Time: at, ID: id, Type: "notifications_coalesced", App: "slack"}
+	merge := func(id string, at time.Time) store.UnsettledRow {
+		return store.UnsettledRow{Time: at, ID: id, Type: "notifications_coalesced", App: "slack"}
 	}
-	counted := func(skipped, coalesced map[string]int, unsettled ...store.OutcomeRow) store.NotificationOutcomes {
+	counted := func(skipped, coalesced map[string]int, unsettled ...store.UnsettledRow) store.NotificationOutcomes {
 		return store.NotificationOutcomes{Skipped: skipped, Coalesced: coalesced, Unsettled: unsettled}
 	}
-	key := func(r store.OutcomeRow) store.OutcomeRow { return store.OutcomeRow{Time: r.Time, ID: r.ID} }
 	twice, keptAtB, settledBetween := skip("twice", at), skip("kept-at-b", at), merge("settled-between", at)
 	sameID, laterSameID := skip("same-id", at), skip("same-id", at.Add(time.Microsecond))
 
-	got := MergeOutcomes([]OutcomePart{
-		{Node: "node-a", Counted: counted(map[string]int{"gitlab": 2}, map[string]int{},
+	got := MergeOutcomes([]Counted[store.NotificationOutcomes]{
+		{Node: "node-a", Part: counted(map[string]int{"gitlab": 2}, map[string]int{},
 			twice, keptAtB, settledBetween, sameID),
-			Kept: []store.OutcomeRow{key(settledBetween)}},
-		{Node: "node-b", Counted: counted(map[string]int{"gitlab": 1}, map[string]int{"slack": 1},
+			Kept: []store.UnsettledRow{settledBetween.Identity()}},
+		{Node: "node-b", Part: counted(map[string]int{"gitlab": 1}, map[string]int{"slack": 1},
 			twice, laterSameID),
-			Kept: []store.OutcomeRow{key(keptAtB)}},
-		{Node: "node-c", Counted: counted(map[string]int{}, map[string]int{"slack": 2})},
+			Kept: []store.UnsettledRow{keptAtB.Identity()}},
+		{Node: "node-c", Part: counted(map[string]int{}, map[string]int{"slack": 2})},
 	})
 	// gitlab: a's 2 and b's 1 counted (b's being kept-at-b), plus twice once,
 	// and same-id at both its instants; slack: b's 1 and c's 2, plus the row
