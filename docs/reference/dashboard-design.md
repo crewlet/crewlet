@@ -1463,7 +1463,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (the login, and that it is bound to no seat — ordinary, never a fault) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer: while the socket's `viewer` question has not (it never does for a person the socket refuses), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and that it is bound to no seat — ordinary, never a fault; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer: while the socket's `viewer` question has not (it never does for a person the socket refuses), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming the grant on a section the reader holds none of the grants for (drawn only once the viewer has answered) and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -1920,7 +1920,9 @@ a blank page, and a reader cannot tell that from a dashboard that is broken.
 company did.** Top to bottom:
 
 - **The greeting.** The company's day (on `org.timezone`, the one clock every
-  due date and budget window is cut on), the reader's morning, and one sentence
+  due date and budget window is cut on), the reader's morning — by the first
+  word of their seat's name, or, for a person no seat names, of their own name
+  as `GET /auth/session` answers it — and one sentence
   of the engine's: "Nimbus is running on 3 nodes. **3 decisions** are waiting on
   you, 1 condition needs a look, and 4 agents are working right now." The
   decisions figure is weighted; an engine condition — a refused session, a lost

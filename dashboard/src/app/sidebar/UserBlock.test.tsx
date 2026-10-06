@@ -170,6 +170,22 @@ describe("who the block says this is", () => {
     });
   });
 
+  // AND BY THEIR OWN NAME where their row holds one, which no seat gives them:
+  // the foot drew the login alone. The login stays beside it, as who the
+  // engine records them as. Mutation: drop the name and the login is drawn.
+  test("an unbound person is their own name, beside their login", () => {
+    const r = whoLine(
+      { ...nobody, login: "bob.smith", unbound: true, grants: [] },
+      "",
+      "Bob Smith",
+    );
+    expect(r).toEqual({
+      name: "Bob Smith",
+      detail: "bob.smith · Not bound to a seat",
+      grants: "Holds no grants",
+    });
+  });
+
   test("nobody and not-yet-known are their own sentences", () => {
     expect(whoLine({ ...nobody, anonymous: true }, "").name).toBe("Not signed in");
     expect(whoLine({ ...nobody, loading: true }, "").name).toBe("Checking who you are");

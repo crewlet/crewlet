@@ -36,7 +36,9 @@ import { useWorkingNow } from "~/app/Shell.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useRest } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { auth } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
 import { toWall } from "~/lib/format.ts";
 import { useAttention } from "~/lib/useAttention.ts";
@@ -74,6 +76,12 @@ export function Home() {
   const now = useNow();
   const org = useOrg();
   const viewer = useViewer();
+  // A PERSON NO SEAT NAMES is greeted by their own name, which their
+  // directory row holds and `GET /auth/session` answers: the viewer's name
+  // is the seat's, so an unbound person was greeted with nothing.
+  const own = useRest(viewer.unbound ? `/auth/session as ${viewer.login}` : null, (signal) =>
+    auth.session(signal),
+  ).data?.name;
   const agents = useAgents();
   const engine = useEngineHealth();
   const { connected, authRejected } = useConnection();
@@ -153,7 +161,7 @@ export function Home() {
       <header className="home-head">
         <div className="home-head-text">
           <span className="home-date">{companyDay(now, org?.timezone)}</span>
-          <h2 className="home-greeting">{greeting(now, viewer.name)}</h2>
+          <h2 className="home-greeting">{greeting(now, viewer.name || own || "")}</h2>
           <p className="home-status">
             {sentence.map((run, i) =>
               run.strong ? (

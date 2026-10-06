@@ -80,10 +80,14 @@ export function grantsLine(grants: readonly string[]): string {
   return grants.length > 0 ? `Holds ${grants.join(", ")}` : "Holds no grants";
 }
 
-/** What the block says about who this browser is. */
+/**
+ * What the block says about who this browser is. `ownName` is the person's own
+ * name, as `GET /auth/session` answers it, for one no seat names.
+ */
 export function whoLine(
   viewer: ViewerState,
   seatName: string,
+  ownName = "",
 ): { name: string; detail: string; grants: string } {
   if (viewer.loading) {
     return { name: "Checking who you are", detail: "Asking the engine", grants: "" };
@@ -93,8 +97,13 @@ export function whoLine(
   }
   const grants = grantsLine(viewer.grants);
   // UNBOUND IS ORDINARY, so it is said as a fact: the login is who the engine
-  // records them as, and their record is kept under it.
-  if (viewer.unbound) return { name: viewer.login, detail: "Not bound to a seat", grants };
+  // records them as, and their record is kept under it — beside their own
+  // name, where their row holds one, since no seat names them.
+  if (viewer.unbound) {
+    return ownName
+      ? { name: ownName, detail: `${viewer.login} · Not bound to a seat`, grants }
+      : { name: viewer.login, detail: "Not bound to a seat", grants };
+  }
   const name = viewer.name || viewer.handle;
   // THE LOGIN AND THE SEAT, never the handle with a bare `@`: the login is
   // who signed in, the seat is where the block links, and the two differ.
@@ -141,7 +150,7 @@ export function UserBlock({
   const prefs = useViewerPrefs();
   const [everywhere, setEverywhere] = useState(false);
   const session = useSessionAnswer(!viewer.anonymous, viewer.login);
-  const who = whoLine(viewer, seatName);
+  const who = whoLine(viewer, seatName, session?.name);
   const resolved = !viewer.loading && !viewer.anonymous;
   const person = resolved && !viewer.unbound;
   const account = accountOf(viewer, session);
@@ -154,7 +163,7 @@ export function UserBlock({
           nobody, or for an answer still out, is not the reader and is not
           ringed. */}
       <SeatAvatar
-        name={person ? who.name : resolved ? viewer.login || "?" : "?"}
+        name={resolved ? who.name || "?" : "?"}
         size="sm"
         kind="human"
         ring={resolved ? "brand" : undefined}

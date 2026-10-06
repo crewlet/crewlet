@@ -488,6 +488,44 @@ describe("the decisions", () => {
     expect(tile("Waiting on your decision").textContent).toContain("1");
   });
 
+  // A PERSON NO SEAT NAMES IS GREETED BY THEIR OWN NAME, which their row holds
+  // and `GET /auth/session` answers — the viewer's name is the seat's, so they
+  // were greeted with nothing. The CONTROL is a bound reader, greeted by the
+  // seat's name and asked nothing more. Mutation: greet by the viewer's name
+  // alone and the unbound reader is greeted bare.
+  test("a reader no seat names is greeted by their own name", async () => {
+    const sessions = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            person: "p-bob",
+            name: "Bob Smith",
+            login: "bob.smith",
+            kind: "person",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", sessions);
+    mount({
+      viewer: {
+        login: "bob.smith",
+        grants: ["state:read"],
+        handle: "",
+        owner: "bob.smith",
+        name: "",
+        kind: "",
+        acts: [],
+      },
+    });
+    expect(await screen.findByRole("heading", { name: /^Good \w+, Bob$/ })).toBeTruthy();
+    cleanup();
+    sessions.mockClear();
+    mount();
+    expect(await screen.findByRole("heading", { name: /^Good \w+, Jane$/ })).toBeTruthy();
+    expect(sessions).not.toHaveBeenCalled();
+  });
+
   test("a seat stopped on its budget is a decision with both ways out", async () => {
     mount({
       agents: [

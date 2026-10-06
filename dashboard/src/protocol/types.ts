@@ -4316,6 +4316,9 @@ export interface RecoveryCodes {
 /** Who a session is, as `GET /auth/session` answers — the part a screen reads. */
 export interface SessionAnswer {
   person: string;
+  /** Their own name as their directory row holds it, or absent — what a screen
+   *  calls a person no seat names. */
+  name?: string;
   login: string;
   seat?: string;
   /** `person` or `machine`: a machine holds no second factor to manage. */
