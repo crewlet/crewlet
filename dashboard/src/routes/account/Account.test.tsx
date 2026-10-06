@@ -492,7 +492,13 @@ describe("personal access tokens", () => {
     for (const box of within(dialog).getAllByRole("checkbox")) {
       expect(box).toHaveProperty("checked", false);
     }
+    // AND A TOKEN CARRYING NO GRANT SAYS WHAT IT REACHES — its owner's own
+    // record, which takes none — rather than reading as one that does nothing.
+    // The CONTROL is the same dialog with a grant ticked, which says nothing.
+    // Mutation: drop the sentence and the first expectation goes red.
+    expect(within(dialog).getByText(/reaches only what takes none: your own inbox/)).toBeDefined();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
+    expect(within(dialog).queryByText(/reaches only what takes none/)).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Mint" }));
     expect(await within(dialog).findByText(/This token acts as you/)).toBeDefined();
     const mint = engineIs.writes().find((w) => w.path === "/iam/credentials")!;

@@ -1174,7 +1174,9 @@ a person mints their own from their own session, which is `POST
 /iam/credentials` with no `?person=` — the dashboard's Account page
 (`#/account`, **Personal access tokens › New token**) makes that request from
 the signed-in session — with **no grant ticked** to start, so a token carries
-what its holder chose rather than everything they hold, and with a lifetime
+what its holder chose rather than everything they hold (minted with none, it
+reaches only what takes no grant — its owner's own inbox, queue, pins and
+priorities, which the dialog says), and with a lifetime
 past the 365-day ceiling refused before it is sent — and `crewlet iam token
 -login` is that request too,
 signing in for it exactly as the dashboard does —

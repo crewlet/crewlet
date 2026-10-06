@@ -705,6 +705,18 @@ export function MintTokenDialog({
               reason: "A token never carries this: it needs a person present.",
             }}
           />
+          {/* A TOKEN CARRYING NO GRANT IS STILL A CREDENTIAL, and says what it
+              reaches: the verbs about its owner's own record take no grant,
+              so it reads and keeps that record and nothing else. Unsaid, a
+              person holding none was offered "Nothing to offer." beside an
+              enabled Mint, and read the token it minted as one that could do
+              nothing at all. */}
+          {grants.length === 0 && (
+            <Text as="p" variant="caption" tone="secondary">
+              With no grant ticked, the token reaches only what takes none:{" "}
+              {self ? "your" : "the account's"} own inbox, queue, pins and priorities.
+            </Text>
+          )}
         </>
       )}
       <IamOutcome answer={write.answer} />
