@@ -345,6 +345,12 @@ func (r *TailReader) Tail(ctx context.Context, q TailQuery) (TailAnswer, error) 
 	}
 	answer.Node = nodeOf(run.Owner)
 	if !running {
+		// The same as a peer's answer does: a launch that stopped is never
+		// asked about again, so its reading here is let go now rather than
+		// at the next request's idle sweep, which may never come.
+		if r.Feeds != nil {
+			r.Feeds.Forget(q.TurnID, q.LaunchID)
+		}
 		answer.Outcome, answer.Status = notRunning(status), status
 		return answer, nil
 	}

@@ -15,6 +15,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/queue"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // tailRig is two nodes on one broker and one fleet record: `asker` serves the
@@ -378,6 +379,81 @@ func TestAPeekNeverWakesAPausedBox(t *testing.T) {
 	}
 }
 
+// A LAUNCH THAT STOPPED IS LET GO, on the owner's own read as on a peer's
+// answer: nobody asks about it again, so its reading — up to [liveHold] of
+// text — is dropped by the request that learned it stopped, not kept until
+// some later request's idle sweep, which on a quiet node never comes.
+//
+// Mutation: drop either Forget, and that path's reading stays.
+func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
+	t.Parallel()
+	rig := newTailRig(t)
+	rig.runner.Say(SourceTranscript, "working\n")
+	served := rig.serve(t, boxOwner)
+	own := rig.feeds(t)
+	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: own}
+	remote := rig.reader(t, everyBuildServes)
+	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on the owner": local} {
+		if got := rig.tail(t, reader, &TailCursor{}); got.Outcome != TailRunning {
+			t.Fatalf("%s: answer = %+v; want a tail", name, got)
+		}
+	}
+	if readings(served) != 1 || readings(own) != 1 {
+		t.Fatalf("readings: served %d, own %d; want one each while the job runs",
+			readings(served), readings(own))
+	}
+	if err := rig.pending.SetStatus(t.Context(), "t1", StatusAwaiting, Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, reader := range map[string]*TailReader{"across the fleet": remote, "on the owner": local} {
+		if got := rig.tail(t, reader, &TailCursor{}); got.Outcome != TailNotRunning {
+			t.Fatalf("%s: answer = %+v; want not_running", name, got)
+		}
+	}
+	// The asker reads the record first and answers not_running itself, so a
+	// peer is told only by its own read; ask it the way an asker that read
+	// the record a moment earlier would.
+	raw, err := json.Marshal(tailRequest{Version: tailWireVersion, TurnID: "t1",
+		LaunchID: rig.launch, Owner: boxOwner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client(t).Ask(t.Context(), topics.ObserveSandboxTail, raw, 1); err != nil {
+		t.Fatal(err)
+	}
+	if readings(served) != 0 || readings(own) != 0 {
+		t.Errorf("readings: served %d, own %d; want none once the launch stopped",
+			readings(served), readings(own))
+	}
+}
+
+// A NODE THAT STOPPED READS NO BOX. Its readings end before its seats are
+// released and the boxes stop being its to read, and a request that lands in
+// between is told the read failed rather than starting one.
+//
+// Mutation: leave the readings' context running at Stop, and the box is read.
+func TestAStoppedNodeReadsNoBox(t *testing.T) {
+	t.Parallel()
+	rig := newTailRig(t)
+	rig.runner.Say(SourceTranscript, "working\n")
+	feeds := rig.feeds(t)
+	feeds.Stop()
+	local := &TailReader{Owner: boxOwner, Pending: rig.pending, Feeds: feeds}
+	if got, err := local.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch}); err == nil {
+		t.Errorf("answer = %+v; want the read's failure from a node that stopped", got)
+	}
+	if rig.runner.Reads() != 0 {
+		t.Errorf("a stopped node read the box %d times", rig.runner.Reads())
+	}
+}
+
+// readings is how many readings a node keeps.
+func readings(feeds *LiveFeeds) int {
+	feeds.mu.Lock()
+	defer feeds.mu.Unlock()
+	return len(feeds.feeds)
+}
+
 // ---------------------------------------------------------------------
 // the cursor
 // ---------------------------------------------------------------------
@@ -427,8 +503,8 @@ func waitPastReuse(feeds *LiveFeeds) {
 }
 
 // A CURSOR THAT DOES NOT MATCH IS A RESET, NEVER A SPLICE: another reading's
-// epoch, a digest of text this reading never settled, an offset past its end.
-// Each would otherwise append the reading's tail to text it does not follow.
+// epoch, a digest of text this reading never settled, an offset past its end
+// or before its start. Each would otherwise append the reading's tail to text it does not follow.
 //
 // Mutation: skip the digest check, and a viewer holding different text of the
 // same length is sent a delta.
@@ -445,6 +521,10 @@ func TestACursorThatDoesNotMatchIsAReset(t *testing.T) {
 		"another epoch":  {Epoch: "transcript@99", Offset: view.cursor.Offset, Digest: view.cursor.Digest},
 		"another digest": {Epoch: view.cursor.Epoch, Offset: view.cursor.Offset, Digest: "0123456789abcdef"},
 		"past the end":   {Epoch: view.cursor.Epoch, Offset: view.cursor.Offset + 10, Digest: view.cursor.Digest},
+		// A peer's request is decoded off the wire, where nothing held the
+		// offset to a whole number: a negative one is a reset, not a slice
+		// out of range in the owner's answer.
+		"before the start": {Epoch: view.cursor.Epoch, Offset: -1, Digest: view.cursor.Digest},
 	} {
 		got := rig.tail(t, reader, &cursor)
 		if got.Output == nil || !got.Output.Reset || got.Output.Text != "one\ntwo\n" {
@@ -484,7 +564,7 @@ func TestAnOwnerMoveContinuesOnTheSameBuildAndResetsOnAnother(t *testing.T) {
 	// The first owner's reading is long gone — a restart — and the one it
 	// starts reads the same stream under a build that derives it
 	// differently.
-	first.Stop()
+	first.Forget("t1", rig.launch)
 	rig.runner.Rewrite("FIRST\nSECOND\nthird\n")
 	got := view.take(t, rig.tail(t, reader, &view.cursor))
 	if !got.Reset || view.text != "FIRST\nSECOND\nthird\n" {

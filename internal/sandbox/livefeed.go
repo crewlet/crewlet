@@ -128,8 +128,9 @@ const liveHold = 2 * MaxRunTextBytes
 type LiveFeeds struct {
 	manager func() *Manager
 	now     func() time.Time
-	// base bounds every read; it ends when the node does.
+	// base bounds every read; it ends when the node does, or at Stop.
 	base context.Context
+	end  context.CancelFunc
 
 	mu    sync.Mutex
 	feeds map[feedKey]*liveFeed
@@ -153,15 +154,19 @@ func NewLiveFeeds(ctx context.Context, opts LiveFeedsOptions) *LiveFeeds {
 	if now == nil {
 		now = time.Now
 	}
-	return &LiveFeeds{manager: opts.Manager, now: now, base: ctx, feeds: map[feedKey]*liveFeed{}}
+	base, end := context.WithCancel(ctx)
+	return &LiveFeeds{manager: opts.Manager, now: now, base: base, end: end, feeds: map[feedKey]*liveFeed{}}
 }
 
 // Stop ends every reading and every read in flight, for a node that stops
 // answering before its context ends.
 //
 // A read runs under the node's context rather than a request's, because it
-// must outlive the request that started it ([liveFeed.current]).
+// must outlive the request that started it ([liveFeed.current]). A request
+// that arrives after Stop is answered with the read's own failure, rather
+// than reading a box this node is letting go of.
 func (fs *LiveFeeds) Stop() {
+	fs.end()
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	for key, feed := range fs.feeds {
@@ -319,6 +324,11 @@ func (f *liveFeed) refresh(done chan struct{}) {
 // readBox attaches to the run's box — never resuming it — and advances the
 // reading from it.
 func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
+	// A reading that ended — the node stopped, or the launch was let go —
+	// reads nothing, whatever a backend would make of a dead context.
+	if err := ctx.Err(); err != nil {
+		return LiveRead{}, fmt.Errorf("sandbox: the reading of run %s has ended: %w", f.run.TurnID, err)
+	}
 	var m *Manager
 	if f.feeds.manager != nil {
 		m = f.feeds.manager()
@@ -397,10 +407,12 @@ func (s *liveSnapshot) apply(read LiveRead) {
 
 // digestAt is the digest of the window a viewer holding through offset at
 // holds: the [MaxRunTextBytes] before it, or everything before it where that
-// is less. False where the owner no longer keeps the whole window.
+// is less. False where the owner no longer keeps the whole window, and for an
+// offset this reading never had — a cursor off the wire is a peer's claim,
+// and nothing between there and here held it to a whole number.
 func (s liveSnapshot) digestAt(at int64) (string, bool) {
 	from := max(at-MaxRunTextBytes, 0)
-	if at > s.end || from < s.base {
+	if at < 0 || at > s.end || from < s.base {
 		return "", false
 	}
 	sum := sha256.Sum256([]byte(s.text[from-s.base : at-s.base]))
