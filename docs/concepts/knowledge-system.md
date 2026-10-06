@@ -310,6 +310,22 @@ embedded, every vector withdrawn, every 1 024 rows a training reads and the end
 of its k-means and filing are progress, so a wedged tick never holds the duty
 while a slow node still finishes its training once rather than starting it
 again every tick.
+**What is embedded is a source's opening.** The title, one space, then the
+body, every run of whitespace collapsed — and of that, the first **8 KiB**, or
+less where the model's own per-input bound is smaller. Collapsed first and cut
+second, so indentation and blank lines spend none of the 8 KiB. The figure is a
+representation rather than a limit somebody hit: one vector stands for one
+source, and 8 KiB of prose is about 2 000 tokens — what a page or a task is
+about — while a vector over the whole of a long page about several things
+matches none of them well. It is also the most that is provably inside
+OpenAI's 8 192-token window without counting tokens, since no tokenizer emits
+more than one token a byte. The **keyword half indexes the whole body**, so a
+`hybrid` search still finds a passage deep in a long runbook by the words it
+uses; a `semantic` search cannot see past the window at all. A selection reads
+only what the opening can need — the first 16 384 characters of a body — rather
+than the whole of every page it considers, and the digest each vector carries
+is of exactly the bytes the provider received.
+
 Both source kinds are covered: the tracker's work items and the knowledge
 base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename

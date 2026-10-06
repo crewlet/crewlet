@@ -46,7 +46,8 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 	var gone []string
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT p.id, p.container, p.edit_version, p.title, p.body
+			SELECT p.id, p.container, p.edit_version, p.title,
+			       substr(p.body, 1, ?)
 			FROM pages_heads p
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'page' AND v.source_id = p.id
@@ -55,7 +56,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			       OR v.source_rev <> p.edit_version
 			       OR v.model <> ? OR v.dim <> ?)
 			ORDER BY p.updated_at
-			LIMIT ?`, model, dim, limit)
+			LIMIT ?`, embedReadChars, model, dim, limit)
 		if err != nil {
 			return err
 		}

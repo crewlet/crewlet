@@ -42,6 +42,15 @@ alike — takes one of three modes, with one vocabulary on every surface:
 | `keyword` | the words the query used — BM25 alone | Keyword |
 | `semantic` | what the query means — the vector scan alone | Meaning |
 
+**The two halves do not read the same text.** The keyword half indexes a
+source's title and its whole body. The semantic half ranks one vector per
+source, computed from its **opening** — the title and the first 8 KiB of the
+body, whitespace collapsed, or less where the model's own per-input bound is
+smaller (see
+[Where the vectors come from](../concepts/knowledge-system.md#where-the-vectors-come-from)).
+So a passage deep in a long page is found by `hybrid` and `keyword` through the
+words it uses, and never by `semantic`, which cannot see past the window.
+
 A semantic ranking needs the **query** in the same embedding space as the
 documents. The asking node computes that vector once through the company's
 embeddings provider — the same model and width the corpus is embedded at — and

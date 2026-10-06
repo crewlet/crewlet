@@ -2,7 +2,10 @@ package search_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -19,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // THE ROUND TRIP: the duty embeds, the record reaches a real broker, this
@@ -114,6 +119,93 @@ func TestTheCorpusOpeningFitsTheModelsBound(t *testing.T) {
 			if len(text) > 64 {
 				t.Errorf("the duty sent %d bytes to a model that takes 64", len(text))
 			}
+		}
+	}
+}
+
+// THE DUTY SENDS THE PREPARED OPENING, AND ITS DIGEST IS OF WHAT IT SENT.
+//
+// The provider collapses every run of whitespace before it sends anything, so
+// an opening cut BEFORE that spends the bound on indentation the model never
+// sees — a body indented the way runbooks and code are embedded a fraction of
+// what the bound allows — and a digest over that cut is a digest of bytes
+// nobody embedded, so it can never be compared with what was. Prepared first
+// and cut second, the opening is the bound's worth of text, the title then ONE
+// space then the body, and the digest every replicated record carries is
+// sha256 of exactly the bytes the provider received.
+func TestTheDutySendsThePreparedOpeningAndDigestsWhatItSent(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	const bound = 96
+	h.embedder.SetLimits(embeddings.Limits{InputBytes: bound, BatchInputs: 128, BatchBytes: 1 << 20})
+	body := "\n\n    step one:      restart the worker\n" +
+		strings.Repeat("            and then drain the queue\n", 12)
+	h.seedTitled("t-run", "Runbook", body)
+
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	requests := h.embedder.Requests()
+	if len(requests) != 1 || len(requests[0]) != 1 {
+		t.Fatalf("one task went to the provider as %v", requests)
+	}
+	sent := requests[0][0]
+	if want := embeddings.Opening("Runbook "+body, bound); sent != want {
+		t.Fatalf("the provider received %q, want the prepared opening %q", sent, want)
+	}
+	if !strings.HasPrefix(sent, "Runbook step one: restart the worker and then") {
+		t.Errorf("the provider received %q — the title, one space, then the body "+
+			"is what every stored vector was computed from", sent)
+	}
+	// THE FIXTURE HAS TO TELL THE TWO ORDERS APART: cut first, the same text
+	// prepares to markedly less than the bound allows.
+	cutFirst := embeddings.Prepare(textcut.Bytes("Runbook\n\n"+strings.TrimSpace(body), bound))
+	if len(cutFirst) >= len(sent) {
+		t.Fatalf("setup: a cut taken before the preparation keeps %d bytes and "+
+			"the prepared opening %d, so this case proves nothing", len(cutFirst), len(sent))
+	}
+
+	h.drain()
+	sum := sha256.Sum256([]byte(sent))
+	if got := h.storedSHA(search.SourceTask, "t-run"); got != hex.EncodeToString(sum[:]) {
+		t.Errorf("the stored digest is %q, not sha256 of the %d bytes the provider "+
+			"received (%x)", got, len(sent), sum)
+	}
+}
+
+// A SELECTION READS THE OPENING OF A BODY, NEVER THE WHOLE OF IT.
+//
+// A page holds up to 512 KiB and a selection is asked for a whole tick's worth
+// of sources, so read whole it held up to half a gibibyte to send 8 KiB of
+// each. It reads [search.EmbedReadChars] CHARACTERS — `substr` counts
+// characters on text, which is what lets the bound be stated against bytes
+// after the whitespace is collapsed — and a body of two-byte characters is the
+// case that tells a character count from a byte count.
+func TestASelectionReadsOnlyTheOpeningOfABody(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	long := strings.Repeat("é", 3*search.EmbedReadChars)
+	h.seedTitled("t-long", "Long", long)
+	writePage(t, h.db, pageRow{id: "p-long", container: "eng", title: "Long",
+		body: long, status: "published", edit: 1, version: 1})
+
+	for _, corpus := range []search.Corpus{
+		search.TaskCorpus{DB: h.db.Replicated().Reader()},
+		search.PageCorpus{DB: h.db.Replicated().Reader()},
+	} {
+		stale, _, err := corpus.Stale(t.Context(), embedModel, 64, 10)
+		if err != nil {
+			t.Fatalf("%s: Stale: %v", corpus.Source(), err)
+		}
+		if len(stale) != 1 {
+			t.Fatalf("%s: %d stale document(s), want the one long one", corpus.Source(), len(stale))
+		}
+		body := stale[0].Body
+		if !utf8.ValidString(body) || utf8.RuneCountInString(body) != search.EmbedReadChars {
+			t.Errorf("%s: the selection read %d bytes holding %d characters (valid "+
+				"UTF-8: %v), want exactly the first %d characters", corpus.Source(),
+				len(body), utf8.RuneCountInString(body), utf8.ValidString(body),
+				search.EmbedReadChars)
 		}
 	}
 }
@@ -651,37 +743,58 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 	// map's order, which documents a tick embedded — and so which corpus an
 	// index was trained on — changed from run to run.
 	slices.Sort(ids)
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
-		for _, id := range ids {
-			h.version++
-			document := fmt.Sprintf(`{"body":%q}`, bodies[id])
-			// A DOCUMENT WITH NO TEXT AT ALL needs an empty title
-			// too: a task titled after its own id is embeddable
-			// text, and a fixture that meant to test the empty case
-			// would silently be testing the ordinary one.
-			title := id
-			if bodies[id] == "" {
-				title = ""
-			}
-			if _, err := tx.ExecContext(h.t.Context(), `
-				INSERT INTO tracker_tasks
-					(id, key, project_key, root_id, type, title, status,
-					 status_group, rank, version, created_at, updated_at,
-					 document)
-				VALUES (?, ?, 'ENG', ?, 'task', ?, 'todo', 'open', 'm0',
-				        ?, 0, ?, ?)
-				ON CONFLICT (id) DO UPDATE SET
-					document = excluded.document, version = excluded.version,
-					updated_at = excluded.updated_at`,
-				id, strings.ToUpper(id), id, title, h.version, h.version, document,
-			); err != nil {
-				return err
-			}
+	for _, id := range ids {
+		// A DOCUMENT WITH NO TEXT AT ALL needs an empty title too: a task
+		// titled after its own id is embeddable text, and a fixture that
+		// meant to test the empty case would silently be testing the
+		// ordinary one.
+		title := id
+		if bodies[id] == "" {
+			title = ""
 		}
-		return nil
+		h.seedTitled(id, title, bodies[id])
+	}
+}
+
+// seedTitled writes one tracker row with the title a test dictates, at the
+// next version and update instant.
+func (h *embedHarness) seedTitled(id, title, body string) {
+	h.t.Helper()
+	h.version++
+	document, err := json.Marshal(map[string]string{"body": body})
+	if err != nil {
+		h.t.Fatalf("encode the body: %v", err)
+	}
+	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(h.t.Context(), `
+			INSERT INTO tracker_tasks
+				(id, key, project_key, root_id, type, title, status,
+				 status_group, rank, version, created_at, updated_at,
+				 document)
+			VALUES (?, ?, 'ENG', ?, 'task', ?, 'todo', 'open', 'm0',
+			        ?, 0, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET
+				title = excluded.title, document = excluded.document,
+				version = excluded.version, updated_at = excluded.updated_at`,
+			id, strings.ToUpper(id), id, title, h.version, h.version, document)
+		return err
 	}); err != nil {
 		h.t.Fatalf("seed: %v", err)
 	}
+}
+
+// storedSHA is the text digest the vector row for one source carries.
+func (h *embedHarness) storedSHA(source search.Source, id string) string {
+	h.t.Helper()
+	var sha string
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT text_sha FROM kb_vectors WHERE source = ? AND source_id = ?`,
+			string(source), id).Scan(&sha)
+	}); err != nil {
+		h.t.Fatalf("read the digest of %s %s: %v", source, id, err)
+	}
+	return sha
 }
 
 func (h *embedHarness) removeTask(id string) {

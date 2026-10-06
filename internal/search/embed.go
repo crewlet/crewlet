@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The embedding duty: ONE fleet singleton, one provider bill, N copies.
@@ -86,17 +85,60 @@ const (
 	// raising the provider's, which is the half that is actually slow.
 	EmbedInterval = time.Minute
 
-	// EmbedInputBytes caps what ONE source contributes to a request.
+	// EmbedInputBytes is how much of ONE source the corpus embeds: the
+	// opening of its prepared text — title and body, every run of
+	// whitespace collapsed ([embeddings.Prepare]) — up to this many bytes,
+	// or the model's own per-input bound where that is smaller
+	// ([Embedder.inputBound]).
 	//
-	// 8 KiB. Past it the text is CUT rather than refused, and that is the
-	// deliberate opposite of what this engine does with a vendor-limited
-	// field elsewhere: a page's first eight kibibytes are what a semantic
-	// search is about, so cutting keeps the document findable where
-	// refusing would remove it from the corpus entirely with nothing to
-	// say so. Never past the MODEL's own bound, though, which the provider
-	// enforces ([Embedder.inputBound]): OpenAI's is exactly this, and a
-	// model with a smaller window is sent the opening that fits it.
+	// 8 KiB, and two reasons hold it there, one from below and one from
+	// above.
+	//
+	// FROM BELOW IT IS A REPRESENTATION, not a limit anybody imposed. One
+	// vector stands for one source, and 8 KiB of English prose is about
+	// 2 000 tokens — a quarter of OpenAI's 8 192-token window — which is
+	// the span the ranking, the floor curve and every capacity figure in
+	// this package were measured over. An opening that long already says
+	// what a page or a task is about; a vector over much more of a long,
+	// multi-topic page is a mean of its topics and matches none of them
+	// well. What lies past the window is not lost to search — the keyword
+	// half indexes the WHOLE body ([Indexer]) — only to a search by
+	// meaning.
+	//
+	// FROM ABOVE IT IS THE MOST THAT IS PROVABLY INSIDE THE WINDOW without a
+	// tokenizer. A tokenizer emits at most one token per byte of its input
+	// (config.EmbeddingModels states the argument for each family), and
+	// OpenAI's models take 8 192 tokens an input with nothing wrapped
+	// around it — so 8 192 bytes is the largest opening that can never be
+	// refused there, whatever the script. Raising it means counting tokens,
+	// which this engine deliberately does not ship a tokenizer to do.
+	//
+	// CUT RATHER THAN REFUSED, the deliberate opposite of what this engine
+	// does with a vendor-limited field a person wrote: no person or model
+	// ever reads this text — it is machine input whose only output is a
+	// vector — and refusing would remove the source from the semantic half
+	// with nothing to say so.
 	EmbedInputBytes = 8 << 10
+
+	// embedReadChars is how much of a source's body a selection reads to
+	// form its opening: twice [EmbedInputBytes], in CHARACTERS, because
+	// that is what `substr` counts on a TEXT value in SQLite and in Turso.
+	//
+	// ENOUGH, because every character is at least one byte and collapsing
+	// whitespace removes only whitespace: a prefix of 2·N characters of
+	// which at most N are whitespace still prepares to at least N bytes,
+	// so the opening reaches the full bound. A body whose first 2·N
+	// characters are mostly whitespace — deeply indented code, a padded
+	// table — gets a SHORTER opening than its whole would give, and the
+	// same shorter opening every time, so its digest is as stable as any
+	// other's.
+	//
+	// AND NO MORE, because the selection is asked for a whole tick's worth
+	// of sources per corpus and a page holds up to 512 KiB: read whole,
+	// 1 024 of them were up to half a gibibyte held to send 8 KiB of each.
+	// Read like this, it is at most 64 KiB a source at four bytes a
+	// character, and 16 KiB for prose.
+	embedReadChars = 2 * EmbedInputBytes
 )
 
 // THERE IS NO STALL WINDOW HERE, deliberately, and the constant that used to
@@ -199,9 +241,9 @@ type Document struct {
 	// re-embedding anything.
 	Version uint64
 
-	// Title and Body are the text. They are joined with a blank line
-	// rather than concatenated, because a title running into a body is a
-	// sentence the model has to disentangle before it can represent it.
+	// Title is the source's whole title, and Body the OPENING of its body:
+	// the first [embedReadChars] characters, which is all an opening of
+	// [EmbedInputBytes] can need ([Document.text]).
 	//
 	// A TASK'S BODY IS NOT A COLUMN — it lives inside the encoded document,
 	// deliberately, because nothing indexes it and a duplicate column costs
@@ -213,24 +255,40 @@ type Document struct {
 	Body  string
 }
 
-// text is what is actually sent, cut to bound — [Embedder.inputBound], the
-// per-source ceiling inside the model's own.
+// text is what is actually sent for this source: the [embeddings.Opening] of
+// its title and body at bound — [Embedder.inputBound], the corpus's opening
+// inside the model's own — which is PREPARED text, exactly the bytes the
+// provider receives.
 //
-// Through [textcut.Bytes], unmarked, because what the provider receives is
-// embedding INPUT and an appended character would be a token in the vector
-// rather than a note about one.
+// PREPARED FIRST AND CUT SECOND. The provider collapses every run of
+// whitespace before it sends anything ([embeddings.Prepare]), so a cut taken
+// before that spent the bound on indentation and blank lines the model never
+// saw, and a digest taken over it was a digest of bytes nobody embedded.
+//
+// THE TITLE AND THE BODY ARE SEPARATED BY ONE SPACE, which is what the model
+// has always received: the preparation collapses whatever separated them —
+// the blank line this used to join them with included — and every vector the
+// corpus holds was computed from "Title Body…". A delimiter that survived the
+// preparation (a colon, a full stop) would be a token in every vector, and it
+// would change the text of every source while nothing selects an unchanged
+// source again: the corpus would hold two representations side by side until
+// each source happened to be edited.
+//
+// UNMARKED, because this is embedding INPUT that no reader sees, and an
+// appended character would be a token in the vector rather than a note about
+// one — the class textcut's package doc names, cut by the provider's own rule.
 func (d Document) text(bound int) string {
-	joined := strings.TrimSpace(d.Title) + "\n\n" + strings.TrimSpace(d.Body)
-	return textcut.Bytes(strings.TrimSpace(joined), bound)
+	return embeddings.Opening(d.Title+" "+d.Body, bound)
 }
 
-// sha is the digest of the exact text that was embedded.
+// sha is the digest of the exact text that was embedded: sha256 over
+// [Document.text], which is byte for byte what the provider received.
 //
-// OF THE CUT TEXT, not of the source, and that is what makes it able to answer
-// the question it exists for: a source rewritten into the same words — a
-// re-file, a label, a parent move — produces the same digest and is not paid
-// for again. A digest of the whole body would differ whenever anything below
-// the cut moved, which is text the provider never saw.
+// OF THE OPENING, not of the source, and that is what lets it answer the
+// question it exists for: a source rewritten into the same words — a re-file,
+// a label, a parent move — produces the same digest. A digest of the whole
+// body would differ whenever anything past the window moved, which is text the
+// provider never saw.
 func (d Document) sha(bound int) string {
 	sum := sha256.Sum256([]byte(d.text(bound)))
 	return hex.EncodeToString(sum[:])
@@ -416,9 +474,9 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 		//
 		// A CORPUS UNDER THE CEILING IS NOT FREE EITHER, and the bill
 		// is in [Embedder.Tick]: every corpus is selected at the whole
-		// tick's ceiling, so N of them read N x 1 024 whole documents
-		// — untruncated bodies and all — to embed 1 024. Read that
-		// paragraph before adding the third.
+		// tick's ceiling, so N of them read N x 1 024 documents — each
+		// its title and the opening of its body — to embed 1 024. Read
+		// that paragraph before adding the third.
 		return nil, fmt.Errorf("search: the embed duty has %d corpora and a "+
 			"ceiling of %d provider calls a tick — every corpus must be "+
 			"guaranteed at least one call or the ones at the back of "+
@@ -518,13 +576,13 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	// many in TOTAL, so with every corpus behind at once (N-1)/N of what
 	// was read is discarded — 1 024 documents at the two corpora shipped,
 	// 7 168 at the eight [NewEmbedder] allows. It is not only SQL work:
-	// [Document.Body] holds the UNTRUNCATED body, since the cut to
-	// EmbedInputBytes happens in [Document.text] at send time, so N x 1 024
-	// whole documents are live for the length of the tick and a third
-	// corpus is a 50 % rise in this duty's peak footprint before it embeds
-	// anything new. That is the figure to weigh when adding one. None of it
-	// is lost WORK — the selection is derived from the rows, so the next
-	// tick asks again.
+	// every selected [Document] holds its body's first [embedReadChars]
+	// characters — up to 64 KiB, 16 KiB of prose — so N x 1 024 of those
+	// are live for the length of the tick, up to 64 MiB a corpus, and a
+	// third corpus is a 50 % rise in this duty's peak footprint before it
+	// embeds anything new. That is the figure to weigh when adding one.
+	// None of it is lost WORK — the selection is derived from the rows, so
+	// the next tick asks again.
 	//
 	// TWO SHAPES THAT WOULD BOUND THE READ WERE WEIGHED AND NOT TAKEN,
 	// because each buys it back with something load-bearing:
@@ -909,7 +967,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.project_key, t.version, t.title,
-			       COALESCE(json_extract(t.document, '$.body'), '')
+			       substr(COALESCE(json_extract(t.document, '$.body'), ''), 1, ?)
 			FROM tracker_tasks t
 			LEFT JOIN kb_vectors v
 			  ON v.source = 'task' AND v.source_id = t.id
@@ -918,7 +976,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			       OR v.source_rev <> t.version
 			       OR v.model <> ? OR v.dim <> ?)
 			ORDER BY t.updated_at
-			LIMIT ?`, model, dim, limit)
+			LIMIT ?`, embedReadChars, model, dim, limit)
 		if err != nil {
 			return err
 		}
