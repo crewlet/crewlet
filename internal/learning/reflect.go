@@ -109,6 +109,30 @@ func (t Turn) Ask() string {
 	return strings.Join(parts, "\n\n")
 }
 
+// describeTurn writes the lines every post-turn worker's prompt opens its
+// account of a turn with: what woke it, what it was asked, and what it did —
+// each under the name of what it IS.
+//
+// They were "Task:" and "Plan:", and neither was: the first is the label of
+// the waking event ([types.TurnCompleted.TaskSummary] — "Message from Ana:
+// Slack message", "cto asked a colleague on ch-1"), which a model told it is
+// the task reads as the whole of what was asked; the second is the review's
+// account of what landed, or the final answer, which is what the turn did and
+// not what it meant to. ask is rendered on one line, quoted, and omitted when
+// empty; a worker that renders each interaction itself passes only the ask
+// the interactions do not carry.
+func describeTurn(b *strings.Builder, t Turn, ask string) {
+	b.WriteString("- Woken by: ")
+	b.WriteString(orElse(strings.TrimSpace(t.Event.TaskSummary), "(not recorded)"))
+	if ask = strings.Join(strings.Fields(ask), " "); ask != "" {
+		b.WriteString("\n- Asked: \"")
+		b.WriteString(ask)
+		b.WriteString("\"")
+	}
+	b.WriteString("\n- What it did: ")
+	b.WriteString(orElse(strings.TrimSpace(t.Event.PlanSummary), "(nothing recorded)"))
+}
+
 // DedupeKey is what the redelivery guard remembers, and it is a DIFFERENT
 // question from [Turn.WorkKey].
 //

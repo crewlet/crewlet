@@ -527,10 +527,10 @@ func buildPersistPrompt(t Turn, existing []DiaryEntry) string {
 		tools = strings.Join(t.Event.ToolSequence, ", ")
 	}
 	var b strings.Builder
-	b.WriteString("Turn summary:\n- Task: ")
-	b.WriteString(orElse(t.Event.TaskSummary, "(no description)"))
-	b.WriteString("\n- Plan: ")
-	b.WriteString(orElse(t.Event.PlanSummary, "(no plan)"))
+	b.WriteString("Turn summary:\n")
+	// ONLY THE ASK NO INTERACTION CARRIES: each interaction is rendered
+	// below with its sender, which is what attributing a fact needs.
+	describeTurn(&b, t, t.Event.Ask)
 	b.WriteString("\n- Tools called: ")
 	b.WriteString(tools)
 	b.WriteString("\n- Outcome: ")

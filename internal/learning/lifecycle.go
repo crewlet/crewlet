@@ -1281,9 +1281,10 @@ type FitFunc func(ctx context.Context, role string, field EpisodeField, text str
 type EpisodeField string
 
 const (
-	// FieldTask is [Episode.TaskSummary]: what the turn was asked.
+	// FieldTask is [Episode.TaskSummary]: the label of the event that woke
+	// the turn — the only account of what it was asked a stored episode has.
 	FieldTask EpisodeField = "task"
-	// FieldOutcome is [Episode.PlanSummary]: what the turn concluded.
+	// FieldOutcome is [Episode.PlanSummary]: what the turn did.
 	FieldOutcome EpisodeField = "outcome"
 )
 
@@ -1457,8 +1458,10 @@ func RenderCluster(c Cluster, condensed map[string]string) string {
 			// than the wrong procedure.
 			tools = strings.Join(ep.ToolSequence, ", ")
 		}
-		fmt.Fprintf(&b, "%d. [%s] task: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary, condensed))
-		fmt.Fprintf(&b, "   plan: %s\n", oneLine(ep.PlanSummary, condensed))
+		// UNDER THE NAMES OF WHAT THEY ARE (see [describeTurn]): the
+		// label of the event that woke the turn, and what the turn did.
+		fmt.Fprintf(&b, "%d. [%s] woken by: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary, condensed))
+		fmt.Fprintf(&b, "   did: %s\n", oneLine(ep.PlanSummary, condensed))
 		fmt.Fprintf(&b, "   tools: %s\n", tools)
 		fmt.Fprintf(&b, "   when: %s\n", ep.EndedAt.UTC().Format(time.DateOnly))
 	}

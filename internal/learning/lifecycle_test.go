@@ -1314,13 +1314,13 @@ func TestRenderClusterFlattensAndCarriesEveryFieldWhole(t *testing.T) {
 	// A turn summary carrying its own newlines would look like more turns
 	// than there are, and a model that miscounts writes the pattern of a
 	// cluster that does not exist.
-	if !strings.Contains(got, "task: line one line two") {
+	if !strings.Contains(got, "woken by: line one line two") {
 		t.Errorf("newlines were not flattened:\n%s", got)
 	}
 	// NOTHING IS CUT. A field past the budget with no rewrite is carried
 	// whole: the pattern inferred from a stack trace's first 280 bytes is
 	// the trace's opening and none of what the turn was for.
-	if !strings.Contains(got, "plan: "+long+"\n") {
+	if !strings.Contains(got, "   did: "+long+"\n") {
 		t.Errorf("an unrewritten field was not carried whole:\n%s", got)
 	}
 	// The whole tool sequence. A shortened one reads as a shorter procedure
@@ -1346,10 +1346,10 @@ func TestRenderClusterFlattensAndCarriesEveryFieldWhole(t *testing.T) {
 	// is not the turn's own — and only a field past the budget takes one.
 	condensed := map[string]string{long: "posted the release notes to #eng", "line one line two": "nope"}
 	got = RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first}}, condensed)
-	if !strings.Contains(got, "plan: (condensed) posted the release notes to #eng\n") || strings.Contains(got, long) {
+	if !strings.Contains(got, "did: (condensed) posted the release notes to #eng\n") || strings.Contains(got, long) {
 		t.Errorf("the rewrite was not rendered in the field's place:\n%s", got)
 	}
-	if !strings.Contains(got, "task: line one line two\n") {
+	if !strings.Contains(got, "woken by: line one line two\n") {
 		t.Errorf("a field within the budget took a rewrite:\n%s", got)
 	}
 }
@@ -1403,12 +1403,12 @@ func TestTheSummarizerCondensesOnlyTheOutliersBeforeTheCall(t *testing.T) {
 		t.Errorf("rewrites asked = %v at %d bytes, want the three outliers as their fields at %d",
 			asked, budget, perTurnDetail)
 	}
-	if strings.Count(user, "task: (condensed) rewrote task") != 2 ||
-		!strings.Contains(user, "plan: (condensed) rewrote outcome") ||
-		!strings.Contains(user, "plan: short\n") {
+	if strings.Count(user, "woken by: (condensed) rewrote task") != 2 ||
+		!strings.Contains(user, "did: (condensed) rewrote outcome") ||
+		!strings.Contains(user, "did: short\n") {
 		t.Errorf("the rewrites did not reach the prompt:\n%s", user)
 	}
-	if !strings.Contains(user, "plan: "+flatten(broken)+"\n") {
+	if !strings.Contains(user, "did: "+flatten(broken)+"\n") {
 		t.Errorf("a field whose rewrite failed was not carried whole:\n%s", user)
 	}
 }

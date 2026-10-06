@@ -426,10 +426,8 @@ Leave out what happened this time — no ticket numbers, no names, no dates.`
 // buildSynthesisPrompt renders the one turn the draft is distilled from.
 func buildSynthesisPrompt(t Turn) string {
 	var b strings.Builder
-	b.WriteString("Turn summary:\n- Task: ")
-	b.WriteString(orElse(t.Event.TaskSummary, "(no description)"))
-	b.WriteString("\n- Plan: ")
-	b.WriteString(orElse(t.Event.PlanSummary, "(no plan)"))
+	b.WriteString("Turn summary:\n")
+	describeTurn(&b, t, t.Ask())
 	b.WriteString("\n- Tools called, in order: ")
 	b.WriteString(strings.Join(t.Event.ToolSequence, " -> "))
 	b.WriteString("\n- Outcome: ")

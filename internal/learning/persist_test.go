@@ -617,8 +617,8 @@ func TestEveryCoalescedRequesterReachesThePrompt(t *testing.T) {
 		`- Inbound message: "please open replies with hey sam"`,
 		"- Requester: miles",
 		`- Inbound message: "and cc me"`,
-		"- Task: Help with reporting",
-		"- Plan: Summarise",
+		"- Woken by: Help with reporting",
+		"- What it did: Summarise",
 		"- Tools called: search",
 		"- Outcome: done",
 	} {
@@ -642,7 +642,7 @@ func TestAnEmptyTurnStillDescribesItself(t *testing.T) {
 	p := says(`{"kind":"NOOP"}`)
 	mustDecide(t, decider(t, p, &fakeDiary{}), turn)
 	prompt := p.prompt(t, 0)
-	for _, want := range []string{"- Task: (no description)", "- Plan: (no plan)", "- Tools called: (none)"} {
+	for _, want := range []string{"- Woken by: (not recorded)", "- What it did: (nothing recorded)", "- Tools called: (none)"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt is missing %q:\n%s", want, prompt)
 		}

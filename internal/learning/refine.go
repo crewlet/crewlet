@@ -388,10 +388,8 @@ func buildRefinementPrompt(t Turn, candidates []Skill) string {
 	for _, sk := range candidates {
 		fmt.Fprintf(&b, "\n### %s\n%s\n\n%s\n", sk.Name, sk.Description, sk.Content)
 	}
-	b.WriteString("\nThe turn:\n- Task: ")
-	b.WriteString(orElse(t.Event.TaskSummary, "(no description)"))
-	b.WriteString("\n- Plan: ")
-	b.WriteString(orElse(t.Event.PlanSummary, "(no plan)"))
+	b.WriteString("\nThe turn:\n")
+	describeTurn(&b, t, t.Ask())
 	b.WriteString("\n- Tools called, in order: ")
 	b.WriteString(strings.Join(t.Event.ToolSequence, " -> "))
 	b.WriteString("\n- Outcome: ")

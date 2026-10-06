@@ -113,7 +113,7 @@ Agents can search their own prior turns.
 
 Mines recurring successful trajectories and drafts a new procedural skill.
 
-- **Single-turn induction** runs inline in the reflect engine: a **settled** turn (`done` or `failed`) that used ≥`min_tool_calls` tools is offered to the auxiliary model, which drafts a skill or declines. Declining is the ordinary answer — most turns are not procedures — so a turn with no reusable shape costs one cheap call and writes nothing.
+- **Single-turn induction** runs inline in the reflect engine: a **settled** turn (`done` or `failed`) that used ≥`min_tool_calls` tools is offered to the auxiliary model, which drafts a skill or declines. Declining is the ordinary answer — most turns are not procedures — so a turn with no reusable shape costs one cheap call and writes nothing. Every post-turn worker's prompt describes the turn under the names of what its fields are — **woken by** (the label of the waking event, which says what kind of event it was and nothing of what it said), **asked** (what the turn was asked; the PersistDecider renders each interaction with its sender instead), and **what it did** (the review's account of what landed, or the final answer) — never as a "task" and a "plan", which a model reads as the whole of what was asked and what was intended.
 - **Three gates, all before the model call**, because a draft made only to be discarded is money spent for nothing: the per-seat cap (`max_skills_per_agent`), and a duplicate check comparing the turn's tool set against the seat's existing skills by Jaccard similarity (`duplicate_jaccard_threshold`). The comparison is over the tool **set**, not the ordered run — two turns calling the same four tools in a different order are the same procedure, and treating order as identity is how a seat ends up with a skill per permutation. A draft the model returns without a name, summary or body is dropped rather than written with the gap.
 - **Clustered synthesis** (`scheduler_enabled`, `cluster_*`) is the other half, and it catches what single-turn induction cannot: the shape a seat arrives at over a fortnight — three tools, unremarkable on any one turn, run the same way eleven times. Repetition is evidence a single turn cannot offer, and it is invisible from inside any one of them. A daily [singleton](seat-ownership.md#singleton-duties) pass reads each seat's last `episode_fetch_limit` (default 200) turns, greedy-clusters them by tool-sequence Jaccard at `cluster_jaccard_threshold` (default 0.6), and drafts from the largest cluster of size ≥`cluster_min_size` (default 3). It is **off by default** — `scheduler_enabled: false` — because the pass costs an auxiliary call per seat per day and a young company has nothing to cluster yet.
   - **One draft per seat per pass, largest cluster first.** Not every qualifying cluster: each draft is a completion, and a seat with three real patterns learns them over three days with the strongest evidence going first. A pass that drafted everything could also fill the per-seat cap in a single tick.
@@ -338,7 +338,9 @@ So the raw message rides separately. The notification's `SalientBody` carries th
 
 | Surface | Reads |
 |---|---|
-| Counterparty profiler / PersistDecider | `InboundInteraction.body` — the salient text, one entry per constituent |
+| Counterparty profiler / PersistDecider | `InboundInteraction.body` — the salient text, one entry per constituent; the PersistDecider is also shown `turn_completed.ask` for a wake with no interactions (a colleague's question, a schedule's task) |
+| Synthesizer / Refiner | the turn's ask as `turn_completed` records it — the interactions' bodies, or its `ask` |
+| The episode's vector | the turn's label, its ask and what it did, as one text — see [Episodes](#4-episodes-and-query_episodes-search-own-past) |
 | `## Personal memory` prefetch | the turn's ask → the similarity half's vector, and the aux filter prompt |
 | `## Relevant knowledge` prefetch | the turn's ask → aux-LLM query generation + knowledge-base search |
 | `## Similar prior work` (episode recall) | the turn's ask → the vector query, and the episode summary prompt |
@@ -394,7 +396,7 @@ After the migration `episodes` rows distinguish on `kind`:
 - **`query_episodes` builtin**: its `query` path is similarity, so raw turns only; its recency and `conversation` paths return both kinds, and render a compacted row as its pattern, count, outcome tally and variations rather than as a turn.
 - **`## Similar prior work` prefetch block**: similarity, so raw turns only.
 - **`Synthesizer`**: raw rows only, on both paths. Compacted aggregates are too coarse to draft a clean skill body from, and the clustered pass would count one fold as one turn.
-- **`Refiner`**: reads no episodes at all. It is shown the skills the turn was offered and the turn itself (task, plan, tool sequence, outcome), which is the whole question it answers.
+- **`Refiner`**: reads no episodes at all. It is shown the skills the turn was offered and the turn itself (what woke it, what it was asked, what it did, its tool sequence and outcome), which is the whole question it answers.
 
 ### What this protects
 
