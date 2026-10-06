@@ -449,6 +449,26 @@ func (f *Fleet) PostCharge(_ context.Context, seat string, tokens int, windows c
 	}, nil
 }
 
+// PostChargeSeat adds spend that already happened to one seat's counter
+// alone, refusing nothing and leaving its refusal stamps as they were. See
+// [coord.Budgets.PostChargeSeat].
+func (f *Fleet) PostChargeSeat(_ context.Context, seat string, tokens int, windows coord.Windows) (coord.Usage, error) {
+	if tokens <= 0 {
+		return coord.Usage{}, nil
+	}
+	if seat == "" {
+		return coord.Usage{}, errors.New("coord/memory: a charge needs a seat scope")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	agent := f.budgets[seat].Roll(windows).Add(tokens, time.Now().UTC())
+	f.budgets[seat] = agent
+	return agent.Usage(seat, windows), nil
+}
+
 // PostChargeOrg adds spend that already happened to the company's counter
 // alone, refusing nothing and leaving its refusal stamps as they were. See
 // [coord.Budgets.PostChargeOrg].

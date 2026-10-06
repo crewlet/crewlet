@@ -179,24 +179,30 @@ func (r ChargeRequest) Validate() error {
 	return nil
 }
 
-// SeatUncountedError is a charge that reached the COMPANY's counter and not the
-// seat's: the company's write landed and the seat's then failed.
+// SeatUncountedError is a charge or a post-charge that reached the COMPANY's
+// counter and not the seat's: the company's write landed and the seat's then
+// failed.
 //
-// It is the one partial a charge can leave — the order is built, the company
+// It is the one partial either can leave — the order is built, the company
 // first and then the seat ([Budgets.Charge]) — and it is NAMED rather than
-// undone. What a charge records was billed before it was charged, so the
-// company's record of it is true. The compensation that used to run here took
-// the round back off the company whenever the seat's write failed, and nothing
-// that charges asks again — the engine's meter stops the round on the error —
-// so the company was left short of a round the vendor had already been paid
-// for: room handed to the next round that the refused write had used, on the
-// counter every seat in the company is judged against.
+// undone. What both record was billed before it was recorded, so the company's
+// record of it is true. The compensation that used to run here took the spend
+// back off the company whenever the seat's write failed, and almost nothing
+// that records spend asks again: the engine's meter stops the round on the
+// error, an auxiliary call's record is logged and dropped, and a collected
+// coding run is offered again only when its resume fails. So the company was
+// left short of spend the vendor had already been paid for — room handed to
+// the next round that the failed write had used, on the counter every seat in
+// the company is judged against.
 //
-// The seat's counter is short by Tokens in the windows the charge was cut for,
+// The seat's counter is short by Tokens in the windows the spend was cut for,
 // until they turn over: its own ceiling then judges less than the seat spent,
 // which is the fail-open direction for that one seat's cap. It is bounded by
 // how often a write fails right after the one before it landed, and a backend
-// logs it where it happens.
+// logs it where it happens. A caller that DOES offer the spend again — the
+// sandbox's, whose collected run comes back when its resume fails — records
+// the seat's share alone the second time ([Budgets.PostChargeSeat]), because
+// the company already holds it.
 type SeatUncountedError struct {
 	// Seat is the seat's counter key, and Tokens what its counter is missing.
 	Seat   string
@@ -287,8 +293,9 @@ type WindowUsage struct {
 	// weaker. A charge refused overall leaves every other scope's stamps
 	// alone, even where that scope would have had room, so the answer does
 	// not depend on which scope a backend happens to test first. A
-	// [Budgets.PostCharge] neither stamps nor clears: it is not a decision
-	// about room.
+	// post-charge ([Budgets.PostCharge], [Budgets.PostChargeOrg],
+	// [Budgets.PostChargeSeat]) neither stamps nor clears: it is not a
+	// decision about room.
 	RefusedAt time.Time
 }
 
@@ -297,7 +304,7 @@ type Usage struct {
 	Scope string
 
 	// UpdatedAt is when the counter last moved — a charge, admitted or
-	// refused, since both count the round; a post-charge; or an unwind.
+	// refused, since both count the round; or a post-charge.
 	// Zero only for a scope nothing has charged.
 	UpdatedAt time.Time
 
@@ -467,14 +474,29 @@ type Budgets interface {
 	// nor that it had room for one. A counter it takes past a cap is
 	// refused by the next Charge, which stamps it then.
 	//
-	// All or nothing, which Charge is not: an error takes the org's half
-	// back, so a caller that retries does not count the company twice. The
-	// compensation is BEST-EFFORT — two keys and no transaction — and a
-	// backend that cannot make it says so in its log
-	// rather than in the answer, because the caller's answer is already
-	// decided. It errs in the one safe direction: the org reads HIGH, so a
-	// cap trips early rather than late.
+	// Two writes, the company's first, and NEITHER IS TAKEN BACK, exactly
+	// as Charge's are not: the spend happened. An error that is a
+	// [SeatUncountedError] says the company's write landed and the seat's
+	// did not, so a caller that offers the spend again records the seat's
+	// share alone ([Budgets.PostChargeSeat]) rather than counting the
+	// company twice. Any other error is the company's own write failing,
+	// which may or may not have landed: offering it again can only
+	// over-state the company, which trips a cap early rather than late.
 	PostCharge(ctx context.Context, seat string, tokens int, windows Windows) (Spend, error)
+
+	// PostChargeSeat adds spend that has ALREADY HAPPENED to one SEAT's
+	// counter alone, in the given windows, and never refuses. The answer is
+	// the seat's counter after the write — or an empty [Usage] for a charge
+	// of nothing, which writes nothing and reads nothing, exactly as
+	// PostCharge answers one.
+	//
+	// It exists to FINISH a post-charge whose company half landed and seat
+	// half did not ([SeatUncountedError]): the caller that offers that
+	// spend again must not count the company a second time, and with no
+	// verb for the seat's half alone its only choices were to do exactly
+	// that or to leave the seat short for good. Like every post-charge it
+	// leaves the refusal stamps alone.
+	PostChargeSeat(ctx context.Context, seat string, tokens int, windows Windows) (Usage, error)
 
 	// PostChargeOrg adds spend that has ALREADY HAPPENED to the COMPANY's
 	// counter alone, in the given windows, and never refuses. The answer is
@@ -595,16 +617,16 @@ func (t Tally) Refusing(tokens int, caps Caps) []period.Period {
 	return out
 }
 
-// Add counts delta in every slot, moving the counter's clock to at. The tally
+// Add counts tokens in every slot, moving the counter's clock to at. The tally
 // must already be rolled to the charge's windows, which is what makes every
 // slot the current one.
 //
-// A negative delta takes spend back and is floored at zero, so a compensation
-// for a charge whose own write was already reaped cannot leave a counter that
-// reads as credit.
-func (t Tally) Add(delta int, at time.Time) Tally {
+// Only ever spend, never credit: nothing a counter recorded is taken back
+// ([SeatUncountedError]), and every caller has already returned for a charge
+// of nothing.
+func (t Tally) Add(tokens int, at time.Time) Tally {
 	for i := range t.Slots {
-		t.Slots[i].Used = max(t.Slots[i].Used+delta, 0)
+		t.Slots[i].Used += tokens
 	}
 	t.At = at
 	return t
@@ -628,20 +650,6 @@ func (t Tally) Count(tokens int, caps Caps, w Windows, at time.Time) (Tally, []p
 	rolled := t.Roll(w)
 	refusing := rolled.Refusing(tokens, caps)
 	return rolled.Add(tokens, at).Stamp(refusing, rolled, at), refusing
-}
-
-// Undo takes back a charge of tokens from the slots it was counted in: those
-// still on the window charged holds. A slot that has since rolled on is left
-// alone, because what the charge spent belongs to a window that is over, and
-// taking it from the next one would hand that window credit.
-func (t Tally) Undo(tokens int, charged Tally, at time.Time) Tally {
-	for i := range t.Slots {
-		if t.Slots[i].Label == charged.Slots[i].Label {
-			t.Slots[i].Used = max(t.Slots[i].Used-tokens, 0)
-		}
-	}
-	t.At = at
-	return t
 }
 
 // Stamp records at as the last refusal of each period in periods, on the slots

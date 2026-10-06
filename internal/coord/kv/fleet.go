@@ -1146,9 +1146,12 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 		// and turning it into an error would report an outage for a company
 		// that is simply out of budget; the company's record of the round
 		// is true, so taking it back would only make the counter wrong in a
-		// second place. On a context that outlives the caller's, for the
-		// reason [FleetStore.unwindOrg] gives: the round is spent whatever
-		// the caller does next.
+		// second place. On a context that outlives the caller's: the round
+		// is spent whatever the caller does next, and a write that
+		// inherited a caller who hung up between the two would fail with
+		// it. It cannot hang in the caller's place: the client bounds every
+		// request made on a context with no deadline by its own API
+		// timeout.
 		if _, _, seatErr := f.count(context.WithoutCancel(ctx), req.Seat, req.Tokens, req.Windows, nil, false); seatErr != nil {
 			log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", req.Seat,
 				"tokens", req.Tokens, "error", seatErr,
@@ -1201,6 +1204,8 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 //
 // The same two writes as [FleetStore.Charge], org first, with no ceiling to
 // judge and no refusal stamp touched: nothing here decided the scope had room.
+// And the same partial when the seat's write fails after the company's: the
+// company keeps what it counted, and the error names what the seat is missing.
 func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error) {
 	if tokens <= 0 {
 		return coord.Spend{OK: true}, nil
@@ -1217,20 +1222,50 @@ func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, wi
 	}
 	agent, _, err := f.count(ctx, seat, tokens, windows, nil, false)
 	if err != nil {
-		f.unwindOrg(ctx, tokens, org)
-		return coord.Spend{}, err
+		// THE COMPANY KEEPS IT, for Charge's reason: the spend happened,
+		// and the company's record of it is true. The compensation this
+		// replaced took it back so a caller that retried would not count
+		// the company twice — but most callers never retry, and the one
+		// that does now finishes the seat's half alone (PostChargeSeat).
+		log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", seat,
+			"tokens", tokens, "error", err,
+			"detail", "the company counted this post-charge and the seat's write failed; "+
+				"the seat's own counter understates its spend by it")
+		return coord.Spend{}, &coord.SeatUncountedError{Seat: seat, Tokens: tokens, Err: err}
 	}
 	return coord.Spend{
 		OK: true, Org: org.Usage(coord.OrgScope, windows), Agent: agent.Usage(seat, windows),
 	}, nil
 }
 
+// PostChargeSeat adds spend that already happened to one seat's counter alone,
+// refusing nothing. See [coord.Budgets.PostChargeSeat].
+//
+// ONE write, so it can leave no partial of its own, and a count with no caps
+// carries the seat's refusal stamps through untouched.
+func (f *FleetStore) PostChargeSeat(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Usage, error) {
+	if tokens <= 0 {
+		return coord.Usage{}, nil
+	}
+	if seat == "" {
+		return coord.Usage{}, errors.New("coord/kv: a charge needs a seat scope")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	agent, _, err := f.count(ctx, seat, tokens, windows, nil, false)
+	if err != nil {
+		return coord.Usage{}, err
+	}
+	return agent.Usage(seat, windows), nil
+}
+
 // PostChargeOrg adds spend that already happened to the company's counter
 // alone, refusing nothing. See [coord.Budgets.PostChargeOrg].
 //
-// ONE write, so there is no half to compensate: the company's record is the
-// only key it touches, and a count with no caps carries its refusal stamps
-// through untouched.
+// ONE write, so it can leave no partial: the company's record is the only key
+// it touches, and a count with no caps carries its refusal stamps through
+// untouched.
 func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error) {
 	if tokens <= 0 {
 		return coord.Usage{}, nil
@@ -1245,37 +1280,6 @@ func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coor
 	return org.Usage(coord.OrgScope, windows), nil
 }
 
-// unwindOrg takes back the org's half of a post-charge whose seat half did not
-// land, from the windows that post-charge was counted in. A [FleetStore.Charge]
-// never comes here: what it counted on the company stays counted.
-//
-// On a context that OUTLIVES the caller's. The failure being undone is often
-// the caller's own cancellation (a turn stopped mid-charge, a node draining),
-// and an unwind that inherited that dead context failed with it: the company
-// was billed for a charge its caller was told had failed, and refused early
-// until the window turned over. It cannot hang in the caller's place: the
-// client bounds every request made on a context with no deadline by its own
-// API timeout.
-//
-// Logged rather than returned: the caller's answer is already decided, and a
-// compensation that failed leaves the org over-stated, which trips a cap
-// EARLY. That is the safe direction, and it is worth a line saying so rather
-// than a drift nobody can later explain.
-func (f *FleetStore) unwindOrg(ctx context.Context, tokens int, charged coord.Tally) {
-	_, undo := f.casTally(context.WithoutCancel(ctx), coord.OrgScope, "unwind the token counter",
-		func(stored coord.Tally, found bool) (coord.Tally, bool) {
-			// Gone means aged out, and there is nothing left to take a
-			// charge back from.
-			return stored.Undo(tokens, charged, time.Now().UTC()), found
-		})
-	if undo != nil {
-		log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
-			"tokens", tokens, "error", undo,
-			"detail", "the org counter is over-stated by this charge in the windows it "+
-				"was counted in, and will refuse early until they turn over")
-	}
-}
-
 // clearRefusal drops the refusals an admitted charge found on a scope.
 //
 // ONLY THE STAMPS IT SAW. Between the charge's write and this one another
@@ -1284,9 +1288,8 @@ func (f *FleetStore) unwindOrg(ctx context.Context, tokens int, charged coord.Ta
 // A failure is logged rather than returned: the charge already happened, and
 // the stamp is what a dashboard reads, not what the gate decides with.
 //
-// On a context that OUTLIVES the caller's, for the reason [FleetStore.unwindOrg]
-// gives: this runs AFTER both counters have been written, so the charge is a
-// fact whatever happens next, and the caller's context dying between the two
+// On a context that OUTLIVES the caller's: this runs AFTER both counters have
+// been written, so the charge is a fact whatever happens next, and the caller's context dying between the two
 // writes and this one is ordinary — a turn cancelled, a node draining. Left on
 // that context the clear failed with it, and the scope kept telling every
 // dashboard it was refusing charges while it had just admitted one. It cannot

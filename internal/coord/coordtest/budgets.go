@@ -1038,6 +1038,61 @@ var budgetCases = []fleetCase{{
 		}
 	},
 }, {
+	name: "a seat post-charge moves that seat's counter and not the company's",
+	fn: func(h *fleetHarness) {
+		// It finishes a post-charge whose company half already landed, so
+		// counting the company here would count it twice. Past the seat's
+		// ceiling included: the spend happened, and the next round is
+		// refused against it.
+		if got := h.charge(testSeat, 90, day(1000), day(100)); !got.OK {
+			h.t.Fatalf("setup charge refused: %+v", got)
+		}
+		got, err := h.f.PostChargeSeat(h.ctx, testSeat, 50, h.windows())
+		if err != nil {
+			h.t.Fatalf("PostChargeSeat: %v", err)
+		}
+		if got.Scope != testSeat || got.In(period.Day).Used != 140 {
+			h.t.Fatalf("seat post-charge = %+v, want the seat's counter at 140", got)
+		}
+		if h.used(coord.OrgScope) != 90 || h.used(testSeat) != 140 {
+			h.t.Fatalf("org = %d and seat = %d, want the company's own 90 and 140",
+				h.used(coord.OrgScope), h.used(testSeat))
+		}
+		if next := h.charge(testSeat, 1, day(1000), day(100)); next.OK || next.RefusedScope != "agent" {
+			h.t.Fatalf("next charge = %+v, want the seat to refuse against the recorded spend", next)
+		}
+	},
+}, {
+	name: "a seat post-charge keeps the refusal stamp, needs a seat, and one of nothing writes nothing",
+	fn: func(h *fleetHarness) {
+		if got, err := h.f.PostChargeSeat(h.ctx, testSeat, 0, h.windows()); err != nil || got.Scope != "" {
+			h.t.Fatalf("PostChargeSeat(0) = (%+v, %v), want an empty answer", got, err)
+		}
+		if _, listed := h.usage(testSeat); listed {
+			h.t.Fatal("a seat post-charge of zero created a counter")
+		}
+		if _, err := h.f.PostChargeSeat(h.ctx, "", 5, h.windows()); err == nil {
+			h.t.Fatal("a seat post-charge with no seat scope was accepted")
+		}
+		if _, err := h.f.PostChargeSeat(h.ctx, testSeat, 5, coord.Windows{}); err == nil {
+			h.t.Fatal("a seat post-charge with no windows was accepted")
+		}
+		if _, listed := h.usage(testSeat); listed {
+			h.t.Fatal("a refused seat post-charge still charged the seat")
+		}
+		// Not a decision about room: a refusing seat stays refusing.
+		from := time.Now()
+		h.charge(testSeat, 50, nil, day(40)) // the seat refuses
+		stamped := h.refusedAt(testSeat, period.Day, from, time.Now())
+		if _, err := h.f.PostChargeSeat(h.ctx, testSeat, 30, h.windows()); err != nil {
+			h.t.Fatalf("PostChargeSeat: %v", err)
+		}
+		if row, _ := h.usage(testSeat); !row.In(period.Day).RefusedAt.Equal(stamped) ||
+			row.In(period.Day).Used != 80 {
+			h.t.Fatalf("seat = %+v, want 80 used and the refusal stamped at %v kept", row, stamped)
+		}
+	},
+}, {
 	name: "retiring lifetime counters that are not there is not an error",
 	fn: func(h *fleetHarness) {
 		// The maintenance duty asks on every tick once the fleet is past

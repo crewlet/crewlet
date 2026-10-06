@@ -59,26 +59,6 @@ func TestARollClearsOnlyTheRefusalsOfWindowsThatTurnedOver(t *testing.T) {
 	}
 }
 
-// AN UNDO TAKES A CHARGE BACK FROM THE WINDOWS IT WAS COUNTED IN. A slot that
-// rolled on between the charge and its unwind holds another window's spend,
-// and taking the round off it would hand that window credit.
-func TestAnUndoLeavesASlotThatRolledOnAlone(t *testing.T) {
-	t.Parallel()
-	charged := coord.Tally{}.Roll(windowsOn(2026, time.March, 14)).Add(40, time.Now())
-	moved := charged.Roll(windowsOn(2026, time.March, 15)).Add(25, time.Now())
-
-	undone := moved.Undo(40, charged, time.Now())
-	if undone.Slots[0].Used != 25 {
-		t.Errorf("the new day = %d, want the 25 charged in it", undone.Slots[0].Used)
-	}
-	if undone.Slots[2].Used != 25 {
-		t.Errorf("the month = %d, want 65 less the 40 undone", undone.Slots[2].Used)
-	}
-	if floor := charged.Undo(100, charged, time.Now()); floor.Slots[0].Used != 0 {
-		t.Errorf("an undo larger than the spend left %d, want a floor at zero", floor.Slots[0].Used)
-	}
-}
-
 // A CLEAR TAKES ONLY THE STAMPS IT SAW. A refusal stamped after an admitted
 // charge read the counter is still true, and clearing it would hide a scope
 // that is refusing now.

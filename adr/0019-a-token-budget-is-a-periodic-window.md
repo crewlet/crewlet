@@ -60,9 +60,9 @@ inside a write that already happens, on whichever node charges next, with
 nothing to schedule and nothing that can run twice.
 
 The second is a counter per window, keyed by label. That is three records per
-scope and three compare-and-swaps per charge, and the org-first compensation
-for a seat write that fails then has to take the charge back from as many as
-five keys rather than one.
+scope and three compare-and-swaps per charge, and a charge that fails partway
+then leaves its round on as many as five of six keys rather than on one of
+two, each a partial somebody has to reason about.
 
 ## What this does not decide
 

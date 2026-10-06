@@ -139,6 +139,10 @@ type Release struct {
 	// on the row by the release itself. See [PendingRun.Charged].
 	Charged bool
 
+	// CompanyCharged is whether the company's share of it is, where the
+	// seat's is not, recorded the same way. See [PendingRun.CompanyCharged].
+	CompanyCharged bool
+
 	// Published is whether the run's own phase record went out, recorded
 	// the same way and for the same reason. See [LaunchRecord.Published].
 	Published bool
@@ -585,6 +589,24 @@ type PendingRun struct {
 	// turn is a second job with spend of its own, so [PendingStore.BeginLaunch]
 	// clears it, and nothing else does.
 	Charged bool `json:"charged,omitempty"`
+
+	// CompanyCharged is whether this launch's collected tokens are on the
+	// COMPANY's counter while the seat's write failed
+	// ([coord.SeatUncountedError]) — meaningful only while Charged is not.
+	//
+	// The partial is KEPT, never undone: the run spent what it spent, and
+	// the compensation that used to take the company's share back left it
+	// on neither counter whenever the resume then succeeded, since only a
+	// failed resume brings a collected run back to be charged again. Kept
+	// and recorded here, the retry a failed resume does bring finishes the
+	// seat's share alone rather than counting the company twice; a resume
+	// that succeeds leaves only the seat short, by this run.
+	//
+	// Written and cleared exactly as Charged is. An OLDER build reading a
+	// row that carries it ignores the field and charges both counters
+	// again on such a retry: the company is then counted twice for this
+	// one run, which trips its cap early rather than late.
+	CompanyCharged bool `json:"company_charged,omitempty"`
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 

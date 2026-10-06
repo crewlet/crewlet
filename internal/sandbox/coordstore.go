@@ -151,7 +151,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
-		existing.Charged = false
+		existing.Charged, existing.CompanyCharged = false, false
 		return true
 	})
 	return err
@@ -205,6 +205,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
+		run.CompanyCharged = run.CompanyCharged || release.CompanyCharged
 		if release.Published || !release.CollectFailedAt.IsZero() {
 			// Onto THIS job's record, starting one where the row carries
 			// none of its own: a row an older build launched has no record,

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -127,8 +128,14 @@ type ResumeRequest struct {
 // PAST its cap, for the caller to report; the spend is on both counters either
 // way, and the next round the seat or the company attempts is refused against
 // the figure that includes it.
+//
+// companyCharged says an earlier attempt already put the run on the COMPANY's
+// counter and failed on the seat's, so this one records the seat's share alone.
+// An error wrapping a [coord.SeatUncountedError] is that partial, reached now:
+// the company's share is recorded and the seat's is not. Any other error
+// records nothing this caller can count on.
 type Accountant interface {
-	Charge(ctx context.Context, agentID, handle string, tokens int) (refused bool, err error)
+	Charge(ctx context.Context, agentID, handle string, tokens int, companyCharged bool) (refused bool, err error)
 }
 
 // AudienceResolver resolves the audience a coding agent named for its question
@@ -608,7 +615,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 
 	// Carried on the claimed row from here, so that handing the claim back
 	// hands the record back with it — both of them.
-	run.Charged = c.charge(ctx, run, result)
+	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishPhase(ctx, run, result)
 
 	if result.NeedsInput {
@@ -792,35 +799,46 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 //
 // A CHARGE THE COUNTER NEVER ANSWERED IS NOT RECORDED: it may or may not have
 // landed, and offering it again can only over-state the counter, which trips a
-// cap early rather than late — the direction the counter itself takes when a
-// node dies mid-charge.
+// cap early rather than late.
+//
+// A charge that reached the COMPANY and failed on the seat is recorded as that
+// ([PendingRun.CompanyCharged]): the company's share stays counted, and a retry
+// finishes the seat's alone rather than counting the company a second time.
 //
 // A charge that went OVER A CAP is recorded like any other, because it landed
 // like any other: the post-charge records the spend whatever the caps say (see
 // [Accountant]). Reading that answer as "unrecorded" and offering it again is
 // how one over-cap run is charged once per completion retry, which is the
 // double-charge this record exists to stop.
-func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) bool {
+func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) (charged, companyCharged bool) {
 	tokens := result.InputTokens + result.OutputTokens
 	if run.Charged {
 		log.InfoContext(ctx, "sandbox_charge_already_recorded",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
-		return true
+		return true, run.CompanyCharged
 	}
 	if c.account == nil || tokens == 0 {
-		return false
+		return false, run.CompanyCharged
 	}
-	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
-	if err != nil {
+	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens, run.CompanyCharged)
+	var partial *coord.SeatUncountedError
+	switch {
+	case errors.As(err, &partial):
+		log.WarnContext(ctx, "sandbox_accounting_partial", "turn_id", run.TurnID,
+			"agent_id", run.AgentID, "tokens", tokens, "error", err.Error(),
+			"detail", "the company's counter holds this run and the seat's does not; a "+
+				"retry of the completion records the seat's share alone")
+		return false, true
+	case err != nil:
 		log.WarnContext(ctx, "sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
-		return false
+		return false, run.CompanyCharged
 	}
 	if over {
 		log.WarnContext(ctx, "sandbox_spend_over_budget",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
 	}
 	// RECORDED EITHER WAY, because the counters moved either way.
-	return true
+	return true, true
 }
 
 // publishPhase publishes the collected run as a phase of its turn, ONCE per
@@ -1701,7 +1719,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
-		Launch: run.LaunchID, To: to, Charged: run.Charged,
+		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
 		Published: run.LaunchFacts().Published, CollectFailedAt: collectFailedAt,
 		Fence: fenceOf(run),
 	})

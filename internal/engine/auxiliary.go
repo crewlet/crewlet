@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -195,9 +196,21 @@ func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.C
 			// caller's work is valid; failing it here would turn a
 			// coordination blip into a reflection outage, and the
 			// pre-flight gates are what actually stop the spending.
+			//
+			// WHICH COUNTER IS SHORT is in the detail, because the two
+			// failures send an operator to different places: a record
+			// that reached the company and not the seat leaves the
+			// company exact (coord.SeatUncountedError), and only one
+			// seat's own ceiling judges less than it spent.
+			detail := "the fleet counter now understates this company's spend; "
+			var partial *coord.SeatUncountedError
+			if errors.As(spendErr, &partial) {
+				detail = "the company's counter holds this call and the seat's does not, so " +
+					"only the seat's own ceiling understates its spend; "
+			}
 			log.WarnContext(ctx, "auxiliary_spend_uncounted", "error", spendErr,
 				"tokens", tokens, "model", model, "purpose", string(p.use.Purpose),
-				"detail", "the fleet counter now understates this company's spend; "+
+				"detail", detail+
 					"the spend history still records it")
 		}
 	}

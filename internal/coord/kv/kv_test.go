@@ -965,65 +965,45 @@ func TestARoundTheCompanyRefusedReachesTheSeatAfterAHangUp(t *testing.T) {
 	}
 }
 
-// A POST-CHARGE IS ALL OR NOTHING, exactly as a charge is.
+// A POST-CHARGE WHOSE SEAT WRITE FAILS KEEPS ITS SPEND ON THE COMPANY, AND THE
+// SEAT'S HALF CAN BE FINISHED ALONE.
 //
-// Two keys and no transaction, so the property is built rather than given: the
-// org is written first and taken back when the seat's write fails. Without the
-// compensation a collected coding run whose second write failed would leave the
-// company billed for tokens the seat's own counter never saw, and the caller —
-// which retries — would bill the org again.
-func TestAPostChargeThatCannotFinishRecordsNeitherScope(t *testing.T) {
+// The spend already happened (a collected coding run, an auxiliary call), so
+// the company's record of it is true when its write lands and the seat's then
+// fails. The compensation this replaced took it back so a caller that retried
+// would not count the company twice — but an auxiliary call is never offered
+// again, and a coding run only when its resume fails, so in the common case
+// the company lost the spend for good. Kept, the partial is named, and the one
+// caller that does offer the spend again finishes the seat's half alone.
+func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	store.budgets = hangUpAfterWriting{
-		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
+	healthy := store.budgets
+	store.budgets = failWriting{KeyValue: healthy, key: encodeKey(seat)}
+
+	got, err := store.PostCharge(t.Context(), seat, 10, testWindows())
+	var partial *coord.SeatUncountedError
+	if !errors.As(err, &partial) || partial.Seat != seat || partial.Tokens != 10 {
+		t.Fatalf("PostCharge = (%+v, %v), want an error naming the 10 tokens the seat "+
+			"%s is missing", got, err, seat)
+	}
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v after the seat's write failed, want the 10 "+
+			"the company was billed: its half was taken back", used)
 	}
 
-	if got, err := store.PostCharge(ctx, seat, 10, testWindows()); err == nil {
-		t.Fatalf("PostCharge = %+v, want the seat's write to fail on the cancelled context", got)
-	}
-	if used := orgSpent(t, store); used != [3]int{} {
-		t.Errorf("org day/week/month = %v after a post-charge that failed, want "+
-			"nothing: the unwind ran on the cancelled context and left the company "+
-			"billed for a run its seat never recorded", used)
-	}
-}
-
-// AN UNWIND TAKES A CHARGE BACK FROM THE WINDOW IT WAS COUNTED IN.
-//
-// The seat's write can fail after midnight has passed and a peer has rolled
-// the org's day. What the failed charge counted belongs to the day that is
-// over; taking it off the new day would hand that day credit, and a floor at
-// zero would hide it only until the day's first real charge.
-func TestAnUnwindLeavesAWindowThatHasRolledOnAlone(t *testing.T) {
-	store := openFleet(t, embeddedNATS(t))
-	ctx := t.Context()
-	today := testWindows()
-	tomorrow := coord.WindowsAt(today[0].End, time.UTC)
-
-	charged, _, err := store.count(ctx, coord.OrgScope, 40, today, nil, false)
+	// The seat's half, finished alone: the company is not counted twice.
+	store.budgets = healthy
+	u, err := store.PostChargeSeat(t.Context(), seat, partial.Tokens, testWindows())
 	if err != nil {
-		t.Fatalf("count: %v", err)
+		t.Fatalf("PostChargeSeat: %v", err)
 	}
-	// A peer's charge crosses midnight before the unwind lands.
-	if _, _, err := store.count(ctx, coord.OrgScope, 25, tomorrow, nil, false); err != nil {
-		t.Fatalf("count tomorrow: %v", err)
+	if day := u.Windows[0].Used; day != 10 {
+		t.Errorf("the seat's day = %d after its half was finished, want 10", day)
 	}
-	store.unwindOrg(ctx, 40, charged)
-
-	u, err := store.Used(ctx, coord.OrgScope, tomorrow)
-	if err != nil {
-		t.Fatalf("Used: %v", err)
-	}
-	if got := u.Windows[0].Used; got != 25 {
-		t.Errorf("tomorrow's day = %d, want the 25 charged in it: the unwind took "+
-			"yesterday's round off a window it was never counted in", got)
-	}
-	// The week and the month did not roll, so the round comes off them.
-	if got := u.Windows[2].Used; got != 25 {
-		t.Errorf("the month = %d, want 25: the unwound round is still counted", got)
+	if used := orgSpent(t, store); used != [3]int{10, 10, 10} {
+		t.Errorf("org day/week/month = %v after the seat's half was finished, want "+
+			"still 10: finishing the seat counted the company again", used)
 	}
 }
 

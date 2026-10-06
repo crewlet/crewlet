@@ -257,7 +257,11 @@ func secondsPtr(v *float64) *time.Duration {
 // whether to SAY the run went over.
 //
 // Charging it once per launch, however often its completion is retried, is the
-// coordinator's side: see [sandbox.PendingRun.Charged].
+// coordinator's side: see [sandbox.PendingRun.Charged]. So is finishing a charge
+// that reached the company and not the seat ([coord.SeatUncountedError]): the
+// coordinator records the partial on the run, and the retry it hands here is
+// told so and records the seat's share alone ([coord.Budgets.PostChargeSeat]),
+// rather than counting the company a second time.
 type sandboxAccountant struct {
 	budgets postCharger
 
@@ -274,15 +278,31 @@ type sandboxAccountant struct {
 // postCharger is the slice of the fleet's counters the accountant calls.
 type postCharger interface {
 	PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
+	PostChargeSeat(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Usage, error)
 }
 
-func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens int) (bool, error) {
+// Charge post-charges a collected run, and reports whether it took a counter
+// past a ceiling. The error is the counter's own, a [coord.SeatUncountedError]
+// included, for the coordinator to record.
+//
+// A run whose company share an earlier attempt already recorded is charged to
+// the seat alone, and only the seat's ceilings can then say it went over: the
+// company's counter was not read, and reading it to answer a log line would
+// be a second round trip for a figure nothing acts on.
+func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens int, companyCharged bool) (bool, error) {
 	if a.budgets == nil || tokens <= 0 {
 		return false, nil
 	}
 	basis := a.basis(agentID)
-	spend, err := a.budgets.PostCharge(ctx, coord.AgentScope(agentID), tokens,
-		coord.WindowsAt(a.now(), basis.zone))
+	scope, windows := coord.AgentScope(agentID), coord.WindowsAt(a.now(), basis.zone)
+	if companyCharged {
+		seat, err := a.budgets.PostChargeSeat(ctx, scope, tokens, windows)
+		if err != nil {
+			return false, err
+		}
+		return overAnyCap(seat, basis.seat), nil
+	}
+	spend, err := a.budgets.PostCharge(ctx, scope, tokens, windows)
 	if err != nil {
 		return false, err
 	}
