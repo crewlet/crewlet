@@ -34,7 +34,11 @@ const RecordVersion = 1
 // Kind is what a usage record is about.
 //
 // A NAMED STRING TYPE with a Valid method, so a kind a newer build publishes
-// is a value this build defers rather than a panic.
+// is a value this build defers rather than a panic. DEFERS, and the envelope is
+// what makes that true rather than claimed: a kind this build does not know is
+// admitted there only on a record stamped above [RecordVersion] — which is how
+// a newer build stamps one — and the second pass then retains the record as
+// [ErrFutureVersion]. See [Subject.validateFor].
 type Kind string
 
 const (
@@ -85,12 +89,8 @@ func (s Subject) Validate() error {
 	if !s.Kind.Valid() {
 		return fmt.Errorf("usage: %q is not a kind this build writes", s.Kind)
 	}
-	if strings.TrimSpace(s.Node) == "" {
-		return fmt.Errorf("usage: a %s record names no node — the node is half "+
-			"of the object's identity, and the only writer allowed on it", s.Kind)
-	}
-	if _, err := period.Parse(period.Day, s.Day, nil); err != nil {
-		return fmt.Errorf("usage: a %s record's day: %w", s.Kind, err)
+	if err := s.validateShared(); err != nil {
+		return err
 	}
 	switch s.Kind {
 	case KindSeat:
@@ -112,6 +112,43 @@ func (s Subject) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validateShared checks the two segments every kind's identity begins with —
+// the node and the day — which is all a build can check of a kind it does not
+// know.
+func (s Subject) validateShared() error {
+	if strings.TrimSpace(s.Node) == "" {
+		return fmt.Errorf("usage: a %s record names no node — the node is half "+
+			"of the object's identity, and the only writer allowed on it", s.Kind)
+	}
+	if _, err := period.Parse(period.Day, s.Day, nil); err != nil {
+		return fmt.Errorf("usage: a %s record's day: %w", s.Kind, err)
+	}
+	return nil
+}
+
+// validateFor is [Subject.Validate] as the envelope applies it to a record of
+// version v.
+//
+// A KIND THIS BUILD DOES NOT KNOW, ON A RECORD ABOVE [RecordVersion], IS A
+// NEWER BUILD'S, and the envelope admits it with only the node and the day
+// checked, so the second pass retains it as [ErrFutureVersion]. The envelope
+// is the half every build must read, and refused here the record was an
+// unreadable envelope — which the framework treats as a STOP of the whole
+// applier rather than a deferral of one record. So every kind a later build
+// added stopped every node still on this one, which is the opposite of what
+// [Kind] promised. Below the day, the subject is then this build's reading of
+// fields it does not know and is only a label: the deferred record keeps its
+// whole payload, and the build that can read it re-derives the rest.
+//
+// AT OR BELOW [RecordVersion] AN UNKNOWN KIND IS A WRITER FAULT rather than a
+// newer build, because a version this build reads is one whose kinds it knows.
+func (s Subject) validateFor(v int) error {
+	if !s.Kind.Valid() && v > RecordVersion {
+		return s.validateShared()
+	}
+	return s.Validate()
 }
 
 // segments is the object's identity below its kind, in the order the subject
@@ -286,7 +323,7 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 			"every record states its version, and one that does not cannot be "+
 			"told apart from a newer build's", env.V)
 	}
-	if err := env.Subject.Validate(); err != nil {
+	if err := env.Subject.validateFor(env.V); err != nil {
 		return RecordEnvelope{}, err
 	}
 	if env.Scope.Empty() {
