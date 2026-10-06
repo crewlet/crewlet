@@ -303,18 +303,18 @@ type Credential struct {
 	Grants []iam.Grant `json:"grants,omitempty"`
 
 	// Epoch is the owner's revocation epoch when a machine token was
-	// minted. A token is refused once the owner's epoch moves past it,
-	// which is what makes signing somebody out everywhere — and
-	// offboarding them — end every token they hold as well as every
-	// session.
+	// minted or a reset link issued. Either is refused once the owner's
+	// epoch moves past it, which is what makes signing somebody out
+	// everywhere — and suspending or offboarding them — end every token and
+	// link they hold as well as every session ([Credential.EndedBy]).
 	Epoch uint64 `json:"epoch,omitempty"`
 
 	// Generation is the company's session generation when a machine token
-	// was minted, and a token is refused once the generation moves past
-	// it — for the reason a session is: a backup taken before a token was
-	// revoked restores it unrevoked, and the restore runbook's
-	// invalidate-all is the only gesture that can end every such
-	// credential without knowing which they were.
+	// was minted or a reset link issued, and either is refused once the
+	// generation moves past it — for the reason a session is: a backup
+	// taken before a token was revoked, or a link spent, restores it
+	// live, and the restore runbook's invalidate-all is the only gesture
+	// that can end every such credential without knowing which they were.
 	Generation uint64 `json:"generation,omitempty"`
 
 	// Spent marks a reset link its person USED, beside the revocation every
@@ -366,13 +366,36 @@ const (
 // writes no `revoked_at`.
 type Counters struct{ Epoch, Generation uint64 }
 
-// EndedBy reports a credential a COUNTER ended: a machine token minted at an
-// epoch or a generation that has since moved on — the comparison
-// [credential.CheckToken] refuses it on. Counters only move forward, so it
-// never verifies again.
+// EndedBy reports a credential a COUNTER ended: a machine token minted, or a
+// reset link issued, at an epoch or a generation that has since moved on — the
+// comparison [credential.CheckToken] refuses a token on. Counters only move
+// forward, so it never verifies again.
+//
+// A RESET LINK IS ENDED THE WAY A TOKEN IS: refused only while a suspension's
+// stage stood, a link sent out of band came back with the reactivation, and
+// whoever kept a copy of it set the person's password.
 func (c Credential) EndedBy(now Counters) bool {
-	return c.Method == MethodToken &&
+	return (c.Method == MethodToken || c.Method == MethodReset) &&
 		(now.Epoch > c.Epoch || now.Generation > c.Generation)
+}
+
+// stampIssued is after with every reset link before did not hold stamped with
+// counters — the issuing snapshot's, so the link is ended by whatever moves
+// one of them next, as a token minted in that snapshot is ([Credential.EndedBy]).
+// STAMPED BY THE RECORD, never by its caller: the caller forms the person
+// without either counter, which it could only read in another transaction.
+func stampIssued(before, after []Credential, counters Counters) []Credential {
+	held := make(map[string]bool, len(before))
+	for _, c := range before {
+		held[c.ID] = true
+	}
+	out := slices.Clone(after)
+	for i, c := range out {
+		if c.Method == MethodReset && !held[c.ID] {
+			out[i].Epoch, out[i].Generation = counters.Epoch, counters.Generation
+		}
+	}
+	return out
 }
 
 // fitHeld is a credential set as a write lands it: set itself where it is

@@ -283,7 +283,8 @@ func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
 	}
 	if in.Check != nil {
 		if err := in.Check(iamdomain.Person{Kind: e.person.Kind,
-			Stage: e.person.Stage, Credentials: slices.Clone(e.person.Credentials)}); err != nil {
+			Stage: e.person.Stage, Credentials: slices.Clone(e.person.Credentials)},
+			iamdomain.Counters{}); err != nil {
 			return statelog.Result{}, err
 		}
 	}
@@ -324,7 +325,7 @@ func (e *estate) ResetByID(_ context.Context, id string) (iamdomain.ResetRow, er
 		held = e.behindResets
 	}
 	row := iamdomain.ResetOf(iamdomain.Person{Kind: e.person.Kind,
-		Stage: e.person.Stage, Credentials: held}, id)
+		Stage: e.person.Stage, Credentials: held}, id, iamdomain.Counters{})
 	if row.ID != "" {
 		row.PersonID, row.Login = e.person.ID, e.person.Login
 	}

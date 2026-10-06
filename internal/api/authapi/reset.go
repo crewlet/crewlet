@@ -126,10 +126,11 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 	set, err := holder.SetPassword(r.Context(), iamdomain.PasswordSet{
 		PersonID: held.PersonID, Verifier: verifier,
 		// THE LINK AGAIN, IN THE RECORD'S OWN SNAPSHOT: one spent by
-		// another tab, revoked by an administrator or its person
-		// suspended since the read above opens nothing here either.
-		Check: func(p iamdomain.Person) error {
-			if !iamdomain.ResetOf(p, held.ID).Opens(in.Secret, s.now()) {
+		// another tab, revoked by an administrator, ended by a counter or
+		// its person suspended since the read above opens nothing here
+		// either.
+		Check: func(p iamdomain.Person, counters iamdomain.Counters) error {
+			if !iamdomain.ResetOf(p, held.ID, counters).Opens(in.Secret, s.now()) {
 				return errResetSpent
 			}
 			return nil

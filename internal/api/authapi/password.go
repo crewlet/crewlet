@@ -193,7 +193,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	opID := statelog.NewOpID(s.now(), "password-change")
 	changed, err := s.behalf(principal).SetPassword(r.Context(), iamdomain.PasswordSet{
 		PersonID: held.ID, Verifier: fresh,
-		Check: func(p iamdomain.Person) error {
+		Check: func(p iamdomain.Person, _ iamdomain.Counters) error {
 			for _, c := range p.Credentials {
 				if c.ID == current.ID && c.Method == iamdomain.MethodPassword &&
 					c.Verifier == current.Verifier && c.RevokedAt.IsZero() {

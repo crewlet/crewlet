@@ -950,12 +950,17 @@ type ResetRow struct {
 	Verifier  string
 	ExpiresAt time.Time
 	RevokedAt time.Time
+
+	// Ended is a link a counter ended since its issue ([Credential.EndedBy]):
+	// its person suspended, signed out everywhere or their sessions ended by
+	// an administrator, or the company's invalidated after a restore.
+	Ended bool
 }
 
 // Opens reports whether a secret presented with this link's id is the link's,
 // and the link still sets a password at now: not revoked — which is what
-// spending it does — not past its expiry, and its person somebody a reset
-// may reach ([ResetStages]).
+// spending it does — not ended by a counter, not past its expiry, and its
+// person somebody a reset may reach ([ResetStages]).
 //
 // ONE PREDICATE, for [InvitationRow.Spent]'s reason: every way a link stops
 // working has one remedy, ask for another, and told apart they would say
@@ -963,20 +968,20 @@ type ResetRow struct {
 func (r ResetRow) Opens(secret string, now time.Time) bool {
 	return r.ID != "" && r.Kind == iam.KindPerson &&
 		slices.Contains(ResetStages, r.Stage) &&
-		r.RevokedAt.IsZero() && now.Before(r.ExpiresAt) &&
+		r.RevokedAt.IsZero() && !r.Ended && now.Before(r.ExpiresAt) &&
 		credential.VerifyReset(r.Verifier, r.ID, secret)
 }
 
 // ResetOf is the reset link id names among a person's credentials, as a
-// document a decide read holds them — the zero row for one it does not hold.
-// It is what a spend's [PasswordSet.Check] judges the link by, in the record's
-// own snapshot, with the same [ResetRow.Opens] the link's screen asks.
-func ResetOf(person Person, id string) ResetRow {
+// document a decide read holds them at counters — the zero row for one it does
+// not hold. It is what a spend's [PasswordSet.Check] judges the link by, in the
+// record's own snapshot, with the same [ResetRow.Opens] the link's screen asks.
+func ResetOf(person Person, id string, counters Counters) ResetRow {
 	for _, c := range person.Credentials {
 		if c.ID == id && c.Method == MethodReset {
 			return ResetRow{ID: id, Kind: person.Kind, Stage: person.Stage,
 				Verifier: c.Verifier, ExpiresAt: c.ExpiresAt,
-				RevokedAt: c.RevokedAt}
+				RevokedAt: c.RevokedAt, Ended: c.EndedBy(counters)}
 		}
 	}
 	return ResetRow{}
@@ -999,17 +1004,17 @@ func (r *Reader) ResetByID(ctx context.Context, id string) (ResetRow, error) {
 	var out ResetRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var (
-			verifier         []byte
-			expires, revoked int64
-			kind, stage      string
+			verifier, document []byte
+			expires, revoked   int64
+			kind, stage        string
 		)
 		err := tx.QueryRowContext(ctx, `
 			SELECT c.person_id, c.verifier, c.expires_at, c.revoked_at,
-			       p.login, p.kind, p.stage, p.seat_id
+			       c.document, p.login, p.kind, p.stage, p.seat_id
 			  FROM iam_credentials c
 			  JOIN iam_people p ON p.id = c.person_id
 			 WHERE c.id = ? AND c.method = ?`, id, string(MethodReset)).
-			Scan(&out.PersonID, &verifier, &expires, &revoked,
+			Scan(&out.PersonID, &verifier, &expires, &revoked, &document,
 				&out.Login, &kind, &stage, &out.Seat)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -1018,10 +1023,21 @@ func (r *Reader) ResetByID(ctx context.Context, id string) (ResetRow, error) {
 		case err != nil:
 			return fmt.Errorf("iamdomain: read a reset link: %w", err)
 		}
+		held, err := DecodeCredential(document)
+		if err != nil {
+			return fmt.Errorf("iamdomain: open reset link %q: %w", id, err)
+		}
+		// THE COUNTERS IN THE SNAPSHOT THE ROW IS READ IN, as the spend's
+		// own check reads them in its record's.
+		counters, err := countersOf(ctx, tx, out.PersonID)
+		if err != nil {
+			return err
+		}
 		out.ID = id
 		out.Verifier = string(verifier)
 		out.ExpiresAt = fromMillis(expires)
 		out.RevokedAt = fromMillis(revoked)
+		out.Ended = held.EndedBy(counters)
 		out.Kind, out.Stage = iam.Kind(kind), iam.Stage(stage)
 		return nil
 	})

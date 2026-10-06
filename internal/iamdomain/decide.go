@@ -2390,8 +2390,12 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 			return fmt.Errorf("%w: %s is a %s, and only a person holds a "+
 				"password", ErrRefused, in.PersonID, person.Kind)
 		}
+		counters, err := countersOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
 		if in.Check != nil {
-			if err = in.Check(person); err != nil {
+			if err = in.Check(person, counters); err != nil {
 				return err
 			}
 		}
@@ -2413,10 +2417,6 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 			V: DocumentVersion, ID: id, Method: MethodPassword,
 			Verifier: in.Verifier,
 		})
-		counters, err := countersOf(ctx, tx, in.PersonID)
-		if err != nil {
-			return err
-		}
 		if person.Credentials, err = fitHeld(kept, now, counters, ErrInvalid); err != nil {
 			return err
 		}
@@ -2437,7 +2437,9 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 // a password is; a new link's issue, because a person holds at most one; and
 // an edit that ADDS a grant ([Writer.UpdatePerson]), because a link is judged
 // against its issuer's grants at the issue and a grant gained afterwards was
-// judged against nobody who holds it.
+// judged against nobody who holds it. Everything that ends a person's sessions
+// and tokens ends their links too, by moving a counter the link was issued
+// at ([Credential.EndedBy]) rather than through this.
 func RevokeResetLinks(held []Credential, now time.Time) []Credential {
 	out := slices.Clone(held)
 	for i, c := range out {
@@ -2457,12 +2459,12 @@ type PasswordSet struct {
 	Verifier string
 
 	// Check is the caller's proof, judged in the record's own snapshot
-	// against the person as it holds them, and refusing with nothing
-	// published. A FUNCTION for [CredentialSet.Apply]'s reason: the proof
-	// is about the credential set the write lands on, which the caller
-	// does not hold and must not read separately. It may refuse; it forms
-	// nothing.
-	Check func(Person) error
+	// against the person as it holds them and their [Counters], and
+	// refusing with nothing published. A FUNCTION for
+	// [CredentialSet.Apply]'s reason: the proof is about the credential set
+	// the write lands on, which the caller does not hold and must not read
+	// separately. It may refuse; it forms nothing.
+	Check func(Person, Counters) error
 
 	// Spends is the reset link this password is set from, marked
 	// [Credential.Spent] beside the revocation every link takes; empty for
@@ -2568,13 +2570,17 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err = machineHolds(person.Kind, added); err != nil {
 			return err
 		}
-		// A GRANT GAINED ENDS EVERY OUTSTANDING RESET LINK, in this record.
-		if len(added) > 0 {
-			updated.Credentials = RevokeResetLinks(updated.Credentials, w.Now())
-		}
 		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
+		}
+		// A RESET LINK THIS RECORD ISSUES ENDS WITH THE COUNTERS IT WAS
+		// ISSUED AT, as a token does.
+		updated.Credentials = stampIssued(person.Credentials,
+			updated.Credentials, counters)
+		// A GRANT GAINED ENDS EVERY OUTSTANDING RESET LINK, in this record.
+		if len(added) > 0 {
+			updated.Credentials = RevokeResetLinks(updated.Credentials, w.Now())
 		}
 		if updated.Credentials, err = fitHeld(updated.Credentials, w.Now(),
 			counters, ErrInvalid); err != nil {

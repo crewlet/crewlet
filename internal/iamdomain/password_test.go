@@ -46,7 +46,7 @@ func issueReset(t *testing.T, rig *writeRig, person string) (string, string) {
 // setPassword sets a person's password through the node's own writer — the
 // party both callers act through — judged by check.
 func setPassword(t *testing.T, rig *writeRig, person, verifier string,
-	check func(iamdomain.Person) error) error {
+	check func(iamdomain.Person, iamdomain.Counters) error) error {
 
 	t.Helper()
 	return rig.draining(func() error {
@@ -85,8 +85,8 @@ func TestAPasswordSetIsOneRecordThatEndsEveryTokenAndLink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opens := func(p iamdomain.Person) error {
-		if !iamdomain.ResetOf(p, link).Opens(secret, brokerAt) {
+	opens := func(p iamdomain.Person, counters iamdomain.Counters) error {
+		if !iamdomain.ResetOf(p, link, counters).Opens(secret, brokerAt) {
 			return errors.New("the link no longer opens")
 		}
 		return nil
@@ -194,6 +194,86 @@ func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
 	if opens() {
 		t.Error("the link still opens after its person gained config:write, " +
 			"which nobody holding it was judged against")
+	}
+}
+
+// A RESET LINK ENDS WITH ITS PERSON'S SESSIONS AND TOKENS.
+//
+// A link is sent out of band and its copy stays wherever it went. It was
+// judged only by its own row and its person's stage, so a suspension refused
+// it only while the stage stood: reactivated, the person's link from before
+// the suspension opened again, and whoever kept a copy set their password.
+// Signing out everywhere, an administrator ending their sessions and the
+// restore runbook's invalidate-all left it alone too. It is stamped with the
+// person's epoch and the company's generation at its issue, and ended by
+// either moving, as a machine token is — on the link's screen and in the
+// spend's own snapshot. The CONTROL is a link issued after the gesture, which
+// opens. Mutation: drop the counters from EndedBy's reset arm and every row
+// opens again.
+func TestAResetLinkEndsWithItsPersonsSessionsAndTokens(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		gesture func(t *testing.T, rig *writeRig, person string) error
+	}{
+		{"suspended and reactivated", func(t *testing.T, rig *writeRig, person string) error {
+			for _, stage := range []iam.Stage{iam.StageSuspended, iam.StageActive} {
+				if _, err := rig.writer.SetStage(t.Context(), person, stage,
+					operationKey(), "a stage"); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"signed out everywhere", func(t *testing.T, rig *writeRig, person string) error {
+			_, err := rig.writer.Revoke(t.Context(), person, operationKey(),
+				"signed out everywhere")
+			return err
+		}},
+		{"everybody's sessions invalidated", func(t *testing.T, rig *writeRig, _ string) error {
+			_, err := rig.writer.InvalidateAll(t.Context(), operationKey(),
+				"a restore")
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newWriteRig(t)
+			person := tokenOwner(t, rig, "jane.doe")
+			link, secret := issueReset(t, rig, person)
+			if err := rig.draining(func() error {
+				return tc.gesture(t, rig, person)
+			}); err != nil {
+				t.Fatalf("the gesture: %v", err)
+			}
+			rig.drain()
+			row, err := rig.reader(t).ResetByID(t.Context(), link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.Opens(secret, brokerAt) {
+				t.Errorf("the link issued before the gesture still opens: %+v", row)
+			}
+			opens := func(p iamdomain.Person, counters iamdomain.Counters) error {
+				if !iamdomain.ResetOf(p, link, counters).Opens(secret, brokerAt) {
+					return errors.New("the link no longer opens")
+				}
+				return nil
+			}
+			if err := setPassword(t, rig, person, "argon-new", opens); err == nil {
+				t.Error("the spend set a password from the ended link")
+			}
+
+			after, fresh := issueReset(t, rig, person)
+			row, err = rig.reader(t).ResetByID(t.Context(), after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !row.Opens(fresh, brokerAt) {
+				t.Errorf("a link issued after the gesture does not open — the "+
+					"control: %+v", row)
+			}
+		})
 	}
 }
 

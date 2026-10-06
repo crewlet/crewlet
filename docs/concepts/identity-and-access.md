@@ -829,6 +829,15 @@ issuing a link still holds one that opens, as an invitation they issued still
 confers what it carries — so whoever demotes them revokes it with `DELETE
 /iam/credentials/{id}`.
 
+**It ends with the person's sessions and tokens.** A link is stamped with the
+person's revocation epoch and the company's session generation when it is
+issued, as a machine token is, and refused once either moves: suspending them,
+signing them out everywhere or ending their sessions, and the restore
+runbook's `crewlet iam invalidate-all` all end it, and it is listed as revoked.
+Reactivating somebody does not bring it back — it was sent out of band, and the
+copy somebody else kept is exactly the one a reactivation would revive — so an
+administrator issues a fresh one.
+
 **It is good for one day.** It travels out of band — by chat or mail, where a
 link sits unread and gets forwarded — to somebody locked out *today*, so it
 lives long enough to reach them the next working day and no longer.
@@ -836,7 +845,7 @@ An invitation's week is for somebody who does not work here yet.
 
 **Opening it spends nothing**, as an invitation's GET does not, and every way a
 link fails to open — an id that is no link, a secret that is not the id's, a
-link spent, revoked or aged out, a person the reset no longer reaches — is
+link spent, revoked, ended or aged out, a person the reset no longer reaches — is
 **one `410 reset_spent`** in the same bytes, counted as a failed attempt (method
 `reset`) only where the link did not prove itself. It meets no curve: it names
 nobody until it opens, and its secret is 256 bits of `crypto/rand`.
