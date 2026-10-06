@@ -153,8 +153,8 @@ export function ServiceAccountDialog({
 
 /**
  * Mint a token for a service account: a label, a lifetime, and grants out of
- * the account's own — never one a token may not carry. The value is shown
- * ONCE; the engine keeps a hash of it.
+ * the account's own — never one a token may not carry, nor one the minter does
+ * not hold. The value is shown ONCE; the engine keeps a hash of it.
  */
 export function MintTokenDialog({
   owner,
@@ -170,10 +170,16 @@ export function MintTokenDialog({
   const write = useIamGesture();
   const [label, setLabel] = useState("");
   const [days, setDays] = useState("");
+  // WHAT STARTS TICKED is what this mint may send: the account's grants a
+  // token may carry AND the minter holds — the engine refuses a token carrying
+  // a grant its minter does not hold, and the picker locks such a box, so one
+  // ticked here would be a refusal nobody could clear.
   const carried = useMemo(
     () =>
-      (owner.grants ?? []).filter((g) => !(TOKEN_WITHHELD_GRANTS as readonly string[]).includes(g)),
-    [owner.grants],
+      (owner.grants ?? []).filter(
+        (g) => !(TOKEN_WITHHELD_GRANTS as readonly string[]).includes(g) && held.includes(g),
+      ),
+    [owner.grants, held],
   );
   const [grants, setGrants] = useState<string[]>(carried);
   const minted = write.answer?.kind === "done" ? write.answer.body : null;
@@ -306,6 +312,11 @@ export function EditPersonDialog({
   const [login, setLogin] = useState(row.login ?? "");
   const [seat, setSeat] = useState(row.seat ?? NO_SEAT);
   const [grants, setGrants] = useState<string[]>(row.grants ?? []);
+  // WHAT THIS EDIT MAY CONFER is the engine's rule: only a grant it ADDS needs
+  // the editor to hold it, so one the person already holds may be kept or
+  // taken away by an administrator who does not hold it — stripping a
+  // compromised colleague's config:write needs nobody to hold config:write.
+  const conferrable = useMemo(() => [...held, ...(row.grants ?? [])], [held, row.grants]);
   // THEIR OWN SEAT STAYS OFFERED beside the vacant ones: nobody else holds it,
   // but it is held, so the vacancies list leaves it out.
   const options = useMemo(() => {
@@ -396,7 +407,7 @@ export function EditPersonDialog({
           />
         )}
       </FormField>
-      <GrantPicker value={grants} onChange={setGrants} held={held} />
+      <GrantPicker value={grants} onChange={setGrants} held={conferrable} />
       <IamOutcome answer={write.answer} />
     </Modal>
   );

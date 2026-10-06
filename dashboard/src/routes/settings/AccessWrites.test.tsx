@@ -59,11 +59,21 @@ const PEOPLE = {
       grants: ["state:read"],
     },
     {
+      id: "p-di",
+      kind: "person",
+      stage: "active",
+      login: "di.moss",
+      name: "Di Moss",
+      // secrets:write is a grant ADMIN does not hold.
+      grants: ["state:read", "secrets:write"],
+    },
+    {
       id: "p-ci",
       kind: "machine",
       stage: "active",
       login: "ci:release",
-      grants: ["work:write", "people:manage"],
+      // sandbox:run is a grant ADMIN does not hold.
+      grants: ["work:write", "people:manage", "sandbox:run"],
     },
   ],
   next: "",
@@ -158,6 +168,7 @@ function engine(writes: Record<string, Response[]> = {}) {
           }),
         );
       case "/iam/people/p-bo/sessions":
+      case "/iam/people/p-di/sessions":
         return Promise.resolve(json(200, { sessions: [] }));
     }
     return Promise.resolve(json(404, { error: "no_route" }));
@@ -387,6 +398,56 @@ test("an opened person's edit sends what changed, and suspending sends the stage
     { stage: "suspended" },
   ]);
   for (const w of eng.writes()) expect(w.key).toMatch(UUID7);
+});
+
+// AN EDIT MAY TAKE AWAY A GRANT THE EDITOR DOES NOT HOLD, as the engine
+// allows (it checks only what an edit adds): Di's secrets:write is enabled
+// and unticking it sends the grants without it. The CONTROL is a grant
+// neither of them holds — secrets:read stays locked here, as it does in the
+// invitation, which confers from nothing. Mutation: hand the picker the
+// viewer's grants alone and secrets:write is locked ticked.
+test("an edit takes away a grant the editor does not hold, and adds none", async () => {
+  const eng = engine({
+    "PATCH /iam/people/p-di": [json(200, { id: "p-di", outcome: "applied", op_id: "k" })],
+  });
+  location.hash = "#/settings/access?person=p-di";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Di Moss" });
+  const held = within(edit).getByRole("checkbox", { name: "secrets:write" });
+  expect(held).toHaveProperty("checked", true);
+  expect(held).toHaveProperty("disabled", false);
+  expect(within(edit).getByRole("checkbox", { name: "secrets:read" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  fireEvent.click(held);
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ grants: ["state:read"] }]);
+});
+
+// A TOKEN STARTS FROM WHAT ITS MINTER MAY CONFER: the account's sandbox:run,
+// which ADMIN does not hold and the engine would refuse, is neither ticked nor
+// sent. Mutation: seed the selection from the account's grants alone and the
+// mint carries sandbox:run, locked ticked where nobody can clear it.
+test("a mint leaves out an account's grant its minter does not hold", async () => {
+  const eng = engine({
+    "POST /iam/credentials": [
+      json(201, { id: "c-tok", person: "p-ci", token: "cwl_pat_c-tok_1_s", grants: [] }),
+    ],
+  });
+  location.hash = "#/settings/access?person=p-ci";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Mint token" }));
+  const mint = await screen.findByRole("dialog", { name: "Mint a token for ci:release" });
+  expect(within(mint).getByRole("checkbox", { name: "sandbox:run" })).toHaveProperty(
+    "checked",
+    false,
+  );
+  fireEvent.click(within(mint).getByRole("button", { name: "Mint" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ grants: ["work:write"] }]);
 });
 
 // A RESET LINK READS NO KEY and is shown once; REMOVING somebody waits for

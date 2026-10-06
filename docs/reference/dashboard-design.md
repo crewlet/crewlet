@@ -5576,11 +5576,16 @@ this screen is the exception):
 - **New service account** — a machine: a login in the colon grammar
   (`ci:release`), a name and grants — and then **Mint its token**: a label, a
   lifetime and grants out of the account's own (`secrets:read` and
-  `people:manage` disabled, since no token carries them), the value shown once.
+  `people:manage` disabled, since no token carries them, and one the reader
+  does not hold left unticked and disabled, since the engine refuses a token
+  carrying a grant its minter does not hold), the value shown once.
 - **Cancel** on an invitation nobody redeemed: its link stops working at once
   and the address is free again.
 - On an **opened row** — **Edit login, seat and grants** (one `PATCH` carrying
-  only what changed; the seat offered among the vacant ones and their own),
+  only what changed; the seat offered among the vacant ones and their own; a
+  grant the person already holds may be unticked whoever edits, since the
+  engine checks only what an edit adds, while one neither holds stays
+  disabled),
   **Suspend** / **Reactivate**, and for a person **Issue password reset link**
   (shown once; the outstanding link is listed among their credentials),
   **Reset second factor** (when they hold one) and **End all sessions** — or,

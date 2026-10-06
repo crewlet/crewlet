@@ -56,11 +56,11 @@ export const GRANT_WORDS: Record<(typeof GRANTS)[number], string> = {
 };
 
 /**
- * Checkboxes over the grants. One the viewer does not hold is drawn disabled
- * with why — the engine refuses to confer it anyway (a caller may not confer a
- * grant they do not hold), and a box that only fails on submit is a guess.
- * `only` narrows the offer (a token carries a subset of its owner's), and
- * `withheld` greys out what the engine refuses outright, with its reason.
+ * Checkboxes over the grants. One outside `held` is drawn disabled with why —
+ * the engine refuses to confer it anyway (a caller may not confer a grant they
+ * do not hold), and a box that only fails on submit is a guess. `only` narrows
+ * the offer (a token carries a subset of its owner's), and `withheld` greys
+ * out what the engine refuses outright, with its reason.
  */
 export function GrantPicker({
   value,
@@ -72,7 +72,11 @@ export function GrantPicker({
 }: {
   value: readonly string[];
   onChange: (next: string[]) => void;
-  /** The viewer's own grants. */
+  /**
+   * What this write may confer: the viewer's own grants — and, on an edit,
+   * what the person already holds, which keeping or taking away confers
+   * nothing (the engine checks only what an edit ADDS).
+   */
   held: readonly string[];
   only?: readonly string[];
   withheld?: { grants: readonly string[]; reason: string };
