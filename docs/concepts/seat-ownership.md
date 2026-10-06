@@ -229,7 +229,13 @@ not: this node's own audit log and dispatch history, which are records of what
 A row that arrives for one this node already has is resolved by what kind of
 row it is. An append-only row — a diary entry, an episode, a skill version, a
 ledger entry — is immutable once written, so the carried copy is discarded and
-the local row stands. A small mutable row — a counterparty profile, a skill's
+the local row stands, with one exception: a diary note's **vector**, which the
+holder fills after the insert for a note written without one or under a model
+the company has since left. The holder re-files a filled note at the end of its
+table so the changelog carries it like a new row, and a node already holding
+the note takes the carried vector over a stored one of no model, another model
+or another width — never the reverse, so a stale copy replayed later cannot
+erase a filled vector. A small mutable row — a counterparty profile, a skill's
 state and use count, an onboarding marker — is one whose *update is the
 content*, so the carried copy wins. That is safe rather than merely
 convenient: a seat is held by one node at a time, so the changelog's latest

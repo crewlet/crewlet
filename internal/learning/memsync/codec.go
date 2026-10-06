@@ -55,6 +55,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -204,8 +205,10 @@ func (t table) subject(handle string, values map[string]any) string {
 //
 // WHAT THE CONFLICT DOES IS THE TABLE'S OWN ANSWER, and it is the same split
 // table.wholeEachCycle already makes. An append-only row is immutable once
-// written, so a row already here is that row and DO NOTHING is exact. A
-// wholeEachCycle row is one whose UPDATE IS THE CONTENT — a counterparty
+// written, so a row already here is that row and DO NOTHING is exact — but for
+// the one column pair a holder fills afterwards, a diary note's vector, which
+// the carry takes over a stored vector of no model or another
+// (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one whose UPDATE IS THE CONTENT — a counterparty
 // profile rewritten as the seat learns, a skill archived, an onboarding
 // marker flipped — and DO NOTHING there discards precisely what the table is
 // republished every cycle to carry. A node that held the seat, lost it while
@@ -320,7 +323,7 @@ func decode(body []byte) (Row, table, bool, error) {
 func (t table) onConflict(carried []string) string {
 	skip := " ON CONFLICT DO NOTHING"
 	if !t.wholeEachCycle {
-		return skip
+		return t.fillVector(carried) + skip
 	}
 	assignments := make([]string, 0, len(carried))
 	for _, column := range carried {
@@ -337,4 +340,32 @@ func (t table) onConflict(carried []string) string {
 	}
 	return " ON CONFLICT (" + strings.Join(t.key, ", ") + ") DO UPDATE SET " +
 		strings.Join(assignments, ", ") + skip
+}
+
+// fillVector is the one update an append-only row takes on import: the vector
+// the holder filled, over a stored row whose vector is of no model or of
+// another (see [table.fillsVector]). Empty for a table that fills none.
+//
+// EVERYTHING ELSE ABOUT THE ROW STAYS WHAT IS HERE — its retrieval
+// bookkeeping is this node's — and the carried vector is taken only when it is
+// a whole one: the row must carry both columns, so a row from a build that
+// predates the model column (no `embedding_model` key at all) never overwrites
+// a tagged vector with an untagged one, and both must be set, so a carried copy
+// written before the fill never erases the vector the fill gave this node.
+// ONLY A DIFFERENT SPACE is a change — another model, or the same model at
+// another width, which a restart can leave behind: the same model's vector of
+// the same immutable text at the same width is the same vector, and rewriting
+// it would be churn.
+func (t table) fillVector(carried []string) string {
+	if !t.fillsVector || !slices.Contains(carried, "embedding") ||
+		!slices.Contains(carried, "embedding_model") {
+		return ""
+	}
+	stored := t.name + "."
+	return " ON CONFLICT (" + strings.Join(t.key, ", ") + ") DO UPDATE SET" +
+		" embedding = excluded.embedding, embedding_model = excluded.embedding_model" +
+		" WHERE excluded.embedding IS NOT NULL AND excluded.embedding_model IS NOT NULL" +
+		" AND (" + stored + "embedding IS NULL OR " + stored + "embedding_model IS NULL" +
+		" OR " + stored + "embedding_model <> excluded.embedding_model" +
+		" OR length(" + stored + "embedding) <> length(excluded.embedding))"
 }

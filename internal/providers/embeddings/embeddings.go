@@ -3,7 +3,8 @@
 //
 // # Who asks for one, and what each does with it
 //
-// Four callers, in two kinds:
+// Its callers, in two kinds — the ones that send BATCHES (the knowledge corpus,
+// a diary's fill) and the ones that embed one text while something waits:
 //
 //   - The knowledge corpus duty (internal/search) embeds the company's own
 //     pages and work items, once for the fleet, and publishes each vector on
@@ -16,6 +17,10 @@
 //   - Diary and episode recall (internal/agent/prefetch, internal/learning)
 //     embed a turn's ask and each completed turn, and rank a seat's own
 //     memories against it; a failure is "no similarity search this turn".
+//   - A seat's diary (internal/learning, internal/engine) embeds each note
+//     as it is written, and the node holding the seat fills, in batches, the
+//     notes left with no vector of the current model; a failure is a note
+//     the next fill asks about again.
 //
 // # Nothing here retries, and what it does instead
 //

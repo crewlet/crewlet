@@ -86,12 +86,54 @@ func (d DiaryEntry) Expired(now time.Time) bool {
 }
 
 // Diary is a seat's private observation log.
-type Diary struct{ db *store.DB }
+type Diary struct {
+	db *store.DB
+
+	// embed is what a note is embedded with as it is written, or nil for
+	// a handle that only reads — see [WithEmbed].
+	embed Embed
+}
+
+// DiaryOption configures a [Diary].
+type DiaryOption func(*Diary)
+
+// WithEmbed makes [Diary.Write] embed each note as it is written.
+//
+// A WRITER'S OPTION, and only a writer's: the turn-start prefetch, the memory
+// screen and the retention sweep read the diary and embed nothing, and a
+// handle built for them that embedded on Write would be a second writer
+// nobody declared. The two writers — reflect_and_persist and the post-turn
+// persist decider — are built with it.
+func WithEmbed(embed Embed) DiaryOption {
+	return func(d *Diary) { d.embed = embed }
+}
 
 // NewDiary wraps a database handle.
-func NewDiary(db *store.DB) *Diary { return &Diary{db: db} }
+func NewDiary(db *store.DB, opts ...DiaryOption) *Diary {
+	d := &Diary{db: db}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
+}
 
 // Write records one observation.
+//
+// EMBEDDED IN THE INSERT, when the handle was built [WithEmbed] and the entry
+// carries no vector of its own: the content's vector and its model are
+// written in the same statement as the row, so the memory changelog — which
+// carries a row when it is inserted — carries the vector with it, and the
+// seat's next holder can recall the note by meaning. A vector that cannot be
+// had inside [DiaryEmbedBudget] costs the vector and never the note: the row
+// lands without one and the holder's fill gives it one later (see
+// [Diary.Unembedded]).
+//
+// THERE IS NO DUPLICATE GUARD HERE, and a note is stored verbatim. What keeps
+// the diary from filling with paraphrases is upstream of the store: the
+// reflect dispatcher's redelivery guard on the work key, and the persist
+// decider's prompt, which is shown the seat's recent notes and asked not to
+// repeat one. A byte-exact guard here would catch only the copy that is
+// already caught, and none of the paraphrases.
 func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 	switch {
 	case e.ID == "" || e.AgentID == "":
@@ -110,6 +152,11 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: a %q entry needs a deadline", DiaryShort)
 	case e.Kind == DiaryLong && !e.TTLUntil.IsZero():
 		return fmt.Errorf("learning: a %q entry must not carry a deadline", DiaryLong)
+	}
+
+	if len(e.Embedding) == 0 {
+		vector := d.embedNote(ctx, e)
+		e.Embedding, e.EmbeddingModel = vector.Values, vector.Model
 	}
 
 	// Same policy as an episode's embedding, and for the same reason — see

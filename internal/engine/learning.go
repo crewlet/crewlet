@@ -79,7 +79,8 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 
 	var workers []learning.Worker
 	if models != nil && cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
-		decider, err := learning.NewPersistDecider(models, learning.NewDiary(db),
+		decider, err := learning.NewPersistDecider(models,
+			learning.NewDiary(db, learning.WithEmbed(e.embedText)),
 			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
 		if err != nil {
 			log.Warn("persist_decider_unavailable", "error", err,

@@ -71,6 +71,25 @@ type table struct {
 	// no bound at all, which made it the one table here whose cost grew
 	// with the deployment's age rather than with its size.
 	wholeEachCycle bool
+
+	// fillsVector says the holder FILLS this append-only table's vector
+	// after the insert — its `embedding` and the `embedding_model` it came
+	// from — for rows written without one or under a model the company
+	// has since left.
+	//
+	// The one in-place change an append-only row takes, and both halves
+	// of carrying it are deliberate. The holder re-files a filled row at
+	// the end of its table, so the rowid watermark carries it like an
+	// insert (learning.Diary.FillEmbeddings); and a carry over a row
+	// already here takes the carried vector WHEN THE STORED ONE IS OF NO
+	// MODEL OR ANOTHER — see [table.onConflict] — because with DO NOTHING
+	// a peer that already held the vectorless row would keep it, and when
+	// the seat moved there that stale copy would be the holder's.
+	//
+	// The diary only. An episode is embedded as it is written or never:
+	// the text it is embedded from is not stored whole, so nothing could
+	// fill one later.
+	fillsVector bool
 }
 
 // tables is every table a seat's memory lives in.
@@ -89,7 +108,8 @@ var tables = []table{
 			"turn_id", "metadata", "retrieval_count", "last_retrieved_at",
 			"embedding", "embedding_model", "created_at",
 		},
-		blobs: []string{"embedding"},
+		blobs:       []string{"embedding"},
+		fillsVector: true,
 	},
 	{
 		name:    "episodes",
