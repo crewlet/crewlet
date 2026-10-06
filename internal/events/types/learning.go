@@ -735,9 +735,13 @@ func (e CompactionCompleted) SummaryFor(actor string) string {
 
 // ReflectionCompleted fires at the end of every reflection pass that actually
 // dispatched workers. It carries no per-worker outcome — those have their own
-// events — because its job is to be a state-derivation sentinel: the aux
-// workers' phase events keep the agent showing as working during learning, and
-// this is what flips it back to idle when the whole pass is done.
+// events, and what each worker's model calls cost is the reflection stage's
+// `auxiliary_spend` — because its job is to be the pass's trailing SENTINEL:
+// the live view extends the seat's last turn to it, and the Turn screen's
+// Reflection lane ends at it. It does not end the turn's work, which
+// agent_turn_completed already did; the pass is not published on every path
+// (the reflector returns without it on every path where no worker runs), so nothing may wait
+// for it to call a seat idle.
 type ReflectionCompleted struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -755,8 +759,8 @@ type ReflectionCompleted struct {
 // EventType is the "reflection_completed" wire type.
 func (ReflectionCompleted) EventType() string { return "reflection_completed" }
 
-// Role is the seat the pass reflected for. This is the event that flips that
-// seat back to idle, so the projection needs the role to know whose.
+// Role is the seat the pass reflected for, whose last turn the projection
+// extends to the pass's end — so it needs the role to know whose.
 func (e ReflectionCompleted) Role() string { return e.RoleName }
 
 // AgentID is the instance whose learning workers have finished.
