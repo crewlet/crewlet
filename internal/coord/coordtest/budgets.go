@@ -810,6 +810,40 @@ var budgetCases = []fleetCase{{
 		}
 	},
 }, {
+	name: "a company refusal leaves the seat's own refusal standing",
+	fn: func(h *fleetHarness) {
+		// The other direction of the case above, and the one a backend
+		// reaches by WRITING the seat: a round the company refused is
+		// counted on the seat with no verdict of its own, so that write
+		// carries the seat's stamps through. A backend that cleared them
+		// there — or judged the seat after all — would erase a seat
+		// refusal that is still true, and the seat's surfaces would stop
+		// saying since when it has been refusing.
+		from := time.Now()
+		if got := h.charge(testSeat, 50, nil, day(40)); got.RefusedScope != "agent" {
+			h.t.Fatalf("setup refusal = %+v, want the agent scope", got)
+		}
+		stamped := h.refusedAt(testSeat, period.Day, from, time.Now())
+		// A distinct instant, so a backend that stamped the seat again
+		// cannot pass by landing in the same clock tick.
+		time.Sleep(2 * time.Millisecond)
+
+		// The company's ceiling tightened below what it holds: the
+		// company refuses, and the seat's own ceiling is not asked.
+		if got := h.charge(testSeat, 10, day(55), day(1000)); got.RefusedScope != "org" {
+			h.t.Fatalf("refusal = %+v, want the org scope", got)
+		}
+		row, _ := h.usage(testSeat)
+		if got := row.In(period.Day).RefusedAt; !got.Equal(stamped) {
+			h.t.Fatalf("seat refusal stamp = %v, want the %v it held: a round the "+
+				"company refused rewrote the seat's own refusal", got, stamped)
+		}
+		if h.used(coord.OrgScope) != 60 || h.used(testSeat) != 60 {
+			h.t.Fatalf("org = %d and seat = %d, want both rounds on both counters",
+				h.used(coord.OrgScope), h.used(testSeat))
+		}
+	},
+}, {
 	name: "concurrent charges add up",
 	fn: func(h *fleetHarness) {
 		// The property a compare-and-swap buys and a read-modify-write
