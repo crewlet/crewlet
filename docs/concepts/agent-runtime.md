@@ -433,7 +433,7 @@ flowchart TD
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
     S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S9
-    S9["9. Reap shared MCP servers; close stream + store"]
+    S9["9. Reap shared MCP servers; last auxiliary-spend flush;<br/>custody flush; close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
@@ -480,8 +480,13 @@ flowchart TD
    notification transports, the maintenance duties, the integration reconcile
    loop, memory sync, the learning passes, the cron scheduler and the
    credential cooldown refresh.
-9. **Close the backends**: the shared MCP servers are reaped, then the stream
-   connection and the store file are closed (`engine_stopped`).
+9. **Close the backends**: the shared MCP servers are reaped; the
+   auxiliary-spend ledger publishes its last records — what the seats'
+   auxiliary model spent since its last 15-second flush — on a budget of five
+   seconds, once every producer of them has stopped and before a node without
+   `data` flushes its [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)
+   batches, which carry those records too; then the custody flush, and the
+   stream connection and the store file are closed (`engine_stopped`).
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 

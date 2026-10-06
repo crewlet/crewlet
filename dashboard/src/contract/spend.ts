@@ -21,8 +21,11 @@ export const GROUPS = [
  * The four bands a phase breakdown is drawn in, and the data series each one
  * takes — the engine folds every phase into one of them ONCE
  * (`tokens.PhaseBand`: execute and a coding run are Execute, review is Review,
- * delegated workers are Workers, the learning workers, the judge and
- * onboarding are Auxiliary), so no screen folds a phase itself.
+ * delegated workers are Workers, and everything that is not the turn's own
+ * work is Auxiliary — every call to the seat's auxiliary model (the turn-start
+ * context, every compaction rewrite, the reflection workers, the background
+ * learning passes, a person's answered question), the round-cap judge and the
+ * first-turn onboarding), so no screen folds a phase itself.
  *
  * `series` is the 1-based data hue, in stacking order; `internal/api/queries`'
  * band gate holds `value` against `tokens.Bands` in both directions.

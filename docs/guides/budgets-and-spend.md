@@ -214,9 +214,11 @@ known size:
 - **The flush.** An auxiliary call reaches the rollup up to one 15-second flush
   after the counter (two for a named window), and a phase record the moment
   its phase ends.
-- **A node that stopped hard.** A process that dies loses at most one flush of
-  unpublished auxiliary records: the counter holds that spend, the rollups are
-  short by it.
+- **A node that stopped hard.** A process that dies loses the auxiliary
+  records it had not published: at most one flush of them, plus — if it dies
+  while the broker is refusing them — every refused record it was holding for
+  a retry, up to the 4 096 below. The counter holds that spend, the rollups
+  are short by it.
 - **A broker that refused records.** A node keeps up to 4 096 unpublished
   records for its next flush — most of an hour of a busy company — and logs
   any it has to drop past that, with their tokens.

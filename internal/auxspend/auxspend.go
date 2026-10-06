@@ -41,13 +41,15 @@
 //
 // # What a crash costs
 //
-// A bucket lives in memory until it is published, so a process that dies
-// loses at most one flush interval of records: the counters already hold that
-// spend, and the rollups are short by it. A publish that FAILS keeps its
-// record — sealed, with its id and its instant, so the retry the next flush
-// makes is the same event and every reader's de-duplication collapses a
-// publish that in fact landed — up to [MaxPending] of them, past which the
-// oldest is dropped and said.
+// A bucket lives in memory until it is published, and so does a record whose
+// publish failed: such a record is kept — sealed, with its id and its instant,
+// so the retry the next flush makes is the same event and every reader's
+// de-duplication collapses a publish that in fact landed — up to [MaxPending]
+// of them, past which the oldest is dropped and said. So a process that dies
+// loses the buckets still open, at most one flush interval of records, PLUS
+// every refused record it was still holding — up to [MaxPending], most of an
+// hour of a busy company, when it dies during a broker outage. The counters
+// already hold that spend either way, and the rollups are short by it.
 package auxspend
 
 import (
