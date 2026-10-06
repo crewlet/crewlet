@@ -21,7 +21,7 @@ import (
 func TestEnvdClientKeepsTheCallersTransport(t *testing.T) {
 	t.Parallel()
 	marker := http.RoundTripper(&http.Transport{})
-	c := newEnvdClient("box.example.com", &http.Client{
+	c := newEnvdClient("box.example.com", "", &http.Client{
 		Transport: marker, Timeout: 30 * time.Second,
 	})
 	if c.http.Transport != marker {
@@ -45,7 +45,7 @@ func TestEnvdClientFallsBackToTheSharedTransport(t *testing.T) {
 		{"no client at all", nil},
 		{"a client with no transport of its own", &http.Client{Timeout: time.Second}},
 	} {
-		if got := newEnvdClient("box.example.com", tc.from).http.Transport; got != httpx.Transport() {
+		if got := newEnvdClient("box.example.com", "", tc.from).http.Transport; got != httpx.Transport() {
 			t.Errorf("%s: transport = %T, want the one httpx shares", tc.name, got)
 		}
 	}
@@ -70,7 +70,7 @@ func TestASilentFileTransferIsAbandonedAndSaysWhy(t *testing.T) {
 		close(release)
 		server.Close()
 	})
-	c := newEnvdClient(server.URL, server.Client())
+	c := newEnvdClient(server.URL, "", server.Client())
 	c.fileIdle = 50 * time.Millisecond
 
 	for name, transfer := range map[string]func() error{

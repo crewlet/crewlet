@@ -172,6 +172,10 @@ type envdClient struct {
 	host string
 	http *http.Client
 
+	// token is the box's envd access token ([e2bBox.EnvdAccessToken]),
+	// sent on every request; empty for a box made without secured access.
+	token string
+
 	// fileIdle is [e2bFileIdleTimeout], held on the value so a test can
 	// watch a silent transfer abandoned without waiting a minute for it.
 	fileIdle time.Duration
@@ -183,7 +187,7 @@ type envdClient struct {
 // The transport falls back to [httpx.Transport] rather than to nil, which
 // would be http.DefaultTransport and its two idle connections per host —
 // the one thing every other client here was moved off.
-func newEnvdClient(host string, from *http.Client) *envdClient {
+func newEnvdClient(host, token string, from *http.Client) *envdClient {
 	client := &http.Client{Transport: httpx.Transport()}
 	if from != nil {
 		if from.Transport != nil {
@@ -192,7 +196,7 @@ func newEnvdClient(host string, from *http.Client) *envdClient {
 		client.CheckRedirect = from.CheckRedirect
 		client.Jar = from.Jar
 	}
-	return &envdClient{host: host, http: client, fileIdle: e2bFileIdleTimeout}
+	return &envdClient{host: host, http: client, token: token, fileIdle: e2bFileIdleTimeout}
 }
 
 // connectEnvelope is the five-byte prefix Connect puts before each streamed
@@ -288,7 +292,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 		req.Header.Set("Connect-Timeout-Ms",
 			strconv.FormatInt(int64(opts.TimeoutSec*1000), 10))
 	}
-	setEnvdUser(req)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -441,7 +445,7 @@ func (c *envdClient) fileExchange(ctx context.Context, method, path string,
 	for key, values := range header {
 		req.Header[key] = values
 	}
-	setEnvdUser(req)
+	c.authorize(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		idle.stop()
@@ -699,12 +703,21 @@ func filesQuery(path string) string {
 	return url.Values{"path": {path}, "username": {e2bEnvdUser}}.Encode()
 }
 
-// setEnvdUser names the account a call acts as.
-func setEnvdUser(req *http.Request) {
+// authorize names the account a call acts as and presents the box's access
+// token — the two headers EVERY envd request carries, which is why each one
+// is built through here.
+func (c *envdClient) authorize(req *http.Request) {
 	// Sent as a header AND as the query parameter above, because envd has
 	// read it from both across versions and a mismatch between the box's
 	// envd and this build shows up as a permission error naming no user.
 	req.Header.Set("X-User", e2bEnvdUser)
+	if c.token != "" {
+		// envd's own header for it (packages/envd/internal/api/auth.go in
+		// e2b-dev/infra). A secured box refuses a process call without it
+		// and a file call without it or a signature; a header is the
+		// form both accept, and the one E2B's SDKs send.
+		req.Header.Set("X-Access-Token", c.token)
+	}
 }
 
 // baseName is the last path element, without importing path/filepath for a

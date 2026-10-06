@@ -52,7 +52,7 @@ import (
 // What is NOT ordinary is a configured provider that cannot be constructed —
 // that fails the apply, because the alternative publishes a company whose
 // sandbox-enabled seats plan around a box they will never get.
-func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelReceiver) (*sandbox.Manager, error) {
+func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelReceiver, fleet sandbox.FleetFeatures) (*sandbox.Manager, error) {
 	spec := c.Providers.Sandbox
 	if spec == nil || !spec.Enabled() {
 		return nil, nil
@@ -62,7 +62,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	// container backend for a company whose seats all run direct, and failed
 	// the apply demanding an image the validator had just refused as a field
 	// nothing would read.
-	providers, err := buildSandboxProviders(spec, env, c.SandboxPlacements())
+	providers, err := buildSandboxProviders(spec, env, c.SandboxPlacements(), fleet)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func sandboxRunners() map[string]sandbox.Runner {
 // differ in exactly one option, and a single instance would have to be told
 // which cell it was serving on every call — which is the block-wide mode this
 // whole reshape removed, reintroduced one layer down.
-func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string) (map[sandbox.Placement]sandbox.Provider, error) {
+func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string, fleet sandbox.FleetFeatures) (map[sandbox.Placement]sandbox.Provider, error) {
 	built := make(map[sandbox.Placement]sandbox.Provider, len(reached))
 	// WALKED IN THE CLOSED SET'S ORDER, not the map's: a map iterates
 	// randomly, and an error naming whichever backend happened to come
@@ -126,7 +126,7 @@ func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, r
 			return nil, fmt.Errorf("providers.sandbox: %q is reached by %s and "+
 				"has no backend configured", placement, reached[placement])
 		}
-		provider, err := buildSandboxProvider(spec, env, placement)
+		provider, err := buildSandboxProvider(spec, env, placement, fleet)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +135,7 @@ func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, r
 	return built, nil
 }
 
-func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement) (sandbox.Provider, error) {
+func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement, fleet sandbox.FleetFeatures) (sandbox.Provider, error) {
 	if spec.Fake {
 		// The in-process double, for a deployment demonstrating the flow
 		// without a real box. Named in config rather than inferred, so
@@ -159,10 +159,15 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 		// own: a staging cluster and a production one are the same config
 		// with a different variable, and passing the reference through
 		// would point every box at a host called "${E2B_DOMAIN}".
+		//
+		// The FLEET is what a create asks before it secures a box: a box
+		// secured while a node of an older build is live is one that node
+		// cannot read, and it may hold the waiter or the run's seat next.
 		return sandbox.NewE2B(sandbox.E2BOptions{
 			APIKey:   resolvedOr(env, e2b.APIKey),
 			Domain:   resolvedOr(env, e2b.Domain),
 			Template: e2b.Template,
+			Fleet:    fleet,
 		})
 	case config.PlacementDirect, config.PlacementContainer:
 		local := spec.Local
@@ -1375,12 +1380,19 @@ func (e *Engine) sandboxManager() *sandbox.Manager {
 	return rt.coordinator.Manager()
 }
 
+// sandboxFleet is what a sandbox backend asks the fleet through: the feature
+// table every node's presence lease carries, read live on each question. The
+// remote backend asks it before it secures a box ([sandbox.E2BProvider.Create]).
+func (e *Engine) sandboxFleet() coord.FeatureReader {
+	return coord.FeatureReader{Leases: e.backends.Coord}
+}
+
 // startSandboxFor is [Engine.startSandbox] for the company a node boots on:
 // its catalogue built, and the runtime brought up where it reaches a cell.
 // An apply builds the catalogue itself, earlier, so that a revision whose
 // catalogue cannot be built is refused before anything else moves.
 func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
-	manager, err := buildSandbox(c.Config, e.resolver(), e.sandboxOtel)
+	manager, err := buildSandbox(c.Config, e.resolver(), e.sandboxOtel, e.sandboxFleet())
 	if err != nil {
 		return err
 	}

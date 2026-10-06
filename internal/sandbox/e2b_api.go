@@ -173,6 +173,19 @@ type e2bBox struct {
 	// spec, on its `GET /sandboxes/{sandboxID}` answer only ([getBox]);
 	// a create or a connect answers a running box and does not carry it.
 	State string `json:"state,omitempty"`
+
+	// EnvdAccessToken is the credential a SECURED box's envd requires on
+	// every request (`X-Access-Token`; see [e2bAPI.createBox]), and E2B
+	// answers it on the create, on a connect and on a read of the box
+	// alike, so every handle this backend builds carries it whichever of
+	// the three reached the box. Empty for a box made without secured
+	// access, whose envd asks for none. NEVER LOGGED OR STORED: it is the
+	// box's credential, and every call that reaches the box hands it back,
+	// so nothing here has to keep it.
+	//
+	// Source: the Sandbox and SandboxDetail schemas of E2B's OpenAPI spec,
+	// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
+	EnvdAccessToken string `json:"envdAccessToken,omitempty"`
 }
 
 // e2bPaused is the [e2bBox.State] of a snapshot.
@@ -196,10 +209,31 @@ func (b e2bBox) host(domain string) string {
 // The TTL is the box's own kill timer, refreshed by [E2BSandbox.SetTimeout]
 // on every poll tick — so it bounds how long a box outlives an engine that
 // stopped heart-beating, never how long a job may run.
-func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string) (e2bBox, error) {
+//
+// SECURED WHEN ASKED, and the provider asks once the whole fleet can read
+// such a box ([E2BProvider.Create]). This endpoint secures a box only when
+// `secure` is true; otherwise its envd requires no credential and E2B answers
+// no access token for it. Secured, envd requires the token the create answers
+// ([e2bBox.EnvdAccessToken]) on every request but its health check — E2B's
+// own SDKs have created every box that way since their 2.0 ("Each call to the
+// sandbox controller must include an additional header X-Access-Token with
+// the access token value returned during sandbox creation"). A template whose
+// envd predates secured access (below 0.2.0) is refused by E2B with a message
+// saying to rebuild it, which is the right place for that to surface.
+//
+// `secure` is OMITTED rather than sent false when not asked, so an unsecured
+// create is the request an older build sends, byte for byte.
+//
+// Sources: https://e2b.dev/docs/sandbox/secured-access; the NewSandbox
+// schema in https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml, the
+// create handler that mints a token only for `secure: true`
+// (packages/api/internal/handlers/sandbox_create.go there), and envd's
+// WithAuthorization in packages/envd/internal/api/auth.go.
+func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string, secure bool) (e2bBox, error) {
 	type request struct {
 		TemplateID string            `json:"templateID"`
 		Timeout    int               `json:"timeout,omitempty"`
+		Secure     bool              `json:"secure,omitempty"`
 		EnvVars    map[string]string `json:"envVars,omitempty"`
 		Metadata   map[string]string `json:"metadata,omitempty"`
 	}
@@ -207,6 +241,7 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 	err := a.do(ctx, http.MethodPost, "/sandboxes", request{
 		TemplateID: template,
 		Timeout:    int(timeoutSec),
+		Secure:     secure,
 		EnvVars:    env,
 		// STAMPED SO A LEAK IS ATTRIBUTABLE. A box outlives the process
 		// that made it by design, so an operator looking at a running VM

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -302,7 +304,9 @@ func e2bAnswering(t *testing.T, status int) *E2BProvider {
 	t.Cleanup(server.Close)
 	provider, err := NewE2B(E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
+		// Never asked: nothing here creates a box.
+		Fleet: coord.FeatureReader{Leases: coordmem.New()},
+		HTTP:  &http.Client{Transport: httpxtest.Rewrite(t, server)},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -338,7 +338,7 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
 		// and a nil resolver hands the literal through, which is what an
 		// in-process caller wrote.
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, coord.FeatureReader{Leases: memory.New()})
 		if err != nil {
 			t.Errorf("run_in %q is accepted by the config and cannot be "+
 				"built: %v", placement, err)
@@ -371,7 +371,7 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 	t.Parallel()
 	spec := &config.SandboxProvider{Fake: true}
 	for _, placement := range config.BackendPlacements() {
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, coord.FeatureReader{Leases: memory.New()})
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)
 		}

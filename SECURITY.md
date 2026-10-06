@@ -39,3 +39,9 @@ A few things worth knowing when deploying Crewlet:
   (E2B); the sandbox boundary — not the coding agent's own permission
   prompts — is the isolation model. Treat anything you inject into a sandbox
   (tokens in `role.sandbox.env`) as visible to the code that runs there.
+  E2B boxes are created with secured access, so a box's in-box agent runs a
+  command or serves a file only for a holder of that box's access token,
+  which the engine reads from E2B and never stores. While a rolling upgrade
+  still has a node whose build predates it live, boxes are created without
+  it, because that node could not read them — finish an upgrade promptly
+  (`docs/concepts/code-sandbox.md#sandbox-backends`).

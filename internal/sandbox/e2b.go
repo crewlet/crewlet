@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -74,6 +75,15 @@ type E2BProvider struct {
 	api      *e2bAPI
 	template string
 	http     *http.Client
+	fleet    FleetFeatures
+}
+
+// FleetFeatures is the one question this backend asks of the fleet: whether
+// every live node's build carries a feature. [coord.FeatureReader] satisfies
+// it, three-valued as everything read from the presence leases is — a
+// definite yes, a definite no, or an error for a fleet that could not say.
+type FleetFeatures interface {
+	AllLiveHave(ctx context.Context, feature coord.Feature) (bool, error)
 }
 
 // E2BOptions configure an [E2BProvider].
@@ -93,6 +103,15 @@ type E2BOptions struct {
 	// HTTP is the client both planes use. Nil takes one bounded by
 	// [E2BClientTimeout].
 	HTTP *http.Client
+
+	// Fleet says whether every live node can read a box created with
+	// secured access ([coord.FeatureEnvdAccessToken]), which is what a
+	// create asks before it secures one — see [E2BProvider.Create].
+	// REQUIRED: a nil one has no answer to give, and either default a
+	// provider could take for it is wrong on some fleet — secured, a box an
+	// older peer cannot read; unsecured, a box whose envd requires no
+	// credential on a fleet that could read a secured one.
+	Fleet FleetFeatures
 }
 
 // NewE2B builds the remote backend.
@@ -108,6 +127,11 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 				"cluster, where `domain` changes which API is talked to and " +
 				"not whether it authenticates")
 	}
+	if opts.Fleet == nil {
+		return nil, errors.New("e2b: E2BOptions.Fleet is nil — a create asks the fleet " +
+			"whether every live node can read a box created with secured access, and " +
+			"a provider with nobody to ask could only guess")
+	}
 	client := opts.HTTP
 	if client == nil {
 		client = httpx.Client(E2BClientTimeout)
@@ -116,6 +140,7 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 		api:      newE2BAPI(opts.APIKey, opts.Domain, client),
 		template: strings.TrimSpace(opts.Template),
 		http:     client,
+		fleet:    opts.Fleet,
 	}, nil
 }
 
@@ -138,16 +163,64 @@ func (p *E2BProvider) templateFor(spec Spec) string {
 }
 
 // Create implements [Provider].
+//
+// SECURED ONCE EVERY LIVE NODE CAN READ IT. A secured box's envd refuses any
+// request without the box's access token, and a build from before this one
+// sends none — so a box secured while such a node is live is one that node
+// cannot read, and it may be the node that next holds the waiter duty (every
+// completion poll of the box then fails to read it) or the run's seat (its
+// collection fails, is retried, and the run is settled as lost). Placement
+// moves seats on its own during an upgrade, so this is not something an
+// operator can steer around. So the create asks the fleet
+// ([coord.FeatureEnvdAccessToken], over every live node, as a pause does)
+// and makes the box an older build can read until the answer is yes. Every
+// build that advertises the feature sends the token whenever E2B answers one,
+// so the gate is on the create alone.
+//
+// AN UNKNOWN ANSWER SECURES THE BOX. [coord.FeatureReader.AllLiveHave]
+// answers a definite no whenever any live node lacks the feature, even beside
+// a node it could not read, so what is left unknown is a node whose last
+// heartbeat carried no status, an empty membership, or a membership that
+// could not be read — the blips of a fleet that has finished upgrading,
+// which is where a fleet spends nearly all its life. Read as "no", each blip
+// would create a box whose envd requires no credential and keep it that way
+// for the box's whole life; read as a refusal, it would fail a coding run
+// over a question that is only about upgrade compatibility. Secured, the
+// worst case is the upgrade-window run described above, and it is logged.
 func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	template := p.templateFor(spec)
-	box, err := p.api.createBox(ctx, template, spec.TimeoutSec, spec.Env)
+	secure := p.secured(ctx)
+	box, err := p.api.createBox(ctx, template, spec.TimeoutSec, spec.Env, secure)
 	if err != nil {
 		return nil, err
 	}
 	e2bLog.Info("e2b_sandbox_created", "sandbox_id", box.SandboxID,
 		"template", template, "domain", p.api.domain,
-		"envd_version", box.EnvdVersion)
+		"envd_version", box.EnvdVersion, "secure", secure,
+		"envd_token", box.EnvdAccessToken != "")
 	return p.box(box), nil
+}
+
+// secured is the create's answer to "may this box be secured" — see
+// [E2BProvider.Create] for why each of the three answers is read as it is.
+func (p *E2BProvider) secured(ctx context.Context) bool {
+	all, err := p.fleet.AllLiveHave(ctx, coord.FeatureEnvdAccessToken)
+	switch {
+	case err != nil:
+		e2bLog.WarnContext(ctx, "e2b_secure_access_unverified", "error", err.Error(),
+			"detail", "the fleet could not say whether every live node can read a "+
+				"secured box; it is created secured, and a node whose build "+
+				"predates "+string(coord.FeatureEnvdAccessToken)+" cannot read it")
+		return true
+	case !all:
+		e2bLog.InfoContext(ctx, "e2b_secure_access_deferred",
+			"detail", "a live node runs a build without "+
+				string(coord.FeatureEnvdAccessToken)+", which cannot read a secured "+
+				"box, so this box is created without secured access; boxes are "+
+				"secured once every live node advertises it")
+		return false
+	}
+	return true
 }
 
 // Connect implements [Provider].
@@ -223,7 +296,7 @@ func (p *E2BProvider) box(b e2bBox) *E2BSandbox {
 	return &E2BSandbox{
 		id:   b.SandboxID,
 		api:  p.api,
-		envd: newEnvdClient(b.host(p.api.domain), p.http),
+		envd: newEnvdClient(b.host(p.api.domain), b.EnvdAccessToken, p.http),
 	}
 }
 

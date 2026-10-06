@@ -100,6 +100,19 @@ const (
 	// cursor only to an owner advertising this, and asks every other for
 	// the window it can answer. Asked of the run's OWNER alone.
 	FeatureSandboxTailCursor Feature = "sandbox_tail_cursor"
+
+	// FeatureEnvdAccessToken — the node presents an E2B box's envd access
+	// token on every command and file request it makes to that box
+	// (internal/sandbox, e2b_envd.go), so it can read a box created with
+	// secured access. An older build sends no token, and a secured box's
+	// envd refuses every such request — so a box created secured while one
+	// is live could be polled by it without being read (it may hold the
+	// waiter duty), and a run whose seat it next holds could not be
+	// collected and would be settled as lost. Not a refusal: the E2B create
+	// asks [FeatureReader.AllLiveHave] and makes the box the older shape,
+	// unsecured, until every live node advertises it, because any of them
+	// may hold the waiter or the run's seat next.
+	FeatureEnvdAccessToken Feature = "envd_access_token"
 )
 
 // Features is every feature THIS build honours, which is exactly what a node
@@ -111,7 +124,7 @@ const (
 // fleet told it can do something it cannot.
 var Features = []Feature{
 	FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause, FeatureSteer, FeatureHeldRead,
-	FeatureSandboxTail, FeatureSandboxTailCursor,
+	FeatureSandboxTail, FeatureSandboxTailCursor, FeatureEnvdAccessToken,
 }
 
 // Valid reports whether this build knows the feature.
