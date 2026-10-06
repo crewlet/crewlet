@@ -100,4 +100,9 @@ import "errors"
 // This one is answered to somebody who has already proved who they are and is
 // choosing a new secret. A generic refusal there is somebody typing variations
 // until one sticks.
-var ErrWeak = errors.New("credential: this password cannot be used")
+//
+// SO ITS TEXT IS A SENTENCE, with no package prefix: the three surfaces that
+// refuse a new password hand [CheckStrength]'s error to the person choosing
+// it, verbatim, and the prefix this package's other errors carry for a log
+// reached a form as "Credential: this password cannot be used".
+var ErrWeak = errors.New("this password cannot be used")
