@@ -86,3 +86,20 @@ test("a refusal is the engine's words, the grants that admit, and what had lande
   expect(text).toMatch(/people:manage would admit you/);
   expect(text).toMatch(/What did change: the login and seat\./);
 });
+
+// A STEP-UP REFUSAL NAMES NO GRANT AS MISSING: the grants it carries are the
+// ones that admitted the caller. Mutation: name grants on every refusal and a
+// holder of people:manage is told people:manage would admit them.
+test("a step-up refusal is about confirming, never a grant", async () => {
+  answer(403, {
+    error: "step_up_required",
+    message: "This action needs you to have confirmed who you are recently.",
+    reason: "step_up",
+    window: "step_up",
+    grants: ["people:manage"],
+  });
+  const got = await iamWrite({ method: "POST", path: "/iam/credentials" });
+  const text = got.kind === "refused" ? got.text : "";
+  expect(text).toMatch(/confirmed who you are/);
+  expect(text).not.toMatch(/would admit you/);
+});
