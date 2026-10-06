@@ -145,8 +145,14 @@ func (s *Service) openInvitation(r *http.Request, row iamdomain.InvitationRow) (
 // redeemed, withdrawn — its link opens nothing from now on, exactly as an id
 // nobody issued, and the address it held is free for a new one.
 //
-// A REDEEMED ONE IS 409, NAMING WHOM IT CREATED: the link is spent, and what
-// undoes it is removing that person. An id the estate does not hold is 404.
+// A REDEEMED ONE IS 409 `stale`, NAMING WHOM IT CREATED: the link is spent,
+// and what undoes it is removing that person. `stale` because the caller is
+// acting on a reading the redemption has overtaken — the remedy is to read the
+// directory again, where the person now is — and in a sentence of the
+// surface's own, because the domain's error is written for a log, package
+// prefix and ids included, and the dashboard shows a detail verbatim. It was
+// `bad_params`, whose sentence is about a query parameter, beside that error.
+// An id the estate does not hold is 404.
 func (s *Service) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
 	writer, ok := s.writerFor(r.Context())
 	if !ok {
@@ -170,9 +176,11 @@ func (s *Service) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
 				"once it was redeemed or aged out"})
 		return
 	case errors.As(err, &redeemed):
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeBadParams,
-			httpjson.Detail{"detail": err.Error(), "person": redeemed.Person,
-				"id": id})
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeStale,
+			httpjson.Detail{"detail": "this invitation has already been " +
+				"redeemed: the person it invited has joined, so there is no " +
+				"link left to cancel — remove them instead if they should " +
+				"not have access", "person": redeemed.Person, "id": id})
 		return
 	}
 	if err == nil && ownLanding(cancelled) {

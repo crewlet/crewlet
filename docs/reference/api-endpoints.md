@@ -788,8 +788,11 @@ another address, another login, other grants — is `409 bad_params` carrying th
 `op_id`, and so is the key of an invitation since redeemed or aged out: a retry
 is the same request, and a new person or a new link is a new key.
 
-An address, a login or a seat somebody else holds is `409` **naming who holds
-it**; an address an open invitation holds names the invitation.
+An address, a login or a seat somebody else holds is `409 invalid` **naming who
+holds it** — `field` says which value, `held_by` is the holder's id, and the
+`detail` names them by their login; an address an open invitation holds names
+the `invitation` instead. The address itself is never repeated back, since the
+estate holds it only as a blind.
 An authority refusal is `403` and will never land however often it is retried.
 A login that is absent or outside its holder's kind is `400` — `POST
 /iam/people` requires one for a person as for a machine, because it is the
@@ -943,8 +946,9 @@ invitation's row, so the link answers `410` exactly as one nobody issued, and
 the address it held is free for a new invitation or a create at once. It reads
 an `Idempotency-Key` like every keyed write here. An id this estate does not
 hold is `404` — never issued, cancelled already, or collected by the sweep —
-and a **redeemed** invitation is `409` naming the `person` it created: the
-link is spent, and what undoes it is removing that person. Each cancellation
+and a **redeemed** invitation is `409 stale` naming the `person` it created:
+the redemption overtook the reading the cancel was made from, the link is
+spent, and what undoes it is removing that person. Each cancellation
 is an `iam_invitation_cancelled` event, by the invitation's id and never its
 address.
 

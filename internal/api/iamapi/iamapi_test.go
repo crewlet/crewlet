@@ -1394,6 +1394,53 @@ func TestACreateWhoseSeatIsTakenCreatesNobody(t *testing.T) {
 	}
 }
 
+// A VALUE SOMEBODY ELSE HOLDS IS REFUSED IN WORDS AN ADMINISTRATOR CAN READ.
+//
+// The detail used to be the domain's error, which is written for a log: the
+// package's name, the holder's raw id and — for an address — its BLIND, a
+// digest nobody can read, all shown verbatim by the dashboard, under
+// `bad_params`, whose sentence is about a query parameter. It is `invalid`
+// now, naming the value and the holder by their login, with the ids beside the
+// sentence rather than in it. The address held by an open invitation names
+// the invitation. Mutation: answer the domain's error as the detail and every
+// case goes red; name the holder by id and the login cases do.
+func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		taken *iamdomain.ErrTaken
+		want  string
+	}{
+		{"a seat", &iamdomain.ErrTaken{Field: iamdomain.UniqueSeat,
+			Value: "platform-lead", Person: bob.String()},
+			"the seat platform-lead is already held by bob.sre"},
+		{"an address", &iamdomain.ErrTaken{Field: iamdomain.UniqueEmail,
+			Value: "0123456789abcdef", Person: bob.String()},
+			"that address is already held by bob.sre"},
+		{"an address an invitation holds", &iamdomain.ErrTaken{
+			Field: iamdomain.UniqueEmail, Value: "0123456789abcdef",
+			Invitation: "inv-1"}, "held by an open invitation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.refusals = map[string]error{"enrol": tc.taken}
+			got := r.as(administrator(), http.MethodPost, "/iam/people",
+				map[string]any{"login": "dana.sre", "email": "dana@example.com",
+					"seat": "platform-lead"})
+			detail, _ := got.body["detail"].(string)
+			if got.status != http.StatusConflict || got.body["error"] != "invalid" ||
+				!strings.Contains(detail, tc.want) ||
+				strings.Contains(detail, "iamdomain") ||
+				strings.Contains(detail, tc.taken.Value) && tc.taken.Field == iamdomain.UniqueEmail ||
+				strings.Contains(detail, bob.String()) {
+				t.Errorf("answered %d %v, want 409 `invalid` saying %q", got.status,
+					got.body, tc.want)
+			}
+		})
+	}
+}
+
 // ANOTHER CREATE UNDER ONE KEY IS ANOTHER OPERATION, AND A RETRY IS ONE.
 //
 // Every create is on the directory's one subject, and the ledger answers an

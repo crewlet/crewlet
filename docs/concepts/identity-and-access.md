@@ -573,8 +573,8 @@ inviter who lost it cancels and issues another. `DELETE /iam/invitations/{id}`
 `people:manage` like every directory write. It is one directory record, and
 its apply deletes the invitation's row, so the link answers exactly as one
 nobody issued and the address it held is free for a new invitation at once. A
-redeemed invitation is refused `409` naming the person it created: what to
-undo then is that person, and that is a removal. Each cancellation is an
+redeemed invitation is refused `409 stale` naming the person it created: what
+to undo then is that person, and that is a removal. Each cancellation is an
 `iam_invitation_cancelled` event, naming the invitation by its id and never
 the address.
 

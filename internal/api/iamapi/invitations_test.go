@@ -140,11 +140,15 @@ func TestInvitationsAreReadLikeTheDirectoryAndWithdrawnLikeAWrite(t *testing.T) 
 // A CANCELLATION ANSWERS WHAT ITS RECORD DECIDED, AND IS ANNOUNCED ONLY ONCE IT
 // LANDED.
 //
-// An id the estate does not hold is 404; a redeemed invitation is 409 NAMING
-// the person it created, because what undoes it is removing them; a landed one
-// is 200 and one `iam_invitation_cancelled` carrying the invitation and whoever
-// withdrew it — never an address; an unknown one is 503 and announces nothing.
-// Mutation: announce before the outcome is read and the unknown row emits.
+// An id the estate does not hold is 404; a redeemed invitation is 409 `stale`
+// NAMING the person it created, because what undoes it is removing them, in a
+// sentence of the surface's own rather than the domain's error, which carries
+// its package and raw ids into a dialog that shows a detail verbatim; a landed
+// one is 200 and one `iam_invitation_cancelled` carrying the invitation and
+// whoever withdrew it — never an address; an unknown one is 503 and announces
+// nothing. Mutation: announce before the outcome is read and the unknown row
+// emits; answer the domain's error as the detail, or `bad_params` as the code,
+// and the redeemed row goes red.
 func TestACancellationAnswersWhatItsRecordDecided(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -176,9 +180,19 @@ func TestACancellationAnswersWhatItsRecordDecided(t *testing.T) {
 				t.Fatalf("answered %d, want %d (body %v)", got.status, tc.status,
 					got.body)
 			}
-			if tc.status == http.StatusConflict && got.body["person"] != bob.String() {
-				t.Errorf("the refusal of a redeemed invitation does not name the "+
-					"person it created: %v", got.body)
+			if tc.status == http.StatusConflict {
+				if got.body["person"] != bob.String() {
+					t.Errorf("the refusal of a redeemed invitation does not name "+
+						"the person it created: %v", got.body)
+				}
+				detail, _ := got.body["detail"].(string)
+				if got.body["error"] != "stale" ||
+					!strings.Contains(detail, "already been redeemed") ||
+					strings.Contains(detail, "iamdomain") ||
+					strings.Contains(detail, bob.String()) {
+					t.Errorf("a redeemed invitation is refused %v, want `stale` "+
+						"saying it was redeemed in words of the surface's own", got.body)
+				}
 			}
 			if !tc.event {
 				if seen := r.audit.all(); len(seen) != 0 {
