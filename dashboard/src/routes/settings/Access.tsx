@@ -112,7 +112,7 @@ import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { rest } from "~/protocol/index.ts";
+import { auth, rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
 import { EditPersonDialog, ServiceAccountDialog } from "./AccessDialogs.tsx";
 
@@ -1258,9 +1258,11 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
+          {/* WHAT THIS PERSON HOLDS, said: a seat they do not hold is not
+              withheld, and the sessions a suspension ends stay ended. */}
           {gesture === "reactivate"
-            ? `${who} may act again, with what they held; nothing has to be enrolled again.`
-            : `${who} may not act while suspended: their sign-ins are refused and their seat is withheld. Their record is kept, and reactivating restores it.`}
+            ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions and tokens the suspension ended stay ended.`
+            : `${who} may not act while suspended: every session and token they hold ends and their sign-ins are refused${row.seat ? ", and their seat is withheld" : ""}. Their record is kept, and reactivating lets them sign in again.`}
         </PersonWrite>
       )}
       {gesture === "mfa" && (
@@ -1273,7 +1275,7 @@ function Principal({
           onDone={changed}
         >
           Their authenticator app and recovery codes stop working, and every session and token they
-          hold ends. They enrol a new factor at their next sign-in.
+          hold ends. <AfterFactorReset />
         </PersonWrite>
       )}
       {gesture === "sessions" && (
@@ -1299,9 +1301,9 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
-          Their row, credentials and sessions are deleted, their seat is freed, and every sealed
-          value of theirs is erased. This cannot be undone: to bring them back, invite them again.
-          The trail keeps what they did.
+          Their row, credentials and sessions are deleted, {row.seat ? "their seat is freed, " : ""}
+          and every sealed value of theirs is erased. This cannot be undone: to bring them back,
+          invite them again. The trail keeps what they did.
         </PersonWrite>
       )}
       <QueryState
@@ -1464,6 +1466,24 @@ function Principal({
       )}
     </Card>
   );
+}
+
+/**
+ * What a reset second factor leaves its person to do, as this deployment
+ * decides it (`api.auth.totp`): enrol a new one before anything else opens, or
+ * nothing — a deployment where a factor is optional signs them in on their
+ * password alone, and promising an enrolment there was a promise nothing
+ * keeps. Said only once the setting is read.
+ */
+function AfterFactorReset() {
+  const config = useRest("/auth/config", (signal) => auth.config(signal));
+  switch (config.data?.second_factor) {
+    case "required":
+      return <>They enrol a new factor at their next sign-in, before anything else opens.</>;
+    case "optional":
+      return <>They sign in with their password alone until they set up a new one.</>;
+  }
+  return null;
 }
 
 /** One confirmed write about a principal: the dialog, the request, the answer. */

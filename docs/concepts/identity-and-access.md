@@ -1439,7 +1439,7 @@ read-only. What each gesture ends is the route's:
 | **Edit login, seat and grants** | One edit carrying only what changed. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
 | **Suspend** · **Reactivate** | A suspended person may not act, every session and token they hold ends, and a seat they hold is withheld; reactivating restores the seat and lets them sign in again |
 | **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold |
-| **Reset second factor** | Clears their authenticator and recovery codes and ends every session and token they hold; they enrol again at their next sign-in |
+| **Reset second factor** | Clears their authenticator and recovery codes and ends every session and token they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
 | **End all sessions** | Moves their revocation epoch: every session — and every personal token — they hold ends |
 | **Revoke** (a credential) | Ends that one credential — a token, a reset link, or how they prove who they are |
 | **Remove** | Typed back by login. Deletes the person and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-nodes-rows); undone only by inviting them again |

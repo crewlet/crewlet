@@ -114,6 +114,9 @@ function json(status: number, payload: unknown): Response {
  * — a queue per `METHOD /path`, the last answer repeating — and the directory
  * read from `directory` at each read, so a test can move it between two.
  */
+/** What `GET /auth/config` says of a second factor, for a case that reads it. */
+let secondFactor = "required";
+
 function engine(writes: Record<string, Response[]> = {}, directory: () => unknown = () => PEOPLE) {
   const sent: Sent[] = [];
   const queues = new Map<string, Response[]>(Object.entries(writes).map(([k, v]) => [k, [...v]]));
@@ -134,6 +137,8 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
       return Promise.resolve(answer ? answer.clone() : json(404, { error: "no_route" }));
     }
     switch (url.pathname) {
+      case "/auth/config":
+        return Promise.resolve(json(200, { min_password_length: 12, second_factor: secondFactor }));
       case "/iam/people":
         return Promise.resolve(json(200, directory()));
       case "/iam/invitations":
@@ -214,6 +219,7 @@ let uninstall: (() => void) | null = null;
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/settings/access";
+  secondFactor = "required";
 });
 
 afterEach(() => {
@@ -377,6 +383,36 @@ test("a step-up refusal is confirmed and the same cancellation replayed", async 
   expect(screen.queryByRole("dialog", { name: "Cancel this invitation?" })).toBeNull();
   expect(eng.reads("/iam/invitations")).toBeGreaterThan(before);
 });
+
+// THE DIALOGS SAY WHAT THIS PERSON HOLDS AND WHAT THIS DEPLOYMENT ASKS. Bo
+// holds no seat, so none is withheld or freed; where a second factor is
+// optional, a reset promises no enrolment the next sign-in never asks for. The
+// CONTROL is the reset where one is required. Mutation: name the seat
+// whatever the person holds, or promise the enrolment whatever the setting.
+test.each([
+  ["optional", /password alone until they set up a new one/],
+  ["required", /enrol a new factor at their next sign-in/],
+])(
+  "a seatless person's dialogs name no seat, and a reset says what %s asks",
+  async (setting, after) => {
+    secondFactor = setting;
+    engine();
+    location.hash = "#/settings/access?person=p-bo";
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
+    const suspend = await screen.findByRole("dialog", { name: "Suspend Bo Lang?" });
+    expect(within(suspend).queryByText(/seat/)).toBeNull();
+    fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    const remove = await screen.findByRole("dialog", { name: "Remove Bo Lang?" });
+    expect(within(remove).queryByText(/seat/)).toBeNull();
+    fireEvent.click(within(remove).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reset second factor" }));
+    const reset = await screen.findByRole("dialog", { name: "Reset Bo Lang's second factor?" });
+    expect(await within(reset).findByText(after)).toBeTruthy();
+    secondFactor = "required";
+  },
+);
 
 // AN EDIT SENDS ONLY WHAT CHANGED, and a suspension is the stage alone.
 test("an opened person's edit sends what changed, and suspending sends the stage", async () => {
