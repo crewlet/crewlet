@@ -67,25 +67,38 @@ func (r *rewriter) prompts() []string {
 
 var whenever = time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 
-// WHAT A PAST TURN DID IS IN THE ANSWER, beside what woke it. The label names
-// the kind of event — every chat turn's is "Message from <someone>" — so an
-// answer of labels and outcomes told a seat it had been messaged, and nothing
-// of what it did about it.
-func TestQueryEpisodesSaysWhatEachTurnDid(t *testing.T) {
+// WHAT A PAST TURN WAS ASKED AND WHAT IT DID ARE IN THE ANSWER, beside what
+// woke it — marked as that. The label names the kind of event — every chat
+// turn's is "Message from <someone>" — so an answer of labels and outcomes told
+// a seat it had been messaged, and nothing of what it was asked or did; and
+// written after the date with no marker, while the tool promised "what you
+// were asked", the label read as the question.
+func TestQueryEpisodesSaysWhatEachTurnWasAskedAndDid(t *testing.T) {
 	t.Parallel()
 	tool := registered(t, builtin.Deps{Episodes: fixedEpisodes{rows: []learning.Episode{{
 		Kind: learning.KindRaw, StartedAt: whenever,
 		TaskSummary:   "Message from Ana: Slack message",
+		Ask:           "The staging deploy keeps failing.",
 		PlanSummary:   "Rolled staging back to v41 and\nposted the runbook fix in #ops.",
 		ReviewOutcome: "done",
+	}, {
+		// A turn from before the ask was stored says nothing it cannot.
+		Kind: learning.KindRaw, StartedAt: whenever.Add(-time.Hour),
+		TaskSummary: "cto asked a colleague on ch-1", PlanSummary: "answered",
 	}}}}, builtin.QueryEpisodesTool)
 
 	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{})
-	want := "- 2026-09-01T09:00:00Z — Message from Ana: Slack message\n" +
+	want := "- 2026-09-01T09:00:00Z — woken by: Message from Ana: Slack message\n" +
+		"    asked: The staging deploy keeps failing.\n" +
 		"    outcome: done\n" +
 		"    what it did: Rolled staging back to v41 and posted the runbook fix in #ops."
 	if !strings.Contains(res.Output, want) {
 		t.Fatalf("output =\n%s\nwant it to contain\n%s", res.Output, want)
+	}
+	older := "- 2026-09-01T08:00:00Z — woken by: cto asked a colleague on ch-1\n" +
+		"    what it did: answered"
+	if !strings.Contains(res.Output, older) {
+		t.Fatalf("output =\n%s\nwant a turn with no stored ask to show none:\n%s", res.Output, older)
 	}
 }
 

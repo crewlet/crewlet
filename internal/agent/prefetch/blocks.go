@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -100,16 +99,16 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 	}
 
 	// WHICH PATH PAYS WHICH CALL. With the summary on, its model reads the
-	// recalled accounts WHOLE — up to [summaryAccountBytes] each, which
-	// almost every account is under — and its one briefing replaces them, so
-	// condensing them to a reader's [learning.EpisodeAccountBytes] first was
-	// up to three rewrites spent on text the summary threw away, and a
-	// summary written from rewrites instead of from the accounts. The raw
-	// bullets, each account condensed past that reader's bound, are rendered
-	// only where they are what the seat is shown: the summary off, or a
-	// summary that did not answer.
+	// recalled asks and accounts WHOLE — up to [summaryTextBytes] each,
+	// which almost every one is under — and its one briefing replaces them,
+	// so condensing them to a reader's [learning.EpisodeAccountBytes] first
+	// was rewrites spent on text the summary threw away, and a summary
+	// written from rewrites instead of from the turns. The raw bullets, each
+	// text condensed past that reader's bound, are rendered only where they
+	// are what the seat is shown: the summary off, or a summary that did not
+	// answer.
 	if f.src.SummarizeEpisodes && f.src.Models != nil {
-		whole := joinBullets(f.renderEpisodes(ctx, r, hits, summaryAccountBytes))
+		whole := joinBullets(f.renderEpisodes(ctx, r, hits, summaryTextBytes))
 		if whole == "" {
 			return ""
 		}
@@ -133,16 +132,16 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 	return joinBullets(f.renderEpisodes(ctx, r, hits, learning.EpisodeAccountBytes))
 }
 
-// summaryAccountBytes bounds one recalled account as the episode summary's
-// input, where [learning.EpisodeAccountBytes] bounds one as the block a seat
-// reads.
+// summaryTextBytes bounds one recalled turn's ask, and its account, as the
+// episode summary's input, where [learning.EpisodeAccountBytes] bounds each as
+// the block a seat reads.
 //
-// ONE AUXILIARY CALL'S INPUT ROOM, shared by the turns recalled: a third of
+// ONE AUXILIARY CALL'S INPUT ROOM, shared by the texts recalled: a sixth of
 // [compact.ChunkBytes] — the most one auxiliary completion is handed, about
-// sixteen thousand tokens — so the three accounts together fit one call, and
-// only an account past about twenty-one kilobytes, a final answer pages long,
-// is condensed before the summary reads it.
-const summaryAccountBytes = compact.ChunkBytes / recallHits
+// sixteen thousand tokens — so three turns' asks and accounts together fit one
+// call, and only a text past about eleven kilobytes, a task description or a
+// final answer pages long, is condensed before the summary reads it.
+const summaryTextBytes = compact.ChunkBytes / (2 * recallHits)
 
 // summaryTokens is the operator's cap on the episode summary, or the default.
 func (f *Fetcher) summaryTokens() int {
@@ -152,43 +151,41 @@ func (f *Fetcher) summaryTokens() int {
 	return DefaultSummaryTokens
 }
 
-// renderEpisodes renders the recalled turns, each one's account condensed
-// where it is past accountBytes — concurrently, since each condensing is a
-// model call and a turn start is waiting on all of them, and each bounded by
-// [learning.EpisodeRewriteTimeout], the one deadline every rewrite of a past
-// turn's account is held to.
+// renderEpisodes renders the recalled turns, each one's ask and account
+// condensed where it is past textBytes — through [learning.PastTurns], the
+// one rendering the query_episodes tool shares, so every rewrite is held to
+// [learning.EpisodeRewriteTimeout] and at most [compact.Parallel] run at once.
 func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning.Hit,
-	accountBytes int,
+	textBytes int,
 ) []string {
-	fit := f.src.Compact.For(r.Seat, r.Aux)
-	bullets := make([]string, len(hits))
-	var wg sync.WaitGroup
+	episodes := make([]learning.Episode, len(hits))
 	for i, hit := range hits {
-		wg.Go(func() {
-			bullets[i] = renderEpisode(ctx, fit, hit, accountBytes)
-		})
+		episodes[i] = hit.Episode
 	}
-	wg.Wait()
+	turns := learning.PastTurns(ctx, episodes, f.src.Compact.For(r.Seat, r.Aux), textBytes)
+	bullets := make([]string, len(hits))
+	for i, hit := range hits {
+		bullets[i] = renderEpisode(hit.Episode, turns[i])
+	}
 	return bullets
 }
 
 // renderEpisode renders one past turn.
 //
-// WHAT WOKE IT, WHAT IT DID, AND WHETHER IT WORKED, because those are what
-// make a past turn useful as precedent. The label alone was all this showed,
-// and a label names the kind of event and nothing of the work — every chat
-// turn's is "Message from <someone>: <surface> message" — so the account of
-// what the turn did ([learning.EpisodeAccount]) rides beside it. The tool
-// sequence rides along because it is the cheapest possible answer to "how did
-// I do this last time".
-func renderEpisode(ctx context.Context, fit compact.Bound, hit learning.Hit, accountBytes int) string {
-	ep := hit.Episode
+// WHAT WOKE IT, WHAT IT WAS ASKED, WHAT IT DID, AND WHETHER IT WORKED, because
+// those are what make a past turn useful as precedent. The label alone was all
+// this showed, and a label names the kind of event and nothing of the work —
+// every chat turn's is "Message from <someone>: <surface> message" — so it is
+// said as what WOKE the turn, the worker prompts' own word for it, and what
+// the turn was asked ([learning.EpisodeAsk]) and what it did
+// ([learning.EpisodeAccount]) ride beside it. The tool sequence rides along
+// because it is the cheapest possible answer to "how did I do this last time".
+func renderEpisode(ep learning.Episode, turn learning.PastTurn) string {
 	label := collapse(ep.TaskSummary)
-	account := learning.EpisodeAccount(ctx, ep, fit, accountBytes)
-	if label == "" && account == "" {
+	if label == "" && turn.Ask == "" && turn.Account == "" {
 		return ""
 	}
-	line := "- " + firstNonEmpty(label, "(a turn with no recorded trigger)")
+	line := "- Woken by: " + firstNonEmpty(label, "(not recorded)")
 	var notes []string
 	if ep.ReviewOutcome != "" {
 		notes = append(notes, "outcome: "+ep.ReviewOutcome)
@@ -199,8 +196,11 @@ func renderEpisode(ctx context.Context, fit compact.Bound, hit learning.Hit, acc
 	if len(notes) > 0 {
 		line += " _(" + strings.Join(notes, "; ") + ")_"
 	}
-	if account != "" {
-		line += "\n  What it did: " + account
+	if turn.Ask != "" {
+		line += "\n  Asked: " + turn.Ask
+	}
+	if turn.Account != "" {
+		line += "\n  What it did: " + turn.Account
 	}
 	return line
 }

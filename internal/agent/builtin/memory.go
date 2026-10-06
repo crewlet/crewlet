@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/compact"
@@ -220,8 +219,8 @@ var _ tools.SeatCallable = (*queryEpisodes)(nil)
 func (t *queryEpisodes) Name() string { return QueryEpisodesTool }
 
 func (t *queryEpisodes) Description() string {
-	return "Recall your own past turns — what you were asked, what you " +
-		"did, how it went. Pass `query` to search by MEANING once you know " +
+	return "Recall your own past turns — what woke each one, what you were " +
+		"asked, how it ended and what you did. Pass `query` to search by MEANING once you know " +
 		"what this task actually involves; that is the one to use after " +
 		"recon on a thin trigger, when the block at the top of your prompt " +
 		"said it found nothing. Pass `conversation` to narrow to one thread, " +
@@ -387,39 +386,35 @@ func unsearchedNote(n int) string {
 		"with `conversation`, or with neither argument for your most recent turns.", n)
 }
 
-// render renders each recalled turn, condensing the long accounts
-// concurrently — each is a model call, and a model is waiting on the answer —
-// at most [compact.Parallel] at once, the compactor's own bound on how many
-// rewrites one caller opens against a seat's provider. Each rewrite is held to
-// [learning.EpisodeRewriteTimeout], the turn-start block's own deadline, and
-// one that misses it names the account by its size — so the answer waits at
-// most ⌈turns / Parallel⌉ of those, where it used to wait out the compactor's
-// minute, and its retry, per account.
+// render renders each recalled turn, its long asks and accounts condensed
+// through [learning.PastTurns] — the turn-start block's own rendering — so at
+// most [compact.Parallel] rewrites run at once and each is held to
+// [learning.EpisodeRewriteTimeout]: one that misses it names its text by size,
+// and the answer waits at most ⌈2·turns / Parallel⌉ of those, where it used to
+// wait out the compactor's minute, and its retry, per account.
 func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
 	// Each rewrite is the turn's own cost, filed under its run.
-	fit := t.compact.For(turn.Seat, turn.Aux())
+	turns := learning.PastTurns(ctx, found, t.compact.For(turn.Seat, turn.Aux()),
+		learning.EpisodeAccountBytes)
 	out := make([]string, len(found))
-	var group errgroup.Group
-	group.SetLimit(compact.Parallel)
 	for i, ep := range found {
-		group.Go(func() error {
-			out[i] = renderPastTurn(ctx, fit, ep)
-			return nil
-		})
+		out[i] = renderPastTurn(ep, turns[i])
 	}
-	_ = group.Wait() // every render answers nil: a failed rewrite is a size note
 	return out
 }
 
 // renderPastTurn is one entry of query_episodes' answer.
 //
-// A RAW TURN is what woke it, how it ended, and what it did — the account,
-// which the label alone never said: every chat turn's label is "Message from
-// <someone>". A COMPACTED ROW stands for a cluster of turns, so it is the
-// pattern, how many turns it stands for and how many of them ended done, and
-// what varied: it has no label and no account of its own, and rendered as a
-// turn it showed nothing but its date.
-func renderPastTurn(ctx context.Context, fit compact.Bound, ep learning.Episode) string {
+// A RAW TURN is what woke it, what it was asked, how it ended, and what it did.
+// What woke it is the label of the waking event, MARKED as that — the worker
+// prompts' "woken by" — because unmarked, after the date, a model read
+// "Message from Ana: Slack message" as the question it had been asked; what it
+// was asked is the ask the row stores (node migration 0042, so a turn from
+// before it has none). A COMPACTED ROW stands for a cluster of turns, so it is
+// the pattern, how many turns it stands for and how many of them ended done,
+// and what varied: it has no label and no account of its own, and rendered as
+// a turn it showed nothing but its date.
+func renderPastTurn(ep learning.Episode, past learning.PastTurn) string {
 	var b strings.Builder
 	if ep.Kind == learning.KindCompacted {
 		count := max(ep.Count, 1)
@@ -437,14 +432,17 @@ func renderPastTurn(ctx context.Context, fit compact.Bound, ep learning.Episode)
 	}
 	fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
 	if ep.TaskSummary != "" {
-		fmt.Fprintf(&b, " — %s", ep.TaskSummary)
+		fmt.Fprintf(&b, " — woken by: %s", ep.TaskSummary)
 	}
 	b.WriteString("\n")
+	if past.Ask != "" {
+		fmt.Fprintf(&b, "    asked: %s\n", past.Ask)
+	}
 	if ep.ReviewOutcome != "" {
 		fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
 	}
-	if account := learning.EpisodeAccount(ctx, ep, fit, learning.EpisodeAccountBytes); account != "" {
-		fmt.Fprintf(&b, "    what it did: %s\n", account)
+	if past.Account != "" {
+		fmt.Fprintf(&b, "    what it did: %s\n", past.Account)
 	}
 	return b.String()
 }

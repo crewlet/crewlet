@@ -966,21 +966,24 @@ func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {
 	}
 }
 
-// WHAT A PAST TURN DID RIDES BESIDE ITS LABEL. The label is the kind of event
-// that woke it — every chat turn's reads "Message from <someone>" — so a block
-// of labels told a seat three times that somebody had sent a message, and
-// nothing of what it did about it.
-func TestRecallShowsWhatAPastTurnDidBesideItsLabel(t *testing.T) {
+// WHAT A PAST TURN WAS ASKED AND WHAT IT DID RIDE BESIDE ITS LABEL, and the
+// label is said as what WOKE it. The label is the kind of event — every chat
+// turn's reads "Message from <someone>" — so a block of labels told a seat
+// three times that somebody had sent a message, and nothing of what it was
+// asked or did about it; unmarked, it read as the question.
+func TestRecallShowsWhatAPastTurnWasAskedAndDidBesideItsLabel(t *testing.T) {
 	t.Parallel()
 	got := fetch(t, prefetch.Sources{
 		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
 			TaskSummary:   "Message from Ana: Slack message",
+			Ask:           "The staging deploy\nkeeps failing.",
 			PlanSummary:   "Rolled staging back to v41 and\nposted the runbook fix in #ops.",
 			ReviewOutcome: "done",
 		}}}},
 		Embed: embeds,
 	}, request(t)).EpisodeRecall
-	want := "- Message from Ana: Slack message _(outcome: done)_\n" +
+	want := "- Woken by: Message from Ana: Slack message _(outcome: done)_\n" +
+		"  Asked: The staging deploy keeps failing.\n" +
 		"  What it did: Rolled staging back to v41 and posted the runbook fix in #ops."
 	if got != want {
 		t.Fatalf("recall =\n%s\nwant\n%s", got, want)
