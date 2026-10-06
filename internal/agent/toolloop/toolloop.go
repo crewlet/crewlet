@@ -398,6 +398,10 @@ type Narration struct {
 type SpendOutcome struct {
 	OK    bool
 	Scope string
+
+	// Used and Limit are the refusing window's spend and ceiling. Used is
+	// the spend as the refused round LEFT it — the round is recorded (see
+	// [BudgetMeter]) — so a refusal reads past its Limit by that round.
 	Used  int
 	Limit int
 
@@ -411,9 +415,21 @@ type SpendOutcome struct {
 
 // BudgetMeter is the shared token counter a turn charges.
 type BudgetMeter interface {
-	// Spend checks and increments in ONE operation against the shared
-	// counter. An error means the counter could not be reached, which is
-	// not the same as a refusal and must not be treated as one.
+	// Spend records tokens a model call has ALREADY SPENT, and answers
+	// whether they fitted, in ONE operation against the shared counter.
+	//
+	// Already spent, because the loop charges a round once its reply is
+	// in — a round's size is known no sooner — and before any tool the
+	// round asked for runs. So a refusal decides what FOLLOWS the round:
+	// its tools do not run and no later round starts. It does not undo
+	// the round, which the vendor has billed, and a meter must record a
+	// round it refuses exactly as it records one it admits: one that
+	// dropped it under-stated the company by the round that crossed the
+	// cap, and admitted the next round smaller than the room left on top
+	// of tokens the refused one had already used.
+	//
+	// An error means the counter could not be reached, which is not the
+	// same as a refusal and must not be treated as one.
 	Spend(ctx context.Context, tokens int) (SpendOutcome, error)
 }
 
@@ -1064,7 +1080,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// Charge BEFORE running the tools this round asked for. A round
 		// whose spend is refused must not also have fired its side
 		// effects — the refusal is the whole point, and tools are where
-		// the irreversible things happen.
+		// the irreversible things happen. The round's own tokens are
+		// spent already, and the meter records them whichever way it
+		// answers (see [BudgetMeter]).
 		if err = charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
 			// The round is on the failure record: publish it to the
 			// Progress the caller reads on this path, since it is the

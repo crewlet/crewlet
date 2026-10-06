@@ -71,7 +71,9 @@ func (s *fakeSurface) Execute(_ context.Context, call llm.ToolCall) (toolloop.To
 	return toolloop.ToolResult{Output: "ok"}, nil
 }
 
-// meter records spends and can refuse or fail.
+// meter records spends and can refuse or fail. A refused spend is recorded
+// too, as the fleet's counter records one: the meter is handed tokens a
+// round has already spent.
 type meter struct {
 	spent    int
 	refuseAt int // refuse once cumulative spend would exceed this; 0 never
@@ -82,13 +84,14 @@ func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, err
 	if m.err != nil {
 		return toolloop.SpendOutcome{}, m.err
 	}
-	if m.refuseAt > 0 && m.spent+tokens > m.refuseAt {
+	fits := m.refuseAt == 0 || m.spent+tokens <= m.refuseAt
+	m.spent += tokens
+	if !fits {
 		return toolloop.SpendOutcome{
 			Scope: "role", Used: m.spent, Limit: m.refuseAt,
 			Period: period.Week, Window: "2026-W39", ResetsAt: weekTurnsOver,
 		}, nil
 	}
-	m.spent += tokens
 	return toolloop.SpendOutcome{OK: true}, nil
 }
 
@@ -660,6 +663,13 @@ func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {
 	}
 	if be.Scope != "role" {
 		t.Errorf("scope = %q, want role — the refusal did not name itself", be.Scope)
+	}
+	// THE REFUSED ROUND WAS HANDED TO THE METER WHOLE — input and output,
+	// both billed before anything judged them — and the refusal states the
+	// spend as that round left it, past the ceiling.
+	if m.spent != 120 || be.Used != 120 || be.Limit != 100 {
+		t.Errorf("meter holds %d and the refusal says %d/%d, want the whole 120-token "+
+			"round counted against the ceiling of 100", m.spent, be.Used, be.Limit)
 	}
 	// AND THE WINDOW IT REFUSED IN, carried from the counter's answer
 	// unchanged: a ceiling is per calendar window, so a refusal that does
