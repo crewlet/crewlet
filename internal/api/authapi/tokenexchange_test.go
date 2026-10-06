@@ -324,6 +324,65 @@ func TestASessionIsNotExchangedForAnother(t *testing.T) {
 	}
 }
 
+// AN EXCHANGE IN A BROWSER SIGNED IN AS SOMEBODY ELSE ENDS THAT SESSION, as
+// every fresh sign-in does.
+//
+// The exchange sets its own cookie over the one the browser sent, so the
+// session that cookie named was held by no browser any more — and was left
+// live on every node until its absolute deadline. The header wins the request
+// and the cookie still names a session, which is closed under its own subject.
+// The CONTROL is a browser holding no session, whose exchange closes nothing.
+// Mutation: drop the close from the exchange and the held session still
+// answers 200.
+func TestAnExchangeInABrowserSignedInAsSomebodyElseEndsThatSession(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		held bool
+	}{
+		{"signed in as the ops token", true},
+		{"signed in as nobody (the control)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newExchangeRig(t)
+			var held *http.Cookie
+			if tc.held {
+				held, _ = r.exchange(opsValue)
+				if held == nil {
+					t.Fatal("the first exchange set no cookie")
+				}
+			}
+			req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
+			req.Header.Set("Authorization", "Bearer "+boundValue)
+			if held != nil {
+				req.AddCookie(held)
+			}
+			rec := httptest.NewRecorder()
+			r.handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("the exchange answered %d: %s", rec.Code,
+					rec.Body.String())
+			}
+			closes := r.estate.closes()
+			if !tc.held {
+				if len(closes) != 0 {
+					t.Errorf("a browser holding nothing closed %v", closes)
+				}
+				return
+			}
+			if len(closes) != 1 || closes[0].person != iam.TokenLogin("ops") {
+				t.Fatalf("closed %v, want the held session under %s", closes,
+					iam.TokenLogin("ops"))
+			}
+			if _, after := r.probe(held); after.Code != http.StatusUnauthorized {
+				t.Errorf("the replaced session answered %d, want 401",
+					after.Code)
+			}
+		})
+	}
+}
+
 // SIGNING OUT EVERYWHERE FROM A TOKEN'S SESSION ENDS EVERY SESSION THAT TOKEN
 // OPENED — its subject is the token's login, so that is where the epoch moves.
 func TestSigningOutEverywhereEndsATokensSessions(t *testing.T) {

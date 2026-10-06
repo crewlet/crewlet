@@ -133,6 +133,16 @@ const tokenLifetime = time.Hour
 // A session — a person's, or one this route already minted — has no value to
 // exchange, and exchanging one for another would reset nothing anybody needs
 // reset. A personal access token is presented on every request by design.
+//
+// # It ends whatever session the browser held
+//
+// As every fresh sign-in does ([Service.openSignIn]): the cookie set here
+// replaces the one the browser sent, so the session that cookie named — a
+// person's, when the dashboard's "use an API token instead" is followed in a
+// browser already signed in — is held by no browser any more, and was left
+// live on every node until its absolute deadline. The header wins the
+// request; the cookie still names a session, and it is closed as a sign-out
+// closes it.
 func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {
@@ -169,6 +179,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := s.now().Add(tokenLifetime)
 	opID := sessionOpID(lineage)
+	s.endEveryHeld(r)
 	opened, err := s.behalf(principal).OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: subject,
 		AbsoluteExpiresAt: expires,
