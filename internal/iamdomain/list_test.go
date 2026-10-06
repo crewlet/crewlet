@@ -21,11 +21,16 @@ import (
 //
 // AND IT SAYS WHY, since no record named the session and the row holds no
 // reason: an ended session with none was listed beside the deadline it never
-// reached.
+// reached. Where the person's epoch moved, the move that ended it is the one
+// the epoch's row keeps, so it is listed with THAT record's reason and instant
+// — a suspension, a reset link, an administrator ending them all and a
+// password change otherwise all read "ended with every session they held",
+// with no end.
 //
 // Mutation: drop Superseded from SessionRecord.Live, or from
 // CredentialRow.Revoked, and the session or the token minted before the
-// counter moved is listed live; drop the reason and it is listed with none.
+// counter moved is listed live; drop the reason and it is listed with none;
+// list the generic reason for an epoch move and the first case goes red.
 func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -37,7 +42,7 @@ func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 			_, err := rig.writer.Revoke(rig.t.Context(), owner, "op-revoke",
 				"signed out everywhere")
 			return err
-		}, "ended with every session they held"},
+		}, "signed out everywhere"},
 		{"the company's session generation", func(rig *writeRig, _ string) error {
 			_, err := rig.writer.InvalidateAll(rig.t.Context(), "op-invalidate",
 				"restored from a backup")
@@ -75,13 +80,23 @@ func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 			}
 			listed := map[string]bool{}
 			why := map[string]string{}
+			endedAt := map[string]time.Time{}
 			for _, s := range sessions {
 				listed[s.Lineage] = s.Live(wall)
 				why[s.Lineage] = s.EndedWhy
+				endedAt[s.Lineage] = s.EndedAt
 			}
 			if why[sessionBefore] != tc.why || why[sessionAfter] != "" {
 				t.Errorf("the sessions are listed ended because %q and %q, "+
 					"want %q and none", why[sessionBefore], why[sessionAfter], tc.why)
+			}
+			// AN EPOCH MOVE SAYS WHEN; the company's generation is listed
+			// with no end, since an earlier invalidation may have been the
+			// one that ended it.
+			if epoch := tc.why == "signed out everywhere"; endedAt[sessionBefore].IsZero() == epoch ||
+				!endedAt[sessionAfter].IsZero() {
+				t.Errorf("the sessions are listed ended at %v and %v", endedAt[sessionBefore],
+					endedAt[sessionAfter])
 			}
 			end, err := rig.end(t.Context())
 			if err != nil {
@@ -121,5 +136,52 @@ func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 					"revoked=%v (listed: %v), want in use", got, ok)
 			}
 		})
+	}
+}
+
+// ONLY THE LAST MOVE IS KEPT, so only a session it ended is listed with it.
+//
+// A session opened before an EARLIER move of the epoch was ended by that one,
+// whose reason the epoch's row no longer holds: it is listed with the generic
+// reason and no end rather than with a later move's, which would name a cause
+// that came after it was already over. The CONTROL is the session the last
+// move ended. Mutation: list the last move for every superseded session and the
+// first one names it.
+func TestOnlyTheEpochsLastMoveIsListedAsWhatEndedASession(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	expires := time.Now().UTC().Add(24 * time.Hour)
+	revoke := func(op, why string) {
+		t.Helper()
+		if err := rig.draining(func() error {
+			_, err := rig.writer.Revoke(rig.t.Context(), owner, op, why)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		rig.drain()
+	}
+	first := rig.openSession(owner, expires)
+	revoke("op-first", "changed their own password")
+	second := rig.openSession(owner, expires)
+	revoke("op-second", "signed out everywhere")
+	sessions, err := rig.reader(t).Sessions(t.Context(), owner)
+	if err != nil {
+		t.Fatalf("list the sessions: %v", err)
+	}
+	for _, s := range sessions {
+		switch s.Lineage {
+		case first:
+			if s.EndedWhy != "ended with every session they held" || !s.EndedAt.IsZero() {
+				t.Errorf("the session an earlier move ended is listed %q at %v",
+					s.EndedWhy, s.EndedAt)
+			}
+		case second:
+			if s.EndedWhy != "signed out everywhere" || s.EndedAt.IsZero() {
+				t.Errorf("the session the last move ended is listed %q at %v",
+					s.EndedWhy, s.EndedAt)
+			}
+		}
 	}
 }

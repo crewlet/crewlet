@@ -519,9 +519,19 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 		if err != nil {
 			return err
 		}
-		current, err := epochOf(ctx, tx, personID)
-		if err != nil {
-			return err
+		// THE LAST MOVE OF THE EPOCH, and what it was: a session the
+		// counter ended is listed with that move's reason and instant when
+		// that move is the one that ended it.
+		var (
+			current     uint64
+			movedWhy    string
+			movedMillis int64
+		)
+		err = tx.QueryRowContext(ctx, `
+			SELECT epoch, reason, bumped_at FROM iam_revocation_epochs
+			WHERE person_id = ?`, personID).Scan(&current, &movedWhy, &movedMillis)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("iamdomain: read person %s's epoch: %w", personID, err)
 		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT lineage, person_id, epoch, start_position, created_at,
@@ -562,9 +572,19 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 				// the row holds no reason: say which, or the listing shows
 				// an ended session with no account of why — beside the
 				// deadline it never reached.
-				row.EndedWhy = "ended with every session they held"
-				if uint64(start) < invalidated {
+				switch {
+				case uint64(start) < invalidated:
 					row.EndedWhy = "ended with every session in the company"
+				case row.Epoch+1 == current && movedWhy != "":
+					// THE LAST MOVE ENDED IT, so its record's reason and
+					// instant are this session's: a suspension, a reset
+					// link, an administrator ending them all and a password
+					// change read alike otherwise. An earlier move ended
+					// one opened before that, and only the last is kept.
+					row.EndedWhy = movedWhy
+					ended = movedMillis
+				default:
+					row.EndedWhy = "ended with every session they held"
 				}
 			}
 			row.CreatedAt = fromMillis(created)
