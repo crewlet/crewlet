@@ -622,6 +622,33 @@ test("an edit takes away a grant the editor does not hold, and adds none", async
   expect(eng.writes().map((w) => w.body)).toEqual([{ remove_grants: ["secrets:write"] }]);
 });
 
+// A MACHINE'S EDIT ADDS NEITHER GRANT A TOKEN NEVER CARRIES, and takes away
+// one it holds. ci:release holds people:manage — written before the engine
+// refused it — so that box stays live and unticking it sends its removal,
+// while secrets:read is locked with why, though ADMIN could otherwise confer
+// nothing it does not hold either way. Mutation: withhold both whatever the
+// account holds, and people:manage is locked ticked where nobody can clear it.
+test("a machine's edit adds no grant a token never carries, and takes one away", async () => {
+  const eng = engine({
+    "PATCH /iam/people/p-ci": [json(200, { id: "p-ci", outcome: "applied", op_id: "k" })],
+  });
+  location.hash = "#/settings/access?person=p-ci";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit login, seat and grants" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit ci:release" });
+  const held = within(edit).getByRole("checkbox", { name: "people:manage" });
+  expect(held).toHaveProperty("disabled", false);
+  expect(within(edit).getByRole("checkbox", { name: "secrets:read" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(within(edit).getByText(/acts only through tokens/)).toBeTruthy();
+  fireEvent.click(held);
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ remove_grants: ["people:manage"] }]);
+});
+
 // A TOKEN STARTS FROM WHAT ITS MINTER MAY CONFER: the account's sandbox:run,
 // which ADMIN does not hold and the engine would refuse, is neither ticked nor
 // sent. Mutation: seed the selection from the account's grants alone and the
@@ -700,9 +727,11 @@ test("a reset link is issued unkeyed, a removal is typed back, a revocation name
   expect(revocation?.query.get("person")).toBe("p-bo");
 });
 
-// A SERVICE ACCOUNT IS A KEYED CREATE OF A MACHINE, and its token's mint is
-// unkeyed, offers the account's grants alone — never one a token may not carry
-// — and shows the value once.
+// A SERVICE ACCOUNT IS A KEYED CREATE OF A MACHINE, offered neither grant a
+// token never carries — it acts only through tokens, and the engine refuses
+// either on a machine — and its token's mint is unkeyed, offers the account's
+// grants alone and shows the value once. Mutation: drop the create dialog's
+// withholding and people:manage is a box like any other.
 test("a service account is created keyed and its token minted unkeyed from its grants", async () => {
   const eng = engine({
     "POST /iam/people": [json(201, { id: "p-new", outcome: "applied", op_id: "k" })],
@@ -720,18 +749,20 @@ test("a service account is created keyed and its token minted unkeyed from its g
   fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
   const create = await screen.findByRole("dialog", { name: "New service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "ci:deploy" } });
+  for (const withheld of ["people:manage", "secrets:read"]) {
+    expect(within(create).getByRole("checkbox", { name: withheld })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  }
+  expect(within(create).getAllByText(/acts only through tokens/)).toHaveLength(2);
   fireEvent.click(within(create).getByRole("checkbox", { name: "work:write" }));
-  fireEvent.click(within(create).getByRole("checkbox", { name: "people:manage" }));
   fireEvent.click(within(create).getByRole("button", { name: "Create" }));
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Mint its token" }));
   const mint = await screen.findByRole("dialog", { name: "Mint a token for ci:deploy" });
-  // OUT OF THE ACCOUNT'S OWN GRANTS, and people:manage greyed out.
+  // OUT OF THE ACCOUNT'S OWN GRANTS.
   expect(within(mint).queryByRole("checkbox", { name: "state:read" })).toBeNull();
-  expect(within(mint).getByRole("checkbox", { name: "people:manage" })).toHaveProperty(
-    "disabled",
-    true,
-  );
   fireEvent.click(within(mint).getByRole("button", { name: "Mint" }));
   await settle();
   const [created, minted] = eng.writes();
@@ -739,7 +770,7 @@ test("a service account is created keyed and its token minted unkeyed from its g
     kind: "machine",
     login: "ci:deploy",
     name: "",
-    grants: ["work:write", "people:manage"],
+    grants: ["work:write"],
   });
   expect(created?.key).toMatch(UUID7);
   expect(minted?.path).toBe("/iam/credentials");

@@ -21,7 +21,17 @@ import {
   useSeatEntry,
   useUnheldSeats,
 } from "~/components/people.tsx";
+import { TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
+
+/**
+ * Why a machine is offered neither of the grants a token never carries: it has
+ * no password and no session, so it acts only through tokens, and the engine
+ * refuses either on a machine — offered as ordinary boxes, a service account
+ * was created holding `people:manage` it could never exercise.
+ */
+const MACHINE_WITHHELD =
+  "A service account acts only through tokens, and a token never carries this: it needs a person present.";
 
 /** A directory row, as much of it as an edit and a mint need. */
 export interface EditableRow {
@@ -138,7 +148,12 @@ export function ServiceAccountDialog({
               />
             )}
           </FormField>
-          <GrantPicker value={grants} onChange={setGrants} held={held} />
+          <GrantPicker
+            value={grants}
+            onChange={setGrants}
+            held={held}
+            withheld={{ grants: TOKEN_WITHHELD_GRANTS, reason: MACHINE_WITHHELD }}
+          />
         </>
       )}
       <IamOutcome answer={write.answer} />
@@ -281,7 +296,21 @@ export function EditPersonDialog({
           />
         )}
       </FormField>
-      <GrantPicker value={grants} onChange={setGrants} held={conferrable} />
+      <GrantPicker
+        value={grants}
+        onChange={setGrants}
+        held={conferrable}
+        withheld={
+          // A MACHINE IS GIVEN NEITHER, and the engine judges what an edit
+          // ADDS: one it already holds stays a box, so it can be taken away.
+          row.kind === "machine"
+            ? {
+                grants: TOKEN_WITHHELD_GRANTS.filter((g) => !before.includes(g)),
+                reason: MACHINE_WITHHELD,
+              }
+            : undefined
+        }
+      />
       <IamOutcome answer={write.answer} />
     </Modal>
   );
