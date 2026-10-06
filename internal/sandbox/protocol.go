@@ -217,11 +217,21 @@ type Result struct {
 
 	Error string
 
-	// Transcript is the agent's streamed activity log — tool calls, shell
-	// commands, todos — captured from its output. It is the observability
-	// surface for an agent that emits no telemetry of its own. Tail-capped
-	// here, redacted at publish.
+	// Transcript is the agent's activity log — what it said, each tool it
+	// called and the first line of what it ran — rebuilt from its own
+	// output, or its stderr where the CLI streams nothing better. It is the
+	// observability surface for an agent that emits no telemetry of its
+	// own. A runner returns it WHOLE and redacted; the coordinator holds it
+	// to the record's bound ([Coordinator.fitResult]) and redacts it again
+	// at publish.
 	Transcript string
+
+	// TranscriptElidedLines and TranscriptElidedBytes are how much of the
+	// transcript's middle the record's bound left out: whole lines, and
+	// every byte not kept. Zero for a transcript kept whole. Set by the
+	// coordinator, never by a runner.
+	TranscriptElidedLines int
+	TranscriptElidedBytes int
 }
 
 // usageFloored is r with every count of what the run spent made non-negative,

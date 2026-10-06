@@ -115,10 +115,13 @@ func Bytes(s string, max int) string {
 // marker in front where it was cut.
 //
 // The mirror of [Ellipsis], for the one kind of text whose useful end is the
-// end: a process's own account of itself — a coding run's activity log, its
-// stderr — where the most recent activity and the conclusion are what a reader
-// wants and the head (a clone, a dependency install, a banner) is the least
-// interesting thing to drop. The same two rules hold: the marker is not
+// end: a process's own account of itself watched live — the last few KiB of a
+// running coding job's activity log or its stderr, where what a watcher asks
+// is what it is doing now — and the end of one line too long to keep whole,
+// which is where a process says what went wrong. It is never how a whole log
+// is bounded for a record: that keeps whole lines from both ends and counts
+// the middle, because a log's opening is its plan and a cut to its end loses
+// it. The same two rules hold: the marker is not
 // counted against max, because the cap bounds the content, and the cut never
 // lands inside a rune, because a byte slice taken from the end begins mid-rune
 // whenever the text is not ASCII and a JSON encoder turns that partial rune

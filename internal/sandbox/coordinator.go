@@ -865,19 +865,24 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		// the event store.
 		Response:           redact.Secrets(result.Text),
 		ActivityTranscript: redact.Secrets(result.Transcript),
-		InputTokens:        result.InputTokens,
-		OutputTokens:       result.OutputTokens,
-		TotalTokens:        result.InputTokens + result.OutputTokens,
-		CacheReadTokens:    result.CacheReadTokens,
-		CacheWriteTokens:   result.CacheWriteTokens,
-		WorkItem:           run.WorkItem,
-		LaunchID:           run.LaunchID,
-		Backend:            types.BackendSandbox,
-		CodingAgent:        run.CodingAgent,
-		SandboxID:          run.SandboxID,
-		CostUSD:            result.CostUSD,
-		DeliveredRefs:      result.DeliveredRefs,
-		ConversationKey:    run.Conversation(),
+		// What the record's bound left out of the transcript's middle, so a
+		// screen says the record is not the whole log without parsing the
+		// note that stands in the text — see [boundTranscript].
+		ActivityTranscriptElidedLines: result.TranscriptElidedLines,
+		ActivityTranscriptElidedBytes: result.TranscriptElidedBytes,
+		InputTokens:                   result.InputTokens,
+		OutputTokens:                  result.OutputTokens,
+		TotalTokens:                   result.InputTokens + result.OutputTokens,
+		CacheReadTokens:               result.CacheReadTokens,
+		CacheWriteTokens:              result.CacheWriteTokens,
+		WorkItem:                      run.WorkItem,
+		LaunchID:                      run.LaunchID,
+		Backend:                       types.BackendSandbox,
+		CodingAgent:                   run.CodingAgent,
+		SandboxID:                     run.SandboxID,
+		CostUSD:                       result.CostUSD,
+		DeliveredRefs:                 result.DeliveredRefs,
+		ConversationKey:               run.Conversation(),
 	}
 	if !facts.StartedAt.IsZero() {
 		rec.StartedAt = facts.StartedAt.UTC()

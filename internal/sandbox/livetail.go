@@ -19,7 +19,8 @@ import (
 //
 // A detached run writes its own account of itself into its box — the streamed
 // transcript a runner parses, or its stderr — and nothing leaves the box until
-// the run is collected, when the whole of it rides the run's
+// the run is collected, when the transcript, held to the record's bound (its
+// start and its end, [MaxRunTextBytes]), rides the run's
 // `agent_phase_completed{phase: sandbox}` record. Between the launch and the
 // collection a person watching the run had nothing: the run could be minutes
 // or hours in, and the turn trace showed a bar and no words.
@@ -54,10 +55,10 @@ import (
 // A peek answers "what is it doing now", polled every few seconds while a
 // person has the run open, and every answer crosses the broker whole. 8 KiB is
 // a hundred-odd lines of a transcript — the current step and the few before it
-// — at a size a poll can repeat indefinitely without being noticed; the WHOLE
-// transcript is on the run's phase record the moment it is collected (its
-// last [MaxRunTextBytes], 256 KiB), so nothing is lost by the live view being
-// a window.
+// — at a size a poll can repeat indefinitely without being noticed. The run's
+// phase record carries far more of it the moment it is collected — its first
+// 64 KiB and its last 192 KiB ([MaxRunTextBytes]) — but while the run is
+// going, what this window does not hold is not on any screen.
 const MaxLiveOutputBytes = 8 << 10
 
 // TailReadBudget is how long a tail request waits for the owning node to

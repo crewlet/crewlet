@@ -336,11 +336,10 @@ const stderrKeep = 2 << 20
 // EVERYTHING IS REDACTED WHOLE before anything is bounded: every file here
 // came out of a box whose environment holds the seat's credentials, and a
 // secret straddling a cut survives as a fragment the pattern no longer
-// recognises. The report and the failure detail leave here WHOLE — the
-// coordinator holds them to the record's bound, condensing rather than
-// cutting ([sandbox.MaxRunTextBytes]) — and only the transcript, read by a
-// person watching what the run did, is bounded here, to its last
-// [sandbox.MaxRunTextBytes].
+// recognises. The report, the failure detail and the transcript all leave
+// here WHOLE: the coordinator holds each to the record's bound — condensing
+// the two a model acts on, keeping the transcript's start and end in whole
+// lines — in one place ([sandbox.MaxRunTextBytes]).
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	out := r.cli.Output(paths)
@@ -466,9 +465,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
-	// TAILED, AFTER the redaction: the transcript is read by a person
-	// asking what the run did last.
-	result.Transcript = textcut.Tail(redact.Secrets(result.Transcript), sandbox.MaxRunTextBytes)
+	// WHOLE, as the report and the failure leave here: the coordinator is
+	// the one home of the record's bound, and holds the transcript to it
+	// after redacting it again ([sandbox.MaxRunTextBytes]).
+	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
 }
 

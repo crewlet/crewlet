@@ -410,36 +410,32 @@ func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
 	}
 }
 
-// THE BOUND IS BYTES, AND THE CUT IS ON A BOUNDARY. The transcript rides an
-// event, and an event's ceiling is bytes: a transcript of three-byte runes
-// under the old 100 000-RUNE cap was 300 KB on the wire, past the 256 KiB this
-// bound promises. And the kept half opens on a whole character, because a
-// byte offset from the end lands mid-rune two times in three here, which the
-// event store's JSON encoding turns into U+FFFD.
-func TestTheTranscriptIsCutAtABoundaryInBytes(t *testing.T) {
+// THE TRANSCRIPT LEAVES THE RUNNER WHOLE AND REDACTED. The record's bound is
+// the coordinator's to apply, in one place, after it redacts again; a runner
+// that cut it first would decide by position what of the log a reader sees,
+// and a runner that forgot to cut it would no longer be a hole.
+func TestTheTranscriptLeavesTheRunnerWholeAndRedacted(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
+	secret := "sk-ant-" + strings.Repeat("Q7", 20)
+	stderr := "start " + secret + "\n" + strings.Repeat("日", sandbox.MaxRunTextBytes) + "\nTHE CONCLUSION"
 	b.Put(p.Findings(), "Outcome: succeeded")
-	b.Put(p.Err(), strings.Repeat("日", sandbox.MaxRunTextBytes)+"\nTHE CONCLUSION")
+	b.Put(p.Err(), stderr)
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	kept, marked := strings.CutPrefix(res.Transcript, "…")
-	if !marked {
-		t.Fatal("the cap was silent")
+	if strings.Contains(res.Transcript, secret) {
+		t.Error("a credential left the runner unredacted")
 	}
-	if len(kept) > sandbox.MaxRunTextBytes {
-		t.Fatalf("the transcript kept %d bytes, past the %d-byte bound", len(kept), sandbox.MaxRunTextBytes)
+	if !strings.HasPrefix(res.Transcript, "start ") || !strings.HasSuffix(res.Transcript, "THE CONCLUSION") ||
+		len(res.Transcript) < sandbox.MaxRunTextBytes {
+		t.Errorf("the transcript is %d bytes opening %.20q; want the whole of it", len(res.Transcript), res.Transcript)
 	}
-	if !utf8.ValidString(kept) || strings.HasPrefix(kept, string(utf8.RuneError)) {
-		t.Fatal("the transcript was cut through a rune")
-	}
-	// The TAIL is kept: the conclusion is what a reader wants.
-	if !strings.HasSuffix(kept, "THE CONCLUSION") {
-		t.Fatal("the tail cap dropped the end of the transcript instead of the start")
+	if !utf8.ValidString(res.Transcript) {
+		t.Error("the transcript is not valid UTF-8")
 	}
 }
 
@@ -507,31 +503,6 @@ func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	}
 	if !res.Success {
 		t.Error("a long report stopped reading as a success")
-	}
-}
-
-// REDACTED WHOLE, THEN CUT. The transcript keeps its last 256 KiB, and a
-// secret straddling where that cut lands used to survive as its own tail — a
-// fragment the pattern no longer recognises, published on the phase record.
-func TestASecretAcrossTheTranscriptCutIsRedactedFirst(t *testing.T) {
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	secret := "sk-ant-" + strings.Repeat("Q7", 20)
-	// The cut keeps the last MaxRunTextBytes bytes, so it lands twenty bytes
-	// before the line break: inside the secret.
-	b.Put(p.Err(), "start\n"+secret+"\n"+strings.Repeat("y", sandbox.MaxRunTextBytes-21))
-	b.Put(p.Findings(), "Outcome: succeeded")
-
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if !strings.HasPrefix(res.Transcript, "…") {
-		t.Fatal("the transcript was not cut, so the case tests nothing")
-	}
-	if strings.Contains(res.Transcript, secret[len(secret)-20:]) {
-		t.Error("the secret's tail survived the cut unredacted")
 	}
 }
 

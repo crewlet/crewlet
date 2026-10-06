@@ -737,11 +737,22 @@ type AgentPhaseCompleted struct {
 	CostUSD       float64  `json:"cost_usd"`
 	DeliveredRefs []string `json:"delivered_refs,omitempty"`
 	// ActivityTranscript is a coding run's own account of what it did —
-	// its tool calls and shell commands, or its stderr where the CLI
-	// streams nothing better — on the PhaseSandbox record only. Tail-capped
-	// and secret-redacted where it is collected. It is the whole
-	// observability surface of an agent that emits no telemetry of its own.
+	// what it said, its tool calls and what they ran, or its stderr where
+	// the CLI streams nothing better — on the PhaseSandbox record only.
+	// Secret-redacted, and held to the record's bound: a long one keeps its
+	// first 64 KiB and its last 192 KiB in whole lines, with a note line
+	// where its middle was. It is the whole observability surface of an
+	// agent that emits no telemetry of its own.
 	ActivityTranscript string `json:"activity_transcript,omitempty"`
+	// ActivityTranscriptElidedLines and ActivityTranscriptElidedBytes count
+	// what that bound left out of the transcript's middle — whole lines, and
+	// every byte not kept — so a screen can say the record is not the whole
+	// log without parsing the note. ADDITIVE: zero on a transcript kept
+	// whole, and on every record an older build published, which kept the
+	// transcript's last 256 KiB marked only by a leading "…"; an older
+	// reader ignores both.
+	ActivityTranscriptElidedLines int `json:"activity_transcript_elided_lines,omitempty"`
+	ActivityTranscriptElidedBytes int `json:"activity_transcript_elided_bytes,omitempty"`
 	// Failed is true when the phase died instead of finishing.
 	//
 	// A phase that raises used to publish NOTHING: the only durable record was
