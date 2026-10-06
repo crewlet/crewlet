@@ -309,10 +309,13 @@ type Sources struct {
 	// are then left out and counted, which is what the block always did.
 	Compact *compact.Compactor
 
-	// Embed turns text into a vector for the similarity searches. Nil
-	// falls back to recency alone, which is a real degradation rather
-	// than a failure: recent memories are still this seat's memories.
-	Embed func(ctx context.Context, text string) ([]float32, error)
+	// Embed turns text into a vector for the similarity searches, with
+	// the company's CURRENT embedder — read when it is called, never when
+	// the fetcher was built (see [learning.Embed]). Nil, or an answer of
+	// [learning.ErrNoEmbeddings], falls back to recency alone, which is a
+	// real degradation rather than a failure: recent memories are still
+	// this seat's memories.
+	Embed learning.Embed
 
 	// SummarizeEpisodes is the operator's switch for whether episode hits
 	// are passed through the auxiliary model. It gates ONLY that call.

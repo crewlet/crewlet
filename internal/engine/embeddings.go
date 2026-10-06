@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
@@ -75,14 +76,25 @@ func (e *Engine) storeWidth() int {
 	return e.backends.Store.EmbeddingDim()
 }
 
-// embedder is the company's embedder as the prefetch and the episodist take
-// it, or nil.
+// embedText is the company's embedder as the learning paths take it — the
+// turn-start prefetch, the pull tools that re-run it, and the episodist: the
+// [learning.Embed] seam, handed out as this method value.
 //
-// A FUNCTION rather than the interface, because that is what their seams ask
-// for — and because it is where the one rule the callers share lives: an
-// error is no vector, never a failure to propagate. Every consumer of a
-// vector here is ranking, and a ranking that could not be computed costs
-// relevance rather than correctness.
+// READ AT CALL TIME, never captured, and that is the whole reason it is a
+// method rather than a function built over whatever [Engine.embeddings]
+// held. An apply equips its epoch's tools BEFORE it stores the embedder it
+// is applying (see [Engine.equip]), so a seam captured at build ran one
+// epoch behind for its whole life: query_episodes answered "no embeddings"
+// for the entire first epoch a node booted, and re-activating an unchanged
+// revision to rotate the provider's key — the documented gesture — left the
+// pull tools on the previous provider and its retired key. A company with
+// none configured answers [learning.ErrNoEmbeddings], which every consumer
+// reads as "no similarity search" rather than as a fault.
+//
+// It is also where the one rule the callers share lives: an error is no
+// vector, never a failure to propagate. Every consumer of a vector here is
+// ranking, and a ranking that could not be computed costs relevance rather
+// than correctness.
 //
 // THE WHOLE TEXT, through [embeddings.EmbedWhole], because what these callers
 // embed — a turn's ask, a completed turn — is text whose end matters as much
@@ -95,19 +107,16 @@ func (e *Engine) storeWidth() int {
 // has always had here: a long ask is one batch call, whose requests carry a
 // corpus's ceiling rather than a turn start's, and a turn must not wait longer
 // for its similarity search because the ask was long.
-func (e *Engine) embedder() func(context.Context, string) ([]float32, error) {
-	embed := e.embeddings.Load()
-	if embed == nil || *embed == nil {
-		return nil
+func (e *Engine) embedText(ctx context.Context, text string) ([]float32, error) {
+	held := e.embeddings.Load()
+	if held == nil || *held == nil {
+		return nil, learning.ErrNoEmbeddings
 	}
-	held := *embed
-	batch, ok := held.(embeddings.BatchEmbedder)
+	batch, ok := (*held).(embeddings.BatchEmbedder)
 	if !ok {
-		return held.Embed
+		return (*held).Embed(ctx, text)
 	}
-	return func(ctx context.Context, text string) ([]float32, error) {
-		ctx, cancel := context.WithTimeout(ctx, embeddings.EmbedTimeout)
-		defer cancel()
-		return embeddings.EmbedWhole(ctx, batch, text)
-	}
+	ctx, cancel := context.WithTimeout(ctx, embeddings.EmbedTimeout)
+	defer cancel()
+	return embeddings.EmbedWhole(ctx, batch, text)
 }

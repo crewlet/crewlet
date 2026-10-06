@@ -2,6 +2,7 @@ package learning
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,13 +26,6 @@ const EpisodistSource = "episodist"
 // enough to be truncated here has already said what it is about many times
 // over.
 const episodeEmbedInput = 8000
-
-// Embed turns text into a vector, or reports that it cannot.
-//
-// A FUNCTION rather than the provider interface: it is the one thing this
-// worker wants from embeddings, and taking the interface would make every
-// test that writes an episode implement a Width it never reads.
-type Embed func(ctx context.Context, text string) ([]float32, error)
 
 // Episodist records one completed turn as an episode.
 //
@@ -64,7 +58,8 @@ type Episodist struct {
 
 // EpisodistOptions configures the worker.
 type EpisodistOptions struct {
-	// Embed is the vector backend, or nil for a company with none.
+	// Embed is the vector backend, read at call time (see [Embed]); nil is
+	// a worker built with none at all, which writes every row unembedded.
 	Embed Embed
 
 	// EmbedTimeout bounds the embedding call. Zero takes the default.
@@ -220,6 +215,11 @@ func (w *Episodist) vector(ctx context.Context, summary string) []float32 {
 	ctx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 	vector, err := w.embed(ctx, summary)
+	if errors.Is(err, ErrNoEmbeddings) {
+		// The company configures none, which is how it is set up rather
+		// than a fault worth a line per turn.
+		return nil
+	}
 	if err != nil {
 		log.WarnContext(ctx, "episode_embedding_failed", "error", err.Error(),
 			"detail", "the episode is written without a vector; recall skips "+

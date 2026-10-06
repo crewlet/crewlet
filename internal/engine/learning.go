@@ -96,8 +96,14 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// `episodic.enabled` in the config because the read-side knobs
 	// (retrieval_limit) presuppose rows exist — a company that wants no
 	// episodic memory turns learning off entirely.
+	//
+	// Its embedder is READ AT CALL TIME (see [Engine.embedText]). The
+	// workers happen to be rebuilt after the apply stores its embedder, so
+	// a captured one would be current today only because of the order of
+	// two calls in the apply — the order that put the pull tools a whole
+	// epoch behind. Read per call, it is current by construction.
 	episodist, err := learning.NewEpisodist(learning.NewEpisodes(db),
-		learning.EpisodistOptions{Embed: e.embedder()})
+		learning.EpisodistOptions{Embed: e.embedText})
 	if err != nil {
 		log.Warn("episodist_unavailable", "error", err,
 			"detail", "no episode will be recorded, so recall and skill "+

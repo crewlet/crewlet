@@ -75,11 +75,14 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 	if reg := e.Registry(); reg != nil {
 		src.Parties = reg
 	}
-	// Nil where a company configured no embeddings, which degrades the
+	// THE CURRENT EMBEDDER, read at each call rather than now: this
+	// fetcher is also the pull tools' (see [Engine.equip]), which is built
+	// before the epoch it equips stores its embedder. A company with none
+	// configured answers learning.ErrNoEmbeddings, which degrades the
 	// similarity half of the memory pool to recency alone and episode
 	// recall to an empty block — both first-class states in the prefetch
 	// rather than failures.
-	src.Embed = e.embedder()
+	src.Embed = e.embedText
 	return src
 }
 

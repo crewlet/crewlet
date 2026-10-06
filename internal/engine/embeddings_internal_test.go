@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
@@ -163,38 +164,35 @@ func TestAStoreOpenedWithoutVectorsVetoesNothing(t *testing.T) {
 	}
 }
 
-// The prefetch takes a FUNCTION, and nil is how it learns there is no
-// similarity search — so an engine that built no embedder must hand it a nil
-// func rather than a live method value closing over a nil interface, which
-// is not nil and panics on the first call.
-func TestNoEmbedderIsANilFuncNotAPanickingOne(t *testing.T) {
+// NO EMBEDDER IS AN ANSWER, not a panic: the seam is a method value that
+// reads the engine's current embedder on every call, so an engine that never
+// stored one — or stored a nil — answers learning.ErrNoEmbeddings, which every
+// consumer reads as "no similarity search" rather than as a fault.
+func TestNoEmbedderAnswersThatNoneIsConfigured(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	if e.embedder() != nil {
-		t.Fatal("an engine that never stored an embedder handed out a callable")
+	if _, err := e.embedText(t.Context(), "anything"); !errors.Is(err, learning.ErrNoEmbeddings) {
+		t.Fatalf("an engine that never stored an embedder answered %v", err)
 	}
 	var none embeddings.Embedder
 	e.embeddings.Store(&none)
-	if e.embedder() != nil {
-		t.Fatal("a stored nil embedder handed out a callable")
+	if _, err := e.embedText(t.Context(), "anything"); !errors.Is(err, learning.ErrNoEmbeddings) {
+		t.Fatalf("a stored nil embedder answered %v", err)
 	}
 }
 
-// A STORED EMBEDDER IS HANDED OUT AS ITS WHOLE-TEXT FORM: what the prefetch
-// and the episodist embed — a turn's ask, a completed turn — has an end that
-// matters as much as its beginning, and the provider refuses an input past the
-// model's bound before sending it. So a short text is exactly Embed's vector
-// and a long one is the pool of all of it, never "no similarity search".
+// A STORED EMBEDDER IS USED AS ITS WHOLE-TEXT FORM: what the prefetch and the
+// episodist embed — a turn's ask, a completed turn — has an end that matters
+// as much as its beginning, and the provider refuses an input past the model's
+// bound before sending it. So a short text is exactly Embed's vector and a
+// long one is the pool of all of it, never "no similarity search".
 func TestAStoredEmbedderEmbedsTheWholeOfWhatItIsHanded(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	fake := embeddings.NewFake(4)
 	var held embeddings.Embedder = fake
 	e.embeddings.Store(&held)
-	embed := e.embedder()
-	if embed == nil {
-		t.Fatal("a stored embedder handed out nothing")
-	}
+	embed := e.embedText
 	short := "the quick brown fox"
 	v, err := embed(t.Context(), short)
 	if err != nil {

@@ -3,6 +3,7 @@ package prefetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -348,11 +349,19 @@ func jsonArray(text string) string {
 }
 
 // embed turns text into a vector, or reports that it cannot.
+//
+// A company with no embeddings — a nil seam, or one answering
+// [learning.ErrNoEmbeddings] because the engine's current epoch has none — is
+// how that company is set up, and is not logged; a provider that was asked
+// and failed is.
 func (f *Fetcher) embed(ctx context.Context, text string) ([]float32, bool) {
 	if f.src.Embed == nil {
 		return nil, false
 	}
 	vector, err := f.src.Embed(ctx, text)
+	if errors.Is(err, learning.ErrNoEmbeddings) {
+		return nil, false
+	}
 	if err != nil || len(vector) == 0 {
 		if err != nil {
 			log.WarnContext(ctx, "prefetch_embedding_failed", "error", err.Error())
