@@ -625,7 +625,11 @@ the rest need a grant the reader does not hold, and its title names those
 grants — what a reader would ask somebody for. It is drawn only once the viewer
 has answered, since a lock on every section while the first read is out claims
 a refusal nobody has made. The command palette says the same of a guarded
-destination in the same words — "needs `config:read`" beside its hint.
+destination in the same words — "needs `config:read`" beside its hint. And for
+a reader with **no access yet** — a session without `state:read`, which every
+workspace reads the company through — every row of the sidebar carries the
+lock ("Needs `state:read`"), Settings included: offered unmarked, each led to
+the same panel with nothing beside it saying so.
 
 **A guarded section says so and nothing else.** Opened by a reader the engine
 has SAID holds none of the grants it needs, a guarded section is replaced by
@@ -669,11 +673,16 @@ without a sound.
 
 **The health card** says the one state that decides what a reader should do,
 in precedence order: nobody is signed in (the card is then the button that
-goes to the sign-in), the engine knows who this is and will not serve them (a
-seat taken out of the chart, a session without `state:read` — a statement, with
-every screen but the reader's Account replaced by one panel that names who they
-are from `GET /auth/session`, what they hold and the engine's reason, and offers
-the Account, a retry and the sign-out), reconnecting,
+goes to the sign-in), **no access yet** — a session without `state:read`, said
+in neutral ink because a person invited with no grants is not a fault, and
+for which the socket is never dialled (see [Signing in](#signing-in-is-a-screen-outside-the-frame))
+— then the engine knows who this is and will not serve them (a seat taken out
+of the chart). Both are statements, with every screen but the reader's Account
+replaced by one panel that names who they are from `GET /auth/session`, what
+they hold and why — for no access, that `state:read` would open the
+dashboard, which it then does by itself; for a refusal, the engine's reason —
+and offers the Account, a check or a retry, and the sign-out. Then
+reconnecting,
 draining, no configuration, a posture that
 diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
 ("Waiting for the engine" — nothing reported is not healthy), and serving —
@@ -1465,7 +1474,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and that it is bound to no seat — ordinary, never a fault; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer: while the socket's `viewer` question has not (it never does for a person the socket refuses), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and that it is bound to no seat — ordinary, never a fault; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming the grant on a section the reader holds none of the grants for (drawn only once the viewer has answered) and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -1765,12 +1774,31 @@ Four routes draw no sidebar and no page header — `#/login`,
 `#/invite/{id}.{secret}`, `#/reset/{id}.{secret}` and `#/enrol` (`FRAMELESS` in
 `app/nav.ts`): a frame whose every row is locked is a frame showing a person
 what they cannot open. **And they dial nothing that needs a session**: the
-socket is made at boot and dialled by a sign-in or by the frame
-(`app/Shell.tsx`) — and by the frame only once `GET /auth/session` has not
-answered `401` — so a browser that opens one of these four, or opens
-`/dashboard` signed out, sends no handshake, no refusal probe and no
-degraded-mode snapshot on its way to the sign-in. The sign-in asks
-`GET /auth/session` once, to say whose session the browser already holds. **A
+socket is made at boot and dialled by the frame alone (`app/Shell.tsx`) — a
+sign-in lands in the frame and dials nothing itself — so a browser that opens
+one of these four, or opens `/dashboard` signed out, sends no handshake, no
+refusal probe and no degraded-mode snapshot on its way to the sign-in.
+
+**The frame asks who this is once, before anything else** — `GET
+/auth/session` (`lib/frameSession.ts`), which the sidebar's user block and the
+refusal panel read too, where each used to ask for itself — and **dials only
+for a session holding `state:read`**, the grant the engine refuses the
+socket's handshake without. A `401` is nobody, and the sign-in follows with
+nothing dialled; a read that failed on anything else says nothing about the
+session, and the handshake decides. A session WITHOUT the grant is **no access
+yet**: nothing is dialled — a dial was a refused handshake, its probe and a
+refused snapshot, twice, for every person invited with no grants — and the
+session is asked again every thirty seconds and when the tab comes back,
+because nothing else can tell the tab an administrator has given the grant:
+the identity move that names the person is pushed over the socket it does not
+have. The answer that holds it dials, and the dashboard opens without a
+reload. A socket the engine refuses asks the session again too, so a grant
+withdrawn under an open socket is drawn as no access rather than as "you hold
+`state:read`" beside "the live socket needs `state:read`". The sign-in asks
+`GET /auth/session` once, to say whose session the browser already holds —
+and not at all when a `401` routed the reader there, which has already said
+it: a signed-out load of `/dashboard` asks once on its way to the sign-in, as
+`#/login` opened directly does. **A
 sign-out holds the socket** until it is answered (`LiveSocket.hold`): the
 engine closes the session's socket as it applies the sign-out, and that close
 re-dialled before the reload, one more refused handshake on the way out.
@@ -1807,8 +1835,8 @@ a message — so `lib/session.ts` accepts only a hash route of this dashboard: n
 `//`, no backslash, no control character, never one of the four screens above.
 Anything it refuses lands on Home.
 
-**A sign-in replaces the history entry it was made from**, re-dials the socket
-so the next handshake carries the new cookie, and goes to `next` — through
+**A sign-in replaces the history entry it was made from** and goes to `next`,
+where the frame dials the socket for the session it reads — through
 `#/enrol` first when the engine opened the session only for enrolling a second
 factor. The screen prints the engine's own sentence for a refusal and nothing it
 composed itself: a failed sign-in is one refusal on purpose, and a
@@ -6379,14 +6407,20 @@ brings that carries a design-system rule.
   credential it was opened with — whenever an identity record names that
   credential, a company is published, or the credential reaches its own end.
   `4401` means that credential no longer
-  resolves to anybody — the session ended or was revoked — so re-dial with the
-  cookie the browser holds now and sign in only if the handshake then answers
-  `401`. `4403` means the person resolves and may not have this surface —
+  resolves to anybody — the session ended or was revoked — so once this tab's
+  own requests have settled, ask `GET /auth/session` once: a `401` sends the
+  reader to sign in with nothing dialled — dialled blind, a session ended
+  elsewhere was a refused handshake, its probe and a refused snapshot, three
+  `401`s where one says it — and any other answer re-dials with the cookie the
+  browser holds now. `4403` means the person resolves and may not have this surface —
   their seat is gone, or `state:read` was withdrawn: the socket STOPS (no
   reconnect, no REST fallback, both of which the same decision would refuse)
   and every screen but the Account, which reads no socket, is replaced by one
-  panel saying who they are (`GET /auth/session`), what they hold and why,
-  with the *Account*, a *Try again* for after an administrator has acted and a
+  panel saying who they are (`GET /auth/session`, asked again on the refusal),
+  what they hold and why, with the *Account*, a *Try again* for after an
+  administrator has acted — or, where the session no longer holds
+  `state:read`, the no-access panel, which asks again on its own and dials once
+  the grant is back — and a
   *Sign out* — the person refused is the person who needs to leave, and the
   engine keeps `/auth/` open to their session for exactly that. Drawn as
   they were, the screens said the engine was "not connected" and showed

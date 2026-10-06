@@ -14,6 +14,14 @@
  * ever sent, beside figures that never resolved, while the sidebar's foot said
  * "Checking who you are" for good. So every screen but the Account is replaced
  * by one panel that says who they are, what they hold and why.
+ *
+ * A SESSION WITHOUT `state:read` IS NO ACCESS YET, read off the session the
+ * frame asks for first: nothing is dialled for it — a dial was a refused
+ * handshake, a refused probe and a refused snapshot, twice, on landing — the
+ * panel, the sidebar's foot and its rows say so without alarm, and the
+ * session is asked again, so a grant an administrator makes opens the
+ * dashboard without a reload. Nothing else could tell the tab: the identity
+ * move naming the person is pushed over the socket it does not have.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -41,12 +49,15 @@ interface Sent {
 
 let sent: Sent[];
 let reloads: ReturnType<typeof vi.spyOn>;
+/** What `GET /auth/session` says the session holds. */
+let grants: string[];
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   Element.prototype.scrollIntoView = () => {};
   location.hash = "#/work";
   sent = [];
+  grants = ["state:read"];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -64,7 +75,7 @@ beforeEach(() => {
           person: "p-1",
           login: "jane.doe",
           kind: "person",
-          grants: [],
+          grants,
           expires_at: "2026-10-05T00:00:00Z",
           status: "signed_in",
         });
@@ -90,17 +101,18 @@ afterEach(() => {
 });
 
 /**
- * The shell over a socket that was refused, and whose questions never answer.
- * The Work screen's chunk is fetched first, so the screen draws rather than
- * suspending inside the render.
+ * The shell, whose socket's questions never answer. The Work screen's chunk
+ * is fetched first, so the screen draws rather than suspending inside the
+ * render. `refused` is the engine's refusal of the dial the frame makes for a
+ * session holding `state:read`, landing once it has made it.
  */
-async function mount() {
+async function mount(refused: string | null = "your seat is no longer in the chart") {
   await loadChunk("work");
   await loadChunk("account");
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
-  act(() => store.setAccessRefused("your seat is no longer in the chart"));
+  const dial = vi.spyOn(socket, "start");
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -108,15 +120,24 @@ async function mount() {
       </Router>
     </ClientContext.Provider>,
   );
+  if (refused !== null) {
+    await waitFor(() => expect(dial).toHaveBeenCalled());
+    act(() => store.setAccessRefused(refused));
+  }
+  return { store, dial };
+}
+
+/** The panel drawn in place of the screen, once it names the reader. */
+async function panelTitled(title: string): Promise<HTMLElement> {
+  const panel = (await screen.findByText(title)).closest(".crewlet-empty-state") as HTMLElement;
+  await waitFor(() => expect(within(panel).getByText("jane.doe")).toBeDefined());
+  return panel;
 }
 
 test("every screen is one panel naming who you are, and it signs out", async () => {
   await mount();
-  const panel = (await screen.findByText("The engine will not serve this screen to you")).closest(
-    ".crewlet-empty-state",
-  ) as HTMLElement;
-  await waitFor(() => expect(within(panel).getByText("jane.doe")).toBeDefined());
-  expect(within(panel).getByText(/you hold no grants yet/)).toBeDefined();
+  const panel = await panelTitled("The engine will not serve this screen to you");
+  expect(within(panel).getByText(/you hold state:read/)).toBeDefined();
   expect(within(panel).getByText(/your seat is no longer in the chart/)).toBeDefined();
   // NOTHING SAYS IT IS RECONNECTING, and nothing the screen would have asked
   // is drawn: the socket was refused and stopped.
@@ -139,7 +160,8 @@ test("the panel's Account is the one screen it does not replace", async () => {
 });
 
 test("the user block offers both sign-outs though the viewer never answers", async () => {
-  await mount();
+  grants = [];
+  await mount(null);
   fireEvent.click(await screen.findByRole("button", { name: "Account and preferences" }));
   const popover = await screen.findByRole("dialog", { name: "Account and preferences" });
   // UNDER THE SESSION'S OWN LOGIN, the viewer that would name a seat never
@@ -148,4 +170,59 @@ test("the user block offers both sign-outs though the viewer never answers", asy
   expect(within(popover).getByRole("link", { name: "Account" })).toBeDefined();
   expect(within(popover).getByRole("button", { name: "Sign out everywhere" })).toBeDefined();
   expect(within(popover).getByRole("button", { name: "Sign out" })).toBeDefined();
+});
+
+// NO ACCESS YET IS NOT A REFUSAL: a person invited with no grants landed on a
+// red "Access refused" after two rounds of refused dials, every row offered and
+// unmarked. The CONTROL is the seat-gone refusal above, which is drawn in the
+// engine's words and dialled for. Mutation: dial whatever the session holds,
+// or draw this state as the refusal, and a line here goes red.
+test("a session without state:read dials nothing and is told what would open the dashboard", async () => {
+  grants = [];
+  const { dial } = await mount(null);
+  const panel = await panelTitled("You have no access to the company yet");
+  expect(within(panel).getByText(/you hold no grants yet/)).toBeDefined();
+  expect(within(panel).getByRole("button", { name: "Check again" })).toBeDefined();
+  expect(screen.queryByText("The engine will not serve this screen to you")).toBeNull();
+  // THE FOOT SAYS IT WITHOUT ALARM, and nothing says it is reconnecting.
+  expect(screen.getByText("No access yet")).toBeDefined();
+  expect(screen.queryByText(/Access refused|Reconnecting|Not connected/)).toBeNull();
+  // EVERY ROW IS LOCKED, NEVER HIDDEN, naming what would open it.
+  const inbox = screen.getByRole("link", { name: /^Inbox/ });
+  expect(inbox.querySelector("[title='Needs state:read']")).not.toBeNull();
+  expect(dial).not.toHaveBeenCalled();
+  expect(sent.some((s) => s.path === "/stream/snapshot" || s.path === "/ws/stream")).toBe(false);
+});
+
+// AND THE GRANT IS NOTICED: the tab kept refusing after an administrator gave
+// it, contradicting itself ("you hold state:read. The engine says: the live
+// socket needs state:read") until a reload. The session is asked again — here
+// as the tab comes back — and the answer holding the grant dials. Mutation:
+// stop asking again, or dial only once per frame, and the dial never comes.
+test("a grant made meanwhile dials the socket and the panel goes", async () => {
+  grants = [];
+  const { dial } = await mount(null);
+  await panelTitled("You have no access to the company yet");
+  grants = ["state:read"];
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await waitFor(() => expect(dial).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(screen.queryByText("You have no access to the company yet")).toBeNull(),
+  );
+});
+
+// A GRANT WITHDRAWN UNDER AN OPEN SOCKET closes it, and the session the frame
+// read before still held the grant: the panel said "you hold state:read"
+// beside the engine's "the live socket needs state:read". The refusal asks the
+// session again. Mutation: drop that and the panel draws the stale grants.
+test("a refusal for want of state:read asks who this is again, and says no access", async () => {
+  const { store, dial } = await mount(null);
+  await waitFor(() => expect(dial).toHaveBeenCalled());
+  grants = [];
+  act(() => store.setAccessRefused("the live socket needs state:read"));
+  const panel = await panelTitled("You have no access to the company yet");
+  expect(within(panel).getByText(/you hold no grants yet/)).toBeDefined();
+  expect(within(panel).queryByText(/you hold state:read/)).toBeNull();
 });

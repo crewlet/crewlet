@@ -55,6 +55,26 @@ describe("which state the card says", () => {
     expect(r.press).toBe("none");
   });
 
+  // NO ACCESS YET IS NOT A FAULT: a person invited with no grants read a red
+  // "Access refused" over the engine's reason. It is said neutrally, and it
+  // outranks a refusal — a socket refused for want of the grant is this same
+  // state, which the session says. Mutation: give it the refusal's tone, or
+  // let the refusal outrank it, and a line here goes red.
+  test("no access yet is said without alarm, over a refusal, and leads nowhere", () => {
+    const r = read({
+      noAccess: true,
+      accessRefused: "the live socket needs state:read",
+      connected: false,
+    });
+    expect(r).toEqual({
+      tone: "neutral",
+      title: "No access yet",
+      detail: "Signed in, without the state:read grant the company's live state needs",
+      press: "none",
+    });
+    expect(read({ noAccess: true, authRejected: true }).title).toBe("Not signed in");
+  });
+
   test("a lost socket outranks what the last push claimed", () => {
     expect(read({ connected: false, health: { ...healthy, shutting_down: true } }).title).toBe(
       "Reconnecting",

@@ -41,6 +41,7 @@ import { starsKey } from "~/lib/starred.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { LiveSocket, Store, sessionRestored, type SessionAnswer } from "~/protocol/index.ts";
 import type { ReactNode } from "react";
 
@@ -53,17 +54,19 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** The block where it lives: under a client (its session read is the shared REST read), a router and a toaster. */
+/** The block where it lives: under a client, the frame's session read, a router and a toaster. */
 function block(viewer: ViewerState, seatName = ""): ReactNode {
   const store = new Store();
   const socket = new LiveSocket(store);
   return (
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <ToastProvider>
-          <UserBlock viewer={viewer} seatName={seatName} />
-        </ToastProvider>
-      </Router>
+      <SessionReading>
+        <Router>
+          <ToastProvider>
+            <UserBlock viewer={viewer} seatName={seatName} />
+          </ToastProvider>
+        </Router>
+      </SessionReading>
     </ClientContext.Provider>
   );
 }

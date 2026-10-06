@@ -20,10 +20,13 @@
  *
  * A session that may do everything goes to `next`, REPLACING the sign-in
  * screen's history entry — Back from the page the reader asked for must not
- * land them on a form for a session they already hold — and the socket
- * re-dials, because the one it has was opened as nobody. A session that may
- * only enrol a second factor goes to the enrolment screen instead, carrying
- * `next` along, and the socket waits: it would only be refused again.
+ * land them on a form for a session they already hold. The sign-in DIALS
+ * NOTHING: `next` is a screen in the frame, which reads the new session and
+ * dials for it only if it may read the company (`app/Shell.tsx`) — a sign-in
+ * that dialled on its own was a refused handshake, a refused probe and a
+ * refused snapshot for every person invited with no grants. A session that
+ * may only enrol a second factor goes to the enrolment screen instead,
+ * carrying `next` along.
  *
  * Either way the sign-in's answer REPLACES the session need a transport
  * recorded (`protocol/signin.ts`): it is the newest fact about this browser,
@@ -54,7 +57,6 @@ import { framelessOf } from "~/app/nav.ts";
 import { currentReader, noteReader } from "~/lib/reader.ts";
 import { forgetOtherReaders as forgetOtherRecents } from "~/lib/recents.ts";
 import { forgetOtherReaders as forgetOtherStars } from "~/lib/starred.ts";
-import { useClient } from "~/lib/store-hooks.ts";
 import {
   auth,
   sessionNeedsEnrolment,
@@ -260,7 +262,6 @@ export interface SignedInAs {
  */
 export function useSignedIn(): (answer: SignedInAs, next: string | null) => void {
   const nav = useNavigator();
-  const { socket } = useClient();
   return useCallback(
     ({ status, person = "" }, next) => {
       const target = safeNext(next);
@@ -283,15 +284,12 @@ export function useSignedIn(): (answer: SignedInAs, next: string | null) => void
         nav.replace(["enrol"], { next: target });
         return;
       }
-      // IN THIS ORDER. The need clears first, so the screen `next` names
-      // does not mount under a need it would be routed away for; the socket
-      // re-dials second, before the move, so that screen's first questions
-      // wait for the new socket rather than the one opened as nobody.
+      // THE NEED CLEARS FIRST, so the screen `next` names does not mount
+      // under a need it would be routed away for.
       sessionRestored();
-      socket.reconnect();
       const route = parseHash(target);
       nav.replace(route.path, route.query);
     },
-    [nav, socket],
+    [nav],
   );
 }

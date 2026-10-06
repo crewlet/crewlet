@@ -65,6 +65,11 @@
  * replaced the cookie. The screen says whose, and offers to carry on as them;
  * it does not send them on unasked, because "sign in as somebody else" is a
  * thing people mean.
+ *
+ * AND NOT ASKED TWICE: a reader the app routed here because a request was
+ * just answered `401` (the `sign_in` need, `protocol/signin.ts`) holds no
+ * session, which the engine has already said — asking `GET /auth/session`
+ * again was one more refused request on every way a session ends.
  */
 
 import { useEffect, useState } from "react";
@@ -73,7 +78,7 @@ import { useRoute } from "~/app/router.tsx";
 import { currentReader } from "~/lib/reader.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
-import { auth, RestError, type SessionAnswer } from "~/protocol/index.ts";
+import { auth, currentSessionNeed, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import { SignInPage } from "./SignInPage.tsx";
 
 export function SignIn() {
@@ -87,7 +92,11 @@ export function SignIn() {
   // UNDEFINED UNTIL `/auth/session` HAS ANSWERED, and null once it answered
   // nobody: a tab holding a good session must not flash "you were signed out"
   // for the round trip it takes to say so, nor on an answer that was no answer.
-  const [current, setCurrent] = useState<SessionAnswer | null | undefined>(undefined);
+  // NULL AT ONCE where a `401` routed the reader here — see the package doc.
+  const [routed] = useState(() => currentSessionNeed() === "sign_in");
+  const [current, setCurrent] = useState<SessionAnswer | null | undefined>(
+    routed ? null : undefined,
+  );
   // AS THE PAGE OPENED: a sign-in records the next reader before it moves on.
   const [read] = useState(() => currentReader() !== null);
 
@@ -98,20 +107,22 @@ export function SignIn() {
       // AN UNREAD ANSWER IS NOT "UNCLAIMED" — see the package doc.
       () => {},
     );
-    auth.session().then(
-      (session) => live && setCurrent(session),
-      // NOBODY SIGNED IN is a 401, which is why this screen is usually open.
-      // Anything else — a node behind on the identity log (503), a throttle,
-      // the network — says nothing about this browser's session, so it stays
-      // unanswered and the page claims nothing.
-      (err: unknown) => {
-        if (live && err instanceof RestError && err.status === 401) setCurrent(null);
-      },
-    );
+    if (!routed) {
+      auth.session().then(
+        (session) => live && setCurrent(session),
+        // NOBODY SIGNED IN is a 401, which is why this screen is usually open.
+        // Anything else — a node behind on the identity log (503), a throttle,
+        // the network — says nothing about this browser's session, so it
+        // stays unanswered and the page claims nothing.
+        (err: unknown) => {
+          if (live && err instanceof RestError && err.status === 401) setCurrent(null);
+        },
+      );
+    }
     return () => {
       live = false;
     };
-  }, []);
+  }, [routed]);
 
   return (
     <SignInPage

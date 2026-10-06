@@ -59,6 +59,7 @@ export interface Degradation {
 export function degradationOf({
   authRejected,
   accessRefused = null,
+  noAccess = false,
   connected,
   configured,
   onSignIn,
@@ -72,6 +73,11 @@ export function degradationOf({
    * never be answered.
    */
   accessRefused?: string | null;
+  /**
+   * The reader's session holds no grant to read the company, so the socket
+   * is never dialled — said in place of the screen too, for the same reason.
+   */
+  noAccess?: boolean;
   connected: boolean;
   configured: boolean | undefined;
   onSignIn: () => void;
@@ -85,9 +91,10 @@ export function degradationOf({
       action: { label: "Sign in", onClick: onSignIn },
     };
   }
-  // A REFUSED BROWSER'S SOCKET STOPS, so "reconnecting" would be false: the
-  // screen says what is true instead — see `AccessRefused`.
-  if (accessRefused !== null) return null;
+  // A REFUSED BROWSER'S SOCKET STOPS, and one with no access is never dialled,
+  // so "reconnecting" would be false: the screen says what is true instead —
+  // see `AccessRefused`.
+  if (accessRefused !== null || noAccess) return null;
   if (!connected) {
     return {
       variant: "warning",

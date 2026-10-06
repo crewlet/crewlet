@@ -55,6 +55,7 @@ import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
@@ -290,10 +291,12 @@ function Frame() {
 function Screen({ where, path }: { where: Route; path: string[] }) {
   const viewer = useViewer();
   const { accessRefused } = useConnection();
+  const { noAccess } = useFrameSession();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
-  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE is told so in place of every
-  // screen but its Account, which reads no socket — see `AccessRefused`.
-  if (accessRefused !== null && workspaceOf(path) !== "account") {
+  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE, or whose session holds no
+  // grant to read the company, is told so in place of every screen but its
+  // Account, which reads no socket — see `AccessRefused`.
+  if ((accessRefused !== null || noAccess) && workspaceOf(path) !== "account") {
     return <AccessRefused reason={accessRefused} />;
   }
   // A SECTION FOR A VIEWER THE ENGINE HAS SAID HOLDS NONE OF ITS GRANTS is

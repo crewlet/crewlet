@@ -7,7 +7,8 @@
  * 4401 when its session ended, 4403 when its credential names somebody who may
  * not have this surface. The repairs are opposite: a 4401 is a reconnect once
  * this tab's own requests have landed (the browser may hold a newer cookie,
- * and after a step-up it is about to), a 4403 is not repaired by anything this
+ * and after a step-up it is about to) and `GET /auth/session` has said the
+ * browser still holds a session, a 4403 is not repaired by anything this
  * tab can do, so the socket must STOP rather than dial the same refusal every
  * thirty seconds under a "reconnecting" banner. Anything else is the backoff.
  */
@@ -54,6 +55,8 @@ let probeHeaders: Record<string, string> = {};
 let probeDelayMs = 0;
 /** What the degraded-mode snapshot read answers: by default nothing the engine wrote. */
 let snapshotAnswer: () => Promise<Response> = async () => new Response("{}", { status: 503 });
+/** What `GET /auth/session` answers: by default a session. */
+let sessionStatus = 200;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -65,6 +68,7 @@ beforeEach(() => {
   probeHeaders = {};
   probeDelayMs = 0;
   snapshotAnswer = async () => new Response("{}", { status: 503 });
+  sessionStatus = 200;
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: ScriptedWebSocket });
   vi.stubGlobal(
     "fetch",
@@ -72,6 +76,16 @@ beforeEach(() => {
       const url = String(input);
       fetches.push(url);
       fetchInits.push(init);
+      if (url.endsWith("/auth/session")) {
+        return new Response(
+          JSON.stringify(
+            sessionStatus === 200
+              ? { person: "p-1", login: "jane.doe", grants: ["state:read"], status: "signed_in" }
+              : { error: "invalid_token" },
+          ),
+          { status: sessionStatus, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (url.endsWith("/ws/stream")) {
         if (probeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, probeDelayMs));
         return new Response(JSON.stringify(probeBody), {
@@ -126,7 +140,7 @@ describe("the engine's close codes", () => {
     expect(fetches).toHaveLength(0);
   });
 
-  test("4401 reconnects and asks nothing", async () => {
+  test("4401 reconnects for a session the browser still holds, and probes nothing", async () => {
     const { store } = started();
     dial(0).open();
     dial(0).closeWith(4401, "credential no longer accepted");
@@ -135,7 +149,29 @@ describe("the engine's close codes", () => {
     expect(ScriptedWebSocket.dials.length).toBeGreaterThan(1);
     expect(store.state.accessRefused).toBeNull();
     expect(store.state.authRejected).toBe(false);
+    expect(fetches.filter((u) => u.endsWith("/auth/session"))).toHaveLength(1);
     expect(fetches.filter((u) => u.endsWith("/ws/stream"))).toHaveLength(0);
+  });
+
+  // A SESSION ENDED ELSEWHERE — a password change, a sign-out everywhere, an
+  // administrator — closes this tab's socket 4401, and the tab dialled again
+  // blind: a refused handshake, its refusal probe and a refused degraded-mode
+  // snapshot before the sign-in, three 401s in the console where one says it.
+  // It asks `GET /auth/session` once and dials nothing on a 401. The CONTROL is
+  // the case above, whose session answers and is dialled for. Mutation: dial
+  // before asking, or on any answer, and a dial and its 401s come back.
+  test("4401 whose session ended asks once and dials nothing on the way to the sign-in", async () => {
+    sessionStatus = 401;
+    const { store } = started();
+    dial(0).open();
+    dial(0).closeWith(4401, "signed out everywhere");
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
+    expect(fetches.filter((u) => u.endsWith("/auth/session"))).toHaveLength(1);
+    expect(fetches.filter((u) => !u.endsWith("/auth/session"))).toEqual([]);
+    expect(store.state.authRejected).toBe(true);
+    expect(currentSessionNeed()).toBe("sign_in");
   });
 
   // A SIGN-OUT HOLDS THE SOCKET, because the engine closes this session's

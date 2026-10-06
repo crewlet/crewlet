@@ -28,6 +28,11 @@
  * indistinguishable from one that does not exist. The lock says how many of
  * its sections are closed to the reader, and its title names the grants that
  * would open them — what a reader would ask somebody for.
+ *
+ * AND EVERY ROW IS LOCKED, NEVER HIDDEN, for a reader with no access yet — a
+ * session without `state:read`, which every workspace reads the company
+ * through (`lib/frameSession.ts`). Offered unmarked, each row led to the same
+ * refusal panel with nothing beside it saying so.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -54,6 +59,7 @@ import {
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { LIVE_VIEW_GRANT, useFrameSession } from "~/lib/frameSession.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { pageCount, unfinished, viewRun, projectPath } from "~/lib/work.ts";
@@ -76,6 +82,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
   const viewer = useViewer();
+  const { noAccess } = useFrameSession();
 
   // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
   // the reader's way to it without reaching for the toggle in the bar. Only
@@ -145,7 +152,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const row = (ws: WorkspaceRow) => (
     <NavRow
       key={ws.key}
-      label={ws.label}
+      label={
+        noAccess ? (
+          <Locked label={ws.label} needs={[LIVE_VIEW_GRANT]} said="needs a grant you do not hold" />
+        ) : (
+          ws.label
+        )
+      }
       icon={ws.icon}
       path={ws.path}
       current={here === ws.key}
@@ -200,14 +213,18 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
                 <NavRow
                   key={ws.key}
                   label={
-                    closed.length > 0 ? (
-                      <span className="side-locked" title={`Needs ${grantWords(neededBy(closed))}`}>
-                        {ws.label}
-                        <KeyGlyph size="xs" aria-hidden="true" />
-                        <span className="sr-only">
-                          , {closed.length} of its sections need a grant you do not hold
-                        </span>
-                      </span>
+                    noAccess ? (
+                      <Locked
+                        label={ws.label}
+                        needs={[LIVE_VIEW_GRANT]}
+                        said="needs a grant you do not hold"
+                      />
+                    ) : closed.length > 0 ? (
+                      <Locked
+                        label={ws.label}
+                        needs={neededBy(closed)}
+                        said={`${closed.length} of its sections need a grant you do not hold`}
+                      />
                     ) : (
                       ws.label
                     )
@@ -225,6 +242,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
                 connected,
                 authRejected,
                 accessRefused,
+                noAccess,
                 health,
               })}
               onSignIn={goSignIn}
@@ -271,6 +289,20 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
+  );
+}
+
+/**
+ * A row's label with the lock beside it: its title names what would open it,
+ * and a screen reader hears `said` after the label.
+ */
+function Locked({ label, needs, said }: { label: string; needs: readonly Grant[]; said: string }) {
+  return (
+    <span className="side-locked" title={`Needs ${grantWords(needs)}`}>
+      {label}
+      <KeyGlyph size="xs" aria-hidden="true" />
+      <span className="sr-only">, {said}</span>
+    </span>
   );
 }
 

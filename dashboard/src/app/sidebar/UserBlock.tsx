@@ -29,9 +29,11 @@
  * SIGNING OUT DOES NOT WAIT FOR THE SOCKET. The viewer is a socket question,
  * and a person the socket refuses — a seat taken out of the chart (`403
  * seat_unavailable`), a session without `state:read` — never has it answered:
- * the socket stops dialling on a refusal. So `GET /auth/session` is asked
- * whatever the viewer says, and while the viewer has not answered, a session
- * it names is offered the two sign-outs under its own login.
+ * the socket stops dialling on a refusal, and is never dialled for a session
+ * without the grant. So the block reads the frame's `GET /auth/session`
+ * (`lib/frameSession.ts`) whatever the viewer says, and while the viewer has
+ * not answered, a session it names is offered the two sign-outs under its own
+ * login.
  *
  * # Preferences are per-browser, and they are here
  *
@@ -66,13 +68,12 @@ import { href } from "~/app/router.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { browserZone, useViewerPrefs, type DateFormat } from "~/lib/prefs.ts";
 import { refusalText } from "~/lib/refusal.ts";
-import { adoptReader } from "~/lib/reader.ts";
-import { useRest } from "~/lib/useRest.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { goSignIn, signOut } from "~/lib/session.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
-import { auth, type SessionAnswer } from "~/protocol/index.ts";
+import type { SessionAnswer } from "~/protocol/index.ts";
 import { WORKSPACES } from "../nav.ts";
 import { preload } from "../lazyScreen.ts";
 
@@ -125,33 +126,6 @@ export function whoLine(
   return { name, detail: `${viewer.login} · ${seat}`, grants };
 }
 
-/**
- * The session behind this browser, as the sign-in surface describes it, or
- * null until it has answered — or if it cannot, in which case nothing that
- * depends on it is offered.
- *
- * ASKED UNLESS THE VIEWER HAS ANSWERED NOBODY — before it has answered too,
- * see the file's note — and again when the viewer's login moves, which is a
- * different session, and when the tab comes back: for the people the socket
- * refuses this read is the ONLY way to the sign-outs, so a request lost on the
- * way must not leave them none until a reload.
- */
-function useSessionAnswer(enabled: boolean, login: string): SessionAnswer | null {
-  return useRest(
-    // A DIFFERENT LOGIN IS A DIFFERENT SESSION, so it is a different question
-    // and starts from nothing.
-    enabled ? `/auth/session as ${login}` : null,
-    async (signal) => {
-      const session = await auth.session(signal);
-      // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is
-      // read by here, since no sign-in in it ever said (`lib/reader.ts`).
-      adoptReader(session.person);
-      return session;
-    },
-    { refetchOnFocus: true },
-  ).data;
-}
-
 export function UserBlock({
   viewer,
   seatName,
@@ -162,7 +136,10 @@ export function UserBlock({
 }) {
   const prefs = useViewerPrefs();
   const [everywhere, setEverywhere] = useState(false);
-  const session = useSessionAnswer(!viewer.anonymous, viewer.login);
+  // THE FRAME'S ONE READ, asked again when the tab comes back: for the people
+  // the socket refuses it is the ONLY way to the sign-outs, so a request lost
+  // on the way must not leave them none until a reload.
+  const session = useFrameSession().answer;
   const who = whoLine(viewer, seatName, session);
   const answered = !viewer.loading && !viewer.anonymous;
   const person = answered && !viewer.unbound;

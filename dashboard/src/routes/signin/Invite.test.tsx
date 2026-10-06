@@ -89,6 +89,9 @@ function mount(link = `${ID}.${SECRET}`) {
   location.hash = `#/invite/${link}`;
   const store = new Store();
   const socket = new LiveSocket(store);
+  // THE FRAME'S DIAL (`start`), for the session it reads once the redemption
+  // lands; `reconnect` is nothing a redemption may call.
+  const dial = vi.spyOn(socket, "start");
   const reconnect = vi.spyOn(socket, "reconnect");
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -97,7 +100,7 @@ function mount(link = `${ID}.${SECRET}`) {
       </Router>
     </ClientContext.Provider>,
   );
-  return { reconnect };
+  return { dial, reconnect };
 }
 
 function type(label: RegExp | string, value: string) {
@@ -287,8 +290,18 @@ describe("redeeming it", () => {
           status: "signed_in",
         },
       },
+      "GET /auth/session": {
+        status: 200,
+        body: {
+          person: "p-1",
+          login: "jane.doe",
+          kind: "person",
+          grants: ["state:read"],
+          status: "signed_in",
+        },
+      },
     });
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     await screen.findByLabelText("Login");
     type(/your name/i, "Jane Doe");
     type("Password", "correct horse battery staple");
@@ -296,7 +309,9 @@ describe("redeeming it", () => {
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
     await waitFor(() => expect(location.hash).toBe("#/"));
-    expect(reconnect).toHaveBeenCalled();
+    // THE FRAME DIALS, for the session it read; the redemption dials nothing.
+    await waitFor(() => expect(dial).toHaveBeenCalled());
+    expect(reconnect).not.toHaveBeenCalled();
     const redeem = sent.find((s) => s.method === "POST");
     expect(redeem?.body).toEqual({
       secret: SECRET,
@@ -358,7 +373,7 @@ describe("redeeming it", () => {
       },
       "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
     });
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     await screen.findByLabelText("Login");
     // THE REAL BROWSER'S STATE: the socket's refusal probe records that
     // nobody is signed in on every load of this screen. This suite's socket
@@ -377,6 +392,7 @@ describe("redeeming it", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(location.hash).toBe(enrol);
+    expect(dial).not.toHaveBeenCalled();
     expect(reconnect).not.toHaveBeenCalled();
   });
 });

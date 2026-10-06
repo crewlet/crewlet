@@ -1454,7 +1454,7 @@ read-only. What each gesture ends is the route's:
 
 | Gesture | What it does, and what it ends |
 |---|---|
-| **Invite person** | An address, a human seat nobody holds, the grants (none the inviter does not hold) — without `state:read` the dialog warns that the person will open nothing but their own Account. The [link](#everybody-arrives-by-invitation) is shown once; redeeming it creates the person |
+| **Invite person** | An address, a human seat nobody holds, the grants (none the inviter does not hold) — without `state:read` the dialog warns that the person will open nothing but their own Account (their dashboard says they have no access yet, and opens by itself once somebody gives them `state:read`). The [link](#everybody-arrives-by-invitation) is shown once; redeeming it creates the person |
 | **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address |
 | **New service account** · **Mint token** | A machine with a coloned login and grants — never `secrets:read` or `people:manage`, which no token carries and so no machine is given — then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants, shown once |
 | **Edit login, seat and grants** | One edit carrying only what changed. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
