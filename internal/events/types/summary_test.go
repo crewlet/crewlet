@@ -40,9 +40,9 @@ func TestSummaries(t *testing.T) {
 		payload: OrgStopped{OrgName: "Acme"},
 		want:    "Organization 'Acme' stopped",
 	}, {
-		name:    "an assignment names the seat and what it is for",
-		payload: TaskAssigned{RoleName: "Dev", TaskID: "T-42"},
-		want:    "Dev was assigned task T-42",
+		name:    "a fire names the seat and the schedule it came from",
+		payload: TaskAssigned{RoleName: "Dev", TaskID: "T-42", Schedule: "weekly-report"},
+		want:    "Dev was assigned scheduled work weekly-report",
 	}, {
 		name:    "a turn reports its model and token total",
 		payload: AgentTurnCompleted{RoleName: "CTO", Model: "gpt-4o", TotalTokens: 500},
@@ -412,9 +412,9 @@ func TestSummaryLeadsWithTheResolvedActor(t *testing.T) {
 		want    string
 	}{{
 		name:    "from the payload's role",
-		payload: TaskAssigned{RoleName: "Dev", TaskID: "T-42"},
+		payload: TaskAssigned{RoleName: "Dev", TaskID: "T-42", Schedule: "weekly-report"},
 		source:  "task_engine",
-		want:    "Dev was assigned task T-42",
+		want:    "Dev was assigned scheduled work weekly-report",
 	}, {
 		// The event that has no role of its own: the publisher is what
 		// the chain resolves to, and the summary names it.
@@ -424,8 +424,8 @@ func TestSummaryLeadsWithTheResolvedActor(t *testing.T) {
 		want:    "Organization 'Acme' started",
 	}, {
 		name:    "from the agent id, when nothing else names anyone",
-		payload: TaskAssigned{Agent: "a1", TaskID: "T-42"},
-		want:    "a1 was assigned task T-42",
+		payload: TaskAssigned{Agent: "a1", TaskID: "T-42", Schedule: "weekly-report"},
+		want:    "a1 was assigned scheduled work weekly-report",
 	}, {
 		// The payload's OWN sender beats the publisher, because a
 		// message the bus published on somebody's behalf is still that

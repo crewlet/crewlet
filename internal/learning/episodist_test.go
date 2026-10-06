@@ -478,6 +478,51 @@ func TestAnEpisodeIsEmbeddedAsWhatItWasAskedAndWhatItDid(t *testing.T) {
 	}
 }
 
+// TWO FIRES OF ONE SCHEDULE ARE ONE KIND OF WORK to a similarity search and to
+// a seat reading them back. The fire's label led with the fire's own id —
+// "swe was assigned task unit:Engineering:weekly-report:<instant>:swe" — so
+// every scheduled episode's vector opened on the one part that differs on
+// every fire, and every recall of one handed the seat a tracker-looking key
+// that names no item. Each fire here is built as the scheduler publishes it,
+// and its label and ask are read off it the way the engine reads them.
+func TestTwoFiresOfOneScheduleAreLabelledAndEmbeddedAlike(t *testing.T) {
+	t.Parallel()
+	fire := func(instant string) types.TaskAssigned {
+		return types.TaskAssigned{
+			TaskID: "unit:Engineering:weekly-report:" + instant + ":swe",
+			Agent:  "agent-uuid", RoleName: "swe",
+			Schedule: "weekly-report", Description: "Write the weekly engineering report.",
+		}
+	}
+	var labels, texts []string
+	for _, instant := range []string{"2026-09-21T09:00:00Z", "2026-09-28T09:00:00Z"} {
+		task := fire(instant)
+		store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
+		var sent string
+		w := episodist(t, store, func(o *learning.EpisodistOptions) {
+			o.Embed = func(_ context.Context, text string) (learning.Vector, error) {
+				sent = text
+				return learning.Vector{Values: []float32{1, 0, 0, 0}, Model: "m"}, nil
+			}
+		})
+		turn := epTurn()
+		turn.Event.TaskSummary = types.DescribeTrigger(events.New(task, events.TraceContext{})).Summary
+		turn.Event.Ask = task.Brief()
+		turn.Event.ConversationKey = ""
+		reflectEpisode(t, w, turn)
+		if strings.Contains(turn.Event.TaskSummary, instant) || strings.Contains(sent, instant) {
+			t.Fatalf("the fire's id reached the episode: label %q, embedded %q", turn.Event.TaskSummary, sent)
+		}
+		labels, texts = append(labels, turn.Event.TaskSummary), append(texts, sent)
+	}
+	if labels[0] != labels[1] || texts[0] != texts[1] {
+		t.Fatalf("two fires of one schedule differ:\nlabels %q\ntexts  %q", labels, texts)
+	}
+	if want := "swe was assigned scheduled work weekly-report"; labels[0] != want {
+		t.Fatalf("label = %q, want %q", labels[0], want)
+	}
+}
+
 // A LONG TURN IS EMBEDDED WHOLE. The input used to be cut at 8000 bytes, so a
 // pasted diff or a long answer was a vector of its opening; the seam chunks
 // and pools a text past the model's window instead, and only the seam knows

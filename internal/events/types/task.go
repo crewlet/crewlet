@@ -27,21 +27,27 @@ import (
 // event stream would be a second answer to "what happened to this item", and
 // the two would disagree the first time one of them was not published.
 //
-// This one is not a lifecycle event at all. It is what the scheduler and the
-// delegation path put into an INBOX, which is why it survives them.
+// This one is not a lifecycle event at all. It is what the scheduler puts
+// into an INBOX, which is why it survives them.
 
 func init() {
 	events.Register[TaskAssigned]()
 }
 
-// TaskAssigned hands a task to a seat. This is also the agent's wake: it is
-// what the scheduler and the delegation path publish into an inbox.
+// TaskAssigned hands a schedule's task to a seat. This is also the agent's
+// wake: it is what the scheduler publishes into an inbox, and the scheduler is
+// its ONE producer — a hand-off between seats is a tracker assignment or a
+// colleague's ask, each with a wake of its own. Its docs used to name a
+// "delegation path" as a second producer; nothing in this tree publishes one.
 type TaskAssigned struct {
+	// TaskID is the fire's run id — scope, schedule, instant and runner —
+	// kept for telemetry and the feed's detail. It names one FIRE and no
+	// tracker item, so nothing a seat reads leads with it ([Brief],
+	// [SummaryFor]).
 	TaskID   string `json:"task_id"`
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
-	// Description is the work itself — a schedule's `task:` text, or what
-	// the delegating seat asked for.
+	// Description is the work itself — the schedule's `task:` text.
 	//
 	// TYPED, for the reason [A2ARequest] is: the scheduler used to write
 	// this into the envelope's free-form Payload under "task_description"
@@ -49,12 +55,14 @@ type TaskAssigned struct {
 	// the literal string "(task_assigned)" and the founder-authored task
 	// text never reached a model.
 	Description string `json:"description,omitempty"`
-	// Schedule names the schedule that fired this, empty for a delegation.
-	// It is what tells a seat a recurring duty came round from a one-off
-	// hand-off, which changes how it reads "do this again".
+	// Schedule names the schedule that fired this. It is what tells a seat
+	// a recurring duty came round, which changes how it reads "do this
+	// again", and it is what the fire's label names ([SummaryFor]), so two
+	// fires of one schedule read alike.
 	Schedule string `json:"schedule,omitempty"`
-	// TimeoutSeconds is the schedule's wall-clock cap for this fire, zero
-	// for a delegation.
+	// TimeoutSeconds is the schedule's wall-clock cap for this fire; zero
+	// is no cap, which the one producer never sends (a schedule with none
+	// of its own carries the default).
 	//
 	// ENFORCED BETWEEN ROUNDS by the turn loop (turn.Settings.MaxWallClock):
 	// a turn past the cap starts no further round and ends with a
@@ -68,7 +76,7 @@ type TaskAssigned struct {
 }
 
 // EventType is the "task_assigned" wire type. It is also an inbox WAKE: this
-// is what the scheduler and the delegation path publish to start a turn.
+// is what the scheduler publishes to start a turn.
 func (TaskAssigned) EventType() string { return "task_assigned" }
 
 // Role is the seat the task was handed to.
@@ -97,11 +105,20 @@ func (e TaskAssigned) Brief() string {
 	return strings.TrimSpace(b.String())
 }
 
-// SummaryFor names the task id when there is one; a task with no id is real
-// enough to report, it just cannot be linked to.
+// SummaryFor names the SCHEDULE a fire came from, never the fire's id.
+//
+// The summary is not only a feed line: it is the trigger's label
+// ([Trigger.Summary]), so it becomes the turn's task_summary and the recalled
+// episode's "woken by" line, and it is the first paragraph of the text the
+// episode's vector is made of. It led with the task id, which is [Brief]'s
+// mistake over again: the one producer's id is a readable name for one fire,
+// so every recall of a scheduled turn handed the seat something that reads as
+// a tracker key and names no item, and every fire of one schedule was unalike
+// to a similarity search by the one part that differs on every fire. The id
+// stays on the payload, where telemetry and the feed's detail read it.
 func (e TaskAssigned) SummaryFor(actor string) string {
-	if e.TaskID != "" {
-		return lead(actor, "was assigned task "+e.TaskID)
+	if e.Schedule != "" {
+		return lead(actor, "was assigned scheduled work "+e.Schedule)
 	}
 	return lead(actor, "was assigned a task")
 }
