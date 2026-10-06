@@ -246,16 +246,17 @@ describe("who the block says this is", () => {
   });
 
   // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is read
-  // by here, since no sign-in in it said — and one already recorded is never
-  // overwritten.
+  // by here, since no sign-in in it said — and a tab read by somebody else is
+  // never quietly theirs: it is handed over, reloaded with nothing kept.
   test("the session it finds is adopted as the tab's reader, where none is recorded", async () => {
     render(block(ada));
     await waitFor(() => expect(currentReader()).toBe("p-1"));
+    expect(reloads).not.toHaveBeenCalled();
     cleanup();
     noteReader("p-9");
     render(block(ada));
-    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2));
-    expect(currentReader()).toBe("p-9");
+    await waitFor(() => expect(reloads).toHaveBeenCalledTimes(1));
+    expect(currentReader()).toBe("p-1");
   });
 });
 

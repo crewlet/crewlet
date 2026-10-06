@@ -174,6 +174,38 @@ describe("the engine's close codes", () => {
     expect(currentSessionNeed()).toBe("sign_in");
   });
 
+  // A SIGN-IN AS SOMEBODY ELSE IN ANOTHER TAB ends this tab's session (4401)
+  // and moves the cookie the two tabs share, so `GET /auth/session` answers for
+  // them — and the re-dial reached the company as them in a tab still holding
+  // the last reader's draft and stars. The app is asked first, with the person
+  // the answer names, and dials nothing where it hands the tab over. The
+  // CONTROL is the same close for the tab's own reader, which dials again.
+  // Mutation: dial without asking and the second dial comes back.
+  test("4401 for somebody else's session asks the app and dials nothing for them", async () => {
+    for (const [carriesOn, dials] of [
+      [true, 2],
+      [false, 1],
+    ] as const) {
+      ScriptedWebSocket.dials = [];
+      const asked: string[] = [];
+      const store = new Store();
+      const socket = new LiveSocket(store, {
+        takeSession: (person) => {
+          asked.push(person);
+          return carriesOn;
+        },
+      });
+      running.push(socket);
+      socket.start();
+      dial(0).open();
+      dial(0).closeWith(4401, "credential no longer accepted");
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(asked).toEqual(["p-1"]);
+      expect(ScriptedWebSocket.dials).toHaveLength(dials);
+    }
+  });
+
   // A SIGN-OUT HOLDS THE SOCKET, because the engine closes this session's
   // socket 4401 as it applies the sign-out, and that close re-dialled before
   // the sign-out's reload — a handshake refused 401 on the way out. The

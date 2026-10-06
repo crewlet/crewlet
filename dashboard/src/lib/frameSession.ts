@@ -37,7 +37,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Grant } from "~/app/nav.ts";
-import { adoptReader } from "./reader.ts";
+import { takeSession } from "./session.ts";
 import { useRest } from "./useRest.ts";
 import { auth, type RestError, type SessionAnswer } from "~/protocol/index.ts";
 
@@ -84,8 +84,10 @@ export function SessionReading({ children }: { children: ReactNode }) {
     async (signal) => {
       const session = await auth.session(signal);
       // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is
-      // read by here, since no sign-in in it ever said (`lib/reader.ts`).
-      adoptReader(session.person);
+      // read by here, since no sign-in in it ever said (`lib/reader.ts`) —
+      // and a tab whose cookie somebody else's sign-in moved is handed to
+      // them, with nothing of its last reader kept (`lib/session.ts`).
+      takeSession(session.person);
       return session;
     },
     { refetchOnFocus: true },

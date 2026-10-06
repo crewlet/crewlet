@@ -1943,6 +1943,15 @@ signing in again after their session lapsed keeps the tab, and with it the
 builder's kept draft. That draft is stamped with the reader it was kept for, and
 one kept for anybody else is discarded unoffered.
 
+**And so does a session somebody else left in the browser.** Signing in as
+somebody else in one tab ends the session every other tab of the browser was
+opened with (each socket closes `4401`) and moves the cookie they share, so the
+next `GET /auth/session` — the socket's before it dials again, the frame's on
+its next read — answers for them. A tab read by anybody else is handed over
+exactly as a sign-in by them would hand it — emptied, its new reader recorded,
+reloaded where it was — and the socket dials nothing for them first
+(`lib/session.ts`'s `takeSession`, which `main.tsx` hands the socket).
+
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
 (an `org` address carrying `?unit=Backend`, with a router-level reveal hook); this tree gives a unit

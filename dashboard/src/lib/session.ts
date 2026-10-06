@@ -54,7 +54,7 @@
 import { useCallback } from "react";
 import { buildHash, parseHash, useNavigator } from "~/app/router.tsx";
 import { framelessOf } from "~/app/nav.ts";
-import { currentReader, noteReader } from "~/lib/reader.ts";
+import { adoptReader, currentReader, noteReader } from "~/lib/reader.ts";
 import { forgetOtherReaders as forgetOtherRecents } from "~/lib/recents.ts";
 import { forgetOtherReaders as forgetOtherStars } from "~/lib/starred.ts";
 import {
@@ -226,6 +226,32 @@ function handOver(person: string, hash: string): void {
   forgetTab();
   noteReader(person);
   page.reloadInto(hash);
+}
+
+/**
+ * The session this browser holds, TAKEN BY THIS TAB — the check every read of
+ * it that carries the tab on makes: the frame's (`lib/frameSession.ts`) and the
+ * live socket's after a `4401` (`protocol/socket.ts`, handed this by
+ * `main.tsx`).
+ *
+ * A tab nobody has recorded ADOPTS it (`adoptReader`), and the person it was
+ * read by carries on. Anybody else is HANDED THE TAB (`handOver`), reloaded
+ * where it was with nothing of its last reader kept: their sign-in in another
+ * tab moved the cookie this one shares, and ended the session this tab was
+ * opened with — so the socket's re-dial reached the company as them, and the
+ * frame served them the last reader's tab: the builder's kept draft as their
+ * own, and their stars written under the last reader's key. It answers false
+ * then, because a reload is under way, and nothing should dial or draw for
+ * them in a tab that still holds somebody else's.
+ */
+export function takeSession(person: string): boolean {
+  const reader = currentReader();
+  if (person === "" || reader === null || reader === person) {
+    adoptReader(person);
+    return true;
+  }
+  handOver(person, safeNext(location.hash));
+  return false;
 }
 
 /**

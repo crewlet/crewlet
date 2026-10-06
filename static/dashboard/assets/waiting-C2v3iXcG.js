@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-CbXtAM7H.js";import{i as t}from"./react-D3MgmOsQ.js";import{At as n,Mt as r}from"./primitives-jJBlbqyN.js";var i=e(t(),1);function a(){let e=(0,i.useSyncExternalStore)(n,r,()=>!1);return{asked:e,reason:e?`Waiting for you to confirm who you are.`:`Waiting for the engine to answer.`}}export{a as t};

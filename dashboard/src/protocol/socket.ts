@@ -32,7 +32,9 @@
  *    a newer cookie, and after a step-up it does, once the answer that set it
  *    has landed. So the tab waits for its own requests to settle and asks
  *    `GET /auth/session` once: a `401` is nobody and sends the reader to sign
- *    in with nothing dialled, and any other answer dials again.
+ *    in with nothing dialled, a session somebody else's sign-in left in the
+ *    browser hands the tab to them (`LiveSocketOptions.takeSession`), and any
+ *    other answer dials again.
  *  - 4403 (`CLOSE_FORBIDDEN`): the engine knows who this is and will not serve
  *    them this surface. Reconnecting reaches the same person with the same
  *    access, so the socket STOPS and the page says why.
@@ -229,8 +231,23 @@ interface Inflight {
   timer: ReturnType<typeof setTimeout> | 0;
 }
 
+/** What the app hands the socket that the protocol alone cannot know. */
+export interface LiveSocketOptions {
+  /**
+   * Asked with the person a `4401`'s `GET /auth/session` answered for, before
+   * the re-dial: whether this tab carries on as them. The app answers through
+   * `lib/session.ts`'s `takeSession`, which hands the tab over — a reload with
+   * nothing kept — where the session is somebody other than the person the tab
+   * was read by, and answers false so nothing is dialled for them in it. A
+   * socket handed nothing carries on with every session: the protocol knows
+   * no reader, and neither does the e2e replay that drives it.
+   */
+  takeSession?: (person: string) => boolean;
+}
+
 export class LiveSocket {
   private store: Store;
+  private takeSession: (person: string) => boolean;
   private sock: WebSocket | null = null;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | 0 = 0;
@@ -275,8 +292,9 @@ export class LiveSocket {
   private watched = "";
   private watchRetry: ReturnType<typeof setTimeout> | 0 = 0;
 
-  constructor(store: Store) {
+  constructor(store: Store, options: LiveSocketOptions = {}) {
     this.store = store;
+    this.takeSession = options.takeSession ?? (() => true);
   }
 
   /**
@@ -578,10 +596,16 @@ export class LiveSocket {
    * `401`s where one says it. A `401` here is that one (`rest.ts` raises the
    * sign-in need); any other failure says nothing about the session, and
    * the dial's own handshake decides.
+   *
+   * AND ONLY FOR THE PERSON THIS TAB WAS READ BY (`takeSession`): a sign-in
+   * as somebody else in another tab ends this tab's session and moves the
+   * cookie, and a re-dial on any answer reached the company as them in a tab
+   * still holding the last reader's.
    */
   private async redialIfSignedIn(): Promise<void> {
     try {
-      await auth.session();
+      const session = await auth.session();
+      if (!this.takeSession(session.person)) return;
     } catch (err) {
       if (err instanceof RestError && err.status === 401) {
         this.authRejected();

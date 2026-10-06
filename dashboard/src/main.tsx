@@ -37,6 +37,7 @@ import { App } from "./app/App.tsx";
 import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
 import { bootTheme } from "./lib/prefs.ts";
+import { takeSession } from "./lib/session.ts";
 import { forgetRetiredKeys } from "./lib/storage.ts";
 import { LiveSocket, SessionKeepAlive, Store } from "./protocol/index.ts";
 
@@ -58,7 +59,9 @@ bootTheme();
 forgetRetiredKeys(() => localStorage);
 
 const store = new Store();
-const socket = new LiveSocket(store);
+// A RE-DIAL AFTER A SESSION ENDED IS FOR THIS TAB'S OWN READER ONLY: anybody
+// else is handed the tab, with nothing of its last reader kept.
+const socket = new LiveSocket(store, { takeSession });
 // The session idles out after twelve hours with no request, and the socket is
 // not one: a tab that only listens keeps it alive here (`protocol/keepalive.ts`).
 new SessionKeepAlive(socket).start();

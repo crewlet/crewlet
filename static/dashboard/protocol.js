@@ -1131,7 +1131,9 @@ function retryAfterMs(seconds) {
 *    a newer cookie, and after a step-up it does, once the answer that set it
 *    has landed. So the tab waits for its own requests to settle and asks
 *    `GET /auth/session` once: a `401` is nobody and sends the reader to sign
-*    in with nothing dialled, and any other answer dials again.
+*    in with nothing dialled, a session somebody else's sign-in left in the
+*    browser hands the tab to them (`LiveSocketOptions.takeSession`), and any
+*    other answer dials again.
 *  - 4403 (`CLOSE_FORBIDDEN`): the engine knows who this is and will not serve
 *    them this surface. Reconnecting reaches the same person with the same
 *    access, so the socket STOPS and the page says why.
@@ -1283,6 +1285,7 @@ function refusalOf$1(msg) {
 }
 var LiveSocket = class {
 	store;
+	takeSession;
 	sock = null;
 	attempt = 0;
 	reconnectTimer = 0;
@@ -1326,8 +1329,9 @@ var LiveSocket = class {
 	*/
 	watched = "";
 	watchRetry = 0;
-	constructor(store) {
+	constructor(store, options = {}) {
 		this.store = store;
+		this.takeSession = options.takeSession ?? (() => true);
 	}
 	/**
 	* The tab came back to a socket stopped because nobody was signed in: dial
@@ -1574,10 +1578,16 @@ var LiveSocket = class {
 	* `401`s where one says it. A `401` here is that one (`rest.ts` raises the
 	* sign-in need); any other failure says nothing about the session, and
 	* the dial's own handshake decides.
+	*
+	* AND ONLY FOR THE PERSON THIS TAB WAS READ BY (`takeSession`): a sign-in
+	* as somebody else in another tab ends this tab's session and moves the
+	* cookie, and a re-dial on any answer reached the company as them in a tab
+	* still holding the last reader's.
 	*/
 	async redialIfSignedIn() {
 		try {
-			await auth.session();
+			const session = await auth.session();
+			if (!this.takeSession(session.person)) return;
 		} catch (err) {
 			if (err instanceof RestError && err.status === 401) {
 				this.authRejected();
