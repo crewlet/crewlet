@@ -105,10 +105,17 @@ func (rig *tailRig) serve(t *testing.T, owner string) {
 }
 
 // reader is the asking node's reader.
+//
+// ITS BUDGET IS ROOM TO ANSWER, not the case's clock: a scatter returns the
+// moment its one reply lands, so a generous budget costs a passing case
+// nothing, while the 200 ms it was flaked every answering case on a loaded
+// race-enabled run — the owner's reply was simply later than that, and the
+// case read it as a silent owner. The one case that waits the budget OUT sets
+// its own ([TestASilentOwnerIsNamedNotEmpty]).
 func (rig *tailRig) reader(t *testing.T, features TailFeatures) *TailReader {
 	return &TailReader{
 		Owner: askerOwner, Pending: rig.pending, Queue: rig.client(t),
-		Features: features, Budget: 200 * time.Millisecond,
+		Features: features, Budget: 30 * time.Second,
 		// The ASKER has no sandbox backend of its own: an answer that
 		// came from here instead of from the owner would fail loudly.
 		Manager: func() *Manager { return nil },
@@ -191,7 +198,10 @@ func TestASilentOwnerIsNamedNotEmpty(t *testing.T) {
 	rig := newTailRig(t)
 	rig.runner.SetOutput(Output{Text: "never read", Source: SourceTranscript})
 
-	got, err := rig.reader(t, everyBuildServes{}).Tail(t.Context(), "t1", rig.launch)
+	// Nobody answers, so this case waits the whole budget out: a short one.
+	reader := rig.reader(t, everyBuildServes{})
+	reader.Budget = 200 * time.Millisecond
+	got, err := reader.Tail(t.Context(), "t1", rig.launch)
 	if err != nil {
 		t.Fatalf("Tail: %v", err)
 	}
