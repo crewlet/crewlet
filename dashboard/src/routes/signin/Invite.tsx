@@ -28,12 +28,22 @@
  *
  * # A refusal the person can fix keeps their form
  *
- * A login somebody already holds is `409`, a password under the floor or a
- * login outside the grammar `400` naming the rule; both are shown in the
- * engine's words above a form that keeps everything typed, because a person
- * told to choose another login should not have to type their password again.
- * The redemption can be retried until it lands — the engine derives the
- * person from the invitation, so a second attempt names the same person.
+ * A login outside the grammar is said under the field before anything is
+ * posted (`lib/login.ts`, the engine's grammar). A login somebody already
+ * holds is `409`, shown in the engine's words above a form that keeps
+ * everything typed, because a person told to choose another login should not
+ * have to type their password again.
+ * The redemption can be retried until it lands: it is one record, so an
+ * attempt the engine refused wrote nothing and the next has nothing in its
+ * way — what keeps the link single-use is the record that spends it.
+ *
+ * # A browser already signed in is told so
+ *
+ * The view names the login this browser's session is signed in as, and
+ * redeeming ends that session before the new one opens — so the form says
+ * both before Join is pressed. It switched a browser from one person to
+ * another with no word, and left the first person's session live on the
+ * engine for its whole deadline.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -41,25 +51,12 @@ import { Button, Callout, EmptyState, FormField, Input, Skeleton, Text } from "@
 import { CompassGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
+import { loginProblem } from "~/lib/login.ts";
 import { LANDING, useSignedIn } from "~/lib/session.ts";
 import { auth, RestError, type InvitationView } from "~/protocol/index.ts";
+import { parseLink } from "./link.ts";
+import { NewPasswordFields, newPasswordReady } from "./NewPassword.tsx";
 import { SignInPage } from "./SignInPage.tsx";
-
-/**
- * The two halves of a link's last segment, or null for one that is not a
- * whole link. The id is a uuid and the secret unpadded URL-safe base64, so
- * neither half can hold the dot that joins them.
- */
-export function parseInviteLink(segment: string): { id: string; secret: string } | null {
-  const at = segment.indexOf(".");
-  if (at <= 0 || at === segment.length - 1) return null;
-  return { id: segment.slice(0, at), secret: segment.slice(at + 1) };
-}
-
-/** How many characters a password is, as the engine counts them: runes. */
-function characters(text: string): number {
-  return [...text].length;
-}
 
 type Read =
   | { state: "loading" }
@@ -68,7 +65,7 @@ type Read =
   | { state: "failed"; sentence: string };
 
 export function Invite({ link }: { link: string }) {
-  const parsed = parseInviteLink(link);
+  const parsed = parseLink(link);
   if (!parsed) {
     return (
       <SignInPage title="This invitation link is incomplete">
@@ -182,17 +179,18 @@ function Redeem({
   const [login, setLogin] = useState(view.login ?? "");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
   const floor = view.min_password_length;
-  const short = characters(password) < floor;
   const loginMissing = login.trim() === "";
+  const loginWrong = loginProblem("person", login.trim());
 
   async function submit() {
     setTried(true);
-    if (busy || short || loginMissing) return;
+    if (busy || !newPasswordReady(password, confirm, floor) || loginMissing || loginWrong) return;
     setBusy(true);
     setRefusal(null);
     try {
@@ -231,6 +229,12 @@ function Redeem({
         </>
       }
     >
+      {view.signed_in_as && (
+        <Callout variant="warning">
+          This browser is signed in as <strong>{view.signed_in_as}</strong>. Joining signs that
+          session out and signs you in as the person this invitation is for.
+        </Callout>
+      )}
       {seat &&
         (seat.handle ? (
           <Callout variant="neutral">
@@ -271,7 +275,7 @@ function Redeem({
         <FormField
           label="Login"
           helper="What your changes are recorded under while you hold no seat, and one way to sign in. Lowercase words joined by dots, such as jane.doe."
-          error={tried && loginMissing ? "Choose a login." : undefined}
+          error={tried ? (loginMissing ? "Choose a login." : (loginWrong ?? undefined)) : undefined}
         >
           {(field) => (
             <Input
@@ -298,28 +302,15 @@ function Redeem({
             />
           )}
         </FormField>
-        <FormField
+        <NewPasswordFields
           label="Password"
-          helper={`At least ${floor} characters. There are no other rules; a long phrase is the strongest password there is.`}
-          error={
-            tried && short
-              ? `This is ${characters(password)} characters, and the minimum is ${floor}.`
-              : undefined
-          }
-        >
-          {(field) => (
-            <Input
-              id={field.id}
-              aria-describedby={field.describedBy}
-              aria-invalid={field.invalid || undefined}
-              type="password"
-              autoComplete="new-password"
-              width="full"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          )}
-        </FormField>
+          floor={floor}
+          password={password}
+          confirm={confirm}
+          onPassword={setPassword}
+          onConfirm={setConfirm}
+          tried={tried}
+        />
         {refusal && (
           <Callout variant="danger" role="alert">
             {refusal}

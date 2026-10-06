@@ -110,6 +110,7 @@ describe("navigation identity", () => {
       knowledge: "k",
       spend: "t",
       settings: "s",
+      account: "u",
     });
   });
 });
@@ -152,11 +153,15 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // NINE WORKSPACES, and the sidebar draws them and nothing else from the
-  // table: a section that became a sidebar row is a second column of
-  // navigation arriving one row at a time.
-  test("the sidebar's rows are the nine workspaces, in the story's order", () => {
-    expect(WORKSPACES.map((w) => w.key)).toEqual([
+  // NINE WORKSPACES ARE SIDEBAR ROWS, and the sidebar draws them and nothing
+  // else from the table: a section that became a sidebar row is a second
+  // column of navigation arriving one row at a time. The TENTH is the reader's
+  // own Account, which has no row — the user block at the sidebar's foot is
+  // the reader, and its menu links it — and is a workspace all the same, so
+  // the palette and its chord reach it.
+  test("the sidebar's rows are nine workspaces, in the story's order, and the menu holds the tenth", () => {
+    const rows = WORKSPACES.filter((w) => w.place !== "menu").map((w) => w.key);
+    expect(rows).toEqual([
       "home",
       "inbox",
       "me",
@@ -167,6 +172,7 @@ describe("the navigation grammar", () => {
       "spend",
       "settings",
     ]);
+    expect(WORKSPACES.filter((w) => w.place === "menu").map((w) => w.key)).toEqual(["account"]);
   });
 
   // A SECTION IS A PATH INSIDE ITS WORKSPACE, never a query and never a row:
@@ -230,9 +236,10 @@ describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
 
   // THE SIGN-IN SCREENS take exactly the tail their address has. An
-  // invitation is the exception: its screen answers a link that is not whole
-  // (an empty one) rather than Not Found, since its holder pasted it.
-  test("a sign-in screen is its exact address, and an invitation its one link", () => {
+  // invitation and a reset link are the exceptions: each screen answers a link
+  // that is not whole (an empty one) rather than Not Found, since its holder
+  // pasted it.
+  test("a sign-in screen is its exact address, and an invitation or a reset its one link", () => {
     expect(resolve(["login"])).toMatchObject({ screen: "login", workspace: "" });
     expect(resolve(["login", "x"]).resolved).toBe(false);
     expect(resolve(["enrol"])).toMatchObject({ screen: "enrol", workspace: "" });
@@ -242,6 +249,19 @@ describe("the resolver", () => {
       link: `${uuid}.secret`,
     });
     expect(resolve(["invite", "a", "b"])).toMatchObject({ screen: "invite", link: "" });
+    expect(resolve(["reset", `${uuid}.secret`])).toMatchObject({
+      screen: "reset",
+      link: `${uuid}.secret`,
+      workspace: "",
+    });
+    expect(resolve(["reset", "a", "b"])).toMatchObject({ screen: "reset", link: "" });
+  });
+
+  // THE ACCOUNT IS IN THE FRAME, unlike the sign-in screens: it is a signed-in
+  // reader's page, under the frame's own reads, and takes no tail.
+  test("the account is its exact address, inside the frame", () => {
+    expect(resolve(["account"])).toMatchObject({ screen: "account", workspace: "account" });
+    expect(resolve(["account", "tokens"]).resolved).toBe(false);
   });
 
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
@@ -646,8 +666,10 @@ describe("the information architecture", () => {
       // THE SCREENS OUTSIDE THE FRAME, which no workspace declares: a page a
       // person is sent to before anything else opens is one somebody
       // starting from the document has to be able to find.
-      // An invitation is written down as the link it carries.
-      ...FRAMELESS.map((head) => (head === "invite" ? [head, "{id}.{secret}"] : [head])),
+      // An invitation and a reset link are written down as the link each carries.
+      ...FRAMELESS.map((head) =>
+        head === "invite" || head === "reset" ? [head, "{id}.{secret}"] : [head],
+      ),
     ];
     for (const path of paths) {
       expect(

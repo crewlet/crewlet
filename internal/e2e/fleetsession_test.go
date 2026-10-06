@@ -120,10 +120,8 @@ const deploymentURL = "https://crewlet.example.com"
 // configuration `crewlet validate` would accept with a port set.
 func withSignIn(boot *config.Bootstrap) {
 	boot.API.ExternalURL = deploymentURL
-	boot.API.Auth.Backend = config.AuthBackendLocal
-	boot.API.Auth.Local = &config.APILocal{
-		TOTP: iam.SecondFactorOptional, AcceptInsecure: true,
-	}
+	boot.API.Auth.TOTP = iam.SecondFactorOptional
+	boot.API.Auth.AcceptInsecure = true
 }
 
 // Who signs in, and what they are given.
@@ -169,7 +167,7 @@ func signIn(t *testing.T, n *node, b *browser) {
 	// once it has applied the invitation, and a redemption before that is
 	// refused as a link nobody issued.
 	settle(t, "member "+n.id+" to apply the invitation", func() (bool, string) {
-		row, err := n.engine.IAM().InvitationByID(t.Context(), id)
+		row, err := n.engine.InvitationByID(t.Context(), id)
 		return err == nil && row.ID == id, ""
 	})
 

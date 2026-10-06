@@ -41,29 +41,29 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
+import type { GRANTS } from "~/contract/identity.ts";
 
 /**
  * A capability a principal carries — the engine's `iam.Grant` vocabulary,
  * which the `viewer` answer reports in `grants`. A closed union so a section
  * naming a grant the engine does not have is a compile error rather than a
- * lock nobody can open.
+ * lock nobody can open — drawn from `contract/identity.ts`, the one list a gate
+ * holds against the engine's.
  */
-export type Grant =
-  | "state:read"
-  | "audit:read"
-  | "config:read"
-  | "secrets:read"
-  | "work:write"
-  | "knowledge:write"
-  | "config:write"
-  | "secrets:write"
-  | "fleet:operate"
-  | "people:manage"
-  | "sandbox:run";
+export type Grant = (typeof GRANTS)[number];
 
-/** The workspaces, which are the sidebar's navigation rows. */
+/** The workspaces: the sidebar's navigation rows, and the reader's own Account. */
 export type Workspace =
-  "home" | "inbox" | "me" | "work" | "agents" | "live" | "knowledge" | "spend" | "settings";
+  | "home"
+  | "inbox"
+  | "me"
+  | "work"
+  | "agents"
+  | "live"
+  | "knowledge"
+  | "spend"
+  | "settings"
+  | "account";
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
@@ -73,8 +73,12 @@ export type Workspace =
  */
 export type SectionRenderer = "tabs" | "column" | "tree" | "none";
 
-/** Where a workspace's row sits in the sidebar. */
-export type SidebarPlace = "you" | "workspace" | "foot";
+/**
+ * Where a workspace's row sits in the sidebar — or `menu`, for the one with no
+ * row: the reader's own Account, which the user block at the sidebar's foot
+ * links from its menu, since that block already IS the reader.
+ */
+export type SidebarPlace = "you" | "workspace" | "foot" | "menu";
 
 /**
  * One section of a workspace: a place with its own path.
@@ -588,6 +592,22 @@ export const WORKSPACES: WorkspaceRow[] = [
       },
     ],
   },
+  {
+    // THE READER'S OWN, AND NO ROW: the user block at the sidebar's foot is
+    // the reader, and its menu is where this is opened — a row beside it would
+    // be the same person twice. A workspace all the same, so the palette and
+    // `g u` reach it. No grant: every signed-in reader has an account, and
+    // the page says what a credential that is not a person's can do there.
+    key: "account",
+    label: "Account",
+    icon: "user",
+    path: ["account"],
+    hint: "Your profile, password, second factor, sessions and personal access tokens",
+    chord: "u",
+    place: "menu",
+    renderer: "none",
+    sections: [],
+  },
 ];
 
 /** The row for a workspace, or undefined for a route nothing owns. */
@@ -611,8 +631,9 @@ export function workspaceOf(path: string[]): Workspace | "" {
 }
 
 /**
- * The routes drawn OUTSIDE the frame: signing in, redeeming an invitation, and
- * enrolling the second factor a deployment requires before anything else.
+ * The routes drawn OUTSIDE the frame: signing in, redeeming an invitation,
+ * setting a password from a reset link, and enrolling the second factor a
+ * deployment requires before anything else.
  *
  * NOT WORKSPACES, and not rows anywhere. Each is somewhere a browser is before
  * it holds a session the frame can use — nobody, or a session that may do
@@ -626,7 +647,7 @@ export function workspaceOf(path: string[]): Workspace | "" {
  * Every head is lowercase and none is a key the engine mints, which
  * `router.test.ts` holds as it holds the reserved segments.
  */
-export const FRAMELESS = ["login", "invite", "enrol"] as const;
+export const FRAMELESS = ["login", "invite", "reset", "enrol"] as const;
 
 export type FramelessRoute = (typeof FRAMELESS)[number];
 

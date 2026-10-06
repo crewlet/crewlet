@@ -33,11 +33,11 @@ function engine(routes: Record<string, Answer>): { method: string; path: string 
   return sent;
 }
 
-function dialog() {
+function dialog(held = true) {
   render(
     <ToastProvider>
       <LayerHost>
-        <RecoveryCodesDialog onClose={() => {}} />
+        <RecoveryCodesDialog held={held} onClose={() => {}} />
       </LayerHost>
     </ToastProvider>,
   );
@@ -67,6 +67,25 @@ describe("recovery codes", () => {
     expect(screen.getByText("e5f6-g7h8")).toBeDefined();
     expect(sent.filter((s) => s.path === "/auth/totp/recovery")).toHaveLength(1);
   });
+
+  // A FIRST SET RETIRES NOTHING, and says nothing about one. The CONTROL is a
+  // person who held a set. Mutation: say "earlier codes" whatever was held and
+  // the first set speaks of codes its person never had.
+  test.each([
+    { held: false, earlier: false },
+    { held: true, earlier: true },
+  ])(
+    "a set issued with held=$held speaks of earlier codes: $earlier",
+    async ({ held, earlier }) => {
+      engine({ "POST /auth/totp/recovery": { status: 200, body: { codes: ["a1b2-c3d4"] } } });
+      dialog(held);
+      await screen.findByRole("dialog", { name: "Recovery codes" });
+      expect(screen.queryByText(/retires the one you hold/) !== null).toBe(earlier);
+      fireEvent.click(screen.getByRole("button", { name: "Issue new codes" }));
+      await screen.findByText("a1b2-c3d4");
+      expect(screen.queryByText(/earlier codes no longer work/) !== null).toBe(earlier);
+    },
+  );
 
   test("a set nobody can confirm was stored is not called harmless", async () => {
     engine({

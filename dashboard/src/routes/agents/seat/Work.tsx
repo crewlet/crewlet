@@ -31,7 +31,7 @@ import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { OrgIndex, Seat } from "~/lib/seats.ts";
-import { mayReadRecord } from "./profile.ts";
+import { isOwnSeat, mayReadRecord } from "./profile.ts";
 import type { WorkItemsAnswer } from "~/protocol/index.ts";
 import { itemPath } from "~/lib/work.ts";
 
@@ -55,6 +55,8 @@ export function Work({
   // the admin path of the owner-or-lead rule (never `people:manage`, which
   // opens directory rows and nobody's work).
   const mayRead = mayReadRecord(viewer, index, handle);
+  // ON THE READER'S OWN SEAT THE TAB SPEAKS TO THEM, as the Overview does.
+  const self = isOwnSeat(viewer, handle);
   const mine = useQuery(
     "work_my_work",
     { handle },
@@ -74,7 +76,7 @@ export function Work({
         empty={
           work.data && rows.length === 0
             ? {
-                title: "Nothing open is assigned to them",
+                title: `Nothing open is assigned to ${self ? "you" : "them"}`,
                 hint: "Work reaches a seat by assignment, and closed work is not counted here.",
               }
             : undefined
@@ -112,18 +114,12 @@ export function Work({
           {(mine.data?.asked_of_me.length ?? 0) > 0 && (
             <Card padding="none">
               <Card.Header count={mine.data?.totals?.asked_of_me.total}>
-                <Card.Title as="h3">Waiting on their answer</Card.Title>
+                <Card.Title as="h3">Waiting on {self ? "your" : "their"} answer</Card.Title>
               </Card.Header>
-              <HoldWrites
-                reason={
-                  viewer.handle === handle
-                    ? null
-                    : `Asked of ${seat.name} — only they can answer it.`
-                }
-              >
+              <HoldWrites reason={self ? null : `Asked of ${seat.name} — only they can answer it.`}>
                 <AskList
                   rows={mine.data?.asked_of_me ?? []}
-                  decider={{ handle, name: viewer.handle === handle ? undefined : seat.name }}
+                  decider={{ handle, name: self ? undefined : seat.name }}
                   now={now}
                 />
               </HoldWrites>
@@ -133,8 +129,8 @@ export function Work({
               block is a page of at most twenty rows, and its own length
               would say twenty of a queue of forty. */}
           <TaskBlock
-            title="What they mean to do first"
-            hint="Their own order, as they set it."
+            title={self ? "What you mean to do first" : "What they mean to do first"}
+            hint={self ? "Your own order, as you set it." : "Their own order, as they set it."}
             total={mine.data?.totals?.priorities}
             rows={mine.data?.priorities ?? []}
             now={now}
@@ -143,7 +139,11 @@ export function Work({
           />
           <TaskBlock
             title="Collaborating"
-            hint="Tasks they are named on without owning."
+            hint={
+              self
+                ? "Tasks you are named on without owning."
+                : "Tasks they are named on without owning."
+            }
             total={mine.data?.totals?.collaborating}
             rows={mine.data?.collaborating ?? []}
             now={now}

@@ -3,6 +3,7 @@ package authapi_test
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,16 +15,15 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// requiring is a Tier A whose password backend states `totp`.
+// requiring is a Tier A stating `totp`.
 func requiring(o *authapi.Options, factor iam.SecondFactor) {
-	o.Bootstrap.API.Auth.Local = &config.APILocal{TOTP: factor}
+	o.Bootstrap.API.Auth.TOTP = factor
 }
 
 // passwordOnly strips a rig's person down to the password: freshly invited,
@@ -110,8 +110,17 @@ func send(t *testing.T, h http.Handler, method, path, body string,
 	cookie string) (*httptest.ResponseRecorder, string) {
 
 	t.Helper()
+	return sendFrom(t, h, "203.0.113.9", method, path, body, cookie)
+}
+
+// sendFrom is [send] from source, for a case about which address an attempt
+// came from.
+func sendFrom(t *testing.T, h http.Handler, source, method, path, body string,
+	cookie string) (*httptest.ResponseRecorder, string) {
+
+	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.RemoteAddr = "203.0.113.9:4711"
+	req.RemoteAddr = net.JoinHostPort(source, "4711")
 	if cookie != "" {
 		req.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: cookie})
 	}
@@ -134,7 +143,7 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 
 // A REQUIRED SECOND FACTOR IS ENROLLED BEFORE ANYTHING ELSE.
 //
-// `api.auth.local.totp: required` promised that nobody acts on a password
+// `api.auth.totp: required` promised that nobody acts on a password
 // alone, and nothing read it: a person holding only a password signed in and
 // reached every route. Now their sign-in succeeds into a session that says so
 // (`status: second_factor_enrolment_required`), which the guard refuses /iam
@@ -148,11 +157,17 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 // not who holds it, so dating the replacement at the enrolment handed whoever
 // held the restricted cookie a fresh step-up window.
 //
+// And an UNSET `api.auth.totp` is required HERE, where a sign-in enforces it —
+// not only in what `/auth/config` reports — since that default is the one a
+// deployment that says nothing runs on.
+//
 // The CONTROL is the same person under `totp: optional`, whose sign-in is a
 // whole session from the start. Mutation: drop the mark at the sign-in, or the
 // guard's check, and the restricted cookie reaches /iam; replace nothing at
 // the enrolment and the old cookie still works; date the replacement at the
-// enrolment and its proof is five minutes younger than the password's.
+// enrolment and its proof is five minutes younger than the password's; read
+// only an explicit `required` as required and the unset case is a whole
+// session on a password alone.
 func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -161,6 +176,7 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 		restricted bool
 	}{
 		{"required", iam.SecondFactorRequired, true},
+		{"unset is required", "", true},
 		{"optional (the control)", iam.SecondFactorOptional, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -372,6 +388,7 @@ func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {
 		restricted bool
 	}{
 		{"required", iam.SecondFactorRequired, true},
+		{"unset is required", "", true},
 		{"optional (the control)", iam.SecondFactorOptional, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -539,4 +556,51 @@ func (c *ticking) advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.at = c.at.Add(d)
+}
+
+// RECOVERY CODES ARE ISSUED ONLY BESIDE AN AUTHENTICATOR.
+//
+// A recovery credential is a second factor on its own, so a set issued to
+// somebody holding a password alone made every later sign-in ask for a code
+// only those ten single-use codes could answer. The CONTROL is the same person
+// holding an authenticator app, whose new set is issued. Mutation: drop the
+// check and the password-only person is handed codes and holds a factor.
+func TestRecoveryCodesAreIssuedOnlyBesideAnAuthenticator(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		strip    bool
+		status   int
+		recovery bool
+	}{
+		{"holding an authenticator (the control)", false, http.StatusOK, true},
+		{"holding a password alone", true, http.StatusConflict, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newSignInRig(t)
+			if tc.strip {
+				passwordOnly(r.estate)
+			}
+			rec := r.asPerson(http.MethodPost, "/auth/totp/recovery", "")
+			if rec.Code != tc.status {
+				t.Fatalf("answered %d (%s), want %d", rec.Code, rec.Body, tc.status)
+			}
+			var body map[string]any
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if _, codes := body["codes"]; codes != tc.recovery {
+				t.Errorf("the answer carried codes: %v, want %v (%s)", codes,
+					tc.recovery, rec.Body)
+			}
+			r.estate.mu.Lock()
+			defer r.estate.mu.Unlock()
+			if held := slices.ContainsFunc(r.estate.person.Credentials,
+				func(c iamdomain.Credential) bool {
+					return c.Method == iamdomain.MethodRecovery
+				}); held != tc.recovery {
+				t.Errorf("the person holds recovery codes: %v, want %v", held,
+					tc.recovery)
+			}
+		})
+	}
 }

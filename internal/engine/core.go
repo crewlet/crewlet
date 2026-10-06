@@ -394,8 +394,9 @@ func (e *Engine) IAM() *iamdomain.Reader {
 	return c.iamReader
 }
 
-// AnyPerson reports whether this company has anybody enrolled — `/health`'s
-// `identity` and the boot's `iam_unclaimed` line — with "nobody" PROVED
+// AnyPerson reports whether this company has a person enrolled — `/health`'s
+// `identity` and the boot's `iam_unclaimed` line; a service account alone
+// leaves it waiting for its first person — with "nobody" PROVED
 // against the identity log's end, which is read first
 // ([iamdomain.Reader.AnyPerson]).
 //
@@ -438,6 +439,41 @@ func (e *Engine) SessionStanding(ctx context.Context, lineage string,
 		return "", false, fmt.Errorf("%w: %w", statelog.ErrUnavailable, err)
 	}
 	return c.iamReader.SessionStanding(ctx, lineage, now, end)
+}
+
+// ResetByID is one password reset link as this node's rows hold it, with
+// whether they vouch for it at the identity log's end, which is read first
+// ([iamdomain.Reader.ResetByID]).
+//
+// PROVED for [Engine.SessionStanding]'s reason: a link issued through a peer is
+// a row this node holds only once its applier catches up, and read bare its
+// absence answered the link's holder that it was dead.
+func (e *Engine) ResetByID(ctx context.Context, id string) (iamdomain.ResetRow, error) {
+	c := e.core.Load()
+	if c == nil {
+		return iamdomain.ResetRow{}, errNoCoreRuntime
+	}
+	end, err := e.IdentityLogEnd(ctx)
+	if err != nil {
+		return iamdomain.ResetRow{}, fmt.Errorf("%w: %w", statelog.ErrUnavailable, err)
+	}
+	return c.iamReader.ResetByID(ctx, id, end)
+}
+
+// InvitationByID is [Engine.ResetByID] for an invitation's link
+// ([iamdomain.Reader.InvitationByID]).
+func (e *Engine) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	c := e.core.Load()
+	if c == nil {
+		return iamdomain.InvitationRow{}, errNoCoreRuntime
+	}
+	end, err := e.IdentityLogEnd(ctx)
+	if err != nil {
+		return iamdomain.InvitationRow{}, fmt.Errorf("%w: %w", statelog.ErrUnavailable, err)
+	}
+	return c.iamReader.InvitationByID(ctx, id, end)
 }
 
 // IAMWriter is this node's identity write side, or nil on an engine with no

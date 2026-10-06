@@ -160,7 +160,6 @@ api:
   port: %d
   external_url: "http://127.0.0.1:%d"
   auth:
-    backend: none
     max_grants: [state:read, audit:read, config:read, secrets:read,
                  work:write, knowledge:write, config:write, secrets:write,
                  fleet:operate, sandbox:run]

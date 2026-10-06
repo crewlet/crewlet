@@ -97,7 +97,8 @@ type Writer struct {
 	// EMPTY ON THE NODE'S OWN WRITER, which acts through no credential.
 	//
 	// Set on a party [Writer.As] derived, and never carried by As from the
-	// writer it cloned: it is the party's, like the grants.
+	// writer it cloned: it is the party's, like the grants. [Writer.For]
+	// sets it to the credential of the person it writes for.
 	OperatorID string
 
 	// Principal is the id of the principal this writer's party IS — a
@@ -261,6 +262,38 @@ func (w *Writer) As(p iam.Principal) *Writer {
 	if p.ID != uuid.Nil {
 		next.Principal = p.ID.String()
 	}
+	return &next
+}
+
+// For is this writer's authority writing on somebody's behalf: the records it
+// publishes, and the facts it announces, name them as the author — the name,
+// the kind and the credential [iam.ActorFor] gives them — while what it may do
+// is still this writer's own.
+//
+// FOR THE GESTURES A PERSON MAKES THROUGH THE NODE: signing in and out, a
+// second factor's spend, an invitation's redemption, a reset link, enrolling
+// their own authenticator. The node's own writer authors those, because the
+// person holds no grant the record asks of its party — a redemption's
+// enrolment needs [AdminGrant], and nobody is a principal before they have
+// signed in — and the trail named the node as WHO for every one of them, so
+// it could not say who had signed in, only that somebody had. The node only
+// wrote the record; the person made the gesture. What the engine decides for
+// itself — a sweep, a re-seal, a password re-hashed at this build's cost —
+// keeps the node as its author. And what a redemption CONFERS is announced as
+// the decision of whoever issued the invitation ([Writer.Enrol]), never as the
+// person it writes for: they redeemed the link, and chose none of its grants.
+//
+// Unlike [Writer.As] it carries no grants and no id from the principal: a
+// party's authority is never widened or narrowed by whom it writes for.
+func (w *Writer) For(p iam.Principal) *Writer {
+	if w == nil {
+		return nil
+	}
+	actor := iam.ActorFor(p)
+	next := *w
+	next.Actor = actor.Name
+	next.ActorKind = p.Kind
+	next.OperatorID = actor.OperatorID
 	return &next
 }
 

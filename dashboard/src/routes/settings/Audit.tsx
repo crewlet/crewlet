@@ -215,6 +215,8 @@ export interface IdentityAuditEntry {
   object_id?: string;
   /** The person it concerns, by id. */
   person?: string;
+  /** The login that person holds now; absent for nobody, or somebody removed. */
+  login?: string;
   /** What was done: `invite`, `enrol`, `update`, `revoke`, `open`, `close`, … */
   op: string;
   actor?: string;
@@ -333,10 +335,12 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
 
 /**
  * WHAT AN IDENTITY ENTRY WAS ABOUT. A person, a session and an address are an
- * id, a lineage and a blind, so they are named by their kind with the id
- * shortened — except the email, whose id is a keyed blind that says nothing
- * and must never be read as the address. Every one is the People & access
- * screen's to show.
+ * id, a lineage and a blind, so they are named by the LOGIN of the person the
+ * entry concerns where the engine names one — a column of id prefixes said
+ * whose session opened and whose row changed to nobody — and otherwise by
+ * their kind with the id shortened, except the email, whose id is a keyed
+ * blind that says nothing and must never be read as the address. Every one is
+ * the People & access screen's to show.
  */
 function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" | "path"> {
   const id = entry.object_id ?? "";
@@ -344,12 +348,17 @@ function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" 
   switch (entry.object_kind) {
     case "email":
       return { subject: "an address", path };
-    default:
-      return {
-        subject: id ? `${entry.object_kind} ${short(id)}` : entry.object_kind,
-        path,
-      };
+    case "person":
+      if (entry.login) return { subject: entry.login, path };
+      break;
+    case "session":
+      if (entry.login) return { subject: `${entry.login}'s session`, path };
+      break;
   }
+  return {
+    subject: id ? `${entry.object_kind} ${short(id)}` : entry.object_kind,
+    path,
+  };
 }
 
 /** A case-blind substring match. */

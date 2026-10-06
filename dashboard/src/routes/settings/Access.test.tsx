@@ -1,5 +1,6 @@
 /**
- * People & access draws the identity directory from both ends, read-only.
+ * People & access draws the identity directory from both ends — what it
+ * WRITES is `AccessWrites.test.tsx`'s.
  *
  * The invariants, in the order they cost when they go: the whole directory is
  * drawn, not its first page — a directory cut at a page is a company that
@@ -9,15 +10,16 @@
  * document is told so rather than shown seats nobody can reach.
  */
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
+import { INVITATION_WORDS, PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -85,6 +87,24 @@ const CHECK = {
   bindings_unchecked: 0,
 };
 
+const OPEN_INVITATIONS = {
+  invitations: [
+    { id: "inv-1", email: "sam@example.com", seat: "sam", grants: ["state:read"], state: "open" },
+    { id: "inv-2", sealed: true, grants: [], state: "open" },
+  ],
+  next: "",
+};
+
+const ALL_INVITATIONS = {
+  invitations: [
+    ...OPEN_INVITATIONS.invitations,
+    { id: "inv-3", email: "old@example.com", grants: [], state: "redeemed", person: "p-old" },
+    // REDEEMED BY SOMEBODY SINCE REMOVED: the removal erased the address.
+    { id: "inv-4", grants: [], state: "redeemed", person: "p-gone", invited_by: "jane" },
+  ],
+  next: "",
+};
+
 function json(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status,
@@ -109,6 +129,10 @@ function stubIam(override: (url: URL) => Response | null = () => null) {
         return Promise.resolve(json(200, TOKENS));
       case "/iam/check":
         return Promise.resolve(json(200, CHECK));
+      case "/iam/invitations":
+        return Promise.resolve(
+          json(200, url.searchParams.get("all") === "true" ? ALL_INVITATIONS : OPEN_INVITATIONS),
+        );
       case "/iam/credentials":
         return Promise.resolve(
           json(200, {
@@ -144,7 +168,9 @@ function mount(viewer: Record<string, unknown> = AUDITOR) {
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
         <Router>
-          <PeopleAndAccess />
+          <SessionReading>
+            <PeopleAndAccess />
+          </SessionReading>
         </Router>
       </ViewerProvider>
     </ClientContext.Provider>,
@@ -184,7 +210,8 @@ test("every page of the directory is drawn, walked by its cursor", async () => {
 test("a row this node cannot open is drawn as sealed", async () => {
   stubIam();
   mount();
-  expect(await screen.findByText("sealed")).toBeTruthy();
+  // THE PERSON'S ROW, and the sealed invitation's address beside it.
+  expect((await screen.findAllByText("sealed")).length).toBe(2);
 });
 
 // FROM BOTH ENDS: the seat with whoever holds it, and each of this node's
@@ -287,4 +314,207 @@ test("an opened person shows the credentials and sessions read for them", async 
   expect(screen.getByText("Signed in")).toBeTruthy();
   const credentials = asked.find((u) => u.pathname === "/iam/credentials");
   expect(credentials?.searchParams.get("person")).toBe("p-ana");
+});
+
+// A PERSON THE LINK NAMES AND THE DIRECTORY DOES NOT HOLD is said, and Close
+// takes the address back to the list: a saved link to somebody since removed
+// drew the list with no panel and no word. The CONTROL is the case above, a
+// person the directory holds, which draws no such note. Mutation: drop the
+// note and the first half goes red.
+test("a link to a person the directory does not hold says so, and closes", async () => {
+  location.hash = "#/settings/access?person=p-gone";
+  stubIam();
+  mount();
+  expect(await screen.findByText("Nobody in the directory has this id")).toBeTruthy();
+  expect(screen.getByText("p-gone")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(location.hash).not.toContain("person=");
+  expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
+  cleanup();
+
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam();
+  mount();
+  await screen.findByText("Authenticator app");
+  expect(screen.queryByText("Nobody in the directory has this id")).toBeNull();
+});
+
+// AN ENDED SESSION SAYS WHY, AND NOT WHEN IT WOULD HAVE ENDED. One a counter
+// ended carries a reason and no ended_at; its reason rode in a tooltip and its
+// deadline read as "in 6d" beside "Ended". Mutation: show the expiry for every
+// ended session and the deadline is drawn.
+test("an ended session says why and draws no deadline it never reached", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam((url) =>
+    url.pathname === "/iam/people/p-ana/sessions"
+      ? json(200, {
+          sessions: [
+            {
+              lineage: "s-2",
+              person: "p-ana",
+              live: false,
+              created_at: new Date(Date.now() - 3_600_000).toISOString(),
+              expires_at: new Date(Date.now() + 6 * 86_400_000).toISOString(),
+              ended_reason: "ended with every session they held",
+            },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const reason = await screen.findByText("ended with every session they held");
+  const row = reason.closest(".grid-row") as HTMLElement;
+  expect(within(row).getByText("Not recorded")).toBeTruthy();
+  expect(within(row).queryByText(/^in /)).toBeNull();
+  // AND IT CAN BE READ WHOLE. The State column was a shrink column, capped at
+  // a fifth of the grid and clipped with no ellipsis, so a reason was cut at
+  // its edge with no way to read the rest. It is the flexible column now, and
+  // a reason longer than it is cut with an ellipsis and whole on its title.
+  // Mutation: make the State column shrink again, or drop the title.
+  expect(reason.closest(".grid-cell")?.classList.contains("shrink")).toBe(false);
+  expect(reason.getAttribute("title")).toBe("ended with every session they held");
+});
+
+// A RESET LINK ITS PERSON USED READS USED: setting the password revokes it
+// too, and "Revoked" said somebody had withdrawn it. The CONTROL is a link
+// withdrawn unused. Mutation: drop `spent` from the word and both read Revoked.
+test("a reset link its person used reads used, one withdrawn reads revoked", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam((url) =>
+    url.pathname === "/iam/credentials"
+      ? json(200, {
+          credentials: [
+            {
+              id: "c-used",
+              person: "p-ana",
+              method: "reset",
+              revoked: true,
+              revoked_at: "2026-10-06T03:00:00Z",
+              spent: true,
+            },
+            {
+              id: "c-withdrawn",
+              person: "p-ana",
+              method: "reset",
+              revoked: true,
+              revoked_at: "2026-10-05T03:00:00Z",
+            },
+          ],
+        })
+      : null,
+  );
+  mount();
+  expect(await screen.findByText("Used")).toBeTruthy();
+  expect(screen.getAllByText("Revoked")).toHaveLength(1);
+});
+
+// A RESET LINK CARRIES NO GRANT: it sets a password once and signs nobody in,
+// and the panel said it carried "Its holder's grants". The CONTROL is a
+// password, which signs its holder in with what they hold. Mutation: give the
+// link the password's words and the first expectation goes red.
+test("a reset link says it sets a password, never that it carries grants", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  stubIam((url) =>
+    url.pathname === "/iam/credentials"
+      ? json(200, {
+          credentials: [
+            { id: "c-link", person: "p-ana", method: "reset", revoked: false },
+            { id: "c-pw", person: "p-ana", method: "password", revoked: false },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const link = (await screen.findByText("Password reset link")).closest(".grid-row") as HTMLElement;
+  expect(within(link).getByText("Sets a password once")).toBeTruthy();
+  expect(within(link).queryByText("Its holder's grants")).toBeNull();
+  const password = screen.getByText("Password").closest(".grid-row") as HTMLElement;
+  expect(within(password).getByText("Its holder's grants")).toBeTruthy();
+});
+
+// AN ENDED CREDENTIAL DRAWS NO DEADLINE IT WILL NEVER REACH. A used reset
+// link and a revoked token keep the deadline they were issued with, and the
+// person panel read "Used — in 1d". The CONTROLS: a credential that EXPIRED
+// reached its deadline, which is shown, and one in use counts down to its own.
+// Mutation: draw the deadline whatever the state and the used link counts
+// down.
+test("an ended credential draws no deadline it will never reach", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  const later = new Date(Date.now() + 86_400_000).toISOString();
+  const earlier = new Date(Date.now() - 86_400_000).toISOString();
+  stubIam((url) =>
+    url.pathname === "/iam/credentials"
+      ? json(200, {
+          credentials: [
+            {
+              id: "c-used",
+              person: "p-ana",
+              method: "reset",
+              revoked: true,
+              revoked_at: earlier,
+              spent: true,
+              expires_at: later,
+            },
+            {
+              id: "c-lapsed",
+              person: "p-ana",
+              method: "token",
+              label: "lapsed",
+              revoked: true,
+              expires_at: earlier,
+            },
+            {
+              id: "c-live",
+              person: "p-ana",
+              method: "token",
+              label: "live",
+              revoked: false,
+              expires_at: later,
+            },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const used = (await screen.findByText("Used")).closest(".grid-row") as HTMLElement;
+  expect(within(used).getByText("Already ended")).toBeTruthy();
+  const lapsed = screen.getByText(/· lapsed/).closest(".grid-row") as HTMLElement;
+  expect(within(lapsed).queryByText("Already ended")).toBeNull();
+  expect(within(lapsed).getByText("Expired")).toBeTruthy();
+  const live = screen.getByText(/· live/).closest(".grid-row") as HTMLElement;
+  expect(within(live).getByText(/^in /)).toBeTruthy();
+});
+
+// AN INVITATION SAYS WHO SENT IT AS THE CHART NAMES THEM, and why its address
+// is gone. A person bound to a seat writes as the seat, so the table read
+// "jane" where the invitation's own page reads "Jane Founder"; and a removal
+// erases the address of the invitation its person redeemed, which left an
+// empty cell. Mutation: draw the recorded author, or nothing for the erased
+// address.
+test("an invitation names its sender by the chart and says its address was erased", async () => {
+  stubIam();
+  mount();
+  await screen.findByText("sam@example.com");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));
+  const erased = await screen.findByText("Erased with the person it invited");
+  const row = erased.closest(".grid-row") as HTMLElement;
+  expect(within(row).getByText("Jane Founder")).toBeTruthy();
+});
+
+// THE INVITATIONS NOBODY REDEEMED, and — asked — every one the estate holds:
+// a sealed address is a state, and a redeemed one says so rather than its
+// deadline. Mutation: drop `all=true` from the toggle's read and the redeemed
+// row never arrives.
+test("the open invitations are listed, and the toggle asks for every state", async () => {
+  const asked = stubIam();
+  mount();
+  expect(await screen.findByText("sam@example.com")).toBeTruthy();
+  expect(screen.getAllByText("sealed").length).toBeGreaterThan(0);
+  expect(screen.queryByText("old@example.com")).toBeNull();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show expired and redeemed" }));
+  const row = (await screen.findByText("old@example.com")).closest(".grid-row") as HTMLElement;
+  expect(within(row).getByText(INVITATION_WORDS.redeemed!.label)).toBeTruthy();
+  expect(
+    asked.some((u) => u.pathname === "/iam/invitations" && u.searchParams.get("all") === "true"),
+  ).toBe(true);
 });

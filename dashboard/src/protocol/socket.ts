@@ -30,9 +30,11 @@
  *    revocation, a fleet-wide invalidation, or a STEP-UP, which replaces the
  *    session it was made from. Not a refusal on its own: the browser may hold
  *    a newer cookie, and after a step-up it does, once the answer that set it
- *    has landed. So the tab waits for its own requests to settle and dials
- *    again; only a re-handshake the probe then reads as 401 sends anybody to
- *    sign in.
+ *    has landed. So the tab waits for its own requests to settle and asks
+ *    `GET /auth/session` once: a `401` is nobody and sends the reader to sign
+ *    in with nothing dialled, a session somebody else's sign-in left in the
+ *    browser hands the tab to them (`LiveSocketOptions.takeSession`), and any
+ *    other answer dials again.
  *  - 4403 (`CLOSE_FORBIDDEN`): the engine knows who this is and will not serve
  *    them this surface. Reconnecting reaches the same person with the same
  *    access, so the socket STOPS and the page says why.
@@ -46,7 +48,8 @@ import { CLOSE_FORBIDDEN, CLOSE_UNAUTHENTICATED } from "../contract/closecodes.t
 import type { QueryErrorCode } from "../contract/errors.ts";
 import { UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
 import { api } from "./api.ts";
-import { retryHintOf, whenRequestsSettle } from "./rest.ts";
+import { auth } from "./auth.ts";
+import { RestError, retryHintOf, whenRequestsSettle } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
 import { needSession } from "./signin.ts";
 import type { Store } from "./store.ts";
@@ -228,8 +231,23 @@ interface Inflight {
   timer: ReturnType<typeof setTimeout> | 0;
 }
 
+/** What the app hands the socket that the protocol alone cannot know. */
+export interface LiveSocketOptions {
+  /**
+   * Asked with the person a `4401`'s `GET /auth/session` answered for, before
+   * the re-dial: whether this tab carries on as them. The app answers through
+   * `lib/session.ts`'s `takeSession`, which hands the tab over — a reload with
+   * nothing kept — where the session is somebody other than the person the tab
+   * was read by, and answers false so nothing is dialled for them in it. A
+   * socket handed nothing carries on with every session: the protocol knows
+   * no reader, and neither does the e2e replay that drives it.
+   */
+  takeSession?: (person: string) => boolean;
+}
+
 export class LiveSocket {
   private store: Store;
+  private takeSession: (person: string) => boolean;
   private sock: WebSocket | null = null;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | 0 = 0;
@@ -251,6 +269,18 @@ export class LiveSocket {
    * would otherwise schedule the next one.
    */
   private refused = false;
+  /**
+   * Whether the latch above is set because NOBODY IS SIGNED IN (see
+   * `authRejected`) — the one refusal the tab coming back may lift, since a
+   * sign-in in another tab gives this one the cookie too.
+   */
+  private signedOut = false;
+  /**
+   * Whether a sign-out holds the socket (see `hold`). Not `refused`, because
+   * a sign-out that fails gives the socket back as it found it — still
+   * refused, if it was.
+   */
+  private held = false;
   private nextQueryId = 1;
   private inflight = new Map<number, Inflight>();
   /**
@@ -262,11 +292,34 @@ export class LiveSocket {
   private watched = "";
   private watchRetry: ReturnType<typeof setTimeout> | 0 = 0;
 
-  constructor(store: Store) {
+  constructor(store: Store, options: LiveSocketOptions = {}) {
     this.store = store;
+    this.takeSession = options.takeSession ?? (() => true);
   }
 
+  /**
+   * The tab came back to a socket stopped because nobody was signed in: dial
+   * ONCE, which is what notices a sign-in made in another tab. A dial that
+   * finds nobody still stops again.
+   */
+  private readonly onVisible = (): void => {
+    if (!this.signedOut || this.isClosed || document.visibilityState !== "visible") return;
+    this.signedOut = false;
+    this.refused = false;
+    this.connect();
+  };
+
+  /**
+   * Dial for the session the frame has just read (`app/Shell.tsx`), unless a
+   * dial is already open or under way.
+   *
+   * IT LIFTS WHAT AN EARLIER SESSION LATCHED: the frame calls this for an
+   * answer that holds the grant the socket needs — after a sign-in, or once an
+   * administrator has given it — and a refusal or a sign-out recorded under
+   * the last one no longer describes the browser.
+   */
   start(): void {
+    this.lift();
     this.connect();
   }
 
@@ -276,20 +329,51 @@ export class LiveSocket {
    * A dropped envelope is gone: the server's per-client queue discards the
    * OLDEST frame under backpressure, so a lost `agents` overlay is never
    * re-sent and the only true repair is a fresh handshake snapshot. It is
-   * also how a sign-in or a restored access is picked up: a re-dial is a new
-   * attempt, usually with a credential the browser did not hold at the last
-   * one, so the last refusal no longer describes it.
+   * also how a restored access is tried: a re-dial is a new attempt, so the
+   * last refusal no longer describes it.
    */
   reconnect(): void {
-    this.refused = false;
-    this.store.setAuthRejected(false);
-    this.store.setAccessRefused(null);
+    this.lift();
     if (this.sock) this.sock.close();
     else this.connect();
   }
 
+  /** Forget what the last refusal or sign-out latched. */
+  private lift(): void {
+    this.refused = false;
+    this.signedOut = false;
+    this.store.setAuthRejected(false);
+    this.store.setAccessRefused(null);
+  }
+
+  /**
+   * Dial nothing while this tab signs out, until `release()`.
+   *
+   * The engine ends this session's socket (4401) as it applies the sign-out,
+   * and that close re-dialled once this tab's own requests had settled — which
+   * is before the sign-out's reload — so every sign-out made one more
+   * handshake the engine refused.
+   */
+  hold(): void {
+    this.held = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = 0;
+    this.stopFallback();
+  }
+
+  /**
+   * Give back what `hold` took: a sign-out nothing answered stays on the page,
+   * and the socket dials again — unless a refusal had already stopped it,
+   * which the sign-out did not change.
+   */
+  release(): void {
+    this.held = false;
+    this.connect();
+  }
+
   stop(): void {
     this.isClosed = true;
+    document.removeEventListener("visibilitychange", this.onVisible);
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.watchRetry);
     this.stopPing();
@@ -413,6 +497,7 @@ export class LiveSocket {
     if (
       this.isClosed ||
       this.refused ||
+      this.held ||
       (this.sock &&
         (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING))
     ) {
@@ -468,6 +553,9 @@ export class LiveSocket {
         entry.timer = 0;
       }
       this.store.setConnected(false);
+      // A SIGN-OUT IS UNDER WAY: neither a re-dial nor the fallback's read,
+      // both of which would carry the cookie it is ending.
+      if (this.held) return;
       const code = e ? e.code : 0;
       if (code === CLOSE_FORBIDDEN) {
         // No reconnect and no REST fallback: both would be answered 403 by
@@ -477,13 +565,12 @@ export class LiveSocket {
       }
       if (code === CLOSE_UNAUTHENTICATED) {
         // THE SESSION ENDED, and the browser may already hold the one that
-        // replaced it — or be about to: a step-up's answer sets it. Dial
-        // once this tab's own requests have settled, and let that dial's
-        // handshake say whether anybody is signed in. Neither the backoff
-        // nor the fallback: the fallback's read, sent now, would carry the
-        // ended cookie and send a person who just proved who they are to
-        // the sign-in form.
-        void whenRequestsSettle().then(() => this.connect());
+        // replaced it — or be about to: a step-up's answer sets it. Ask once
+        // this tab's own requests have settled (`redialIfSignedIn`).
+        // Neither the backoff nor the fallback: the fallback's read, sent
+        // now, would carry the ended cookie and send a person who just
+        // proved who they are to the sign-in form.
+        void whenRequestsSettle().then(() => this.redialIfSignedIn());
         return;
       }
       this.scheduleReconnect();
@@ -497,6 +584,35 @@ export class LiveSocket {
       // disconnected state so the header stops claiming to be live.
       this.store.setConnected(false);
     };
+  }
+
+  /**
+   * After a `4401`: dial again only if the browser still holds a session.
+   *
+   * `GET /auth/session` FIRST, rather than a dial whose handshake decides:
+   * a session that ended elsewhere — a password change, a sign-out
+   * everywhere, an administrator — was a refused handshake, its refusal
+   * probe and a refused degraded-mode snapshot before the sign-in, three
+   * `401`s where one says it. A `401` here is that one (`rest.ts` raises the
+   * sign-in need); any other failure says nothing about the session, and
+   * the dial's own handshake decides.
+   *
+   * AND ONLY FOR THE PERSON THIS TAB WAS READ BY (`takeSession`): a sign-in
+   * as somebody else in another tab ends this tab's session and moves the
+   * cookie, and a re-dial on any answer reached the company as them in a tab
+   * still holding the last reader's.
+   */
+  private async redialIfSignedIn(): Promise<void> {
+    try {
+      const session = await auth.session();
+      if (!this.takeSession(session.person)) return;
+    } catch (err) {
+      if (err instanceof RestError && err.status === 401) {
+        this.authRejected();
+        return;
+      }
+    }
+    this.connect();
   }
 
   /**
@@ -570,7 +686,9 @@ export class LiveSocket {
    * by the same decision every thirty seconds for as long as the tab stayed
    * open, and a page that says "reconnecting" to somebody whose access was
    * withdrawn is telling them to wait for something that will not happen.
-   * `reconnect()` is the way back, once an administrator has restored it.
+   * `reconnect()` is the way back, once an administrator has restored it —
+   * or `start()`, which the frame calls once the session it reads again
+   * holds the grant the socket needs.
    */
   private accessRefused(reason: string): void {
     this.stopDialling();
@@ -580,15 +698,15 @@ export class LiveSocket {
   /**
    * The engine accepts this browser's session for nothing but enrolling the
    * second factor the deployment requires. Every dial would be refused the
-   * same way until it has, so the loop stops; the enrolment ends by calling
-   * `reconnect()` with the whole session it opened.
+   * same way until it has, so the loop stops; the enrolment ends in the
+   * frame, which dials again (`start()`) for the whole session it opened.
    */
   private enrolmentRequired(): void {
     this.stopDialling();
     needSession("second_factor");
   }
 
-  /** Stops the reconnect loop and the REST fallback, until `reconnect()`. */
+  /** Stops the reconnect loop and the REST fallback, until `start()` or `reconnect()`. */
   private stopDialling(): void {
     this.refused = true;
     clearTimeout(this.reconnectTimer);
@@ -599,12 +717,18 @@ export class LiveSocket {
   /**
    * The engine resolved nobody from this browser's cookie.
    *
-   * Two things happen, and both are needed. Asking for a sign-in is the repair
-   * — the dashboard is served unauthenticated by design (the page that signs a
-   * person in cannot itself require them to be), so the browser has no other
-   * moment to learn it needs one. The store flag is what the chrome reads while
-   * the loop goes on dialling: a sign-in in another tab gives this one the
-   * cookie too, and the next dial is what notices.
+   * Asking for a sign-in is the repair — the dashboard is served
+   * unauthenticated by design (the page that signs a person in cannot itself
+   * require them to be), so the browser has no other moment to learn it needs
+   * one — and the store flag is what the chrome reads meanwhile.
+   *
+   * AND THE LOOP STOPS, as it does for a refusal: every dial until somebody
+   * signs in is the same 401, and a signed-out tab — the sign-in page, an
+   * invitation's or a reset link's — dialled one on its backoff for as long
+   * as it stayed open, each a failed handshake and a 401 in the console. What
+   * ends it is a sign-in: in this tab, which lands in the frame and dials
+   * (`start()`); or in another, which gives this one the cookie too and is
+   * noticed by ONE dial when the tab comes back (`onVisible`).
    *
    * The socket does not own the screen: the sign-in is a route, and a
    * transport that reaches into the router is a transport that cannot be
@@ -613,6 +737,10 @@ export class LiveSocket {
   private authRejected(): void {
     this.store.setAuthRejected(true);
     needSession("sign_in");
+    this.stopDialling();
+    this.signedOut = true;
+    // ONE LISTENER however often this runs: the same function is added once.
+    document.addEventListener("visibilitychange", this.onVisible);
   }
 
   /**
@@ -793,6 +921,12 @@ export class LiveSocket {
     // took before the connection recovered — and the open that stopped this
     // run is what says so, as is a `stop()`.
     if (this.fallbackRun !== run || this.connected) return;
+    // NOBODY SIGNED IN ENDS THIS RUN: every later read is the same 401, and a
+    // signed-out tab — the sign-in page, an invitation's — polled one every
+    // five seconds for as long as it stayed open. The dial's own probe has
+    // stopped the loop too (`authRejected`): a sign-in, or the tab coming
+    // back, is what dials again.
+    if (read.state === "nobody") return;
     if (read.state === "read") this.store.applySnapshot(read.snapshot);
     // THE NEXT READ WAITS WHAT THE ENGINE SAID: a 503 it wrote replaces the
     // next tick with its `Retry-After`, and one with none is its statement

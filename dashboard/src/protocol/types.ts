@@ -4258,15 +4258,6 @@ export interface SignedIn {
   status: SessionStatus;
 }
 
-/** What a sign-in page may know before anybody has signed in. */
-export interface AuthConfig {
-  /**
-   * How this deployment signs people in. `local` is passwords; `none` is a
-   * deployment with no people, whose only credential is a Tier A token.
-   */
-  backend: string;
-}
-
 /** What an invitation's screen renders from, before anything is spent. */
 export interface InvitationView {
   /** The address it is for, opened for this one answer. */
@@ -4281,6 +4272,25 @@ export interface InvitationView {
   /** The seat redeeming it binds the person to, as the chart calls it now, or
    *  absent for an invitation that binds none. */
   seat?: { handle?: string; name?: string };
+  /** The login this BROWSER is signed in as, or absent for nobody: redeeming
+   *  ends that session, so the form says so first. */
+  signed_in_as?: string;
+}
+
+/** What a password reset link's screen renders from, before anything is spent. */
+export interface ResetView {
+  /** Whose password the link sets. */
+  login: string;
+  /** When the link stops opening. */
+  expires_at: string;
+  /** The floor every password is held to. */
+  min_password_length: number;
+}
+
+/** A password set from a reset link — and no session: the person signs in next. */
+export interface PasswordSet {
+  status: "password_set";
+  login: string;
 }
 
 /**
@@ -4309,15 +4319,38 @@ export interface RecoveryCodes {
 /** Who a session is, as `GET /auth/session` answers — the part a screen reads. */
 export interface SessionAnswer {
   person: string;
+  /** Their own name as their directory row holds it, or absent — what a screen
+   *  calls a person no seat names. */
+  name?: string;
   login: string;
   seat?: string;
   /** `person` or `machine`: a machine holds no second factor to manage. */
   kind: string;
+  /** What this node lets the caller do: their grants, cut to its ceiling. */
+  grants?: string[] | null;
   /** The absolute deadline of the session the request carried, or absent for
    *  a credential that is not a session. */
   expires_at?: string;
+  /** The session the request carried, by the id a listing of the person's
+   *  sessions names it by — absent exactly where `expires_at` is. */
+  lineage?: string;
   status: SessionStatus;
 }
+
+/** What a client reads before anybody signs in (`GET /auth/config`). */
+export interface AuthConfig {
+  /** The floor every password is held to, in characters. */
+  min_password_length: number;
+  /** Whether a person signing in with a password must hold a second factor. */
+  second_factor: "required" | "optional";
+}
+
+/**
+ * What changing your own password answers: the new session that keeps this
+ * browser signed in, or — where this node has not applied the change yet — the
+ * plain fact that every session ended, this browser's with them.
+ */
+export type PasswordChanged = SignedIn | { status: "password_changed"; detail: string };
 
 /** One seat a name could mean, and why. */
 export interface ColleagueCandidate {

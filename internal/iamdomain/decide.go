@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -203,14 +205,22 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		}
 		return BucketScope(buckets...), nil
 	}
+	// WHO DECIDED WHAT IT CONFERS: this writer's party for an
+	// administrator's create, and for a redemption whoever issued the
+	// invitation ([Writer.redeemable]) — never the person redeeming it,
+	// whom a party derived with [Writer.For] names as the record's author.
+	decidedBy, decidedVia := w.Actor, w.OperatorID
 	decide := func(tx *sql.Tx) (_ []byte, err error) {
 		if err = wholeDirectory(ctx, tx); err != nil {
 			return nil, err
 		}
 		if in.Invitation != "" {
 			// THE INVITATION, READ WHERE THE GRANTS LAND FROM: the one
-			// read of it that decides anything.
-			err = w.redeemable(ctx, tx, in, blind, seat)
+			// read of it that decides anything. Its issuer acted through
+			// a credential when they issued it, which the issue's own
+			// record names; the redemption acted through none of theirs.
+			decidedVia = ""
+			decidedBy, err = w.redeemable(ctx, tx, in, blind, seat)
 		} else {
 			err = w.createsNobodyTwice(ctx, tx, in)
 		}
@@ -259,11 +269,11 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
 	// to what it carries — and the first person a company enrols, invited
 	// under the deployment's own token, is the one row of those an audit
-	// most needs to find.
+	// most needs to find: by whoever decided it.
 	if added, _ := grantDelta(nil, in.Grants); len(added) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
-			Person: in.PersonID, Added: added, By: w.Actor,
-			OperatorID: w.OperatorID, Version: result.Position.Packed(),
+			Person: in.PersonID, Added: added, By: decidedBy,
+			OperatorID: decidedVia, Version: result.Position.Packed(),
 		})
 	}
 	return result, err
@@ -499,7 +509,29 @@ func (in Enrolment) validate() error {
 			"they make is recorded under while they hold no seat, and without "+
 			"one they would be recorded as nobody", ErrInvalidLogin)
 	}
+	if err := machineHolds(in.Kind, in.Grants); err != nil {
+		return err
+	}
 	return loginFits(in.Kind, in.Login)
+}
+
+// machineHolds refuses a MACHINE a grant it could never exercise: one a
+// token never carries ([iam.PersonPresentGrants]). A machine has no password
+// and no session — it acts only through tokens minted on it, which drop those
+// grants on every request, and a Tier A token's row is no account at all — so
+// a service account created holding `people:manage` listed a grant nothing it
+// can present would ever carry.
+func machineHolds[G ~string](kind iam.Kind, grants []G) error {
+	if kind != iam.KindMachine {
+		return nil
+	}
+	for _, g := range grants {
+		if slices.Contains(iam.PersonPresentGrants, iam.Grant(g)) {
+			return fmt.Errorf("%w: a machine acts only through tokens, and a "+
+				"token never carries %s — it needs a person present", ErrInvalid, g)
+		}
+	}
+	return nil
 }
 
 // redeemable refuses an enrolment its invitation does not cover, read inside
@@ -513,8 +545,11 @@ func (in Enrolment) validate() error {
 // THE WRITER'S CLOCK decides the expiry, as [openInvitationFor]'s does: the
 // surface already refused an aged-out link against the same clock, and what
 // this buys is that the check and the grants it bounds are one snapshot.
+//
+// IT ANSWERS WHO ISSUED IT, because that is who decided what the redemption
+// confers: the person redeeming chose none of it.
 func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
-	blind, seat string) error {
+	blind, seat string) (string, error) {
 
 	var (
 		held           string
@@ -527,14 +562,14 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("%w: invitation %s is not held on this node, so "+
+		return "", fmt.Errorf("%w: invitation %s is not held on this node, so "+
 			"nothing says what redeeming it confers", ErrRefused, in.Invitation)
 	case err != nil:
-		return fmt.Errorf("iamdomain: read invitation %s: %w", in.Invitation, err)
+		return "", fmt.Errorf("iamdomain: read invitation %s: %w", in.Invitation, err)
 	}
 	invitation, err := DecodeInvitation(document)
 	if err != nil {
-		return fmt.Errorf("iamdomain: open invitation %s: %w", in.Invitation, err)
+		return "", fmt.Errorf("iamdomain: open invitation %s: %w", in.Invitation, err)
 	}
 	switch {
 	case !invitationAdmits(invitation.Verifier, in.InvitationSecret):
@@ -543,22 +578,22 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 		// naming an invitation's id — which every snapshot and proxy log
 		// holds — is not holding its link. An invitation issued before
 		// links carried a secret has no verifier and admits nobody.
-		return fmt.Errorf("%w: the secret presented is not the one invitation "+
+		return "", fmt.Errorf("%w: the secret presented is not the one invitation "+
 			"%s's link carries", ErrRefused, in.Invitation)
 	case held != blind:
-		return fmt.Errorf("%w: invitation %s was issued to another address — "+
+		return "", fmt.Errorf("%w: invitation %s was issued to another address — "+
 			"holding somebody's link is not holding their address",
 			ErrRefused, in.Invitation)
 	case spent != 0:
-		return fmt.Errorf("%w: invitation %s has already been used",
+		return "", fmt.Errorf("%w: invitation %s has already been used",
 			ErrRefused, in.Invitation)
 	case expires != 0 && !w.Now().Before(time.UnixMilli(expires)):
-		return fmt.Errorf("%w: invitation %s has aged out", ErrRefused,
+		return "", fmt.Errorf("%w: invitation %s has aged out", ErrRefused,
 			in.Invitation)
 	}
 	for _, g := range in.Grants {
 		if !g.Valid() || !slices.Contains(invitation.Grants, g) {
-			return fmt.Errorf("%w: redeeming invitation %s confers %v, and "+
+			return "", fmt.Errorf("%w: redeeming invitation %s confers %v, and "+
 				"%s is not among them — a redemption hands out what was "+
 				"offered and nothing more", ErrRefused, in.Invitation,
 				invitation.Grants, g)
@@ -569,11 +604,11 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 	// offered, and one it carried and the enrolment dropped would spend
 	// the link without the binding its issuer decided on.
 	if seat != invitation.Seat {
-		return fmt.Errorf("%w: invitation %s binds seat %q, and the "+
+		return "", fmt.Errorf("%w: invitation %s binds seat %q, and the "+
 			"enrolment names %q — a redemption binds what was offered and "+
 			"nothing else", ErrRefused, in.Invitation, invitation.Seat, seat)
 	}
-	return nil
+	return invitation.InvitedBy, nil
 }
 
 // loginFits refuses a login that is not in its holder's kind's grammar.
@@ -892,16 +927,27 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 			"stage this build cannot name would suspend somebody by accident",
 			ErrInvalid, stage)
 	}
-	mutation, err := EncodeStatus(StatusChange{V: DocumentVersion, Stage: stage})
-	if err != nil {
-		return statelog.Result{}, err
-	}
 	rec, err := w.record(PersonSubject(personID), OpStatus, personID,
-		PeopleScope(personID), mutation, reason)
+		PeopleScope(personID), nil, reason)
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	result, err := w.publish(ctx, w.request(ctx, &rec, opID, statelog.PatternArbitrated, nil))
+	decide := func(tx *sql.Tx) (err error) {
+		change := StatusChange{V: DocumentVersion, Stage: stage}
+		if !stage.MayAct() {
+			// A STAGE THAT MAY NOT ACT ENDS WHAT THEY HOLD, at the next
+			// epoch — see [StatusChange.Epoch].
+			var current uint64
+			if current, err = epochOf(ctx, tx, personID); err != nil {
+				return err
+			}
+			change.Epoch = current + 1
+		}
+		rec.Mutation, err = EncodeStatus(change)
+		return err
+	}
+	result, err := w.publish(ctx,
+		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
 	return result, err
 }
 
@@ -1107,6 +1153,19 @@ func generationOf(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	return uint64(generation), nil
 }
 
+// countersOf is a person's [Counters], read inside a decide.
+func countersOf(ctx context.Context, tx *sql.Tx, personID string) (Counters, error) {
+	epoch, err := epochOf(ctx, tx, personID)
+	if err != nil {
+		return Counters{}, err
+	}
+	generation, err := generationOf(ctx, tx)
+	if err != nil {
+		return Counters{}, err
+	}
+	return Counters{Epoch: epoch, Generation: generation}, nil
+}
+
 // SessionStart is what opening a session needs.
 //
 // NO EPOCH AND NO GENERATION: both are read inside the decide — see
@@ -1125,13 +1184,15 @@ type SessionStart struct {
 
 	// EnrolmentOnly opens a session that may do nothing but enrol a second
 	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
-	// what it proved and the deployment's own `api.auth.local.totp`.
+	// what it proved and the deployment's own `api.auth.totp`.
 	EnrolmentOnly bool
 
 	// NoWait asks for the answer the broker's acknowledgement already
 	// establishes, rather than waiting for this node's applier.
 	//
-	// THE ONE PLACE IN THIS ESTATE IT IS CORRECT, and the reason is that
+	// A SIGN-IN IS THE ONE PLACE IN THIS ESTATE IT IS CORRECT — never a
+	// session that replaces another, which is opened from a page that
+	// lists them — and the reason is that
 	// the bearer minted from this record carries its POSITION: every node
 	// validates against its own applier, and a node below that position
 	// serves reads on the signature and the epoch alone
@@ -1405,8 +1466,12 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 		if person.Credentials, err = in.Apply(person.Credentials); err != nil {
 			return err
 		}
+		counters, err := countersOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
 		if person.Credentials, err = fitHeld(person.Credentials, w.Now(),
-			ErrInvalid); err != nil {
+			counters, ErrInvalid); err != nil {
 			return err
 		}
 		mutation, err = EncodePerson(person)
@@ -1576,14 +1641,11 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		if err != nil {
 			return err
 		}
-		epoch, err := epochOf(ctx, tx, in.PersonID)
+		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
-		generation, err := generationOf(ctx, tx)
-		if err != nil {
-			return err
-		}
+		epoch, generation := counters.Epoch, counters.Generation
 		token := Credential{
 			V: DocumentVersion, ID: in.ID, Method: MethodToken,
 			Verifier: in.Verifier, Label: in.Label, ExpiresAt: in.ExpiresAt,
@@ -1603,7 +1665,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		kept = append(kept, token)
 		// THE NEW TOKEN IS LIVE, so making room never drops it: only a
 		// credential that has already stopped verifying gives up its place.
-		if owner.Credentials, err = fitHeld(kept, now, ErrInvalidToken); err != nil {
+		if owner.Credentials, err = fitHeld(kept, now, counters, ErrInvalidToken); err != nil {
 			return err
 		}
 		minted = TokenMinted{Grants: grants, ExpiresAt: in.ExpiresAt,
@@ -2182,6 +2244,237 @@ type InviteMint struct {
 	Reason string
 }
 
+// CancelInvitation withdraws an invitation nobody has redeemed — open, or aged
+// out and not yet collected — so its link opens nothing and the address it held
+// is free for a new invitation the moment the record lands.
+//
+// # A directory record, because the address is held there
+//
+// The invitation holds its address on the directory subject, so the record
+// that frees it rides there too: an issue to the same address decided after
+// it is decided from rows that no longer hold the old one, and one racing it
+// contends at the broker. It TAKES nothing, so it does not ask
+// [wholeDirectory], for a removal's reason.
+//
+// # Three answers about the row, read in the record's own snapshot
+//
+// An invitation this snapshot does not hold is [ErrNoInvitation] — never
+// issued, cancelled already, or collected by the sweep, which a link to it
+// cannot tell apart either. One somebody REDEEMED is [InvitationRedeemed],
+// naming whom it created: the link is spent, and what undoes it is removing
+// that person. Anything else is cancelled.
+func (w *Writer) CancelInvitation(ctx context.Context, id, opID, reason string) (
+	statelog.Result, error) {
+
+	if err := w.mayAdminister(OpCancel); err != nil {
+		return statelog.Result{}, err
+	}
+	if id == "" || opID == "" {
+		return statelog.Result{}, errors.New("iamdomain: cancelling an " +
+			"invitation needs its id and an operation id")
+	}
+	// THE BUCKET IS THE ADDRESS'S, as the issue's was and as the row's is,
+	// and an invitation this snapshot does not hold has none — the decide
+	// refuses it, so the id's own bucket is only a scope that encodes.
+	scopeOf := func(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
+		held, found, err := invitationIn(ctx, tx, id)
+		if err != nil || !found {
+			return BucketScope(BucketOf(id)), err
+		}
+		return BucketScope(BucketOf(held.Blind)), nil
+	}
+	decide := func(tx *sql.Tx) ([]byte, error) {
+		held, found, err := invitationIn(ctx, tx, id)
+		switch {
+		case err != nil:
+			return nil, err
+		case !found:
+			return nil, fmt.Errorf("%w: %s", ErrNoInvitation, id)
+		case held.Person != "":
+			return nil, &InvitationRedeemed{ID: id, Person: held.Person}
+		}
+		return EncodeCancellation(Cancellation{
+			V: DocumentVersion, Invitation: id, EmailBlind: held.Blind,
+		})
+	}
+	return w.publishDirectory(ctx, OpCancel, "", opID, reason, scopeOf, decide)
+}
+
+// invitationIn is the address blind one invitation holds and the person a
+// redemption created, read inside a decide's snapshot — and false for an id it
+// does not hold.
+func invitationIn(ctx context.Context, tx *sql.Tx, id string) (
+	InvitationRow, bool, error) {
+
+	var held InvitationRow
+	err := tx.QueryRowContext(ctx, `
+		SELECT email_blind, person_id FROM iam_invites WHERE id = ?`, id).
+		Scan(&held.Blind, &held.Person)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return InvitationRow{}, false, nil
+	case err != nil:
+		return InvitationRow{}, false, fmt.Errorf("iamdomain: read "+
+			"invitation %s: %w", id, err)
+	}
+	return held, true, nil
+}
+
+// ErrNoInvitation reports an invitation this estate does not hold: never
+// issued, cancelled already, or collected by the sweep once it was redeemed or
+// aged out.
+var ErrNoInvitation = errors.New("iamdomain: no such invitation")
+
+// InvitationRedeemed refuses the cancellation of an invitation somebody
+// redeemed, naming the person it created — the link is spent, and what undoes
+// it is removing them.
+type InvitationRedeemed struct {
+	ID     string
+	Person string
+}
+
+func (e *InvitationRedeemed) Error() string {
+	return fmt.Sprintf("iamdomain: invitation %s was redeemed and created "+
+		"person %s — it cannot be cancelled; remove the person instead",
+		e.ID, e.Person)
+}
+
+// SetPassword replaces a person's password and moves their revocation epoch,
+// in ONE record ([OpPassword]): every session and machine token they hold ends
+// with the password it replaces.
+//
+// # Two callers, one record
+//
+// A person CHANGING their own password, having presented the current one, and
+// a person SPENDING a reset link an administrator issued them. Both are a
+// password somebody else may have had — which is why the epoch moves — and
+// both revoke every reset link the person still holds, the one spent
+// included, so a link is never a second way back in once a password is set.
+//
+// # No grant, and the caller's proof instead
+//
+// Neither caller holds an administrative capability: the first is the person,
+// the second nobody yet. What bounds it is [PasswordSet.Check], which the
+// surface hands in and which runs in the record's own snapshot — the verifier
+// of the password the change presented still the one held, or the reset link
+// still live and its secret the link's — so a password changed by somebody
+// else between the proof and the record, or a link spent by another tab, is
+// refused with nothing published.
+//
+// THE NEW CREDENTIAL'S ID IS MINTED ONCE, before the decide that may run more
+// than once, so every round forms the same document.
+func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
+	statelog.Result, error) {
+
+	switch {
+	case in.PersonID == "" || in.OpID == "":
+		return statelog.Result{}, errors.New("iamdomain: setting a password " +
+			"needs a person and an operation id")
+	case in.Verifier == "":
+		return statelog.Result{}, errors.New("iamdomain: setting a password " +
+			"needs the new password's verifier — the password itself is " +
+			"never published")
+	}
+	id := uuid.NewString()
+	rec, err := w.record(PersonSubject(in.PersonID), OpPassword, in.PersonID,
+		PeopleScope(in.PersonID), nil, in.Reason)
+	if err != nil {
+		return statelog.Result{}, err
+	}
+	decide := func(tx *sql.Tx) error {
+		person, err := heldPerson(ctx, tx, in.PersonID, "their new password")
+		if err != nil {
+			return err
+		}
+		if person.Kind != iam.KindPerson {
+			return fmt.Errorf("%w: %s is a %s, and only a person holds a "+
+				"password", ErrRefused, in.PersonID, person.Kind)
+		}
+		counters, err := countersOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
+		if in.Check != nil {
+			if err = in.Check(person, counters); err != nil {
+				return err
+			}
+		}
+		now := w.Now()
+		kept := make([]Credential, 0, len(person.Credentials)+1)
+		for _, c := range RevokeResetLinks(person.Credentials, now) {
+			// REPLACED, not revoked: a password has no listing of its
+			// own anybody reads afterwards, and a second one on the
+			// row is a second password that works.
+			if c.Method == MethodPassword {
+				continue
+			}
+			if c.Method == MethodReset && c.ID == in.Spends {
+				c.Spent = true
+			}
+			kept = append(kept, c)
+		}
+		kept = append(kept, Credential{
+			V: DocumentVersion, ID: id, Method: MethodPassword,
+			Verifier: in.Verifier,
+		})
+		if person.Credentials, err = fitHeld(kept, now, counters, ErrInvalid); err != nil {
+			return err
+		}
+		rec.Mutation, err = EncodePasswordChange(PasswordChange{
+			V: DocumentVersion, Person: person, Epoch: counters.Epoch + 1,
+		})
+		return err
+	}
+	return w.publish(ctx,
+		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
+}
+
+// RevokeResetLinks answers held with every reset link still outstanding in it
+// revoked at now — a copy, so the caller's slice is untouched.
+//
+// THREE RECORDS END A PERSON'S LINKS, and each through this: a password set
+// ([Writer.SetPassword]), because a link must not be a second way back in once
+// a password is; a new link's issue, because a person holds at most one; and
+// an edit that ADDS a grant ([Writer.UpdatePerson]), because a link is judged
+// against its issuer's grants at the issue and a grant gained afterwards was
+// judged against nobody who holds it. Everything that ends a person's sessions
+// and tokens ends their links too, by moving a counter the link was issued
+// at ([Credential.EndedBy]) rather than through this.
+func RevokeResetLinks(held []Credential, now time.Time) []Credential {
+	out := slices.Clone(held)
+	for i, c := range out {
+		if c.Method == MethodReset && c.RevokedAt.IsZero() {
+			out[i].RevokedAt = now
+		}
+	}
+	return out
+}
+
+// PasswordSet is what replacing somebody's password needs.
+type PasswordSet struct {
+	PersonID string
+
+	// Verifier is the new password's argon2id verifier — never the
+	// password, which no record carries.
+	Verifier string
+
+	// Check is the caller's proof, judged in the record's own snapshot
+	// against the person as it holds them and their [Counters], and
+	// refusing with nothing published. A FUNCTION for
+	// [CredentialSet.Apply]'s reason: the proof is about the credential set
+	// the write lands on, which the caller does not hold and must not read
+	// separately. It may refuse; it forms nothing.
+	Check func(Person, Counters) error
+
+	// Spends is the reset link this password is set from, marked
+	// [Credential.Spent] beside the revocation every link takes; empty for
+	// a person changing their own.
+	Spends string
+
+	OpID   string
+	Reason string
+}
+
 // UpdatePerson rewrites one person's own document — their grants, their name
 // — forming the new whole INSIDE the snapshot.
 //
@@ -2201,6 +2494,20 @@ type InviteMint struct {
 // once rather than the design's two, because "on my own record" and "on
 // somebody else's" have the same answer and splitting them is how one of the
 // two arms comes to be checked and the other not.
+//
+// # A grant gained revokes every outstanding reset link
+//
+// A reset link is issued only for somebody whose every grant its issuer holds,
+// judged at the issue — and the issuer is shown the link and can spend it. A
+// grant the person gains while it is outstanding was judged against nobody
+// holding the link, so spending it would hand that grant to a party that may
+// never have held it: an administrator holding people:manage would act with
+// secrets:read because somebody else granted it to the person they issued a
+// link for. So the record that adds a grant revokes the link, in the snapshot
+// the grant lands in, and the next link is judged against the new set. This
+// is the one write that grows an existing person's grants, so it is the one
+// place the rule needs stating; taking a grant away revokes nothing, since a
+// link that now reaches less was judged against more.
 func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	statelog.Result, error) {
 
@@ -2257,8 +2564,26 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err = w.MayConfer(person.Grants, updated.Grants); err != nil {
 			return err
 		}
+		added, _ := grantDelta(person.Grants, updated.Grants)
+		// ONLY WHAT IS ADDED, as MayConfer judges: a row already holding
+		// such a grant can still be edited, and is where it is taken away.
+		if err = machineHolds(person.Kind, added); err != nil {
+			return err
+		}
+		counters, err := countersOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
+		// A RESET LINK THIS RECORD ISSUES ENDS WITH THE COUNTERS IT WAS
+		// ISSUED AT, as a token does.
+		updated.Credentials = stampIssued(person.Credentials,
+			updated.Credentials, counters)
+		// A GRANT GAINED ENDS EVERY OUTSTANDING RESET LINK, in this record.
+		if len(added) > 0 {
+			updated.Credentials = RevokeResetLinks(updated.Credentials, w.Now())
+		}
 		if updated.Credentials, err = fitHeld(updated.Credentials, w.Now(),
-			ErrInvalid); err != nil {
+			counters, ErrInvalid); err != nil {
 			return err
 		}
 		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)

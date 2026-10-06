@@ -144,7 +144,7 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	}
 	row, err := g.bindings.Directory.BoundSeat(ctx, p.Login)
 	if err != nil {
-		log.WarnContext(ctx, "api_token_binding_unavailable",
+		log.Log(ctx, UnreadLevel(ctx), "api_token_binding_unavailable",
 			"login", p.Login, "error", err)
 		return iam.Principal{}, iam.Unknown, nil
 	}
@@ -156,7 +156,7 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	binding := session.ResolveSeat(ctx, g.bindings.Chart, row)
 	switch binding.Answer() {
 	case session.AnswerUnavailable:
-		log.WarnContext(ctx, "api_token_seat_unavailable",
+		log.Log(ctx, UnreadLevel(ctx), "api_token_seat_unavailable",
 			"login", p.Login, "seat", row.Seat,
 			"detail", binding.Detail, "error", errText(binding.Err))
 		return iam.Principal{}, iam.Unknown, nil

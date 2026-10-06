@@ -197,6 +197,29 @@ type fakeDirectory struct {
 	// a directory this node could not read them from.
 	bindings    []iamdomain.SeatBinding
 	bindingsErr error
+
+	// invitations is every invitation the estate holds, and invited the
+	// last query `GET /iam/invitations` asked of it.
+	invitations []iamdomain.InvitationRow
+	invited     iamdomain.InvitationsQuery
+}
+
+// Invitations answers every invitation it holds, the open ones alone unless
+// the query asks for all — the reader's own predicate, [iamdomain.InvitationRow.Spent].
+func (d *fakeDirectory) Invitations(_ context.Context, q iamdomain.InvitationsQuery) (
+	iamdomain.InvitationPage, error) {
+
+	d.invited = q
+	if d.err != nil {
+		return iamdomain.InvitationPage{}, d.err
+	}
+	var out iamdomain.InvitationPage
+	for _, row := range d.invitations {
+		if q.All || !row.Spent(q.Now) {
+			out.Invitations = append(out.Invitations, row)
+		}
+	}
+	return out, nil
 }
 
 func (d *fakeDirectory) SeatBindings(context.Context) ([]iamdomain.SeatBinding, error) {
@@ -314,9 +337,16 @@ type fakeWriter struct {
 	// identity is every identity change the surface asked for.
 	identity []iamdomain.IdentityEdit
 
+	// reasons is the reason the last call of each kind carried.
+	reasons map[string]string
+
 	// held is the credential set a SetCredentials call's Apply is run
 	// against, the way the real decide runs it against the snapshot.
 	held []iamdomain.Credential
+
+	// document, when a case sets it, is the person an UpdatePerson call's
+	// Apply is run against, and what it formed afterwards.
+	document *iamdomain.Person
 
 	// rerun, when set, is a SECOND snapshot the Apply is run against
 	// after the first — the real decide's round after a lost race, whose
@@ -355,6 +385,14 @@ func (w *fakeWriter) op(what, opID string) {
 	w.ops[what] = append(w.ops[what], opID)
 }
 
+// reason records the reason one call carried.
+func (w *fakeWriter) reason(what, why string) {
+	if w.reasons == nil {
+		w.reasons = map[string]string{}
+	}
+	w.reasons[what] = why
+}
+
 func (w *fakeWriter) did(what string) (statelog.Result, error) {
 	w.calls = append(w.calls, what)
 	if w.err != nil {
@@ -381,6 +419,7 @@ func (w *fakeWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
 	statelog.Result, error) {
 
 	w.enrolled = in
+	w.reason("enrol", in.Reason)
 	w.op("enrol", in.OpID)
 	return w.did("enrol")
 }
@@ -389,13 +428,25 @@ func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) 
 	statelog.Result, error) {
 
 	w.updated = in
+	w.reason("update", in.Reason)
 	w.op("update", in.OpID)
+	if w.document != nil && in.Apply != nil {
+		// THE DECIDE'S OWN ROUND, against the document a case set: a
+		// refusal publishes nothing and comes back unwrapped.
+		formed, err := in.Apply(*w.document)
+		if err != nil {
+			w.calls = append(w.calls, "update")
+			return statelog.Result{}, err
+		}
+		*w.document = formed
+	}
 	return w.did("update")
 }
 
 func (w *fakeWriter) SetStage(_ context.Context, _ string, _ iam.Stage,
-	opID, _ string) (statelog.Result, error) {
+	opID, reason string) (statelog.Result, error) {
 
+	w.reason("stage", reason)
 	w.op("stage", opID)
 	return w.did("stage")
 }
@@ -447,6 +498,7 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 	iamdomain.InviteIssued, error) {
 
 	w.invited = in
+	w.reason("invite", in.Reason)
 	w.op("invite", in.OpID)
 	result, err := w.did("invite")
 	// THE REAL DERIVATION, under a fixture key: the id is the operation's,
@@ -469,6 +521,14 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 		ExpiresAt: in.ExpiresAt}, err
 }
 
+func (w *fakeWriter) CancelInvitation(_ context.Context, _, opID, reason string) (
+	statelog.Result, error) {
+
+	w.reason("cancel", reason)
+	w.op("cancel", opID)
+	return w.did("cancel")
+}
+
 // MayConfer is the record's own rule, over the grants the rig's authority
 // handed this writer: a case about a grant the caller may not confer is about
 // the surface asking it, and a fake that admitted everything would pass it.
@@ -482,9 +542,10 @@ func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
 	return nil
 }
 
-func (w *fakeWriter) Revoke(_ context.Context, _, opID, _ string) (
+func (w *fakeWriter) Revoke(_ context.Context, _, opID, reason string) (
 	statelog.Result, error) {
 
+	w.reason("revoke", reason)
 	w.op("revoke", opID)
 	return w.did("revoke")
 }
@@ -496,9 +557,10 @@ func (w *fakeWriter) InvalidateAll(_ context.Context, opID, _ string) (
 	return w.did("invalidate")
 }
 
-func (w *fakeWriter) Remove(_ context.Context, _, opID, _ string) (
+func (w *fakeWriter) Remove(_ context.Context, _, opID, reason string) (
 	statelog.Result, error) {
 
+	w.reason("remove", reason)
 	w.op("remove", opID)
 	return w.did("remove")
 }
@@ -514,6 +576,15 @@ func (fakeOpener) Open(_ string, field iamdomain.Field, sealed string) (string, 
 		return "Opened Name", nil
 	}
 	return "opened@example.com", nil
+}
+
+// OpenInvitation opens an invitation's address, and refuses one sealed under a
+// key this keyring does not hold — the fixture spells it `foreign`.
+func (fakeOpener) OpenInvitation(_ string, sealed string) (string, error) {
+	if sealed == "foreign" {
+		return "", errors.New("sealed under a key this keyring does not hold")
+	}
+	return "invited@example.com", nil
 }
 
 // --- what the surface guards -------------------------------------------- //
@@ -690,6 +761,10 @@ func (o failingOpener) Open(person string, field iamdomain.Field,
 	return fakeOpener{}.Open(person, field, sealed)
 }
 
+func (failingOpener) OpenInvitation(id, sealed string) (string, error) {
+	return fakeOpener{}.OpenInvitation(id, sealed)
+}
+
 // A READ THIS NODE COULD NOT PERFORM IS 503 AND NEVER AN EMPTY LIST.
 //
 // An identity estate that could not be read and a company with nobody in it
@@ -818,17 +893,34 @@ func TestTheInviteUrlIsReturnedExactlyOnce(t *testing.T) {
 		t.Errorf("the invitation expires at %s, want %s",
 			r.writer.invited.ExpiresAt, at.Add(iamapi.InviteWindow))
 	}
-	// AND NOTHING READS IT BACK. The surface holds no route that could:
-	// the one place the URL exists is the answer above.
-	for _, target := range []string{
-		"/iam/invitations", "/iam/invitations/" + id,
-	} {
-		if got := r.as(administrator(), http.MethodGet, target, nil); got.status == http.StatusOK {
-			t.Errorf("%s answered 200, so an invitation link is readable back",
-				target)
+	// AND NOTHING READS IT BACK. The listing names the invitation and never
+	// its link, and no route reads one invitation back: the one place the
+	// URL exists is the answer above.
+	r.directory.invitations = []iamdomain.InvitationRow{{
+		ID: id, Sealed: "sealed", ExpiresAt: at.Add(time.Hour),
+		Verifier: iamdomain.InvitationVerifier(secret),
+	}}
+	listed := r.as(administrator(), http.MethodGet, "/iam/invitations", nil)
+	if listed.status != http.StatusOK {
+		t.Fatalf("the listing answered %d (body %v)", listed.status, listed.body)
+	}
+	raw, _ := json.Marshal(listed.body)
+	for _, leak := range []string{secret, iamdomain.InvitationVerifier(secret),
+		inviteRoute} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("the listing carries %q, so an invitation link is "+
+				"readable back: %s", leak, raw)
 		}
 	}
+	if got := r.as(administrator(), http.MethodGet, "/iam/invitations/"+id,
+		nil); got.status == http.StatusOK {
+		t.Error("one invitation is readable back by its id")
+	}
 }
+
+// inviteRoute is the dashboard screen an invitation's link opens, which no
+// listing may name.
+const inviteRoute = "#/invite/"
 
 // --- the report ---------------------------------------------------------- //
 
@@ -1144,6 +1236,85 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 	}
 }
 
+// A CHANGE TO SOMEBODY'S GRANTS LEAVES THE ONES IT DOES NOT NAME AS THEY ARE
+// WHEN IT LANDS.
+//
+// An editor works from a read, and another administrator may change the same
+// person before the edit lands. Bob's row is read holding state:read; by the
+// time the document is decided another administrator has stripped it in one
+// case and given him audit:read in the other. Adding people:manage leaves the
+// strip standing, and removing state:read leaves the new audit:read — where
+// the whole set the editor's read implied would hand state:read back and take
+// audit:read away, and nothing refuses either, since only an addition needs
+// the caller to hold the grant. Mutation: apply the change to the row read
+// before the decide rather than to the document it is handed, and both go red.
+func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		decided []iam.Grant
+		body    map[string]any
+		want    []iam.Grant
+	}{
+		"a grant stripped meanwhile stays stripped": {
+			decided: nil,
+			body:    map[string]any{"add_grants": []string{"people:manage"}},
+			want:    []iam.Grant{iam.GrantPeopleManage},
+		},
+		"a grant given meanwhile stays given": {
+			decided: []iam.Grant{iam.GrantStateRead, iam.GrantAuditRead},
+			body:    map[string]any{"remove_grants": []string{"state:read"}},
+			want:    []iam.Grant{iam.GrantAuditRead},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.document = &iamdomain.Person{V: iamdomain.DocumentVersion,
+				Kind: iam.KindPerson, Stage: iam.StageActive, Grants: tc.decided}
+			got := r.as(administrator(), http.MethodPatch,
+				"/iam/people/"+bob.String(), tc.body)
+			if got.status != http.StatusOK {
+				t.Fatalf("status %d (body %v)", got.status, got.body)
+			}
+			if !slices.Equal(r.writer.document.Grants, tc.want) {
+				t.Errorf("the document holds %v, want %v", r.writer.document.Grants,
+					tc.want)
+			}
+		})
+	}
+
+	// AND A BODY THAT CANNOT SAY WHICH IT MEANS IS REFUSED BEFORE ANY RECORD:
+	// both shapes at once, a grant both added and removed, a name that is no
+	// grant (removed as nothing, it would be a typo answered 200) — and an
+	// addition the caller may not confer is refused there too.
+	for name, tc := range map[string]struct {
+		body   map[string]any
+		status int
+	}{
+		"the whole set and a change": {map[string]any{
+			"grants": []string{"state:read"}, "add_grants": []string{"people:manage"}},
+			http.StatusBadRequest},
+		"a grant added and removed": {map[string]any{
+			"add_grants": []string{"state:read"}, "remove_grants": []string{"state:read"}},
+			http.StatusBadRequest},
+		"a name that is no grant": {map[string]any{
+			"remove_grants": []string{"state:raed"}}, http.StatusBadRequest},
+		"an addition the caller does not hold": {map[string]any{
+			"add_grants": []string{"secrets:read"}}, http.StatusForbidden},
+	} {
+		r := newRig(t)
+		got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
+			tc.body)
+		if got.status != tc.status {
+			t.Errorf("%s answered %d, want %d (body %v)", name, got.status,
+				tc.status, got.body)
+		}
+		if len(r.writer.calls) != 0 {
+			t.Errorf("%s published %v before it was refused", name, r.writer.calls)
+		}
+	}
+}
+
 // AN EDIT THAT CHANGED NO DOCUMENT ANSWERS ITS OUTCOME, beside the row.
 //
 // An edit with nothing left for the person's own document reads the row back,
@@ -1238,6 +1409,105 @@ func TestACreateWhoseSeatIsTakenCreatesNobody(t *testing.T) {
 	}
 	if !slices.Equal(r.writer.calls, []string{"enrol"}) {
 		t.Errorf("calls %v, want the one refused enrolment", r.writer.calls)
+	}
+}
+
+// A GESTURE'S OWN REASON SAYS WHAT WAS DONE AND BY WHOM, IN WORDS.
+//
+// Where its caller gave no reason, each write recorded the ROUTE it came
+// through — "suspended through /iam/people", "every session was ended through
+// /iam" — and that is what the identity trail's Detail and every session a
+// suspension or a revocation ends were shown as. A stage change names its
+// stage, since a suspension's reason is what every session it ends is listed
+// as ended by. The CONTROL is a reason the caller gave, which is carried as
+// given. Mutation: name the route again and every default case goes red; pass
+// the edit's reason to the stage change and the stage cases do.
+func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, method, target string
+		body                 map[string]any
+		call, want           string
+	}{
+		{"a create", http.MethodPost, "/iam/people", map[string]any{
+			"login": "dana.sre", "email": "dana@example.com"},
+			"enrol", "created by alice.admin"},
+		{"an edit", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"name": "Bob"}, "update", "changed by alice.admin"},
+		{"a suspension", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"stage": "suspended"}, "stage", "suspended by alice.admin"},
+		{"a reactivation", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"stage": "active"}, "stage", "reactivated by alice.admin"},
+		{"a suspension with a reason (the control)", http.MethodPatch,
+			"/iam/people/" + bob.String(), map[string]any{"stage": "suspended",
+				"reason": "left the company"}, "stage", "left the company"},
+		{"a removal", http.MethodDelete, "/iam/people/" + bob.String(), nil,
+			"remove", "removed by alice.admin"},
+		{"ending every session", http.MethodDelete,
+			"/iam/people/" + bob.String() + "/sessions", nil,
+			"revoke", "every session ended by alice.admin"},
+		{"an invitation", http.MethodPost, "/iam/invitations",
+			map[string]any{"email": "dana@example.com"}, "invite",
+			"invited by alice.admin"},
+		{"a cancellation", http.MethodDelete, "/iam/invitations/inv-1", nil,
+			"cancel", "cancelled by alice.admin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			got := r.as(administrator(), tc.method, tc.target, tc.body)
+			if got.status >= http.StatusBadRequest || r.writer.reasons[tc.call] != tc.want {
+				t.Errorf("answered %d (%v) with the reason %q, want %q", got.status,
+					got.body, r.writer.reasons[tc.call], tc.want)
+			}
+		})
+	}
+}
+
+// A VALUE SOMEBODY ELSE HOLDS IS REFUSED IN WORDS AN ADMINISTRATOR CAN READ.
+//
+// The detail used to be the domain's error, which is written for a log: the
+// package's name, the holder's raw id and — for an address — its BLIND, a
+// digest nobody can read, all shown verbatim by the dashboard, under
+// `bad_params`, whose sentence is about a query parameter. It is `invalid`
+// now, naming the value and the holder by their login, with the ids beside the
+// sentence rather than in it. The address held by an open invitation names
+// the invitation. Mutation: answer the domain's error as the detail and every
+// case goes red; name the holder by id and the login cases do.
+func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		taken *iamdomain.ErrTaken
+		want  string
+	}{
+		{"a seat", &iamdomain.ErrTaken{Field: iamdomain.UniqueSeat,
+			Value: "platform-lead", Person: bob.String()},
+			"the seat platform-lead is already held by bob.sre"},
+		{"an address", &iamdomain.ErrTaken{Field: iamdomain.UniqueEmail,
+			Value: "0123456789abcdef", Person: bob.String()},
+			"that address is already held by bob.sre"},
+		{"an address an invitation holds", &iamdomain.ErrTaken{
+			Field: iamdomain.UniqueEmail, Value: "0123456789abcdef",
+			Invitation: "inv-1"}, "held by an open invitation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.refusals = map[string]error{"enrol": tc.taken}
+			got := r.as(administrator(), http.MethodPost, "/iam/people",
+				map[string]any{"login": "dana.sre", "email": "dana@example.com",
+					"seat": "platform-lead"})
+			detail, _ := got.body["detail"].(string)
+			if got.status != http.StatusConflict || got.body["error"] != "invalid" ||
+				!strings.Contains(detail, tc.want) ||
+				strings.Contains(detail, "iamdomain") ||
+				strings.Contains(detail, tc.taken.Value) && tc.taken.Field == iamdomain.UniqueEmail ||
+				strings.Contains(detail, bob.String()) {
+				t.Errorf("answered %d %v, want 409 `invalid` saying %q", got.status,
+					got.body, tc.want)
+			}
+		})
 	}
 }
 

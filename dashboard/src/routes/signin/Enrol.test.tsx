@@ -94,6 +94,9 @@ function mount() {
   location.hash = `#/enrol?next=${encodeURIComponent(NEXT)}`;
   const store = new Store();
   const socket = new LiveSocket(store);
+  // THE FRAME'S DIAL (`start`), for the whole session it reads once the
+  // enrolment lands; `reconnect` is nothing an enrolment may call.
+  const dial = vi.spyOn(socket, "start");
   const reconnect = vi.spyOn(socket, "reconnect");
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -102,7 +105,7 @@ function mount() {
       </Router>
     </ClientContext.Provider>,
   );
-  return { reconnect };
+  return { dial, reconnect };
 }
 
 function alerts(): string[] {
@@ -168,8 +171,18 @@ describe("enrolling", () => {
     const sent = engine({
       "POST /auth/totp": [SEED, ENROLLED],
       "POST /auth/totp/recovery": { status: 200, body: { codes: CODES } },
+      "GET /auth/session": {
+        status: 200,
+        body: {
+          person: "p-1",
+          login: "jane.doe",
+          kind: "person",
+          grants: ["state:read"],
+          status: "signed_in",
+        },
+      },
     });
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     needSession("second_factor");
     await confirmCode("123456");
 
@@ -178,9 +191,11 @@ describe("enrolling", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /I have saved them/ }));
     await waitFor(() => expect(location.hash).toBe(NEXT));
-    // THE SOCKET WAS REFUSED under the restricted session and re-dials under
-    // the whole one; and the need that sent the reader here is answered.
-    expect(reconnect).toHaveBeenCalled();
+    // THE SOCKET WAS REFUSED under the restricted session, and the frame
+    // the reader lands in dials it under the whole one; and the need that
+    // sent the reader here is answered.
+    await waitFor(() => expect(dial).toHaveBeenCalled());
+    expect(reconnect).not.toHaveBeenCalled();
     expect(currentSessionNeed()).toBeNull();
   });
 

@@ -198,8 +198,13 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 		// routes do with it is create people and open sessions, both of
 		// which are the deployment's to do on somebody's behalf — a
 		// person cannot author their own enrolment, because they do not
-		// exist until it lands.
-		Writer:   writer,
+		// exist until it lands. It is the AUTHOR only of what the engine
+		// decides for itself: a password re-hashed at this build's cost.
+		Writer: writer,
+		// AND THAT WRITER WRITING FOR A PERSON, for every gesture a person
+		// makes through these routes: the node only writes it down, and
+		// the trail names who made it — see [iamdomain.Writer.For].
+		Behalf:   func(person iam.Principal) authapi.Writer { return writer.For(person) },
 		Signer:   signer,
 		Hasher:   credential.NewHasher(credential.Default(), credential.VerifyCap()),
 		Throttle: throttle,
@@ -244,11 +249,13 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 }
 
 // signInDirectory is the sign-in surface's [authapi.Directory]: this node's
-// identity reader, with the one read that turns on a row being MISSING — whose
-// is a named session — proved against the identity log's end by the engine
-// ([engine.Engine.SessionStanding]), because the reader cannot read the log's
+// identity reader, with the reads that turn on a row being MISSING — whose is a
+// named session, and whether a link's id names an invitation or a reset link —
+// proved against the identity log's end by the engine
+// ([engine.Engine.SessionStanding], [engine.Engine.ResetByID],
+// [engine.Engine.InvitationByID]), because the reader cannot read the log's
 // end itself and a missing row on a node behind the log is a session still
-// running.
+// running, or a link issued through a peer.
 type signInDirectory struct {
 	*iamdomain.Reader
 	engine *engine.Engine
@@ -258,6 +265,18 @@ func (d signInDirectory) SessionStanding(ctx context.Context, lineage string,
 	now time.Time) (string, bool, error) {
 
 	return d.engine.SessionStanding(ctx, lineage, now)
+}
+
+func (d signInDirectory) ResetByID(ctx context.Context, id string) (
+	iamdomain.ResetRow, error) {
+
+	return d.engine.ResetByID(ctx, id)
+}
+
+func (d signInDirectory) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	return d.engine.InvitationByID(ctx, id)
 }
 
 // directorySurface builds /iam, on every node for [signInSurface]'s reason.

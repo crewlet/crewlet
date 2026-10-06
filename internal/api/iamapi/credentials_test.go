@@ -223,16 +223,22 @@ func TestATokenCannotOutliveTheCeiling(t *testing.T) {
 // One minted from a token is one whoever holds a pipeline's environment can
 // renew for ever, a year at a time, with nobody present. The request goes
 // through the real guard so the credential SHAPE is the guard's own answer.
-// Mutation: drop the check and the writer is asked to mint.
+// And it is `token_refused`, every such gesture's code: answered
+// `unauthorized`, its message said the credential lacked a grant beside a
+// detail saying no grant would do. Mutation: drop the check and the writer is
+// asked to mint; answer `unauthorized` and the code is wrong.
 func TestATokenCannotMintAToken(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	presented, row := aliceToken(t)
 	rec := throughTheGuard(t, r, row, http.MethodPost, "/iam/credentials",
 		presented)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("a token minting a token answered %d, want 403: %s",
-			rec.Code, rec.Body.String())
+	body := decodeBody(t, rec)
+	if rec.Code != http.StatusForbidden ||
+		body["error"] != string(httpjson.CodeTokenRefused) ||
+		body[authz.DetailReason] != string(authz.ReasonTokenRefused) {
+		t.Errorf("a token minting a token answered %d %v, want 403 token_refused",
+			rec.Code, body)
 	}
 	if len(r.writer.calls) != 0 {
 		t.Errorf("the writer was asked for %v", r.writer.calls)
@@ -543,4 +549,71 @@ type noSeats struct{}
 
 func (noSeats) Seat(context.Context, string) (session.Seat, bool, error) {
 	return session.Seat{}, false, nil
+}
+
+// THE LAST AUTHENTICATOR TAKES ITS RECOVERY CODES WITH IT.
+//
+// Recovery codes stand in for an authenticator app, and held alone they are a
+// second factor every sign-in asks for with ten single-use answers — the state
+// `POST /auth/totp/recovery` refuses to create. Revoking a person's only
+// authenticator here left the codes live, so the Account page said signing in
+// asked for a password alone while every sign-in asked for a code. The
+// second-factor reset takes both; so does revoking the last authenticator,
+// each withdrawal announced. The CONTROL is one of two authenticators, whose
+// revocation leaves the codes standing beside the other.
+//
+// Mutation: drop the recovery sweep and the only authenticator's revocation
+// leaves the codes live.
+func TestTheLastAuthenticatorTakesItsRecoveryCodesWithIt(t *testing.T) {
+	t.Parallel()
+	const (
+		app      = "018f3a9c-0000-7000-8000-0000000000d1"
+		spare    = "018f3a9c-0000-7000-8000-0000000000d2"
+		recovery = "018f3a9c-0000-7000-8000-0000000000d3"
+	)
+	for _, tc := range []struct {
+		name      string
+		spare     bool
+		codesGone bool
+	}{
+		{"the only authenticator", false, true},
+		{"one of two authenticators (the control)", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.held = []iamdomain.Credential{
+				{ID: app, Method: iamdomain.MethodTOTP},
+				{ID: recovery, Method: iamdomain.MethodRecovery},
+			}
+			if tc.spare {
+				r.writer.held = append(r.writer.held,
+					iamdomain.Credential{ID: spare, Method: iamdomain.MethodTOTP})
+			}
+			got := r.as(administrator(), http.MethodDelete, "/iam/credentials/"+app, nil)
+			if got.status != http.StatusOK {
+				t.Fatalf("status %d: %v", got.status, got.body)
+			}
+			for _, c := range r.writer.held {
+				want := c.ID == app || (c.ID == recovery && tc.codesGone)
+				if revoked := !c.RevokedAt.IsZero(); revoked != want {
+					t.Errorf("%s (%s) revoked=%v, want %v", c.ID, c.Method,
+						revoked, want)
+				}
+			}
+			var announced []string
+			for _, seen := range r.audit.all() {
+				if ev, ok := seen.(types.IAMCredentialRevoked); ok {
+					announced = append(announced, ev.Credential)
+				}
+			}
+			want := []string{app}
+			if tc.codesGone {
+				want = append(want, recovery)
+			}
+			if !slices.Equal(announced, want) {
+				t.Errorf("announced the revocation of %v, want %v", announced, want)
+			}
+		})
+	}
 }

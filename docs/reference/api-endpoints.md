@@ -228,18 +228,21 @@ node means nothing was done.
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply and every boot; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds, absent on a container no stamped apply has written), so a configuration activated earlier never overwrites them |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
-| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code after the same argon2id derivation — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
-| `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, and `min_password_length` — the deployment's own `api.auth.local.min_password_length`, never below the engine's twelve, which is exactly the floor every redemption enforces. **Unguarded**, and it carries **no user list and no count of people** |
-| `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it, the password floor, the `seat` it binds (`{handle, name}` as the chart calls it now — absent for an invitation that binds none), and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt**, counted on the audit trail's per-minute failure row (`iam_login_failures`) under the source it came from: walking ids or secrets is guessing at a link, and that source's count climbing is what shows it. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference |
-| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. The redemption is **one record** — the person, their address, their login, the seat the invitation binds and the spent link — so every refusal writes nothing: a seat removed or made an agent's since the issue is `410`, and one bound to somebody else since is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. The company's **first person** redeems exactly this way: a Tier A token issues their invitation — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
-| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage and grants, and `reauth_at`, the instant your proof of identity stops counting for a [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture — with `step_up_due` saying whether the next one will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
+| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code after the same argon2id derivation — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.totp` is `required` (its default) and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
+| `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: `{min_password_length, second_factor}` — the deployment's own `api.auth.min_password_length`, never below the engine's twelve, which is exactly the floor every password a person sets is held to, and `required` or `optional` from `api.auth.totp` (unset is `required`). Password sign-in is always served, so there is no backend to report. **Unguarded**, and it carries **no user list and no count of people** |
+| `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it (`invited_by` — a seat by the name the chart gives it, since a person bound to one writes as its handle, a person bound to none by their login, and absent for a machine — a Tier A token or a service account — whose coloned login, `token:founder`, is nothing the person holding the link would recognise), the password floor, the `seat` it binds (`{handle, name}` as the chart calls it now — absent for an invitation that binds none), a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill, and `signed_in_as` — the login of the session the browser asking is already signed in with, absent for one signed in as nobody — because redeeming ends that session, and the form says so first. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt**, counted on the audit trail's per-minute failure row (`iam_login_failures`) under the source it came from: walking ids or secrets is guessing at a link, and that source's count climbing is what shows it. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference. A node whose identity rows cannot **vouch** for a link that does not open — behind the identity log, or holding a record it could not apply — answers `503 identity_unavailable` instead, for an id it does not hold and a wrong secret alike, and counts nothing: the link may have been issued through a peer |
+| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. The redemption is **one record** — the person, their address, their login, the seat the invitation binds and the spent link — so every refusal writes nothing: a seat removed or made an agent's since the issue is `410`, and one bound to somebody else since is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. A browser that already holds a session — somebody else's, or the redeemer's own — has it **ended** as `POST /auth/logout` ends it, before the new one opens: its cookie is replaced, and the session it named was left live with no browser holding it. Every sign-in that opens a fresh session does the same (`POST /auth/login`, `POST /auth/token`). The company's **first person** redeems exactly this way: a Tier A token issues their invitation — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
+| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage and grants; your own `name` as your directory row holds it — absent for a Tier A token, which has no row, and where this node cannot read or open it, which never fails the answer; for a session cookie its `expires_at` and its `lineage` — the id a listing of your sessions names it by, so a client can tell which of them is this browser; and `reauth_at`, the instant your proof of identity stops counting for a [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture — with `step_up_due` saying whether the next one will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request. It answers to the token's **id**, not its value: a new value put under the same id leaves the sessions the old value opened working until their hour ends, so to cut a leaked value's sessions off at once, rotate by giving the token a **new id** — see [Identity and access](../concepts/identity-and-access.md#the-three-credential-shapes-meet-at-one-frame). `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted on the audit trail's per-minute failure row, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline |
-| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. **Never through a machine token**: one is `403 unauthorized` with `reason: token_refused`, whatever its owner may do, because a token proves nobody is present. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
-| `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up`, refused as `POST /auth/totp` is, a machine token included. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
+| `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. **Never through a machine token**: one is `403 token_refused`, whatever its owner may do, because a token proves nobody is present. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
+| `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up`, refused as `POST /auth/totp` is, a machine token included. Issued only beside an authenticator app: a person who holds none is refused `409 invalid` and issued nothing, because recovery codes held alone are a second factor every sign-in would ask for with only those ten single-use answers — the first set comes with the first enrolment. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
 | `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine. It ends the session behind **either** cookie name — the one this deployment issues, and the other a browser may still hold from before `api.external_url` moved to https, which the guard no longer authenticates — and clears both. Only a session this node's rows still hold is closed and announced as `iam_session_ended`: a cookie past its deadline, revoked, or naming a session a record already ended is cleared and nothing is written, and a node that cannot read its rows records the close without announcing it. **Unguarded**, and that is what makes the promise true: behind the request guard, a node that could not read its identity estate answered `503 identity_unavailable` before the sign-out ran and the cookie stayed set. It verifies every bearer the browser holds itself, and the origin check still judges it |
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
-| `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows, and whether you may end it is the authority table's — the same rule as `DELETE /iam/people/{id}/sessions`, so ending one session and ending all of somebody's never answer differently: your **own** on no proof at all (a session exchanged from a Tier A token counts the token's other sessions as its own), and **anybody else's** on `people:manage`, a proof inside `step_up` and a person present. A refusal is the table's own envelope — `403 unauthorized` naming `people:manage`, `403 step_up_required`, or `403 unauthorized` with `reason: token_refused` for a machine token. A lineage nobody holds answers `ended`, as a session already over does — ended by a record, past its absolute deadline, revoked or invalidated — with nothing written or announced; "nobody holds it" is **proved** against the identity log's end, so a node whose rows have not applied every record the log holds (it is behind, or holds one it could not apply) does not say it — a session opened through a peer is a row such a node is still missing, and `ended` would be a lie about a session still running. That node, and one that cannot read its rows at all, answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id`; asking again is a fresh close, and one that finds the first had landed answers `ended` |
+| `GET` | `/auth/reset/{id}` | **Says whose password a reset link sets, and never spends it** — the invitation view's rule, for its reason. **Unguarded**: the link is the credential, its **secret** presented in the `X-Crewlet-Reset-Secret` header and never in the URL; the link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/reset/<id>.<secret>`. Answers `{login, expires_at, min_password_length}`. Every way a link fails to open — an id that is no link, a secret that is not its link's, a link spent, revoked, ended by a counter or aged out, a person suspended, retired or removed since — is one `410 reset_spent` in the same bytes, and only a link that did **not** prove itself is a failed attempt on the per-minute failure row (method `reset`). A node whose identity rows cannot vouch for a link that does not open is `503 identity_unavailable` instead, counting nothing, as the invitation's view is. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) |
+| `POST` | `/auth/reset/{id}` | **Sets a new password from a reset link, once.** **Unguarded**. `{secret, password}`, the password held to the floor (`422 invalid`, naming the rule). One record sets it, spends the link with every other the person held and moves their revocation epoch — every session and machine token they held ends — judged by the link again in that record's own snapshot, so a link spent from another tab in between is the same `410 reset_spent`. Answers `{status: "password_set", login}` and **no session**: the person signs in next, where a second factor they hold still applies. Each spend is its own operation, so a second one — another tab, or a retry of a spend whose answer was lost — decides again, finds the link spent and is the same `410 reset_spent`, never a `password_set` for a password nothing set; the password the first spend set is the one that works. Issued by an administrator — `POST /iam/people/{id}/password-reset` |
+| `POST` | `/auth/password` | **Change your own password.** Takes `{current_password, new_password, code}`, and the proof is a step-up's, taken in this request — so no step-up is asked first. The current password is verified on the step-up's terms — on the throttle's curve for the login you are signed in as, a wrong one the `401 sign_in_refused` every failed sign-in answers, with `field: current_password` and a `detail` saying so, since the caller is already signed in as the person it is checked for. **`code` is asked of anybody who holds a second factor** — the current code from their authenticator app, or one of their recovery codes — exactly as a step-up asks it: absent, `401 second_factor_required`, which changes nothing and counts as no attempt; wrong or already spent, `401 sign_in_refused`, counted on the person's own curve as well as the pair's (a wait past five seconds is `429` with a `Retry-After`); right, it is spent. Without it, somebody holding your session cookie and your password but not your authenticator could end every session you held and lock you out. Somebody who holds no second factor sends no `code`. The new password is held to the password floor (`422 invalid`, naming the rule). Needs a person present: a machine token is `403 token_refused`, and a session exchanged from a Tier A token, which is no person's, is `403 forbidden`. **One record** sets the password and moves the person's revocation epoch, ending every session and machine token they held and every outstanding reset link; this browser is then handed a new session, proved now and answered in the sign-in's own shape. A change this node has not applied yet is `202` with `status: password_changed` and no session — sign in again with the new password — and one that finds the password changed by somebody else since it was verified is `409 stale` with the cookie cleared, because that change ended this session too. See [Changing your own password ends everything else](../concepts/identity-and-access.md#changing-your-own-password-ends-everything-else) |
+| `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows, and whether you may end it is the authority table's — the same rule as `DELETE /iam/people/{id}/sessions`, so ending one session and ending all of somebody's never answer differently: your **own** on no proof at all (a session exchanged from a Tier A token counts the token's other sessions as its own), and **anybody else's** on `people:manage`, a proof inside `step_up` and a person present. A refusal is the table's own envelope — `403 unauthorized` naming `people:manage`, `403 step_up_required`, or `403 token_refused` for a machine token. A lineage nobody holds answers `ended`, as a session already over does — ended by a record, past its absolute deadline, revoked or invalidated — with nothing written or announced; "nobody holds it" is **proved** against the identity log's end, so a node whose rows have not applied every record the log holds (it is behind, or holds one it could not apply) does not say it — a session opened through a peer is a row such a node is still missing, and `ended` would be a lie about a session still running. That node, and one that cannot read its rows at all, answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id`; asking again is a fresh close, and one that finds the first had landed answers `ended` |
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through — and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a bound person, the login for everybody else. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named, always an array — and `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
@@ -280,9 +283,9 @@ node means nothing was done.
 > cookie, and any other client sets the header. **No route reads a credential
 > off its URL**, the socket included: a `?token=…` authenticates nobody,
 > because a URL lands in proxy logs and browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
-> `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/static/*`),
-> and the five sign-in routes plus `/auth/invite/*` — a login cannot require a
-> login. That is an **exact list and not a `/auth/` prefix**: the same surface
+> `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/favicon.ico`,
+> `/static/*`), and `/auth/config`, `/auth/login`, `/auth/logout`,
+> `/auth/invite/*` and `/auth/reset/*` — a login cannot require a login. That is an **exact list and not a `/auth/` prefix**: the same surface
 > ends sessions and enrols second factors, and a prefix would put those behind
 > no credential at all. See
 > [Configuration § Auth](../concepts/configuration.md#auth).
@@ -332,7 +335,7 @@ node means nothing was done.
 > refused for theirs, and neither are the server-to-server edges (`/webhooks/*`,
 > `/otlp/*`, `/mcp/*`), which a server reaches with a credential of its own.
 > The sign-in routes are judged like every other write although no credential
-> guards them — `POST /auth/login` and `/auth/invite/{id}`
+> guards them — `POST /auth/login`, `/auth/invite/{id}` and `/auth/reset/{id}`
 > — because a sign-in posted from somebody else's
 > page is how an attacker leaves a victim's browser signed in as somebody the
 > attacker controls. See
@@ -374,9 +377,10 @@ already have:
 | Code | Why it is safe to be specific |
 |---|---|
 | `throttled` | `429` with a `Retry-After`: the seconds until this attempt is admitted. Keyed on the subject **as typed** from the caller's source — never on the source alone, and never on what it resolved to — a name nobody holds climbs the curve exactly as a real one does, so a stranger learns only that they failed recently from where they are, which they already knew. Keyed on the resolved person it would be an oracle — "this account exists and I can slow it down" — which is why the one curve that is, a second factor's, is reached only past the password |
-| `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens. It is also the `403` a session that may only enrol a second factor meets at `POST /auth/totp` once its person holds one — enrolled since, from another session: a password alone never enrols over a factor, and the remedy is to sign in again with it |
+| `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens. `POST /auth/step-up` answers it on the same rule, a `401`, to a right password with no code from a person who holds a second factor. It is also the `403` a session that may only enrol a second factor meets at `POST /auth/totp` once its person holds one — enrolled since, from another session: a password alone never enrols over a factor, and the remedy is to sign in again with it |
 | `second_factor_enrolment_required` | A `status` on a successful sign-in, and a `403` from every guarded route but three for the session it opened — reached only by somebody who proved the password, so it says nothing to a stranger. The deployment requires a second factor and this person holds none: the session may read `GET /auth/session`, enrol one at `POST /auth/totp` and re-confirm the password at `POST /auth/step-up`, and sign out at `POST /auth/logout`, which no guard stands in front of — and enrolling replaces it with a whole one. Its own code rather than `step_up_required`, because no fresher password changes the answer |
 | `invite_spent` | Read by somebody holding the link, which is already evidence it was issued to them. One code for redeemed, withdrawn and expired — and for a secret that is not the link's, answered in the same bytes as an id nobody issued — because the remedy is the same and telling them apart would say "already used" to somebody whose link merely aged out, or say which ids exist to somebody guessing secrets |
+| `reset_spent` | A password reset link's `410`, for `invite_spent`'s reasons: read by somebody holding the link, one code for spent, revoked, expired and a person the reset no longer reaches — and for a secret that is not the link's, in the same bytes as an id nobody issued. The remedy is the same: ask an administrator for a new one |
 
 ### A failure costs a wait, never a lockout
 
@@ -496,7 +500,8 @@ table made the refusal — every question, the policy every `/config/*` and
 `reason` is the authority table's own word for the rule that decided —
 `no_grant`, `not_self`, `not_lead`, `not_author`, `stage`, `seat_refused`,
 `token_refused` (a [machine token](#post-iamcredentials-mints-a-machine-token)
-on a gesture that needs a person present), `unnamed`, and `step_up` on the one
+on a gesture that needs a person present, answered under the code
+`token_refused` rather than `unauthorized`), `unnamed`, and `step_up` on the one
 refusal the caller clears themselves
 ([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants` are the capabilities any **one** of which would have
 admitted this caller for this object. An empty `grants` is an answer rather
@@ -537,8 +542,8 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
-| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password — and code, from somebody who holds a second factor — is itself the proof; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
 surface answers for the same fact, carrying the window it needs so a client can
@@ -572,8 +577,10 @@ day nobody can sign in as a person. What keeps a machine token off the
 gestures that need a person present is therefore never the clock, and it is
 two locks, both in the authority table. Every row that needs a person says so,
 and a request that presented a machine token is refused there
-`403 unauthorized` with `reason: token_refused` and no `grants`, since no
-capability would change it: revealing a secret, every `/iam/*` write that
+`403 token_refused` with `reason: token_refused` and no `grants`, since no
+capability would change it — a code of its own, whose `message` says a token
+cannot do this and its owner must, signed in, because `unauthorized`'s is
+about a missing grant: revealing a secret, every `/iam/*` write that
 changes who may do anything, ending every session in the company, changing how
 somebody proves who they are (`POST /auth/totp`, `POST /auth/totp/recovery`,
 and revoking a password, a second factor or the recovery codes through
@@ -679,12 +686,15 @@ list and nothing ever will be.
 | `PATCH /iam/people/{id}` | `people:manage` |
 | `DELETE /iam/people/{id}` | `people:manage` |
 | `POST /iam/invitations` | `people:manage` |
+| `GET /iam/invitations[?all=true]` | `people:manage` or `audit:read` |
+| `DELETE /iam/invitations/{id}` | `people:manage` |
 | `GET /iam/people/{id}/sessions` | the person themselves, `people:manage` or `audit:read` |
 | `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
+| `POST /iam/people/{id}/password-reset` | `people:manage`, for somebody holding no grant the caller does not |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
-| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused` with nothing written, on a node that had listed the credential before the write and on one that had not alike |
+| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused` with nothing written, on a node that had listed the credential before the write and on one that had not alike. Revoking a person's **last** authenticator app revokes their recovery codes with it, in the same record and each announced, because codes held alone are a second factor every sign-in would ask for with only those single-use answers |
 | `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
 | `GET /iam/seats` | `people:manage` or `audit:read` |
 | `GET /iam/check` | `people:manage` or `audit:read` |
@@ -717,6 +727,20 @@ answered `403` naming the grant.
 because "who can reach this company, and how" is the audit question — and it
 opens nothing that changes it, because a grant that could end a session is a
 grant that can lock a company out of its own engine.
+
+**A listing says what still works.** A session's `live` and a credential's
+`revoked` are the reading the request guard makes: a session or a machine token
+ended by its person's revocation epoch — a password change, signing out
+everywhere, an administrator ending their sessions, a suspension — or by
+`POST /iam/invalidate-all` is listed ended, and a named sign-out of a session
+listed live finds it live. A session keeps the `ended_reason` and `ended_at` of
+whatever ended it — a revocation writes its own on every session it ends, and a
+later one never rewrites them — while `POST /iam/invalidate-all`, which writes
+nothing per session, lists its sessions ended "with every session in the
+company" and no `ended_at`; neither counter writes a `revoked_at` on a token. A
+session a revocation had already ended when its start landed is listed ended
+"with every session they held", with no `ended_at`, and no later revocation
+claims it.
 
 #### Every write answers three ways
 
@@ -773,8 +797,11 @@ another address, another login, other grants — is `409 bad_params` carrying th
 `op_id`, and so is the key of an invitation since redeemed or aged out: a retry
 is the same request, and a new person or a new link is a new key.
 
-An address, a login or a seat somebody else holds is `409` **naming who holds
-it**; an address an open invitation holds names the invitation.
+An address, a login or a seat somebody else holds is `409 invalid` **naming who
+holds it** — `field` says which value, `held_by` is the holder's id, and the
+`detail` names them by their login; an address an open invitation holds names
+the `invitation` instead. The address itself is never repeated back, since the
+estate holds it only as a blind.
 An authority refusal is `403` and will never land however often it is retried.
 A login that is absent or outside its holder's kind is `400` — `POST
 /iam/people` requires one for a person as for a machine, because it is the
@@ -783,9 +810,17 @@ and a machine's is coloned (`ci:release`, or `token:<id>` to bind a Tier A
 token), at most 64 characters either way, checked on a create and on a rename
 alike — and so is a `kind` other
 than `person` or `machine`, since a seat belongs to the company document and
-the engine is the node. A value outside a bound is `400` too: a `reason` longer than 256
+the engine is the node. A write's `reason` is optional, and without one the
+record says what was done and by whose login, in words — `suspended by
+jane.doe`, `every session ended by jane.doe`, `invited by jane.doe` — which is
+the trail's detail and, for a suspension or ending somebody's sessions, what
+each session it ends is listed as ended by. A value outside a bound is `400`
+too: a `reason` longer than 256
 bytes (it is rendered into the authentication trail beside the op, so it
-names which cause fired rather than narrating). An enrolment is one record, so a
+names which cause fired rather than narrating), and a machine given
+`secrets:read` or `people:manage` — by a create, or by an edit that adds one —
+since a machine acts only through tokens and a token never carries either. An
+enrolment is one record, so a
 refused create leaves nothing behind and the corrected retry lands.
 
 #### `POST /iam/credentials` mints a machine token
@@ -806,7 +841,7 @@ for 90 days. The answer is `201` with
 |---|---|
 | `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
 | `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, an owner already holding 64 live credentials — a revoked or expired one gives up its place to the new token, the earliest to lapse first, so revoking a token nothing uses makes room at once |
-| `403` | The request presented a machine token; a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; an owner who may not act |
+| `403` | The request presented a machine token (`token_refused`); a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; an owner who may not act |
 | `404` | Nobody by that id |
 
 **`Idempotency-Key` is ignored here, deliberately.** A retry that landed once
@@ -837,10 +872,20 @@ refused first, it is refused with nothing landed. The record states the login
 and the seat the person holds from now on, so the old ones are free the moment
 it lands; `seat: ""` unbinds.
 
+**Grants are the whole set or a change to it, never both.** `grants` replaces
+what the person holds — what `crewlet iam grant` sends, stating it outright.
+`add_grants` and `remove_grants` are applied to what they hold **when the
+record is decided**, which is what an editor working from an earlier read
+means: sent whole, the grants that editor never touched are the ones the read
+held, so a grant another administrator took away meanwhile would come back and
+one they gave would go — and nothing would refuse it, since only an addition
+needs the caller to hold the grant. The dashboard's edit sends the change.
+
 **Everything the surface can judge alone is refused before the first record**:
 a `login` of `""` (a login is never cleared, only changed), a `stage` this
-build cannot name, a `reason` past 256 bytes, and `grants` the caller may not
-confer (`403`). What only a later record can decide — a grant the caller's own
+build cannot name, a `reason` past 256 bytes, `grants` beside `add_grants` or
+`remove_grants`, a name in either that is no grant or that is in both (`400`),
+and grants the caller may not confer (`403`). What only a later record can decide — a grant the caller's own
 row stopped letting them confer a moment ago — is refused by that record, and
 the steps before it have landed. So a refusal met after the first record
 carries `landed`, the fields whose change was made (`identity`, `stage`), and a
@@ -856,11 +901,13 @@ record may hold the value, so another node decides it.
 
 #### Values that are shown once
 
-`POST /iam/invitations` answers the invitation URL and `POST /iam/credentials`
-answers the token. Neither is stored and neither can be read back: what the
-estate holds is the invitation's id and a SHA-256 of the secret its link
-carries, and a SHA-256 of the token. An invitation an administrator lost is
-re-issued rather than recovered.
+`POST /iam/invitations` answers the invitation URL, `POST
+/iam/people/{id}/password-reset` a reset link and `POST /iam/credentials` the
+token. None is stored and none can be read back: what the estate holds is the
+invitation's id and a SHA-256 of the secret its link carries, the same for a
+reset link, and a SHA-256 of the token. An invitation an administrator lost is
+cancelled and issued again rather than recovered, and a reset link is simply
+issued again.
 
 The invitation URL is the **dashboard's invitation screen**:
 
@@ -884,6 +931,93 @@ company does not hold and an agent's seat are `400`, and one somebody holds is
 `POST /iam/invitations` on a node with no `api.external_url` is `500
 no_external_url`: there is no address a link could point at, and only the
 node's own configuration file can supply one.
+
+#### `GET /iam/invitations` lists them, and never a link
+
+```json
+{
+  "invitations": [
+    {"id": "0192f00d-…", "email": "sam@example.com", "seat": "qa-lead",
+     "grants": ["state:read", "work:write"], "invited_by": "ana.admin",
+     "created_at": "2026-06-08T09:12:00Z", "expires_at": "2026-06-15T09:12:00Z",
+     "state": "open"}
+  ],
+  "next": "",
+  "position": "CREWLET_IAM_LOG@0:1840"
+}
+```
+
+The invitations nobody has redeemed and that are still good, paged on their id
+as `GET /iam/people` pages (`?after=`, `?limit=`). `?all=true` adds the
+expired and the redeemed ones this estate still holds — until the sweep
+collects them — and `state` says which: `open`, `expired`, or `redeemed`, with
+`redeemed_at` and the `person` it created. The address is opened on this
+node's own keyring and a row it cannot open reads `sealed`, as a person's does;
+a redeemed row whose person has since been **removed** carries no `email` and is
+not `sealed`, because a removal erases every value of theirs other rows hold.
+**No row carries the link**, its secret or what the estate keeps of it: the
+link is shown once, and an inviter who lost it cancels and issues another.
+
+#### `DELETE /iam/invitations/{id}` withdraws one nobody redeemed
+
+One directory record, `?reason=` recorded on it. Its apply deletes the
+invitation's row, so the link answers `410` exactly as one nobody issued, and
+the address it held is free for a new invitation or a create at once. It reads
+an `Idempotency-Key` like every keyed write here. An id this estate does not
+hold is `404` — never issued, cancelled already, or collected by the sweep —
+and a **redeemed** invitation is `409 stale` naming the `person` it created:
+the redemption overtook the reading the cancel was made from, the link is
+spent, and what undoes it is removing that person. Each cancellation
+is an `iam_invitation_cancelled` event, by the invitation's id and never its
+address.
+
+#### `POST /iam/people/{id}/password-reset` issues a one-time link
+
+```json
+{
+  "id": "018f3a9c-…",
+  "credential": "0192f00d-…",
+  "url": "https://crewlet.example.com/dashboard#/reset/<id>.<secret>",
+  "expires_at": "2026-06-09T09:12:00Z",
+  "outcome": "applied",
+  "position": "CREWLET_IAM_LOG@0:1841"
+}
+```
+
+`201` with a link that sets the person a new password **once**: the
+dashboard's reset screen, the credential's id and a secret in the fragment, as
+an invitation's link is built — and on a node with no `api.external_url` it is
+the same `500 no_external_url`. The link is a `reset` credential on the person,
+stored as the SHA-256 of its secret and good for **24 hours**: it travels out
+of band to somebody locked out today. It is listed among the person's
+credentials (`GET /iam/credentials?person=`), revoked like any of them, and
+issuing another revokes the one before it — a person holds at most one. Once
+spent it is listed `revoked` and `spent: true`, since setting the password
+revokes every link the person held, the one they used included. It also ends
+with the person's sessions and tokens: stamped with their revocation epoch and
+the company's session generation, it is refused — and listed `revoked` — once
+a suspension, a second factor's reset (`POST /iam/people/{id}/mfa/reset`),
+signing them out everywhere, ending their sessions or `POST
+/iam/invalidate-all` moves either, and a reactivation does not bring it back —
+so a link needed beside any of those is issued after it, or it is `410
+reset_spent` by the time it is opened. A
+machine is `409` (it has no password; mint it a token), and so is a person
+`suspended` or `retired`, naming the `stage`, because a link would hand back an
+account somebody stopped: reactivate them first. A person holding a grant the
+caller does not is `403 unauthorized`, judged in the record's own snapshot:
+whoever issues the link is shown it and could spend it themselves, so a link is
+held to the rule an invitation and an edit are — nobody hands out a grant they
+do not hold.
+
+**Shown once, and no key is read.** Like a token's mint, a replay of the issue
+could not hand back a secret its first attempt never showed, so the route
+ignores `Idempotency-Key`; an issue whose outcome is unknown is `503` naming
+its `op_id` and carrying no link, and the remedy is to issue again, which
+revokes the one that may have landed. Each issue is an
+`iam_password_reset_issued` event — for whom, by whom, until when, never the
+link. **Spending it** is `POST /auth/reset/{id}`, among the `/auth` routes
+above: it sets the password, ends every session and machine token the person
+held, and signs nobody in.
 
 #### `GET /iam/people` pages on a key the applier writes
 
@@ -1007,8 +1141,19 @@ Each entry names its `actor` and `actor_kind`, and — where there is one —
 machine token acting as its owner, `session:<lineage>` for one of their
 browser sessions, a Tier A token's own login. A token acts as its owner, so
 `actor` is the owner either way, and `operator_id` is what tells their token's
-gesture from their own. It is absent from an entry the sign-in surface or a
-duty wrote: the node acts on nobody's credential.
+gesture from their own. A gesture a person makes through the sign-in surface
+— signing in or out, spending a second factor, redeeming an invitation,
+setting a password from a reset link, enrolling their own authenticator — is
+theirs: the node writes it down under its own authority, and the entry names
+the person as `actor` and the session it opened or closed as `operator_id`
+(their login, where it came through no session yet). An entry the engine
+decided for itself — a sweep, a re-seal, a password re-hashed at the current
+cost — names the node and no `operator_id`: the node acts on nobody's
+credential.
+
+An entry about somebody names them by `person`, their id, and by `login`, the
+login their row holds when the trail is read — absent once they are removed,
+since the removal erases what identified them and the trail keeps the id.
 
 ### `/config/*` — live config management (auth-gated)
 
@@ -1433,7 +1578,7 @@ On a `409`, re-read `/config` and send the edit again.
 
 - `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings"}`)
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
-- `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
+- `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key — asked last, once the write is admitted and its document checked, so a caller who may not make the change is answered the `403` first; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `config:read` on a read and `config:write` on a write, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
@@ -2590,7 +2735,7 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
-| `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for [its first invitation](../concepts/identity-and-access.md#how-the-first-person-exists), issued under a Tier A token — and `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to invite a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
+| `identity` | Whether this company has its **first person**: `ready` once a person is enrolled, `unclaimed` while nobody is — a service account alone signs nobody in with a password, so it does not count — a fresh install waiting for [its first invitation](../concepts/identity-and-access.md#how-the-first-person-exists), issued under a Tier A token — and `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to invite a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it), and on a node older than the field; never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
 | `alarms` | `{count, worst, worst_domain}`: how many of this node's [alarms](alarms.md) are firing, and `worst`, the one that has been firing **longest** (absent when `count` is 0) — the table asserts no severity of its own, and the condition that has gone unanswered longest is the one a health card names. `worst_domain` is the state log it fired on, for an alarm the table keeps **per log** (`log_headroom`, `log_ceiling_short`, `trim_blocked`, `deferred_old`, `floor_unknown`), and absent for one about the node as a whole: two logs' `trim_blocked` are two conditions with two remedies, and a card naming the kind alone could not say which log to look at. From the **same** evaluation the `crewlet.alarm.active` gauge and the `alarm_raised` / `alarm_cleared` log lines come from, which runs every fifteen seconds on every node. **Absent** before that evaluation first runs: nothing has looked yet, and `{count: 0}` would read as healthy. |
 | `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed, the live spend window and each seat's last turn that every screen starts from — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those screens a node short, and this is where that stays visible after the log line has scrolled away. |
@@ -3002,8 +3147,10 @@ upgrade, naming the grant — and every push kind is received only by a socket
 whose caller holds the grant that kind's question takes: `event` needs
 `audit:read` (it is an `events` row, carrying every phase's prompt and
 response), and every other company kind `state:read`. The snapshot is built for
-the same audience. When the socket's credential is decided again and its grants
-have changed, a fresh snapshot is sent for the new audience; one that finds
+the same audience. When the socket's credential is decided again and it
+resolves somebody else — another login, another seat or none, other grants —
+the socket closes `1013`, and the reconnect's handshake builds the snapshot for
+the new audience while the client asks who it is again; one that finds
 `state:read` gone closes the socket `4403` — see [Close codes](#close-codes).
 
 #### Pushes
@@ -3348,8 +3495,8 @@ Each answer does one thing:
 | The session ended, expired or was revoked; the token is no longer accepted | `4401` | Re-dial with the credential the browser holds now; if the handshake answers `401`, sign in. |
 | The person resolves but their seat is gone from the chart, or they no longer hold `state:read` | `4403` | Stop reconnecting and show why: the credential is fine, what it may do is not. |
 | This node will not vouch for the credential now: it could not read what decides it, an identity move named nobody, or the seat answers to another handle | `1013` | The standard's *try again later*: reconnect on a backoff. The handshake decides — and answers `503 identity_unavailable` with a `Retry-After` for as long as the node cannot say, before any snapshot is built. |
-| Resolved with different grants | *(no close)* | Nothing — the socket's pushes follow the new grants, and a fresh `snapshot` built for them replaces what the screen was showing. |
-| Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect from the record that narrowed it. |
+| Resolved as somebody else: renamed, bound to another seat or to none, given or refused a grant | `1013` | Reconnect, and ask who you are again (`viewer`): the handshake builds the snapshot for the new grants, and a screen that named the old login or seat — "your day" on a seat no longer yours — is redrawn as the new one. |
+| Resolved as the same login, seat and grants | *(no close)* | Nothing — and later questions are asked as the principal just resolved. |
 
 **A node behind its identity log** hears no record it has not applied, so
 inside the stall grace its open sockets are served on their last decision, as

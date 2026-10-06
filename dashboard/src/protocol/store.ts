@@ -116,8 +116,9 @@ export interface StoreState {
   /**
    * Why the engine KNOWS who this browser is and will not serve it this
    * surface, or null. Set by a `4403` close (the seat is gone from the chart,
-   * or the grant the socket needs was withdrawn) and by a `403` handshake;
-   * cleared when a socket opens. Distinct from `authRejected`, whose repair is
+   * or the grant the socket needs was withdrawn), by a `403` handshake, and by
+   * the frame for a session it read without that grant, which it never dials;
+   * cleared when a socket opens or is dialled again. Distinct from `authRejected`, whose repair is
    * a credential: signing in again reaches the same person with the same
    * access, so the only repair is an administrator's.
    */
@@ -375,10 +376,32 @@ export class Store {
     this.emit("inboxMoves");
   }
 
+  /**
+   * The engine knows this browser and will not serve it the company, or null.
+   *
+   * A REFUSAL DROPS WHAT THE ENGINE SERVED. It is a decision about who may
+   * read the company, so what an earlier socket sent stops being shown the
+   * moment it lands: a tab whose `state:read` was withdrawn went on naming the
+   * company, listing its agents and tools in the palette, from the snapshot it
+   * held — while a session that never held the grant, sent nothing, named and
+   * listed none of it. An outage keeps the last state on purpose ("showing the
+   * last state received"); a refusal is not an outage. `health` stays: it is
+   * the unguarded `/health`, not the company.
+   */
   setAccessRefused(reason: string | null): void {
     const next = reason === null ? null : reason || "refused";
     if (this.state.accessRefused === next) return;
     this.state.accessRefused = next;
+    if (next !== null) {
+      const { health, connected, authRejected } = this.state;
+      Object.assign(this.state, emptyState(), {
+        health,
+        connected,
+        authRejected,
+        accessRefused: next,
+      });
+      this.emit(...ALL_DATA_SLICES, "phases", "inboxMoves");
+    }
     this.emit("health");
   }
 

@@ -861,8 +861,6 @@ api:
                         #   source — in every audit row, and in the
                         #   sign-in throttle's key for every login
   auth:
-    backend: local      # local | none. Unset derives from whether the
-                        #   `local` block below is present
     max_grants:         # THE CEILING. Required once port is set
       [state:read, audit:read, config:read, secrets:read,
        work:write, knowledge:write, config:write, secrets:write,
@@ -881,18 +879,21 @@ api:
       changes: 9600h    # 2160h..24000h (default 9600h = 400 days)
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never
                         #   longer than `changes`
-    local:              # present on the `local` backend
-      totp: required    # required | optional. NO DEFAULT: state one.
+    # People always sign in with a login and a password; these three say
+    #   what that asks of them.
+    totp: required      # required (the default when unset) | optional.
                         #   required: a password sign-in by somebody who
                         #   holds no second factor opens a session that may
-                        #   only enrol one (POST /auth/totp)
-      accept_insecure: false   # acknowledge an insecure posture off loopback
-      min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
-                               #   Enforced wherever a person sets a password
-                               #   — every invitation's redemption — and what
-                               #   /auth/config tells a form to refuse
+                        #   only enrol one (POST /auth/totp). optional off
+                        #   loopback is refused without accept_insecure
+    accept_insecure: false   # acknowledge an insecure posture off loopback
+    min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
+                             #   Enforced wherever a person sets a password —
+                             #   an invitation's redemption, a change, a reset
+                             #   link — and what /auth/config tells a form to
+                             #   refuse
     tokens:             # the DEPLOYMENT's machine credentials. At least one
-                        #   is required once port is set, on every backend
+                        #   is required once port is set
       - id: founder     # acts under the login token:founder — lowercase
                         #   letters, digits and hyphens, optionally joined
                         #   by colons (ci-pipeline, ci:release), at most 58
@@ -964,9 +965,9 @@ nodes disagree a legal state during a rollout. Each node therefore publishes a
 hash of its own resolved ceiling on its presence lease, and `/health` and the
 fleet view report a mixed one.
 
-**At least one `api.auth.tokens` entry is required**, on every backend. A fresh
+**At least one `api.auth.tokens` entry is required.** A fresh
 deployment's identity estate is empty, so a Tier A token is what invites the
-first person (`crewlet iam invite`) — and an invitation confers only what its
+first person (Settings › People & access, or `crewlet iam invite`) — and an invitation confers only what its
 issuer holds, so the token that invites them has to hold every grant they are
 to carry, `people:manage` included. On a running deployment it is the way back
 in when an administrator has locked themselves out. Each entry states its own

@@ -625,7 +625,19 @@ the rest need a grant the reader does not hold, and its title names those
 grants — what a reader would ask somebody for. It is drawn only once the viewer
 has answered, since a lock on every section while the first read is out claims
 a refusal nobody has made. The command palette says the same of a guarded
-destination in the same words — "needs `config:read`" beside its hint.
+destination in the same words — "needs `config:read`" beside its hint. And for
+a reader with **no access yet** — a session without `state:read`, which every
+workspace reads the company through — every row of the sidebar carries the
+lock ("Needs `state:read`"), Settings included: offered unmarked, each led to
+the same panel with nothing beside it saying so. In that frame, and in one the
+socket was refused, nothing of the company is offered at all: the sidebar's
+`+` is held with the refused reason below, its Projects and Pinned sections
+are not drawn, and the palette asks none of its questions and lists no seat or
+tool. A refusal DROPS what an earlier socket sent (`Store.setAccessRefused`),
+so a tab whose grant was withdrawn shows exactly what a session that never
+held it does, where it went on naming the company and listing its agents from
+the snapshot it held — an outage keeps the last state, and a refusal is not an
+outage.
 
 **A guarded section says so and nothing else.** Opened by a reader the engine
 has SAID holds none of the grants it needs, a guarded section is replaced by
@@ -669,9 +681,16 @@ without a sound.
 
 **The health card** says the one state that decides what a reader should do,
 in precedence order: nobody is signed in (the card is then the button that
-goes to the sign-in), the engine knows who this is and will not serve them (a
-seat taken out of the chart, a session without `state:read` — a statement, with
-the state bar beside it carrying the retry and the sign-out), reconnecting,
+goes to the sign-in), **no access yet** — a session without `state:read`, said
+in neutral ink because a person invited with no grants is not a fault, and
+for which the socket is never dialled (see [Signing in](#signing-in-is-a-screen-outside-the-frame))
+— then the engine knows who this is and will not serve them (a seat taken out
+of the chart). Both are statements, with every screen but the reader's Account
+replaced by one panel that names who they are from `GET /auth/session`, what
+they hold and why — for no access, that `state:read` would open the
+dashboard, which it then does by itself; for a refusal, the engine's reason —
+and offers the Account, a check or a retry, and the sign-out. Then
+reconnecting,
 draining, no configuration, a posture that
 diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
 ("Waiting for the engine" — nothing reported is not healthy), and serving —
@@ -700,9 +719,11 @@ ordinary, never a fault), or nobody (a **Sign in** button) — beside the theme
 flip and the **preferences**: theme (light, dark, match the system), density,
 the zone timestamps are drawn in (`Intl.supportedValuesOf` plus UTC, which the
 runtime's canonical list omits, or the browser's own) and how a date is
-written. Its popover also holds the session's own gestures — the second
-factor, new recovery codes and both sign-outs; see
-[Signing in](#signing-in-is-a-screen-outside-the-frame). The preferences are per browser and none is the company's: every key the
+written. Its popover also holds the session's own gestures — a link to the
+reader's [Account](#account-the-readers-own-page), the one workspace with no
+sidebar row of its own (`place: "menu"` in `app/nav.ts`), and both sign-outs,
+which stay in the popover because it is reached even by a person the socket
+refuses; see [Signing in](#signing-in-is-a-screen-outside-the-frame). The preferences are per browser and none is the company's: every key the
 dashboard keeps in browser storage is declared in one table
 (`lib/storage.ts`), and a key no build reads any more is listed there as
 retired and removed at boot, so a stale value does not sit in a reader's
@@ -715,12 +736,14 @@ zone. There is no company switcher: one engine runs one company.
 
 **The lockup is the company**, beside the product's mark: "Nimbus", on one
 line, and the way home. The product's name stands in only while no company has
-been sent. The kit's own default puts the product first and the company under
+been sent — which includes a session without `state:read`, since the name is
+part of the projection that grant reads, whether it never held the grant or
+had it withdrawn. The kit's own default puts the product first and the company under
 it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
-`g l`, `g k`, `g t`, `g s`). A chord rather than a modifier, because every
+`g l`, `g k`, `g t`, `g s`, and `g u` for your Account). A chord rather than a modifier, because every
 single-modifier combination worth having is already the browser's. Every key
 the dashboard answers is in [one table](#the-keys), and `?` shows it.
 
@@ -749,7 +772,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
 | `#/agents/edit` | **Edit org** — the builder, opened from the chart's button *(needs `config:write`)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) |
-| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
+| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile; a person's says who holds the seat, or that nobody does with an Invite for a `people:manage` holder. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs `audit:read`)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -765,7 +788,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by a `config:write` holder), and what is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
-| `#/settings/people` | **People & access** — the identity directory read-only: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the directory's own report (`/iam/check`), every human seat with whoever holds it (`/iam/seats`), and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`). Never a value *(needs `people:manage` or `audit:read`)*. No tail: a person's page is their seat | |
+| `#/settings/people` | **People & access** — the identity directory: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's own report (`/iam/check`), every human seat with whoever holds it (`/iam/seats`), and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`) *(needs `people:manage` or `audit:read`)*. A `people:manage` holder also invites, creates service accounts and mints their tokens, cancels invitations, and changes, suspends, resets, signs out and removes people; an invitation's link, a reset link and a token are shown once and never read back. No tail: a person's page is their seat | `person=` (the opened row, dropped when a removal made from it lands; one the directory does not hold — removed elsewhere, or mistyped — is said, with **Close**) |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(needs `config:read`)* | |
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry is a push every reader gets. Two things on it take `config:read`, and each says so in its own place: the servers' status (`mcp_servers_status`), and which seats hold a server's tools, which is the pushed org's `tool_sources` and reaches only a reader holding that grant. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs `config:read`; the edit `config:write`)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
@@ -774,8 +797,10 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs `config:read`)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs `fleet:operate`)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
-| `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home |
-| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it and the seat it binds, then a login, a name and a password. The link the engine mints lands here | |
+| `#/account` | **Account** — the signed-in reader's own page, opened from the user block's menu at the sidebar's foot (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
+| `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home; `login=` fills the login, and `after=reset` says the password was just set — what a reset link's own **Sign in** sends. Neither is a credential |
+| `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it (a person, never a machine: an invitation a Tier A token or a service account issued names no sender) and the seat it binds, then a login, a name and a password, typed twice. The link the engine mints lands here | |
+| `#/reset/{id}.{secret}` | **Password reset** *(outside the frame)* — whose password the link sets, then a new one, typed twice, once; it ends every session the person held and signs nobody in, so it ends on the sign-in form. The link an administrator issues lands here | |
 | `#/enrol` | **Second factor** *(outside the frame)* — the authenticator a deployment that requires one asks for before anything else opens, then the first recovery codes | `next=`, as the sign-in's |
 
 **There is no redirect table.** There was one, and it was always a liability: a
@@ -1459,7 +1484,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (the login, and that it is bound to no seat — ordinary, never a fault) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds the session's own gestures — a second factor and a new set of recovery codes, offered to a person's session and to nothing else since a machine holds no second factor, and both sign-outs, which need only `GET /auth/session` to answer: while the socket's `viewer` question has not (it never does for a person the socket refuses), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot: bound (their name, login and seat, linking to the seat's page), unbound (their own name, as `GET /auth/session` answers it from their directory row, beside the login, and that it is bound to no seat — ordinary, never a fault; the login alone where the row holds no name) or nobody (a **Sign in** button back to the screen they are on), with the grants beside it. Its popover holds a link to the reader's [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming the grant on a section the reader holds none of the grants for (drawn only once the viewer has answered) and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -1755,9 +1780,39 @@ Both of these shipped wrong once, and neither is visible in a URL.
 
 ### Signing in is a screen outside the frame
 
-Three routes draw no sidebar and no page header — `#/login`,
-`#/invite/{id}.{secret}` and `#/enrol` (`FRAMELESS` in `app/nav.ts`): a frame
-whose every row is locked is a frame showing a person what they cannot open.
+Four routes draw no sidebar and no page header — `#/login`,
+`#/invite/{id}.{secret}`, `#/reset/{id}.{secret}` and `#/enrol` (`FRAMELESS` in
+`app/nav.ts`): a frame whose every row is locked is a frame showing a person
+what they cannot open. **And they dial nothing that needs a session**: the
+socket is made at boot and dialled by the frame alone (`app/Shell.tsx`) — a
+sign-in lands in the frame and dials nothing itself — so a browser that opens
+one of these four, or opens `/dashboard` signed out, sends no handshake, no
+refusal probe and no degraded-mode snapshot on its way to the sign-in.
+
+**The frame asks who this is once, before anything else** — `GET
+/auth/session` (`lib/frameSession.ts`), which the sidebar's user block, the
+refusal panel, the Account, Home's greeting and People & access read too,
+where each used to ask for itself — and **dials only
+for a session holding `state:read`**, the grant the engine refuses the
+socket's handshake without. A `401` is nobody, and the sign-in follows with
+nothing dialled; a read that failed on anything else says nothing about the
+session, and the handshake decides. A session WITHOUT the grant is **no access
+yet**: nothing is dialled — a dial was a refused handshake, its probe and a
+refused snapshot, twice, for every person invited with no grants — and the
+session is asked again every thirty seconds and when the tab comes back,
+because nothing else can tell the tab an administrator has given the grant:
+the identity move that names the person is pushed over the socket it does not
+have. The answer that holds it dials, and the dashboard opens without a
+reload. A socket the engine refuses asks the session again too, so a grant
+withdrawn under an open socket is drawn as no access rather than as "you hold
+`state:read`" beside "the live socket needs `state:read`". The sign-in asks
+`GET /auth/session` once, to say whose session the browser already holds —
+and not at all when a `401` routed the reader there, which has already said
+it: a signed-out load of `/dashboard` asks once on its way to the sign-in, as
+`#/login` opened directly does. **A
+sign-out holds the socket** until it is answered (`LiveSocket.hold`): the
+engine closes the session's socket as it applies the sign-out, and that close
+re-dialled before the reload, one more refused handshake on the way out.
 
 **The session cookie is the browser's only credential.** The dashboard keeps
 no token anywhere — not in storage, not in a URL — and every REST call and the
@@ -1776,50 +1831,90 @@ because the socket can learn it before React has mounted, and a sign-in clears
 it. A `403 second_factor_enrolment_required` does the same toward `#/enrol`. A
 `4403`, a `seat_unavailable` and a refusal that names a grant do NOT: the
 person is signed in, and signing in again reaches the same person with the
-same access.
+same access. A tab that was read by somebody (`lib/reader.ts`) and lands here
+holding no session lost it without a sign-out in this tab — one made here
+empties the tab's storage — so the sign-in says **You were signed out** and
+what ends a session elsewhere: a sign-out from another browser or tab, a
+password change, an administrator, its own deadline. Only a `401` from
+`/auth/session` says so: a node behind on the identity log answers `503`
+precisely so that no browser is told it was signed out when it may not have
+been, and a throttle or a dropped connection says nothing either way.
 
 **`next` is an address on this page, or nothing.** It is the one parameter of
 a sign-in an outsider can choose for somebody else — a `#/login?next=…` link in
 a message — so `lib/session.ts` accepts only a hash route of this dashboard: no
-`//`, no backslash, no control character, never one of the three screens above.
+`//`, no backslash, no control character, never one of the four screens above.
 Anything it refuses lands on Home.
 
-**A sign-in replaces the history entry it was made from**, re-dials the socket
-so the next handshake carries the new cookie, and goes to `next` — through
+**A sign-in replaces the history entry it was made from** and goes to `next`,
+where the frame dials the socket for the session it reads — through
 `#/enrol` first when the engine opened the session only for enrolling a second
 factor. The screen prints the engine's own sentence for a refusal and nothing it
 composed itself: a failed sign-in is one refusal on purpose, and a
 distinguishing message would be a roster. `second_factor_required` asks for the
 six-digit code or a recovery code and resubmits the same details with it; a
-`429` says how many seconds its `Retry-After` names; a deployment whose
-`/auth/config` names no local sign-in offers the API token alone. Somebody
-already signed in is told who, and offered to continue as them.
+`429` says how many seconds its `Retry-After` names. The password form is
+always there — password sign-in is always served — and the deployment's API
+token waits behind **Use an API token instead**. Where `/health` says
+`identity: unclaimed`, nobody has joined yet — an open invitation does not
+change that, since redeeming it is what creates its person — and the token is
+the only way in, so its form is open from the start and the page says how to
+begin: sign in with the token, then invite yourself from Settings › People &
+access, or open the link of an invitation already issued;
+`unknown` keeps the ordinary page, because a node that cannot read its identity
+estate is not one with nobody in it. Somebody already signed in is told who, and
+offered to continue as them.
 
 **An invitation is read, never spent, by opening it.** The link carries the
 whole credential in the fragment, which no browser sends to a server, and the
 screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
 the view, the body on the redemption — never in a request URL. The view names
-who it is for, who sent it and the seat it binds; the form proposes the login
-the engine suggested and states the password length `/auth/config` asks for. A
+who it is for, who sent it — when a person did: one a Tier A token or a service
+account issued, the company's first person's above all, names no sender, since
+`token:founder` is nothing its reader would recognise — and the seat it binds;
+the form proposes the login
+the engine suggested — held to the login grammar, and said under the field,
+before anything is posted — says which session it signs out when the browser
+is already signed in as somebody, states the password length `/auth/config`
+asks for and takes the password twice — a slip in the only copy is an account nobody can
+sign in to, and the way back is an administrator's reset link. A
 spent, withdrawn or mistyped link is one screen (`410`), and a login or address
 somebody else holds is the engine's own sentence (`409`) over the form as
 typed.
+
+**A password reset link is the invitation's screen again, and signs nobody
+in.** The link an administrator issues carries its credential in the fragment
+the same way, and the screen sends the secret beside the id — the
+`X-Crewlet-Reset-Secret` header on the view, the body on the spend. The view
+names whose password it sets, takes the new one twice and states the length
+`/auth/config` asks for; a
+spent, revoked, expired or mistyped link is one screen (`410`). Setting the
+password ends every session the person held and opens none, so the screen ends
+on a **Sign in** button rather than in the product: a second factor the person
+holds is asked for there, which a session handed out by the link would skip.
 
 **A required second factor is enrolled before anything else opens.** `#/enrol`
 asks `POST /auth/totp` for a seed — shown as the key, grouped for typing, and
 the `otpauth://` address, with no QR code: a QR library is a dependency for
 what an authenticator app's "enter a key" field already does — confirms a code
-from the app, and shows the first recovery codes once. The sidebar's user block
-offers the same two steps, and a new set of recovery codes, to a person who wants to
-add or replace one later.
+from the app, and shows the first recovery codes once. The
+[Account](#account-the-readers-own-page) page offers the same two steps, and a
+new set of recovery codes, to a person who wants to add or replace one later.
 
 **A step-up is one modal, and the refused request is replayed.** A
 `403 step_up_required` is not a screen's to handle: `protocol/rest.ts` asks the
 one confirmer the app installed (`app/StepUp.tsx`), which opens a single
 "Confirm it is you" dialog however many requests were refused at once, posts
-the password — and a code where the person holds a second factor — to
-`POST /auth/step-up`, and on success replays each refused request exactly
-once. Cancelled, each request fails with the refusal it had. A refusal of
+the password — and a code where the person holds a second factor, which the
+dialog reads from their own credentials (`GET /iam/credentials`) so the code is
+asked for rather than offered as optional, and its text asks for both — to
+`POST /auth/step-up`, and on success replays each refused request exactly once.
+A wrong password or code is the engine's one sign-in refusal, said as a
+confirmation refused ("That password or code was not accepted") rather than
+as the sign-in form's "sign-in details", and the dialog stays for another try. While it asks, a dialog
+whose write it holds says it is waiting for the person (`lib/waiting.ts`) —
+its button "Waiting for you", its close "Waiting for you to confirm who you
+are." — rather than for the engine, which has nothing in hand. Cancelled, each request fails with the refusal it had. A refusal of
 `/auth/step-up` itself is never confirmed, so a confirmation cannot ask for
 another.
 
@@ -1848,6 +1943,15 @@ going — the enrolment first, for a session that may only enrol. The same perso
 signing in again after their session lapsed keeps the tab, and with it the
 builder's kept draft. That draft is stamped with the reader it was kept for, and
 one kept for anybody else is discarded unoffered.
+
+**And so does a session somebody else left in the browser.** Signing in as
+somebody else in one tab ends the session every other tab of the browser was
+opened with (each socket closes `4401`) and moves the cookie they share, so the
+next `GET /auth/session` — the socket's before it dials again, the frame's on
+its next read — answers for them. A tab read by anybody else is handed over
+exactly as a sign-in by them would hand it — emptied, its new reader recorded,
+reloaded where it was — and the socket dials nothing for them first
+(`lib/session.ts`'s `takeSession`, which `main.tsx` hands the socket).
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
@@ -1892,7 +1996,9 @@ a blank page, and a reader cannot tell that from a dashboard that is broken.
 company did.** Top to bottom:
 
 - **The greeting.** The company's day (on `org.timezone`, the one clock every
-  due date and budget window is cut on), the reader's morning, and one sentence
+  due date and budget window is cut on), the reader's morning — by the first
+  word of their seat's name, or, for a person no seat names, of their own name
+  as `GET /auth/session` answers it — and one sentence
   of the engine's: "Nimbus is running on 3 nodes. **3 decisions** are waiting on
   you, 1 condition needs a look, and 4 agents are working right now." The
   decisions figure is weighted; an engine condition — a refused session, a lost
@@ -2399,6 +2505,14 @@ holds every link to a seat to a tab its profile has. The Work tab counts the
 seat's open work — the engine's `total_hint`, the same answer the Overview's
 card and the Work tab read.
 
+**A person's seat says who holds it.** The chart cannot: the identity directory
+binds a person to a human seat. So above the tabs a person's profile states the
+holder's login and, short of active, their stage — or **Nobody holds this
+seat**, with **Invite** opening the invitation dialog with this seat chosen, for
+a reader holding `people:manage`. The answer is `GET /iam/seats`, which takes
+`people:manage` or `audit:read`, so it is asked only of a reader holding one;
+anybody else sees the profile as it was.
+
 **Three actions, in the page bar, each a write control held with its reason**
 for a reader who cannot make it:
 
@@ -2486,7 +2600,12 @@ read, never the stored list's length, which still names a task they finished
 until their next reorder — and who set them, and pinned views, for the person,
 whoever leads them and a `fleet:operate` holder, and withheld with that sentence
 for anybody else; their open
-work; and About.
+work; and About. On your own seat the whole page speaks to you, not only its
+day — the holder line says "Held by you, as `jane.doe`", the work card "Nothing
+open is assigned to you", the Work tab "What you mean to do first" and "Waiting
+on your answer" — and **Message** is held, saying it is your own seat, because
+a message files an ask of the seat that only you could answer. **Assign task**
+stays: taking a task yourself is a hand-off like any other.
 
 **Turns** is the seat's own turns (`turns{seat}`, an `audit:read` question like
 every turn read — a reader without it is shown the engine's refusal naming
@@ -2861,18 +2980,28 @@ nobody else, so the same words are the button's `title` while it is held — a
 pointer resting on it sees why — and a screen reader, which reads a described
 button's description rather than its title, hears it once. A form whose
 primary action is held also writes the reason on the page beside it (the New
-task sheet's foot), because neither reaches a touch screen. The five reasons,
+task sheet's foot), because neither reaches a touch screen. The six reasons,
 in the order you clear them (`lib/useWriteAccess.ts`) — and being bound to no
 seat is not one of them, since the engine makes your change all the same,
 under your own login:
 
 | You are | The control says |
 |---|---|
+| Refused the company — no access yet (a session without `state:read`, for which nothing is dialled) or a refusal the socket met | The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold. |
 | Offline | Offline — reconnect to make changes. Nothing is queued while you are away. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes — every change is recorded under your name. |
 | Somebody the engine does not make this change for | This engine does not make this change for you. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
+
+**The one screen that draws its writes for one grant only is People &
+access.** Its readers are administrators (`people:manage`) and auditors
+(`audit:read`), and an auditor reads it as a record: a dozen controls on every
+row, each disabled with the same "needs `people:manage`", is noise on exactly
+the screen they came to read, and never news — the one grant that would enable
+them is the one the screen's own note names. So its controls are drawn for a
+`people:manage` holder and left out for everybody else, and the engine refuses
+whatever reaches it all the same.
 
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
@@ -5450,6 +5579,66 @@ when it turns over, or now by raising its ceiling. Home's and the Inbox's
 (`RaiseBudgetDialog`), each field captioned with what that window has spent and
 when it resets.
 
+## Account: the reader's own page
+
+`#/account` is the signed-in reader's own page, opened from the user block's
+menu at the sidebar's foot, from the palette or with `g u`. It has **no
+sidebar row**: the user block already is the reader, and a row beside it would
+be the same person twice. **Every read and write on it names the caller and
+nobody else** — `GET /auth/session` for who this browser is, the self arm of
+`/iam/people/{id}` and its sessions, `GET /iam/credentials` and a token's mint
+and revocation with no `?person=` — so the page holds no id it could be talked
+into swapping for somebody else's.
+
+- **Profile** — login, name, address, kind, seat (linking to its page) and
+  grants, read-only, with the line that an administrator changes them: a
+  person changing their own would be the escalation the directory exists to
+  close. A sealed value reads *sealed*, never blank.
+- **Security** — **Change password**: the current one, a **Code** — for
+  somebody holding a second factor, an authenticator app or recovery codes:
+  the app's current code or a recovery code, as at the sign-in — and the new
+  one typed twice against the floor `/auth/config` names. The password and
+  the code are the proof, a step-up's taken in the one request, so no step-up
+  is asked. The Code field is drawn when the credential list says a factor is
+  held, and also once the engine answers `second_factor_required` for a list
+  that was behind; somebody holding none is never shown it. The change ends
+  every other session and every personal access token the person holds and
+  keeps this browser signed in, which the page says; a `202` (this node has
+  not applied it yet) ended this browser's session too and cleared its
+  cookie, so the tab goes straight to the sign-in with a toast saying the
+  password changed and to sign in with the new one — the page reads nothing
+  more, since every read would be refused. A wrong current password or code
+  is the sign-in surface's one refusal, about what was typed, and never sends
+  the person to sign in: the engine names a wrong current password and words
+  it itself, and a refusal naming no field after a code was sent reads as the
+  step-up dialog reads it ("That password or code was not accepted"), the
+  code cleared. **Two-step verification** sets up or
+  replaces the authenticator app — a first one issuing a first set of recovery
+  codes, shown once, as `#/enrol` does, and a replacement keeping the set held
+  — and **New recovery codes** issues a set —
+  offered only beside an app, because recovery codes held alone are a second
+  factor of their own, which the engine refuses to issue.
+- **Where you are signed in** — the live sessions, with **This browser**
+  marked by the lineage `/auth/session` names; any other is signed out by name
+  (`POST /auth/logout/{lineage}`), and **Sign out everywhere** asks first —
+  here and in the user menu, which closes to ask — saying it ends every
+  personal access token too, which it does. Every gesture on the page
+  reads `/auth/session` again — the frame's read, through its reload — before
+  the lists, because one the engine asked a
+  step-up for replaced this browser's session under a new lineage, and a mark
+  read before it would offer this browser a named sign-out.
+- **Personal access tokens** — the tokens that act as the reader, each with
+  what it carries and when it expires, **Revoke** on a live one, and **New
+  token**: a label, a lifetime (empty takes the engine's default) and grants
+  out of the reader's own, the value shown once with the sentence that it acts
+  as them. It is the same dialog Settings › People & access mints a service
+  account's token with (`components/people.tsx`), minting with no `?person=`.
+
+A session exchanged from a Tier A token is the deployment's credential, not a
+person: the page names it (*signed in with this deployment's API token
+`ops`*) with its grants, and draws none of the sections above, each of which
+the engine would refuse.
+
 ## Settings: the frame, people, secrets, nodes and configuration
 
 Settings is the one workspace that draws its sections as a **column** beside
@@ -5507,7 +5696,7 @@ policies every executor is given verbatim — read from the org projection, so a
 reader holding `state:read` can open it, as they can Tools & MCP. It is
 edited in the org builder (**Edit in org**).
 
-**People & access** is the identity directory, read-only, over the routes
+**People & access** is the identity directory, over the routes
 `/iam` serves to a reader holding `people:manage` or `audit:read`: **People**
 is every person in the directory (`/iam/people`) — their login, stage and
 grants, and the seat the directory binds them to — with their
@@ -5522,11 +5711,87 @@ Tier A labels joined to the directory rows holding their logins
 and the row says so — a label mistyped on either side otherwise looks bound
 until the token presses something. The directory's own report (`/iam/check`)
 names a company nobody can administer, an active person with no credential, a
-binding whose seat is gone and a grant this node's ceiling withholds. The
-screen edits nothing: a person is invited, changed and removed through `/iam`
-(or `crewlet iam`), and a token is declared in Tier A
-(`api.auth.tokens`) and changes at a restart. **It never holds a value** —
-not a token's, not a password's, not a second factor's.
+binding whose seat is gone and a grant this node's ceiling withholds.
+**Invitations** is every invitation nobody has redeemed and that is still good
+(`/iam/invitations`) — address, seat, grants, who sent it, when it expires —
+and **Show expired and redeemed** asks for every one the estate still holds.
+
+**A `people:manage` holder writes the directory from here**, and an
+`audit:read`-only reader keeps the read view with no control in it (see
+[A write control is never hidden](#a-write-control-is-never-hidden) for why
+this screen is the exception):
+
+- **Invite person** — an address, a human seat nobody holds (or none — and
+  where every human seat is held, the field says so: the person joins bound to
+  no seat) and the grants, each grant the reader does not hold disabled with why, since nobody
+  confers what they do not hold — and, while `state:read` is not ticked, a
+  warning that the person will open nothing but their own Account. An edit of a
+  person's grants says the same. The link comes back **once**, with its expiry
+  and the sentence that it is the credential: it works once and the engine keeps
+  only a hash of its secret. Opening it is where the person chooses a login and
+  a password.
+- **New service account** — a machine: a login in the colon grammar
+  (`ci:release`, checked under the field before anything is posted, as an
+  edit's login is against its holder's grammar), a name and grants — and then **Mint its token**: a label, a
+  lifetime and grants out of the account's own (`secrets:read` and
+  `people:manage` disabled, since no token carries them, and one the reader
+  does not hold left unticked and disabled, since the engine refuses a token
+  carrying a grant its minter does not hold), the value shown once.
+- **Cancel** on an invitation nobody redeemed: its link stops working at once
+  and the address is free again.
+- On an **opened row** — **Edit login, seat and grants** (one `PATCH` carrying
+  only what changed since the dialog opened — measured against that row and
+  not the directory's minute-by-minute re-read, so a login or a seat left alone
+  never puts back what another administrator changed meanwhile — and the
+  grants as what was ticked and unticked, `add_grants` and `remove_grants`,
+  which the engine applies to what the person holds when it decides, so a
+  grant left alone stays as another administrator left it whichever others
+  are ticked; the seat offered among the vacant ones and their own; a
+  grant the person already holds may be unticked whoever edits, since the
+  engine checks only what an edit adds, while one neither holds stays
+  disabled),
+  **Suspend** / **Reactivate** (which of the two is fixed when the dialog
+  opens, so its **Try again** after an unknown answer sends the same stage
+  even once the re-read shows it landed), and for a person **Issue password reset link**
+  (shown once; the outstanding link is listed among their credentials),
+  **Reset second factor** (when they hold one) and **End all sessions** — or,
+  for a machine, **Mint token** — and **Remove**, confirmed by typing their
+  login, since it cannot be undone, which closes the panel once it lands and
+  says who was removed. Each credential row has **Revoke**. **Suspend**,
+  **Reset second factor** and **End all sessions** each say that an
+  outstanding password reset link ends with the sessions, **Reactivate**
+  that it stays ended, and **Issue password reset link** that it is issued
+  after those — a link sent first is dead by the time it is opened. On the
+  reader's OWN row — the person `GET /auth/session` names, by id — every
+  gesture that ends their sessions says first that it is them and signs this
+  browser out at once, and speaks to them throughout, its title and body
+  alike ("You may not act while suspended"), and **Suspend** and **Remove** add, where `GET
+  /iam/check` counts nobody else active holding `people:manage`, that
+  afterwards only this node's API token could administer people. **Edit**
+  speaks to them too, and an edit unticking their own `people:manage` says it
+  is them, that they stop administering people once it saves, and the same
+  sentence where nobody else would be left — the engine refuses no one taking
+  away a grant, the last administrator's own included.
+
+Every one of these is one `/iam` write (`lib/iamWrite.ts`): a `403
+step_up_required` opens the step-up dialog and the same request is replayed; a
+create carries a fresh uuid7 `Idempotency-Key`, kept for the retry an unknown
+answer asks for — **Try again** sends the key the engine handed back, so it
+lands once, and a request changed before it is pressed is a new one under a new
+key, since a create's key sent with another body is refused as reused — while a token's mint and a reset link read no key and a retry
+issues another; a refusal is the engine's sentence with the grants that would
+admit; a `202` says the change is recorded and this node is catching up, and
+— like a stale refusal — leaves the dialog only **Done**, because the gesture
+is over and pressing it again would send it again; and after every answer — a refusal part way and an unknown one included, since
+either may have changed something — the lists the write touches are read
+again. Where `/health` says
+`identity: unclaimed`, a callout says nobody has joined yet and what comes
+next: with no invitation open, inviting yourself, and it offers **Invite
+person**; with one open, that its link is where its person chooses a login and
+password — naming the address where there is one invitation — and that a lost
+link is cancelled and issued again, with no second Invite beside it. A token is still declared in Tier A (`api.auth.tokens`) and
+changes at a restart. **It never reads a value back** — not a token's, not a
+password's, not a second factor's.
 
 **Integrations** is a grid of **tiles, one per tool** — Slack, Mattermost,
 Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
@@ -6158,11 +6423,14 @@ brings that carries a design-system rule.
   opened has no frames, so the browser reports 1006, the same code it gives for
   an engine that is simply down. A plain `GET /ws/stream` runs the same guard
   with the same cookie and stops one line short of the upgrade: 401 is nobody
-  signed in, and sends the reader to the sign-in; 426 means the session was
-  accepted; a `403 second_factor_enrolment_required` stops the dialling and
-  sends them to the enrolment. The loop otherwise keeps dialling on its
-  backoff, because a sign-in in another tab gives this one the cookie too —
-  except that a `503` the engine wrote (a node that cannot read its identity
+  signed in, sends the reader to the sign-in and STOPS the dialling — every
+  dial until somebody signs in is the same 401, two console errors each on a
+  sign-in page left open — until a sign-in in this tab re-dials, or the tab
+  coming back dials once, which is what notices a sign-in made in another tab
+  (it gives this one the cookie too); 426 means the session was accepted; a
+  `403 second_factor_enrolment_required` stops the dialling and sends them to
+  the enrolment. The loop otherwise keeps dialling on its backoff — except that
+  a `503` the engine wrote (a node that cannot read its identity
   estate yet) times the next dial by its `Retry-After`, sooner or later than
   the backoff would have, bounded like every hint. A `503` with no
   `Retry-After`, and one something in front of the engine wrote, keep the
@@ -6191,15 +6459,27 @@ brings that carries a design-system rule.
   credential it was opened with — whenever an identity record names that
   credential, a company is published, or the credential reaches its own end.
   `4401` means that credential no longer
-  resolves to anybody — the session ended or was revoked — so re-dial with the
-  cookie the browser holds now and sign in only if the handshake then answers
-  `401`. `4403` means the person resolves and may not have this surface —
+  resolves to anybody — the session ended or was revoked — so once this tab's
+  own requests have settled, ask `GET /auth/session` once: a `401` sends the
+  reader to sign in with nothing dialled — dialled blind, a session ended
+  elsewhere was a refused handshake, its probe and a refused snapshot, three
+  `401`s where one says it — and any other answer re-dials with the cookie the
+  browser holds now. `4403` means the person resolves and may not have this surface —
   their seat is gone, or `state:read` was withdrawn: the socket STOPS (no
   reconnect, no REST fallback, both of which the same decision would refuse)
-  and the state strip says why, with a *Try again* for after an administrator
-  has acted and a *Sign out* beside it — the person refused is the person who
-  needs to leave, and the engine keeps `/auth/` open to their session for
-  exactly that. A handshake refused `403` is the same state, read through the
+  and every screen but the Account, which reads no socket, is replaced by one
+  panel saying who they are (`GET /auth/session`, asked again on the refusal —
+  an engine's, never the frame's own no-access, which that read recorded),
+  what they hold and why, with the *Account*, a *Try again* for after an
+  administrator has acted — or, where the session no longer holds
+  `state:read`, the no-access panel, which asks again on its own and dials once
+  the grant is back — and a
+  *Sign out* — the person refused is the person who needs to leave, and the
+  engine keeps `/auth/` open to their session for exactly that. Drawn as
+  they were, the screens said the engine was "not connected" and showed
+  figures that never resolved, and the sidebar's foot, which names the reader
+  from the same session while the viewer question goes unanswered, said
+  "Checking who you are" for good. A handshake refused `403` is the same state, read through the
   plain-HTTP re-ask. `1013` — the standard's *try again later* — means the
   engine will not vouch for the credential on this socket now (it could not
   read what decides it, an identity move named nobody, or the person's seat

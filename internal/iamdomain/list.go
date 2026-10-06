@@ -119,6 +119,18 @@ const (
 	MaxPageSize     = 200
 )
 
+// pageLimit is how many rows one directory page holds: [DefaultPageSize] for a
+// caller that named none, and at most [MaxPageSize] — clamped, never refused.
+func pageLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return DefaultPageSize
+	case limit > MaxPageSize:
+		return MaxPageSize
+	}
+	return limit
+}
+
 // PeoplePage is one page and where the next one starts.
 type PeoplePage struct {
 	People []PersonRow
@@ -133,13 +145,7 @@ type PeoplePage struct {
 
 // People answers one page of the directory.
 func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) {
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = DefaultPageSize
-	case limit > MaxPageSize:
-		limit = MaxPageSize
-	}
+	limit := pageLimit(q.Limit)
 	out := PeoplePage{At: r.committed()}
 	// ONE MORE THAN ASKED FOR, which is how the cursor is derived without
 	// a second count: the extra row is what says there IS a next page, and
@@ -297,20 +303,44 @@ type CredentialRow struct {
 	// what it can do, re-cut to its owner's own grants on every request.
 	// Empty on every other method.
 	Grants []iam.Grant
+
+	// Superseded marks a machine token a COUNTER ended rather than its own
+	// row: its owner's revocation epoch, or the company's session
+	// generation, moved past the value it was minted at — the comparison
+	// [credential.CheckToken] refuses it on. Neither writes `revoked_at`: a
+	// password change, "sign out everywhere" and an administrator ending
+	// somebody's sessions all move the epoch, so a listing that read the
+	// row alone reported every token they ended as in use.
+	Superseded bool
+
+	// Spent is a reset link its person used — see [Credential.Spent].
+	Spent bool
 }
 
-// Revoked reports a credential that has been withdrawn or has aged out.
+// Revoked reports a credential that has been withdrawn, has aged out, or was
+// ended by a counter ([CredentialRow.Superseded]).
 func (c CredentialRow) Revoked(now time.Time) bool {
-	return !c.RevokedAt.IsZero() ||
+	return !c.RevokedAt.IsZero() || c.Superseded ||
 		(!c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt))
 }
 
 // Credentials lists what one person proves themselves with.
+//
+// THE COUNTERS ARE READ IN THE SNAPSHOT THE ROWS ARE, so a token is reported
+// ended by exactly what ended it at that instant ([CredentialRow.Superseded]).
 func (r *Reader) Credentials(ctx context.Context, personID string) (
 	[]CredentialRow, error) {
 
 	var out []CredentialRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		epoch, err := epochOf(ctx, tx, personID)
+		if err != nil {
+			return err
+		}
+		generation, err := generationOf(ctx, tx)
+		if err != nil {
+			return err
+		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, person_id, method, created_at, expires_at, revoked_at,
 			       document
@@ -341,6 +371,9 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 			if held, err := DecodeCredential(document); err == nil {
 				row.Label = held.Label
 				row.Grants = held.Grants
+				row.Spent = held.Spent
+				row.Superseded = held.EndedBy(Counters{Epoch: epoch,
+					Generation: generation})
 			}
 			out = append(out, row)
 		}
@@ -348,6 +381,75 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// InvitationsQuery is one page of the invitations this estate holds.
+type InvitationsQuery struct {
+	// After is the last id of the previous page, exclusive; Limit is
+	// [PeopleQuery.Limit]'s. An invitation's id is a uuid7 at its issue's
+	// instant ([Blinder.InvitationID]), so id order is issue order.
+	After string
+	Limit int
+
+	// All includes the invitations that no longer open — redeemed, or
+	// past their expiry — which the estate holds until the sweep collects
+	// them. Without it a page is the OPEN ones alone, judged at Now.
+	All bool
+	Now time.Time
+}
+
+// InvitationPage is one page of invitations and where the next one starts.
+type InvitationPage struct {
+	Invitations []InvitationRow
+	Next        string
+	At          statelog.Position
+}
+
+// Invitations answers one page of the invitations this estate holds.
+//
+// THE ROW CARRIES THE VERIFIER, as [Reader.InvitationByID]'s does, and a
+// surface renders none of it: what a listing shows is who was invited, to
+// what, by whom and until when — never the link, which is shown once by the
+// issue that made it.
+func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
+	InvitationPage, error) {
+
+	limit := pageLimit(q.Limit)
+	out := InvitationPage{At: r.committed()}
+	query := `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id > ?`
+	args := []any{q.After}
+	if !q.All {
+		// OPEN IS [InvitationRow.Spent]'s complement: not redeemed, and a
+		// deadline still ahead — the predicate the issue's own decide
+		// reads an address as held by ([openInvitationFor]).
+		query += ` AND redeemed_at = 0 AND expires_at > ?`
+		args = append(args, q.Now.UnixMilli())
+	}
+	query += ` ORDER BY id LIMIT ?`
+	args = append(args, limit+1)
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("iamdomain: read the invitations: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			row, err := scanInvitation(rows.Scan)
+			if err != nil {
+				return err
+			}
+			out.Invitations = append(out.Invitations, row)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return InvitationPage{}, err
+	}
+	if len(out.Invitations) > limit {
+		out.Next = out.Invitations[limit-1].ID
+		out.Invitations = out.Invitations[:limit]
 	}
 	return out, nil
 }
@@ -370,12 +472,33 @@ type SessionRecord struct {
 	// [Session.EnrolmentOnly] — which an administrator reading somebody's
 	// sessions needs told apart from a whole one.
 	EnrolmentOnly bool
+
+	// Superseded marks a session a COUNTER ended: opened before the
+	// company's last invalidation, or at a revocation epoch its person has
+	// since moved past ([sessionSuperseded]). The company's invalidation
+	// writes no `ended_at`, and neither does an epoch move on a session
+	// whose start landed after it or that an estate held before moves wrote
+	// their reasons, so a listing that read the row alone reported those
+	// live.
+	Superseded bool
 }
 
-// Live reports a session that has not ended and has not aged out.
+// Live reports a session nothing has ended: not ended, not past its absolute
+// deadline, and not superseded.
+//
+// THE ONE READING: the listing reports it and [Reader.SessionStanding] decides
+// a named sign-out by it, so a screen never offers to end a session the engine
+// would answer was already over.
 func (s SessionRecord) Live(now time.Time) bool {
-	return s.EndedAt.IsZero() &&
+	return s.EndedAt.IsZero() && !s.Superseded &&
 		(s.ExpiresAt.IsZero() || now.Before(s.ExpiresAt))
+}
+
+// sessionSuperseded is whether a counter has ended a session: it opened (at
+// start) before the company's last invalidation, or carries a revocation epoch
+// below its person's current one.
+func sessionSuperseded(start, epoch, invalidated, current uint64) bool {
+	return start < invalidated || epoch < current
 }
 
 // Sessions lists one person's sessions, newest first.
@@ -384,13 +507,25 @@ func (s SessionRecord) Live(now time.Time) bool {
 // sentence an investigation is looking for and a listing that showed only the
 // live ones could never carry it. The row is kept until the sweep
 // collects it for exactly that reason.
+//
+// THE COUNTERS ARE READ IN THE SNAPSHOT THE ROWS ARE, so a session is
+// reported ended by exactly what ended it at that instant
+// ([SessionRecord.Superseded]).
 func (r *Reader) Sessions(ctx context.Context, personID string) (
 	[]SessionRecord, error) {
 
 	var out []SessionRecord
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		invalidated, err := readInvalidated(ctx, tx)
+		if err != nil {
+			return err
+		}
+		current, err := epochOf(ctx, tx, personID)
+		if err != nil {
+			return err
+		}
 		rows, err := tx.QueryContext(ctx, `
-			SELECT lineage, person_id, epoch, created_at,
+			SELECT lineage, person_id, epoch, start_position, created_at,
 			       absolute_expires_at, ended_at, ended_reason, document
 			FROM iam_sessions WHERE person_id = ?
 			ORDER BY created_at DESC`, personID)
@@ -403,13 +538,14 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 			var (
 				row     SessionRecord
 				epoch   int64
+				start   int64
 				created int64
 				expires int64
 				ended   int64
 				doc     []byte
 			)
-			if err := rows.Scan(&row.Lineage, &row.PersonID, &epoch, &created,
-				&expires, &ended, &row.EndedWhy, &doc); err != nil {
+			if err := rows.Scan(&row.Lineage, &row.PersonID, &epoch, &start,
+				&created, &expires, &ended, &row.EndedWhy, &doc); err != nil {
 				return fmt.Errorf("iamdomain: scan a session: %w", err)
 			}
 			// A DOCUMENT THIS BUILD CANNOT OPEN is listed without the
@@ -420,6 +556,26 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 				row.EnrolmentOnly = held.EnrolmentOnly
 			}
 			row.Epoch = uint64(epoch)
+			row.Superseded = sessionSuperseded(uint64(start), row.Epoch,
+				invalidated, current)
+			if row.Superseded && ended == 0 {
+				// A COUNTER ENDED IT and the row holds no reason: say
+				// which, or the listing shows an ended session with no
+				// account of why — beside the deadline it never reached.
+				// An epoch move writes its own reason on every session it
+				// ends ([Applier.bumpEpoch]), so what is left here is the
+				// company's generation, which ends everybody's at once and
+				// writes no row per session, and a session a move had
+				// already ended without saying so on its row — its start
+				// landed after that move, or the row predates moves writing
+				// their reasons — which no later move re-describes.
+				switch {
+				case uint64(start) < invalidated:
+					row.EndedWhy = "ended with every session in the company"
+				default:
+					row.EndedWhy = "ended with every session they held"
+				}
+			}
 			row.CreatedAt = fromMillis(created)
 			row.ExpiresAt = fromMillis(expires)
 			row.EndedAt = fromMillis(ended)
@@ -446,9 +602,14 @@ type HistoryRow struct {
 	ObjectKind string
 	ObjectID   string
 	PersonID   string
-	Op         OpKind
-	Actor      string
-	ActorKind  iam.Kind
+
+	// Login is the login PersonID holds now, or empty for an entry about
+	// nobody, or about somebody removed since.
+	Login string
+
+	Op        OpKind
+	Actor     string
+	ActorKind iam.Kind
 
 	// OperatorID is the credential Actor acted through, and empty where
 	// the record named none: the node's own writer.
@@ -511,28 +672,35 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 	}
 	out := HistoryPage{At: r.committed()}
 	query := strings.Builder{}
+	// THE LOGIN OF WHOEVER AN ENTRY IS ABOUT, joined from their row as it
+	// stands: an entry names them by id, and a trail of id prefixes said
+	// whose session opened and whose row changed to nobody reading it. A
+	// removed person's row is gone, so their entries name nobody — the
+	// removal erases what identified them, and the trail keeps the id.
 	query.WriteString(`
-		SELECT id, class, object_kind, object_id, person_id, op, actor,
-		       actor_kind, operator_id, reason, summary, broker_at, version
-		FROM iam_history WHERE 1 = 1`)
+		SELECT h.id, h.class, h.object_kind, h.object_id, h.person_id, h.op,
+		       h.actor, h.actor_kind, h.operator_id, h.reason, h.summary,
+		       h.broker_at, h.version, COALESCE(p.login, '')
+		FROM iam_history h LEFT JOIN iam_people p ON p.id = h.person_id
+		WHERE 1 = 1`)
 	var args []any
 	if q.Before > 0 {
-		query.WriteString(` AND version < ?`)
+		query.WriteString(` AND h.version < ?`)
 		args = append(args, int64(q.Before))
 	}
 	if q.Since > 0 {
-		query.WriteString(` AND version >= ?`)
+		query.WriteString(` AND h.version >= ?`)
 		args = append(args, int64(q.Since))
 	}
 	if q.Person != "" {
-		query.WriteString(` AND person_id = ?`)
+		query.WriteString(` AND h.person_id = ?`)
 		args = append(args, q.Person)
 	}
 	if q.Op != "" {
-		query.WriteString(` AND op = ?`)
+		query.WriteString(` AND h.op = ?`)
 		args = append(args, string(q.Op))
 	}
-	query.WriteString(` ORDER BY version DESC LIMIT ?`)
+	query.WriteString(` ORDER BY h.version DESC LIMIT ?`)
 	args = append(args, limit+1)
 
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -552,7 +720,7 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 			)
 			if err := rows.Scan(&row.ID, &class, &row.ObjectKind, &row.ObjectID,
 				&row.PersonID, &op, &row.Actor, &actorKind, &row.OperatorID,
-				&row.Reason, &row.Summary, &at, &version); err != nil {
+				&row.Reason, &row.Summary, &at, &version, &row.Login); err != nil {
 				return fmt.Errorf("iamdomain: scan a trail entry: %w", err)
 			}
 			row.Class = HistoryClass(class)
@@ -577,8 +745,8 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 // DefaultHistoryPage and MaxHistoryPage bound a page of the trail.
 //
 // A HUNDRED AND A THOUSAND, and they are larger than the directory's for one
-// reason: a trail entry is a small ROW, opened from nothing and joined to
-// nothing, while a directory row carries a person whole and is opened before
+// reason: a trail entry is a small ROW, opened from nothing and joined to one
+// login, while a directory row carries a person whole and is opened before
 // anybody can render it. What bounds both is the response size.
 const (
 	DefaultHistoryPage = 100

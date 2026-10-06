@@ -225,7 +225,7 @@ function serving(answers: Partial<Record<QueryName, unknown>>) {
     async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue({
     name: "Acme",
     roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],

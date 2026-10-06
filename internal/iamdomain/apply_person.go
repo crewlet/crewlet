@@ -10,10 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE PERSON'S OWN SUBJECT, and the three ops that arbitrate on it.
+// THE PERSON'S OWN SUBJECT, and the four ops that arbitrate on it.
 //
 // Everything about somebody that is not unique contends here — their content,
-// their stage and their revocation epoch — so two administrators editing one
+// their stage and their revocation epoch, and a password change that moves the
+// first and the last at once — so two administrators editing one
 // person contend and two editing two people never do. A person's row is
 // created and removed on the directory ([Applier.applyDirectory]), never here.
 
@@ -27,6 +28,8 @@ func (a *Applier) applyPerson(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return a.writeStage(ctx, tx, at, id)
 	case OpRevoke:
 		return a.writeRevocation(ctx, tx, at, id)
+	case OpPassword:
+		return a.writePassword(ctx, tx, at, id)
 	}
 	return 0, fmt.Errorf("iamdomain: the record at %s is op %q on a person, "+
 		"which this build has no case for", at.position, at.record.Op)
@@ -51,6 +54,35 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("iamdomain: the person record at %s: %w",
 			at.position, err)
 	}
+	return a.writeDocument(ctx, tx, at, id, person)
+}
+
+// writePassword writes a password change: the person's document, exactly as a
+// content record writes it, and the epoch the record states, exactly as a
+// revocation bumps it — two writes one record makes, so a node holds both or
+// neither.
+func (a *Applier) writePassword(ctx context.Context, tx *sql.Tx, at applyContext,
+	id string) (int, error) {
+
+	change, err := DecodePasswordChange(at.record.Mutation)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: the password record at %s: %w",
+			at.position, err)
+	}
+	written, err := a.writeDocument(ctx, tx, at, id, change.Person)
+	if err != nil {
+		return written, err
+	}
+	bumped, err := a.bumpEpoch(ctx, tx, at, id, change.Epoch)
+	return written + bumped, err
+}
+
+// writeDocument writes one person's document and their credentials onto the
+// row the directory created — the half of a content record and a password
+// change that is the same.
+func (a *Applier) writeDocument(ctx context.Context, tx *sql.Tx, at applyContext,
+	id string, person Person) (int, error) {
+
 	document, err := EncodePerson(person)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: re-encode the person at %s: %w",
@@ -124,6 +156,16 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 		return 0, nil
 	}
 
+	// A CREDENTIAL KEEPS THE INSTANT IT WAS CREATED. Every record about a
+	// person restates all of their credentials, and the document holds no
+	// creation time, so a credential's is its row's: one the set already
+	// held keeps it, and only a new one is stamped with this record's. It
+	// was every row restamped, so each change to a person — a revocation
+	// included — read as having created every credential they held.
+	created, err := credentialsCreated(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
 	result, err := tx.ExecContext(ctx,
 		`DELETE FROM iam_credentials WHERE person_id = ?`, id)
 	if err != nil {
@@ -138,6 +180,10 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 			return written, fmt.Errorf("iamdomain: encode a credential for "+
 				"%s: %w", id, err)
 		}
+		createdAt, held := created[credential.ID]
+		if !held {
+			createdAt = at.unix()
+		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO iam_credentials
 				(id, person_id, method, verifier,
@@ -146,7 +192,7 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 			credential.ID, id, string(credential.Method),
 			[]byte(credential.Verifier),
 			millis(credential.ExpiresAt), millis(credential.RevokedAt),
-			at.bucket(), at.unix(), at.packed, document)
+			at.bucket(), createdAt, at.packed, document)
 		if err != nil {
 			return written, fmt.Errorf("iamdomain: write a credential for "+
 				"%s: %w", id, err)
@@ -154,6 +200,32 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 		written++
 	}
 	return written, nil
+}
+
+// credentialsCreated is when each credential a person's rows hold was
+// created, by id.
+func credentialsCreated(ctx context.Context, tx *sql.Tx, id string) (
+	map[string]int64, error) {
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, created_at FROM iam_credentials WHERE person_id = ?`, id)
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: read person %s's credentials: %w", id, err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var (
+			credential string
+			at         int64
+		)
+		if err := rows.Scan(&credential, &at); err != nil {
+			return nil, fmt.Errorf("iamdomain: scan person %s's credential: %w",
+				id, err)
+		}
+		out[credential] = at
+	}
+	return out, rows.Err()
 }
 
 // writeStage moves a person between enrolment stages.
@@ -219,14 +291,20 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	written, _ := result.RowsAffected()
 	if written > 0 {
-		// A STAGE THAT IS NOT `active` ends every credential acting for
+		// A STAGE THAT IS NOT `active` refuses every credential acting for
 		// them, and one that is admits them again.
 		a.moved.Seats = true
-		if err := a.movedPerson(ctx, tx, id); err != nil {
+		if err = a.movedPerson(ctx, tx, id); err != nil {
 			return int(written), err
 		}
 	}
-	return int(written), nil
+	if change.Epoch == 0 {
+		return int(written), nil
+	}
+	// AND ENDS THEM, whether or not the stage was this record's to write:
+	// an epoch only ever moves forward, so a bump is never stale.
+	bumped, err := a.bumpEpoch(ctx, tx, at, id, change.Epoch)
+	return int(written) + bumped, err
 }
 
 // restage is a stored person document with its stage replaced.
@@ -254,6 +332,21 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: the revocation record at %s: %w",
 			at.position, err)
 	}
+	return a.bumpEpoch(ctx, tx, at, id, revocation.Epoch)
+}
+
+// bumpEpoch moves one person's revocation epoch to the value a record states —
+// the half of a revocation and a password change that is the same.
+func (a *Applier) bumpEpoch(ctx context.Context, tx *sql.Tx, at applyContext,
+	id string, epoch uint64) (int, error) {
+
+	// THE EPOCH THIS MOVE LEAVES, read before it is replaced: a session at
+	// it or above is one this move ends, and one below it an earlier move
+	// had already ended.
+	previous, err := epochOf(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
 	// THE GUARD IS THE EPOCH ITSELF AND NOT THE VERSION, which is the one
 	// place this domain guards on a payload value. An epoch is MONOTONE by
 	// its own meaning — it only ever ends more sessions — so a redelivered
@@ -269,20 +362,49 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 			bumped_at = excluded.bumped_at,
 			version   = excluded.version
 		WHERE excluded.epoch > iam_revocation_epochs.epoch`,
-		id, int64(revocation.Epoch), at.record.Reason, at.unix(),
+		id, int64(epoch), at.record.Reason, at.unix(),
 		at.bucket(), at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: bump person %s's epoch: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
-	if written > 0 {
-		// EVERY SESSION AND MACHINE TOKEN THEY HOLD is over, which is the
-		// whole of what an epoch bump is for.
-		if err := a.movedPerson(ctx, tx, id); err != nil {
-			return int(written), err
-		}
+	if written == 0 {
+		return 0, nil
 	}
-	return int(written), nil
+	// EVERY SESSION AND MACHINE TOKEN THEY HOLD is over, which is the whole
+	// of what an epoch bump is for.
+	if err = a.movedPerson(ctx, tx, id); err != nil {
+		return int(written), err
+	}
+	// AND EACH SESSION IT ENDED SAYS SO ON ITS OWN ROW, with this record's
+	// reason and instant. The epoch's row keeps only its LAST move, so a
+	// listing that derived the why from it re-described every session an
+	// earlier move had ended — a suspension, then a reset link, then an
+	// administrator ending them all, each listed as the last. Written HERE,
+	// once, it is the reason of the move that actually ended the session,
+	// and no later move rewrites it: the guard is `ended_at = 0`, as a
+	// sign-out's is.
+	//
+	// ONLY ON A SESSION LIVE AT THIS MOVE — at the epoch it leaves — because
+	// `ended_at = 0` alone also holds for a session an earlier move ended
+	// without writing it: a start decided before that move whose record
+	// landed after it, and every row an estate held before moves wrote
+	// their reasons. Stamped here, the next move would re-describe it as its
+	// own for good. Those, and a session the company's generation already
+	// ended, are left to say what the counters can ([Reader.Sessions]).
+	ended, err := tx.ExecContext(ctx, `
+		UPDATE iam_sessions
+		SET ended_at = ?, ended_reason = ?, version = ?
+		WHERE person_id = ? AND ended_at = 0 AND epoch >= ? AND epoch < ?
+		  AND start_position >= COALESCE((SELECT version
+		      FROM iam_session_generation WHERE singleton = 0), 0)`,
+		at.unix(), at.record.Reason, at.packed, id, int64(previous), int64(epoch))
+	if err != nil {
+		return int(written), fmt.Errorf("iamdomain: end person %s's sessions: %w",
+			id, err)
+	}
+	closed, _ := ended.RowsAffected()
+	return int(written + closed), nil
 }
 
 // errorsIsNoRows is `errors.Is(err, sql.ErrNoRows)` under a name the call

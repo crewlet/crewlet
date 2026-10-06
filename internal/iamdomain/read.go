@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -636,13 +637,17 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	return nil
 }
 
-// AnyPerson reports whether this estate holds anybody at all — whether a
-// person or a machine is enrolled.
+// AnyPerson reports whether this estate holds a PERSON — whether anybody who
+// signs in with a password is enrolled.
 //
 // WHAT IT IS FOR is `/health`'s `identity`: a fresh deployment's identity
 // estate is empty, and an operator looking at one, or a dashboard whose
 // sign-in form nobody can use yet, needs to be told the next step is to
 // invite the first person rather than left looking at a sign-in that fails.
+// A MACHINE does not count: a service account, or the row binding a Tier A
+// token to a seat, signs nobody in with a password, so an estate holding only
+// those is still waiting for its first person — counted, it read as claimed
+// and the sign-in page hid the way in behind a form nobody could use.
 // It is a COUNT rather than a listing precisely because it is asked by an
 // unauthenticated route — the answer is one bit, and a roster is what it must
 // never become.
@@ -674,9 +679,10 @@ func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS(SELECT 1 FROM iam_people)`).
+			SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind = ?)`,
+			string(iam.KindPerson)).
 			Scan(&held); err != nil {
-			return fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
+			return fmt.Errorf("iamdomain: read whether a person is enrolled: %w", err)
 		}
 		if held {
 			return nil
@@ -714,6 +720,20 @@ func provedAbsent(ctx context.Context, tx *sql.Tx, end uint64, what string) erro
 			what)
 	}
 	return nil
+}
+
+// vouches is [provedAbsent]'s proof as a reading: whether these rows hold every
+// record the log held at end and retain none, and an error only where that
+// could not be read.
+func vouches(ctx context.Context, tx *sql.Tx, end uint64) (bool, error) {
+	switch err := provedAbsent(ctx, tx, end, "a link"); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrNotCurrent):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // ErrNotCurrent reports a snapshot of the identity estate that cannot vouch for
@@ -854,6 +874,7 @@ type InvitationRow struct {
 	Sealed     string
 	InvitedBy  string
 	Grants     []iam.Grant
+	CreatedAt  time.Time
 	ExpiresAt  time.Time
 	RedeemedAt time.Time
 	Person     string
@@ -864,6 +885,10 @@ type InvitationRow struct {
 
 	// Seat is the seat redeeming this binds, or empty — [Invitation.Seat].
 	Seat string
+
+	// Vouched is [ResetRow.Vouched], for [Reader.InvitationByID]: false on a
+	// listing, which does not ask.
+	Vouched bool
 }
 
 // Admits reports whether a secret presented with this invitation's id is the
@@ -904,42 +929,198 @@ func (i InvitationRow) Spent(now time.Time) bool {
 
 // InvitationByID resolves one invitation, on this file's three answers: the
 // zero value for one nobody issued, and an error for a node that could not
-// tell.
-func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, error) {
+// tell — with whether these rows vouch for it at end, the identity log's last
+// sequence read BEFORE this snapshot ([ResetRow.Vouched], [CoversLog]).
+func (r *Reader) InvitationByID(ctx context.Context, id string, end uint64) (
+	InvitationRow, error) {
+
 	if id == "" {
-		return InvitationRow{}, nil
+		return InvitationRow{Vouched: true}, nil
 	}
 	var out InvitationRow
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		var document []byte
-		var expires, redeemed int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT id, email_blind, expires_at, redeemed_at, person_id, document
-			  FROM iam_invites WHERE id = ?`, id).
-			Scan(&out.ID, &out.Blind, &expires, &redeemed, &out.Person, &document)
+		var err error
+		out, err = scanInvitation(tx.QueryRowContext(ctx, `
+			SELECT `+invitationColumns+` FROM iam_invites WHERE id = ?`, id).Scan)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			out = InvitationRow{}
-			return nil
 		case err != nil:
-			return fmt.Errorf("iamdomain: read an invitation: %w", err)
+			return err
 		}
-		doc, err := DecodeInvitation(document)
-		if err != nil {
-			return fmt.Errorf("iamdomain: open invitation %q: %w", id, err)
-		}
-		out.Sealed = doc.Sealed
-		out.InvitedBy = doc.InvitedBy
-		out.Grants = doc.Grants
-		out.Verifier = doc.Verifier
-		out.Seat = doc.Seat
-		out.ExpiresAt = fromMillis(expires)
-		out.RedeemedAt = fromMillis(redeemed)
-		return nil
+		out.Vouched, err = vouches(ctx, tx, end)
+		return err
 	})
 	if err != nil {
 		return InvitationRow{}, err
 	}
+	return out, nil
+}
+
+// ResetRow is one password reset link as the link's own screen resolves it:
+// whose it is, whether it still opens, and the verifier its secret is checked
+// against — never the secret, which the estate does not hold.
+type ResetRow struct {
+	ID       string
+	PersonID string
+	Login    string
+	Kind     iam.Kind
+	Stage    iam.Stage
+
+	// Seat is the seat the person is bound to, or empty: the spend is
+	// theirs, and its record names them as everything else they do does.
+	Seat string
+
+	Verifier  string
+	ExpiresAt time.Time
+	RevokedAt time.Time
+
+	// Ended is a link a counter ended since its issue ([Credential.EndedBy]):
+	// its person suspended, signed out everywhere or their sessions ended by
+	// an administrator, or the company's invalidated after a restore.
+	Ended bool
+
+	// Vouched is whether the rows this was read from held every record the
+	// identity log held when it was asked, and retain none they could not
+	// apply ([CoversLog]). Only where they do is a link they do not hold, or
+	// hold but cannot open, one that does not open: on a node behind the
+	// log, or holding a record it could not apply — a newer build's, one
+	// signed under a keyring key it was not restarted with — it may be a link
+	// issued in a record this node has not applied, and answered as dead it
+	// told its holder to ask for another and counted them as a guesser.
+	Vouched bool
+}
+
+// Opens reports whether a secret presented with this link's id is the link's,
+// and the link still sets a password at now: not revoked — which is what
+// spending it does — not ended by a counter, not past its expiry, and its
+// person somebody a reset may reach ([ResetStages]).
+//
+// ONE PREDICATE, for [InvitationRow.Spent]'s reason: every way a link stops
+// working has one remedy, ask for another, and told apart they would say
+// which ids exist to anybody guessing secrets against them.
+func (r ResetRow) Opens(secret string, now time.Time) bool {
+	return r.ID != "" && r.Kind == iam.KindPerson &&
+		slices.Contains(ResetStages, r.Stage) &&
+		r.RevokedAt.IsZero() && !r.Ended && now.Before(r.ExpiresAt) &&
+		credential.VerifyReset(r.Verifier, r.ID, secret)
+}
+
+// ResetOf is the reset link id names among a person's credentials, as a
+// document a decide read holds them at counters — the zero row for one it does
+// not hold. It is what a spend's [PasswordSet.Check] judges the link by, in the
+// record's own snapshot, with the same [ResetRow.Opens] the link's screen asks.
+func ResetOf(person Person, id string, counters Counters) ResetRow {
+	for _, c := range person.Credentials {
+		if c.ID == id && c.Method == MethodReset {
+			return ResetRow{ID: id, Kind: person.Kind, Stage: person.Stage,
+				Verifier: c.Verifier, ExpiresAt: c.ExpiresAt,
+				RevokedAt: c.RevokedAt, Ended: c.EndedBy(counters)}
+		}
+	}
+	return ResetRow{}
+}
+
+// ResetStages are the stages a password reset reaches: everybody enrolled and
+// not turned away — an invitation's person who never finished enrolling as
+// much as somebody active. A suspended or retired person is reactivated
+// first, because a link that set their password would hand back an account an
+// administrator deliberately stopped.
+var ResetStages = []iam.Stage{iam.StageInvited, iam.StageEnrolling, iam.StageActive}
+
+// ResetByID resolves one reset link by its credential id, on this file's three
+// answers: the zero value for an id that is not a reset link this estate
+// holds, and an error for a node that could not read — with whether these
+// rows vouch for what they hold at end, the identity log's last sequence read
+// BEFORE this snapshot ([ResetRow.Vouched], [CoversLog]).
+func (r *Reader) ResetByID(ctx context.Context, id string, end uint64) (
+	ResetRow, error) {
+
+	if id == "" {
+		return ResetRow{Vouched: true}, nil
+	}
+	var out ResetRow
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		var (
+			verifier, document []byte
+			expires, revoked   int64
+			kind, stage        string
+		)
+		err := tx.QueryRowContext(ctx, `
+			SELECT c.person_id, c.verifier, c.expires_at, c.revoked_at,
+			       c.document, p.login, p.kind, p.stage, p.seat_id
+			  FROM iam_credentials c
+			  JOIN iam_people p ON p.id = c.person_id
+			 WHERE c.id = ? AND c.method = ?`, id, string(MethodReset)).
+			Scan(&out.PersonID, &verifier, &expires, &revoked, &document,
+				&out.Login, &kind, &stage, &out.Seat)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			out = ResetRow{}
+			out.Vouched, err = vouches(ctx, tx, end)
+			return err
+		case err != nil:
+			return fmt.Errorf("iamdomain: read a reset link: %w", err)
+		}
+		if out.Vouched, err = vouches(ctx, tx, end); err != nil {
+			return err
+		}
+		held, err := DecodeCredential(document)
+		if err != nil {
+			return fmt.Errorf("iamdomain: open reset link %q: %w", id, err)
+		}
+		// THE COUNTERS IN THE SNAPSHOT THE ROW IS READ IN, as the spend's
+		// own check reads them in its record's.
+		counters, err := countersOf(ctx, tx, out.PersonID)
+		if err != nil {
+			return err
+		}
+		out.ID = id
+		out.Verifier = string(verifier)
+		out.ExpiresAt = fromMillis(expires)
+		out.RevokedAt = fromMillis(revoked)
+		out.Ended = held.EndedBy(counters)
+		out.Kind, out.Stage = iam.Kind(kind), iam.Stage(stage)
+		return nil
+	})
+	if err != nil {
+		return ResetRow{}, err
+	}
+	return out, nil
+}
+
+// invitationColumns are what [scanInvitation] reads, in its order.
+const invitationColumns = `id, email_blind, created_at, expires_at, redeemed_at,
+	person_id, document`
+
+// scanInvitation reads one invitation row, opening the document for the halves
+// no column carries.
+func scanInvitation(scan func(...any) error) (InvitationRow, error) {
+	var (
+		out                        InvitationRow
+		document                   []byte
+		created, expires, redeemed int64
+	)
+	if err := scan(&out.ID, &out.Blind, &created, &expires, &redeemed,
+		&out.Person, &document); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return InvitationRow{}, err
+		}
+		return InvitationRow{}, fmt.Errorf("iamdomain: read an invitation: %w", err)
+	}
+	doc, err := DecodeInvitation(document)
+	if err != nil {
+		return InvitationRow{}, fmt.Errorf("iamdomain: open invitation %q: %w",
+			out.ID, err)
+	}
+	out.Sealed = doc.Sealed
+	out.InvitedBy = doc.InvitedBy
+	out.Grants = doc.Grants
+	out.Verifier = doc.Verifier
+	out.Seat = doc.Seat
+	out.CreatedAt = fromMillis(created)
+	out.ExpiresAt = fromMillis(expires)
+	out.RedeemedAt = fromMillis(redeemed)
 	return out, nil
 }
 
@@ -976,10 +1157,10 @@ func fromMillis(ms int64) time.Time {
 // Because ending a session is a claim that it was live until now. Asked only
 // for the owner, a named sign-out closed and announced a session a record had
 // already ended — revoked, invalidated, past its absolute deadline — naming
-// the caller as the one who ended it. Live is one reading of the row: not
-// ended, not past its absolute deadline, not opened before the company's last
-// invalidation, and at its person's current revocation epoch. An absent row is
-// never live.
+// the caller as the one who ended it. Live is [SessionRecord.Live], the
+// reading the listing reports: not ended, not past its absolute deadline, not
+// opened before the company's last invalidation, and at its person's current
+// revocation epoch. An absent row is never live.
 //
 // # And an absent row is PROVED against the log's end, or not said
 //
@@ -1021,19 +1202,18 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 		if err != nil {
 			return err
 		}
-		switch {
-		case ended != 0,
-			expires > 0 && expires <= now.UnixMilli(),
-			// A SESSION OPENED BEFORE THE COMPANY'S LAST INVALIDATION
-			// carries the generation that invalidation ended.
-			invalidated > 0 && uint64(start) < invalidated:
-			return nil
-		}
 		current, err := epochOf(ctx, tx, owner)
 		if err != nil {
 			return err
 		}
-		live = uint64(epoch) >= current
+		// THE LISTING'S OWN READING ([SessionRecord.Live]), so the
+		// sessions a screen offers to end are the ones this answers live.
+		live = SessionRecord{
+			EndedAt:   fromMillis(ended),
+			ExpiresAt: fromMillis(expires),
+			Superseded: sessionSuperseded(uint64(start), uint64(epoch),
+				invalidated, current),
+		}.Live(now)
 		return nil
 	})
 	if err != nil {

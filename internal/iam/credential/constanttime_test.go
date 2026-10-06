@@ -25,14 +25,15 @@ import (
 //
 // A LIST RATHER THAN A WALK OF EVERY FUNCTION, because the property is not
 // "this package never uses ==" — it uses it on lengths, on prefixes and on
-// parameters, all of which are public. It is "these four functions compare a
-// SECRET", and naming them is what makes a fifth one added later a visible
+// parameters, all of which are public. It is "these five functions compare a
+// SECRET", and naming them is what makes a sixth one added later a visible
 // omission rather than a silent one.
 var comparisons = map[string]string{
 	"Verify":            "password.go",
 	"VerifyTOTP":        "totp.go",
 	"SpendRecoveryCode": "recovery.go",
 	"VerifyToken":       "pat.go",
+	"VerifyReset":       "reset.go",
 }
 
 func declOf(t *testing.T, file, name string) *ast.FuncDecl {

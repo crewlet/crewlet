@@ -13,8 +13,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -121,20 +121,6 @@ const (
 // See the package doc for why both halves are needed.
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
-	if s.backend() != config.AuthBackendLocal {
-		// A DEPLOYMENT WHOSE PEOPLE DO NOT SIGN IN SERVES NO PASSWORD
-		// ROUTE, and it says so rather than refusing as though the
-		// credentials were wrong: this is a fact about the deployment
-		// that every caller may know, and answering `sign_in_refused`
-		// would send somebody to reset a password this company does not
-		// have.
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownQuery,
-			map[string]string{
-				"detail": "this deployment does not sign in with passwords",
-				"hint":   "see GET /auth/config for how it does",
-			})
-		return
-	}
 
 	body, err := httpjson.ReadBody(w, r, maxLoginBody)
 	if err != nil {
@@ -678,13 +664,14 @@ var errFactorSpent = errors.New("authapi: this second factor was already spent")
 // verdict this call cannot prove is its own, and a session opened on either
 // could be a session on a code that still works or on one somebody else
 // spent. The caller reads that off the result ([built]).
-func (s *Service) spendSecondFactor(ctx context.Context, person string,
+func (s *Service) spendSecondFactor(ctx context.Context, person iamdomain.Sighting,
 	use factorUse) (factorUse, statelog.Result, error) {
 
 	remaining := use.remaining
 	opID := statelog.NewOpID(s.now(), "second-factor")
-	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
-		PersonID: person,
+	// AUTHORED AS THE PERSON WHOSE CODE IT IS, through no session yet.
+	result, err := s.behalf(madeBy(person, "")).SetCredentials(ctx, iamdomain.CredentialSet{
+		PersonID: person.ID,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			spent := true
 			out := make([]iamdomain.Credential, 0, len(held))
@@ -805,7 +792,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		s.refuseSecondFactor(w, r, adm, attempt, held, curve, "second factor mismatch")
 		return factorUse{}, false
 	}
-	use, spend, err := s.spendSecondFactor(r.Context(), held.ID, use)
+	use, spend, err := s.spendSecondFactor(r.Context(), held, use)
 	switch {
 	case errors.Is(err, errFactorSpent):
 		s.refuseSecondFactor(w, r, adm, attempt, held, curve,
@@ -878,7 +865,9 @@ type signIn struct {
 
 	// provedAt is when this sign-in's person proved who they are, where
 	// that was NOT here and now — and nil for every way in that was: a
-	// password, a second factor, an invitation.
+	// password, a second factor, an invitation, a password change (which
+	// proves what a step-up from its person proves, the code included
+	// where they hold a second factor).
 	//
 	// ONE WAY IN SETS IT: an ENROLMENT's replacement session inherits the
 	// proof of the enrolment-only session it replaces, because the code
@@ -900,16 +889,24 @@ type signIn struct {
 //
 // # A sign-in that proved a password and nothing else, where one is required
 //
-// `api.auth.local.totp: required` says nobody signs in on a password alone. So
-// a sign-in THIS SURFACE verified — the password route, a password step-up, an
-// invitation's redemption — that proved no second factor opens
-// a restricted session. Proving none means holding none: the password route
-// and the step-up demand a code from anybody who holds a factor, and a new
-// person holds none yet.
+// `api.auth.totp: required` says nobody signs in on a password alone. So
+// a sign-in THIS SURFACE verified — the password route, a password step-up, a
+// password change, an invitation's redemption — that proved no second factor
+// opens a restricted session. Proving none means holding none: the password
+// route, the step-up and the change demand a code from anybody who holds a
+// factor, and a new person holds none yet.
 //
 // A Tier A exchange never reaches this: presenting the token was its whole
 // proof, and it holds no second factor to enrol.
+//
+// A REPLACEMENT THAT KEEPS ITS SESSION'S PROOF ([signIn.provedAt]) is never
+// restricted: it is the enrolment that lifts the restriction itself. A
+// password change by somebody holding a second factor is not restricted
+// either, for the reason every step-up from them is not: it proved the code.
 func (s *Service) enrolmentOnly(how signIn) bool {
+	if how.provedAt != nil {
+		return false
+	}
 	switch how.method {
 	case types.SignInPassword, types.SignInInvite:
 		return how.factor == "" && s.secondFactorRequired()
@@ -918,15 +915,14 @@ func (s *Service) enrolmentOnly(how signIn) bool {
 }
 
 // secondFactorRequired reports whether this deployment requires a second factor
-// of somebody who signs in with a password: the `api.auth.local` block's own
-// `totp`, and nothing where there is no such block.
+// of somebody who signs in with a password: `api.auth.totp`, whose unset value
+// is required.
 //
-// THE BLOCK IS WHAT STATES what a password sign-in needs, and
-// [iam.SecondFactor.Requires] reads a value this build does not know as
-// required, which is the safe direction for "must you prove more".
+// THE SAME READING `/auth/config` reports ([config.APIAuth.SecondFactor]), so
+// what the posture read tells a sign-in page and what the sign-in enforces
+// cannot disagree about the default.
 func (s *Service) secondFactorRequired() bool {
-	local := s.boot.API.Auth.Local
-	return local != nil && local.TOTP.Requires()
+	return s.boot.API.Auth.SecondFactor() == iam.SecondFactorRequired
 }
 
 // proofOf is the instant a sign-in proved who somebody is: the replaced
@@ -1026,8 +1022,8 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// a step-up to be the same close: closing a closed session changes
 		// nothing, and a step-up asked again is a new gesture.
 		closeOp := statelog.StepOpID(lineage.String(), "close-replaced")
-		closed, closeErr := s.writer.CloseSession(r.Context(), how.replaces,
-			held.ID, because, closeOp)
+		closed, closeErr := s.behalf(madeBy(held, how.replaces)).CloseSession(
+			r.Context(), how.replaces, held.ID, because, closeOp)
 		if closeErr != nil {
 			if removed(closeErr) {
 				s.personRemoved(w, r, how)
@@ -1043,9 +1039,21 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 			unresolved(w, r, "api_step_up_close_unresolved", closed)
 			return loginResponse{}, false
 		}
+	} else {
+		// A FRESH SIGN-IN ENDS WHATEVER SESSION THIS BROWSER HELD, as a
+		// sign-out does: the cookie set below replaces it, so the session
+		// it named is held by no browser — and was left live on every node
+		// until its absolute deadline, listed as "signed in" on its
+		// person's Account. An invitation redeemed in a browser signed in
+		// as somebody else did exactly that to them. Best effort, as a
+		// sign-out is: the sign-in asked for is not refused over a close
+		// of somebody's other session.
+		s.endEveryHeld(r)
 	}
 	restricted := s.enrolmentOnly(how)
-	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
+	// THE PERSON SIGNING IN IS THE AUTHOR, through the session it opens;
+	// the replaced one's close above came through that session.
+	opened, err := s.behalf(madeBy(held, lineage.String())).OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
 		// EVERY PATH HERE IS A PROOF — a password and its second factor,
@@ -1060,10 +1068,16 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// session that may only enrol one — see [Service.enrolmentOnly].
 		EnrolmentOnly: restricted,
 		OpID:          sessionOpID(lineage),
-		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because
-		// nothing in this answer reads the row: the bearer carries the
-		// position and every node validates against its own applier.
-		NoWait: true,
+		// A SIGN-IN IS THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT,
+		// because nothing in this answer reads the row: the bearer carries
+		// the position and every node validates against its own applier.
+		// A REPLACEMENT WAITS, as every other write here does: a step-up,
+		// a password change or an enrolment is made from a page listing
+		// this person's sessions, which reads them again at once — and
+		// read before the start applied, the list held the session the
+		// gesture ended and not the one it opened, so it said this
+		// browser was signed in nowhere.
+		NoWait: how.replaces == "",
 	})
 	if err != nil {
 		if removed(err) {
@@ -1134,20 +1148,15 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 	}, true
 }
 
-// backend is how this deployment signs people in.
-func (s *Service) backend() config.AuthBackend {
-	return s.boot.API.Auth.Resolved()
-}
-
 // passwordFloor is the shortest password this deployment accepts: its own
-// `api.auth.local.min_password_length`, or the engine's twelve.
+// `api.auth.min_password_length`, or the engine's twelve.
 //
 // ONE READING FOR EVERY SITE THAT SETS OR DESCRIBES A PASSWORD — the two
 // enrolments that choose one and the two answers that tell a form what to
 // refuse before it posts — so a form can never be told one number while the
 // route enforces another. That was the shape before this: every site said
 // twelve, and none read the setting.
-func (s *Service) passwordFloor() int { return s.boot.API.Auth.Local.Passwords() }
+func (s *Service) passwordFloor() int { return s.boot.API.Auth.Passwords() }
 
 // sourceOf is the source the throttle keys on, beside what was typed.
 //

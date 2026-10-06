@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -50,9 +52,60 @@ func (d issuedInvitation) InvitationByID(ctx context.Context, id string) (
 	iamdomain.InvitationRow, error) {
 
 	if id != d.id {
-		return iamdomain.InvitationRow{}, nil
+		return iamdomain.InvitationRow{Vouched: true}, nil
 	}
 	return d.sealedInvitation.InvitationByID(ctx, id)
+}
+
+// unvouchedInvitation is [issuedInvitation] on a node whose rows cannot vouch
+// for what they answer ([iamdomain.InvitationRow.Vouched]).
+type unvouchedInvitation struct{ issuedInvitation }
+
+func (d unvouchedInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := d.issuedInvitation.InvitationByID(ctx, id)
+	row.Vouched = false
+	return row, err
+}
+
+// AN INVITATION THIS NODE CANNOT VOUCH FOR IS NO DEAD LINK, for the reset
+// link's reason ([TestALinkThisNodeCannotVouchForIsNoDeadLink]): an id these
+// rows do not hold and a real id with a wrong secret are both 503 and neither
+// is counted, while the live link is served — the CONTROL. Mutation: drop the
+// vouch from the view and the unknown id is a counted 410.
+func TestAnInvitationThisNodeCannotVouchForIsNoDeadLink(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, id, secret string
+		status           int
+	}{
+		{"the live link (the control)", invitationID, invitationSecret, http.StatusOK},
+		{"an id these rows do not hold", uuid.Must(uuid.NewV7()).String(),
+			invitationSecret, http.StatusServiceUnavailable},
+		{"a secret that is not the link's", invitationID, "not-the-links-secret",
+			http.StatusServiceUnavailable},
+	} {
+		audit := &recordingAudit{}
+		mux := http.NewServeMux()
+		buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+			o.Directory = unvouchedInvitation{issuedInvitation{id: invitationID}}
+			o.Sealer = stubSealer{address: "dana@example.com"}
+			o.Audit = audit
+		}).Routes(mux)
+		req := httptest.NewRequest(http.MethodGet, "/auth/invite/"+tc.id, nil)
+		req.Header.Set(secretHeader, tc.secret)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != tc.status {
+			t.Errorf("%s: the view answered %d, want %d: %s", tc.name, rec.Code,
+				tc.status, rec.Body)
+			continue
+		}
+		if _, failures := audit.snapshot(); len(failures) != 0 {
+			t.Errorf("%s: counted %v on a node that could not say", tc.name, failures)
+		}
+	}
 }
 
 // A GET ON AN INVITE RENDERS AND NEVER SPENDS.
@@ -254,4 +307,66 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 	if strings.Contains(rec.Body.String(), holder) {
 		t.Errorf("the refusal names the seat's holder: %s", rec.Body)
 	}
+}
+
+// AN INVITATION NAMES WHO SENT IT AS THE CHART NAMES THEM.
+//
+// A person bound to a seat writes as the seat, so the invitation records its
+// author by the seat's handle, and the page said "founder invited you" to
+// somebody who knows that person as "Jane Founder". A machine — a Tier A
+// token, a service account — is named by nobody: "token:founder invited you"
+// told the company's first person nothing they could recognise. The CONTROL
+// is an author the chart does not hold, named as the record holds it.
+// Mutation: answer the recorded author and the seat's name is never shown and
+// the machine is named.
+func TestAnInvitationNamesWhoSentItAsTheChartNamesThem(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		seats  companySeats
+		author string
+		want   string
+	}{
+		{"a seat the chart holds", companySeats{"founder": {Handle: "founder",
+			Kind: session.SeatKindHuman, Name: "Jane Founder"}}, "", "Jane Founder"},
+		{"a Tier A token", companySeats{}, "token:founder", ""},
+		{"a seat it does not (the control)", companySeats{}, "", "founder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+				o.Directory = authoredInvitation{author: tc.author}
+				o.Seats = tc.seats
+				o.Sealer = stubSealer{address: "dana@example.com"}
+			}).Routes(mux)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, viewInvite(invitationID))
+			var view struct {
+				InvitedBy string `json:"invited_by"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil ||
+				rec.Code != http.StatusOK || view.InvitedBy != tc.want {
+				t.Errorf("the view answered %d naming %q (%v), want %q", rec.Code,
+					view.InvitedBy, err, tc.want)
+			}
+		})
+	}
+}
+
+// authoredInvitation is [sealedInvitation] issued by author, or by its own
+// seat author where author is empty.
+type authoredInvitation struct {
+	sealedInvitation
+	author string
+}
+
+func (a authoredInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := a.sealedInvitation.InvitationByID(ctx, id)
+	if a.author != "" {
+		row.InvitedBy = a.author
+	}
+	return row, err
 }

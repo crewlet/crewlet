@@ -272,6 +272,45 @@ func TestASiteURLMismatchIsReported(t *testing.T) {
 	}
 }
 
+// THE INSTANCE IS READ ONCE, AS NOBODY, WHICHEVER SEATS THERE ARE.
+//
+// The client config is the read a browser makes before anybody signs in, so
+// no seat's session is asked for it. It walked the seats until one answered,
+// so an instance that answers nobody cost the client's retry budget once per
+// seat: forty seconds of boot, before the API listened, for a few seats
+// against a refused connection. Mutation: walk the seats again and the read
+// is made three times, each on a seat's token.
+func TestTheInstanceIsReadOnceAsNobody(t *testing.T) {
+	var reads []string
+	var mu sync.Mutex
+	inst := newInstance(t, map[string]mattermost.User{})
+	inst.server.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/config/client") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return true
+		}
+		mu.Lock()
+		reads = append(reads, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		return true
+	})
+	tr := transport(t, inst, func(o *mattermost.TransportOptions) {
+		o.Config.Seats = nil
+		for _, handle := range []string{"swe", "pm", "ceo"} {
+			o.Config.Seats = append(o.Config.Seats,
+				mattermost.SeatConfig{Handle: handle, Token: "tok-" + handle})
+		}
+	})
+	_ = tr.Start(t.Context())
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reads) != 1 || reads[0] != "" {
+		t.Errorf("the instance was read %d times, carrying %q — want once, "+
+			"on no seat's session", len(reads), reads)
+	}
+}
+
 // The server ENFORCES the typing cadence: sending faster is rejected, so a
 // guessed value that is too eager produces an indicator that never appears.
 func TestTheTypingCadenceComesFromTheServer(t *testing.T) {

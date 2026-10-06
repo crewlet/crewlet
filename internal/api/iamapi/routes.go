@@ -25,7 +25,7 @@ import (
 // guards its listing.
 const Prefix = "/iam/"
 
-// Routes registers the seventeen on a mux.
+// Routes registers the twenty on a mux.
 //
 // EVERY ROUTE CARRIES ITS OWN POLICY, stated where it is mounted, through
 // [authz.Router] — which is the only reader of the matched pattern, because a
@@ -90,12 +90,22 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// somebody. A route named after a person who does not exist yet would
 	// have had to invent an id for them.
 	mount("POST /iam/invitations", at(authz.ActionDirectoryWrite), s.PostInvite)
+	// READ LIKE THE DIRECTORY and withdrawn like any directory write: an
+	// outstanding invitation is a way into the company, and both halves of
+	// "who can reach us" are this surface's.
+	mount("GET /iam/invitations", at(authz.ActionDirectoryRead), s.GetInvitations)
+	mount("DELETE /iam/invitations/{id}", at(authz.ActionDirectoryWrite),
+		s.DeleteInvitation)
 	mount("GET /iam/people/{id}/sessions",
 		about(authz.ActionDirectoryRead), s.GetSessions)
 	mount("DELETE /iam/people/{id}/sessions",
 		about(authz.ActionSessionEnd), s.DeleteSessions)
 	mount("POST /iam/people/{id}/mfa/reset",
 		at(authz.ActionDirectoryWrite), s.PostMFAReset)
+	// THE SAME VERB AS THE SECOND FACTOR'S RESET, for its reason: both
+	// change how somebody else proves who they are, from outside.
+	mount("POST /iam/people/{id}/password-reset",
+		at(authz.ActionDirectoryWrite), s.PostPasswordReset)
 	mount("GET /iam/credentials",
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",
@@ -318,7 +328,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (key, seed s
 func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 	what string, err error) {
 
-	log.WarnContext(r.Context(), "api_iam_read_failed",
+	log.Log(r.Context(), auth.UnreadLevel(r.Context()), "api_iam_read_failed",
 		"what", what, "error", err)
 	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 }
@@ -462,8 +472,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 			httpjson.Detail{"detail": err.Error(), "op_id": opID})
 		return
 	case errors.As(err, &taken):
-		refuse(http.StatusConflict, httpjson.CodeBadParams,
-			httpjson.Detail{"detail": err.Error()})
+		refuse(http.StatusConflict, httpjson.CodeInvalid, s.takenDetail(r, taken))
 		return
 	case errors.Is(err, iamdomain.ErrNotFindable),
 		errors.Is(err, iamdomain.ErrNotFound),
@@ -549,6 +558,36 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 			withExtra(extra, httpjson.Detail{
 				"detail": opkey.UnknownDetail(result.Unvouched)}))
 	}
+}
+
+// takenDetail is what an administrator is told about a value somebody else
+// holds: which value, in a sentence of the surface's own, and who holds it —
+// by the login this node's rows give them, and by id beside it.
+//
+// NOT THE DOMAIN'S ERROR, which is written for a log: it carried the package's
+// name, the holder's raw id and, for an address, its BLIND — a digest nobody
+// can read — into a dialog that shows a detail verbatim. And `invalid` rather
+// than `bad_params`, whose sentence is about a query parameter: the remedy is
+// to send a different value.
+func (s *Service) takenDetail(r *http.Request, taken *iamdomain.ErrTaken) httpjson.Detail {
+	if taken.Invitation != "" {
+		return httpjson.Detail{"field": string(taken.Field),
+			"invitation": taken.Invitation,
+			"detail": "that address is held by an open invitation — cancel " +
+				"the invitation first, or let it be redeemed"}
+	}
+	holder := "somebody else"
+	if row, err := s.directory.Person(r.Context(), taken.Person); err == nil &&
+		row.Login != "" {
+		holder = row.Login
+	}
+	what := "that address"
+	if taken.Field != iamdomain.UniqueEmail {
+		what = fmt.Sprintf("the %s %s", taken.Field, taken.Value)
+	}
+	return httpjson.Detail{"field": string(taken.Field), "held_by": taken.Person,
+		"detail": fmt.Sprintf("%s is already held by %s — choose another",
+			what, holder)}
 }
 
 // withExtra is a route's own fields beside the answer's, the answer's winning

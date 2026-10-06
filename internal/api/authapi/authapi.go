@@ -55,7 +55,7 @@
 //
 // # A required second factor is enrolled before anything else
 //
-// `api.auth.local.totp: required` says nobody acts on a password alone, and a
+// `api.auth.totp: required` says nobody acts on a password alone, and a
 // person who holds no second factor has nothing else to present. So a sign-in
 // this surface verified that proved a password and no second factor opens a
 // session marked ENROLMENT-ONLY on its own start record, and answers
@@ -118,6 +118,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
@@ -155,7 +157,9 @@ type Directory interface {
 
 	// InvitationByID resolves one invitation, on the same three answers:
 	// the zero value for one nobody issued, and an error for a node that
-	// could not tell.
+	// could not tell — with whether this node's rows VOUCH for it
+	// ([iamdomain.InvitationRow.Vouched]): only where they do is a link
+	// they do not hold, or cannot admit, a dead one.
 	//
 	// BY ITS OWN ID and never by address, because the id is what the link
 	// carries and an address lookup here would be a way to ask whether
@@ -175,6 +179,17 @@ type Directory interface {
 	// be a lie about it. See [iamdomain.Reader.SessionStanding].
 	SessionStanding(ctx context.Context, lineage string, now time.Time) (
 		owner string, live bool, err error)
+
+	// ResetByID resolves one password reset link by its credential id, on
+	// the same three answers — the zero value for an id that is no link —
+	// with whether this node's rows vouch for it, as
+	// [Directory.InvitationByID] does. BY ITS OWN ID, for
+	// [Directory.InvitationByID]'s reason.
+	ResetByID(ctx context.Context, id string) (iamdomain.ResetRow, error)
+
+	// Person answers one directory row by id, or [iamdomain.ErrNotFound]:
+	// the signed-in caller's own, whose name `GET /auth/session` carries.
+	Person(ctx context.Context, id string) (iamdomain.PersonRow, error)
 }
 
 // Writer is what this surface writes, defined here for Directory's reason.
@@ -217,6 +232,11 @@ type Writer interface {
 	// a two-request enrolment from pairing an old decision with a new
 	// expectation.
 	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Result, error)
+
+	// SetPassword replaces a person's password and moves their revocation
+	// epoch in ONE record, judged by the caller's own proof in its snapshot
+	// — a person's change, or a reset link's spend.
+	SetPassword(ctx context.Context, in iamdomain.PasswordSet) (statelog.Result, error)
 }
 
 // landed reports whether a write's record is durable: applied here, or
@@ -226,6 +246,21 @@ type Writer interface {
 func landed(result statelog.Result) bool {
 	return result.Outcome == statelog.OutcomeApplied ||
 		result.Outcome == statelog.OutcomePending
+}
+
+// madeBy is who made a gesture this surface writes down before they are
+// anybody's principal — signing in, a second factor, a reset link, a
+// redemption: the person their credential resolved to, and the session the
+// gesture opened or closed, where it has one, as the credential it came
+// through. What [Service.behalf] authors its records as.
+func madeBy(person iamdomain.Sighting, lineage string) iam.Principal {
+	id, _ := uuid.Parse(person.ID)
+	p := iam.Principal{ID: id, Kind: person.Kind, Login: person.Login,
+		Seat: person.Seat}
+	if lineage != "" {
+		p.Via = iam.SessionName(lineage)
+	}
+	return p
 }
 
 // errText is an error's message, or empty — so a log line carries the field
@@ -376,6 +411,9 @@ type Sealer interface {
 		plaintext string) (string, error)
 	OpenCredential(person, credential string, field iamdomain.Field,
 		sealed string) (string, error)
+
+	// Open opens one of a person's own sealed values ([iamdomain.Sealer.Open]).
+	Open(person string, field iamdomain.Field, sealed string) (string, error)
 }
 
 // Blinds is where the keyed blind an address is matched on comes from.
@@ -408,7 +446,7 @@ type Audit interface {
 // Options is what the surface is built from.
 type Options struct {
 	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag,
-	// the session deadlines, the backend and the grant ceiling all come
+	// the session deadlines, the password rules and the grant ceiling all come
 	// from it, and a surface that guessed any of them would mint cookies
 	// the next node rejects.
 	Bootstrap *config.Bootstrap
@@ -417,6 +455,15 @@ type Options struct {
 	// REQUIRED.
 	Directory Directory
 	Writer    Writer
+
+	// Behalf is Writer's authority writing on a person's behalf: what it
+	// publishes names them as its author. REQUIRED. Every gesture a person
+	// makes through this surface — signing in and out, a second factor's
+	// spend, an invitation's redemption, a reset link, enrolling their own
+	// authenticator — is written through it, so the identity trail names
+	// who made it rather than the node that wrote it down; see
+	// [iamdomain.Writer.For].
+	Behalf func(person iam.Principal) Writer
 
 	// Seats is the organisation this node runs, which an invitation's view
 	// names its seat from. Optional: with none, the view names the seat by
@@ -428,9 +475,8 @@ type Options struct {
 	// internal/iam/session rather than here.
 	Signer *session.Signer
 
-	// Hasher verifies passwords. REQUIRED on the `local` backend and
-	// unused on `none`, but taken unconditionally: a nil here would
-	// make the local backend's refusal a panic on the first sign-in
+	// Hasher verifies passwords. REQUIRED: password sign-in is always
+	// served, and a nil here would be a panic on the first sign-in
 	// rather than a refusal at boot.
 	Hasher *credential.Hasher
 
@@ -495,6 +541,7 @@ type Service struct {
 	boot      *config.Bootstrap
 	directory Directory
 	writer    Writer
+	behalf    func(person iam.Principal) Writer
 	seats     session.Chart
 	signer    *session.Signer
 	hasher    *credential.Hasher
@@ -537,6 +584,7 @@ func New(opts Options) (*Service, error) {
 		{"Bootstrap", opts.Bootstrap == nil},
 		{"Directory", opts.Directory == nil},
 		{"Writer", opts.Writer == nil},
+		{"Behalf", opts.Behalf == nil},
 		{"Signer", opts.Signer == nil},
 		{"Hasher", opts.Hasher == nil},
 		{"Throttle", opts.Throttle == nil},
@@ -557,6 +605,7 @@ func New(opts Options) (*Service, error) {
 	}
 	s := &Service{
 		boot: opts.Bootstrap, directory: opts.Directory, writer: opts.Writer,
+		behalf: opts.Behalf,
 		signer: opts.Signer, hasher: opts.Hasher, throttle: opts.Throttle,
 		blinder: opts.Blinder,
 		// THE GUARD'S READING OF A BEARER'S SUBJECT, built from the same
@@ -601,6 +650,17 @@ func joinNames(names []string) string {
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 	in admission, attempt authevents.Failure, why string) {
 
+	s.refuseSignInWith(w, r, in, attempt, why, nil)
+}
+
+// refuseSignInWith is [Service.refuseSignIn] with a detail beside the one
+// code, for the one route whose caller is already signed in as the person the
+// password is checked for — a password change — so saying WHICH field was not
+// accepted tells them nothing they did not know, and "those sign-in details"
+// on a form that is not a sign-in sent them looking at the wrong field.
+func (s *Service) refuseSignInWith(w http.ResponseWriter, r *http.Request,
+	in admission, attempt authevents.Failure, why string, detail map[string]string) {
+
 	in.ticket.Fail()
 	s.audit.Failed(r.Context(), attempt)
 	log.WarnContext(r.Context(), "api_sign_in_refused",
@@ -610,7 +670,7 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 		// operator's screen renders.
 		"reason", why, "method", string(attempt.Method), "route", r.URL.Path,
 		"source", attempt.Source)
-	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
+	httpjson.FailWith(w, http.StatusUnauthorized, httpjson.CodeSignInRefused, detail)
 }
 
 // admission is one attempt the throttle let through: its ticket, and where it

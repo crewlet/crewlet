@@ -344,7 +344,7 @@ from that node's own rows:
 | What | When | How |
 |---|---|---|
 | Signing in | refused from the apply on | the stage is read from the row, and only `active` may act |
-| Every session they hold | refused at the next request, `401 session_revoked` | the same stage check, on every request |
+| Every session and machine token they hold | ended, and refused at the next request, `401 session_revoked` | the record moves their revocation epoch as a `crewlet iam revoke` does, so reactivating them revives none: they sign in again and mint new tokens. Refused only while the stage stood, a reactivation brought back every session — whose browser had been told `401` and dropped its cookie, so the one copy revived was a copy somebody else kept |
 | An open dashboard tab | closed `4401` as the record applies — or `1013` on a node that cannot read the record yet, whose reconnect answers that person `503` until it can | each node's identity applier says whose credentials a committed batch moved — the person, the login they hold, the session it ended — and the node decides again exactly the sockets opened with one; a move that can name nobody (the company's session generation, a record the node retains instead of applying, its identity log passing the stall grace) closes every open tab `1013` without reading anything, and each reconnect's handshake decides |
 | Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply, with a 30-second re-read behind it | the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory |
 | What agents are shown of them — a lead's roster, `lookup_colleague` | their accounts left out from the next turn | every turn pins the registry's reading beside its org, so the prompt and the tools leave out the same people |
@@ -353,7 +353,8 @@ from that node's own rows:
 So a message the person sends from Slack stops being attributed to their
 seat — a suspended lead's DM to an agent no longer arrives as "your lead
 says" — and nothing about the seat has to be edited to make that true.
-Reinstating them (`crewlet iam activate`) restores all of it on the same terms. See
+Reinstating them (`crewlet iam activate`) restores all of it on the same terms
+— all but their sessions and tokens, which the suspension ended. See
 [Humans in the Org Chart: A suspended holder is
 withdrawn](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change)
 for the routing rule for every stage, removal included.
@@ -413,7 +414,10 @@ operator, and it carries the `grants` its own `api.auth.tokens` entry declares,
 cut on every request to the node's `max_grants` ceiling — never the whole
 ceiling by default (see [Tier A](../getting-started/configuration.md#tier-a)).
 So the first person is **invited, like everybody after them**, by whoever holds
-a token declaring `people:manage`:
+a token declaring `people:manage`. On the dashboard that is: sign in with the
+token (the sign-in page opens its token form while `/health` says nobody has
+joined), open **Settings › People & access** and press **Invite person**
+— your address, your seat, the grants. Or from a shell:
 
 ```sh
 export CREWLET_API_TOKEN=...   # the value of one of api.auth.tokens
@@ -421,7 +425,7 @@ crewlet iam invite founder@example.com \
   -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run
 ```
 
-The command prints a link, shown once. The person opens it — the dashboard's
+Either way the link is shown once. The person opens it — the dashboard's
 invitation screen — chooses a login (one is proposed from the address) and a
 password, and redeems it exactly as the next section describes. Nothing about
 the first redemption is special:
@@ -438,10 +442,11 @@ the first redemption is special:
   again; `crewlet iam check` names a company in that state as
   `no_people_manage_holder`.
 - **The node says the company is waiting for it.** `GET /health` answers
-  `identity: unclaimed` while nobody is enrolled (`ready` once anybody is, and
-  `unknown` where this node cannot read the estate — never folded into
-  `unclaimed`), and a node that boots on an empty estate logs `iam_unclaimed`
-  naming the command above. Neither ever moves `status`.
+  `identity: unclaimed` while no person is enrolled (`ready` once one is — a
+  service account alone does not count, since it signs nobody in with a
+  password — and `unknown` where this node cannot read the estate, never
+  folded into `unclaimed`), and a node that boots with no person in its estate
+  logs `iam_unclaimed` naming the command above. Neither ever moves `status`.
 - **After that, the token is the way back in, not the way people arrive.** Once
   somebody holds `people:manage`, invitations come from them; the token stays
   the break-glass credential for the day nobody who can invite is reachable.
@@ -555,6 +560,24 @@ a convenience: the link is a bearer credential sitting in somebody's mailbox,
 so the window is how long a compromised mailbox yields an account. A week
 survives somebody being away without making the link a standing way in.
 
+**An invitation is listed and withdrawn, never read back.** `GET
+/iam/invitations` (`crewlet iam invitations`) lists the invitations nobody has
+redeemed and that are still good — `?all=true` (`-all`) adds the redeemed and
+the expired, each with its `state` — and every row says for whom (the address,
+opened on the listing node's own keyring), which seat it binds, what it
+confers, who issued it and until when. It is read like the directory, by
+whoever holds `people:manage` or `audit:read`, and no row carries the link,
+its secret or what the estate keeps of it: the link is shown once, and an
+inviter who lost it cancels and issues another. `DELETE /iam/invitations/{id}`
+(`crewlet iam cancel-invite`) withdraws one nobody has redeemed, and takes
+`people:manage` like every directory write. It is one directory record, and
+its apply deletes the invitation's row, so the link answers exactly as one
+nobody issued and the address it held is free for a new invitation at once. A
+redeemed invitation is refused `409 stale` naming the person it created: what
+to undo then is that person, and that is a removal. Each cancellation is an
+`iam_invitation_cancelled` event, naming the invitation by its id and never
+the address.
+
 ## The binding has two ends, and only one of them arbitrates
 
 A person is bound to a seat, and the two facts live in two places: the
@@ -656,6 +679,7 @@ would be a credential every operator with a backup holds.
 | Second factor | The TOTP shared secret, sealed under the **fleet keyring** and bound to the person, the credential it was enrolled as and the field — see [below](#what-is-in-the-clear-and-what-is-not) | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
 | Recovery code | SHA-256 | Minted here from `crypto/rand`, so there is no dictionary to grind and no memory cost to buy |
 | Machine token | SHA-256 over the prefix, the credential id and the secret — everything but the log position the value carries, which is a hint about *when* to look and proves nothing | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
+| Password reset link | SHA-256 over a prefix of its own, the credential id and the secret | Minted here from `crypto/rand`, as a machine token is — and it opens nothing but its own two routes, once |
 
 The rule is not "hash secrets with argon2id", it is **spend cost where an
 attacker has a shortcut** — and against a 32-byte value this engine minted,
@@ -677,7 +701,7 @@ enumerates it, and they push people to write the result down. Length is the
 only property that buys entropy from a human at no cost to them.
 
 Twelve is the engine's floor and a deployment may raise it with
-`api.auth.local.min_password_length`; nothing lowers it. The raised floor is
+`api.auth.min_password_length`; nothing lowers it. The raised floor is
 the one every password is held to — every redemption's and every change of a
 password — and the one `GET /auth/config` and an invitation's view
 report, so a form refuses exactly what the route would. It used to be validated
@@ -731,9 +755,144 @@ derived from the person and the verifier it replaces. A node shutting down
 waits for a rewrite in flight within the listener's shutdown grace and cuts it
 after.
 
+### Changing your own password ends everything else
+
+A signed-in person changes their own password with `POST /auth/password`,
+presenting the current one beside the new. **The proof is a step-up's, taken
+in the same request.** The current password is verified exactly as a step-up's
+is: on the throttle's curve for the login they are signed in as, under the
+verify cap, and a wrong one is the one refusal every sign-in arm gives and a
+counted failure — with a detail naming the current password as the field,
+which tells somebody already signed in as that person nothing they did not
+know. **Somebody who holds a second factor presents its `code` too** — the
+current code from their authenticator app, or one of their recovery codes —
+decided exactly as a step-up decides it: without one the answer is `401
+second_factor_required`, which changes nothing and counts as no attempt; a
+wrong one is the one refusal, counted on [the person's own
+curve](#a-failure-costs-a-wait-never-a-lockout) as well as the pair's; and a
+right one is [spent](#a-code-is-spent-when-it-is-used), as every code is.
+Together that is the recent proof the change needs, so the route asks for no
+step-up first. Somebody who holds no second factor presents the password
+alone, which is the whole of a step-up from them. The new password is held to
+the same floor and blocklist as every other.
+
+The code is asked because of what the change ends. On the current password
+alone, somebody who had a person's session cookie and their password — but
+not their authenticator — could change the password, which ends every other
+session and token the person holds and every outstanding reset link, and so
+lock the real owner out of their own account until an administrator issued
+them a reset link: the takeover a second factor exists to stop.
+
+It is how somebody proves who they are, so it needs **a person present**: a
+request that presented a machine token is refused (`reason: token_refused`), as a second
+factor's enrolment is, and a session exchanged from a Tier A token — which is
+no person's — has no password to change and is told so.
+
+**The new password and a moved revocation epoch are one record.** Somebody
+changes a password when they think somebody else has it, so the change ends
+every session and machine token the person held, and every outstanding reset
+link, in the same record that sets it — there is no instant at which the new
+password works and a thief's session still does. **This browser stays signed
+in**: it is handed a new session exactly as a step-up hands one, the session
+it presented ended first and the new one keeping its absolute deadline. Its
+proof is the change itself, dated now, because the change proved everything a
+step-up from that person proves.
+
+A change this node has not applied yet answers `202` with `status:
+password_changed` and **no session**: the epoch a new session is opened at is
+read from rows that do not hold the move yet, so the person signs in again with
+the new password. Each change is an `iam_password_changed` event.
+
+In the dashboard it is the Account page's **Change password** (`#/account`):
+the current password, a code where the person holds a second factor, and the
+new one typed twice.
+
+### A forgotten password is a one-time link from an administrator
+
+Somebody who cannot sign in at all has no current password to present, so an
+administrator issues them a **reset link**: `POST
+/iam/people/{id}/password-reset`, or `crewlet iam reset-password` with their id
+or login, on `people:manage` and a recent proof, as resetting a second factor
+is. The link reads
+
+```text
+https://crewlet.example.com/dashboard#/reset/<id>.<secret>
+```
+
+— the invitation link's shape, for the invitation link's reasons: the dashboard's
+reset screen with the credential after the `#`, which no browser sends to a
+server; the screen asks `/auth/reset/{id}` with the id in the path and the
+secret beside it, in the `X-Crewlet-Reset-Secret` header to say whose password
+it sets and in the body to set one. It is **shown once** and the engine never
+sends it: what the estate keeps is a `reset` credential on the person — the
+SHA-256 of the secret, listed among their credentials and revoked like any of
+them — and issuing another revokes the one before, so a person holds at most
+one. A machine has no password and is refused, and so is somebody suspended or
+retired, because a link would hand back an account somebody stopped. And it is
+issued **only for somebody whose every grant the administrator holds** — `403`
+otherwise, judged in the record's own snapshot: whoever issues the link is shown
+it and could spend it themselves, so a link for somebody holding `secrets:read`
+or `config:write` would let a `people:manage` holder without either act with
+it. It is the rule an invitation and an edit are held to — nobody hands out
+what they do not hold — and the reason a machine token is minted only for a
+service account. Because it is judged when the link is issued, **an edit that
+gives the person a grant revokes their outstanding link** in the same record:
+that grant was never judged against whoever holds the link, so they ask for
+another, judged against the new set. Taking a grant away revokes nothing. What
+the issue does not follow is the *issuer*: an administrator demoted after
+issuing a link still holds one that opens, as an invitation they issued still
+confers what it carries — so whoever demotes them revokes it with `DELETE
+/iam/credentials/{id}`.
+
+**It ends with the person's sessions and tokens.** A link is stamped with the
+person's revocation epoch and the company's session generation when it is
+issued, as a machine token is, and refused once either moves: suspending them,
+resetting their second factor, signing them out everywhere or ending their
+sessions, and the restore runbook's `crewlet iam invalidate-all` all end it,
+and it is listed as revoked. Reactivating somebody does not bring it back — it
+was sent out of band, and the copy somebody else kept is exactly the one a
+reactivation would revive — so an administrator issues a fresh one. **Issue
+the link after any of those, never before**: somebody who lost both their phone
+and their password needs their second factor reset *and* a link, and a link
+sent first is ended by the reset and opens nothing but `410 reset_spent`. The
+dashboard's **Suspend**, **Reset second factor** and **End all sessions**
+dialogs say so, and the link's own says to issue it after them.
+
+**It is good for one day.** It travels out of band — by chat or mail, where a
+link sits unread and gets forwarded — to somebody locked out *today*, so it
+lives long enough to reach them the next working day and no longer.
+An invitation's week is for somebody who does not work here yet.
+
+**Opening it spends nothing**, as an invitation's GET does not, and every way a
+link fails to open — an id that is no link, a secret that is not the id's, a
+link spent, revoked, ended or aged out, a person the reset no longer reaches — is
+**one `410 reset_spent`** in the same bytes, counted as a failed attempt (method
+`reset`) only where the link did not prove itself. It meets no curve: it names
+nobody until it opens, and its secret is 256 bits of `crypto/rand`. A `410`
+is said only by a node whose identity rows **vouch** for it — that hold every
+record the identity log does and retain none they could not apply. One behind
+the log, or holding a record signed under a keyring key it was not restarted
+with, may be missing a link issued through a peer, so it answers every link
+that does not open there `503 identity_unavailable`, counting nothing — an id
+it does not hold and a wrong secret alike, so the two still say nothing about
+which ids exist. An invitation's link is answered the same way.
+
+**Spending it is one record, and it signs nobody in.** The new password, the
+link spent with every other the person held, and their revocation epoch moved
+— every session and machine token they held ends — exactly as a change of their
+own does, judged by the link again in the record's own snapshot, so one spent
+from another tab in between opens nothing. The answer is the login and nothing
+else: the person signs in next, where a second factor they hold still applies,
+which a session handed out by the link would skip. Each spend is its own
+operation, so a second one — another tab, or a retry of a spend whose answer
+was lost — finds the link spent and is the same `410 reset_spent`; the password
+the first spend set is the one that works. Issuing is an `iam_password_reset_issued` event and spending an
+`iam_password_reset` one; neither carries the link.
+
 ### A required second factor is enrolled before anything else
 
-`api.auth.local.totp: required` means **nobody acts on a password alone**. A
+`api.auth.totp: required` — the default, when the line is absent — means
+**nobody acts on a password alone**. A
 person who holds a second factor is asked for it at every password sign-in and
 step-up, as they always were. A person who holds **none** — freshly invited,
 the company's first person among them, somebody an administrator reset — has
@@ -766,7 +925,13 @@ enrol one**:
   handed a moment earlier, not who is holding it, so it earns no fresh
   step-up window. Recovery codes come after, from the whole session, while the
   password's proof is still inside `step_up` — or after a step-up that
-  presents the new factor.
+  presents the new factor. They are issued **only beside an authenticator
+  app**: held alone, recovery codes are a second factor of their own, and a
+  person who asked for a set with no app would have every later sign-in
+  demand a code that only those ten single-use codes answer. For the same
+  reason revoking a person's last authenticator app
+  (`DELETE /iam/credentials/{id}`) revokes their recovery codes with it, as
+  the second-factor reset clears both.
 - A restricted session enrols **only while its person holds no second
   factor**, decided in the snapshot the factor would land on. Its proof is a
   password alone, and fresh enough for the enrolment's window, so without this
@@ -803,10 +968,11 @@ password alone, which is why it is refused off loopback unless
 
 ### A code is spent when it is used
 
-Either second factor works at a sign-in or a step-up, whichever the person
-holds: an app code, or one of their recovery codes when the phone is not to
-hand. Both are **spent by the sign-in they complete**, as a write to the
-person's own credentials decided in the same snapshot that checked them:
+Either second factor works at a sign-in, a step-up or a password change,
+whichever the person holds: an app code, or one of their recovery codes when
+the phone is not to hand. Both are **spent by the sign-in they complete**, as a
+write to the person's own credentials decided in the same snapshot that checked
+them:
 
 - an **app code** records the time step it was accepted at, and a code at or
   before that step is refused. Without it, the drift tolerance — the code
@@ -1019,8 +1185,12 @@ A **machine token** is the third credential, beside the deployment's Tier A
 tokens and a person's session: a bearer minted *for somebody in the
 directory* — a person's own token for the assistant they work through, or the
 token a **service account** (a directory row of kind `machine`, with a coloned
-login such as `ci:release`) presents from a pipeline. It is what
-`crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any other:
+login such as `ci:release`) presents from a pipeline. A service account has
+no password and no session, so it acts only through its tokens — and since a
+token never carries `secrets:read` or `people:manage`, a machine row is refused
+either: an enrolment or an edit that would give one to a machine is `400`. It
+is what `crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any
+other:
 
 ```bash
 # Your own, for the assistant you work through: signs in as you for the one
@@ -1038,15 +1208,22 @@ its value, and the token acts as its owner — so one minted on somebody else's
 account is a credential that acts as them, held by somebody who is not them.
 `people:manage` therefore mints for **service accounts** and for nobody else;
 a person mints their own from their own session, which is `POST
-/iam/credentials` with no `?person=` — and `crewlet iam token -login` is that
-request, signing in for it exactly as the dashboard does —
+/iam/credentials` with no `?person=` — the dashboard's Account page
+(`#/account`, **Personal access tokens › New token**) makes that request from
+the signed-in session — with **no grant ticked** to start, so a token carries
+what its holder chose rather than everything they hold (minted with none, it
+only keeps its owner's own record — marks their inbox read, pins views and
+orders their priorities — and reads nothing, that record included, since
+reading takes `state:read`; the dialog says so), and with a lifetime
+past the 365-day ceiling refused before it is sent — and `crewlet iam token
+-login` is that request too,
+signing in for it exactly as the dashboard does —
 the password from the terminal without echo or the first line piped in, a
 second-factor code the same way or the line after it, and never either as a
 flag, because a recovery code on a command line stays good in the shell's
 history — and signs out after,
 so the session it opened does not outlive the command. It reads no
-`CREWLET_API_TOKEN`. A deployment on `backend: none` signs no people in, so
-there is no person there to mint for; its machines are service accounts. The
+`CREWLET_API_TOKEN`. The
 decision is made in the owner's own snapshot, on the
 **id** of the party minting rather than its login, because a login is a name a
 rename moves between people — and that party is the one the identity writer was
@@ -1067,7 +1244,11 @@ stays on the person's record — listed with when and why it stopped — until
 the retention sweep collects it, seven days after it lapsed, or until a change
 needs its place: a mint, a second factor or new recovery codes that would
 leave more than 64 drops the credentials that lapsed **earliest**, as many as
-it needs and never a live one. Only a change that would leave more than 64
+it needs and never a live one. A token ended by signing out everywhere, a
+password change, a suspension or an administrator ending somebody's sessions
+has lapsed too, and goes first: nothing records when it stopped, it can never
+verify again, and the sweep would otherwise keep it until its own expiry.
+Only a change that would leave more than 64
 **live** credentials is refused, `400 invalid_body`, and revoking a token
 nothing uses makes room at once. The bound is what keeps a person's record —
 every credential change republishes all of them — inside the identity log's
@@ -1209,6 +1390,16 @@ checked against, because a lineage is not a secret. So a node that cannot read
 its rows answers `503 identity_unavailable` with a `Retry-After` and writes
 nothing, rather than ending a session it cannot say is the caller's.
 
+**A sign-in signs the browser out first.** Every way in that opens a fresh
+session — the password form, an invitation's redemption, a Tier A token's
+exchange — replaces whatever cookie the browser held, so it ends the session
+that cookie named exactly as a sign-out would before it opens its own. A
+browser signed in as one person that redeemed another person's invitation used
+to switch to the new person and leave the first one's session live, listed as
+signed in on their Account, with no browser holding it until its deadline. The
+invitation's screen says which session it is about to end before anything is
+pressed.
+
 Every field is there because a node has to answer with it and has no other way
 to know it:
 
@@ -1242,12 +1433,13 @@ of what a browser presents, on every REST call and on the live socket's
 handshake alike, and being `HttpOnly` it is out of reach of every script on the
 page. There is no token in the browser's storage and none in any URL — the
 socket reads no `?token=`, because a query string is written into every proxy's
-access log. Its sign-in surface is three screens outside the frame:
+access log. Its sign-in surface is four screens outside the frame:
 
 | Screen | What it does |
 |---|---|
-| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Where `/auth/config` names no local sign-in it offers only **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere — the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
-| `#/invite/<id>.<secret>` | [The invitation link](#everybody-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose — which signs them in |
+| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Behind **Use an API token instead** — open from the start where `/health` says `identity: unclaimed` (nobody has joined — an open invitation does not count until it is redeemed), with a line saying to invite yourself from Settings › People & access or open the link of an invitation already issued — it takes **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere; the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
+| `#/invite/<id>.<secret>` | [The invitation link](#everybody-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose, the password typed twice — which signs them in |
+| `#/reset/<id>.<secret>` | [A password reset link](#a-forgotten-password-is-a-one-time-link-from-an-administrator). It says whose password it sets with the secret in the `X-Crewlet-Reset-Secret` header, spends nothing by being opened, and sets the new password — typed twice — once, which signs nobody in, so it ends on the sign-in form |
 | `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` (the key and its `otpauth://` address), the first code, and the recovery codes shown once |
 
 A button that changes something — filing work, a save, marking the inbox,
@@ -1267,8 +1459,8 @@ step_up_required` opens **one** "Confirm it is you" dialog however many
 requests it refused, posts the password (and the code where a second factor is
 held) to `POST /auth/step-up`, and replays each refused request once — see
 [Some gestures ask how recently you proved who you
-are](#some-gestures-ask-how-recently-you-proved-who-you-are). The page bar's
-identity menu signs out — `POST /auth/logout`, or `POST /auth/logout/all` for
+are](#some-gestures-ask-how-recently-you-proved-who-you-are). The sidebar's
+user block signs out — `POST /auth/logout`, or `POST /auth/logout/all` for
 every session the person holds — and then reloads into the sign-in with the
 tab's `sessionStorage` emptied, because a route change would leave the last
 person's company in the tab's memory for whoever sits down next. A session
@@ -1277,6 +1469,47 @@ sign-in there by anybody other than the person the tab was read by hands it
 over the same way; the same person signing back in carries on where they were.
 [Dashboard Design](../reference/dashboard-design.md#signing-in-is-a-screen-outside-the-frame)
 has the whole of it.
+
+### Your own account is `#/account`
+
+The user block's menu opens the signed-in person's **Account** page, where
+everything this page says a person does about *themselves* is a control, each
+asking about the caller and nobody else:
+
+| Section | What it does, and what it ends |
+|---|---|
+| **Profile** | Their login, name, address, seat and grants, read-only — an administrator changes them |
+| **Change password** | [The current password, a code where a second factor is held, and the new one](#changing-your-own-password-ends-everything-else), typed twice. Ends every other session and every personal token; this browser stays signed in |
+| **Two-step verification** | Sets up or replaces the authenticator app, and issues new [recovery codes](#a-code-is-spent-when-it-is-used) — only beside an app |
+| **Where you are signed in** | Their live sessions, this browser marked (`GET /auth/session`'s `lineage`); any other signed out by name with `POST /auth/logout/{lineage}`, or all of them — and every personal token — with **Sign out everywhere**, which asks first |
+| **Personal access tokens** | [Their machine tokens](#machine-tokens-a-persons-own-and-a-service-accounts): minted with no `?person=`, the value shown once, and revoked |
+
+A session exchanged from a Tier A token is no person's, so its Account page
+names the token and offers none of this.
+
+### People are managed from Settings › People & access
+
+The directory's own screen is where an administrator — whoever holds
+`people:manage` — does everything this page describes, through the same `/iam`
+routes `crewlet iam` calls; a reader holding `audit:read` alone sees it
+read-only. What each gesture ends is the route's:
+
+| Gesture | What it does, and what it ends |
+|---|---|
+| **Invite person** | An address, a human seat nobody holds, the grants (none the inviter does not hold) — without `state:read` the dialog warns that the person will open nothing but their own Account (their dashboard says they have no access yet, and opens by itself once somebody gives them `state:read`). The [link](#everybody-arrives-by-invitation) is shown once; redeeming it creates the person |
+| **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address |
+| **New service account** · **Mint token** | A machine with a coloned login and grants — never `secrets:read` or `people:manage`, which no token carries and so no machine is given — then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants, shown once |
+| **Edit login, seat and grants** | One edit carrying only what changed. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
+| **Suspend** · **Reactivate** | A suspended person may not act, every session, token and password reset link they hold ends, and a seat they hold is withheld; reactivating restores the seat and lets them sign in again, and brings back none of what the suspension ended |
+| **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold. Every gesture that ends their sessions ends it too, so it is issued after them |
+| **Reset second factor** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
+| **End all sessions** | Moves their revocation epoch: every session — and every personal token and password reset link — they hold ends |
+| **Revoke** (a credential) | Ends that one credential — a token, a reset link, or how they prove who they are |
+| **Remove** | Typed back by login. Deletes the person and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-nodes-rows); undone only by inviting them again |
+
+Every write among these asks for a recent proof, so a stale one opens the step-up
+dialog first and the gesture then goes through. A human seat's own page says
+who holds it, and offers **Invite** with that seat chosen where nobody does.
 
 ### A cookie cannot tell its owner from a copy, and nothing pretends it can
 
@@ -1470,7 +1703,7 @@ or because a client must reach it to obtain a credential at all.
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
-| `/auth/config`, `/auth/login`, `/auth/invite/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link is the credential. Exact paths plus the one prefix, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
+| `/auth/config`, `/auth/login`, `/auth/invite/…`, `/auth/reset/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link and a password reset link are each the credential. Exact paths plus the two prefixes, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
 | `/auth/logout` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered it `503` before it ran, and a person left a shared machine still signed in. It verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges it. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
 
 Everything else needs one, **reads included**. `allow_anonymous_read` used to
@@ -1550,8 +1783,8 @@ sandbox box presents the signed token in its path, and refusing either would
 take every integration off the air.
 
 **The sign-in routes are judged, although no credential guards them.** A login
-cannot require a login, so `POST /auth/login` and `/auth/invite/{id}` are
-exempt from the *guard* — and from nothing else. They
+cannot require a login, so `POST /auth/login`, `/auth/invite/{id}` and
+`/auth/reset/{id}` are exempt from the *guard* — and from nothing else. They
 are routes a browser posts to, and each one ends with that browser holding a
 session: a form on somebody else's page that could post an attacker's password
 to the sign-in or redeem an attacker's invitation would leave the victim signed
@@ -1601,7 +1834,7 @@ unlocks.
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even the admin grant |
 | **Colleague write** | Filing, commenting, updating, merging; declaring a project's tags; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
 | **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
-| **Own or lead** | Priorities, a person's day, reading their queue; whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — and answering the question a coding run parked on (`answer_run`) | The owner, whoever leads them, or `fleet:operate`. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
+| **Own or lead** | Priorities, a person's day, reading their queue; whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — and answering the question a coding run parked on (`answer_run`) | The owner, whoever leads them, or `fleet:operate` — and READING a person's day or queue (`work_inbox`, `my_work`, `get_person`) takes `state:read` beside that, the owner's own included, because it lists the company's tasks: one row with two grants, as ending every session in the company is, so `GET /work/inbox` and the operator surface's `work_inbox` give one answer. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
 | **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — re-routing a task to another team, and a page container's own settings | The project's lead or, for pages, the lead of the unit whose `space:` the container is; or `fleet:operate` |
 | **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `config:read` to read and `config:write` to write anything in it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
@@ -1797,8 +2030,8 @@ verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — and every identity-directory write: enrolling, inviting, editing or removing somebody, resetting their second factor, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two
@@ -1849,7 +2082,7 @@ locks, both in the authority table, and the build holds both:
 
 - **The row says so.** Every verb that needs somebody at a keyboard states it
   beside its grant and its window, and a request that **presented a machine
-  token** is refused there — `403 unauthorized`, `reason: token_refused` —
+  token** is refused there — `403 token_refused` —
   whatever its owner may do. Some rows need a person on every arm: revealing a
   secret, every directory write, ending every session in the company, and
   changing how somebody proves who they are (enrolling or replacing a second
@@ -1899,8 +2132,15 @@ Identity has **two trails**, and they answer different questions.
   acted through (`operator_id`): a machine token's `pat:<id>`, a browser
   session's `session:<lineage>`, a Tier A token's own login. A token acts as
   its owner, so the actor is the owner either way, and the credential is what
-  says their token did it. What the sign-in surface and the duties write names
-  none, since the node acts on nobody's credential.
+  says their token did it. A gesture a person makes through the sign-in
+  surface — signing in or out, spending a second factor, redeeming an
+  invitation, setting a password from a reset link, enrolling their own
+  authenticator — is written down by the node under its own authority and
+  names the person as its actor, with the session it opened or closed as the
+  credential, or their login where it came through no session yet. What the
+  engine decides for itself — a sweep, a re-seal, a password re-hashed at the
+  current cost — names the node and no credential, since the node acts on
+  nobody's.
 - **The `auth` category** of the ordinary event feed is what *this node saw*:
   who signed in here and how, what ended a session, how many attempts failed
   and from where. Each row is published through the
@@ -1919,7 +2159,11 @@ Identity has **two trails**, and they answer different questions.
 | `iam_second_factor_throttled` | The sign-in surface, when a person's second-factor curve reaches its ceiling — somebody holding their password is guessing at their code, so the password is what to rotate | On the wrong code that takes the curve to its ceiling, per node — a run held there announces nothing more, and one that has aged back down announces its next climb — naming the address that code came from |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
-| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
+| `iam_invitation_cancelled` | The directory, when an administrator withdraws an invitation nobody redeemed — by its id, never the address | Once per cancellation |
+| `iam_password_reset_issued` | The directory, when an administrator issues somebody a one-time password reset link — for whom, by whom and until when, never the link | Once per link |
+| `iam_password_changed` | The sign-in surface, when a person changes their own password — which ended every other session and token they held | Once per change |
+| `iam_password_reset` | The sign-in surface, when a reset link is spent — the password set, every session and token the person held ended, and nobody signed in | Once per link |
+| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed, by whoever decided it — for a redemption, the person who issued the invitation, never the person redeeming it |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
 
@@ -1930,11 +2174,13 @@ free, with no credential to revoke and no identity on the row. A row per
 attempt would hand the size of every node's event store — and of every backup
 and snapshot taken from it — to whoever is making the attempts. So a failed
 sign-in, a refused second factor, an
-invitation link that answers `410` (nobody
-issued it, it was redeemed or aged out, or its address is already enrolled —
-the id in the link is the credential, so a source walking ids is guessing at
-one) and a bearer credential refused by a route that needs one each do two
-things and publish nothing:
+invitation or password reset link that answers `410` without
+proving itself (nobody issued the id, or the secret is not that link's — the
+link is the credential, so a source walking ids is guessing at one; a link
+that proved itself and is spent, revoked or aged out is its holder or a mail
+scanner reading it again, and is the same `410` uncounted) and a bearer
+credential refused by a route that needs one each do two things and publish
+nothing:
 
 - add one to the `crewlet.auth.attempts.failed` counter, by `method` and
   whether the throttle turned it away — the per-attempt number, for a
@@ -2430,8 +2676,10 @@ today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it and
-  the `grants` it may use; `max_grants`, the ceiling above; `backend`, how people sign in; and the
-  `session`, `audit` and `local` blocks under it. `allow_anonymous_read`,
+  the `grants` it may use; `max_grants`, the ceiling above; what a password
+  sign-in asks for — `totp` (unset is `required`), `accept_insecure` and
+  `min_password_length`; and the `session` and `audit` blocks under it.
+  Password sign-in is always served; there is no setting that turns it off. `allow_anonymous_read`,
   `disabled` and `oidc` are all retired and refused by name — see
   [Configuration § Auth](configuration.md#auth) for what replaced each.
 - **The identity directory** — who is a *person*, who is a machine, and which

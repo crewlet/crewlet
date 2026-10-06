@@ -1612,6 +1612,7 @@ for a person — anybody above them in the management chain.
 | Archive the project | the project's lead or `fleet:operate` — **and never an agent**, whatever it leads or holds |
 | Declare task types and workspace fields (`write_work_catalogue`) | `config:write` |
 | Save a view | see [Views](#views): a personal view is its owner's, a shared one its container's |
+| Read somebody's day — their inbox, queue and record (`work_inbox`, `my_work`, `get_person`) | `state:read`, **and** that person, whoever leads them, or `fleet:operate` — your own included, since it lists the company's tasks |
 | Set somebody's priorities | that person, whoever leads them, or `fleet:operate` — and a **seat** never sets anybody's but its own |
 | Mark an inbox, set pins | the person whose record it is, or `fleet:operate`; never a lead. The two tools take no handle at all, so a caller only ever writes their own |
 | Place a task in the manual order (`place_work_item`, the board drag) | `work:write`, and **never an agent** — a seat files work and moves its status, and the order a board is read in is a person's |
@@ -1928,7 +1929,9 @@ answer `not_found`.
 
 A human has a record of their own beside the work: an **inbox**, a **queue**
 and their **pins**. Three parts of one document, with three different
-authorities over them — which is why they are three separate writes.
+authorities over them — which is why they are three separate writes. Writing
+your own takes no grant; READING any of it, yours included, takes `state:read`
+as every read does, because a notice and a queue name the company's tasks.
 
 | Part | Who may write it |
 |---|---|

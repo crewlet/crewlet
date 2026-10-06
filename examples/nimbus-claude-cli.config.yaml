@@ -201,9 +201,16 @@ api:
   external_url: "http://localhost:8000"
 
   auth:
-    # No people sign in to this one — the token below is the only
-    # credential.  `local` adds passwords and a second factor.
-    backend: none
+    # People sign in with a login and a password, always.  The founder
+    # token below invites the first person (Settings › People & access, or
+    # `crewlet iam invite`) and stays the break-glass credential after.
+    #
+    # A second factor is `required` when this line is absent.  `optional`
+    # is this walkthrough's posture, on a loopback address no password
+    # crosses a network to reach; a deployment reached off loopback leaves
+    # the line out (validation refuses `optional` there without
+    # `accept_insecure: true`).
+    totp: optional
 
     # THE CEILING on what a directory record may ever confer.  Required once a port is set, and deliberately without
     # a default.

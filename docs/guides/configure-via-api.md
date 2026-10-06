@@ -366,7 +366,7 @@ classified, beside the `detail` that renders them.
 | `400` | `invalid_body` | The body is not YAML or JSON, or its shape is not a company's (an unknown key, a list where a mapping belongs). `Content-Type` is not what decides it |
 | `400` | `invalid_patch` | A `PATCH` body that could not be merged, or that names a key the document does not have |
 | `400` | `validation_error` | The whole resulting document failed validation; `detail` carries the message and `problems` locates each failure |
-| `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
+| `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body — asked once the write is admitted and its document checked, so a write you may not make is refused for that first |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
 | `400` | `conflicting_preconditions` | A per-entity `PUT` carrying both `If-None-Match: *` and `If-Match`; send one |
 | `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — a seat's handle and a unit's key are permanent, and a server or provider is renamed in the whole document, with everything that names it |

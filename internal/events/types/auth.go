@@ -63,6 +63,10 @@ func init() {
 	events.Register[IAMRecoveryCodeUsed]()
 	events.Register[IAMSecondFactorThrottled]()
 	events.Register[IAMMFAReset]()
+	events.Register[IAMInvitationCancelled]()
+	events.Register[IAMPasswordChanged]()
+	events.Register[IAMPasswordResetIssued]()
+	events.Register[IAMPasswordReset]()
 	events.Register[IAMSessionGenerationBumped]()
 	events.Register[RecordUnverifiable]()
 	events.Register[RecordTampered]()
@@ -171,6 +175,12 @@ const (
 	// a guesser.
 	FailInvite FailureMethod = "invite"
 
+	// FailReset is a password reset link that did not prove itself — an id
+	// that is no reset link, or a secret that is not the id's link's — for
+	// [FailInvite]'s reason: the link is the credential, and a link that
+	// proved itself and no longer works is not a guess.
+	FailReset FailureMethod = "reset"
+
 	// FailBearer is a credential presented on a request and refused: an
 	// `Authorization` value matching no Tier A token, or a session cookie
 	// whose signature does not verify under this deployment's keyring. A
@@ -183,7 +193,7 @@ const (
 // Valid reports whether m is a method this build names.
 func (m FailureMethod) Valid() bool {
 	switch m {
-	case FailPassword, FailSecondFactor, FailInvite,
+	case FailPassword, FailSecondFactor, FailInvite, FailReset,
 		FailBearer:
 		return true
 	}
@@ -193,7 +203,7 @@ func (m FailureMethod) Valid() bool {
 // FailureMethods is every method, for a metrics dimension and a test that
 // walks the set.
 var FailureMethods = []FailureMethod{
-	FailPassword, FailSecondFactor, FailInvite, FailBearer,
+	FailPassword, FailSecondFactor, FailInvite, FailReset, FailBearer,
 }
 
 // CredentialKind is what sort of credential a mint or a revocation was about.
@@ -215,6 +225,10 @@ const (
 
 	// CredentialPassword is a password.
 	CredentialPassword CredentialKind = "password"
+
+	// CredentialReset is a one-time password reset link an administrator
+	// issued.
+	CredentialReset CredentialKind = "reset"
 )
 
 // IAMSessionStarted is a session opened: somebody proved who they are and now
@@ -513,7 +527,10 @@ type IAMGrantsChanged struct {
 	By      string   `json:"by"`
 
 	// OperatorID is the credential By acted through — see
-	// [IAMSessionEnded.OperatorID].
+	// [IAMSessionEnded.OperatorID]. EMPTY ON A REDEMPTION'S: By there is
+	// the invitation's issuer, who decided what it confers, and the
+	// redemption acted through no credential of theirs — the record that
+	// issued the invitation names the one they issued it through.
 	OperatorID string `json:"operator_id,omitempty"`
 
 	// Version is the record's position, packed — the same number the
@@ -525,7 +542,8 @@ type IAMGrantsChanged struct {
 // EventType is the "iam_grants_changed" wire type.
 func (IAMGrantsChanged) EventType() string { return "iam_grants_changed" }
 
-// Actor is who changed them.
+// Actor is who changed them: whoever decided the grants, which for a
+// redemption is the invitation's issuer and never the person redeeming it.
 func (e IAMGrantsChanged) Actor() string { return e.By }
 
 // Summary lists both directions, because a grant added and a grant taken away
@@ -616,6 +634,106 @@ func (e IAMMFAReset) Actor() string { return e.By }
 // Summary names whose.
 func (e IAMMFAReset) Summary() string {
 	return "Second factor of " + orSomebody(e.Person, "") + " reset"
+}
+
+// IAMInvitationCancelled is an administrator withdrawing an invitation nobody
+// had redeemed: its link opens nothing from now on, and the address it held is
+// free for a new one.
+//
+// THE INVITATION BY ITS ID AND NEVER THE ADDRESS, which the trail row the
+// cancellation's record writes files under its blind — the address itself is
+// in no event here, as it is in none about the invitation's issue.
+type IAMInvitationCancelled struct {
+	Invitation string `json:"invitation"`
+	By         string `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+// EventType is the "iam_invitation_cancelled" wire type.
+func (IAMInvitationCancelled) EventType() string { return "iam_invitation_cancelled" }
+
+// Actor is the administrator.
+func (e IAMInvitationCancelled) Actor() string { return e.By }
+
+// Summary names which invitation.
+func (e IAMInvitationCancelled) Summary() string {
+	return "Invitation " + shortLineage(orSomebody(e.Invitation, "?")) + " cancelled"
+}
+
+// IAMPasswordChanged is a person changing their own password, having presented
+// the current one — which also ended every session and machine token they
+// held, the browser they did it from excepted, which was handed a new one.
+type IAMPasswordChanged struct {
+	Person string `json:"person"`
+	Login  string `json:"login"`
+	Remote string `json:"remote"`
+}
+
+// EventType is the "iam_password_changed" wire type.
+func (IAMPasswordChanged) EventType() string { return "iam_password_changed" }
+
+// Actor is the person, who changed their own.
+func (e IAMPasswordChanged) Actor() string { return e.Login }
+
+// Summary says what it ended, which is the half a reader of the feed acts on.
+func (e IAMPasswordChanged) Summary() string {
+	return lead(orSomebody(e.Login, e.Person),
+		"changed their password, ending every other session and token they held")
+}
+
+// IAMPasswordResetIssued is an administrator issuing somebody a one-time link
+// that sets a new password.
+//
+// NEVER THE LINK. It is shown once, to whoever issued it, and the estate keeps
+// a verifier of its secret; this says that one exists, whose it is and until
+// when.
+type IAMPasswordResetIssued struct {
+	Person     string    `json:"person"`
+	Credential string    `json:"credential"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	By         string    `json:"by"`
+	// OperatorID is the credential By acted through — see
+	// [IAMSessionEnded.OperatorID].
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+// EventType is the "iam_password_reset_issued" wire type.
+func (IAMPasswordResetIssued) EventType() string { return "iam_password_reset_issued" }
+
+// Actor is the administrator.
+func (e IAMPasswordResetIssued) Actor() string { return e.By }
+
+// Summary names for whom.
+func (e IAMPasswordResetIssued) Summary() string {
+	return "Password reset link issued for " + orSomebody(e.Person, "")
+}
+
+// IAMPasswordReset is a reset link spent: a new password set from it, the link
+// with it, and every session and machine token the person held ended.
+//
+// NOBODY WAS SIGNED IN BY IT — the person signs in afterwards, where a second
+// factor they hold still applies — so there is no session on this row.
+type IAMPasswordReset struct {
+	Person     string `json:"person"`
+	Login      string `json:"login"`
+	Credential string `json:"credential"`
+	Remote     string `json:"remote"`
+}
+
+// EventType is the "iam_password_reset" wire type.
+func (IAMPasswordReset) EventType() string { return "iam_password_reset" }
+
+// Actor is the person whose password the link set.
+func (e IAMPasswordReset) Actor() string { return e.Login }
+
+// Summary says it was a link, which is what tells it from a change.
+func (e IAMPasswordReset) Summary() string {
+	return lead(orSomebody(e.Login, e.Person),
+		"set a new password from a reset link, ending every session and token they held")
 }
 
 // IAMSessionGenerationBumped is the fleet-wide session generation moving, which

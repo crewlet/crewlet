@@ -19,8 +19,8 @@
  *
  * # The sign-in screens resolve too, and to no workspace
  *
- * Signing in, redeeming an invitation and enrolling a second factor are drawn
- * OUTSIDE the frame (`FRAMELESS` in `nav.ts`), and they are resolved FIRST,
+ * Signing in, redeeming an invitation, spending a password reset link and
+ * enrolling a second factor are drawn OUTSIDE the frame (`FRAMELESS` in `nav.ts`), and they are resolved FIRST,
  * before any workspace is asked: their heads are reserved for them, and a
  * `#/login?next=…` link is a link to a page like any other, which the link
  * gates hold. What they lack is a workspace — `workspace` is `""` — because
@@ -88,14 +88,17 @@ const ME_SECTIONS: readonly MeSection[] = [
 ];
 
 /**
- * The screens drawn outside the frame. An invitation's one segment is
- * `<id>.<secret>`, kept whole: the screen itself says when that is not a
- * whole link — a link cut short by a mail client is the ordinary way it
+ * The screens drawn outside the frame. An invitation's and a reset link's one
+ * segment is `<id>.<secret>`, kept whole: the screen itself says when that is
+ * not a whole link — a link cut short by a mail client is the ordinary way it
  * arrives wrong, and "no such screen" would send the person looking for a
  * different page rather than for the rest of this one.
  */
 export type SignInScreen =
-  { screen: "login" } | { screen: "enrol" } | { screen: "invite"; link: string };
+  | { screen: "login" }
+  | { screen: "enrol" }
+  | { screen: "invite"; link: string }
+  | { screen: "reset"; link: string };
 
 /** Every screen the frame draws, with what its path names. */
 export type FramedScreen =
@@ -141,7 +144,8 @@ export type FramedScreen =
   | { screen: "nodes"; node?: string }
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
-  | { screen: "audit" };
+  | { screen: "audit" }
+  | { screen: "account" };
 
 /** Every screen the dashboard draws. */
 export type Screen = FramedScreen | SignInScreen;
@@ -229,6 +233,8 @@ export function resolve(path: string[]): Route {
       return missing("spend", under("Spend"));
     case "settings":
       return settings(rest, screen, under);
+    case "account":
+      return rest.length ? missing("account", under("Account")) : screen({ screen: "account" });
     default:
       return missing("", `the screen “${head}”`);
   }
@@ -238,8 +244,8 @@ type Make = (s: FramedScreen) => Resolved;
 
 /**
  * A sign-in screen: exactly the tail its address has, and anything longer is
- * an address the product does not have — except an invitation, whose screen
- * answers a link that is not whole.
+ * an address the product does not have — except an invitation and a reset
+ * link, whose screens answer a link that is not whole.
  */
 function signIn(route: FramelessRoute, rest: string[]): Route {
   const make = (s: SignInScreen): Resolved => ({ ...s, resolved: true, workspace: "" });
@@ -253,7 +259,8 @@ function signIn(route: FramelessRoute, rest: string[]): Route {
         ? missing("", `“${rest.join("/")}” under enrolment`)
         : make({ screen: "enrol" });
     case "invite":
-      return make({ screen: "invite", link: rest.length === 1 ? (rest[0] ?? "") : "" });
+    case "reset":
+      return make({ screen: route, link: rest.length === 1 ? (rest[0] ?? "") : "" });
   }
 }
 type Under = (label: string) => string;

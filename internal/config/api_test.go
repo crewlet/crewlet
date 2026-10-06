@@ -140,30 +140,19 @@ func TestASatelliteServingNoApiIsRefusedWithoutAKeyring(t *testing.T) {
 	}
 }
 
-// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT ON EVERY BACKEND, and the
-// per-backend arm is the point: each one leaves a different way to be locked
-// out of your own company, and `none` is the one where the token is the only
-// credential that exists at all.
-func TestADeploymentWithNoTierATokenIsAFaultOnEveryBackend(t *testing.T) {
+// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT: a fresh deployment's identity
+// estate is empty, so the token is the only credential that exists to invite
+// the first person with.
+func TestADeploymentWithNoTierATokenIsAFault(t *testing.T) {
 	t.Parallel()
-	for _, backend := range AuthBackends {
-		t.Run(string(backend), func(t *testing.T) {
-			t.Parallel()
-			b := serving()
-			b.API.Auth.Backend = backend
-			switch backend {
-			case AuthBackendLocal:
-				b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorRequired}
-			}
-			// The control: with a token this posture is legal, so the
-			// refusal below is about the token and not the backend.
-			if err := b.Validate(); err != nil {
-				t.Fatalf("backend %s with a token was refused: %v", backend, err)
-			}
-			b.API.Auth.Tokens = nil
-			refuses(t, b, "at least one token is required")
-		})
+	b := serving()
+	// The control: with a token this posture is legal, so the refusal
+	// below is about the token and nothing else.
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture with a token was refused: %v", err)
 	}
+	b.API.Auth.Tokens = nil
+	refuses(t, b, "at least one token is required")
 }
 
 // --- the credential itself ----------------------------------------------- //
@@ -287,9 +276,9 @@ func TestEveryRetiredAuthKeyIsANamedRefusal(t *testing.T) {
 			// of it that works any more, and "unknown field" would send
 			// the operator looking for one.
 			"api.auth.oidc",
-			"api:\n  auth:\n    backend: oidc\n    oidc:\n" +
+			"api:\n  auth:\n    oidc:\n" +
 				"      issuer: https://idp.example.com\n",
-			"`backend: local`",
+			"`api.auth.totp`",
 		},
 		{
 			// `closed` described the posture every deployment now
@@ -385,81 +374,66 @@ func TestTrustedProxiesRefusesWhatCannotMeanWhatItSays(t *testing.T) {
 	}
 }
 
-// --- which backend, and which block ------------------------------------- //
-
-// AN UNSET BACKEND DERIVES FROM WHETHER THE BLOCK IS PRESENT, and without it
-// it is `none` — never a password backend nobody asked for.
-func TestTheBackendDerivesFromWhetherTheBlockIsPresent(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		auth APIAuth
-		want AuthBackend
-	}{
-		{"no block", APIAuth{}, AuthBackendNone},
-		{"a local block", APIAuth{Local: &APILocal{}}, AuthBackendLocal},
-		{"a declaration wins", APIAuth{Backend: AuthBackendNone, Local: &APILocal{}}, AuthBackendNone},
-	} {
-		if got := tc.auth.Resolved(); got != tc.want {
-			t.Errorf("%s resolved to %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
-// A BLOCK NO BACKEND READS IS REFUSED rather than ignored, because ignoring it
-// is how a deployment runs with sign-in switched off while its file carries a
-// fully configured password policy and everybody believes it is set up.
-func TestABlockNoBackendReadsIsRefused(t *testing.T) {
-	t.Parallel()
-	b := serving()
-	b.API.Auth.Backend = AuthBackendNone
-	b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorRequired}
-	refuses(t, b, "reads nothing under `local`")
-}
-
-// AND A BACKEND WITH NO BLOCK IS REFUSED TOO, on the one that has no safe
-// default to fall back on: `local` exists to say whether a password alone is
-// enough, and a block that defaulted would answer that on the operator's
-// behalf.
-func TestALocalBackendNeedsItsBlock(t *testing.T) {
-	t.Parallel()
-	b := serving()
-	b.API.Auth.Backend = AuthBackendLocal
-	refuses(t, b, "has no safe default")
-}
-
 // --- the second factor --------------------------------------------------- //
 
-func TestTheSecondFactorMustBeStatedAndIsJudgedOnTheExternalURL(t *testing.T) {
+// AN UNSET SECOND FACTOR IS REQUIRED, the secure value, so a deployment that
+// says nothing gets one and `optional` is always somebody's choice — judged on
+// where a browser reaches the deployment, never on the bind.
+//
+// Mutation: read the zero as optional in [APIAuth.SecondFactor] and the first
+// case fails; drop the loopback rule and the second does.
+func TestTheSecondFactorIsRequiredUnlessOptionalIsStatedAndJudgedOnTheExternalURL(t *testing.T) {
 	t.Parallel()
-	local := func(f iam.SecondFactor, insecure bool, url string) Bootstrap {
+	auth := func(f iam.SecondFactor, insecure bool, url string) Bootstrap {
 		b := serving()
 		b.API.ExternalURL = url
-		b.API.Auth.Backend = AuthBackendLocal
-		b.API.Auth.Local = &APILocal{TOTP: f, AcceptInsecure: insecure}
+		b.API.Auth.TOTP = f
+		b.API.Auth.AcceptInsecure = insecure
 		return b
 	}
-	t.Run("the zero value is refused", func(t *testing.T) {
+	t.Run("unset is required", func(t *testing.T) {
 		t.Parallel()
-		refuses(t, local("", false, "https://crewlet.example.com"), "there is no default")
+		b := auth("", false, "https://crewlet.example.com")
+		if err := b.Validate(); err != nil {
+			t.Fatalf("an unset second factor was refused: %v", err)
+		}
+		if got := b.API.Auth.SecondFactor(); got != iam.SecondFactorRequired {
+			t.Errorf("an unset second factor reads as %q, want %q", got,
+				iam.SecondFactorRequired)
+		}
+		// AN UNKNOWN VALUE REQUIRES ONE TOO: a denylist would read a newer
+		// peer's value as optional and drop the requirement for the length
+		// of a rolling upgrade.
+		newer := APIAuth{TOTP: "somethingnewer"}
+		if got := newer.SecondFactor(); got != iam.SecondFactorRequired {
+			t.Errorf("a value this build does not know reads as %q, want %q",
+				got, iam.SecondFactorRequired)
+		}
+	})
+	t.Run("a value this build does not know is refused", func(t *testing.T) {
+		t.Parallel()
+		refuses(t, auth("sometimes", false, "https://crewlet.example.com"), "sometimes")
 	})
 	t.Run("optional off loopback is refused", func(t *testing.T) {
 		t.Parallel()
-		refuses(t, local(iam.SecondFactorOptional, false, "https://crewlet.example.com"),
+		refuses(t, auth(iam.SecondFactorOptional, false, "https://crewlet.example.com"),
 			"signs somebody in over the network")
 	})
 	t.Run("optional on loopback is fine", func(t *testing.T) {
 		t.Parallel()
 		for _, url := range []string{"http://localhost:8000", "http://127.0.0.1:8000"} {
-			b := local(iam.SecondFactorOptional, false, url)
+			b := auth(iam.SecondFactorOptional, false, url)
 			if err := b.Validate(); err != nil {
 				t.Errorf("%s was refused: %v", url, err)
+			}
+			if got := b.API.Auth.SecondFactor(); got != iam.SecondFactorOptional {
+				t.Errorf("a stated optional reads as %q", got)
 			}
 		}
 	})
 	t.Run("and off loopback with the acknowledgement", func(t *testing.T) {
 		t.Parallel()
-		b := local(iam.SecondFactorOptional, true, "https://crewlet.example.com")
+		b := auth(iam.SecondFactorOptional, true, "https://crewlet.example.com")
 		if err := b.Validate(); err != nil {
 			t.Errorf("an acknowledged insecure posture was refused: %v", err)
 		}
@@ -471,7 +445,7 @@ func TestTheSecondFactorMustBeStatedAndIsJudgedOnTheExternalURL(t *testing.T) {
 	// must refuse it.
 	t.Run("a loopback bind behind a public address is still refused", func(t *testing.T) {
 		t.Parallel()
-		b := local(iam.SecondFactorOptional, false, "https://crewlet.example.com")
+		b := auth(iam.SecondFactorOptional, false, "https://crewlet.example.com")
 		b.API.Host = "127.0.0.1"
 		refuses(t, b, "signs somebody in over the network")
 	})
@@ -480,15 +454,14 @@ func TestTheSecondFactorMustBeStatedAndIsJudgedOnTheExternalURL(t *testing.T) {
 func TestAPasswordFloorBelowTheEngineOwnIsRefusedRatherThanRaised(t *testing.T) {
 	t.Parallel()
 	b := serving()
-	b.API.Auth.Backend = AuthBackendLocal
-	b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorRequired, MinPasswordLength: 8}
+	b.API.Auth.MinPasswordLength = 8
 	refuses(t, b, "below the engine's own floor")
 
-	b.API.Auth.Local.MinPasswordLength = MaxPasswordLength + 1
+	b.API.Auth.MinPasswordLength = MaxPasswordLength + 1
 	refuses(t, b, "nobody can satisfy")
 
-	b.API.Auth.Local.MinPasswordLength = 0
-	if got := b.API.Auth.Local.Passwords(); got != iam.MinPasswordChars {
+	b.API.Auth.MinPasswordLength = 0
+	if got := b.API.Auth.Passwords(); got != iam.MinPasswordChars {
 		t.Errorf("an unset floor = %d, want the engine's own %d", got, iam.MinPasswordChars)
 	}
 }
@@ -564,10 +537,8 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 	t.Run("an acknowledged insecure posture", func(t *testing.T) {
 		t.Parallel()
 		b := serving()
-		b.API.Auth.Backend = AuthBackendLocal
-		b.API.Auth.Local = &APILocal{
-			TOTP: iam.SecondFactorOptional, AcceptInsecure: true,
-		}
+		b.API.Auth.TOTP = iam.SecondFactorOptional
+		b.API.Auth.AcceptInsecure = true
 		named(t, b, "accept_insecure")
 	})
 	t.Run("plain http off loopback", func(t *testing.T) {
@@ -590,8 +561,7 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 func TestASoundApiPostureWarnsAboutNothing(t *testing.T) {
 	t.Parallel()
 	b := serving()
-	b.API.Auth.Backend = AuthBackendLocal
-	b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorRequired}
+	b.API.Auth.TOTP = iam.SecondFactorRequired
 	if err := b.Validate(); err != nil {
 		t.Fatalf("the fixture does not validate: %v", err)
 	}
@@ -614,7 +584,8 @@ func TestANodeServingNoApiWarnsAboutNoneOfIt(t *testing.T) {
 	} {
 		b := DefaultBootstrap()
 		b.API.ExternalURL = external
-		b.API.Auth.Local = &APILocal{TOTP: iam.SecondFactorOptional, AcceptInsecure: true}
+		b.API.Auth.TOTP = iam.SecondFactorOptional
+		b.API.Auth.AcceptInsecure = true
 		for _, w := range b.Warnings() {
 			if strings.HasPrefix(w.Path, "api.") {
 				t.Errorf("a node binding no port, reached at %s, warned about "+

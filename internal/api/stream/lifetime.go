@@ -67,10 +67,18 @@ import (
 //
 // # What a decision by the guard does
 //
-//   - RESOLVED: the socket carries on, later questions are asked as the
-//     principal just resolved, and the pushes follow its grants: a changed
-//     [Audience] is sent a fresh snapshot built for it. The watch is decided
-//     again too.
+//   - RESOLVED AS WHO THE SOCKET ALREADY ACTS AS — the same login, seat and
+//     grants: the socket carries on, later questions are asked as the
+//     principal just resolved, and the watch is decided again.
+//   - RESOLVED AS SOMEBODY ELSE — a rename, a seat bound or unbound, a grant
+//     given or taken: closed [CloseUndecided], and the reconnect's handshake
+//     builds everything for whoever it is now. The tab's own answer to "who
+//     am I" (the `viewer` question, asked again on every reconnect) is what
+//     moves with it: kept open, the socket went on answering the new
+//     principal while the dashboard still named the old one — "Your day" on a
+//     seat the person had just unbound themselves from — until a reload. And
+//     a snapshot sent in place, which a changed audience used to get, moved
+//     the pushes and left that answer behind.
 //   - A SEAT REFUSAL (the seat is gone), or a principal that no longer holds
 //     `state:read`: closed [CloseUnauthorized], because the credential is fine
 //     and what it may do is not.
@@ -334,14 +342,16 @@ func (s *Service) CredentialsMoved(m Moved) {
 // keepDecided acts on this socket's signals and its credential's own end,
 // until ctx ends or the socket is closed. See the file head.
 //
-// resync is what a changed audience is sent: the snapshot, built for the
-// audience the decision resolved, because the screen has to lose what it was
-// showing under a narrowed grant rather than keep it until a reload. rewatch
-// decides the watched seat again, as whoever is asking now. seatOf is the
-// published company's word on a seat.
-func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
-	l *listener, cred credential, seatOf SeatOfFunc, now func() time.Time,
-	resync func(Audience) map[string]any, rewatch func(context.Context)) {
+// rewatch decides the watched seat again, as whoever is asking now. seatOf is
+// the published company's word on a seat. now is the service's clock, which
+// the credential's end is measured against — the one the guard deciding it
+// reads, rather than a second, private reading of the wall clock: a node whose
+// guard was handed a clock this timer did not read re-decided every socket
+// once a second, its deadline long past by one clock and hours off by the
+// other.
+func keepDecided(ctx context.Context, conn *websocket.Conn, l *listener,
+	cred credential, seatOf SeatOfFunc, now func() time.Time,
+	rewatch func(context.Context)) {
 
 	// ONE TIMER, ARMED AT THE HANDSHAKE'S READING: a credential's own end is
 	// fixed when it is issued, so the instant to wake at is known from the
@@ -352,34 +362,27 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 	// clock stepped back after the arming (an NTP correction, a VM resumed)
 	// fires the timer while the guard still sees the credential live, and a
 	// timer dropped there left the socket with no deadline at all. Re-armed
-	// for the wall clock's own distance, floored at [expiryRetry].
+	// for that clock's own distance, floored at [expiryRetry].
 	var timer *time.Timer
 	var expiry <-chan time.Time
 	if !cred.ends.IsZero() {
-		timer = time.NewTimer(time.Until(cred.ends))
+		timer = time.NewTimer(cred.ends.Sub(now()))
 		defer timer.Stop()
 		expiry = timer.C
 	}
 	// WHETHER THE PUBLISHED COMPANY HAS BEEN SEEN TO HOLD the seat the
 	// principal acts as — what tells a seat removed from one not yet in it.
 	//
-	// LEARNED AGAIN ONLY WHEN A DECISION MOVED THE SEAT: re-learned after
-	// every decision it was read from whatever company was published as the
-	// decision ended — one that had just dropped the seat left this socket
-	// believing it had never been held, and the publish that followed
-	// closed it [CloseUndecided] rather than `seat_unavailable`.
+	// LEARNED ONCE, AT THE HANDSHAKE'S SEAT, and never again from a
+	// decision: one that moves the seat closes the socket, and one that
+	// keeps it learned whatever company was published as it ended — one
+	// that had just dropped the seat left this socket believing it had never
+	// been held, and the publish that followed closed it [CloseUndecided]
+	// rather than `seat_unavailable`.
 	seen := holds(seatOf, cred.who.current().Seat)
 	decide := func() bool {
-		seat := cred.who.current().Seat
 		r, refusal := cred.decide(ctx)
-		if !decideOnce(ctx, conn, client, cred.who, r, refusal, now, resync,
-			rewatch) {
-			return false
-		}
-		if moved := cred.who.current().Seat; moved != seat {
-			seen = holds(seatOf, moved)
-		}
-		return true
+		return decideOnce(ctx, conn, cred.who, r, refusal, rewatch)
 	}
 	for {
 		select {
@@ -406,7 +409,7 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 			if !decide() {
 				return
 			}
-			timer.Reset(max(time.Until(cred.ends), expiryRetry))
+			timer.Reset(max(cred.ends.Sub(now()), expiryRetry))
 		}
 	}
 }
@@ -463,9 +466,8 @@ func keepSeated(ctx context.Context, conn *websocket.Conn, who *asking,
 // decideOnce acts on one decision of the socket's credential by the guard —
 // its resolution r and its refusal — and reports whether the socket is still
 // open.
-func decideOnce(ctx context.Context, conn *websocket.Conn, client *Client,
-	who *asking, r *http.Request, refusal *auth.Refusal, now func() time.Time,
-	resync func(Audience) map[string]any, rewatch func(context.Context)) bool {
+func decideOnce(ctx context.Context, conn *websocket.Conn, who *asking,
+	r *http.Request, refusal *auth.Refusal, rewatch func(context.Context)) bool {
 
 	if ctx.Err() != nil {
 		return false
@@ -505,14 +507,32 @@ func decideOnce(ctx context.Context, conn *websocket.Conn, client *Client,
 			string(iam.GrantStateRead))
 		return false
 	}
+	if before := who.current(); !sameActor(before, principal) {
+		// SOMEBODY ELSE NOW — see the file head. The reconnect's handshake
+		// decides the new principal, builds the snapshot for its grants and
+		// is asked "who am I" again.
+		log.InfoContext(ctx, "stream_closed_principal_moved",
+			"login", principal.Login, "was", before.Login,
+			"seat", principal.Seat, "seat_was", before.Seat)
+		_ = conn.Close(CloseUndecided, "who this socket acts as moved")
+		return false
+	}
 	who.set(principal)
 	// AND THE SEAT IT WATCHES, as whoever this decision resolved.
 	if rewatch != nil {
 		rewatch(who.context(ctx))
 	}
-	audience := AudienceOf(principal.Grants)
-	if client.SetAudience(audience) {
-		client.Reply(Push(KindSnapshot, resync(audience), now()))
-	}
 	return true
+}
+
+// sameActor reports whether two resolutions of one credential act as the same
+// principal, as a tab knows it: the same login, seat and grants. The rest — a
+// step-up deadline, the credential's own name — moves under a socket without
+// changing who it is.
+func sameActor(a, b iam.Principal) bool {
+	ga, gb := slices.Clone(a.Grants), slices.Clone(b.Grants)
+	slices.Sort(ga)
+	slices.Sort(gb)
+	return a.Login == b.Login && a.Seat == b.Seat &&
+		slices.Equal(slices.Compact(ga), slices.Compact(gb))
 }

@@ -33,8 +33,8 @@ const Prefix = "/auth/"
 //
 // SOME ARE UNGUARDED, because requiring a credential to obtain one is a
 // deployment nobody can enter: the posture read and the sign-in — and the
-// invitation's own two, its view and its redemption,
-// because holding the link is the credential. The sign-in meets the
+// invitation's own two, its view and its redemption, and a password reset
+// link's two, because holding the link is the credential. The sign-in meets the
 // throttle's curve, keyed on the login as TYPED from the caller's source; the
 // rest present a credential that names nobody and meet no curve
 // ([Service.uncounted]). And the sign-out of THIS session, because a sign-out
@@ -66,6 +66,10 @@ func (s *Service) Routes(mux auth.Mux) {
 	// account created for somebody who never saw it.
 	mux.HandleFunc("GET "+auth.AuthInvitePrefix+"{id}", s.ViewInvite)
 	mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}", s.RedeemInvite)
+	// A RESET LINK IS THE SAME PAIR, for the same reason: the GET says whose
+	// password it sets and spends nothing, the POST is the person.
+	mux.HandleFunc("GET "+auth.AuthResetPrefix+"{id}", s.ViewReset)
+	mux.HandleFunc("POST "+auth.AuthResetPrefix+"{id}", s.SpendReset)
 	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
 
 	// Guarded.
@@ -74,6 +78,7 @@ func (s *Service) Routes(mux auth.Mux) {
 	mux.HandleFunc("POST "+auth.PathAuthStepUp, s.StepUp)
 	mux.HandleFunc("POST "+auth.PathAuthTOTP, s.EnrolTOTP)
 	mux.HandleFunc("POST /auth/totp/recovery", s.RegenerateRecovery)
+	mux.HandleFunc("POST /auth/password", s.ChangePassword)
 	mux.HandleFunc("POST /auth/logout/all", s.LogoutEverywhere)
 	// THE THIRD LOGOUT: one NAMED session, which is what a person uses to
 	// end the one they left open somewhere else without ending the one
@@ -128,6 +133,16 @@ const tokenLifetime = time.Hour
 // A session — a person's, or one this route already minted — has no value to
 // exchange, and exchanging one for another would reset nothing anybody needs
 // reset. A personal access token is presented on every request by design.
+//
+// # It ends whatever session the browser held
+//
+// As every fresh sign-in does ([Service.openSignIn]): the cookie set here
+// replaces the one the browser sent, so the session that cookie named — a
+// person's, when the dashboard's "use an API token instead" is followed in a
+// browser already signed in — is held by no browser any more, and was left
+// live on every node until its absolute deadline. The header wins the
+// request; the cookie still names a session, and it is closed as a sign-out
+// closes it.
 func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {
@@ -164,7 +179,8 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := s.now().Add(tokenLifetime)
 	opID := sessionOpID(lineage)
-	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
+	s.endEveryHeld(r)
+	opened, err := s.behalf(principal).OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: subject,
 		AbsoluteExpiresAt: expires,
 		OpID:              opID,
@@ -337,6 +353,16 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	}
 	var factor factorUse
 	if holdsSecondFactor(held) {
+		if in.Code == "" {
+			// ASKED FOR, as the sign-in asks, and released as neither a
+			// success nor a failure for the sign-in's reason: the password
+			// proved itself. Checked as a code it was refused as a wrong
+			// one, and a person whose password was right read that it was
+			// not.
+			httpjson.Fail(w, http.StatusUnauthorized,
+				httpjson.CodeSecondFactorRequired)
+			return
+		}
 		attempt.Method = types.FailSecondFactor
 		var factored bool
 		if factor, factored = s.proveSecondFactor(w, r, adm, attempt, held,

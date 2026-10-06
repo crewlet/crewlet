@@ -41,9 +41,11 @@ export {
   currentSessionNeed,
   needSession,
   onSessionNeed,
+  onStepUpAsked,
   sessionNeedsEnrolment,
   sessionRestored,
   setStepUpConfirmer,
+  stepUpAsked,
 } from "./signin.ts";
 export type { SessionNeed, StepUpConfirmer } from "./signin.ts";
 export { SessionKeepAlive, SESSION_KEEPALIVE_MS } from "./keepalive.ts";

@@ -29,7 +29,7 @@ import (
 //   - THE BIND MUST BE LOOPBACK. That is the only check that physically
 //     prevents another machine reaching this, which is the whole difference
 //     from `disabled`. It judges `api.host` rather than `api.external_url`,
-//     deliberately and unlike `api.auth.local`'s insecure rule: that one is
+//     deliberately and unlike `api.auth.accept_insecure`'s rule: that one is
 //     about whether a cookie crosses plaintext through a proxy, where the
 //     external address is the truth, and this one is about who can open a
 //     socket to this process, where the bind is.

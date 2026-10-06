@@ -67,7 +67,8 @@ type inviteView struct {
 	Email string `json:"email"`
 
 	// InvitedBy is who sent it, which is the first thing somebody
-	// checks before they act on a link.
+	// checks before they act on a link — as they would know them
+	// ([Service.inviterOf]).
 	InvitedBy string `json:"invited_by,omitempty"`
 
 	// Login is the login this form PROPOSES, derived from the address by
@@ -87,6 +88,14 @@ type inviteView struct {
 	// binds none. It is part of what the person is agreeing to, so the
 	// form shows it before anything is spent.
 	Seat *inviteSeat `json:"seat,omitempty"`
+
+	// SignedInAs is the login of the session this BROWSER is signed in
+	// with, or absent for one signed in as nobody. Redeeming ends that
+	// session ([Service.openSignIn]), so the form says so before anybody
+	// presses Join: it switched a browser from one person to another with
+	// no word. About the caller's own cookie, and nothing about anybody
+	// the link names.
+	SignedInAs string `json:"signed_in_as,omitempty"`
 }
 
 // inviteSeat is the seat an invitation binds, as its view shows it.
@@ -132,14 +141,46 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := inviteView{
-		Email: email, InvitedBy: held.InvitedBy,
+		Email: email, InvitedBy: s.inviterOf(r.Context(), held.InvitedBy),
 		Login:             iam.LoginFromAddress(email),
 		MinPasswordLength: s.passwordFloor(),
 	}
 	if held.Seat != "" {
 		view.Seat = s.inviteSeatOf(r.Context(), held.Seat)
 	}
+	// RESOLVED HERE ONLY THROUGH A SESSION COOKIE: an unguarded route
+	// compares no bearer ([auth.Guard]), so whoever it resolved is the
+	// session this browser holds.
+	if p, how := iam.From(r.Context()); how == iam.Resolved {
+		view.SignedInAs = p.Login
+	}
 	httpjson.Write(w, http.StatusOK, view)
+}
+
+// inviterOf is who sent an invitation, as somebody holding the link would know
+// them. The record names its author as every record does, and a person bound
+// to a seat writes AS the seat, by its handle — so the page read "jane-founder
+// invited you" — while the chart names the seat "Jane Founder". A seat is
+// named as the company this node runs names it; a person by their login, or a
+// seat this node cannot place, by the name the record holds.
+//
+// AND A MACHINE BY NOBODY: an invitation a Tier A token or a service account
+// issued read "token:founder invited jane.doe@example.com" to somebody who has
+// never seen the deployment's configuration — the company's first person,
+// above all, invited under the token every deployment starts with. Named by
+// nobody, the page says whom the invitation is for and not who sent it.
+func (s *Service) inviterOf(ctx context.Context, author string) string {
+	if iam.ValidMachineHandle(author) {
+		return ""
+	}
+	if s.seats == nil || !iam.ValidSeatHandle(author) {
+		return author
+	}
+	seat, found, err := s.seats.Seat(ctx, author)
+	if err != nil || !found || seat.Name == "" {
+		return author
+	}
+	return seat.Name
 }
 
 // inviteSeatOf is the seat an invitation binds, as the company this node runs
@@ -208,7 +249,13 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enrolled, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
+	// AUTHORED AS THE PERSON IT CREATES, who redeemed the link, under the
+	// node's authority, which is what a redemption is enrolled with. What it
+	// confers is announced as the invitation's issuer's decision, which it
+	// was ([iamdomain.Writer.Enrol]).
+	redeemer := s.behalf(madeBy(iamdomain.Sighting{ID: person,
+		Kind: iam.KindPerson, Login: in.Login, Seat: held.Seat}, ""))
+	enrolled, err := redeemer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: in.Name, Email: email, Login: in.Login,
 		Credentials: []iamdomain.Credential{{
@@ -368,6 +415,10 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 		return iamdomain.InvitationRow{}, false
 	}
 	switch {
+	case (held.ID == "" || !held.Admits(secret) || held.Spent(s.now())) &&
+		!held.Vouched:
+		s.unvouched(w, r, "invitation", id)
+		return iamdomain.InvitationRow{}, false
 	case held.ID == "" || !held.Admits(secret):
 		s.refuseInvitation(w, r, adm, false)
 		return iamdomain.InvitationRow{}, false

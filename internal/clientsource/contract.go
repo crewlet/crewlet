@@ -192,6 +192,20 @@ var contract = []Entry{
 	{"MemoryOverview", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverviewSeat", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 
+	// identity.ts
+	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+	{"TOKEN_WITHHELD_GRANTS", ReadLiteral,
+		"internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
+	{"PERSON_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"MACHINE_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"CREDENTIAL_CLASSES", ReadLiteral,
+		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"TOKEN_DEFAULT_DAYS", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
+	{"TOKEN_MAX_DAYS", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
+
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},
 	{"HealthAlarms", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},

@@ -13,11 +13,15 @@
  * dropped. There is nothing for this page to store, so it stores nothing.
  */
 
+import type { EngineHealth } from "../contract/health.ts";
 import { rest } from "./rest.ts";
 import type {
   AuthConfig,
   InvitationView,
+  PasswordChanged,
+  PasswordSet,
   RecoveryCodes,
+  ResetView,
   SecondFactorEnrolled,
   SecondFactorSeed,
   SessionAnswer,
@@ -34,9 +38,23 @@ import type {
  */
 const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
 
+/** The header a password reset link's secret travels in to its view, for
+ *  [INVITE_SECRET_HEADER]'s reason. */
+const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
+
 export const auth = {
-  /** What a sign-in page may know before anybody has signed in. */
-  config: async (): Promise<AuthConfig> => (await rest.get("/auth/config")) as AuthConfig,
+  /**
+   * Whether the company has its first person — `/health`'s `identity`:
+   * `ready`, `unclaimed`, `unknown`, or absent. `/health` is unguarded and is
+   * the one answer an install with nobody in it can reach, which is why the
+   * sign-in page asks it rather than `/iam`.
+   */
+  firstPerson: async (): Promise<EngineHealth["identity"]> =>
+    ((await rest.get("/health")) as EngineHealth | null)?.identity,
+
+  /** The password floor and the second-factor posture — unguarded, like `/health`. */
+  config: async (signal?: AbortSignal): Promise<AuthConfig> =>
+    (await rest.get("/auth/config", signal)) as AuthConfig,
 
   /**
    * Sign in with a login or an address and a password — and, once the engine
@@ -70,6 +88,24 @@ export const auth = {
   ): Promise<SignedIn> =>
     (await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body)) as SignedIn,
 
+  /** Say whose password a reset link sets, without spending it. */
+  viewReset: async (id: string, secret: string): Promise<ResetView> =>
+    (
+      await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, {
+        headers: { [RESET_SECRET_HEADER]: secret },
+      })
+    ).body as ResetView,
+
+  /**
+   * Set a new password from a reset link, once. It ends every session the
+   * person held and signs nobody in: the person signs in next.
+   */
+  spendReset: async (
+    id: string,
+    body: { secret: string; password: string },
+  ): Promise<PasswordSet> =>
+    (await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body)) as PasswordSet,
+
   /**
    * Enrolment's first leg: a seed, and nothing stored. A person who never
    * completes the second leg has enrolled nothing.
@@ -97,6 +133,18 @@ export const auth = {
     (await rest.post("/auth/step-up", body)) as SignedIn,
 
   /**
+   * Change your own password. The current one — and, from somebody who holds
+   * a second factor, a code, exactly as a step-up asks it — is the proof, so
+   * no step-up is asked first; the change ends every other session and
+   * personal token you hold, and answers a fresh session for this browser.
+   */
+  changePassword: async (body: {
+    current_password: string;
+    new_password: string;
+    code?: string;
+  }): Promise<PasswordChanged> => (await rest.post("/auth/password", body)) as PasswordChanged,
+
+  /**
    * Who this browser is signed in as — ended by `signal` where the caller
    * passes one, for a read a newer one has superseded.
    */
@@ -109,6 +157,14 @@ export const auth = {
    */
   logout: async (): Promise<void> => {
     await rest.post("/auth/logout", {});
+  },
+
+  /**
+   * End ONE named session of yours — a laptop left signed in somewhere —
+   * without ending this browser's.
+   */
+  logoutOne: async (lineage: string): Promise<void> => {
+    await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
   },
 
   /**

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
 // rows is a session directory answering one identity for every bearer.
@@ -131,5 +132,87 @@ func TestChangingHowYouProveWhoYouAreAsksTheStepUpWindow(t *testing.T) {
 			t.Errorf("%s a minute after proving answered %d %s, so the refusal "+
 				"above says nothing", path, rec.Code, rec.Body)
 		}
+	}
+}
+
+// THE SESSION ROUTE NAMES THE SESSION THE REQUEST CARRIED.
+//
+// A person's sessions are listed by lineage, and the one a browser is reading
+// that list from is the one it must not be offered a named sign-out of — so
+// `GET /auth/session` says which lineage is this browser's, and it is the
+// cookie's own, never another session of the same person. The CONTROL is the
+// second browser, which reads its own. Mutation: drop the lineage and both
+// answers are empty; read it from anything but the presented bearer and the
+// two browsers name one session.
+func TestTheSessionRouteNamesTheSessionTheRequestCarried(t *testing.T) {
+	t.Parallel()
+	r, h := passwordRig(t)
+	here, elsewhere := signedIn(t, h), signedIn(t, h)
+	if len(r.estate.starts) != 2 {
+		t.Fatalf("two sign-ins opened %d sessions", len(r.estate.starts))
+	}
+	lineageOf := func(cookie string) string {
+		t.Helper()
+		rec, _ := send(t, h, http.MethodGet, "/auth/session", "", cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /auth/session answered %d: %s", rec.Code, rec.Body)
+		}
+		var got struct {
+			Lineage string `json:"lineage"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got.Lineage
+	}
+	for i, cookie := range []string{here, elsewhere} {
+		if got, want := lineageOf(cookie), r.estate.starts[i].Lineage; got != want {
+			t.Errorf("browser %d read lineage %q, want its own session's %q", i, got, want)
+		}
+	}
+}
+
+// THE SESSION ROUTE CARRIES THE PERSON'S OWN NAME.
+//
+// A person bound to no seat has no name the chart could give, so the dashboard
+// drew their login in the sidebar and greeted them with nothing — the name
+// they typed when they redeemed their invitation is on their row, sealed, and
+// nothing answered it. The CONTROL is a row this node cannot open, which
+// answers no name and still says who the caller is. Mutation: drop the name
+// and the first case is empty; fail the answer on a value that does not open
+// and the control is refused.
+func TestTheSessionRouteCarriesThePersonsOwnName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, sealed, want string
+	}{
+		{"a name their row holds", "", "Jane Doe"},
+		{"a name this node cannot open (the control)", "not-a-sealed-value", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, h := passwordRig(t)
+			sealed := tc.sealed
+			if sealed == "" {
+				var err error
+				if sealed, err = fixtureSealer.Seal(r.estate.person.ID,
+					iamdomain.FieldName, "Jane Doe"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.estate.mu.Lock()
+			r.estate.nameSealed = sealed
+			r.estate.mu.Unlock()
+			rec, _ := send(t, h, http.MethodGet, "/auth/session", "", signedIn(t, h))
+			var got struct {
+				Name  string `json:"name"`
+				Login string `json:"login"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &got)
+			if rec.Code != http.StatusOK || got.Login != "jane.doe" || got.Name != tc.want {
+				t.Errorf("GET /auth/session answered %d naming %q (%q), want %q",
+					rec.Code, got.Name, got.Login, tc.want)
+			}
+		})
 	}
 }

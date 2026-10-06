@@ -42,11 +42,21 @@ func TestTwelveCharactersIsTheOnlyRule(t *testing.T) {
 		t.Errorf("the refusal %v does not name the minimum, so somebody "+
 			"choosing a password cannot tell what would satisfy it", err)
 	}
+	// AND IT IS A SENTENCE A PERSON READS, the length's and the blocklist's
+	// alike: every surface hands it to the form verbatim, and this package's
+	// prefix reached one as "Credential: this password cannot be used".
+	// Mutation: put the prefix back on ErrWeak.
+	for _, weak := range []string{"short", "password1234"} {
+		err := credential.CheckStrength(weak, iam.MinPasswordChars)
+		if err == nil || !strings.HasPrefix(err.Error(), "this password cannot be used: ") {
+			t.Errorf("the refusal of %q reads %q, want the sentence alone", weak, err)
+		}
+	}
 }
 
 // A DEPLOYMENT'S FLOOR RAISES THE ENGINE'S, AND NOTHING LOWERS IT.
 //
-// `api.auth.local.min_password_length` was validated and enforced by nothing,
+// `api.auth.min_password_length` was validated and enforced by nothing,
 // so a company that asked for twenty accepted fifteen. The floor handed in is
 // what is refused below — and the refusal names it, because the person choosing
 // a password has to know what would satisfy it — while zero, or anything under

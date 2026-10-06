@@ -103,7 +103,9 @@ const (
 	CodeUnreadableBody Code = "unreadable_body"
 
 	// CodeInvalidBody is a body that was read but is not what the route
-	// accepts.
+	// accepts: its shape, or a value in it the route or its domain refused —
+	// a login outside its grammar, a password under the floor, a lifetime
+	// past the cap — which the detail names.
 	CodeInvalidBody Code = "invalid_body"
 
 	// CodeInvalidQuery is a query parameter that is not one of the values
@@ -463,6 +465,17 @@ const (
 	// identity recently enough for what it just asked to do.
 	CodeStepUpRequired Code = "step_up_required"
 
+	// CodeTokenRefused is a request that presented a machine token on a
+	// verb that needs a person present.
+	//
+	// ITS OWN CODE rather than `unauthorized`, for step_up_required's
+	// reason: that code's sentence says the credential lacks a grant and to
+	// ask whoever runs the deployment for it, which is false here — the
+	// owner may hold every grant there is and no grant on a token admits
+	// it. Answered `unauthorized` with a sentence of its own as `detail`,
+	// the envelope's two sentences contradicted each other.
+	CodeTokenRefused Code = "token_refused"
+
 	// CodeSecondFactorEnrolmentRequired is a session opened on a password
 	// alone where the deployment requires a second factor its person does
 	// not hold: it may enrol one (`POST /auth/totp`), read who it is,
@@ -489,6 +502,13 @@ const (
 	// ask for another one, and because holding the link is already
 	// evidence it was issued to them.
 	CodeInviteSpent Code = "invite_spent"
+
+	// CodeResetSpent is a password reset link that opens nothing: an id that
+	// is no link, a secret that is not the id's, one spent, revoked or past
+	// its expiry, or a person the reset no longer reaches. ONE CODE FOR ALL
+	// OF THEM, for [CodeInviteSpent]'s reason — told apart they would say
+	// which ids exist — and the remedy is the same: ask for a new one.
+	CodeResetSpent Code = "reset_spent"
 
 	// CodeSeatUnavailable is somebody whose session validated perfectly
 	// and whose SEAT the org chart no longer holds.
@@ -710,8 +730,9 @@ var codes = map[Code]string{
 	CodeBodyTooLarge: "The request body is larger than this endpoint accepts. " +
 		"Send a smaller document, or split the change across more than one request.",
 	CodeUnreadableBody: "The request body did not arrive in full. Send it again.",
-	CodeInvalidBody:    "The request body is not in the shape this endpoint accepts.",
-	CodeInvalidQuery:   "One of the query parameters is not a value this endpoint accepts.",
+	CodeInvalidBody: "The request body is not one this endpoint accepts — its " +
+		"shape, or a value in it — and nothing was changed.",
+	CodeInvalidQuery: "One of the query parameters is not a value this endpoint accepts.",
 	CodeNonCanonicalPath: "The request path has a dot segment or an empty " +
 		"segment in it. Send the path it resolves to instead.",
 	CodeInternalError: "Something went wrong inside the engine. The reason is " +
@@ -772,6 +793,9 @@ var codes = map[Code]string{
 		"one of your recovery codes.",
 	CodeStepUpRequired: "This action needs you to have confirmed who you are " +
 		"recently. Confirm it, then try again.",
+	CodeTokenRefused: "A personal access token cannot do this, whatever its " +
+		"owner may do: it needs a person present, and a token proves nobody " +
+		"is. Sign in as yourself and do it there.",
 	CodeSecondFactorEnrolmentRequired: "This company requires a second factor " +
 		"and you have not set one up yet. Add an authenticator app to your " +
 		"account, and everything else opens once you have.",
@@ -782,6 +806,8 @@ var codes = map[Code]string{
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
+	CodeResetSpent: "This password reset link is no longer valid. Ask an " +
+		"administrator for a new one.",
 
 	CodeForbidden: "That change is not yours to make here, and nothing was " +
 		"written. The detail says whose it is.",

@@ -280,7 +280,7 @@ const READERS: readonly {
 ];
 
 beforeEach(() => {
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(null as never);
 });
 

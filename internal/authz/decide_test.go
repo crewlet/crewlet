@@ -748,10 +748,12 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 				if d.Allowed {
 					continue
 				}
-				if also, _ := authz.AlsoGrantOf(a); also != "" {
-					// A TWO-PARTY ROW names what the caller lacks and
+				if also, _ := authz.AlsoGrantOf(a); also != "" && len(d.Grants) > 0 {
+					// A TWO-GRANT ROW names what the caller lacks and
 					// needs ALL of it: with every named grant it is
-					// admitted, and short of any one it is not.
+					// admitted, and short of any one it is not. One that
+					// refused before consulting any grant (nobody named)
+					// names none, as every other row does, below.
 					namesExactlyWhatItLacks(t, a, object, d)
 					continue
 				}
@@ -798,7 +800,7 @@ func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 	}
 	stranger := person("pat.nobody", iam.GrantWorkWrite, iam.GrantStateRead)
 	lead := personLeading("cto", iam.GrantWorkWrite, iam.GrantStateRead)
-	admin := person("ops.admin", iam.GrantFleetOperate)
+	admin := person("ops.admin", iam.GrantFleetOperate, iam.GrantStateRead)
 	blind := chart{err: errors.New("the running org is not built yet")}
 
 	for _, c := range []struct {
@@ -886,5 +888,59 @@ func namesExactlyWhatItLacks(t *testing.T, a authz.Action, object authz.Object,
 				"refusal named a grant it did not need", a, object, short,
 				d.Grants[i])
 		}
+	}
+}
+
+// READING A PERSON'S DAY IS A READ, AND KEEPING IT IS NOT. Their notices name
+// the company's tasks and their queue lists them, so reading their own takes
+// `state:read` beside the owner-or-lead relation, as every other read does;
+// marking, pinning and ordering it takes none. Without the grant on the row,
+// one question had two answers: the query surface asks `state:read` of every
+// question it registers, so `GET /work/inbox` refused a person's no-grant
+// token while `POST /operator/act/work_inbox` answered it — and the token
+// dialog told them it could read their inbox. Mutation: drop the read grant
+// from the three rows and the first case is admitted.
+func TestReadingADayTakesTheReadGrantAndKeepingItDoesNot(t *testing.T) {
+	t.Parallel()
+	own := authz.Object{Kind: authz.KindPerson, Owner: "erin.ng"}
+	theirs := authz.Object{Kind: authz.KindPerson, Owner: "someone.else"}
+	for _, c := range []struct {
+		name   string
+		p      iam.Principal
+		action authz.Action
+		object authz.Object
+		admit  bool
+		grants []iam.Grant
+	}{
+		{"own inbox, holding nothing", person("erin.ng"), authz.ActionInboxRead, own,
+			false, []iam.Grant{iam.GrantStateRead}},
+		{"own queue, holding nothing", person("erin.ng"), authz.ActionMyWork, own,
+			false, []iam.Grant{iam.GrantStateRead}},
+		{"own record, holding nothing", person("erin.ng"), authz.ActionPersonRead, own,
+			false, []iam.Grant{iam.GrantStateRead}},
+		{"own inbox, holding the read", person("erin.ng", iam.GrantStateRead),
+			authz.ActionInboxRead, own, true, nil},
+		{"the admin path without the read", person("ops.admin", iam.GrantFleetOperate),
+			authz.ActionInboxRead, theirs, false, []iam.Grant{iam.GrantStateRead}},
+		{"the admin path with it", person("ops.admin", iam.GrantFleetOperate,
+			iam.GrantStateRead), authz.ActionInboxRead, theirs, true, nil},
+		// THE CONTROLS: keeping your own record takes no grant at all.
+		{"marking own inbox, holding nothing", person("erin.ng"), authz.ActionInboxMark,
+			own, true, nil},
+		{"pinning own views, holding nothing", person("erin.ng"), authz.ActionPinsSet,
+			own, true, nil},
+		{"ordering own queue, holding nothing", person("erin.ng"),
+			authz.ActionPrioritiesSet, own, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			d := authz.Decide(t.Context(), c.p, c.action, c.object, nimbus(), decidedAt)
+			if d.Unknown() || d.Allowed != c.admit {
+				t.Fatalf("decided %+v, want admitted=%v", d, c.admit)
+			}
+			if !c.admit && !slices.Equal(d.Grants, c.grants) {
+				t.Errorf("refused naming %v, want %v", d.Grants, c.grants)
+			}
+		})
 	}
 }

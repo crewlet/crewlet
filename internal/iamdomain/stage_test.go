@@ -2,6 +2,7 @@ package iamdomain_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -133,5 +134,53 @@ func assertStage(t *testing.T, reader *iamdomain.Reader, id string, want iam.Sta
 	}
 	if seen.Stage != want {
 		t.Errorf("a sign-in read answers %q, want %q", seen.Stage, want)
+	}
+}
+
+// A SUSPENSION ENDS THE SESSIONS IT CUTS OFF, AND A REACTIVATION REVIVES NONE.
+//
+// A stage that may not act was only REFUSED at each request, so reactivating
+// somebody brought back every session they held when they were suspended —
+// whose browser had been answered `401` and had dropped its cookie, so the
+// only copy that came back was one somebody else kept. The CONTROL is the
+// session before the suspension, which is live. Mutation: state no epoch on
+// the status record and the session is live again after the reactivation.
+func TestASuspensionEndsTheSessionsItCutsOff(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := enrolForSessions(t, rig)
+	lineage := uuid.Must(uuid.NewV7()).String()
+	if err := rig.draining(func() error {
+		_, err := rig.writer.OpenSession(t.Context(), iamdomain.SessionStart{
+			Lineage: lineage, Person: person,
+			AbsoluteExpiresAt: time.Now().UTC().Add(time.Hour),
+			ProvedAt:          time.Now().UTC(), OpID: "session:" + lineage,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	rig.drain()
+	reader := rig.reader(t)
+	live := func() bool {
+		t.Helper()
+		listed, err := reader.Sessions(t.Context(), person)
+		if err != nil || len(listed) != 1 {
+			t.Fatalf("the listing holds %+v (%v), want the one session", listed, err)
+		}
+		return listed[0].Live(time.Now())
+	}
+	if !live() {
+		t.Fatal("the session is not live before the suspension")
+	}
+	for _, stage := range []iam.Stage{iam.StageSuspended, iam.StageActive} {
+		if _, err := rig.writer.SetStage(t.Context(), person, stage,
+			"op-"+string(stage), "a leave"); err != nil {
+			t.Fatalf("set %s: %v", stage, err)
+		}
+		rig.drain()
+	}
+	if live() {
+		t.Error("the session is live again after a suspension and a reactivation")
 	}
 }

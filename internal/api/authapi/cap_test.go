@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -94,7 +93,6 @@ func TestEverySignInArmWaitsForTheVerifyCap(t *testing.T) {
 	}
 	audit := &recordingAudit{}
 	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
 	buildWith(t, b, func(o *authapi.Options) {
 		o.Hasher = hasher

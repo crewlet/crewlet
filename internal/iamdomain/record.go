@@ -83,6 +83,18 @@ const (
 	// somebody".
 	OpInvite OpKind = "invite"
 
+	// OpCancel withdraws an invitation nobody has redeemed, on
+	// [KindDirectory] — the subject its address is held on — and its apply
+	// DELETES the row, so the address it held is free for a new invitation
+	// the moment it lands and its sealed copy goes with the row.
+	//
+	// ITS OWN OP rather than an invitation whose deadline moved to now: an
+	// operator reading the trail asks "who withdrew this link", and an
+	// expiry nobody authored says nothing. A REDEEMED invitation is never
+	// cancelled — it created somebody, and what undoes that is removing
+	// them.
+	OpCancel OpKind = "cancel"
+
 	// OpEnrol creates a person WHOLE — their row, their first credentials,
 	// their login, their address and their seat — and, for a redemption,
 	// spends the invitation, in ONE record on [KindDirectory].
@@ -135,6 +147,23 @@ const (
 	// indistinguishable afterwards and an operator investigating a
 	// compromise needs to know which one fired.
 	OpRevoke OpKind = "revoke"
+
+	// OpPassword replaces a person's password AND moves their revocation
+	// epoch, in ONE record on [KindPerson]: the person's document as full
+	// post-state, with the new password's verifier and every outstanding
+	// reset link revoked, beside the epoch it moves to.
+	//
+	// ONE RECORD, because each half alone is a state somebody can be left
+	// in. A password changed with the sessions still live is the change
+	// that did not do what it was for — somebody changes a password when
+	// they think somebody else has it — and the two as a sequence are a
+	// first record that lands and a second that may not.
+	//
+	// ITS OWN OP beside [OpUpdate] and [OpRevoke] rather than either of
+	// them, because an operator reads the log for exactly this — "when did
+	// this person's password change, and was it them or a reset link" — and
+	// the reason names which.
+	OpPassword OpKind = "password"
 
 	// OpRemove is a person the company no longer has, and it INSTALLS A
 	// GATE by its op rather than by its kind: it rides the DIRECTORY
@@ -211,11 +240,11 @@ const (
 	OpGeneration OpKind = "generation"
 )
 
-// OpKinds are the fourteen, in the order they are documented.
+// OpKinds are the sixteen, in the order they are documented.
 var OpKinds = []OpKind{
-	OpInvite, OpEnrol, OpIdentity, OpUpdate, OpStatus, OpRevoke, OpRemove,
-	OpOpen, OpClose, OpInvalidate, OpSweep, OpBarrier, OpEviction,
-	OpGeneration,
+	OpInvite, OpCancel, OpEnrol, OpIdentity, OpUpdate, OpStatus, OpRevoke,
+	OpPassword, OpRemove, OpOpen, OpClose, OpInvalidate, OpSweep, OpBarrier,
+	OpEviction, OpGeneration,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -363,10 +392,12 @@ type MutationRecord struct {
 	// OperatorID is the credential Actor acted THROUGH — a machine token's
 	// `pat:<id>`, a browser session's `session:<lineage>`, a Tier A token's
 	// own login — which is what tells a token's gesture from its owner's
-	// when Actor names the owner either way. Empty where the party acted
-	// through none, which is the node's own writer — every sign-in,
-	// sign-out, step-up and enrolment the sign-in surface writes, and every
-	// duty.
+	// when Actor names the owner either way. A gesture a person makes
+	// through the sign-in surface is written FOR them ([Writer.For]): the
+	// session it opened or closed, or their login where it came through no
+	// session yet. Empty where the party acted through none, which is the
+	// node's own writer — every duty, and what the engine decides for
+	// itself, such as a password re-hashed at this build's cost.
 	OperatorID string `json:"operator_id,omitempty"`
 
 	// Reason is why, in at most [MaxReason] bytes, for the operations

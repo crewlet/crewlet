@@ -55,7 +55,7 @@ function servingWith(answer: (what: string, params?: Record<string, unknown>) =>
     answer(what, params),
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue({
     name: "Acme",
     roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],

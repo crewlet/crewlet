@@ -487,17 +487,14 @@ var retiredBootstrapFields = map[string]string{
 		"itself. A deliberately public reader is now a named entry under " +
 		"`api.auth.tokens` holding read grants and nothing else, which is " +
 		"listable, revocable without a restart, and present in the audit log",
-	"APIAuth.oidc": "`api.auth.oidc` is retired, and so is `backend: oidc`: " +
-		"this engine no longer signs anybody in through an identity " +
-		"provider. People sign in with a password and a second factor the " +
-		"engine holds (`backend: local`, with a `local:` block stating " +
-		"whether that second factor is required), or the deployment has no " +
-		"people and its `api.auth.tokens` are the only credentials " +
-		"(`backend: none`). Delete the `oidc:` block and its `backend: oidc` " +
-		"line, and the client secret's environment variable with them. An " +
-		"identity estate that linked provider accounts is reset rather than " +
-		"migrated, and its people are enrolled again with an invitation " +
-		"(`crewlet iam invite`)",
+	"APIAuth.oidc": "`api.auth.oidc` is retired: this engine no longer signs " +
+		"anybody in through an identity provider. People sign in with a " +
+		"password and a second factor the engine holds — `api.auth.totp` " +
+		"says whether that second factor is required, and unset it is. " +
+		"Delete the `oidc:` block, and the client secret's environment " +
+		"variable with it. An identity estate that linked provider accounts " +
+		"is reset rather than migrated, and its people are enrolled again " +
+		"with an invitation (`crewlet iam invite`)",
 	"APIAuth.bootstrap": "`api.auth.bootstrap` is retired, with the one-time " +
 		"founder code it opened or closed: there is no longer a second way in " +
 		"for the first person. Every node that serves the API already holds " +

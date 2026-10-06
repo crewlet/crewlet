@@ -409,6 +409,13 @@ func TestASweepCollectsWhatWasSpent(t *testing.T) {
 			ExpiresAt: brokerAt.Add(30 * 24 * time.Hour)},
 		{V: iamdomain.DocumentVersion, ID: "password",
 			Method: iamdomain.MethodPassword, Verifier: "argon"},
+		// A RESET LINK IS COLLECTED LIKE ANY OTHER CREDENTIAL: one past its
+		// day goes, one still good stays.
+		{V: iamdomain.DocumentVersion, ID: "reset-expired-long-ago",
+			Method: iamdomain.MethodReset, Verifier: "h6", ExpiresAt: long},
+		{V: iamdomain.DocumentVersion, ID: "reset-live",
+			Method: iamdomain.MethodReset, Verifier: "h7",
+			ExpiresAt: brokerAt.Add(24 * time.Hour)},
 	}
 	spent := func(t *testing.T) (*sweepRigT, string) {
 		t.Helper()
@@ -469,7 +476,7 @@ func TestASweepCollectsWhatWasSpent(t *testing.T) {
 		slices.Sort(document)
 		return rows, document
 	}
-	kept := []string{"live-token", "password", "revoked-recently"}
+	kept := []string{"live-token", "password", "reset-live", "revoked-recently"}
 
 	t.Run("it collects what was spent a week ago", func(t *testing.T) {
 		t.Parallel()

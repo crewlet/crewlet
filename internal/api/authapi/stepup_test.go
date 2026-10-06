@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -76,9 +77,17 @@ func newStepUpRigWith(t *testing.T, row session.Row,
 // stepUp posts one confirmation from the presented session.
 func (r *stepUpRig) stepUp(t *testing.T) *httptest.ResponseRecorder {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{
-		"password": password, "code": appCode(t, clock),
-	})
+	return r.stepUpWith(t, appCode(t, clock))
+}
+
+// stepUpWith is [stepUpRig.stepUp] presenting code, or none where it is empty.
+func (r *stepUpRig) stepUpWith(t *testing.T, code string) *httptest.ResponseRecorder {
+	t.Helper()
+	fields := map[string]string{"password": password}
+	if code != "" {
+		fields["code"] = code
+	}
+	body, _ := json.Marshal(fields)
 	req := httptest.NewRequest(http.MethodPost, "/auth/step-up",
 		strings.NewReader(string(body)))
 	req.RemoteAddr = "203.0.113.9:4711"
@@ -178,4 +187,82 @@ func TestAStepUpThatCannotEndWhatItReplacesChangesNothing(t *testing.T) {
 				r.estate.starts, r.estate.closes)
 		}
 	})
+}
+
+// A STEP-UP WITHOUT THE CODE ITS PERSON HOLDS ASKS FOR IT.
+//
+// The sign-in answers a right password with no code `second_factor_required`,
+// and a step-up is the same proof: it checked the empty code as a wrong one,
+// so a person whose password was right was told their sign-in details were
+// not accepted. Asked for, it is neither a failure nor a session. The CONTROL
+// is a wrong code, which is refused and counted. Mutation: drop the empty-code
+// arm and the first case answers `sign_in_refused`.
+func TestAStepUpWithoutTheCodeItsPersonHoldsAsksForIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		code    string
+		want    httpjson.Code
+		counted bool
+	}{
+		{"no code", "", httpjson.CodeSecondFactorRequired, false},
+		{"a wrong code (the control)", "000000", httpjson.CodeSignInRefused, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newStepUpRig(t, session.RowValid)
+			rec := r.stepUpWith(t, tc.code)
+			if rec.Code != http.StatusUnauthorized || codeOf(t, rec) != string(tc.want) {
+				t.Fatalf("the step-up answered %d %s, want 401 %s", rec.Code,
+					rec.Body, tc.want)
+			}
+			r.estate.mu.Lock()
+			opened := len(r.estate.starts)
+			r.estate.mu.Unlock()
+			if opened != 0 {
+				t.Errorf("opened %d sessions, want none", opened)
+			}
+			if _, failures := r.audit.snapshot(); (len(failures) != 0) != tc.counted {
+				t.Errorf("counted %v, want counted %v", failures, tc.counted)
+			}
+		})
+	}
+}
+
+// A SESSION THAT REPLACES ANOTHER IS OPENED ON THIS NODE BEFORE IT IS ANSWERED.
+//
+// A sign-in opens its session without waiting for this node to apply it,
+// since nothing reads the row before the bearer does. A step-up, a password
+// change and an enrolment are made from a page that lists the person's
+// sessions and reads them again at once — and read before the start applied,
+// the list held the session the gesture ended and not the one it opened, so
+// the page said this browser was signed in nowhere. The CONTROL is the
+// sign-in, which still does not wait. Mutation: open every session without
+// waiting and the step-up's does too.
+func TestASessionThatReplacesAnotherWaitsForThisNode(t *testing.T) {
+	t.Parallel()
+	signIn := newSignInRig(t)
+	if rec := signIn.signIn(t, "jane.doe", password, appCode(t, clock)); rec.Code != http.StatusOK {
+		t.Fatalf("the sign-in answered %d (%s)", rec.Code, rec.Body)
+	}
+	stepUp := newStepUpRig(t, session.RowValid)
+	if rec := stepUp.stepUp(t); rec.Code != http.StatusOK {
+		t.Fatalf("the step-up answered %d (%s)", rec.Code, rec.Body)
+	}
+	for _, tc := range []struct {
+		name   string
+		rig    *signInRig
+		noWait bool
+	}{
+		{"a sign-in (the control)", signIn, true},
+		{"a step-up", stepUp.signInRig, false},
+	} {
+		tc.rig.estate.mu.Lock()
+		starts := slices.Clone(tc.rig.estate.starts)
+		tc.rig.estate.mu.Unlock()
+		if len(starts) != 1 || starts[0].NoWait != tc.noWait {
+			t.Errorf("%s opened %+v, want one session with NoWait %v", tc.name,
+				starts, tc.noWait)
+		}
+	}
 }

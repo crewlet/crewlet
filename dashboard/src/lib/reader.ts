@@ -36,8 +36,9 @@
  * ADOPTS ([adoptReader]) the session it finds on a tab nobody has recorded yet
  * — one opened with a session already in the browser — and never overwrites
  * one: a cookie that moved under an open tab (somebody signing in as somebody
- * else in another tab) does not make this tab's memory theirs, and the next
- * sign-in here is decided against who actually read it.
+ * else in another tab) does not make this tab's memory theirs. What it does
+ * instead is `lib/session.ts`'s `takeSession`: the tab is handed to them, as a
+ * sign-in by them here would hand it, with nothing of its last reader kept.
  */
 
 import { useSyncExternalStore } from "react";

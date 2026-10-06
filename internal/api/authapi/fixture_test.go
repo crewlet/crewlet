@@ -2,6 +2,7 @@ package authapi_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,11 @@ func bootstrapFor(t *testing.T) config.Bootstrap {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: "a-token-long-enough-for-the-floor", Grants: iam.AllGrants},
 	}
+	// A SECOND FACTOR OFFERED, NOT REQUIRED: unset is required, which
+	// would make every password sign-in here an enrolment-only session.
+	// The cases about a required factor state it (`requiring`); every
+	// other case signs in on a password and is about something else.
+	b.API.Auth.TOTP = iam.SecondFactorOptional
 	return b
 }
 
@@ -83,6 +89,12 @@ func buildWith(t *testing.T, b config.Bootstrap,
 	if replace != nil {
 		replace(&opts)
 	}
+	if opts.Behalf == nil {
+		// THE CASE'S OWN WRITER, whoever a gesture is made by: a case about
+		// who a record names as its author sets one of its own.
+		writer := opts.Writer
+		opts.Behalf = func(iam.Principal) authapi.Writer { return writer }
+	}
 	svc, err := authapi.New(opts)
 	if err != nil {
 		t.Fatalf("authapi.New: %v", err)
@@ -125,12 +137,23 @@ func (stubDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sigh
 	return iamdomain.Sighting{}, nil
 }
 
+// InvitationByID answers nobody issued it, on rows that vouch for that — as a
+// node holding the whole identity log does.
 func (stubDirectory) InvitationByID(context.Context, string) (iamdomain.InvitationRow, error) {
-	return iamdomain.InvitationRow{}, nil
+	return iamdomain.InvitationRow{Vouched: true}, nil
 }
 
 func (stubDirectory) SessionStanding(context.Context, string, time.Time) (string, bool, error) {
 	return "", false, nil
+}
+
+// ResetByID is [stubDirectory.InvitationByID] for a reset link.
+func (stubDirectory) ResetByID(context.Context, string) (iamdomain.ResetRow, error) {
+	return iamdomain.ResetRow{Vouched: true}, nil
+}
+
+func (stubDirectory) Person(_ context.Context, id string) (iamdomain.PersonRow, error) {
+	return iamdomain.PersonRow{}, fmt.Errorf("%w: %s", iamdomain.ErrNotFound, id)
 }
 
 type stubWriter struct{}
@@ -161,6 +184,10 @@ func (stubWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Result, 
 }
 
 func (stubWriter) SetCredentials(context.Context, iamdomain.CredentialSet) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
+}
+
+func (stubWriter) SetPassword(context.Context, iamdomain.PasswordSet) (statelog.Result, error) {
 	return applied(statelog.Position{}), nil
 }
 
@@ -196,6 +223,10 @@ func (stubSealer) OpenCredential(person, credentialID string, field iamdomain.Fi
 	sealed string) (string, error) {
 
 	return fixtureSealer.OpenCredential(person, credentialID, field, sealed)
+}
+
+func (stubSealer) Open(person string, field iamdomain.Field, sealed string) (string, error) {
+	return fixtureSealer.Open(person, field, sealed)
 }
 
 // fixtureSealer is the domain's sealer over the one key [stubSealer] seals

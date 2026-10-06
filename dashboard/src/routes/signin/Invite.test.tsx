@@ -14,7 +14,7 @@ import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, needSession, Store, sessionRestored } from "~/protocol/index.ts";
-import { parseInviteLink } from "./Invite.tsx";
+import { parseLink } from "./link.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -89,6 +89,9 @@ function mount(link = `${ID}.${SECRET}`) {
   location.hash = `#/invite/${link}`;
   const store = new Store();
   const socket = new LiveSocket(store);
+  // THE FRAME'S DIAL (`start`), for the session it reads once the redemption
+  // lands; `reconnect` is nothing a redemption may call.
+  const dial = vi.spyOn(socket, "start");
   const reconnect = vi.spyOn(socket, "reconnect");
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -97,7 +100,7 @@ function mount(link = `${ID}.${SECRET}`) {
       </Router>
     </ClientContext.Provider>,
   );
-  return { reconnect };
+  return { dial, reconnect };
 }
 
 function type(label: RegExp | string, value: string) {
@@ -133,11 +136,11 @@ afterEach(() => {
 
 describe("reading the link", () => {
   test("the two halves are split at the dot that joins them", () => {
-    expect(parseInviteLink(`${ID}.${SECRET}`)).toEqual({ id: ID, secret: SECRET });
+    expect(parseLink(`${ID}.${SECRET}`)).toEqual({ id: ID, secret: SECRET });
     // THE CONTROL: a link a mail client cut short is not a link.
-    expect(parseInviteLink(ID)).toBeNull();
-    expect(parseInviteLink(`${ID}.`)).toBeNull();
-    expect(parseInviteLink(`.${SECRET}`)).toBeNull();
+    expect(parseLink(ID)).toBeNull();
+    expect(parseLink(`${ID}.`)).toBeNull();
+    expect(parseLink(`.${SECRET}`)).toBeNull();
   });
 
   test("the view is asked with the secret beside the id, and never in a URL", async () => {
@@ -171,6 +174,29 @@ describe("what the screen shows before anything is spent", () => {
     expect(screen.getByText("ana.founder")).toBeDefined();
     expect(screen.getByText("Jane Doe")).toBeDefined();
     expect(screen.getByText(/At least 12 characters/)).toBeDefined();
+  });
+
+  // REDEEMING ENDS THE SESSION THIS BROWSER HOLDS, so the form says whose it
+  // is before Join is pressed. The CONTROL is the view above, which names no
+  // session and draws no notice.
+  test("a browser already signed in as somebody else is told joining signs them out", async () => {
+    engine({
+      [`GET ${PATH}`]: {
+        status: 200,
+        body: { ...(VIEW.body as object), signed_in_as: "dave.lee" },
+      },
+    });
+    mount();
+    await screen.findByLabelText("Login");
+    expect(screen.getByText("dave.lee")).toBeDefined();
+    expect(screen.getByText(/Joining signs that session out/)).toBeDefined();
+  });
+
+  test("a browser signed in as nobody is told nothing about a session", async () => {
+    engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("Login");
+    expect(screen.queryByText(/Joining signs that session out/)).toBeNull();
   });
 
   // ONE ANSWER for redeemed, withdrawn, expired and a wrong secret — in the
@@ -218,6 +244,38 @@ describe("redeeming it", () => {
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
+  // THE ENGINE'S GRAMMAR, said under the field before anything is posted:
+  // somebody who types their own name used to get the domain's refusal at the
+  // foot of the form. The CONTROL is the redemption below, whose proposed
+  // login fits and is posted.
+  test("a login outside the grammar is refused under the field, and nothing is posted", async () => {
+    const sent = engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("Login");
+    type("Login", "Frank");
+    type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+
+    expect(await screen.findByText(/Use lowercase words joined by dots/)).toBeDefined();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([]);
+  });
+
+  // TYPED TWICE, because a slip in the only copy is an account its owner
+  // cannot sign in to. The CONTROL is the next case, the same password typed
+  // the same way twice, which is posted.
+  test("a password typed differently the second time is refused here, and nothing is posted", async () => {
+    const sent = engine({ [`GET ${PATH}`]: VIEW });
+    mount();
+    await screen.findByLabelText("Login");
+    type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery stable");
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+
+    expect(await screen.findByText("The two passwords are not the same.")).toBeDefined();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([]);
+  });
+
   test("it posts the secret in the body and lands on the Inbox, signed in", async () => {
     const sent = engine({
       [`GET ${PATH}`]: VIEW,
@@ -232,15 +290,28 @@ describe("redeeming it", () => {
           status: "signed_in",
         },
       },
+      "GET /auth/session": {
+        status: 200,
+        body: {
+          person: "p-1",
+          login: "jane.doe",
+          kind: "person",
+          grants: ["state:read"],
+          status: "signed_in",
+        },
+      },
     });
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     await screen.findByLabelText("Login");
     type(/your name/i, "Jane Doe");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
     await waitFor(() => expect(location.hash).toBe("#/"));
-    expect(reconnect).toHaveBeenCalled();
+    // THE FRAME DIALS, for the session it read; the redemption dials nothing.
+    await waitFor(() => expect(dial).toHaveBeenCalled());
+    expect(reconnect).not.toHaveBeenCalled();
     const redeem = sent.find((s) => s.method === "POST");
     expect(redeem?.body).toEqual({
       secret: SECRET,
@@ -262,6 +333,7 @@ describe("redeeming it", () => {
     mount();
     await screen.findByLabelText("Login");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
     await waitFor(() =>
@@ -277,6 +349,7 @@ describe("redeeming it", () => {
     mount();
     await screen.findByLabelText("Login");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
     expect(
       await screen.findByText(
@@ -300,7 +373,7 @@ describe("redeeming it", () => {
       },
       "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
     });
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     await screen.findByLabelText("Login");
     // THE REAL BROWSER'S STATE: the socket's refusal probe records that
     // nobody is signed in on every load of this screen. This suite's socket
@@ -308,6 +381,7 @@ describe("redeeming it", () => {
     // in place the enrolment was sent straight back to the sign-in form.
     needSession("sign_in");
     type("Password", "correct horse battery staple");
+    type("Confirm password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
     const enrol = `#/enrol?next=${encodeURIComponent("#/")}`;
@@ -318,6 +392,7 @@ describe("redeeming it", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(location.hash).toBe(enrol);
+    expect(dial).not.toHaveBeenCalled();
     expect(reconnect).not.toHaveBeenCalled();
   });
 });

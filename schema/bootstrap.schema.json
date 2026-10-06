@@ -47,6 +47,10 @@
     "APIAuth": {
       "additionalProperties": false,
       "properties": {
+        "accept_insecure": {
+          "description": "Acknowledge an insecure posture on a routable address. Logged at WARN on every start.",
+          "type": "boolean"
+        },
         "allowed_origins": {
           "description": "Additional browser origins this deployment is reached on. Empty = same-origin only.",
           "items": {
@@ -57,23 +61,18 @@
         "audit": {
           "$ref": "#/$defs/APIAudit"
         },
-        "backend": {
-          "description": "How people sign in. Empty derives from whether local is present.",
-          "enum": [
-            "local",
-            "none"
-          ],
-          "type": "string"
-        },
-        "local": {
-          "$ref": "#/$defs/APILocal"
-        },
         "max_grants": {
           "description": "The most authority the directory may confer. Required once the API is served.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "min_password_length": {
+          "description": "Minimum password length. 0 takes the engine's floor of 12.",
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
         },
         "session": {
           "$ref": "#/$defs/APISession"
@@ -84,25 +83,9 @@
             "$ref": "#/$defs/APIToken"
           },
           "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "APILocal": {
-      "additionalProperties": false,
-      "properties": {
-        "accept_insecure": {
-          "description": "Acknowledge an insecure posture on a routable address. Logged at WARN on every start.",
-          "type": "boolean"
-        },
-        "min_password_length": {
-          "description": "Minimum password length. 0 takes the engine's floor of 12.",
-          "maximum": 256,
-          "minimum": 0,
-          "type": "integer"
         },
         "totp": {
-          "description": "Whether a second factor is required. No default: state one.",
+          "description": "Whether a second factor is required of a person signing in with a password (default required). optional off loopback needs accept_insecure.",
           "enum": [
             "required",
             "optional"

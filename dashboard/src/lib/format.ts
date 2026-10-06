@@ -237,7 +237,8 @@ export function relTime(ts: string | null | undefined, now: number): string {
 }
 
 /**
- * "in 4m" — the same rules as [relTime], forward, INCLUDING ITS TERMINUS.
+ * "in 4m" — the same steps as [relTime], forward, to the nearest unit rather
+ * than below it, INCLUDING ITS TERMINUS.
  *
  * That last clause is what this did not have, while the comment above it claimed
  * it did. Backwards, a relative reading stops counting days at thirty and prints
@@ -257,11 +258,15 @@ export function inTime(ts: string | null | undefined, now: number): string {
   const secs = Math.round((at - now) / 1000);
   if (secs <= 0) return "due";
   if (secs < 60) return `in ${secs}s`;
-  const mins = Math.floor(secs / 60);
+  // TO THE NEAREST UNIT, where [relTime] floors. Floored, a reading forward
+  // drops whatever is left of its last unit: an invitation good for seven days
+  // read "in 6d" the second it was issued. Backward, "3h ago" for three and a
+  // half hours says no more than is so.
+  const mins = Math.round(secs / 60);
   if (mins < 60) return `in ${mins}m`;
-  const hours = Math.floor(mins / 60);
+  const hours = Math.round(secs / 3600);
   if (hours < 24) return `in ${hours}h`;
-  const days = Math.floor(hours / 24);
+  const days = Math.round(secs / 86_400);
   if (days < 30) return `in ${days}d`;
   return fmtDate(ts);
 }

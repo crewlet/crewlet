@@ -278,6 +278,74 @@ func TestALapsedCredentialGivesUpItsPlaceEarliestFirst(t *testing.T) {
 	}
 }
 
+// A TOKEN A COUNTER ENDED GIVES UP ITS PLACE, BEFORE ANY OTHER LAPSED ONE.
+//
+// Signing out everywhere, a password set, a suspension and an administrator
+// ending somebody's sessions all end their tokens by moving the revocation
+// epoch, and write no `revoked_at` — so the cap counted every such token as
+// live until its own expiry, up to a year, while the listing showed it revoked
+// with no Revoke to offer. A person at the cap was then refused every mint,
+// second factor and recovery set over tokens that could never verify again.
+// The one ended comes first because nothing says when it stopped and the sweep
+// never collects it; the one revoked an hour ago keeps its week of account.
+//
+// Mutation: drop the counter from lapsedAt and the mint makes room by dropping
+// the revoked token instead.
+func TestATokenACounterEndedGivesUpItsPlaceFirst(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Revoke(t.Context(), owner,
+			statelog.NewOpID(time.Now(), "sign-out-everywhere"), "signed out")
+		return err
+	}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	set := liveTokens(iamdomain.MaxHeldCredentials)
+	for i := range set {
+		set[i].Epoch = 1
+	}
+	ended, revoked := set[3], set[7]
+	set[3].Epoch = 0
+	set[7].RevokedAt = brokerAt.Add(-time.Hour)
+	if err := rig.draining(func() error {
+		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
+			PersonID: owner, OpID: statelog.NewOpID(time.Now(), "fill"),
+			Apply: func([]iamdomain.Credential) ([]iamdomain.Credential, error) {
+				return set, nil
+			},
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("a set at the cap was refused: %v", err)
+	}
+	if _, _, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{
+		PersonID: owner, Label: "one more", Reason: "a PAT"}); err != nil {
+		t.Fatalf("a mint beside a token the epoch ended was refused: %v", err)
+	}
+	documents := rig.column(
+		`SELECT CAST(document AS TEXT) FROM iam_people WHERE id = ?`, owner)
+	if len(documents) != 1 {
+		t.Fatalf("read the document: %v", documents)
+	}
+	doc, err := iamdomain.DecodePerson([]byte(documents[0]))
+	if err != nil {
+		t.Fatalf("decode the stored document: %v", err)
+	}
+	held := map[string]bool{}
+	for _, c := range doc.Credentials {
+		held[c.ID] = true
+	}
+	if held[ended.ID] {
+		t.Errorf("the token the epoch ended (%s) is still held", ended.ID)
+	}
+	if !held[revoked.ID] {
+		t.Errorf("the token revoked an hour ago (%s) gave way before the one "+
+			"a counter ended", revoked.ID)
+	}
+}
+
 // liveTokens is n machine tokens that verify at the writer's clock.
 func liveTokens(n int) []iamdomain.Credential {
 	out := make([]iamdomain.Credential, n)

@@ -110,14 +110,15 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 // AND THE ESTATE KNOWS WHETHER ANYBODY IS IN IT, which is what `/health` tells
 // an operator of a fresh install: nobody is enrolled yet, so the next step is
 // to invite the first person. A COUNT and never a listing, because it is asked
-// by an unauthenticated route and the answer is one bit.
+// by an unauthenticated route and the answer is one bit — and a count of
+// PEOPLE, so a service account alone leaves the company unclaimed.
 //
 // And "nobody" is PROVED against the log's end or not said: every node applies
 // the identity log from boot, company or none, so a node that has just joined
 // a fleet with people in it holds empty rows for a moment — and its /health
 // and its boot log would tell an operator to invite a founder into a company
 // that has one. Mutation: drop the coverage check and the behind arm answers
-// (false, nil).
+// (false, nil); count every row and the machine alone answers true.
 func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -144,6 +145,26 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 		t.Errorf("rows behind the log answered (%v, %v), want the unknown arm "+
 			"— their \"nobody\" is a joining node telling its operator to "+
 			"invite a founder into a company that has one", held, err)
+	}
+
+	// A MACHINE IS NOBODY HERE: a service account signs nobody in with a
+	// password, so the company is still waiting for its first person.
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: uuid.New().String(), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Name: "Release pipeline", Login: "ci:release",
+		OpID: "op-machine", Reason: "a service account first",
+	}); err != nil {
+		t.Fatalf("enrol the machine: %v", err)
+	}
+	rig.drain()
+	held, err = rig.anybody(t)
+	if err != nil {
+		t.Fatalf("AnyPerson: %v", err)
+	}
+	if held {
+		t.Error("an estate holding only a service account reports a person " +
+			"in it, so its sign-in page hides the way in from an operator " +
+			"who has nobody to sign in as")
 	}
 
 	if err := rig.enrol(iamdomain.Enrolment{

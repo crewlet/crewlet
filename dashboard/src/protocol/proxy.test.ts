@@ -84,6 +84,11 @@ const FORWARDS: readonly { path: string; call: string; why: string }[] = [
     why: "the REST transport's one request: every path it sends is a caller's, read at that caller",
   },
   {
+    path: "lib/iamWrite.ts",
+    call: "rest.request",
+    why: "the identity directory's write: its path is the gesture's, every one a literal under `/iam` at the dialog that sends it, under the `/iam` entry",
+  },
+  {
     path: "protocol/configWrite.ts",
     call: "rest.request",
     why: "the configuration transport's send: its path is the request's, `/config` or a lead's unit at `/config/units/{key}` (`routes/org/builder/model/transport.ts`), both under the `/config` entry",

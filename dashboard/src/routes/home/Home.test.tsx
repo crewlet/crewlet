@@ -21,6 +21,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest, setZone } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { SessionReading } from "~/lib/frameSession.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -227,9 +228,11 @@ function mount({
     <ToastProvider>
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
-          <FrameReadings>
-            <Router>{page}</Router>
-          </FrameReadings>
+          <SessionReading>
+            <FrameReadings>
+              <Router>{page}</Router>
+            </FrameReadings>
+          </SessionReading>
         </ClientContext.Provider>
       </LayerHost>
     </ToastProvider>,
@@ -486,6 +489,48 @@ describe("the decisions", () => {
     expect(asked.some((a) => a.kind === "decisions")).toBe(true);
     expect(screen.queryByText(NOBODY_SENTENCE)).toBeNull();
     expect(tile("Waiting on your decision").textContent).toContain("1");
+  });
+
+  // A PERSON NO SEAT NAMES IS GREETED BY THEIR OWN NAME, which their row holds
+  // and the frame's `GET /auth/session` answered — the viewer's name is the
+  // seat's, so they were greeted with nothing. ONE READ, the frame's: Home
+  // asked again for itself. The CONTROL is a bound reader, greeted by the
+  // seat's name. Mutation: greet by the viewer's name alone and the unbound
+  // reader is greeted bare; read the session in Home and it is asked twice.
+  test("a reader no seat names is greeted by their own name", async () => {
+    const sessions = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify({
+            person: "p-bob",
+            name: "Bob Smith",
+            login: "bob.smith",
+            kind: "person",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", sessions);
+    mount({
+      viewer: {
+        login: "bob.smith",
+        grants: ["state:read"],
+        handle: "",
+        owner: "bob.smith",
+        name: "",
+        kind: "",
+        acts: [],
+      },
+    });
+    expect(await screen.findByRole("heading", { name: /^Good \w+, Bob$/ })).toBeTruthy();
+    const reads = () =>
+      sessions.mock.calls.filter(([url]) => String(url).endsWith("/auth/session"));
+    expect(reads()).toHaveLength(1);
+    cleanup();
+    sessions.mockClear();
+    mount();
+    expect(await screen.findByRole("heading", { name: /^Good \w+, Jane$/ })).toBeTruthy();
+    expect(reads()).toHaveLength(1);
   });
 
   test("a seat stopped on its budget is a decision with both ways out", async () => {

@@ -13,14 +13,51 @@
  * `429 throttled`, whose `Retry-After` is the wait before the next attempt is
  * even looked at, shown as a number and held on the button.
  *
+ * # The password form is always here; the token is the way in before anybody
+ *
+ * Password sign-in is always served — there is no deployment setting that
+ * switches it off — so the form is never withheld. The deployment's own
+ * credential — a Tier A token from `crewlet.yaml` — waits behind "Use an API
+ * token instead": it is the way in before anybody has been invited, and on
+ * the day sign-in itself is broken. On a deployment whose `/health` says
+ * `identity: unclaimed` — nobody has JOINED yet, which an open invitation does
+ * not change, since redeeming it is what creates its person — it is the ONLY
+ * way in, so the token form is open from the start and the page says how to
+ * begin: sign in with the token, then invite yourself from Settings › People &
+ * access, or open the link of an invitation already issued. `unknown` (a node that cannot read its identity estate) and a
+ * `/health` that did not answer are not "unclaimed": they keep the ordinary
+ * page, because telling somebody to invite a founder into a company that has
+ * one is the wrong instruction to guess.
+ *
  * # The token is sent once and kept nowhere
  *
- * The deployment's own credential — a Tier A token from `crewlet.yaml` — is
- * the way in before anybody has been invited, and on the day sign-in itself
- * is broken. It is exchanged for a one-hour session (`POST /auth/token`) and
- * the field is emptied: the cookie that comes back is the credential, and a
- * page that also kept the token would hand the one value that outlives every
- * session to any script that ran in it.
+ * It is exchanged for a one-hour session (`POST /auth/token`) and the field is
+ * emptied: the cookie that comes back is the credential, and a page that also
+ * kept the token would hand the one value that outlives every session to any
+ * script that ran in it.
+ *
+ * # Arriving from a reset link is said, and its login is typed
+ *
+ * `?login=` fills the login and `?after=reset` says the password was just set
+ * — what the reset screen's own "Sign in" sends — so somebody who was just told
+ * which login to sign in with is not handed a blank form under a sentence about
+ * an invitation. Neither is a credential: a link carrying either fills a field
+ * and changes a sentence, nothing more.
+ *
+ * # Signed out from somewhere else is said
+ *
+ * A tab that was read by somebody (`lib/reader.ts`) and finds no session here
+ * lost it without signing out in this tab — a sign-out made here empties the
+ * tab's storage, its reader with it. Something else ended it: a sign-out from
+ * another browser or tab, a password change, an administrator, or its own
+ * deadline. The page says so rather than dropping the person on a plain form
+ * as though they had never been signed in. The engine answers every refused
+ * credential with one `401`, so the sentence names what can end a session
+ * rather than guessing which one did; the person's own Account page lists
+ * each session with what ended it. ONLY a `401` says so: a node behind on the
+ * identity log answers `503` precisely so a browser is never told its session
+ * ended when it may not have, and a throttle or a dropped connection says
+ * nothing either way.
  *
  * # Already signed in is said, not assumed
  *
@@ -29,58 +66,83 @@
  * replaced the cookie. The screen says whose, and offers to carry on as them;
  * it does not send them on unasked, because "sign in as somebody else" is a
  * thing people mean.
+ *
+ * AND NOT ASKED TWICE: a reader the app routed here because a request was
+ * just answered `401` (the `sign_in` need, `protocol/signin.ts`) holds no
+ * session, which the engine has already said — asking `GET /auth/session`
+ * again was one more refused request on every way a session ends.
  */
 
 import { useEffect, useState } from "react";
 import { Button, Callout, Disclosure, FormField, Input, Text } from "@crewlethq/ui";
 import { useRoute } from "~/app/router.tsx";
+import { currentReader } from "~/lib/reader.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
-import { auth, RestError, type SessionAnswer } from "~/protocol/index.ts";
+import { auth, currentSessionNeed, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import { SignInPage } from "./SignInPage.tsx";
 
-/** What the posture read found: a backend, or nothing that could be read. */
-type Backend = { kind: "read"; name: string } | { kind: "unread" };
-
 export function SignIn() {
-  const next = useRoute().query.get("next");
+  const query = useRoute().query;
+  const next = query.get("next");
+  const typed = query.get("login") ?? "";
+  const reset = query.get("after") === "reset";
   const signedIn = useSignedIn();
 
-  const [backend, setBackend] = useState<Backend | null>(null);
-  const [current, setCurrent] = useState<SessionAnswer | null>(null);
+  const [unclaimed, setUnclaimed] = useState(false);
+  // UNDEFINED UNTIL `/auth/session` HAS ANSWERED, and null once it answered
+  // nobody: a tab holding a good session must not flash "you were signed out"
+  // for the round trip it takes to say so, nor on an answer that was no answer.
+  // NULL AT ONCE where a `401` routed the reader here — see the package doc.
+  const [routed] = useState(() => currentSessionNeed() === "sign_in");
+  const [current, setCurrent] = useState<SessionAnswer | null | undefined>(
+    routed ? null : undefined,
+  );
+  // AS THE PAGE OPENED: a sign-in records the next reader before it moves on.
+  const [read] = useState(() => currentReader() !== null);
 
   useEffect(() => {
     let live = true;
-    auth.config().then(
-      (config) => live && setBackend({ kind: "read", name: config.backend }),
-      // UNREAD IS NOT "NONE". A node that could not answer the posture read
-      // still takes a password, and the form is what a person can act on;
-      // the engine refuses whatever it will not accept.
-      () => live && setBackend({ kind: "unread" }),
-    );
-    auth.session().then(
-      (session) => live && setCurrent(session),
-      // Nobody signed in, which is why this screen is usually open.
+    auth.firstPerson().then(
+      (identity) => live && setUnclaimed(identity === "unclaimed"),
+      // AN UNREAD ANSWER IS NOT "UNCLAIMED" — see the package doc.
       () => {},
     );
+    if (!routed) {
+      auth.session().then(
+        (session) => live && setCurrent(session),
+        // NOBODY SIGNED IN is a 401, which is why this screen is usually open.
+        // Anything else — a node behind on the identity log (503), a throttle,
+        // the network — says nothing about this browser's session, so it
+        // stays unanswered and the page claims nothing.
+        (err: unknown) => {
+          if (live && err instanceof RestError && err.status === 401) setCurrent(null);
+        },
+      );
+    }
     return () => {
       live = false;
     };
-  }, []);
-
-  // A DEPLOYMENT WITH NO PEOPLE signs nobody in with a password, so the
-  // form it would refuse is not offered — only the token.
-  const passwords = backend === null || backend.kind === "unread" || backend.name === "local";
+  }, [routed]);
 
   return (
     <SignInPage
       title="Sign in to Crewlet"
       lede={
-        passwords
-          ? "Use the login or email address your invitation was for."
-          : "This deployment signs nobody in with a password. Use one of its API tokens."
+        unclaimed
+          ? "Nobody has joined this deployment yet."
+          : reset
+            ? "Your password is set. Sign in with it — a second factor you hold is still asked for."
+            : "Use the login or email address your invitation was for."
       }
     >
+      {read && current === null && (
+        <Callout variant="warning" title="You were signed out">
+          Your session in this browser ended without a sign-out here: it was signed out from another
+          browser or tab, ended by a password change or by an administrator, or it timed out. Sign
+          in again to carry on.
+        </Callout>
+      )}
       {current && (
         <Callout
           variant="neutral"
@@ -94,8 +156,21 @@ export function SignIn() {
           Signing in below replaces that session in this browser.
         </Callout>
       )}
-      {passwords && <PasswordForm onSignedIn={(answer) => signedIn(answer, next)} />}
-      <TokenForm open={!passwords} onSignedIn={(answer) => signedIn(answer, next)} />
+      {unclaimed && (
+        <Callout variant="neutral" title="Getting started">
+          Sign in with one of this deployment&rsquo;s API tokens — the founder token its{" "}
+          <code className="inline">crewlet.yaml</code> declares under{" "}
+          <code className="inline">api.auth.tokens</code> — then open Settings › People &amp; access
+          and invite yourself. The invitation&rsquo;s link is where you choose your login and
+          password; if you have invited yourself already, open that link instead.
+        </Callout>
+      )}
+      <PasswordForm
+        focus={!unclaimed}
+        typed={typed}
+        onSignedIn={(answer) => signedIn(answer, next)}
+      />
+      <TokenForm open={unclaimed} onSignedIn={(answer) => signedIn(answer, next)} />
     </SignInPage>
   );
 }
@@ -111,8 +186,18 @@ function useWait(): [boolean, (seconds: number) => void] {
   return [until !== 0, (seconds) => setUntil(Date.now() + seconds * 1000)];
 }
 
-function PasswordForm({ onSignedIn }: { onSignedIn: (answer: SignedInAs) => void }) {
-  const [login, setLogin] = useState("");
+function PasswordForm({
+  focus,
+  typed,
+  onSignedIn,
+}: {
+  /** Whether the form takes the focus: not where the token is the way in. */
+  focus: boolean;
+  /** A login already known — `?login=` — or "". The password takes the focus then. */
+  typed: string;
+  onSignedIn: (answer: SignedInAs) => void;
+}) {
+  const [login, setLogin] = useState(typed);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   // SET BY THE ENGINE, never guessed: it asks for the code only once the
@@ -176,7 +261,7 @@ function PasswordForm({ onSignedIn }: { onSignedIn: (answer: SignedInAs) => void
             aria-describedby={field.describedBy}
             name="username"
             autoComplete="username"
-            autoFocus
+            autoFocus={focus && typed === ""}
             width="full"
             spellCheck={false}
             value={login}
@@ -192,6 +277,7 @@ function PasswordForm({ onSignedIn }: { onSignedIn: (answer: SignedInAs) => void
             type="password"
             name="password"
             autoComplete="current-password"
+            autoFocus={focus && typed !== ""}
             width="full"
             value={password}
             onChange={(e) => changeCredentials(() => setPassword(e.target.value))}
@@ -234,7 +320,7 @@ function TokenForm({
   open,
   onSignedIn,
 }: {
-  /** Open from the start where the token is the only way in. */
+  /** Open from the start where the token is the only way in: nobody invited yet. */
   open: boolean;
   onSignedIn: (answer: SignedInAs) => void;
 }) {
@@ -276,6 +362,7 @@ function TokenForm({
             aria-describedby={field.describedBy}
             type="password"
             autoComplete="off"
+            autoFocus={open}
             width="full"
             spellCheck={false}
             value={typed}

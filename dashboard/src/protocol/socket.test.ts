@@ -7,7 +7,8 @@
  * 4401 when its session ended, 4403 when its credential names somebody who may
  * not have this surface. The repairs are opposite: a 4401 is a reconnect once
  * this tab's own requests have landed (the browser may hold a newer cookie,
- * and after a step-up it is about to), a 4403 is not repaired by anything this
+ * and after a step-up it is about to) and `GET /auth/session` has said the
+ * browser still holds a session, a 4403 is not repaired by anything this
  * tab can do, so the socket must STOP rather than dial the same refusal every
  * thirty seconds under a "reconnecting" banner. Anything else is the backoff.
  */
@@ -54,6 +55,8 @@ let probeHeaders: Record<string, string> = {};
 let probeDelayMs = 0;
 /** What the degraded-mode snapshot read answers: by default nothing the engine wrote. */
 let snapshotAnswer: () => Promise<Response> = async () => new Response("{}", { status: 503 });
+/** What `GET /auth/session` answers: by default a session. */
+let sessionStatus = 200;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -65,6 +68,7 @@ beforeEach(() => {
   probeHeaders = {};
   probeDelayMs = 0;
   snapshotAnswer = async () => new Response("{}", { status: 503 });
+  sessionStatus = 200;
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: ScriptedWebSocket });
   vi.stubGlobal(
     "fetch",
@@ -72,6 +76,16 @@ beforeEach(() => {
       const url = String(input);
       fetches.push(url);
       fetchInits.push(init);
+      if (url.endsWith("/auth/session")) {
+        return new Response(
+          JSON.stringify(
+            sessionStatus === 200
+              ? { person: "p-1", login: "jane.doe", grants: ["state:read"], status: "signed_in" }
+              : { error: "invalid_token" },
+          ),
+          { status: sessionStatus, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (url.endsWith("/ws/stream")) {
         if (probeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, probeDelayMs));
         return new Response(JSON.stringify(probeBody), {
@@ -85,6 +99,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const socket of running) socket.stop();
+  running = [];
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -98,10 +114,15 @@ function dial(n: number): ScriptedWebSocket {
   return sock;
 }
 
+/** Every socket a case started, stopped after it: a stopped socket hears no
+ * `visibilitychange` a later case dispatches. */
+let running: LiveSocket[] = [];
+
 function started(): { socket: LiveSocket; store: Store } {
   const store = new Store();
   const socket = new LiveSocket(store);
   socket.start();
+  running.push(socket);
   return { socket, store };
 }
 
@@ -119,7 +140,7 @@ describe("the engine's close codes", () => {
     expect(fetches).toHaveLength(0);
   });
 
-  test("4401 reconnects and asks nothing", async () => {
+  test("4401 reconnects for a session the browser still holds, and probes nothing", async () => {
     const { store } = started();
     dial(0).open();
     dial(0).closeWith(4401, "credential no longer accepted");
@@ -128,7 +149,96 @@ describe("the engine's close codes", () => {
     expect(ScriptedWebSocket.dials.length).toBeGreaterThan(1);
     expect(store.state.accessRefused).toBeNull();
     expect(store.state.authRejected).toBe(false);
+    expect(fetches.filter((u) => u.endsWith("/auth/session"))).toHaveLength(1);
     expect(fetches.filter((u) => u.endsWith("/ws/stream"))).toHaveLength(0);
+  });
+
+  // A SESSION ENDED ELSEWHERE — a password change, a sign-out everywhere, an
+  // administrator — closes this tab's socket 4401, and the tab dialled again
+  // blind: a refused handshake, its refusal probe and a refused degraded-mode
+  // snapshot before the sign-in, three 401s in the console where one says it.
+  // It asks `GET /auth/session` once and dials nothing on a 401. The CONTROL is
+  // the case above, whose session answers and is dialled for. Mutation: dial
+  // before asking, or on any answer, and a dial and its 401s come back.
+  test("4401 whose session ended asks once and dials nothing on the way to the sign-in", async () => {
+    sessionStatus = 401;
+    const { store } = started();
+    dial(0).open();
+    dial(0).closeWith(4401, "signed out everywhere");
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
+    expect(fetches.filter((u) => u.endsWith("/auth/session"))).toHaveLength(1);
+    expect(fetches.filter((u) => !u.endsWith("/auth/session"))).toEqual([]);
+    expect(store.state.authRejected).toBe(true);
+    expect(currentSessionNeed()).toBe("sign_in");
+  });
+
+  // A SIGN-IN AS SOMEBODY ELSE IN ANOTHER TAB ends this tab's session (4401)
+  // and moves the cookie the two tabs share, so `GET /auth/session` answers for
+  // them — and the re-dial reached the company as them in a tab still holding
+  // the last reader's draft and stars. The app is asked first, with the person
+  // the answer names, and dials nothing where it hands the tab over. The
+  // CONTROL is the same close for the tab's own reader, which dials again.
+  // Mutation: dial without asking and the second dial comes back.
+  test("4401 for somebody else's session asks the app and dials nothing for them", async () => {
+    for (const [carriesOn, dials] of [
+      [true, 2],
+      [false, 1],
+    ] as const) {
+      ScriptedWebSocket.dials = [];
+      const asked: string[] = [];
+      const store = new Store();
+      const socket = new LiveSocket(store, {
+        takeSession: (person) => {
+          asked.push(person);
+          return carriesOn;
+        },
+      });
+      running.push(socket);
+      socket.start();
+      dial(0).open();
+      dial(0).closeWith(4401, "credential no longer accepted");
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(asked).toEqual(["p-1"]);
+      expect(ScriptedWebSocket.dials).toHaveLength(dials);
+    }
+  });
+
+  // A SIGN-OUT HOLDS THE SOCKET, because the engine closes this session's
+  // socket 4401 as it applies the sign-out, and that close re-dialled before
+  // the sign-out's reload — a handshake refused 401 on the way out. The
+  // CONTROL is the case above, unheld, which dials again; and a sign-out that
+  // failed releases it, which dials. Mutation: drop the hold and the close
+  // dials; drop the release and nothing does.
+  test("4401 on a socket a sign-out holds dials nothing until it is released", async () => {
+    const { socket } = started();
+    dial(0).open();
+    socket.hold();
+    dial(0).closeWith(4401, "signed out");
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
+    expect(fetches).toHaveLength(0);
+
+    socket.release();
+    expect(ScriptedWebSocket.dials).toHaveLength(2);
+  });
+
+  // A RELEASE IS NOT A RECONNECT: a sign-out that failed from the panel a
+  // refused person reads leaves the refusal standing, where a reconnect would
+  // clear it and draw every screen until the next dial was refused again.
+  test("releasing a socket a refusal stopped keeps the refusal", async () => {
+    const { socket, store } = started();
+    dial(0).open();
+    dial(0).closeWith(4403, "grant withdrawn: state:read");
+    socket.hold();
+    socket.release();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(store.state.accessRefused).toBe("grant withdrawn: state:read");
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
   });
 
   // A STEP-UP REPLACES THE SESSION IT WAS MADE FROM, so the engine closes
@@ -207,6 +317,35 @@ describe("the engine's close codes", () => {
     expect(store.state.authRejected).toBe(true);
     expect(currentSessionNeed()).toBe("sign_in");
     expect(store.state.accessRefused).toBeNull();
+  });
+
+  // NOBODY SIGNED IN STOPS THE DIALLING: every dial until somebody signs in
+  // is the same 401, and a signed-out tab — the sign-in page, an invitation's
+  // — dialled one on its backoff for as long as it stayed open, two console
+  // errors each. A sign-in here re-dials through reconnect(); one in another
+  // tab is noticed by ONE dial when this tab comes back, which stops again if
+  // it still finds nobody. Mutation: leave the loop running after a 401 and
+  // the dials go on.
+  test("a 401 handshake stops the dialling until a sign-in or the tab's return", async () => {
+    probeStatus = 401;
+    probeBody = { error: "invalid_token" };
+    const { socket } = started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    const dialled = ScriptedWebSocket.dials.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled);
+
+    // THE TAB COMES BACK: one dial, which finds nobody and stops again.
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
+    dial(dialled).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
+
+    // A SIGN-IN HERE re-dials at once.
+    socket.reconnect();
+    expect(ScriptedWebSocket.dials).toHaveLength(dialled + 2);
   });
 
   // A SESSION THAT MAY ONLY ENROL is refused the socket until it has, and
@@ -365,6 +504,17 @@ describe("the degraded-mode poll", () => {
 
   test("a 503 the engine wrote with no Retry-After is not asked again on a timer", async () => {
     snapshotAnswer = refusal({});
+    await dropped();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(snapshotReads()).toBe(1);
+  });
+
+  // NOBODY SIGNED IN IS NOT ASKED AGAIN ON A TIMER: every later read is the
+  // same 401, and a signed-out tab polled one every five seconds. Mutation:
+  // read a 401 as the ordinary tick and the snapshot is read again.
+  test("a 401 is not asked again on a timer", async () => {
+    snapshotAnswer = async () =>
+      new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 });
     await dropped();
     await vi.advanceTimersByTimeAsync(120_000);
     expect(snapshotReads()).toBe(1);

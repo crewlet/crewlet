@@ -3,7 +3,7 @@
  *
  * ONE COMPONENT FOR BOTH DOORS: the enrolment a deployment REQUIRES before a
  * password session may do anything else (`#/enrol`), and the one a person
- * opens from their own menu to add or replace an authenticator. The steps are
+ * opens from their Account page to add or replace an authenticator. The steps are
  * the engine's and identical either way; only what surrounds them differs.
  *
  * # Two requests, and nothing is stored until the second
@@ -35,6 +35,7 @@ import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { CopyButton, DownloadButton } from "~/ui/primitives.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import {
   auth,
   RestError,
@@ -214,7 +215,7 @@ export function RecoveryCodeList({ codes }: { codes: readonly string[] }) {
  * first authenticator holds no other way back in: a phone lost next week is
  * an account nobody but an administrator can reopen. A set that cannot be
  * issued is said, with the way to try again, and the way on without it —
- * the codes can be issued later from the person's own menu.
+ * the codes can be issued later from the person's Account page.
  */
 export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -268,16 +269,29 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
 }
 
 /**
- * Adding or replacing an authenticator, from a person's own menu.
+ * Adding or replacing an authenticator, from a person's Account page.
  *
  * THE ENGINE ASKS FOR A FRESH PROOF FIRST — the one step-up window, because
  * this is the gesture that decides whether a stolen session becomes a
  * permanent hold on somebody's account — and the step-up ceremony answers it
  * before the seed arrives, so this dialog only ever shows a seed its reader
  * proved they may have.
+ *
+ * `codes` is whether they hold recovery codes now. Holding none — a first
+ * authenticator — the enrolment ISSUES a first set, as a required enrolment
+ * does ([FirstRecoveryCodes]), since a phone lost next week is otherwise an
+ * account nobody but an administrator can reopen; it used to say "your
+ * recovery codes are unchanged" to somebody who held none, and prompt nothing.
+ * Holding a set, the set stays and the sentence says so.
  */
-export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
+export function AuthenticatorDialog({ codes, onClose }: { codes: boolean; onClose: () => void }) {
   const [enrolled, setEnrolled] = useState(false);
+  // AS THE DIALOG OPENED: the page behind re-reads the credentials when the
+  // tab comes back — from a password manager the codes were saved into — and
+  // the set issued here would then turn this into the replacement's sentence,
+  // taking the codes off the screen before they were saved.
+  const [first] = useState(!codes);
+  const issuing = enrolled && first;
   return (
     <Modal
       open
@@ -287,15 +301,20 @@ export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
       size="md"
       stackBody
       footer={
-        <Button variant={enrolled ? "primary" : "ghost"} onClick={onClose}>
-          {enrolled ? "Done" : "Cancel"}
-        </Button>
+        // THE FIRST SET CARRIES ITS OWN WAY ON, once it is saved or skipped.
+        issuing ? null : (
+          <Button variant={enrolled ? "primary" : "ghost"} onClick={onClose}>
+            {enrolled ? "Done" : "Cancel"}
+          </Button>
+        )
       }
     >
-      {enrolled ? (
+      {issuing ? (
+        <FirstRecoveryCodes onDone={onClose} />
+      ) : enrolled ? (
         <Text as="p" variant="body">
-          Your authenticator is set up, and signing in asks for its code from now on. If it replaced
-          one you had, codes from the old app no longer work; your recovery codes are unchanged.
+          Your authenticator is set up, and signing in asks for its code from now on. Codes from the
+          app it replaced no longer work; your recovery codes are unchanged.
         </Text>
       ) : (
         <>
@@ -311,13 +330,18 @@ export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * Issuing a fresh set of recovery codes, from a person's own menu.
+ * Issuing a fresh set of recovery codes, from a person's Account page.
  *
  * ASKED FOR, never issued on opening: a new set RETIRES the old one, so a
  * person who opened this to look and closed it again must still hold the set
  * they came with.
+ *
+ * `held` is whether they hold a set now, which is what every sentence about
+ * an earlier set turns on: told "your earlier codes no longer work" on their
+ * first set, a person went looking for codes they never had.
  */
-export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
+export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose: () => void }) {
+  const waiting = useWaiting();
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -335,13 +359,14 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
       // would have retired the one held. Saying "still works" there is the
       // claim a person would find out was false on the day they need it.
       const unknown = err instanceof RestError && (err.status === 503 || err.status === 0);
-      setRefusal(
-        `${refusalText(err)} ${
-          unknown
-            ? "It is not known whether a new set was stored, which would retire the one you hold — issue a new set to be sure."
-            : "No codes were issued; the set you hold still works."
-        }`,
-      );
+      const aftermath = unknown
+        ? held
+          ? "It is not known whether a new set was stored, which would retire the one you hold — issue a new set to be sure."
+          : "It is not known whether a set was stored — issue a new set to be sure."
+        : held
+          ? "No codes were issued; the set you hold still works."
+          : "No codes were issued.";
+      setRefusal(`${refusalText(err)} ${aftermath}`);
     } finally {
       setBusy(false);
     }
@@ -354,7 +379,7 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
       icon={<KeyGlyph size="md" />}
       onClose={onClose}
       dismissable={!busy}
-      closeDisabledReason="Waiting for the engine to answer."
+      closeDisabledReason={waiting.reason}
       size="md"
       stackBody
       footer={
@@ -377,7 +402,7 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
       {codes ? (
         <>
           <Text as="p" variant="body">
-            Your earlier codes no longer work. Keep these somewhere safe:{" "}
+            {held && "Your earlier codes no longer work. "}Keep these somewhere safe:{" "}
             <strong>they are shown this once</strong>.
           </Text>
           <RecoveryCodeList codes={codes} />
@@ -385,7 +410,7 @@ export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
       ) : (
         <Text as="p" variant="body" tone="secondary">
           Each recovery code signs you in once in place of a code from your authenticator, for the
-          day you do not have it. Issuing a new set retires the one you hold now.
+          day you do not have it.{held && " Issuing a new set retires the one you hold now."}
         </Text>
       )}
       {refusal && (

@@ -102,7 +102,7 @@ func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 		}
 	}
 
-	row, err := rig.reader(t).InvitationByID(t.Context(), issued.ID)
+	row, err := rig.invitationRow(t, issued.ID)
 	if err != nil {
 		t.Fatalf("read the invitation: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invite: %v", err)
 	}
-	row, err := rig.reader(t).InvitationByID(t.Context(), issued.ID)
+	row, err := rig.invitationRow(t, issued.ID)
 	if err != nil {
 		t.Fatalf("read the invitation: %v", err)
 	}

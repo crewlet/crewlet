@@ -179,7 +179,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	// again is a new enrolment of the same seed. It was `totp:<person>:<id>`,
 	// which carries no instant and read as minted at the epoch.
 	opID := statelog.NewOpID(s.now(), "totp-enrol")
-	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
+	stored, err := s.behalf(principal).SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			// IN THE SNAPSHOT THE FACTOR LANDS ON, never from a read
@@ -365,6 +365,10 @@ func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 // THE OLD SET IS REPLACED RATHER THAN EXTENDED, which is what makes this the
 // move after a set is lost or printed somewhere it should not have been: a set
 // that merely grew would leave whatever leaked still working.
+//
+// ONLY BESIDE AN AUTHENTICATOR ([errNoAuthenticator]): recovery codes stand in
+// for one, and held alone they are a second factor every sign-in then asks for
+// with ten single-use answers and no way to make more.
 func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	principal, ok := s.mayChangeProof(w, r)
 	if !ok {
@@ -382,15 +386,28 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	// A FRESH OPERATION PER SET, for the enrolment's reason: a retry mints
 	// a fresh set, which is a new operation replacing whichever landed.
 	opID := statelog.NewOpID(s.now(), "recovery-codes")
-	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
+	stored, err := s.behalf(principal).SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
+			// IN THE SNAPSHOT THE CODES LAND ON, for the enrolment's
+			// reason: an authenticator revoked a moment ago is exactly the
+			// one this refusal is about.
+			if _, ok := firstCredential(held, iamdomain.MethodTOTP); !ok {
+				return nil, errNoAuthenticator
+			}
 			return append(without(held, iamdomain.MethodRecovery),
 				recoveryCredential(id, verifiers)), nil
 		},
 		OpID:   opID,
 		Reason: reason,
 	})
+	if errors.Is(err, errNoAuthenticator) {
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalid,
+			map[string]string{"detail": "recovery codes stand in for an " +
+				"authenticator app, and this account holds none: set one up " +
+				"first, which issues the first codes with it"})
+		return
+	}
 	if err != nil {
 		if removed(err) {
 			s.proofOfRemoved(w, r)
@@ -420,6 +437,19 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	// bypasses.
 	httpjson.Write(w, http.StatusOK, totpRecoveryResponse{Codes: codes})
 }
+
+// errNoAuthenticator refuses recovery codes to a person who holds no
+// authenticator app, in the snapshot the codes would land on.
+//
+// A RECOVERY CREDENTIAL IS A SECOND FACTOR ON ITS OWN ([holdsFactor]), so a set
+// issued to somebody with a password alone turned every later sign-in into a
+// demand for a code that only those ten single-use codes could answer — a
+// person who opened "new recovery codes" to look locked themselves into
+// spending them, and an administrator's reset was the way back. Codes are
+// issued with the first authenticator (the dashboard's enrolment
+// asks for them at once) and replaced beside one.
+var errNoAuthenticator = errors.New("authapi: recovery codes need an " +
+	"authenticator they stand in for")
 
 // proofOfRemoved answers a change to somebody's proof whose person was removed
 // between the session this was asked through and its record ([removed]): the

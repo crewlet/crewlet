@@ -233,7 +233,7 @@ type Session struct {
 	// EnrolmentOnly marks a session that may do nothing but ENROL A SECOND
 	// FACTOR: opened by a password alone — a sign-in, a step-up or an
 	// invitation's redemption — for a person who holds
-	// none, on a deployment whose `api.auth.local.totp` requires one.
+	// none, on a deployment whose `api.auth.totp` requires one.
 	//
 	// ON THE SESSION, decided ONCE by the sign-in that opened it, rather
 	// than re-derived per request from the person's credentials and the
@@ -303,19 +303,24 @@ type Credential struct {
 	Grants []iam.Grant `json:"grants,omitempty"`
 
 	// Epoch is the owner's revocation epoch when a machine token was
-	// minted. A token is refused once the owner's epoch moves past it,
-	// which is what makes signing somebody out everywhere — and
-	// offboarding them — end every token they hold as well as every
-	// session.
+	// minted or a reset link issued. Either is refused once the owner's
+	// epoch moves past it, which is what makes signing somebody out
+	// everywhere — and suspending or offboarding them — end every token and
+	// link they hold as well as every session ([Credential.EndedBy]).
 	Epoch uint64 `json:"epoch,omitempty"`
 
 	// Generation is the company's session generation when a machine token
-	// was minted, and a token is refused once the generation moves past
-	// it — for the reason a session is: a backup taken before a token was
-	// revoked restores it unrevoked, and the restore runbook's
-	// invalidate-all is the only gesture that can end every such
-	// credential without knowing which they were.
+	// was minted or a reset link issued, and either is refused once the
+	// generation moves past it — for the reason a session is: a backup
+	// taken before a token was revoked, or a link spent, restores it
+	// live, and the restore runbook's invalidate-all is the only gesture
+	// that can end every such credential without knowing which they were.
 	Generation uint64 `json:"generation,omitempty"`
+
+	// Spent marks a reset link its person USED, beside the revocation every
+	// link they held takes when a password is set: listed as revoked alone,
+	// the link they had just used read as one an administrator withdrew.
+	Spent bool `json:"spent,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -353,10 +358,51 @@ const (
 	MaxHeldCredentials = 64
 )
 
+// Counters are the two numbers that end a credential stamped with them, read in
+// one snapshot: the person's revocation epoch and the company's session
+// generation. Every gesture that ends a person's sessions and machine tokens —
+// a password set, signing out everywhere, a suspension, an administrator
+// ending their sessions, invalidating everybody's — moves one of them and
+// writes no `revoked_at`.
+type Counters struct{ Epoch, Generation uint64 }
+
+// EndedBy reports a credential a COUNTER ended: a machine token minted, or a
+// reset link issued, at an epoch or a generation that has since moved on — the
+// comparison [credential.CheckToken] refuses a token on. Counters only move
+// forward, so it never verifies again.
+//
+// A RESET LINK IS ENDED THE WAY A TOKEN IS: refused only while a suspension's
+// stage stood, a link sent out of band came back with the reactivation, and
+// whoever kept a copy of it set the person's password.
+func (c Credential) EndedBy(now Counters) bool {
+	return (c.Method == MethodToken || c.Method == MethodReset) &&
+		(now.Epoch > c.Epoch || now.Generation > c.Generation)
+}
+
+// stampIssued is after with every reset link before did not hold stamped with
+// counters — the issuing snapshot's, so the link is ended by whatever moves
+// one of them next, as a token minted in that snapshot is ([Credential.EndedBy]).
+// STAMPED BY THE RECORD, never by its caller: the caller forms the person
+// without either counter, which it could only read in another transaction.
+func stampIssued(before, after []Credential, counters Counters) []Credential {
+	held := make(map[string]bool, len(before))
+	for _, c := range before {
+		held[c.ID] = true
+	}
+	out := slices.Clone(after)
+	for i, c := range out {
+		if c.Method == MethodReset && !held[c.ID] {
+			out[i].Epoch, out[i].Generation = counters.Epoch, counters.Generation
+		}
+	}
+	return out
+}
+
 // fitHeld is a credential set as a write lands it: set itself where it is
 // within [MaxHeldCredentials], and otherwise set without the credentials that
-// LAPSED EARLIEST — revoked, or past their expiry — until it is. Refused as
-// cause only when the credentials still LIVE are past the cap on their own.
+// LAPSED EARLIEST — revoked, past their expiry, or ended by a counter
+// ([Credential.EndedBy]) at counters — until it is. Refused as cause only when
+// the credentials still LIVE are past the cap on their own.
 //
 // # Why a lapsed credential gives up its place rather than holding it
 //
@@ -375,7 +421,16 @@ const (
 // its expiry, whichever came first — with the set's own order breaking a tie,
 // so the credential dropped is the one the sweep would have collected first,
 // and the rest keep their account for their full week.
-func fitHeld(set []Credential, now time.Time, cause error) ([]Credential, error) {
+//
+// A CREDENTIAL A COUNTER ENDED IS LAPSED, and the earliest of all: it writes no
+// `revoked_at`, so nothing says when it stopped, and the sweep never collects
+// it before its own expiry — up to a year for a token. Counted as live, a
+// person signed out everywhere with sixty tokens was refused every mint, second
+// factor and recovery set over tokens that could never verify again, each
+// listed as revoked with no way to revoke it.
+func fitHeld(set []Credential, now time.Time, counters Counters,
+	cause error) ([]Credential, error) {
+
 	over := len(set) - MaxHeldCredentials
 	if over <= 0 {
 		return set, nil
@@ -386,14 +441,14 @@ func fitHeld(set []Credential, now time.Time, cause error) ([]Credential, error)
 	}
 	var lapsed []lapse
 	for i, c := range set {
-		at, gone := lapsedAt(c, now)
+		at, gone := lapsedAt(c, now, counters)
 		if gone {
 			lapsed = append(lapsed, lapse{index: i, at: at})
 		}
 	}
 	if len(lapsed) < over {
 		return nil, fmt.Errorf("%w: this would leave %d live credentials on one "+
-			"person and the cap is %d — a revoked or expired one makes room when "+
+			"person and the cap is %d — a revoked, expired or ended one makes room when "+
 			"a change needs it, so revoke a token nothing uses and ask again",
 			cause, len(set)-len(lapsed), MaxHeldCredentials)
 	}
@@ -412,9 +467,12 @@ func fitHeld(set []Credential, now time.Time, cause error) ([]Credential, error)
 }
 
 // lapsedAt is when c stopped verifying — its revocation or its expiry,
-// whichever came first — and false for a credential that still verifies at
-// now.
-func lapsedAt(c Credential, now time.Time) (time.Time, bool) {
+// whichever came first, and the zero instant for one a counter ended — and
+// false for a credential that still verifies at now and counters.
+func lapsedAt(c Credential, now time.Time, counters Counters) (time.Time, bool) {
+	if c.EndedBy(counters) {
+		return time.Time{}, true
+	}
 	expired := !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(now)
 	switch revoked := !c.RevokedAt.IsZero(); {
 	case revoked && expired:
@@ -473,11 +531,31 @@ const (
 	// invalidating the codes they printed, and regenerates the codes
 	// without re-enrolling the app.
 	MethodRecovery CredentialMethod = "recovery"
+
+	// MethodReset is a ONE-TIME PASSWORD RESET LINK an administrator
+	// issued: a 256-bit crypto/rand secret held, like a machine token's,
+	// as a SHA-256 verifier ([credential.ResetVerifier]), with an expiry.
+	//
+	// A CREDENTIAL ROW RATHER THAN A TABLE OF ITS OWN, because it is one:
+	// something presented and checked against a verifier, owned by one
+	// person, listed among their credentials so an administrator sees the
+	// outstanding link and revokes it like anything else, and collected
+	// by the sweep once it is spent, revoked or past its expiry.
+	//
+	// IT AUTHENTICATES NOTHING BUT ITS OWN SPEND. No sign-in reads it — a
+	// password is found by its method — and no bearer path does: the
+	// machine-token read refuses a row of any other method, and its
+	// verifier is formed under a prefix of its own, so no token value
+	// could verify against one. Spending it is the one thing it does
+	// ([Writer.SetPassword]), and the spend revokes it — as does a grant
+	// its person gains ([Writer.UpdatePerson]), since the link was judged
+	// against its issuer's grants at the issue.
+	MethodReset CredentialMethod = "reset"
 )
 
-// CredentialMethods are the four.
+// CredentialMethods are the five.
 var CredentialMethods = []CredentialMethod{
-	MethodPassword, MethodToken, MethodTOTP, MethodRecovery,
+	MethodPassword, MethodToken, MethodTOTP, MethodRecovery, MethodReset,
 }
 
 // SecondFactorMethods are the methods that satisfy a second factor rather
@@ -508,6 +586,38 @@ func (m CredentialMethod) Valid() bool {
 	return false
 }
 
+// Cancellation is an invitation withdrawn before anybody redeemed it
+// ([OpCancel]).
+//
+// IT NAMES THE INVITATION AND THE ADDRESS IT HELD, as the blind, and nothing
+// else: the address's blind is what the trail row is filed under and what
+// buckets the record, as the issue's own did, and the apply deletes the row by
+// its id. The address itself is in neither.
+type Cancellation struct {
+	V int `json:"v"`
+
+	Invitation string `json:"invitation"`
+	EmailBlind string `json:"email_blind"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// PasswordChange is a person's password replaced and their revocation epoch
+// moved, in one record ([OpPassword]).
+//
+// THE DOCUMENT IS FULL POST-STATE, as every content record's is — the new
+// password among the credentials, every outstanding reset link revoked — and
+// the EPOCH IS STATED, never incremented by the applier, for [Revocation]'s
+// reason.
+type PasswordChange struct {
+	V int `json:"v"`
+
+	Person Person `json:"person"`
+	Epoch  uint64 `json:"epoch"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
 // Revocation is a bump of somebody's revocation epoch.
 type Revocation struct {
 	V int `json:"v"`
@@ -525,6 +635,15 @@ type StatusChange struct {
 	V int `json:"v"`
 
 	Stage iam.Stage `json:"stage"`
+
+	// Epoch is the revocation epoch a stage that may not act moves the
+	// person to, STATED for [Revocation]'s reason, and zero for one that
+	// may: a suspension ENDS every session and machine token they hold.
+	// Refused only while the stage stood, they came back with a
+	// reactivation — and the browser that had been told so had already
+	// dropped its cookie, so the one copy a reactivation revived was a copy
+	// somebody else kept.
+	Epoch uint64 `json:"epoch,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -678,22 +797,72 @@ type Generation struct {
 // [jsoncarry]'s and not this package's: a decode keeps what it has no home
 // for, an encode folds it back, and a carried field loses to a known one.
 
+// # A person and a credential carry at ANY DEPTH, through codecs of their own
+//
+// A person's document travels INSIDE an enrolment and a password change, and
+// every credential travels inside a person's — and encoding/json marshals a
+// nested struct by its fields, where Extra is `-`. So a nested person or
+// credential DROPPED everything it carried, and a credential's carried fields
+// are where the second factor's last accepted step and the recovery codes'
+// verifiers ride: every recovery code was refused for want of a verifier, and
+// a TOTP code verified as often as it was presented inside its window. The
+// two methods on each are the pair rather than a second copy of it, so the
+// rule holds wherever the type is found.
+
+// MarshalJSON folds what a person's document carries back in, at any depth.
+func (p Person) MarshalJSON() ([]byte, error) {
+	type fields Person // the same fields with no methods, or this recurses
+	return jsoncarry.Encode(fields(p), p.Extra)
+}
+
+// UnmarshalJSON keeps what a person's document carries that this build has no
+// home for, at any depth.
+func (p *Person) UnmarshalJSON(data []byte) error {
+	type fields Person
+	var known fields
+	extra, err := jsoncarry.Decode(data, &known, personFields)
+	if err != nil {
+		return err
+	}
+	*p = Person(known)
+	p.Extra = extra
+	return nil
+}
+
+// MarshalJSON folds what a credential carries back in, at any depth.
+func (c Credential) MarshalJSON() ([]byte, error) {
+	type fields Credential
+	return jsoncarry.Encode(fields(c), c.Extra)
+}
+
+// UnmarshalJSON keeps what a credential carries that this build has no home
+// for, at any depth.
+func (c *Credential) UnmarshalJSON(data []byte) error {
+	type fields Credential
+	var known fields
+	extra, err := jsoncarry.Decode(data, &known, credentialFields)
+	if err != nil {
+		return err
+	}
+	*c = Credential(known)
+	c.Extra = extra
+	return nil
+}
+
 // EncodePerson is the bytes a person's document travels as, with every field a
 // newer build wrote folded back in.
-func EncodePerson(p Person) ([]byte, error) { return jsoncarry.Encode(p, p.Extra) }
+func EncodePerson(p Person) ([]byte, error) { return json.Marshal(p) }
 
 // DecodePerson reads a person's document, keeping every field this build has
 // no home for, and refuses one written at a version above [DocumentVersion].
 func DecodePerson(data []byte) (Person, error) {
 	var p Person
-	extra, err := jsoncarry.Decode(data, &p, personFields)
-	if err != nil {
+	if err := json.Unmarshal(data, &p); err != nil {
 		return Person{}, fmt.Errorf("iamdomain: decode a person: %w", err)
 	}
 	if err := checkVersion(p.V); err != nil {
 		return Person{}, err
 	}
-	p.Extra = extra
 	return p, nil
 }
 
@@ -779,6 +948,52 @@ func DecodeSession(data []byte) (Session, error) {
 	}
 	s.Extra = extra
 	return s, nil
+}
+
+// EncodeCancellation is the bytes an invitation's cancellation travels as,
+// with every field a newer build wrote folded back in.
+func EncodeCancellation(c Cancellation) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
+
+// DecodeCancellation reads an invitation's cancellation, keeping every field
+// this build has no home for, and refuses one written at a version above
+// [DocumentVersion].
+func DecodeCancellation(data []byte) (Cancellation, error) {
+	var c Cancellation
+	extra, err := jsoncarry.Decode(data, &c, cancellationFields)
+	if err != nil {
+		return Cancellation{}, fmt.Errorf("iamdomain: decode a cancellation: %w", err)
+	}
+	if err := checkVersion(c.V); err != nil {
+		return Cancellation{}, err
+	}
+	c.Extra = extra
+	return c, nil
+}
+
+// EncodePasswordChange is the bytes a password change travels as, with every
+// field a newer build wrote folded back in.
+func EncodePasswordChange(c PasswordChange) ([]byte, error) {
+	return jsoncarry.Encode(c, c.Extra)
+}
+
+// DecodePasswordChange reads a password change, keeping every field this build
+// has no home for, and refuses one written at a version above
+// [DocumentVersion]. The person document inside it is held to the same rule.
+func DecodePasswordChange(data []byte) (PasswordChange, error) {
+	var c PasswordChange
+	extra, err := jsoncarry.Decode(data, &c, passwordChangeFields)
+	if err != nil {
+		return PasswordChange{}, fmt.Errorf("iamdomain: decode a password "+
+			"change: %w", err)
+	}
+	if err := checkVersion(c.V); err != nil {
+		return PasswordChange{}, err
+	}
+	if err := checkVersion(c.Person.V); err != nil {
+		return PasswordChange{}, err
+	}
+	c.Extra = extra
+	return c, nil
 }
 
 // EncodeRevocation is the bytes a revocation's payload travels as, with every
@@ -924,21 +1139,19 @@ func DecodeGeneration(data []byte) (Generation, error) {
 
 // EncodeCredential is the bytes one credential's document travels as, with
 // every field a newer build wrote folded back in.
-func EncodeCredential(c Credential) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
+func EncodeCredential(c Credential) ([]byte, error) { return json.Marshal(c) }
 
 // DecodeCredential reads one credential's document, keeping every field this
 // build has no home for, and refuses one written at a version above
 // [DocumentVersion].
 func DecodeCredential(data []byte) (Credential, error) {
 	var c Credential
-	extra, err := jsoncarry.Decode(data, &c, credentialFields)
-	if err != nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return Credential{}, fmt.Errorf("iamdomain: decode a credential: %w", err)
 	}
 	if err := checkVersion(c.V); err != nil {
 		return Credential{}, err
 	}
-	c.Extra = extra
 	return c, nil
 }
 
@@ -952,17 +1165,19 @@ func checkVersion(got int) error {
 // The field sets, DERIVED from each struct's own tags rather than typed
 // again — see [jsoncarry.Names] for the four names hand-kept lists missed.
 var (
-	personFields       = jsoncarry.Names(Person{})
-	enrolledFields     = jsoncarry.Names(Enrolled{})
-	identityFields     = jsoncarry.Names(IdentityChange{})
-	invitationFields   = jsoncarry.Names(Invitation{})
-	sessionFields      = jsoncarry.Names(Session{})
-	revocationFields   = jsoncarry.Names(Revocation{})
-	statusFields       = jsoncarry.Names(StatusChange{})
-	removalFields      = jsoncarry.Names(Removal{})
-	sweepFields        = jsoncarry.Names(Sweep{})
-	invalidationFields = jsoncarry.Names(Invalidation{})
-	evictionFields     = jsoncarry.Names(Eviction{})
-	generationFields   = jsoncarry.Names(Generation{})
-	credentialFields   = jsoncarry.Names(Credential{})
+	personFields         = jsoncarry.Names(Person{})
+	enrolledFields       = jsoncarry.Names(Enrolled{})
+	identityFields       = jsoncarry.Names(IdentityChange{})
+	invitationFields     = jsoncarry.Names(Invitation{})
+	sessionFields        = jsoncarry.Names(Session{})
+	cancellationFields   = jsoncarry.Names(Cancellation{})
+	passwordChangeFields = jsoncarry.Names(PasswordChange{})
+	revocationFields     = jsoncarry.Names(Revocation{})
+	statusFields         = jsoncarry.Names(StatusChange{})
+	removalFields        = jsoncarry.Names(Removal{})
+	sweepFields          = jsoncarry.Names(Sweep{})
+	invalidationFields   = jsoncarry.Names(Invalidation{})
+	evictionFields       = jsoncarry.Names(Eviction{})
+	generationFields     = jsoncarry.Names(Generation{})
+	credentialFields     = jsoncarry.Names(Credential{})
 )

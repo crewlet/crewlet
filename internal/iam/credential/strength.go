@@ -85,8 +85,8 @@ func buildCommon(raw string) map[string]bool {
 //
 // # The floor is an ARGUMENT, because a deployment may raise it
 //
-// min is the deployment's own `api.auth.local.min_password_length` (read
-// through internal/config's APILocal.Passwords), and the length refused is the
+// min is the deployment's own `api.auth.min_password_length` (read
+// through internal/config's APIAuth.Passwords), and the length refused is the
 // larger of it and [iam.MinPasswordChars]: the engine's floor is a floor under
 // every deployment's, so a caller passing zero, or anything smaller, still gets
 // twelve. It used to take no floor at all — the setting was validated,

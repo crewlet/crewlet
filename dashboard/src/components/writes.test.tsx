@@ -55,7 +55,7 @@ let sent: { tool: string; body: { request_id: string; args: Record<string, unkno
 beforeEach(() => {
   sent = [];
   vi.mocked(useViewer).mockReturnValue(JANE);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue({
     name: "Nimbus",
     roles: [

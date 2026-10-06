@@ -28,6 +28,11 @@
  * indistinguishable from one that does not exist. The lock says how many of
  * its sections are closed to the reader, and its title names the grants that
  * would open them — what a reader would ask somebody for.
+ *
+ * AND EVERY ROW IS LOCKED, NEVER HIDDEN, for a reader with no access yet — a
+ * session without `state:read`, which every workspace reads the company
+ * through (`lib/frameSession.ts`). Offered unmarked, each row led to the same
+ * refusal panel with nothing beside it saying so.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -54,6 +59,7 @@ import {
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { LIVE_VIEW_GRANT, useFrameSession } from "~/lib/frameSession.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { pageCount, unfinished, viewRun, projectPath } from "~/lib/work.ts";
@@ -68,6 +74,7 @@ import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 
 /** How many projects the sidebar asks for: the engine's own page of them. */
 const PROJECTS_PAGE = 200;
@@ -76,6 +83,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
   const viewer = useViewer();
+  const { noAccess } = useFrameSession();
 
   // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
   // the reader's way to it without reaching for the toggle in the bar. Only
@@ -90,6 +98,12 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const openNewTask = useOpenNewTask();
   const health = useEngineHealth();
   const { connected, authRejected, accessRefused } = useConnection();
+  // THE ENGINE SERVES THIS BROWSER NO COMPANY — no access yet, or refused —
+  // and nothing of one is offered: the rows are locked, the `+` is held, and
+  // the live sections, whose answers an earlier socket may have left behind,
+  // are not drawn. `noAccess` as well as the store's refusal, because the
+  // frame records the first in the second only once it has rendered.
+  const unserved = noAccess || accessRefused !== null;
   const inbox = useInboxCounts();
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
@@ -145,7 +159,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const row = (ws: WorkspaceRow) => (
     <NavRow
       key={ws.key}
-      label={ws.label}
+      label={
+        noAccess ? (
+          <Locked label={ws.label} needs={[LIVE_VIEW_GRANT]} said="needs a grant you do not hold" />
+        ) : (
+          ws.label
+        )
+      }
       icon={ws.icon}
       path={ws.path}
       current={here === ws.key}
@@ -178,12 +198,17 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
               into the project on screen when there is one — the sheet says
               where before anything is sent. NOT GATED HERE: the sheet's own
               Create is the write control, and it says why a reader who
-              cannot file cannot. */}
+              cannot file cannot — except in a frame the engine serves no
+              company to, where the sheet could not even read the projects
+              it offers and sat on "Reading the projects…" beside an
+              "Offline" nobody was. */}
           <IconButton
             size="sm"
             variant="ghost"
             label="New task"
             icon={<PlusGlyph size="sm" />}
+            disabledReason={unserved ? WRITE_REASONS.refused : undefined}
+            title={unserved ? WRITE_REASONS.refused : undefined}
             onClick={() => openNewTask({ project: routeProject(route.path) || undefined })}
           />
         </div>
@@ -200,14 +225,18 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
                 <NavRow
                   key={ws.key}
                   label={
-                    closed.length > 0 ? (
-                      <span className="side-locked" title={`Needs ${grantWords(neededBy(closed))}`}>
-                        {ws.label}
-                        <KeyGlyph size="xs" aria-hidden="true" />
-                        <span className="sr-only">
-                          , {closed.length} of its sections need a grant you do not hold
-                        </span>
-                      </span>
+                    noAccess ? (
+                      <Locked
+                        label={ws.label}
+                        needs={[LIVE_VIEW_GRANT]}
+                        said="needs a grant you do not hold"
+                      />
+                    ) : closed.length > 0 ? (
+                      <Locked
+                        label={ws.label}
+                        needs={neededBy(closed)}
+                        said={`${closed.length} of its sections need a grant you do not hold`}
+                      />
                     ) : (
                       ws.label
                     )
@@ -225,6 +254,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
                 connected,
                 authRejected,
                 accessRefused,
+                noAccess,
                 health,
               })}
               onSignIn={goSignIn}
@@ -256,21 +286,39 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        <RailBoundary label="Projects" resetKey={at}>
-          <ProjectsSection path={route.path} />
-        </RailBoundary>
-        <RailBoundary label="Pinned" resetKey={at}>
-          <PinnedSection
-            path={route.path}
-            viewKey={route.query.get("view") ?? ""}
-            owner={viewer.owner}
-          />
-        </RailBoundary>
+        {!unserved && (
+          <>
+            <RailBoundary label="Projects" resetKey={at}>
+              <ProjectsSection path={route.path} />
+            </RailBoundary>
+            <RailBoundary label="Pinned" resetKey={at}>
+              <PinnedSection
+                path={route.path}
+                viewKey={route.query.get("view") ?? ""}
+                owner={viewer.owner}
+              />
+            </RailBoundary>
+          </>
+        )}
         <RailBoundary label="Starred" resetKey={at}>
           <StarredSection path={route.path} />
         </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
+  );
+}
+
+/**
+ * A row's label with the lock beside it: its title names what would open it,
+ * and a screen reader hears `said` after the label.
+ */
+function Locked({ label, needs, said }: { label: string; needs: readonly Grant[]; said: string }) {
+  return (
+    <span className="side-locked" title={`Needs ${grantWords(needs)}`}>
+      {label}
+      <KeyGlyph size="xs" aria-hidden="true" />
+      <span className="sr-only">, {said}</span>
+    </span>
   );
 }
 

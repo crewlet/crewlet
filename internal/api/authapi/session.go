@@ -1,6 +1,8 @@
 package authapi
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -9,10 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -40,23 +42,21 @@ func (s *Service) directoryFor() session.Directory { return s.sessions }
 //
 // # What is in it, and what is deliberately not
 //
-// Enough to render the right form and nothing that says who works here. A
-// backend name, the password floor so a form can refuse a short password
-// before a round trip, and whether a second factor is required.
+// Enough to render the right form and nothing that says who works here: the
+// password floor so a form can refuse a short password before a round trip,
+// and whether a second factor is required.
 //
 // THERE IS NO USER LIST, no count of people, and no hint of whether any
 // particular login exists. This route is unguarded, so everything on it is
 // public — and the one question an attacker most wants answered here is who
 // they could be.
 type configResponse struct {
-	// Backend is how this deployment signs people in: local or none.
-	Backend config.AuthBackend `json:"backend"`
-
 	// MinPasswordLength is the floor a form enforces before it posts.
-	MinPasswordLength int `json:"min_password_length,omitempty"`
+	MinPasswordLength int `json:"min_password_length"`
 
-	// SecondFactor reports whether this deployment requires one.
-	SecondFactor string `json:"second_factor,omitempty"`
+	// SecondFactor is `required` or `optional`: whether a person signing
+	// in with a password must hold a second factor.
+	SecondFactor iam.SecondFactor `json:"second_factor"`
 }
 
 // Config answers what a client needs before anybody has signed in.
@@ -65,17 +65,21 @@ type configResponse struct {
 // sign-in page to be. See [configResponse] for what that costs and what it is
 // therefore not allowed to carry.
 func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
-	out := configResponse{Backend: s.backend()}
-	if s.backend() == config.AuthBackendLocal {
-		out.MinPasswordLength = s.passwordFloor()
-		out.SecondFactor = string(s.boot.API.Auth.Local.TOTP)
-	}
-	httpjson.Write(w, http.StatusOK, out)
+	httpjson.Write(w, http.StatusOK, configResponse{
+		MinPasswordLength: s.passwordFloor(),
+		SecondFactor:      s.boot.API.Auth.SecondFactor(),
+	})
 }
 
 // sessionResponse is who the caller is.
 type sessionResponse struct {
-	Person string      `json:"person"`
+	Person string `json:"person"`
+
+	// Name is the person's own name, as their directory row holds it —
+	// what a screen greets them by when no seat names them. ABSENT for a
+	// principal with no row of its own (a Tier A token), and where this
+	// node could not read or open it: see [Service.ownName].
+	Name   string      `json:"name,omitempty"`
 	Login  string      `json:"login"`
 	Seat   string      `json:"seat,omitempty"`
 	Kind   iam.Kind    `json:"kind"`
@@ -87,6 +91,14 @@ type sessionResponse struct {
 	// bearer rather than a cookie — a Tier A token or a personal access
 	// token has its own lifetime and no session to end.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
+
+	// Lineage is the id of the session this request carried — the one a
+	// listing of the person's sessions names it by — so a client can say
+	// which of them is this browser and offer no named sign-out of it.
+	// ABSENT exactly where ExpiresAt is. Not a secret: it is what
+	// `POST /auth/logout/{lineage}` takes, and that route decides on the
+	// session's owner, never on who knows its id.
+	Lineage string `json:"lineage,omitempty"`
 
 	// ReauthAt is when this caller's proof of who they are stops counting
 	// for a step-up gesture (`api.auth.session.step_up`) — the instant the
@@ -135,10 +147,14 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 	// the year 1. A request whose credential was a header carries no
 	// session, and the zero bearer omits it.
 	var expires time.Time
+	var lineage string
 	status := statusSignedIn
 	if r.Header.Get("Authorization") == "" {
 		presented := s.presentedSession(r)
 		expires = presented.Bearer.AbsoluteExpiresAt
+		if presented.Bearer.Lineage != uuid.Nil {
+			lineage = presented.Bearer.Lineage.String()
+		}
 		// THE BEARER'S MARK AND THE ROW'S TOGETHER, as the guard reads
 		// it: on a node that has not applied the session's start there
 		// is no row, and the session is still the restricted one.
@@ -147,16 +163,47 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpjson.Write(w, http.StatusOK, sessionResponse{
-		Person: principal.ID.String(), Login: principal.Login,
+		Person: principal.ID.String(), Name: s.ownName(r.Context(), principal),
+		Login:     principal.Login,
 		Seat:      principal.Seat,
 		Kind:      principal.Kind,
 		Stage:     principal.Stage,
 		Grants:    principal.Grants,
 		ExpiresAt: expires,
+		Lineage:   lineage,
 		ReauthAt:  principal.ReauthAt,
 		StepUpDue: s.stepUpDue(principal),
 		Status:    status,
 	})
+}
+
+// ownName is a principal's own name as their directory row holds it, opened on
+// this node's keyring, or "".
+//
+// A COURTESY ON THIS ANSWER AND NEVER A CONDITION OF IT: who somebody is was
+// decided by the guard, and refusing it over a name this node could not read
+// or open would sign a person out over their greeting. So a principal with no
+// row — a Tier A token, whose id no enrolment wrote — answers none quietly,
+// and a read or an open that fails answers none and is logged.
+func (s *Service) ownName(ctx context.Context, p iam.Principal) string {
+	if p.ID == uuid.Nil {
+		return ""
+	}
+	id := p.ID.String()
+	row, err := s.directory.Person(ctx, id)
+	switch {
+	case errors.Is(err, iamdomain.ErrNotFound):
+		return ""
+	case err != nil:
+		log.WarnContext(ctx, "api_session_name_unread", "person", id, "error", err)
+		return ""
+	}
+	name, err := s.sealer.Open(id, iamdomain.FieldName, string(row.NameSealed))
+	if err != nil {
+		log.WarnContext(ctx, "api_session_name_sealed", "person", id, "error", err)
+		return ""
+	}
+	return name
 }
 
 // stepUpDue reports whether this caller's proof of identity is old enough that
@@ -222,10 +269,17 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // the sign-out merely forgot.
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	s.clearSession(w)
+	s.endEveryHeld(r)
+	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
+}
+
+// endEveryHeld closes every session this browser holds a cookie for, under
+// either name — see [Service.Logout] and, for a sign-in that replaces them,
+// [Service.openSignIn].
+func (s *Service) endEveryHeld(r *http.Request) {
 	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
 		s.endHeld(r, s.signer.Validate(r.Context(), s.directoryFor(), cookie))
 	}
-	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
 }
 
 // endHeld closes and announces one session a sign-out found, when this node's
@@ -264,8 +318,8 @@ func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 	// published. A second sign-out is a second close of a closed session,
 	// which changes nothing.
 	opID := statelog.NewOpID(s.now(), "logout")
-	closed, err := s.writer.CloseSession(r.Context(), lineage, bearer.Person,
-		"signed out", opID)
+	closed, err := s.signingOut(r, lineage).CloseSession(r.Context(), lineage,
+		bearer.Person, "signed out", opID)
 	switch {
 	case removed(err):
 		// THEIR PERSON WAS REMOVED, and every session of theirs with them.
@@ -294,6 +348,20 @@ func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 		})
 	}
 	log.InfoContext(r.Context(), "api_sign_out", "lineage", lineage)
+}
+
+// signingOut is who a sign-out of one session is written as: the person
+// signing out, where the guard resolved them through that very session — the
+// cookie this deployment issues — and the node otherwise. The route is
+// unguarded and reads every bearer itself, so a second cookie under the other
+// name, or a node that could not read who holds this one, has nobody the
+// guard vouched for to name.
+func (s *Service) signingOut(r *http.Request, lineage string) Writer {
+	principal, resolution := iam.From(r.Context())
+	if resolution == iam.Resolved && principal.Via == iam.SessionName(lineage) {
+		return s.behalf(principal)
+	}
+	return s.writer
 }
 
 // callerName is the name a row about this request records as its author, or
@@ -339,7 +407,7 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	// checked against.
 	person := subjectOf(r, principal)
 	opID := statelog.NewOpID(s.now(), "logout-all")
-	revoked, err := s.writer.Revoke(r.Context(), person, opID,
+	revoked, err := s.behalf(principal).Revoke(r.Context(), person, opID,
 		"signed out everywhere")
 	switch {
 	case removed(err):
@@ -509,7 +577,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	// lineage, the close of a session older than an hour carried an id the
 	// ledger could not vouch for.
 	opID := statelog.NewOpID(s.now(), "logout-one")
-	closed, err := s.writer.CloseSession(r.Context(), lineage, owner,
+	closed, err := s.behalf(principal).CloseSession(r.Context(), lineage, owner,
 		"signed out from another session", opID)
 	switch {
 	case removed(err):

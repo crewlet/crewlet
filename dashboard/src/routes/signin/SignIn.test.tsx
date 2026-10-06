@@ -3,7 +3,8 @@
  *
  * The invariants worth breaking a build over, in the order they cost when
  * they go: a sign-in lands where the reader was, REPLACING the sign-in's own
- * history entry, on a socket re-dialled with the new session; a refusal is
+ * history entry, and the frame it lands in dials the socket for the new
+ * session — the sign-in itself dials nothing; a refusal is
  * the engine's own sentence and never a branch of this screen's; the second
  * factor is asked for only when the engine asks; and a token handed to the
  * exchange is sent once, in the header, and kept nowhere.
@@ -48,6 +49,7 @@ type Answer = { status: number; body: unknown; headers?: Record<string, string> 
  * the browser now holds. Answering "nobody" for ever, as the routes alone did,
  * sent every page the sign-in landed on straight back to the form — and the
  * cases still passed, because a poll caught the address on its way through.
+ * It holds `state:read`, the grant the frame dials the socket for.
  */
 function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
   const sent: Sent[] = [];
@@ -74,6 +76,7 @@ function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
             person: cookie.person ?? "",
             login,
             kind: login.startsWith("token:") ? "machine" : "person",
+            grants: ["state:read"],
             status: cookie.status,
             expires_at: cookie.expires_at,
           }),
@@ -101,7 +104,8 @@ function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
 }
 
 const NOBODY: Answer = { status: 401, body: { error: "invalid_token" } };
-const LOCAL: Answer = { status: 200, body: { backend: "local" } };
+/** A deployment somebody has been invited to: the ordinary sign-in page. */
+const CLAIMED: Answer = { status: 200, body: { status: "ok", identity: "ready" } };
 const SIGNED_IN: Answer = {
   status: 200,
   body: {
@@ -133,9 +137,16 @@ async function answered(step?: () => void): Promise<void> {
   await act(async () => {});
 }
 
+/**
+ * The application, with the socket's two dials watched: `start` is the
+ * frame's, for the session it reads, and `reconnect` is nothing a sign-in may
+ * call — it dialled before the frame had read whether the session may read
+ * the company at all.
+ */
 function mount() {
   const store = new Store();
   const socket = new LiveSocket(store);
+  const dial = vi.spyOn(socket, "start");
   const reconnect = vi.spyOn(socket, "reconnect");
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -144,7 +155,7 @@ function mount() {
       </Router>
     </ClientContext.Provider>,
   );
-  return { reconnect };
+  return { dial, reconnect };
 }
 
 function type(label: RegExp | string, value: string) {
@@ -196,13 +207,13 @@ afterEach(() => {
 });
 
 describe("signing in with a password", () => {
-  test("it lands where the reader was, replacing the sign-in, on a re-dialled socket", async () => {
+  test("it lands where the reader was, replacing the sign-in, and the frame dials", async () => {
     const sent = engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     const depth = history.length;
 
     type(/login or email/i, "jane.doe");
@@ -210,9 +221,12 @@ describe("signing in with a password", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await answered();
+    await answered();
 
     expect(location.hash).toBe(NEXT);
-    expect(reconnect).toHaveBeenCalled();
+    // THE FRAME DIALS, for the session it read; the sign-in dials nothing.
+    expect(dial).toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
     // A REPLACE, NOT A PUSH: Back from the page the reader asked for must
     // not land them on a form for a session they already hold.
     expect(history.length).toBe(depth);
@@ -222,7 +236,7 @@ describe("signing in with a password", () => {
 
   test("a refusal is the engine's own sentence, and the form is kept", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 401,
@@ -246,7 +260,7 @@ describe("signing in with a password", () => {
 
   test("the code is asked for only when the engine asks, and sent with the resubmission", async () => {
     const sent = engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": [{ status: 401, body: { error: "second_factor_required" } }, SIGNED_IN],
     });
@@ -279,7 +293,7 @@ describe("signing in with a password", () => {
 
   test("a throttled attempt says how long, and the button waits it out", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 429,
@@ -301,7 +315,7 @@ describe("signing in with a password", () => {
 
   test("a session that may only enrol goes on to the enrolment, carrying next", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 200,
@@ -309,7 +323,7 @@ describe("signing in with a password", () => {
       },
       "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
     });
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     // FROM THE REAL BROWSER'S STATE: the screen's own session read answered
     // 401, which records that nobody is signed in. Without this the case
     // passed while the enrolment was routed straight back to this form — a
@@ -332,6 +346,7 @@ describe("signing in with a password", () => {
     expect(location.hash).toBe(enrol);
     expect(currentSessionNeed()).toBe("second_factor");
     // THE SOCKET WAITS: a session that may only enrol is refused it.
+    expect(dial).not.toHaveBeenCalled();
     expect(reconnect).not.toHaveBeenCalled();
   });
 });
@@ -339,22 +354,23 @@ describe("signing in with a password", () => {
 describe("signing in with the deployment's token", () => {
   test("the token is sent once, in the header, and kept nowhere", async () => {
     const sent = engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/token": {
         ...SIGNED_IN,
         body: { ...(SIGNED_IN.body as object), login: "token:ops" },
       },
     });
-    const { reconnect } = mount();
+    const { dial } = mount();
     fireEvent.click(screen.getByRole("button", { name: /use an api token instead/i }));
     type("API token", "the-break-glass-token-value-long-enough");
     fireEvent.click(screen.getByRole("button", { name: "Sign in with the token" }));
 
     await answered();
+    await answered();
 
     expect(location.hash).toBe(NEXT);
-    expect(reconnect).toHaveBeenCalled();
+    expect(dial).toHaveBeenCalled();
     const exchange = sent.find((s) => s.path === "/auth/token");
     expect(exchange?.headers.Authorization).toBe("Bearer the-break-glass-token-value-long-enough");
     // NOWHERE: not in either storage area — the frame keeps its recents
@@ -368,37 +384,119 @@ describe("signing in with the deployment's token", () => {
     expect(sent.some((s) => s.path.includes("the-break-glass"))).toBe(false);
   });
 
-  test("a deployment with no people offers the token and no password form", async () => {
+  // NOBODY JOINED YET: the token is the only way in, so its form is open from
+  // the start and the page says how to begin — while the password form stays,
+  // because password sign-in is always served. The control is a deployment
+  // somebody has joined, where the token waits behind the disclosure. And it
+  // never says nobody was INVITED: `unclaimed` is no person enrolled, which an
+  // open invitation does not change, so it said so beside one just issued.
+  test("an unclaimed deployment opens the token form and says how to begin", async () => {
     engine({
-      "GET /auth/config": { status: 200, body: { backend: "none" } },
+      "GET /health": { status: 200, body: { status: "ok", identity: "unclaimed" } },
       "GET /auth/session": NOBODY,
     });
     mount();
     await answered();
-    screen.getByText(/signs nobody in with a password/i);
-    expect(screen.queryByLabelText(/^password$/i)).toBeNull();
+    screen.getByText(/nobody has joined this deployment yet/i);
+    expect(screen.queryByText(/nobody has been invited/i)).toBeNull();
+    screen.getByText(/invite yourself/i);
+    screen.getByText(/if you have invited yourself already, open that link/i);
+    // OPEN, not behind the disclosure a claimed deployment keeps it under.
+    expect(screen.queryByText("Use an API token instead")).toBeNull();
     expect(screen.getByLabelText("API token")).toBeDefined();
+    expect(screen.getByLabelText(/^password$/i)).toBeDefined();
+  });
+
+  test("a claimed deployment keeps the token behind the disclosure (the control)", async () => {
+    engine({ "GET /health": CLAIMED, "GET /auth/session": NOBODY });
+    mount();
+    await answered();
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    expect(screen.getByLabelText(/^password$/i)).toBeDefined();
+    screen.getByText("Use an API token instead");
+  });
+
+  // "UNKNOWN" IS NOT "UNCLAIMED": a node that cannot read its identity estate
+  // must not tell anybody to invite a founder into a company that has one.
+  test("a node that cannot say whether anybody was invited draws the ordinary page", async () => {
+    engine({
+      "GET /health": { status: 200, body: { status: "degraded", identity: "unknown" } },
+      "GET /auth/session": NOBODY,
+    });
+    mount();
+    await answered();
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    screen.getByText(/use the login or email address/i);
+  });
+});
+
+// A TAB WHOSE SESSION ENDED ELSEWHERE IS TOLD SO. Another browser's password
+// change, or its "Sign out" of this session, dropped this one on the plain
+// sign-in form as though it had never been signed in. The CONTROLS: a tab
+// nobody read (a fresh one, or one a sign-out emptied) is not told, and one
+// whose session is still good is told whose it holds instead. Nor is a tab
+// whose node could not say: a 503 from a node behind on the identity log is
+// the engine declining to tell a browser it was signed out, and a page that
+// read it as "nobody" said exactly that. Mutation: drop the notice, show it
+// whatever the tab was, or show it on any refusal rather than a 401.
+describe("a tab whose session ended somewhere else", () => {
+  test.each([
+    ["a tab somebody read, holding no session now", "p-1", NOBODY, true],
+    ["a tab nobody read (the control)", null, NOBODY, false],
+    [
+      "a tab somebody read, on a node that cannot read its identity log",
+      "p-1",
+      {
+        status: 503,
+        body: { error: "unavailable", message: "Try again shortly." },
+        headers: { "Retry-After": "2" },
+      },
+      false,
+    ],
+    [
+      "a tab whose session is still good (the control)",
+      "p-1",
+      {
+        status: 200,
+        body: { person: "p-1", login: "jane.doe", kind: "person", status: "signed_in" },
+      },
+      false,
+    ],
+  ])("%s", async (_, reader, session, told) => {
+    if (reader) noteReader(reader);
+    engine({ "GET /health": CLAIMED, "GET /auth/session": session as Answer });
+    mount();
+    await answered();
+    expect(screen.queryByText("You were signed out") !== null).toBe(told);
   });
 });
 
 describe("a browser that is already signed in", () => {
   test("is told whose session it holds, and may carry on as them", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": {
         status: 200,
-        body: { person: "p-1", login: "jane.doe", kind: "person", status: "signed_in" },
+        body: {
+          person: "p-1",
+          login: "jane.doe",
+          kind: "person",
+          grants: ["state:read"],
+          status: "signed_in",
+        },
       },
     });
-    const { reconnect } = mount();
+    const { dial } = mount();
     await answered();
     const carry = screen.getByRole("button", { name: "Continue as jane.doe" });
     // NOT SENT ON UNASKED: "sign in as somebody else" is a thing people mean.
     expect(location.hash).toBe(`#/login?next=${encodeURIComponent(NEXT)}`);
+    expect(dial).not.toHaveBeenCalled();
     act(() => carry.click());
     await answered();
+    await answered();
     expect(location.hash).toBe(NEXT);
-    expect(reconnect).toHaveBeenCalled();
+    expect(dial).toHaveBeenCalled();
   });
 });
 
@@ -416,13 +514,13 @@ describe("a sign-in in a tab somebody else was reading", () => {
 
   test("hands the tab over: its storage emptied, the new reader recorded, reloaded where it was going", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
     noteReader("p-9");
     sessionStorage.setItem("crewlet_org_draft", "{}");
-    const { reconnect } = mount();
+    const { dial, reconnect } = mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -432,14 +530,15 @@ describe("a sign-in in a tab somebody else was reading", () => {
     expect(reloads).toHaveBeenCalledWith(NEXT);
     expect(sessionStorage.getItem("crewlet_org_draft")).toBeNull();
     expect(currentReader()).toBe("p-1");
-    // THE RELOAD DIALS: a socket re-dialled in a page about to be dropped is
-    // a connection opened for nothing.
+    // THE RELOAD DIALS: a socket dialled in a page about to be dropped is a
+    // connection opened for nothing.
+    expect(dial).not.toHaveBeenCalled();
     expect(reconnect).not.toHaveBeenCalled();
   });
 
   test("a session that may only enrol is handed over into the enrolment", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 200,
@@ -460,22 +559,23 @@ describe("a sign-in in a tab somebody else was reading", () => {
   // where they were — the builder keeps their draft for exactly this.
   test("the same person signing in again keeps the tab and what it holds", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
     noteReader("p-1");
     sessionStorage.setItem("crewlet_org_draft", "{}");
-    const { reconnect } = mount();
+    const { dial } = mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await answered();
+    await answered();
 
     expect(location.hash).toBe(NEXT);
     expect(reloads).not.toHaveBeenCalled();
-    expect(reconnect).toHaveBeenCalled();
+    expect(dial).toHaveBeenCalled();
     expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
   });
 
@@ -485,7 +585,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
   // other reader's recents and stars go, and this person's own stay.
   test("every other reader's recents and stars leave the browser, and the person's own stay", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
@@ -513,7 +613,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
   // A TAB NOBODY WAS READING has nothing of anybody's in it to hand over.
   test("a first sign-in in a fresh tab records its reader and carries on", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });

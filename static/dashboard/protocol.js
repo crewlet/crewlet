@@ -192,10 +192,32 @@ var Store = class {
 		};
 		this.emit("inboxMoves");
 	}
+	/**
+	* The engine knows this browser and will not serve it the company, or null.
+	*
+	* A REFUSAL DROPS WHAT THE ENGINE SERVED. It is a decision about who may
+	* read the company, so what an earlier socket sent stops being shown the
+	* moment it lands: a tab whose `state:read` was withdrawn went on naming the
+	* company, listing its agents and tools in the palette, from the snapshot it
+	* held — while a session that never held the grant, sent nothing, named and
+	* listed none of it. An outage keeps the last state on purpose ("showing the
+	* last state received"); a refusal is not an outage. `health` stays: it is
+	* the unguarded `/health`, not the company.
+	*/
 	setAccessRefused(reason) {
 		const next = reason === null ? null : reason || "refused";
 		if (this.state.accessRefused === next) return;
 		this.state.accessRefused = next;
+		if (next !== null) {
+			const { health, connected, authRejected } = this.state;
+			Object.assign(this.state, emptyState(), {
+				health,
+				connected,
+				authRejected,
+				accessRefused: next
+			});
+			this.emit(...ALL_DATA_SLICES, "phases", "inboxMoves");
+		}
 		this.emit("health");
 	}
 	setAuthRejected(value) {
@@ -323,6 +345,25 @@ function onSessionNeed(listener) {
 }
 var confirmer = null;
 var confirming = null;
+var asking = /* @__PURE__ */ new Set();
+/**
+* Whether a step-up is being asked of the person right now — what a dialog
+* whose write is held behind it says it is waiting for: the person, not the
+* engine.
+*/
+function stepUpAsked() {
+	return confirming !== null;
+}
+/** Subscribe to a step-up starting or ending. Returns the unsubscribe. */
+function onStepUpAsked(listener) {
+	asking.add(listener);
+	return () => {
+		asking.delete(listener);
+	};
+}
+function toldAsking() {
+	for (const listener of asking) listener();
+}
 /**
 * Install what confirms a step-up. Returns the uninstall, which leaves a
 * later installation in place.
@@ -345,9 +386,13 @@ function setStepUpConfirmer(fn) {
 */
 function confirmStepUp() {
 	if (!confirmer) return Promise.resolve(false);
-	if (!confirming) confirming = confirmer().catch(() => false).finally(() => {
-		confirming = null;
-	});
+	if (!confirming) {
+		confirming = confirmer().catch(() => false).finally(() => {
+			confirming = null;
+			toldAsking();
+		});
+		toldAsking();
+	}
 	return confirming;
 }
 //#endregion
@@ -890,7 +935,10 @@ async snapshot() {
 			cache: "no-store"
 		});
 		if (!response.ok) {
-			if (response.status === 401) needSession("sign_in");
+			if (response.status === 401) {
+				needSession("sign_in");
+				return { state: "nobody" };
+			}
 			return {
 				state: "unread",
 				retryAfter: await retryHintOf(response)
@@ -907,6 +955,109 @@ async snapshot() {
 		};
 	}
 } };
+//#endregion
+//#region src/protocol/auth.ts
+/**
+* The header an invitation's secret travels in to the view.
+*
+* A HEADER, because the view is a GET and a GET has no body — and never the
+* query string, which every access log between the browser and the engine
+* records. The link carries the secret in its FRAGMENT precisely so that no
+* server sees it on the way to this page.
+*/
+var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+/** The header a password reset link's secret travels in to its view, for
+*  [INVITE_SECRET_HEADER]'s reason. */
+var RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
+var auth = {
+	/**
+	* Whether the company has its first person — `/health`'s `identity`:
+	* `ready`, `unclaimed`, `unknown`, or absent. `/health` is unguarded and is
+	* the one answer an install with nobody in it can reach, which is why the
+	* sign-in page asks it rather than `/iam`.
+	*/
+	firstPerson: async () => (await rest.get("/health"))?.identity,
+	/** The password floor and the second-factor posture — unguarded, like `/health`. */
+	config: async (signal) => await rest.get("/auth/config", signal),
+	/**
+	* Sign in with a login or an address and a password — and, once the engine
+	* has answered `second_factor_required`, the code.
+	*/
+	login: async (body) => await rest.post("/auth/login", body),
+	/**
+	* Exchange a Tier A token for a one-hour session.
+	*
+	* THE TOKEN IS THE BEARER OF THIS ONE REQUEST and nothing else: it goes in
+	* the `Authorization` header, which is how the engine takes it, and the
+	* session that comes back is a cookie. Nothing here holds it afterwards.
+	*/
+	exchangeToken: async (token) => await rest.post("/auth/token", {}, { Authorization: `Bearer ${token}` }),
+	/** Render an invitation without spending it. */
+	viewInvite: async (id, secret) => (await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
+	/** Redeem an invitation, which creates the person and signs them in. */
+	redeemInvite: async (id, body) => await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body),
+	/** Say whose password a reset link sets, without spending it. */
+	viewReset: async (id, secret) => (await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, { headers: { [RESET_SECRET_HEADER]: secret } })).body,
+	/**
+	* Set a new password from a reset link, once. It ends every session the
+	* person held and signs nobody in: the person signs in next.
+	*/
+	spendReset: async (id, body) => await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body),
+	/**
+	* Enrolment's first leg: a seed, and nothing stored. A person who never
+	* completes the second leg has enrolled nothing.
+	*/
+	secondFactorSeed: async () => await rest.post("/auth/totp", {}),
+	/**
+	* Enrolment's second leg: the seed back, with a code derived from it — the
+	* only evidence the authenticator on the other side works.
+	*/
+	enrolSecondFactor: async (secret, code) => await rest.post("/auth/totp", {
+		secret,
+		code
+	}),
+	/** Ten fresh single-use codes, retiring the old set, shown this once. */
+	recoveryCodes: async () => await rest.post("/auth/totp/recovery", {}),
+	/**
+	* Confirm who you are on a session that is already valid: the password,
+	* and the code where a second factor is held. The engine answers a fresh
+	* session cookie and ends the one it replaces.
+	*/
+	stepUp: async (body) => await rest.post("/auth/step-up", body),
+	/**
+	* Change your own password. The current one — and, from somebody who holds
+	* a second factor, a code, exactly as a step-up asks it — is the proof, so
+	* no step-up is asked first; the change ends every other session and
+	* personal token you hold, and answers a fresh session for this browser.
+	*/
+	changePassword: async (body) => await rest.post("/auth/password", body),
+	/**
+	* Who this browser is signed in as — ended by `signal` where the caller
+	* passes one, for a read a newer one has superseded.
+	*/
+	session: async (signal) => await rest.get("/auth/session", signal),
+	/**
+	* End this browser's session. The engine clears the cookie whatever its
+	* own write did, so an answer at all means this browser holds no session.
+	*/
+	logout: async () => {
+		await rest.post("/auth/logout", {});
+	},
+	/**
+	* End ONE named session of yours — a laptop left signed in somewhere —
+	* without ending this browser's.
+	*/
+	logoutOne: async (lineage) => {
+		await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
+	},
+	/**
+	* End every session the caller holds, on every device, by moving their
+	* revocation epoch — this browser's included.
+	*/
+	logoutEverywhere: async () => {
+		await rest.post("/auth/logout/all", {});
+	}
+};
 //#endregion
 //#region src/protocol/retry.ts
 /**
@@ -979,9 +1130,11 @@ function retryAfterMs(seconds) {
 *    revocation, a fleet-wide invalidation, or a STEP-UP, which replaces the
 *    session it was made from. Not a refusal on its own: the browser may hold
 *    a newer cookie, and after a step-up it does, once the answer that set it
-*    has landed. So the tab waits for its own requests to settle and dials
-*    again; only a re-handshake the probe then reads as 401 sends anybody to
-*    sign in.
+*    has landed. So the tab waits for its own requests to settle and asks
+*    `GET /auth/session` once: a `401` is nobody and sends the reader to sign
+*    in with nothing dialled, a session somebody else's sign-in left in the
+*    browser hands the tab to them (`LiveSocketOptions.takeSession`), and any
+*    other answer dials again.
 *  - 4403 (`CLOSE_FORBIDDEN`): the engine knows who this is and will not serve
 *    them this surface. Reconnecting reaches the same person with the same
 *    access, so the socket STOPS and the page says why.
@@ -1133,6 +1286,7 @@ function refusalOf$1(msg) {
 }
 var LiveSocket = class {
 	store;
+	takeSession;
 	sock = null;
 	attempt = 0;
 	reconnectTimer = 0;
@@ -1154,6 +1308,18 @@ var LiveSocket = class {
 	* would otherwise schedule the next one.
 	*/
 	refused = false;
+	/**
+	* Whether the latch above is set because NOBODY IS SIGNED IN (see
+	* `authRejected`) — the one refusal the tab coming back may lift, since a
+	* sign-in in another tab gives this one the cookie too.
+	*/
+	signedOut = false;
+	/**
+	* Whether a sign-out holds the socket (see `hold`). Not `refused`, because
+	* a sign-out that fails gives the socket back as it found it — still
+	* refused, if it was.
+	*/
+	held = false;
 	nextQueryId = 1;
 	inflight = /* @__PURE__ */ new Map();
 	/**
@@ -1164,10 +1330,32 @@ var LiveSocket = class {
 	*/
 	watched = "";
 	watchRetry = 0;
-	constructor(store) {
+	constructor(store, options = {}) {
 		this.store = store;
+		this.takeSession = options.takeSession ?? (() => true);
 	}
+	/**
+	* The tab came back to a socket stopped because nobody was signed in: dial
+	* ONCE, which is what notices a sign-in made in another tab. A dial that
+	* finds nobody still stops again.
+	*/
+	onVisible = () => {
+		if (!this.signedOut || this.isClosed || document.visibilityState !== "visible") return;
+		this.signedOut = false;
+		this.refused = false;
+		this.connect();
+	};
+	/**
+	* Dial for the session the frame has just read (`app/Shell.tsx`), unless a
+	* dial is already open or under way.
+	*
+	* IT LIFTS WHAT AN EARLIER SESSION LATCHED: the frame calls this for an
+	* answer that holds the grant the socket needs — after a sign-in, or once an
+	* administrator has given it — and a refusal or a sign-out recorded under
+	* the last one no longer describes the browser.
+	*/
 	start() {
+		this.lift();
 		this.connect();
 	}
 	/**
@@ -1176,19 +1364,47 @@ var LiveSocket = class {
 	* A dropped envelope is gone: the server's per-client queue discards the
 	* OLDEST frame under backpressure, so a lost `agents` overlay is never
 	* re-sent and the only true repair is a fresh handshake snapshot. It is
-	* also how a sign-in or a restored access is picked up: a re-dial is a new
-	* attempt, usually with a credential the browser did not hold at the last
-	* one, so the last refusal no longer describes it.
+	* also how a restored access is tried: a re-dial is a new attempt, so the
+	* last refusal no longer describes it.
 	*/
 	reconnect() {
-		this.refused = false;
-		this.store.setAuthRejected(false);
-		this.store.setAccessRefused(null);
+		this.lift();
 		if (this.sock) this.sock.close();
 		else this.connect();
 	}
+	/** Forget what the last refusal or sign-out latched. */
+	lift() {
+		this.refused = false;
+		this.signedOut = false;
+		this.store.setAuthRejected(false);
+		this.store.setAccessRefused(null);
+	}
+	/**
+	* Dial nothing while this tab signs out, until `release()`.
+	*
+	* The engine ends this session's socket (4401) as it applies the sign-out,
+	* and that close re-dialled once this tab's own requests had settled — which
+	* is before the sign-out's reload — so every sign-out made one more
+	* handshake the engine refused.
+	*/
+	hold() {
+		this.held = true;
+		clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = 0;
+		this.stopFallback();
+	}
+	/**
+	* Give back what `hold` took: a sign-out nothing answered stays on the page,
+	* and the socket dials again — unless a refusal had already stopped it,
+	* which the sign-out did not change.
+	*/
+	release() {
+		this.held = false;
+		this.connect();
+	}
 	stop() {
 		this.isClosed = true;
+		document.removeEventListener("visibilitychange", this.onVisible);
 		clearTimeout(this.reconnectTimer);
 		clearTimeout(this.watchRetry);
 		this.stopPing();
@@ -1301,7 +1517,7 @@ var LiveSocket = class {
 		}, wait);
 	}
 	connect() {
-		if (this.isClosed || this.refused || this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
+		if (this.isClosed || this.refused || this.held || this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
 		const proto = location.protocol === "https:" ? "wss" : "ws";
 		let sock;
 		try {
@@ -1335,13 +1551,14 @@ var LiveSocket = class {
 				entry.timer = 0;
 			}
 			this.store.setConnected(false);
+			if (this.held) return;
 			const code = e ? e.code : 0;
 			if (code === 4403) {
 				this.accessRefused(e.reason);
 				return;
 			}
 			if (code === 4401) {
-				whenRequestsSettle().then(() => this.connect());
+				whenRequestsSettle().then(() => this.redialIfSignedIn());
 				return;
 			}
 			this.scheduleReconnect();
@@ -1351,6 +1568,34 @@ var LiveSocket = class {
 		sock.onerror = () => {
 			this.store.setConnected(false);
 		};
+	}
+	/**
+	* After a `4401`: dial again only if the browser still holds a session.
+	*
+	* `GET /auth/session` FIRST, rather than a dial whose handshake decides:
+	* a session that ended elsewhere — a password change, a sign-out
+	* everywhere, an administrator — was a refused handshake, its refusal
+	* probe and a refused degraded-mode snapshot before the sign-in, three
+	* `401`s where one says it. A `401` here is that one (`rest.ts` raises the
+	* sign-in need); any other failure says nothing about the session, and
+	* the dial's own handshake decides.
+	*
+	* AND ONLY FOR THE PERSON THIS TAB WAS READ BY (`takeSession`): a sign-in
+	* as somebody else in another tab ends this tab's session and moves the
+	* cookie, and a re-dial on any answer reached the company as them in a tab
+	* still holding the last reader's.
+	*/
+	async redialIfSignedIn() {
+		try {
+			const session = await auth.session();
+			if (!this.takeSession(session.person)) return;
+		} catch (err) {
+			if (err instanceof RestError && err.status === 401) {
+				this.authRejected();
+				return;
+			}
+		}
+		this.connect();
 	}
 	/**
 	* Ask, over plain HTTP, whether that dial was refused or merely failed.
@@ -1410,7 +1655,9 @@ var LiveSocket = class {
 	* by the same decision every thirty seconds for as long as the tab stayed
 	* open, and a page that says "reconnecting" to somebody whose access was
 	* withdrawn is telling them to wait for something that will not happen.
-	* `reconnect()` is the way back, once an administrator has restored it.
+	* `reconnect()` is the way back, once an administrator has restored it —
+	* or `start()`, which the frame calls once the session it reads again
+	* holds the grant the socket needs.
 	*/
 	accessRefused(reason) {
 		this.stopDialling();
@@ -1419,14 +1666,14 @@ var LiveSocket = class {
 	/**
 	* The engine accepts this browser's session for nothing but enrolling the
 	* second factor the deployment requires. Every dial would be refused the
-	* same way until it has, so the loop stops; the enrolment ends by calling
-	* `reconnect()` with the whole session it opened.
+	* same way until it has, so the loop stops; the enrolment ends in the
+	* frame, which dials again (`start()`) for the whole session it opened.
 	*/
 	enrolmentRequired() {
 		this.stopDialling();
 		needSession("second_factor");
 	}
-	/** Stops the reconnect loop and the REST fallback, until `reconnect()`. */
+	/** Stops the reconnect loop and the REST fallback, until `start()` or `reconnect()`. */
 	stopDialling() {
 		this.refused = true;
 		clearTimeout(this.reconnectTimer);
@@ -1436,12 +1683,18 @@ var LiveSocket = class {
 	/**
 	* The engine resolved nobody from this browser's cookie.
 	*
-	* Two things happen, and both are needed. Asking for a sign-in is the repair
-	* — the dashboard is served unauthenticated by design (the page that signs a
-	* person in cannot itself require them to be), so the browser has no other
-	* moment to learn it needs one. The store flag is what the chrome reads while
-	* the loop goes on dialling: a sign-in in another tab gives this one the
-	* cookie too, and the next dial is what notices.
+	* Asking for a sign-in is the repair — the dashboard is served
+	* unauthenticated by design (the page that signs a person in cannot itself
+	* require them to be), so the browser has no other moment to learn it needs
+	* one — and the store flag is what the chrome reads meanwhile.
+	*
+	* AND THE LOOP STOPS, as it does for a refusal: every dial until somebody
+	* signs in is the same 401, and a signed-out tab — the sign-in page, an
+	* invitation's or a reset link's — dialled one on its backoff for as long
+	* as it stayed open, each a failed handshake and a 401 in the console. What
+	* ends it is a sign-in: in this tab, which lands in the frame and dials
+	* (`start()`); or in another, which gives this one the cookie too and is
+	* noticed by ONE dial when the tab comes back (`onVisible`).
 	*
 	* The socket does not own the screen: the sign-in is a route, and a
 	* transport that reaches into the router is a transport that cannot be
@@ -1450,6 +1703,9 @@ var LiveSocket = class {
 	authRejected() {
 		this.store.setAuthRejected(true);
 		needSession("sign_in");
+		this.stopDialling();
+		this.signedOut = true;
+		document.addEventListener("visibilitychange", this.onVisible);
 	}
 	/**
 	* The dispatch table.
@@ -1581,6 +1837,7 @@ var LiveSocket = class {
 		this.fallbackTimer = 0;
 		const read = await api.snapshot();
 		if (this.fallbackRun !== run || this.connected) return;
+		if (read.state === "nobody") return;
 		if (read.state === "read") this.store.applySnapshot(read.snapshot);
 		const next = read.state === "unread" && read.retryAfter !== null ? retryAfterMs(read.retryAfter) : FALLBACK_MS;
 		if (next === null) return;
@@ -1684,92 +1941,6 @@ function layoutOpID(unixMs, tail, name) {
 function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.getRandomValues(bytes)) {
 	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${node}`);
 }
-//#endregion
-//#region src/protocol/auth.ts
-/**
-* The sign-in surface, `/auth`, as the functions the screens call.
-*
-* ONE MODULE over `rest.ts`, for the reason `rest.ts` gives about itself: a
-* screen that composed its own path, header and body for each of these would
-* be a second place for the invitation's secret to end up in a URL, and that
-* is the one mistake this surface exists to make impossible.
-*
-* WHAT NONE OF THESE DOES is keep a credential. Every answer that signs a
-* person in sets a cookie the browser holds and no script can read, and the
-* body carries no bearer at all; the one credential a function here is
-* handed — a Tier A token being exchanged — is sent once, in the header, and
-* dropped. There is nothing for this page to store, so it stores nothing.
-*/
-/**
-* The header an invitation's secret travels in to the view.
-*
-* A HEADER, because the view is a GET and a GET has no body — and never the
-* query string, which every access log between the browser and the engine
-* records. The link carries the secret in its FRAGMENT precisely so that no
-* server sees it on the way to this page.
-*/
-var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
-var auth = {
-	/** What a sign-in page may know before anybody has signed in. */
-	config: async () => await rest.get("/auth/config"),
-	/**
-	* Sign in with a login or an address and a password — and, once the engine
-	* has answered `second_factor_required`, the code.
-	*/
-	login: async (body) => await rest.post("/auth/login", body),
-	/**
-	* Exchange a Tier A token for a one-hour session.
-	*
-	* THE TOKEN IS THE BEARER OF THIS ONE REQUEST and nothing else: it goes in
-	* the `Authorization` header, which is how the engine takes it, and the
-	* session that comes back is a cookie. Nothing here holds it afterwards.
-	*/
-	exchangeToken: async (token) => await rest.post("/auth/token", {}, { Authorization: `Bearer ${token}` }),
-	/** Render an invitation without spending it. */
-	viewInvite: async (id, secret) => (await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
-	/** Redeem an invitation, which creates the person and signs them in. */
-	redeemInvite: async (id, body) => await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body),
-	/**
-	* Enrolment's first leg: a seed, and nothing stored. A person who never
-	* completes the second leg has enrolled nothing.
-	*/
-	secondFactorSeed: async () => await rest.post("/auth/totp", {}),
-	/**
-	* Enrolment's second leg: the seed back, with a code derived from it — the
-	* only evidence the authenticator on the other side works.
-	*/
-	enrolSecondFactor: async (secret, code) => await rest.post("/auth/totp", {
-		secret,
-		code
-	}),
-	/** Ten fresh single-use codes, retiring the old set, shown this once. */
-	recoveryCodes: async () => await rest.post("/auth/totp/recovery", {}),
-	/**
-	* Confirm who you are on a session that is already valid: the password,
-	* and the code where a second factor is held. The engine answers a fresh
-	* session cookie and ends the one it replaces.
-	*/
-	stepUp: async (body) => await rest.post("/auth/step-up", body),
-	/**
-	* Who this browser is signed in as — ended by `signal` where the caller
-	* passes one, for a read a newer one has superseded.
-	*/
-	session: async (signal) => await rest.get("/auth/session", signal),
-	/**
-	* End this browser's session. The engine clears the cookie whatever its
-	* own write did, so an answer at all means this browser holds no session.
-	*/
-	logout: async () => {
-		await rest.post("/auth/logout", {});
-	},
-	/**
-	* End every session the caller holds, on every device, by moving their
-	* revocation epoch — this browser's included.
-	*/
-	logoutEverywhere: async () => {
-		await rest.post("/auth/logout/all", {});
-	}
-};
 //#endregion
 //#region src/protocol/keepalive.ts
 /**
@@ -2460,4 +2631,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, unavailableRetryMs, whenRequestsSettle };
+export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

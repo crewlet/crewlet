@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -114,6 +113,39 @@ type estate struct {
 	// estate opened: its position is below every bearer's start, and it
 	// holds no session row — see [estate.Resolve].
 	unapplied bool
+
+	// passwordSets are every SetPassword asked of this estate, and pending
+	// the writes that land durable and not yet applied here.
+	passwordSets []iamdomain.PasswordSet
+	pending      map[string]bool
+
+	// passwordOps are the operations a SetPassword landed under, which the
+	// framework's ledger answers a later call under the same id from
+	// before its decide runs — applied, collapsed, its Check never asked.
+	passwordOps map[string]bool
+
+	// behindResets, when a case sets it, is the credential set a node
+	// that has not applied this estate's writes reads a reset link from.
+	behindResets []iamdomain.Credential
+
+	// linksUnvouched is a node whose rows cannot vouch for the reset links
+	// they answer ([iamdomain.ResetRow.Vouched]).
+	linksUnvouched bool
+
+	// nameSealed is the person's sealed name, or empty for a row that holds
+	// none.
+	nameSealed string
+}
+
+// Person answers the person's directory row, their sealed name on it.
+func (e *estate) Person(_ context.Context, id string) (iamdomain.PersonRow, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if id != e.person.ID {
+		return iamdomain.PersonRow{}, iamdomain.ErrNotFound
+	}
+	return iamdomain.PersonRow{ID: id, Kind: e.person.Kind, Login: e.person.Login,
+		NameSealed: []byte(e.nameSealed)}, nil
 }
 
 // outcome is what one of this estate's writes answers: applied at a position,
@@ -233,6 +265,78 @@ func (e *estate) SetCredentials(ctx context.Context, in iamdomain.CredentialSet)
 	return result, nil
 }
 
+// SetPassword runs the caller's Check against the person this estate holds,
+// as the domain's decide does in its snapshot, and lands what the domain's
+// record would: the new password in place of the old, every reset link
+// revoked, the revocation epoch moved.
+func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
+	statelog.Result, error) {
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.passwordSets = append(e.passwordSets, in)
+	if err := e.refuse["SetPassword"]; err != nil {
+		return statelog.Result{}, err
+	}
+	if e.passwordOps[in.OpID] {
+		// THE LEDGER ANSWERS FIRST, as the framework's does: an operation
+		// that already landed is this call's retry, whatever it presents.
+		result := applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 12})
+		result.OpID, result.Collapsed = in.OpID, true
+		return result, nil
+	}
+	if in.Check != nil {
+		if err := in.Check(iamdomain.Person{Kind: e.person.Kind,
+			Stage: e.person.Stage, Credentials: slices.Clone(e.person.Credentials)},
+			iamdomain.Counters{}); err != nil {
+			return statelog.Result{}, err
+		}
+	}
+	result := e.outcome("SetPassword", in.OpID, 12)
+	if e.pending["SetPassword"] {
+		result.Outcome = statelog.OutcomePending
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return result, nil
+	}
+	kept := make([]iamdomain.Credential, 0, len(e.person.Credentials)+1)
+	for _, c := range e.person.Credentials {
+		switch {
+		case c.Method == iamdomain.MethodPassword:
+			continue
+		case c.Method == iamdomain.MethodReset && c.RevokedAt.IsZero():
+			c.RevokedAt = clock
+		}
+		kept = append(kept, c)
+	}
+	e.person.Credentials = append(kept, iamdomain.Credential{
+		ID: "pw-new", Method: iamdomain.MethodPassword, Verifier: in.Verifier})
+	e.counters.Epoch++
+	if e.passwordOps == nil {
+		e.passwordOps = map[string]bool{}
+	}
+	e.passwordOps[in.OpID] = true
+	return result, nil
+}
+
+// ResetByID answers a reset link this estate's person holds, as the reader
+// joins it to its person.
+func (e *estate) ResetByID(_ context.Context, id string) (iamdomain.ResetRow, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	held := e.person.Credentials
+	if e.behindResets != nil {
+		held = e.behindResets
+	}
+	row := iamdomain.ResetOf(iamdomain.Person{Kind: e.person.Kind,
+		Stage: e.person.Stage, Credentials: held}, id, iamdomain.Counters{})
+	if row.ID != "" {
+		row.PersonID, row.Login = e.person.ID, e.person.Login
+	}
+	row.Vouched = !e.linksUnvouched
+	return row, nil
+}
+
 const (
 	password = "a-long-enough-passphrase"
 	totpSeed = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
@@ -282,7 +386,6 @@ func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	}}
 	audit := &recordingAudit{}
 	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendLocal
 	svc := buildWith(t, b, func(o *authapi.Options) {
 		o.Directory, o.Writer, o.Hasher, o.Audit = e, e, hasher, audit
 		if replace != nil {

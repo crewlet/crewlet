@@ -185,8 +185,16 @@ func VerifyTOTP(secret, code string, at time.Time, last int64) (int64, bool) {
 // is what it groups on. Writing only one of them produces an entry that says
 // `account` and nothing about which company it is for, on a phone that holds
 // twenty of them.
+//
+// NEITHER MAY CARRY A COLON, which the format forbids: the label's one colon
+// separates the two, and a reader may decode an escaped one before it splits,
+// so the issuer `localhost:18080` — an external URL with a port — read as the
+// issuer `localhost` and the account `18080:jane.doe`, disagreeing with the
+// issuer parameter. A colon in either becomes a space, in both places.
 func TOTPURI(issuer, account, secret string) string {
-	label := url.PathEscape(issuer + ":" + account)
+	issuer = strings.ReplaceAll(issuer, ":", " ")
+	account = strings.ReplaceAll(account, ":", " ")
+	label := url.PathEscape(issuer) + ":" + url.PathEscape(account)
 	query := url.Values{
 		"secret":    {secret},
 		"issuer":    {issuer},

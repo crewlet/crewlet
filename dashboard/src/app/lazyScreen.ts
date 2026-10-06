@@ -61,6 +61,7 @@ const LOADERS = {
   knowledge: () => import("~/routes/knowledge/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
+  account: () => import("~/routes/account/index.ts"),
   signin: () => import("~/routes/signin/index.ts"),
 } satisfies Record<Workspace | "org" | "signin", () => Promise<unknown>>;
 

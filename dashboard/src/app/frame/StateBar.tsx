@@ -44,11 +44,6 @@ export interface Degradation {
   icon: ReactNode;
   message: string;
   action?: { label: string; onClick: () => void };
-  /**
-   * A second way out, drawn beside [action] — the sign-out a refused person
-   * needs. See [degradationOf].
-   */
-  secondary?: { label: string; onClick: () => void };
 }
 
 /**
@@ -64,23 +59,28 @@ export interface Degradation {
 export function degradationOf({
   authRejected,
   accessRefused = null,
+  noAccess = false,
   connected,
   configured,
   onSignIn,
-  onRetry,
-  onSignOut,
   onConfig,
 }: {
   authRejected: boolean;
-  /** Why the engine will not serve this surface to a browser it knows, or null. */
+  /**
+   * Why the engine will not serve this surface to a browser it knows, or
+   * null. Said in place of the screen (`AccessRefused`), never here: it is
+   * not a degradation the strip can describe beside a screen that will
+   * never be answered.
+   */
   accessRefused?: string | null;
+  /**
+   * The reader's session holds no grant to read the company, so the socket
+   * is never dialled — said in place of the screen too, for the same reason.
+   */
+  noAccess?: boolean;
   connected: boolean;
   configured: boolean | undefined;
   onSignIn: () => void;
-  /** Re-dial after a refusal an administrator has since repaired. */
-  onRetry?: () => void;
-  /** End this browser's session — the way out of a refusal. */
-  onSignOut?: () => void;
   onConfig: () => void;
 }): Degradation | null {
   if (authRejected) {
@@ -91,25 +91,10 @@ export function degradationOf({
       action: { label: "Sign in", onClick: onSignIn },
     };
   }
-  if (accessRefused !== null) {
-    // SECOND, beside nobody signed in: neither repairs itself. Unlike that
-    // one, signing in again reaches the same person with the same access, so
-    // the affordance is a retry for after an administrator has acted.
-    //
-    // AND A SIGN-OUT BESIDE IT, because the person refused is exactly the
-    // person who needs to leave: an offboarded seat or a missing `state:read`
-    // stops the socket, so nothing else on the page ever learns who they are
-    // — and the engine leaves `/auth/` open to such a session for precisely
-    // this. Without it a shared machine kept their cookie live until its own
-    // deadline.
-    return {
-      variant: "danger",
-      icon: <KeyGlyph size="md" />,
-      message: `The engine knows who you are but will not serve this dashboard to you (${accessRefused}). An administrator can restore your access.`,
-      ...(onRetry ? { action: { label: "Try again", onClick: onRetry } } : {}),
-      ...(onSignOut ? { secondary: { label: "Sign out", onClick: onSignOut } } : {}),
-    };
-  }
+  // A REFUSED BROWSER'S SOCKET STOPS, and one with no access is never dialled,
+  // so "reconnecting" would be false: the screen says what is true instead —
+  // see `AccessRefused`.
+  if (accessRefused !== null || noAccess) return null;
   if (!connected) {
     return {
       variant: "warning",
@@ -165,19 +150,10 @@ export function StateBar({
           icon={degraded.icon}
           layout="banner"
           action={
-            (degraded.action || degraded.secondary) && (
-              <span className="row gap-2">
-                {degraded.secondary && (
-                  <Button size="small" variant="ghost" onClick={degraded.secondary.onClick}>
-                    {degraded.secondary.label}
-                  </Button>
-                )}
-                {degraded.action && (
-                  <Button size="small" variant="secondary" onClick={degraded.action.onClick}>
-                    {degraded.action.label}
-                  </Button>
-                )}
-              </span>
+            degraded.action && (
+              <Button size="small" variant="secondary" onClick={degraded.action.onClick}>
+                {degraded.action.label}
+              </Button>
             )
           }
         >

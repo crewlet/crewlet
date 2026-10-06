@@ -89,6 +89,7 @@ import {
   failedIn,
   feedRows,
   fortnight,
+  isOwnSeat,
   mayReadRecord,
   placementWords,
   roundWords,
@@ -510,6 +511,7 @@ function AssignedWork({
   work: QueryResult<WorkItemsAnswer>;
   now: number;
 }) {
+  const self = isOwnSeat(useViewer(), seat.handle);
   const rows = work.data?.items ?? [];
   const total = work.data?.total_hint ?? rows.length;
   return (
@@ -533,7 +535,7 @@ function AssignedWork({
         empty={
           work.data && rows.length === 0
             ? {
-                title: "Nothing open is assigned to them",
+                title: `Nothing open is assigned to ${self ? "you" : "them"}`,
                 hint: "Work reaches a seat by assignment; closed work is not counted here.",
               }
             : undefined
@@ -981,7 +983,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
   // leads them and to a `fleet:operate` holder — so it is asked where this
   // page can tell it will be answered ([mayReadRecord]), and WITHHELD by a
   // sentence elsewhere rather than drawn as a person with nothing to do.
-  const self = viewer.handle !== "" && viewer.handle === seat.handle;
+  const self = isOwnSeat(viewer, seat.handle);
   const mayRead = mayReadRecord(viewer, index, seat.handle);
   const person = useQuery(
     "work_person",
@@ -1062,7 +1064,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
                         <EmptyValue
                           label={
                             mine.error
-                              ? "Their queue did not answer"
+                              ? `${self ? "Your" : "Their"} queue did not answer`
                               : "This engine counts no queue"
                           }
                         />

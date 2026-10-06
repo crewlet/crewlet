@@ -151,18 +151,42 @@ describe("a gesture that needs a fresher proof", () => {
 
     await waitFor(() => expect(outcome).toEqual({ stored: true }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(sent.map((s) => s.path)).toEqual([
+    // AND THE DIALOG'S OWN READ of whether a code is held, beside them.
+    const asked = sent.filter((s) => s.path !== "/iam/credentials");
+    expect(asked.map((s) => s.path)).toEqual([
       "/secrets/GITHUB_TOKEN",
       "/auth/step-up",
       "/secrets/GITHUB_TOKEN",
     ]);
-    expect(sent[1]?.body).toEqual({ password: "correct horse battery staple" });
+    expect(asked[1]?.body).toEqual({ password: "correct horse battery staple" });
     // THE REPLAY IS THE REQUEST THAT WAS REFUSED, which is what keeps a form.
-    expect(sent[2]?.body).toEqual(sent[0]?.body);
+    expect(asked[2]?.body).toEqual(asked[0]?.body);
     // THE SESSION WAS REPLACED, and NOTHING HERE RE-DIALS the socket opened on
     // the old one: the engine closes it `4401`, and the socket dials again
     // itself once this tab's requests have settled, with the new cookie.
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  // A PERSON WHO HOLDS AN AUTHENTICATOR IS ASKED FOR ITS CODE, not offered it:
+  // the field read "Code (optional)" and a password-only Confirm was refused
+  // for the code. Confirm waits for one. The CONTROL is a person who holds
+  // none, for whom it stays optional. Mutation: leave the field optional
+  // whatever the person holds.
+  test.each([
+    ["holds an authenticator", [{ method: "totp", revoked: false }], true],
+    ["holds none (the control)", [{ method: "password", revoked: false }], false],
+  ])("a person who %s is asked for the code accordingly", async (_, credentials, required) => {
+    engine({
+      "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
+      "/iam/credentials": [{ status: 200, body: { credentials } }],
+    });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("dialog", { name: "Confirm it is you" });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a password" } });
+    const confirm = screen.getByRole("button", { name: "Confirm" });
+    await waitFor(() => expect(confirm).toHaveProperty("disabled", required));
+    expect(screen.queryByText(/optional/i) === null).toBe(required);
   });
 
   // ONE WINDOW, so the dialog names none: every sensitive gesture is held to
@@ -176,7 +200,56 @@ describe("a gesture that needs a fresher proof", () => {
     expect(screen.getByText(/confirmed who you are recently/)).toBeDefined();
   });
 
-  test("a wrong password is the engine's own sentence, and the dialog stays for another try", async () => {
+  // A WRONG PASSWORD OR CODE IS A CONFIRMATION REFUSED, not a sign-in: the
+  // engine's one refusal reads "Those sign-in details were not accepted", which
+  // the dialog showed verbatim, and its text asked for the password alone of
+  // somebody it also asked a code of. The CONTROL is a person holding no
+  // authenticator, asked for the password and told the password was wrong.
+  // Mutation: show the engine's sentence, or ask for the password alone.
+  test.each([
+    [
+      "holds an authenticator",
+      [{ method: "totp", revoked: false }],
+      "000000",
+      /password and a code from your authenticator app/,
+      "That password or code was not accepted. Check both and confirm again.",
+    ],
+    [
+      "holds none (the control)",
+      [{ method: "password", revoked: false }],
+      "",
+      /Enter your password to carry on/,
+      "That password was not accepted. Check it and confirm again.",
+    ],
+  ])(
+    "a person who %s is asked for, and refused, in a confirmation's words",
+    async (_, credentials, code, asks, refused) => {
+      engine({
+        "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
+        "/iam/credentials": [{ status: 200, body: { credentials } }],
+        "/auth/step-up": [
+          {
+            status: 401,
+            body: {
+              error: "sign_in_refused",
+              message: "Those sign-in details were not accepted. Check them and try again.",
+            },
+          },
+        ],
+      });
+      mount();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByRole("dialog", { name: "Confirm it is you" });
+      await waitFor(() => expect(screen.getByText(asks)).toBeDefined());
+      fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a password" } });
+      if (code) fireEvent.change(screen.getByLabelText(/^Code/), { target: { value: code } });
+      fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+      await waitFor(() => expect(alerts()).toContain(refused));
+      expect(alerts().join(" ")).not.toMatch(/sign-in details/);
+    },
+  );
+
+  test("a wrong password stays for another try, and sends nothing again", async () => {
     const sent = engine({
       "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
       "/auth/step-up": [
@@ -193,9 +266,7 @@ describe("a gesture that needs a fresher proof", () => {
     await refuseAndConfirm("wrong horse battery staple");
 
     await waitFor(() =>
-      expect(alerts()).toContain(
-        "Those sign-in details were not accepted. Check them and try again.",
-      ),
+      expect(alerts()).toContain("That password was not accepted. Check it and confirm again."),
     );
     expect(screen.getByRole("dialog", { name: "Confirm it is you" })).toBeDefined();
     // NOTHING WAS SENT AGAIN, and the need to sign in was not raised: a

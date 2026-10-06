@@ -37,6 +37,7 @@ import { Home } from "~/routes/home/Home.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { SessionReading } from "~/lib/frameSession.ts";
 
 // ---------------------------------------------------------------------------
 // 1. The source
@@ -478,9 +479,11 @@ function mount(hash: string, view: ReactElement, answers: Record<string, unknown
     Promise.resolve(answers[what] ?? {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <FrameReadings>
-        <Router>{view}</Router>
-      </FrameReadings>
+      <SessionReading>
+        <FrameReadings>
+          <Router>{view}</Router>
+        </FrameReadings>
+      </SessionReading>
     </ClientContext.Provider>,
   );
 }

@@ -34,6 +34,11 @@ import type { Snapshot } from "./types.ts";
  */
 export type SnapshotRead =
   | { readonly state: "read"; readonly snapshot: Snapshot }
+  /**
+   * A `401`: nobody is signed in, and no later read answers otherwise until
+   * somebody is — which the socket's own dial notices.
+   */
+  | { readonly state: "nobody" }
   | {
       readonly state: "unread";
       /**
@@ -57,7 +62,10 @@ export const api = {
       if (!response.ok) {
         // A 401 is nobody signed in, which the sign-in screen repairs — the
         // same reading `rest.ts` gives every other request's.
-        if (response.status === 401) needSession("sign_in");
+        if (response.status === 401) {
+          needSession("sign_in");
+          return { state: "nobody" };
+        }
         // WHOSE REFUSAL, read by the rule every other read takes: only a 503
         // carrying the engine's own error code carries its hint.
         return { state: "unread", retryAfter: await retryHintOf(response) };

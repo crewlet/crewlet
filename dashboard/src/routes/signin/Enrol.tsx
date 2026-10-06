@@ -4,7 +4,7 @@
  *
  * # Where a browser lands, and why it cannot be anywhere else
  *
- * On a deployment whose `api.auth.local.totp` is `required`, a sign-in that
+ * On a deployment whose `api.auth.totp` is `required` (its default), a sign-in that
  * proved a password and no second factor opens a session that may do exactly
  * three things: say who it is, enrol a factor, and re-confirm the password.
  * Every other route answers `403 second_factor_enrolment_required` — the

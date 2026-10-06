@@ -49,7 +49,7 @@ let sent: Sent[];
 beforeEach(() => {
   sent = [];
   vi.mocked(useViewer).mockReturnValue(BOUND);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useClient).mockReturnValue({
     socket: {
       query: vi.fn(async (kind: string, params: Record<string, unknown>) => {
@@ -318,7 +318,7 @@ test("a refusal that is not on authority carries no grants", async () => {
 
 // OFFLINE IS DISABLED, NEVER QUEUED.
 test("offline, the press sends nothing and says why", async () => {
-  vi.mocked(useConnection).mockReturnValue({ connected: false } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: false, accessRefused: null } as never);
   const posts = engine(() => json({}, 200));
   mount();
   const button = screen.getByRole("button", { name: "Pin" });

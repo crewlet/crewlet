@@ -23,6 +23,7 @@ type auditView struct {
 	ObjectKind string                 `json:"object_kind"`
 	ObjectID   string                 `json:"object_id,omitempty"`
 	Person     string                 `json:"person,omitempty"`
+	Login      string                 `json:"login,omitempty"`
 	Op         iamdomain.OpKind       `json:"op"`
 	Actor      string                 `json:"actor,omitempty"`
 	ActorKind  iam.Kind               `json:"actor_kind,omitempty"`
@@ -106,7 +107,8 @@ func (s *Service) GetAudit(w http.ResponseWriter, r *http.Request) {
 	for _, row := range page.Entries {
 		events = append(events, auditView{
 			ID: row.ID, Class: row.Class, ObjectKind: row.ObjectKind,
-			ObjectID: row.ObjectID, Person: row.PersonID, Op: row.Op,
+			ObjectID: row.ObjectID, Person: row.PersonID, Login: row.Login,
+			Op:    row.Op,
 			Actor: row.Actor, ActorKind: row.ActorKind,
 			OperatorID: row.OperatorID, Reason: row.Reason,
 			Summary: row.Summary, At: row.At, Position: row.Version,

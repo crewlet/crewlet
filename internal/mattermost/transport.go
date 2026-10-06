@@ -202,22 +202,21 @@ func (t *Transport) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// The server's own typing cadence and Site URL, read ONCE from the
-	// first usable seat: they are properties of the instance, not of a
-	// bot, and reading them per seat would be N identical calls.
-	t.readInstance(ctx)
-
 	// CONCURRENTLY, and that is not an optimisation. Each seat resolves
 	// its identity against the server, and a failing call spends the
 	// client's whole retry budget — so started in sequence, an instance
 	// that is down delays boot by that budget times the number of seats.
 	// Started together, it costs one budget however many seats there are,
-	// and the fleet's own reconnect loop keeps trying afterwards.
+	// and the fleet's own reconnect loop keeps trying afterwards. The
+	// server's own typing cadence and Site URL are read beside them, once,
+	// for the same reason: read first, a down instance cost one budget for
+	// the read and another for the seats.
 	var (
 		wg     sync.WaitGroup
 		mu     sync.Mutex
 		failed []string
 	)
+	wg.Go(func() { t.readInstance(ctx) })
 	for _, cfg := range t.cfg.Seats {
 		wg.Go(func() {
 			if err := t.startSeat(ctx, cfg.Resolve()); err != nil {
@@ -337,36 +336,37 @@ func (t *Transport) Reregister(reg *notify.Registry) {
 // readInstance reads the facts that belong to the server rather than to a
 // bot: the typing cadence it enforces, and the Site URL it believes it is
 // served at.
+//
+// ONCE, AND AS NOBODY: the client config is the read a browser makes before
+// anybody signs in, so it needs no seat's session. It used to walk the seats
+// until one answered, which against an instance that does not answer spent
+// the client's whole retry budget once per seat — measured at forty seconds of
+// boot for a few seats against a refused connection — when the instance's
+// silence is the same answer whichever token asks.
 func (t *Transport) readInstance(ctx context.Context) {
-	for _, cfg := range t.cfg.Seats {
-		if cfg.Token == "" {
-			continue
-		}
-		c, err := NewClient(ClientOptions{URL: t.cfg.URL, Token: cfg.Token, Now: t.now})
-		if err != nil {
-			continue
-		}
-		conf, err := c.ClientConfig(ctx)
-		if err != nil {
-			continue
-		}
-		t.mu.Lock()
-		t.throttle = TypingThrottle(conf)
-		t.mu.Unlock()
-
-		// THE SILENT FAILURE THIS EXISTS FOR: Mattermost accepts a
-		// websocket only from a browser whose Origin matches its Site
-		// URL, so a mismatch blinds every HUMAN in the workspace while
-		// the agents — which send no Origin the server checks the same
-		// way — keep working perfectly. Nothing else reports it.
-		if reported := SiteURL(conf); reported != "" && !OriginMatches(t.cfg.URL, reported) {
-			log.WarnContext(ctx, "mattermost_site_url_mismatch",
-				"configured", t.cfg.URL, "reported", reported,
-				"detail", "the server accepts a websocket only from an origin "+
-					"matching its own SiteURL, so browsers will fail to connect "+
-					"while agents keep working")
-		}
+	c, err := NewClient(ClientOptions{URL: t.cfg.URL, Now: t.now})
+	if err != nil {
 		return
+	}
+	conf, err := c.ClientConfig(ctx)
+	if err != nil {
+		return
+	}
+	t.mu.Lock()
+	t.throttle = TypingThrottle(conf)
+	t.mu.Unlock()
+
+	// THE SILENT FAILURE THIS EXISTS FOR: Mattermost accepts a websocket
+	// only from a browser whose Origin matches its Site URL, so a mismatch
+	// blinds every HUMAN in the workspace while the agents — which send no
+	// Origin the server checks the same way — keep working perfectly.
+	// Nothing else reports it.
+	if reported := SiteURL(conf); reported != "" && !OriginMatches(t.cfg.URL, reported) {
+		log.WarnContext(ctx, "mattermost_site_url_mismatch",
+			"configured", t.cfg.URL, "reported", reported,
+			"detail", "the server accepts a websocket only from an origin "+
+				"matching its own SiteURL, so browsers will fail to connect "+
+				"while agents keep working")
 	}
 }
 

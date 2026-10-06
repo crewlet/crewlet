@@ -1,13 +1,14 @@
 // Package credential is what somebody proves themselves with, and the
 // arithmetic behind each of them: a password, a second factor, a recovery
-// code, and a machine's bearer token.
+// code, a machine's bearer token, and the one-time link an administrator
+// issues somebody to set a new password with (reset.go).
 //
 // # What is stored is a VERIFIER, never a secret
 //
 // Every value this package puts in front of the identity estate is something a
 // presented secret is checked AGAINST and which cannot be presented to
 // anything: an argon2id digest with its own parameters beside it, a SHA-256 of
-// a machine token, a TOTP shared secret sealed under the fleet keyring and
+// a machine token or a reset link's secret, a TOTP shared secret sealed under the fleet keyring and
 // bound to its person and its credential.
 // The estate is replicated to every node, snapshotted, backed up and donated
 // to joining peers — so a value that could be replayed out of it would be a
@@ -99,4 +100,9 @@ import "errors"
 // This one is answered to somebody who has already proved who they are and is
 // choosing a new secret. A generic refusal there is somebody typing variations
 // until one sticks.
-var ErrWeak = errors.New("credential: this password cannot be used")
+//
+// SO ITS TEXT IS A SENTENCE, with no package prefix: the three surfaces that
+// refuse a new password hand [CheckStrength]'s error to the person choosing
+// it, verbatim, and the prefix this package's other errors carry for a log
+// reached a form as "Credential: this password cannot be used".
+var ErrWeak = errors.New("this password cannot be used")

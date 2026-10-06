@@ -20,10 +20,13 @@
  *
  * A session that may do everything goes to `next`, REPLACING the sign-in
  * screen's history entry — Back from the page the reader asked for must not
- * land them on a form for a session they already hold — and the socket
- * re-dials, because the one it has was opened as nobody. A session that may
- * only enrol a second factor goes to the enrolment screen instead, carrying
- * `next` along, and the socket waits: it would only be refused again.
+ * land them on a form for a session they already hold. The sign-in DIALS
+ * NOTHING: `next` is a screen in the frame, which reads the new session and
+ * dials for it only if it may read the company (`app/Shell.tsx`) — a sign-in
+ * that dialled on its own was a refused handshake, a refused probe and a
+ * refused snapshot for every person invited with no grants. A session that
+ * may only enrol a second factor goes to the enrolment screen instead,
+ * carrying `next` along.
  *
  * Either way the sign-in's answer REPLACES the session need a transport
  * recorded (`protocol/signin.ts`): it is the newest fact about this browser,
@@ -51,10 +54,9 @@
 import { useCallback } from "react";
 import { buildHash, parseHash, useNavigator } from "~/app/router.tsx";
 import { framelessOf } from "~/app/nav.ts";
-import { currentReader, noteReader } from "~/lib/reader.ts";
+import { adoptReader, currentReader, noteReader } from "~/lib/reader.ts";
 import { forgetOtherReaders as forgetOtherRecents } from "~/lib/recents.ts";
 import { forgetOtherReaders as forgetOtherStars } from "~/lib/starred.ts";
-import { useClient } from "~/lib/store-hooks.ts";
 import {
   auth,
   sessionNeedsEnrolment,
@@ -147,8 +149,29 @@ export const page = {
  * nothing, and reloading would put the person straight back where they were
  * while telling them they had left. That throws, for the caller to say so.
  */
-export async function signOut(): Promise<void> {
-  await auth.logout();
+export async function signOut(socket: Dialler): Promise<void> {
+  await leaving(socket, () => auth.logout());
+}
+
+/** What a sign-out needs of the live socket — see `LiveSocket.hold`. */
+export interface Dialler {
+  hold(): void;
+  release(): void;
+}
+
+/**
+ * Sign out by `gesture`, with the socket held so the close the engine sends
+ * this session's socket dials nothing on the way out; a sign-out nothing
+ * answered stays, and the socket is released.
+ */
+async function leaving(socket: Dialler, gesture: () => Promise<void>): Promise<void> {
+  socket.hold();
+  try {
+    await gesture();
+  } catch (err) {
+    socket.release();
+    throw err;
+  }
   leave();
 }
 
@@ -206,6 +229,32 @@ function handOver(person: string, hash: string): void {
 }
 
 /**
+ * The session this browser holds, TAKEN BY THIS TAB — the check every read of
+ * it that carries the tab on makes: the frame's (`lib/frameSession.ts`) and the
+ * live socket's after a `4401` (`protocol/socket.ts`, handed this by
+ * `main.tsx`).
+ *
+ * A tab nobody has recorded ADOPTS it (`adoptReader`), and the person it was
+ * read by carries on. Anybody else is HANDED THE TAB (`handOver`), reloaded
+ * where it was with nothing of its last reader kept: their sign-in in another
+ * tab moved the cookie this one shares, and ended the session this tab was
+ * opened with — so the socket's re-dial reached the company as them, and the
+ * frame served them the last reader's tab: the builder's kept draft as their
+ * own, and their stars written under the last reader's key. It answers false
+ * then, because a reload is under way, and nothing should dial or draw for
+ * them in a tab that still holds somebody else's.
+ */
+export function takeSession(person: string): boolean {
+  const reader = currentReader();
+  if (person === "" || reader === null || reader === person) {
+    adoptReader(person);
+    return true;
+  }
+  handOver(person, safeNext(location.hash));
+  return false;
+}
+
+/**
  * End every session this person holds, on every device, and this one with
  * them.
  *
@@ -214,9 +263,8 @@ function handOver(person: string, hash: string): void {
  * laptop left open somewhere, when nothing can say it was, is the one claim
  * this gesture exists to make true.
  */
-export async function signOutEverywhere(): Promise<void> {
-  await auth.logoutEverywhere();
-  leave();
+export async function signOutEverywhere(socket: Dialler): Promise<void> {
+  await leaving(socket, () => auth.logoutEverywhere());
 }
 
 /**
@@ -240,7 +288,6 @@ export interface SignedInAs {
  */
 export function useSignedIn(): (answer: SignedInAs, next: string | null) => void {
   const nav = useNavigator();
-  const { socket } = useClient();
   return useCallback(
     ({ status, person = "" }, next) => {
       const target = safeNext(next);
@@ -263,15 +310,12 @@ export function useSignedIn(): (answer: SignedInAs, next: string | null) => void
         nav.replace(["enrol"], { next: target });
         return;
       }
-      // IN THIS ORDER. The need clears first, so the screen `next` names
-      // does not mount under a need it would be routed away for; the socket
-      // re-dials second, before the move, so that screen's first questions
-      // wait for the new socket rather than the one opened as nobody.
+      // THE NEED CLEARS FIRST, so the screen `next` names does not mount
+      // under a need it would be routed away for.
       sessionRestored();
-      socket.reconnect();
       const route = parseHash(target);
       nav.replace(route.path, route.query);
     },
-    [nav, socket],
+    [nav],
   );
 }

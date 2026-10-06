@@ -18,9 +18,10 @@
  *
  * # And a level above both: in the frame, or outside it
  *
- * Signing in, redeeming an invitation and enrolling a required second factor
- * are drawn OUTSIDE the frame (`FRAMELESS` in `nav.ts`), because a browser on
- * one of them holds no session the frame could use. They are also where the
+ * Signing in, redeeming an invitation, spending a password reset link and
+ * enrolling a required second factor are drawn OUTSIDE the frame (`FRAMELESS`
+ * in `nav.ts`), because a browser on one of them holds no session the frame
+ * could use. They are also where the
  * transports send a browser that lost its session — `FollowSessionNeed`,
  * mounted once here beside both, is what reads that and moves. The step-up
  * ceremony (`StepUp.tsx`) is mounted beside both for the same reason: a
@@ -49,9 +50,12 @@ import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import { resolve, type Resolved, type Route } from "./routes.ts";
-import { framelessOf, grantsOpen, sectionOf } from "./nav.ts";
+import { framelessOf, grantsOpen, sectionOf, workspaceOf } from "./nav.ts";
+import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
+import { useConnection } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
@@ -104,8 +108,10 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const Audit = lazyScreen("settings", (m) => m.Audit);
+const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
+const Reset = lazyScreen("signin", (m) => m.Reset);
 const Enrol = lazyScreen("signin", (m) => m.Enrol);
 
 /** One resolved screen, drawn. */
@@ -117,6 +123,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Enrol />;
     case "invite":
       return <Invite key={route.link} link={route.link} />;
+    case "reset":
+      return <Reset key={route.link} link={route.link} />;
     case "home":
       return <Home />;
     case "inbox":
@@ -215,6 +223,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "audit":
       return <Audit />;
+    case "account":
+      return <Account />;
   }
 }
 
@@ -241,7 +251,7 @@ function FollowSessionNeed() {
     if (need === null) return;
     const at = framelessOf(route.path);
     if (need === "sign_in") {
-      if (at === "login" || at === "invite") return;
+      if (at === "login" || at === "invite" || at === "reset") return;
       const target = parseHash(signInHash(route.hash));
       nav.replace(target.path, target.query);
       return;
@@ -280,7 +290,15 @@ function Frame() {
 
 function Screen({ where, path }: { where: Route; path: string[] }) {
   const viewer = useViewer();
+  const { accessRefused } = useConnection();
+  const { noAccess } = useFrameSession();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
+  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE, or whose session holds no
+  // grant to read the company, is told so in place of every screen but its
+  // Account, which reads no socket — see `AccessRefused`.
+  if ((accessRefused !== null || noAccess) && workspaceOf(path) !== "account") {
+    return <AccessRefused reason={accessRefused} />;
+  }
   // A SECTION FOR A VIEWER THE ENGINE HAS SAID HOLDS NONE OF ITS GRANTS is
   // its refusal and nothing else — see `GrantRequired`. Only on an ANSWER,
   // and the first one is waited for: until it is in, the section asks

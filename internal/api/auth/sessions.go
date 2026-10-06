@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -149,7 +150,7 @@ func seatRefusal(binding session.Binding) *Refusal {
 //
 // # Why a session and not a sign-in refusal
 //
-// `api.auth.local.totp: required` says nobody signs in on a password alone,
+// `api.auth.totp: required` says nobody signs in on a password alone,
 // and a person who holds no second factor — freshly invited, or one
 // an administrator reset — has nothing else to present. Refusing the sign-in
 // would lock them out of the one gesture that satisfies the rule, so the
@@ -249,6 +250,24 @@ const RetryIdentitySeconds = 2
 func RetryIdentity(cause error) int {
 	return httpjson.RetrySeconds(statelog.RetryAfter(cause,
 		RetryIdentitySeconds*time.Second))
+}
+
+// UnreadLevel is the level an identity read a request could not make is
+// logged at: WARN, because a node that cannot read its identity estate is
+// one an operator should hear about — unless the request itself has gone
+// away, whose read failing IS the cancellation and says nothing about the
+// estate, so DEBUG.
+//
+// A browser abandons requests routinely — a page reloading its data after a
+// password change cancels its own reads in flight — and each one was logged
+// `api_session_unavailable row=stalled ... context canceled` beside
+// `api_auth_unavailable`, which an operator reads as a stalled identity
+// estate.
+func UnreadLevel(ctx context.Context) slog.Level {
+	if ctx.Err() != nil {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
 }
 
 // SessionCatchUp is how long a write presenting a session this node has not
@@ -478,7 +497,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 	switch v.Answer(need) {
 	case session.AnswerUnavailable:
-		log.WarnContext(r.Context(), "api_session_unavailable",
+		log.Log(r.Context(), UnreadLevel(r.Context()), "api_session_unavailable",
 			"row", string(v.Row), "detail", v.Detail, "error", errText(v.Err))
 		return sessionAnswer{how: iam.Unknown, presented: true}
 	case session.AnswerServe:
@@ -524,7 +543,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	reissue := true
 	switch binding.Answer() {
 	case session.AnswerUnavailable:
-		log.WarnContext(r.Context(), "api_session_seat_unavailable",
+		log.Log(r.Context(), UnreadLevel(r.Context()), "api_session_seat_unavailable",
 			"person", v.Bearer.Person, "seat", v.Person.Seat,
 			"detail", binding.Detail, "error", errText(binding.Err))
 		return sessionAnswer{how: iam.Unknown, presented: true}

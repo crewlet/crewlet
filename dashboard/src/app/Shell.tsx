@@ -49,7 +49,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { AppShell, useToast } from "@crewlethq/ui";
+import { AppShell } from "@crewlethq/ui";
 import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
@@ -68,13 +68,13 @@ import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
+import { NO_ACCESS, SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
-import { goSignIn, signOut } from "~/lib/session.ts";
-import { refusalText } from "~/lib/refusal.ts";
+import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
@@ -315,11 +315,31 @@ export function FrameReadings({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * The frame, and the one thing only the frame does: DIAL THE SOCKET.
+ *
+ * The socket is made at boot and lives for the tab (`main.tsx`), and it is
+ * dialled here because the frame is the one part of this dashboard that needs
+ * a session. Dialled at boot, every signed-out page — the sign-in, an
+ * invitation's, a reset link's — dialled `/ws/stream` once and read its
+ * refusal and the degraded-mode snapshot: three `401`s in the console of a page
+ * that needs nobody. A sign-in does not dial either: it lands here, and the
+ * frame dials for the session it reads.
+ *
+ * AND ONLY FOR A SESSION THE ENGINE SERVES THE LIVE VIEW TO. The frame asks
+ * `GET /auth/session` first (`lib/frameSession.ts`): a `401` is nobody, which
+ * `rest.ts` turns into the sign-in the app follows, and nothing is dialled; a
+ * session without `state:read` is no access yet, and nothing is dialled until
+ * an answer holds it; any other failure says nothing about a session, and the
+ * dial's own handshake decides.
+ */
 export function Shell({ children }: { children: ReactNode }) {
   return (
-    <FrameReadings>
-      <Frame>{children}</Frame>
-    </FrameReadings>
+    <SessionReading>
+      <FrameReadings>
+        <Frame>{children}</Frame>
+      </FrameReadings>
+    </SessionReading>
   );
 }
 
@@ -327,11 +347,41 @@ function Frame({ children }: { children: ReactNode }) {
   const route = useRoute();
   const peek = usePeek();
   const nav = useNavigator();
-  const { socket } = useClient();
-  const toast = useToast();
+  const { socket, store } = useClient();
   const { connected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
+  const session = useFrameSession();
+
+  // DIAL FOR A SESSION THAT MAY READ THE COMPANY — see [Shell] — when it is
+  // first read, and again when a later answer holds the grant an earlier one
+  // lacked. A read that failed on anything but a `401` says nothing about the
+  // session, and the handshake decides.
+  const serves = session.answer !== null && !session.noAccess;
+  const undecided =
+    session.answer === null && session.error !== null && session.error.status !== 401;
+  useEffect(() => {
+    if (serves || undecided) socket.start();
+  }, [serves, undecided, socket]);
+  // A SESSION WITH NO ACCESS IS A BROWSER THE ENGINE REFUSES, whether or not a
+  // dial found out: recorded where a refused handshake records one, so every
+  // surface reading the connection — the write gate, the palette — says the
+  // one thing rather than "offline" about a socket nobody dialled. The dial a
+  // later grant makes lifts it (`LiveSocket.start`).
+  useEffect(() => {
+    if (session.noAccess) store.setAccessRefused(NO_ACCESS);
+  }, [session.noAccess, store]);
+  // A REFUSAL THE SOCKET MET IS ASKED ABOUT AGAIN: `state:read` withdrawn under
+  // an open socket closes it, and the session read before it still holds the
+  // grant — so the panel said "you hold state:read" beside the engine's "the
+  // live socket needs state:read", and nothing would ever notice the grant
+  // coming back. NEVER THE FRAME'S OWN [NO_ACCESS]: that is recorded FROM the
+  // read this would repeat, so every no-access landing read the session twice
+  // in a row — and a third time after a socket refusal it answered.
+  const { reload: readSessionAgain } = session;
+  useEffect(() => {
+    if (accessRefused !== null && accessRefused !== NO_ACCESS) void readSessionAgain();
+  }, [accessRefused, readSessionAgain]);
   // A ZONE OR A DATE FORMAT CHANGED IN THE PREFERENCES REPAINTS EVERY
   // TIMESTAMP. The formatters read the preference when they are called, so
   // the frame subscribes and re-renders; the screen is a child of this render
@@ -447,17 +497,10 @@ function Frame({ children }: { children: ReactNode }) {
   const degraded = degradationOf({
     authRejected,
     accessRefused,
+    noAccess: session.noAccess,
     connected,
     configured: engine?.configured,
     onSignIn: goSignIn,
-    onRetry: () => socket.reconnect(),
-    // A FAILED SIGN-OUT IS SAID, as the user block says it: a sign-out nothing
-    // answered must not look like one that worked.
-    onSignOut: () => {
-      signOut().catch((err: unknown) =>
-        toast.failed(`Signing out did not go through. ${refusalText(err)}`),
-      );
-    },
     onConfig: () => nav.to(["settings", "config"]),
   });
 

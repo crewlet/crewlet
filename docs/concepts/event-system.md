@@ -397,6 +397,14 @@ iam_login_failures         # ONE per node per minute that had a failure, from
                            # what was presented, and never whom it named
 iam_stepup_completed       # a signed-in person confirming who they are
 iam_credential_minted, iam_credential_revoked, iam_mfa_reset
+iam_invitation_cancelled   # an unredeemed invitation withdrawn: which one and
+                           # by whom, never the address
+iam_password_changed       # a person changing their own, which ended every
+                           # other session and token they held
+iam_password_reset_issued  # an administrator issuing a one-time reset link:
+                           # for whom, by whom, until when — never the link
+iam_password_reset         # a reset link spent: the password set, every
+                           # session and token ended, nobody signed in
 iam_grants_changed         # one per person write, from the writer that
                            # decided it: added, removed, by, record version
 iam_recovery_code_used     # and how many the person has left

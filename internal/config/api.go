@@ -276,31 +276,6 @@ func checkTrustedProxy(path Path, block string) error {
 	return p.err()
 }
 
-// AuthBackend is how the PEOPLE of a company prove who they are.
-//
-// It governs people only. The Tier A tokens in [APIAuth.Tokens] are the
-// deployment's own machine credentials and are accepted on every backend,
-// including [AuthBackendNone] — which is what makes `none` a coherent posture
-// rather than an unreachable engine.
-type AuthBackend string
-
-const (
-	// AuthBackendLocal is passwords, a second factor and recovery codes
-	// held by this engine.
-	AuthBackendLocal AuthBackend = "local"
-
-	// AuthBackendNone is a deployment with no people at all: the Tier A
-	// tokens are the only credentials, which is the posture a laptop and
-	// a CI fixture run in.
-	AuthBackendNone AuthBackend = "none"
-)
-
-// AuthBackends is the closed set.
-var AuthBackends = []AuthBackend{AuthBackendLocal, AuthBackendNone}
-
-// Valid reports whether a backend off the wire is one this build knows.
-func (b AuthBackend) Valid() bool { return slices.Contains(AuthBackends, b) }
-
 // APIAuth is how anyone — a person, a machine, this deployment's own operator
 // — proves who they are to the HTTP surface.
 //
@@ -322,15 +297,24 @@ func (b AuthBackend) Valid() bool { return slices.Contains(AuthBackends, b) }
 // replaces it: a flag rather than a field, because a field gets copied into an
 // image, and refused unless `api.host` BINDS loopback and the binary is a
 // development build. The bind rather than `api.external_url`, deliberately and
-// unlike `api.auth.local`'s insecure rule: that one is about whether a cookie
+// unlike [APIAuth.AcceptInsecure]'s rule: that one is about whether a cookie
 // crosses plaintext through a proxy, where the external address is the truth,
 // and this is about who can open a socket to this process, where the bind
 // is.
 //
 // `oidc` signed people in through an identity provider, and sign-in through a
 // third party is not something this engine does any more: a person proves who
-// they are with a password and a second factor held here, or the deployment
-// has no people at all.
+// they are with a password and a second factor held here.
+//
+// # Password sign-in is always on, so there is no backend to choose
+//
+// There was a `backend:` (`local` or `none`) and a `local:` block beneath it.
+// With third-party sign-in gone, `local` was the only backend that did
+// anything and `none` only switched password sign-in off — which a deployment
+// with nobody invited already is, since nobody holds a password to present.
+// So the selector went, and what the block held — whether a second factor is
+// required, the acknowledgement of an insecure posture, the password floor —
+// is stated here directly.
 //
 // `bootstrap` opened a second way in for the first person — a one-time code a
 // node wrote beside its store — beside the one every serving node already
@@ -341,12 +325,6 @@ func (b AuthBackend) Valid() bool { return slices.Contains(AuthBackends, b) }
 //
 // All four are refused by name if they appear — see retiredBootstrapFields.
 type APIAuth struct {
-	// Backend is how PEOPLE sign in. Empty derives from whether the
-	// `local` block is present: `local` if it is, and `none` if not —
-	// which is the honest reading of a file that says nothing about
-	// people, and never a password backend somebody did not ask for.
-	Backend AuthBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=local|none" desc:"How people sign in. Empty derives from whether local is present."`
-
 	// MaxGrants is THE CEILING: the most authority this deployment will
 	// let a company's own directory confer. REQUIRED once the API is
 	// served.
@@ -382,10 +360,38 @@ type APIAuth struct {
 	// Audit is how long the identity estate keeps what happened.
 	Audit APIAudit `yaml:"audit,omitempty" json:"audit,omitzero"`
 
-	// Local configures the password backend. A POINTER because its
-	// presence is what `backend` derives from, and a value type cannot
-	// tell an absent block from one whose every field is empty.
-	Local *APILocal `yaml:"local,omitempty" json:"local,omitempty"`
+	// TOTP is whether a second factor is REQUIRED of a person who signs in
+	// with a password, or merely offered.
+	//
+	// UNSET IS REQUIRED, the secure value, so a deployment that says
+	// nothing gets a second factor and `optional` is the explicit — and,
+	// off loopback, acknowledged and logged — weakening. It used to have no
+	// default and refuse its zero, which made sense only while the block it
+	// sat in was itself optional and its absence meant nobody signed in at
+	// all; with password sign-in always on, a refusal of the zero would make
+	// every deployment write the one line that should be the default. See
+	// [APIAuth.SecondFactor], which reads the zero as required.
+	TOTP iam.SecondFactor `yaml:"totp,omitempty" json:"totp,omitempty" js:"enum=required|optional" desc:"Whether a second factor is required of a person signing in with a password (default required). optional off loopback needs accept_insecure."`
+
+	// AcceptInsecure is the deliberate acknowledgement that this
+	// deployment is reachable off loopback with a posture that should not
+	// be. It is what lets `totp: optional` and an `http://` external URL
+	// stand on a routable address, and it is logged at WARN on every
+	// start for the whole life of the deployment.
+	//
+	// A FIELD RATHER THAN A FLAG, unlike `-dev-principal`, and the
+	// difference is what each one opens: the flag authenticates every
+	// request as somebody, which must never survive being copied into an
+	// image; this weakens a requirement while every credential still has
+	// to be presented, which a staging deployment may genuinely want to
+	// carry in its own config.
+	AcceptInsecure bool `yaml:"accept_insecure,omitempty" json:"accept_insecure,omitempty" desc:"Acknowledge an insecure posture on a routable address. Logged at WARN on every start."`
+
+	// MinPasswordLength raises the floor above [iam.MinPasswordChars].
+	// Zero takes that floor; anything below it is refused rather than
+	// clamped, because a file asking for eight is a file whose writer
+	// believes eight is enough.
+	MinPasswordLength int `yaml:"min_password_length,omitempty" json:"min_password_length,omitempty" js:"min=0;max=256" desc:"Minimum password length. 0 takes the engine's floor of 12."`
 
 	// Tokens are this deployment's own machine credentials: break-glass,
 	// the operator CLI, a CI pipeline. At least one is REQUIRED once the
@@ -399,16 +405,26 @@ type APIAuth struct {
 	AllowedOrigins []string `yaml:"allowed_origins,omitempty" json:"allowed_origins,omitempty" desc:"Additional browser origins this deployment is reached on. Empty = same-origin only."`
 }
 
-// Resolved is which backend this block configures, with the derivation
-// applied: what is declared, or what the presence of a block implies.
-func (a APIAuth) Resolved() AuthBackend {
-	if a.Backend != "" {
-		return a.Backend
+// SecondFactor is whether a second factor is required here, with the default
+// applied: `optional` where the file says so, and `required` everywhere else.
+//
+// AN ALLOWLIST OF ONE, for [iam.Stage.MayAct]'s reason turned round: a value
+// this build does not know reads as REQUIRED, because the safe direction for
+// "must you prove more" is yes. It is the ONE reading of the setting — the
+// sign-in that enforces it and the posture read that reports it both ask it.
+func (a APIAuth) SecondFactor() iam.SecondFactor {
+	if a.TOTP == iam.SecondFactorOptional {
+		return iam.SecondFactorOptional
 	}
-	if a.Local != nil {
-		return AuthBackendLocal
+	return iam.SecondFactorRequired
+}
+
+// Passwords is the effective minimum password length.
+func (a APIAuth) Passwords() int {
+	if a.MinPasswordLength == 0 {
+		return iam.MinPasswordChars
 	}
-	return AuthBackendNone
+	return a.MinPasswordLength
 }
 
 // Ceiling is the resolved ceiling as a set, for the per-request intersection.
@@ -605,77 +621,37 @@ func (a APIAudit) validate(path Path) error {
 	return p.err()
 }
 
-// APILocal is the password backend: what this engine itself asks of a person.
-type APILocal struct {
-	// TOTP is whether a second factor is REQUIRED or merely offered. It
-	// has no default and its zero value is refused — see [iam.SecondFactor]
-	// for why this of all settings may not be inherited silently.
-	TOTP iam.SecondFactor `yaml:"totp,omitempty" json:"totp,omitempty" js:"enum=required|optional" desc:"Whether a second factor is required. No default: state one."`
-
-	// AcceptInsecure is the deliberate acknowledgement that this
-	// deployment is reachable off loopback with a posture that should not
-	// be. It is what lets `totp: optional` and an `http://` external URL
-	// stand on a routable address, and it is logged at WARN on every
-	// start for the whole life of the deployment.
-	//
-	// A FIELD RATHER THAN A FLAG, unlike `-dev-principal`, and the
-	// difference is what each one opens: the flag authenticates every
-	// request as somebody, which must never survive being copied into an
-	// image; this weakens a requirement while every credential still has
-	// to be presented, which a staging deployment may genuinely want to
-	// carry in its own config.
-	AcceptInsecure bool `yaml:"accept_insecure,omitempty" json:"accept_insecure,omitempty" desc:"Acknowledge an insecure posture on a routable address. Logged at WARN on every start."`
-
-	// MinPasswordLength raises the floor above [iam.MinPasswordChars].
-	// Zero takes that floor; anything below it is refused rather than
-	// clamped, because a file asking for eight is a file whose writer
-	// believes eight is enough.
-	MinPasswordLength int `yaml:"min_password_length,omitempty" json:"min_password_length,omitempty" js:"min=0;max=256" desc:"Minimum password length. 0 takes the engine's floor of 12."`
-}
-
-// MaxPasswordLength is the ceiling under [APILocal.MinPasswordLength].
+// MaxPasswordLength is the ceiling under [APIAuth.MinPasswordLength].
 //
 // A MINIMUM THAT NOBODY CAN SATISFY IS A DEPLOYMENT NOBODY CAN ENROL IN, and
 // 256 is already far past any memorable passphrase — so a larger number here
 // is a unit mistake rather than a policy.
 const MaxPasswordLength = 256
 
-// Passwords is the effective minimum password length.
-func (l *APILocal) Passwords() int {
-	if l == nil || l.MinPasswordLength == 0 {
-		return iam.MinPasswordChars
-	}
-	return l.MinPasswordLength
-}
-
-func (l *APILocal) validate(path Path, api API) error {
+// validatePasswords is what a person signing in with a password is asked: the
+// second factor and the password floor.
+func (a *APIAuth) validatePasswords(path Path, api API) error {
 	var p problems
-	if !l.TOTP.Valid() {
-		if l.TOTP == "" {
-			p.add(at(path, "totp"), ErrMissing,
-				"state `required` or `optional`: there is no default, because "+
-					"the value a deployment would inherit is the one that "+
-					"silently has no second factor")
-		} else {
-			p.add(at(path, "totp"), ErrUnknownValue,
-				"%q (want %s or %s)", l.TOTP, iam.SecondFactorRequired,
-				iam.SecondFactorOptional)
-		}
+	if a.TOTP != "" && !a.TOTP.Valid() {
+		p.add(at(path, "totp"), ErrUnknownValue,
+			"%q (want %s or %s; unset is %s)", a.TOTP, iam.SecondFactorRequired,
+			iam.SecondFactorOptional, iam.SecondFactorRequired)
 	}
 	// AN OPTIONAL SECOND FACTOR OFF LOOPBACK IS A FAULT unless somebody
 	// said so out loud. The judgement is on where a BROWSER reaches this
 	// deployment, not on the bind address: a hardened node binds loopback
 	// behind its proxy, so a bind check would permit the insecure posture
 	// in exactly the deployment that must refuse it.
-	if l.TOTP == iam.SecondFactorOptional && api.Serving() &&
-		!api.externalLoopback() && !l.AcceptInsecure {
+	if a.TOTP == iam.SecondFactorOptional && api.Serving() &&
+		!api.externalLoopback() && !a.AcceptInsecure {
 		p.add(at(path, "totp"), ErrConflict,
 			"`optional` on a deployment a browser reaches at %s means a "+
-				"password alone signs somebody in over the network. Write "+
-				"`required`, or acknowledge it with `accept_insecure: true` — "+
-				"which is logged at WARN on every start", api.ExternalBase())
+				"password alone signs somebody in over the network. Remove the "+
+				"line (unset is `required`), or acknowledge it with "+
+				"`accept_insecure: true` — which is logged at WARN on every "+
+				"start", api.ExternalBase())
 	}
-	if n := l.MinPasswordLength; n != 0 {
+	if n := a.MinPasswordLength; n != 0 {
 		switch {
 		case n < iam.MinPasswordChars:
 			p.add(at(path, "min_password_length"), ErrOutOfRange,
@@ -725,16 +701,10 @@ type APIToken struct {
 func (a *APIAuth) validate(path Path, api API) error {
 	var p problems
 
-	if a.Backend != "" && !a.Backend.Valid() {
-		p.add(at(path, "backend"), ErrUnknownValue,
-			"%q (want %s or %s)", a.Backend, AuthBackendLocal,
-			AuthBackendNone)
-	}
-
 	p.wrap(a.validateCeiling(path, api))
 	p.wrap(a.Session.validate(at(path, "session")))
 	p.wrap(a.Audit.validate(at(path, "audit")))
-	p.wrap(a.validateBackendBlocks(path, api))
+	p.wrap(a.validatePasswords(path, api))
 	p.wrap(a.validateTokens(path, api))
 
 	for i, origin := range a.AllowedOrigins {
@@ -769,40 +739,6 @@ func (a *APIAuth) validateCeiling(path Path, api API) error {
 			p.add(gp, ErrConflict, "duplicate grant %q", g)
 		}
 		seen[g] = struct{}{}
-	}
-	return p.err()
-}
-
-// validateBackendBlocks refuses a backend with no block to configure it and a
-// block no backend reads.
-func (a *APIAuth) validateBackendBlocks(path Path, api API) error {
-	var p problems
-	resolved := a.Resolved()
-
-	// A BLOCK NO BACKEND READS IS REFUSED rather than ignored, because
-	// ignoring it is how a deployment runs with `backend: none` while its
-	// file carries a fully configured password policy and everybody
-	// believes sign-in is set up.
-	if a.Local != nil && resolved != AuthBackendLocal {
-		p.add(at(path, "local"), ErrConflict,
-			"`backend: %s` reads nothing under `local`, so this block "+
-				"configures nothing and looks configured. Remove it, or write "+
-				"`backend: %s`", resolved, AuthBackendLocal)
-	}
-	if resolved == AuthBackendLocal {
-		if a.Local == nil {
-			// NOT DEFAULTED, because the one setting this block
-			// exists for has no safe default: `totp` decides
-			// whether a password alone is enough, and a block that
-			// defaulted would be answering that question on the
-			// operator's behalf.
-			p.add(at(path, "local"), ErrMissing,
-				"`backend: %s` needs a `local:` block, because the one thing "+
-					"it has to state — whether a second factor is required — "+
-					"has no safe default", AuthBackendLocal)
-		} else {
-			p.wrap(a.Local.validate(at(path, "local"), api))
-		}
 	}
 	return p.err()
 }
@@ -878,22 +814,20 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 				"withholds from everybody else"))
 	}
 
-	// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT, on both backends, and
-	// it is a fault rather than a warning because each leaves a different
-	// way to be locked out of your own company and both are permanent:
+	// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT, and a fault rather
+	// than a warning because each way it bites is a permanent lock-out of
+	// your own company:
 	//
-	//   - on `local`, an administrator who is throttled, who lost their
-	//     second factor, or whose password is refused has nothing else to
-	//     present;
-	//   - on `none`, it is the only credential that exists at all.
-	//
-	// And on every one of them, a fresh deployment's identity estate is
-	// EMPTY: somebody has to invite the first person, and the token is
-	// the only credential that exists to do it with.
+	//   - a fresh deployment's identity estate is EMPTY: somebody has to
+	//     invite the first person, and the token is the only credential
+	//     that exists to do it with;
+	//   - on a running one, an administrator who is throttled, who lost
+	//     their second factor, or whose password is refused has nothing
+	//     else to present.
 	if api.Serving() && len(a.Tokens) == 0 {
 		p.add(at(path, "tokens"), ErrMissing,
-			"at least one token is required once `api.port` is set, on every "+
-				"backend. The identity estate of a fresh deployment is empty, "+
+			"at least one token is required once `api.port` is set. The "+
+				"identity estate of a fresh deployment is empty, "+
 				"so this is what invites the first person (`crewlet iam "+
 				"invite`); and on a running one it is the way back in when an "+
 				"administrator has locked themselves out. Generate one with "+
@@ -1008,8 +942,8 @@ func (a API) warnings() []Warning {
 	// acknowledgement is what makes it legal, and it is a decision made
 	// once that everybody after inherits — so `crewlet validate` says it
 	// out loud every time, exactly as the engine logs it on every start.
-	if local := auth.Local; local != nil && local.AcceptInsecure {
-		out = append(out, advisory(field("api.auth.local.accept_insecure"),
+	if auth.AcceptInsecure {
+		out = append(out, advisory(field("api.auth.accept_insecure"),
 			"a posture that would otherwise be refused off loopback is in "+
 				"force: this deployment is reached at "+a.ExternalBase()+
 				" and `accept_insecure` is what lets it stand. Remove it once "+
@@ -1022,8 +956,8 @@ func (a API) warnings() []Warning {
 	//
 	// A WARNING RATHER THAN A REFUSAL because it is what a tunnel, a
 	// staging box and an internal network genuinely look like, and because
-	// the one posture it would be a refusal for — a password backend with
-	// an optional second factor — IS refused, by the rule beside it.
+	// the one posture it would be a refusal for — an optional second
+	// factor — IS refused, by the rule beside it.
 	if strings.HasPrefix(a.ExternalBase(), "http://") && !a.externalLoopback() {
 		out = append(out, advisory(field("api.external_url"),
 			"a browser reaches this deployment over plain http, so the session "+

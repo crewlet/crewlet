@@ -10,7 +10,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -32,15 +31,16 @@ import (
 func TestEveryAuthRouteIsClassified(t *testing.T) {
 	t.Parallel()
 
-	// THE UNGUARDED SIGN-IN ROUTES, plus the invitation pair and the
-	// sign-out. Each sign-in route is here because requiring a credential to
-	// obtain one is a deployment nobody can enter — for the invitation,
+	// THE UNGUARDED SIGN-IN ROUTES, plus the invitation and reset pairs and
+	// the sign-out. Each sign-in route is here because requiring a credential
+	// to obtain one is a deployment nobody can enter — for the two links,
 	// because holding the link IS the credential — and the sign-out because
 	// it must clear the cookie on a node that cannot read its identity
 	// estate, verifying every bearer it ends for itself.
 	unguarded := []string{
 		auth.PathAuthConfig, auth.PathAuthLogin,
-		auth.AuthInvitePrefix + "{id}", auth.PathAuthLogout,
+		auth.AuthInvitePrefix + "{id}", auth.AuthResetPrefix + "{id}",
+		auth.PathAuthLogout,
 	}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
 	// than derived as "the rest": a route that went missing from the
@@ -48,7 +48,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	// classified by omission.
 	guarded := []string{
 		"/auth/session", "/auth/token", "/auth/step-up",
-		"/auth/totp", "/auth/totp/recovery",
+		"/auth/totp", "/auth/totp/recovery", "/auth/password",
 		"/auth/logout/all", "/auth/logout/{lineage}",
 	}
 
@@ -215,10 +215,7 @@ func pathOf(pattern string) string {
 // the same whoever is named in it.
 func TestAnOversizedSignInIsAnsweredRatherThanDropped(t *testing.T) {
 	t.Parallel()
-	// A PASSWORD DEPLOYMENT, or the sign-in route answers that it serves
-	// none before it reads a byte.
 	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
 	build(t, b).Routes(mux)
 	for _, path := range []string{auth.PathAuthLogin, auth.AuthInvitePrefix + invitationID} {

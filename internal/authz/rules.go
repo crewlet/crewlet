@@ -277,11 +277,19 @@ type rule struct {
 	// row is a gate somebody forgot to fill in, which [granted] refuses.
 	grant iam.Grant
 
-	// also is a SECOND capability an operator row requires beside grant:
-	// the row admits only a principal holding BOTH. Empty on every row but
-	// the one gesture that belongs to two parties at once — ending every
-	// session in the company, which is the deployment's to run and the
-	// directory's to decide ([ActionSessionInvalidate]).
+	// also is a SECOND capability a row requires beside whatever else
+	// admits: the row admits only a principal holding it as well. On an
+	// operator row it sits beside grant — the one gesture that belongs to
+	// two parties at once, ending every session in the company, which is
+	// the deployment's to run and the directory's to decide
+	// ([ActionSessionInvalidate]). On a RELATION row it sits beside the
+	// relation: reading somebody's day is the owner-or-lead rule's, and it
+	// is a READ of the company — their notices name its tasks and their
+	// queue lists them — so it takes `state:read` as every other read does
+	// ([ActionInboxRead], [ActionMyWork], [ActionPersonRead]). Without it the
+	// same question had two answers: the query surface asks `state:read`
+	// of every question it registers, so `GET /work/inbox` refused a token
+	// carrying no grant that `POST /operator/act/work_inbox` answered.
 	//
 	// A FIELD AND NOT A SECOND VERB ASKED FROM INSIDE THE HANDLER, because
 	// the table is what a REST route, a socket question and a walk all read:
@@ -417,10 +425,16 @@ var rules = map[Action]rule{
 	// READING SOMEBODY'S DAY IS THE LEAD RELATION, and MARKING it is not.
 	// A lead re-orders what their report works on and says what is
 	// important; marking somebody's mail read and rearranging their
-	// pinned views is a gesture nobody asked a lead to make.
-	ActionPersonRead:    {class: ClassOwnOrLead, recency: iam.RecencyAny},
-	ActionMyWork:        {class: ClassOwnOrLead, recency: iam.RecencyAny},
-	ActionInboxRead:     {class: ClassOwnOrLead, recency: iam.RecencyAny},
+	// pinned views is a gesture nobody asked a lead to make. And reading it
+	// takes the read grant beside the relation ([rule.also]) — a person's
+	// own record is the company's tasks and notices about them — while
+	// keeping it (marks, pins, the order they mean to work in) takes none.
+	ActionPersonRead: {class: ClassOwnOrLead, also: iam.GrantStateRead,
+		recency: iam.RecencyAny},
+	ActionMyWork: {class: ClassOwnOrLead, also: iam.GrantStateRead,
+		recency: iam.RecencyAny},
+	ActionInboxRead: {class: ClassOwnOrLead, also: iam.GrantStateRead,
+		recency: iam.RecencyAny},
 	ActionPrioritiesSet: {class: ClassOwnOrLead, recency: iam.RecencyAny},
 	ActionInboxMark:     {class: ClassOwnRecord, recency: iam.RecencyAny},
 	ActionPinsSet:       {class: ClassOwnRecord, recency: iam.RecencyAny},
@@ -679,8 +693,9 @@ func GrantOf(a Action) (iam.Grant, bool) {
 	return r.grant, ok
 }
 
-// AlsoGrantOf reports the SECOND capability a two-party operator row asks for
-// beside [GrantOf]'s, and empty for every row that asks one or none — see
+// AlsoGrantOf reports the SECOND capability a row asks for beside what else
+// admits — a two-party operator row's beside [GrantOf]'s, a relation row's
+// beside the relation — and empty for every row that asks none — see
 // [rule.also].
 //
 // EXPORTED FOR THE WALKS, on [GrantOf]'s terms. Use [Decide].

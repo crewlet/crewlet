@@ -178,6 +178,12 @@ const RetryUndecidedSeconds = 2
 //     carrying the window it needs ([StepUpDetail]): the rule admitted the
 //     caller, and confirming who they are and replaying the request is the
 //     whole remedy, which a client can do without asking anybody.
+//   - A MACHINE TOKEN on a verb that needs a person present is `403
+//     token_refused`, its own code for step_up_required's reason: the
+//     `unauthorized` code's sentence is about a grant the credential lacks,
+//     and no grant on a token would admit it. It was that code with a
+//     sentence of its own as `detail`, so the envelope's `message` and its
+//     `detail` contradicted each other.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
 	switch {
 	case d.Unknown():
@@ -185,6 +191,9 @@ func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decisio
 	case d.Reason == ReasonStepUp:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
 			StepUpDetail(d))
+	case d.Reason == ReasonTokenRefused:
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused,
+			RefusalDetail(d.Reason, d.Grants))
 	default:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
 			RefusalDetail(d.Reason, d.Grants))

@@ -94,13 +94,13 @@ var log = logging.Get("api.auth")
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
-//   - FOUR ROUTES UNDER /auth/, and only four. Two because a login cannot
+//   - FIVE ENTRIES UNDER /auth/, and only five. Two because a login cannot
 //     require a login: the posture read and the sign-in are how somebody
 //     OBTAINS a credential, so requiring one is a deployment nobody can
 //     enter. What stands in for the guard on each is the throttle and the
-//     origin check, which they are NOT exempt from. Plus /auth/invite/,
-//     whose link is the credential — the id in the path and the secret
-//     beside it, never in a URL. And the SIGN-OUT
+//     origin check, which they are NOT exempt from. Plus /auth/invite/ and
+//     /auth/reset/, whose links are the credential — the id in the path and
+//     the secret beside it, never in a URL. And the SIGN-OUT
 //     OF THIS SESSION, because a sign-out must clear the cookie whatever this
 //     node can read: guarded, a node that could not read its identity estate
 //     answered it `503 identity_unavailable` before it ran, so on exactly the
@@ -131,6 +131,7 @@ var unguardedExact = map[string]struct{}{
 
 var unguardedPrefixes = []string{
 	WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/", AuthInvitePrefix,
+	AuthResetPrefix,
 }
 
 // The sign-in routes served without a credential, named HERE rather than in
@@ -143,9 +144,9 @@ var unguardedPrefixes = []string{
 // The dependency runs that way round because authapi already imports this
 // package for the guard, and the reverse would be a cycle.
 const (
-	// PathAuthConfig is the posture read: which backend, the password
-	// floor, whether a second factor is required. No user list and no
-	// count of people — see authapi.
+	// PathAuthConfig is the posture read: the password floor and whether a
+	// second factor is required. No user list and no count of people — see
+	// authapi.
 	PathAuthConfig = "/auth/config"
 
 	// PathAuthLogin is the sign-in itself.
@@ -160,6 +161,11 @@ const (
 	// secret, which travels beside the id in a header, a body or a form
 	// and never in a path.
 	AuthInvitePrefix = "/auth/invite/"
+
+	// AuthResetPrefix is the password reset pair — the link's view and its
+	// spend — exempt for the invitation's reason: holding the link is the
+	// credential, its secret in a header or a body and never in a path.
+	AuthResetPrefix = "/auth/reset/"
 
 	// PathDashboard is the dashboard's shell: the page every screen is a
 	// fragment route of, and so the page a link a person follows points
@@ -230,7 +236,7 @@ func IsRead(method string) bool {
 // WHAT READS THIS IS NARROWER THAN IT WAS. It used to decide whether an open
 // read posture on this bind deserved a warning; that posture is gone. What is
 // left is the development principal, which is refused outright off loopback —
-// and note that `api.auth.local`'s own insecure rule deliberately judges the
+// and note that `api.auth.accept_insecure`'s own rule deliberately judges the
 // EXTERNAL URL instead, because a hardened node binds loopback behind its
 // proxy and a bind check would permit the insecure posture in exactly the
 // deployment that must refuse it.
@@ -602,7 +608,8 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			// provider — which is the failure internal/iam/session's
 			// whole three-valued shape exists to prevent, arriving
 			// at the one frame that could still undo it.
-			log.Warn("api_auth_unavailable",
+			//nolint:contextcheck // r is the resolved request; see Resolve above
+			log.Log(r.Context(), UnreadLevel(r.Context()), "api_auth_unavailable",
 				"route", path, "remote", g.Client(r))
 			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
 				RetryIdentitySeconds)
@@ -620,18 +627,27 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			//
 			// COUNTED HERE AND ONLY HERE: this is the one arm where a
 			// refused credential decided something. See audit.go.
-			g.refused(r)
-			log.Warn("api_auth_failed",
-				"route", path,
-				"reason", "missing_or_invalid_bearer",
-				// The candidate value is NEVER logged: a rejected token
-				// is still a credential, and a log is a place it would
-				// outlive the request.
-				// THE RESOLVED CLIENT, not the peer. Behind a
-				// proxy every line would otherwise name the
-				// proxy, which is the one address that tells an
-				// operator nothing about who is guessing.
-				"remote", g.Client(r))
+			if g.refused(r) {
+				log.Warn("api_auth_failed",
+					"route", path,
+					"reason", "credential_refused",
+					// The candidate value is NEVER logged: a rejected
+					// token is still a credential, and a log is a place
+					// it would outlive the request.
+					// THE RESOLVED CLIENT, not the peer. Behind a
+					// proxy every line would otherwise name the
+					// proxy, which is the one address that tells an
+					// operator nothing about who is guessing.
+					"remote", g.Client(r))
+			} else {
+				// NOTHING PRESENTED IS NOBODY, NOT A FAILURE: a signed-out
+				// tab, an invitation's page and a probe all ask without
+				// a credential, and a WARN for each was a thousand lines
+				// an hour from one browser, burying the ones that are
+				// somebody's credential turned away.
+				log.Debug("api_auth_anonymous", "route", path,
+					"remote", g.Client(r))
+			}
 			// THE SAME REFUSAL ENVELOPE EVERY OTHER SURFACE
 			// ANSWERS WITH. This was a hand-written JSON literal
 			// and a hand-set header pair — the shape that drifts,

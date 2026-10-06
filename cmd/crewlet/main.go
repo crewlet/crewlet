@@ -216,7 +216,8 @@ Usage:
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           The company's people, credentials and sessions:
-                              invite, grant, bind, suspend, revoke, audit
+                              invite, grant, bind, suspend, revoke, reset a
+                              password, audit
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
@@ -2082,7 +2083,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 
 	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"external_url", boot.API.ExternalBase(),
-		"auth_backend", boot.API.Auth.Resolved(),
+		"second_factor", boot.API.Auth.SecondFactor(),
 		"tokens", app.Guard().Tokens(),
 		// THE BROWSER POSTURE BESIDE THE CREDENTIAL ONE. Zero is
 		// same-origin only, which is what the dashboard this process
@@ -2094,11 +2095,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// address a browser reaches over the network — which is a decision
 	// somebody made once and everybody after them inherits. A warning that
 	// only fired the first time would be a decision nobody can see.
-	if local := boot.API.Auth.Local; local != nil && local.AcceptInsecure {
+	if boot.API.Auth.AcceptInsecure {
 		log.WarnContext(ctx, "api_insecure_posture_accepted",
 			"external_url", boot.API.ExternalBase(),
-			"totp", local.TOTP,
-			"hint", "api.auth.local.accept_insecure is true: a posture that "+
+			"totp", boot.API.Auth.SecondFactor(),
+			"hint", "api.auth.accept_insecure is true: a posture that "+
 				"would otherwise be refused off loopback is in force. Remove it "+
 				"once this deployment is reached over TLS with a second factor")
 	}

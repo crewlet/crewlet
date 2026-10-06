@@ -196,6 +196,7 @@ function mount({
   );
   const input = screen.getByRole("combobox");
   return {
+    store,
     closed,
     keys,
     input,
@@ -747,6 +748,35 @@ describe("the actions, made as the person", () => {
     });
     expect(posted).toEqual([]);
     expect(p.closed).not.toHaveBeenCalled();
+  });
+
+  // A BROWSER THE ENGINE SERVES NO COMPANY IS OFFERED NONE OF ONE. A person
+  // whose state:read was withdrawn kept a palette listing the agents and tools
+  // of the snapshot they held, and one invited with none was offered Ask and
+  // Create held as "Offline" — online, and refused. The CONTROL is the same
+  // palette before the refusal, which lists the seat and asks its questions.
+  // Mutation: keep the snapshot on a refusal, ask regardless, or rank offline
+  // first in the gate, and a line here goes red.
+  test("a refused browser asks nothing, lists no seat or tool, and says why it cannot write", async () => {
+    const p = mount({ answers: TASKS });
+    act(() => p.store.applyTools([{ name: "task_activity", source: "builtin" }] as never));
+    await p.type("swe");
+    expect(screen.getAllByText("SWE").length).toBeGreaterThan(0);
+    await p.type("task");
+    expect(screen.getAllByText("task_activity").length).toBeGreaterThan(0);
+    expect(asked.some((q) => q.kind === "work_search")).toBe(true);
+
+    act(() => p.store.setAccessRefused("grant withdrawn: state:read"));
+    asked = [];
+    await p.type("swe");
+    expect(screen.queryByText("SWE")).toBeNull();
+    await p.type("task");
+    expect(screen.queryByText("task_activity")).toBeNull();
+    expect(asked).toEqual([]);
+    for (const label of [/Ask an agent/, /Create task/]) {
+      expect(p.row(label).textContent).toContain(WRITE_REASONS.refused);
+      expect(p.row(label).textContent).not.toContain(WRITE_REASONS.offline);
+    }
   });
 
   // NO DEFAULT PROJECT IS NOT A REASON TO REFUSE: the person chooses where,

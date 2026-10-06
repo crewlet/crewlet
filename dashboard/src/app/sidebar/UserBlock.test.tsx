@@ -13,9 +13,9 @@
  * keep its invariants here: a sign-out ends in a RELOAD at the sign-in —
  * nothing of the last person's company left in the tab — and only once the
  * engine has answered; a revocation nobody can confirm is said rather than
- * reloaded past; the second-factor gestures are offered to a person's session
- * and to nothing else; and a session the viewer never answers for is still
- * offered its sign-outs.
+ * reloaded past; the menu links the Account page, where a person's proof
+ * gestures live, and holds none of them itself; and a session the viewer never
+ * answers for is still offered its sign-outs.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -32,6 +32,7 @@ import {
   type Account,
 } from "./UserBlock.tsx";
 import { Router } from "~/app/router.tsx";
+import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { dates, reloadForTest, zone, zoneIsChosen } from "~/lib/prefs.ts";
 import { currentReader, noteReader } from "~/lib/reader.ts";
 import { recentsKey } from "~/lib/recents.ts";
@@ -40,6 +41,7 @@ import { starsKey } from "~/lib/starred.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { LiveSocket, Store, sessionRestored, type SessionAnswer } from "~/protocol/index.ts";
 import type { ReactNode } from "react";
 
@@ -52,17 +54,19 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** The block where it lives: under a client (its session read is the shared REST read), a router and a toaster. */
+/** The block where it lives: under a client, the frame's session read, a router and a toaster. */
 function block(viewer: ViewerState, seatName = ""): ReactNode {
   const store = new Store();
   const socket = new LiveSocket(store);
   return (
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <ToastProvider>
-          <UserBlock viewer={viewer} seatName={seatName} />
-        </ToastProvider>
-      </Router>
+      <SessionReading>
+        <Router>
+          <ToastProvider>
+            <UserBlock viewer={viewer} seatName={seatName} />
+          </ToastProvider>
+        </Router>
+      </SessionReading>
     </ClientContext.Provider>
   );
 }
@@ -169,9 +173,42 @@ describe("who the block says this is", () => {
     });
   });
 
+  // AND BY THEIR OWN NAME where their row holds one, which no seat gives them:
+  // the foot drew the login alone. The login stays beside it, as who the
+  // engine records them as. Mutation: drop the name and the login is drawn.
+  test("an unbound person is their own name, beside their login", () => {
+    const r = whoLine({ ...nobody, login: "bob.smith", unbound: true, grants: [] }, "", {
+      login: "bob.smith",
+      name: "Bob Smith",
+    });
+    expect(r).toEqual({
+      name: "Bob Smith",
+      detail: "bob.smith · Not bound to a seat",
+      grants: "Holds no grants",
+    });
+  });
+
   test("nobody and not-yet-known are their own sentences", () => {
     expect(whoLine({ ...nobody, anonymous: true }, "").name).toBe("Not signed in");
     expect(whoLine({ ...nobody, loading: true }, "").name).toBe("Checking who you are");
+  });
+
+  // A VIEWER THAT NEVER ANSWERS — the socket refused a person without
+  // `state:read` — is no reason to keep asking: the session names them, and
+  // what they hold. The CONTROL is the case above, with no session either.
+  test("a session stands in for a viewer that has not answered", () => {
+    expect(whoLine({ ...nobody, loading: true }, "", { login: "erin.ng", grants: [] })).toEqual({
+      name: "erin.ng",
+      detail: "Signed in",
+      grants: "Holds no grants",
+    });
+    expect(
+      whoLine({ ...nobody, loading: true }, "", {
+        login: "erin.ng",
+        name: "Erin Ng",
+        grants: ["work:write"],
+      }),
+    ).toEqual({ name: "Erin Ng", detail: "erin.ng", grants: "Holds work:write" });
   });
 
   test("only a person is a link, and it goes to their seat", () => {
@@ -209,39 +246,27 @@ describe("who the block says this is", () => {
   });
 
   // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is read
-  // by here, since no sign-in in it said — and one already recorded is never
-  // overwritten.
+  // by here, since no sign-in in it said — and a tab read by somebody else is
+  // never quietly theirs: it is handed over, reloaded with nothing kept.
   test("the session it finds is adopted as the tab's reader, where none is recorded", async () => {
     render(block(ada));
     await waitFor(() => expect(currentReader()).toBe("p-1"));
+    expect(reloads).not.toHaveBeenCalled();
     cleanup();
     noteReader("p-9");
     render(block(ada));
-    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2));
-    expect(currentReader()).toBe("p-9");
+    await waitFor(() => expect(reloads).toHaveBeenCalledTimes(1));
+    expect(currentReader()).toBe("p-1");
   });
 });
 
 describe("what the account offers", () => {
-  test("a person signed in with a session: their proof and both sign-outs", () => {
-    expect(accountOf(ada, PERSON)).toEqual({
-      kind: "session",
-      login: "ada.lovelace",
-      proof: true,
-    });
-  });
-
-  // A MACHINE HOLDS NO SECOND FACTOR, and a dialog the engine would refuse
-  // is a control that lies — the Tier A token's own session is the case.
-  test("a machine is offered no proof", () => {
-    const machine = { ...PERSON, kind: "machine", expires_at: undefined };
-    expect(accountOf({ ...ada, login: "token:ops", unbound: true }, machine)).toEqual({
+  test("a signed-in reader is offered the menu under their own login", () => {
+    expect(accountOf(ada, PERSON)).toEqual({ kind: "session", login: "ada.lovelace" });
+    expect(accountOf({ ...ada, login: "token:ops", unbound: true }, null)).toEqual({
       kind: "session",
       login: "token:ops",
-      proof: false,
     });
-    // NOR IS A SESSION NOBODY HAS ANSWERED FOR YET.
-    expect(accountOf(ada, null)).toMatchObject({ proof: false });
   });
 
   // THE VIEWER IS A SOCKET QUESTION, and a person the socket refuses — a seat
@@ -250,11 +275,7 @@ describe("what the account offers", () => {
   // to end their own session; the session route still answers them.
   test("a session the viewer never answers for is still offered its sign-outs", () => {
     const waiting = { ...nobody, loading: true };
-    expect(accountOf(waiting, PERSON)).toEqual({
-      kind: "session",
-      login: "ada.lovelace",
-      proof: false,
-    });
+    expect(accountOf(waiting, PERSON)).toEqual({ kind: "session", login: "ada.lovelace" });
     // NOTHING ANSWERED AT ALL IS STILL NOTHING.
     expect(accountOf(waiting, null)).toBeNull();
   });
@@ -266,42 +287,76 @@ describe("what the account offers", () => {
     await waitFor(() => expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/work")}`));
   });
 
-  test("the proof gestures are drawn for a person and for nothing else", () => {
-    const { onFactor, onCodes } = actions({ kind: "session", login: "ada.lovelace", proof: true });
-    fireEvent.click(screen.getByRole("button", { name: "Two-step verification…" }));
-    fireEvent.click(screen.getByRole("button", { name: "New recovery codes…" }));
-    expect(onFactor).toHaveBeenCalledOnce();
-    expect(onCodes).toHaveBeenCalledOnce();
-    cleanup();
-    actions({ kind: "session", login: "token:ops", proof: false });
-    expect(screen.queryByRole("button", { name: "Two-step verification…" })).toBeNull();
+  // THE PROOF GESTURES LIVE ON THE ACCOUNT PAGE, and the menu links it rather
+  // than keeping a second copy of them — a link, so it can open in a tab, that
+  // closes the menu it is in. The CONTROL is the menu still holding both
+  // sign-outs, which stay here for the reader the socket refuses.
+  test("the menu links the Account page and holds no proof gesture of its own", () => {
+    const { onLeave } = actions({ kind: "session", login: "ada.lovelace" });
+    const link = screen.getByRole("link", { name: "Account" });
+    expect(link.getAttribute("href")).toBe("#/account");
+    fireEvent.click(link);
+    expect(onLeave).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: /Two-step verification/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /recovery codes/i })).toBeNull();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Sign out everywhere" })).toBeTruthy();
   });
 });
 
-/** The account's gestures, drawn on their own with a toaster to report into. */
-function actions(account: Account) {
-  const onFactor = vi.fn();
-  const onCodes = vi.fn();
-  render(
-    <Router>
-      <ToastProvider>
-        <LayerHost>
-          <AccountActions
-            account={account}
-            grants="Holds state:read"
-            onFactor={onFactor}
-            onCodes={onCodes}
-          />
-        </LayerHost>
-      </ToastProvider>
-    </Router>,
-  );
-  return { onFactor, onCodes };
+/**
+ * The live socket a sign-out holds, recording what it was asked: `hold` before
+ * the request, `release` after one nothing answered.
+ */
+function heldSocket() {
+  const asked: string[] = [];
+  const socket = {
+    hold: () => asked.push("hold"),
+    release: () => asked.push("release"),
+  };
+  const value = { store: new Store(), socket } as unknown as { store: Store; socket: LiveSocket };
+  return { asked, value };
 }
 
-const signedIn: Account = { kind: "session", login: "ada.lovelace", proof: true };
+/** The account's gestures, drawn on their own with a toaster to report into. */
+function actions(account: Account) {
+  const onLeave = vi.fn();
+  const onSignOutEverywhere = vi.fn();
+  const client = heldSocket();
+  render(
+    <ClientContext.Provider value={client.value}>
+      <Router>
+        <ToastProvider>
+          <LayerHost>
+            <AccountActions
+              account={account}
+              grants="Holds state:read"
+              onLeave={onLeave}
+              onSignOutEverywhere={onSignOutEverywhere}
+            />
+          </LayerHost>
+        </ToastProvider>
+      </Router>
+    </ClientContext.Provider>,
+  );
+  return { onLeave, onSignOutEverywhere, asked: client.asked };
+}
+
+/** The confirmation signing out everywhere asks, drawn on its own. */
+function everywhere() {
+  const onClose = vi.fn();
+  const client = heldSocket();
+  render(
+    <ClientContext.Provider value={client.value}>
+      <LayerHost>
+        <SignOutEverywhereDialog onClose={onClose} />
+      </LayerHost>
+    </ClientContext.Provider>,
+  );
+  return { onClose, asked: client.asked };
+}
+
+const signedIn: Account = { kind: "session", login: "ada.lovelace" };
 
 describe("signing out", () => {
   // THE TAB'S OWN STORAGE GOES WITH THE SESSION, because a reload keeps it:
@@ -315,10 +370,14 @@ describe("signing out", () => {
     for (const key of [recentsKey("p-1"), starsKey("p-1"), recentsKey("p-9")]) {
       localStorage.setItem(key, "[]");
     }
-    actions(signedIn);
+    const { asked } = actions(signedIn);
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
     expect(sent).toContainEqual({ method: "POST", path: "/auth/logout" });
+    // THE SOCKET STOPS DIALLING FIRST: the engine closes this session's socket
+    // as it applies the sign-out, and that close re-dialled before the reload,
+    // a handshake refused 401 on the way out.
+    expect(asked).toEqual(["hold"]);
     expect(sessionStorage.length).toBe(0);
     for (const key of [recentsKey("p-1"), starsKey("p-1"), recentsKey("p-9")]) {
       expect(localStorage.getItem(key), key).toBeNull();
@@ -332,12 +391,26 @@ describe("signing out", () => {
     engine({ "POST /auth/logout": "offline" });
     sessionStorage.setItem("crewlet_org_draft", "{}");
     localStorage.setItem(recentsKey("p-1"), "[]");
-    actions(signedIn);
+    const { asked } = actions(signedIn);
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByText(/Signing out did not go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
+    // AND THE SOCKET IT HELD IS GIVEN BACK: the person is still signed in here.
+    expect(asked).toEqual(["hold", "release"]);
     expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
     expect(localStorage.getItem(recentsKey("p-1"))).toBe("[]");
+  });
+
+  // EVERYWHERE IS ASKED FIRST, because it ends every personal token too: the
+  // menu closes and asks, and nothing is sent until the person confirms.
+  // Mutation: post from the menu's own click and the revocation is sent.
+  test("everywhere: the menu closes and asks, sending nothing", () => {
+    const sent = engine({ "POST /auth/logout/all": { status: 200, body: {} } });
+    const { onLeave, onSignOutEverywhere } = actions(signedIn);
+    fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    expect(onLeave).toHaveBeenCalledOnce();
+    expect(onSignOutEverywhere).toHaveBeenCalledOnce();
+    expect(sent.filter((s) => s.method === "POST")).toEqual([]);
   });
 
   test("everywhere: a revocation nobody can confirm is said, never reloaded past", async () => {
@@ -351,16 +424,19 @@ describe("signing out", () => {
         },
       },
     });
-    actions(signedIn);
-    fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    everywhere();
+    const ask = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
+    expect(within(ask).getByText(/every personal access token you\s+minted/)).toBeDefined();
+    fireEvent.click(within(ask).getByRole("button", { name: "Sign out everywhere" }));
     expect(await screen.findByText(/Signing out everywhere did not go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
   });
 
   test("everywhere, confirmed, reloads into the sign-in too", async () => {
     engine({ "POST /auth/logout/all": { status: 200, body: {} } });
-    actions(signedIn);
-    fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
+    everywhere();
+    const ask = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
+    fireEvent.click(within(ask).getByRole("button", { name: "Sign out everywhere" }));
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
   });
 });

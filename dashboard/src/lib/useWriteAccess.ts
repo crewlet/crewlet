@@ -9,8 +9,14 @@
  * So every control asks here, is drawn for everybody, and is DISABLED with
  * the reason when it cannot act: the sentence is the instruction.
  *
- * FIVE REASONS, in the order a person has to clear them:
+ * SIX REASONS, in the order a person has to clear them:
  *
+ *  - REFUSED — the engine knows who this browser is and will not serve it the
+ *    company: a session without `state:read`, or a person whose seat was taken
+ *    out of the chart (`store.accessRefused`). Before OFFLINE, because a
+ *    socket that is not open for that reason is not one a reconnect brings
+ *    back, and "reconnect to make changes" sent a person invited with no
+ *    grants — online, and refused — looking for a network fault;
  *  - OFFLINE — the socket is down. A change is never queued for later: a
  *    queued write is one the person has walked away from believing it
  *    happened, and the company may have moved under it by the time it goes;
@@ -47,7 +53,19 @@ import type { ActionTool } from "~/protocol/act.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 
 /** Why a control cannot act, as a value a test can name. */
-export type WriteBlock = "offline" | "loading" | "anonymous" | "not_served" | "held";
+export type WriteBlock = "refused" | "offline" | "loading" | "anonymous" | "not_served" | "held";
+
+/**
+ * What the socket says about this browser: open, down — which a reconnect
+ * repairs — or refused by an engine that knows who it is, which none does.
+ */
+export type Link = "open" | "offline" | "refused";
+
+/** The [Link] a connection posture (`useConnection`) is. */
+export function linkOf(connection: { connected: boolean; accessRefused: string | null }): Link {
+  if (connection.accessRefused !== null) return "refused";
+  return connection.connected ? "open" : "offline";
+}
 
 export type WriteAccess =
   | {
@@ -69,6 +87,8 @@ export type WriteAccess =
  * names whose record is on screen.
  */
 export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held">, string>> = {
+  refused:
+    "The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold.",
   offline: "Offline — reconnect to make changes. Nothing is queued while you are away.",
   loading: "Checking who you are before anything can be changed.",
   anonymous: "Sign in to make changes — every change is recorded under your name.",
@@ -79,7 +99,7 @@ export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held">, string>
 export function writeAccess(
   tool: ActionTool,
   viewer: ViewerState,
-  connected: boolean,
+  link: Link,
   /** The hold the nearest [HoldWrites] placed, or null where none is. */
   held: string | null = null,
 ): WriteAccess {
@@ -88,7 +108,7 @@ export function writeAccess(
     block,
     reason: WRITE_REASONS[block],
   });
-  if (!connected) return blocked("offline");
+  if (link !== "open") return blocked(link);
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
   if (!viewer.acts.includes(tool)) return blocked("not_served");
@@ -121,9 +141,9 @@ export function HoldWrites({ reason, children }: { reason: string | null; childr
 /** Whether this browser may make `tool`'s change now, and why not. */
 export function useWriteAccess(tool: ActionTool): WriteAccess {
   const viewer = useViewer();
-  const { connected } = useConnection();
+  const link = linkOf(useConnection());
   const held = useContext(Held);
-  return writeAccess(tool, viewer, connected, held);
+  return writeAccess(tool, viewer, link, held);
 }
 
 /**
@@ -153,7 +173,7 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
  * person asked to confirm who they are can, on the spot.
  */
 export type ConfigWriteBlock =
-  "offline" | "loading" | "anonymous" | "no_grant" | "outside_scope" | "held";
+  "refused" | "offline" | "loading" | "anonymous" | "no_grant" | "outside_scope" | "held";
 
 export type ConfigWriteAccess =
   { can: true } | { can: false; block: ConfigWriteBlock; reason: string };
@@ -165,6 +185,7 @@ export const CONFIG_WRITE_GRANT = "config:write";
 export const CONFIG_WRITE_REASONS: Readonly<
   Record<Exclude<ConfigWriteBlock, "held" | "outside_scope">, string>
 > = {
+  refused: WRITE_REASONS.refused,
   offline: WRITE_REASONS.offline,
   loading: WRITE_REASONS.loading,
   anonymous: "Sign in to change the company's configuration.",
@@ -192,7 +213,7 @@ export function configGuardedReason(code: string): string {
 /** The decision over values — what the hook reads, and what a test pins. */
 export function configWriteAccess(
   viewer: ViewerState,
-  connected: boolean,
+  link: Link,
   held: string | null = null,
 ): ConfigWriteAccess {
   const blocked = (
@@ -202,7 +223,7 @@ export function configWriteAccess(
     block,
     reason: CONFIG_WRITE_REASONS[block],
   });
-  if (!connected) return blocked("offline");
+  if (link !== "open") return blocked(link);
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
   if (!viewer.grants.includes(CONFIG_WRITE_GRANT)) return blocked("no_grant");
@@ -213,9 +234,9 @@ export function configWriteAccess(
 /** Whether this browser may change the company's configuration now, and why not. */
 export function useConfigWriteAccess(): ConfigWriteAccess {
   const viewer = useViewer();
-  const { connected } = useConnection();
+  const link = linkOf(useConnection());
   const held = useContext(Held);
-  return configWriteAccess(viewer, connected, held);
+  return configWriteAccess(viewer, link, held);
 }
 
 // ---------------------------------------------------------------------------
@@ -255,12 +276,12 @@ export function outsideScopeReason(scope: LeadScope): string {
  */
 export function orgWriteAccess(
   viewer: ViewerState,
-  connected: boolean,
+  link: Link,
   scope: LeadScope,
   target: OrgTarget,
   held: string | null = null,
 ): ConfigWriteAccess {
-  const company = configWriteAccess(viewer, connected, held);
+  const company = configWriteAccess(viewer, link, held);
   if (company.can || company.block !== "no_grant" || scope.tops.length === 0) return company;
   const inside =
     target === "anywhere" ||
@@ -274,8 +295,8 @@ export function orgWriteAccess(
 /** [orgWriteAccess] for the person reading, now. */
 export function useOrgWriteAccess(target: OrgTarget): ConfigWriteAccess {
   const viewer = useViewer();
-  const { connected } = useConnection();
+  const link = linkOf(useConnection());
   const held = useContext(Held);
   const scope = useLeadScope();
-  return orgWriteAccess(viewer, connected, scope, target, held);
+  return orgWriteAccess(viewer, link, scope, target, held);
 }

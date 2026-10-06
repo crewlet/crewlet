@@ -210,7 +210,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		Stage: iam.StageActive,
 		Name:  in.Name, Email: in.Email, Login: in.Login, Seat: in.Seat,
 		Grants: in.Grants,
-		OpID:   published, Reason: reasonOr(in.Reason, "created through /iam/people"),
+		OpID:   published, Reason: reasonOr(in.Reason, byCaller(r.Context(), "created")),
 	})
 	// THE ID ONLY BESIDE A CREATE THAT MAY HAVE LANDED: a refused one
 	// created nobody, and naming the person it would have made reads as
@@ -229,14 +229,50 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 // an administrator stripping somebody's last grant would send an empty list
 // that reads exactly like a body that never mentioned grants, and the strip
 // would silently not happen.
+//
+// GRANTS ARE THE WHOLE SET OR A CHANGE TO IT, never both. `grants` replaces
+// what the person holds, which is what somebody stating it outright means
+// (`crewlet iam grant`). `add_grants` and `remove_grants` are applied to what
+// they hold when the record is DECIDED, which is what an editor working from
+// an earlier read means: sent as a whole set, the grants that editor never
+// touched are the ones their read held, so a grant another administrator took
+// away meanwhile is handed back and one they gave is taken away again — and
+// nothing refuses it, since only an addition needs the caller to hold the
+// grant. The tracker's set-valued arguments take the same two shapes for the
+// same reason.
 type patchBody struct {
-	Name   *string      `json:"name"`
-	Login  *string      `json:"login"`
-	Seat   *string      `json:"seat"`
-	Grants *[]iam.Grant `json:"grants"`
-	Stage  *iam.Stage   `json:"stage"`
+	Name         *string      `json:"name"`
+	Login        *string      `json:"login"`
+	Seat         *string      `json:"seat"`
+	Grants       *[]iam.Grant `json:"grants"`
+	AddGrants    []iam.Grant  `json:"add_grants"`
+	RemoveGrants []iam.Grant  `json:"remove_grants"`
+	Stage        *iam.Stage   `json:"stage"`
 
 	Reason string `json:"reason"`
+}
+
+// grantsOn is what the body makes of the grants somebody holds, and whether
+// it touches them at all.
+func (b patchBody) grantsOn(held []iam.Grant) ([]iam.Grant, bool) {
+	if b.Grants != nil {
+		return *b.Grants, true
+	}
+	if len(b.AddGrants) == 0 && len(b.RemoveGrants) == 0 {
+		return held, false
+	}
+	out := make([]iam.Grant, 0, len(held)+len(b.AddGrants))
+	for _, g := range held {
+		if !slices.Contains(b.RemoveGrants, g) {
+			out = append(out, g)
+		}
+	}
+	for _, g := range b.AddGrants {
+		if !slices.Contains(out, g) {
+			out = append(out, g)
+		}
+	}
+	return out, true
 }
 
 // refusal is what is wrong with an edit that this surface can judge before
@@ -260,6 +296,21 @@ func (b patchBody) refusal() string {
 	case len(b.Reason) > iamdomain.MaxReason:
 		return "the reason is " + strconv.Itoa(len(b.Reason)) + " bytes and " +
 			"the cap is " + strconv.Itoa(iamdomain.MaxReason)
+	case b.Grants != nil && (len(b.AddGrants) > 0 || len(b.RemoveGrants) > 0):
+		return "`grants` is the whole set and `add_grants` and " +
+			"`remove_grants` a change to what they hold: send one or the other"
+	}
+	// A NAME THAT IS NO GRANT is refused rather than removed as nothing, which
+	// is what a mistyped one would otherwise come to.
+	for _, g := range slices.Concat(b.AddGrants, b.RemoveGrants) {
+		if !g.Valid() {
+			return strconv.Quote(string(g)) + " is not a grant"
+		}
+	}
+	for _, g := range b.AddGrants {
+		if slices.Contains(b.RemoveGrants, g) {
+			return string(g) + " is both added and removed"
+		}
 	}
 	return ""
 }
@@ -320,13 +371,14 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	// THE ANSWER'S OPERATION IS THE KEY a retry sends back; every record
 	// below is published under op.id, a step of it bound to this request.
 	opID := op.key
-	reason := reasonOr(in.Reason, "changed through /iam/people")
-	if in.Grants != nil {
+	reason := reasonOr(in.Reason, byCaller(r.Context(), "changed"))
+	after, touchesGrants := in.grantsOn(held.Grants)
+	if touchesGrants {
 		// THE RECORD'S OWN CONFERRAL RULE, asked before anything lands:
 		// it reads nothing, so a grant the caller may not confer is
 		// refused with nothing moved. The document's decide asks it again
 		// in the snapshot the grants land from, which is the authority.
-		if err = writer.MayConfer(held.Grants, *in.Grants); err != nil {
+		if err = writer.MayConfer(held.Grants, after); err != nil {
 			s.answerWrite(w, r, opID, statelog.Result{}, err,
 				map[string]any{"id": id})
 			return
@@ -384,12 +436,16 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if in.Stage != nil {
+		// THE STAGE'S OWN DEFAULT, because a suspension's reason is what
+		// every session it ends is listed as ended by: the edit's
+		// "changed by …" said nothing about why.
+		staged := reasonOr(in.Reason, byCaller(r.Context(), stageDone(*in.Stage)))
 		if !step("stage")(writer.SetStage(r.Context(), id, *in.Stage,
-			statelog.StepOpID(op.id, "stage"), reason)) {
+			statelog.StepOpID(op.id, "stage"), staged)) {
 			return
 		}
 	}
-	if in.Name == nil && in.Grants == nil {
+	if in.Name == nil && !touchesGrants {
 		// NOTHING LEFT FOR THE PERSON'S OWN DOCUMENT. A body that moved
 		// only a login, a seat or a stage has already landed its records,
 		// so publishing an empty document write here would be a record
@@ -412,10 +468,11 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		// sealed once, before the decide, and a decide may run again —
 		// sealed inside Apply it would be sealed afresh on every run.
 		Name: in.Name,
+		// A CHANGE TO THE GRANTS IS APPLIED TO THE SNAPSHOT'S, never to
+		// the row read above: another administrator's edit may have landed
+		// in between, and this one changes only what it names.
 		Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-			if in.Grants != nil {
-				p.Grants = *in.Grants
-			}
+			p.Grants, _ = in.grantsOn(p.Grants)
 			return p, nil
 		},
 		OpID: op.id, Reason: reason,
@@ -441,7 +498,7 @@ func (s *Service) DeletePerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	reason := reasonOr(r.URL.Query().Get("reason"), "removed through /iam/people")
+	reason := reasonOr(r.URL.Query().Get("reason"), byCaller(r.Context(), "removed"))
 	op, ok := s.opIDFor(w, r, "people-remove", nil)
 	if !ok {
 		return
@@ -589,11 +646,37 @@ type writtenView struct {
 // reasonOr is the caller's reason, or the surface's own.
 //
 // NEVER EMPTY. Every row in the trail carries one, and a blank reason is the
-// field an investigation most wants and least often finds — so the default
-// names the surface, which is at least true.
+// field an investigation most wants and least often finds.
 func reasonOr(given, fallback string) string {
 	if trimmed := strings.TrimSpace(given); trimmed != "" {
 		return trimmed
 	}
 	return fallback
+}
+
+// byCaller is a gesture's own reason: what was done, in words, and the login
+// of whoever did it — "suspended by jane.doe".
+//
+// IN WORDS, because a reason is read by people: it is the Detail of the
+// identity trail and, for a gesture that moves the revocation epoch, what
+// every session it ends is listed as ended by. It used to name the ROUTE
+// ("suspended through /iam/people"), which told an administrator reading a
+// person's sessions an API path and not who suspended them — the session row
+// has no author column of its own to say it. The LOGIN rather than the
+// author name a record carries ([iam.ActorFor]), which for a bound person is
+// a seat handle: a login is the name the directory lists a person under.
+func byCaller(ctx context.Context, done string) string {
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved || principal.Login == "" {
+		return done
+	}
+	return done + " by " + principal.Login
+}
+
+// stageDone is what moving somebody to a stage did, as a reason says it.
+func stageDone(stage iam.Stage) string {
+	if stage == iam.StageActive {
+		return "reactivated"
+	}
+	return string(stage)
 }

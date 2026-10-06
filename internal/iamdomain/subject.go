@@ -19,8 +19,8 @@
 //
 // What keeps an address, a login and a seat binding to one holder instead is
 // that EVERY WRITE THAT SETS OR FREES ONE IS A RECORD ON ONE SUBJECT — the
-// directory ([KindDirectory]): an enrolment, a redemption, an invitation, an
-// identity change and a removal. Its decide reads the whole directory in its
+// directory ([KindDirectory]): an enrolment, a redemption, an invitation and
+// its cancellation, an identity change and a removal. Its decide reads the whole directory in its
 // own snapshot, refuses a value somebody else holds by naming them
 // ([ErrTaken]), and publishes at that one subject's arbitration anchor — so two
 // directory writes contend at the broker and the loser decides again from rows
@@ -30,7 +30,8 @@
 // read in one snapshot needs no sequence, no reservation and no release.
 //
 // EVERYTHING THAT SETS NOTHING UNIQUE STAYS OFF IT. A person's own content —
-// their name, grants, credentials, stage and revocation epoch — arbitrates on
+// their name, grants, credentials, stage and revocation epoch, and a new
+// password with the epoch it moves in one record ([OpPassword]) — arbitrates on
 // their own subject, and a session on its lineage, so two administrators
 // editing two people never contend and a thousand people signing in at nine
 // o'clock do not either.

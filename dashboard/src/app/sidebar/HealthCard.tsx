@@ -11,10 +11,12 @@
  *   1. nobody is signed in — the engine accepted no session from this
  *      browser, nothing else on screen can be trusted, and the card is the
  *      button that goes to the sign-in;
- *   2. the engine knows who this is and will not serve them — a seat taken
- *      out of the chart, a session without `state:read` — which no press
- *      here repairs, so the card is a statement and the state bar beside it
- *      carries the retry and the sign-out;
+ *   2. the reader holds no access yet — a session without `state:read`,
+ *      for which nothing is dialled — said NEUTRALLY, because a person
+ *      invited with no grants is not a fault; or the engine knows who this
+ *      is and will not serve them — a seat taken out of the chart — in
+ *      danger. No press here repairs either, so the card is a statement and
+ *      the panel in place of the screen carries the retry and the sign-out;
  *   3. the socket is reconnecting — everything shown is the last push;
  *   4. this node is draining — it is leaving and hands its seats on;
  *   5. no company is configured — nothing runs, whatever else is true;
@@ -58,7 +60,7 @@ import type { EngineHealth } from "~/contract/health.ts";
 const AGREED = new Set(["", "serve", "wait"]);
 
 export interface HealthReading {
-  tone: "success" | "warning" | "danger";
+  tone: "success" | "warning" | "danger" | "neutral";
   title: string;
   detail: string;
   /**
@@ -87,9 +89,11 @@ export function healthReading(input: {
   authRejected: boolean;
   /** Why the engine will not serve a browser it knows, or null. */
   accessRefused?: string | null;
+  /** The reader's session holds no `state:read`, so nothing is dialled. */
+  noAccess?: boolean;
   health: EngineHealth | null;
 }): HealthReading {
-  const { connected, authRejected, accessRefused = null, health } = input;
+  const { connected, authRejected, accessRefused = null, noAccess = false, health } = input;
   const alarms = alarmLine(health);
   if (authRejected) {
     return {
@@ -97,6 +101,16 @@ export function healthReading(input: {
       title: "Not signed in",
       detail: "The engine accepted no session from this browser — sign in",
       press: "sign-in",
+    };
+  }
+  // NO ACCESS YET BEFORE A REFUSAL: a socket refused for want of the grant is
+  // the same state, and the session is what says which one this is.
+  if (noAccess) {
+    return {
+      tone: "neutral",
+      title: "No access yet",
+      detail: "Signed in, without the state:read grant the company's live state needs",
+      press: "none",
     };
   }
   if (accessRefused !== null) {

@@ -74,6 +74,10 @@ type Directory interface {
 	// SeatBindings is everybody bound to a seat, in one snapshot, which
 	// the seat listing joins to the running company's human seats.
 	SeatBindings(ctx context.Context) ([]iamdomain.SeatBinding, error)
+
+	// Invitations is one page of the invitations this estate holds.
+	Invitations(ctx context.Context, q iamdomain.InvitationsQuery) (
+		iamdomain.InvitationPage, error)
 }
 
 // Writer is one party's authority to change the identity estate, as this
@@ -101,6 +105,9 @@ type Writer interface {
 	// up is freed by the record that takes the new one.
 	SetIdentity(ctx context.Context, in iamdomain.IdentityEdit) (statelog.Result, error)
 	Invite(ctx context.Context, in iamdomain.InviteMint) (iamdomain.InviteIssued, error)
+
+	// CancelInvitation withdraws an invitation nobody has redeemed.
+	CancelInvitation(ctx context.Context, id, opID, reason string) (statelog.Result, error)
 
 	// MayConfer is the record's own conferral rule, asked BEFORE the first
 	// record of an edit that moves a login or a seat ahead of its grants —
@@ -140,6 +147,11 @@ type Authority func(principal iam.Principal) Writer
 // ring cannot open. See [Service.open].
 type Opener interface {
 	Open(personID string, field iamdomain.Field, sealed string) (string, error)
+
+	// OpenInvitation opens the address an invitation was issued to, sealed
+	// as the INVITATION's own because there is no person yet
+	// ([iamdomain.Sealer.SealInvitation]).
+	OpenInvitation(invitationID, sealed string) (string, error)
 }
 
 // Audit is where this surface's identity facts go: a credential minted or
