@@ -1,6 +1,7 @@
 package codingagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,7 +85,9 @@ type Output struct {
 	// Result is the file the CLI's RESULT is read from, whole ([CLI.Parse]),
 	// or "" when the result is the stream's own. When it names a file other
 	// than Stdout, the wrapper writes it after the CLI exits: the stream's
-	// last line, which is where a CLI that streams puts its result.
+	// last line, which is where a CLI that streams puts its result — and
+	// where the wrapper died before it could, the collection reads that line
+	// from the stream in its place.
 	Result string
 }
 
@@ -351,16 +354,33 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	out := r.cli.Output(paths)
 	var refused []string
 
-	var result sandbox.Result
+	var (
+		result sandbox.Result
+		last   streamLast
+	)
 	if out.Events {
-		streamed, err := r.decodeStream(ctx, box, out.Stdout)
+		streamed, end, err := r.decodeStream(ctx, box, out.Stdout)
 		if err != nil {
 			return sandbox.Result{}, err
 		}
-		result = streamed
+		result, last = streamed, end
 	}
 	if out.Result != "" {
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its CLI printed")
+		if err == nil && refusal == "" && out.Events && out.Result != out.Stdout && strings.TrimSpace(raw) == "" {
+			// THE WRAPPER NEVER COPIED IT. The result file is the stream's
+			// last line, written by the wrapper once the CLI has exited, so
+			// a run whose process group died — an OOM kill, a host restart
+			// — has none, and Parse("") called a run that streamed a whole
+			// session "a run that produced no output". The stream's last
+			// line is what the copy would have held: a result message the
+			// CLI did print, or whatever it was saying when it stopped,
+			// which Parse names for what it is.
+			raw, refusal = last.resultLine(out.Stdout)
+			log.WarnContext(ctx, "coding_agent_result_from_stream", "agent", r.cli.Name(),
+				"detail", "the result file was never written, so the event stream's last line "+
+					"was read in its place")
+		}
 		switch {
 		case err != nil:
 			return sandbox.Result{}, err
@@ -528,18 +548,60 @@ func unreadNote(unread int64, none bool) string {
 		humanSize(unread))
 }
 
-// decodeStream reads one event stream through a fresh decoder.
-func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (sandbox.Result, error) {
+// decodeStream reads one event stream through a fresh decoder, and keeps its
+// last line.
+func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (sandbox.Result, streamLast, error) {
 	stream, err := box.OpenFile(ctx, path)
 	if err != nil {
-		return sandbox.Result{}, fmt.Errorf("codingagent: opening the event stream: %w", err)
+		return sandbox.Result{}, streamLast{}, fmt.Errorf("codingagent: opening the event stream: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
-	dec := r.cli.Events()
+	dec := &keepingLast{Decoder: r.cli.Events()}
 	if err := eachLine(stream, dec); err != nil {
-		return sandbox.Result{}, fmt.Errorf("codingagent: reading the event stream: %w", err)
+		return sandbox.Result{}, streamLast{}, fmt.Errorf("codingagent: reading the event stream: %w", err)
 	}
-	return dec.Result(), nil
+	return dec.Result(), dec.last, nil
+}
+
+// streamLast is an event stream's last line, as `tail -n 1` would copy it
+// into a result file: the line itself, or the size of one too long to read.
+type streamLast struct {
+	line    []byte
+	skipped int64
+}
+
+// resultLine is the stream's last line read as the result file the wrapper
+// did not write: the line, or a refusal where it was past what one line of a
+// stream may hold — as the copy itself would have been past what a result
+// file is read to.
+func (l streamLast) resultLine(stream string) (string, string) {
+	if l.skipped > 0 {
+		return "", fmt.Sprintf("the result its CLI printed (the last line of %s, read because the "+
+			"result file was never written) is %s, past the %s one line of a run's output may hold, "+
+			"so it was not read", stream, humanSize(l.skipped), humanSize(maxLineBytes))
+	}
+	return string(l.line), ""
+}
+
+// keepingLast is a decoder that also keeps the stream's last non-blank line,
+// in one buffer it reuses, so what it holds is one line however long the
+// stream.
+type keepingLast struct {
+	Decoder
+	last streamLast
+}
+
+func (k *keepingLast) Line(line []byte) {
+	if len(bytes.TrimSpace(line)) > 0 {
+		k.last.line = append(k.last.line[:0], line...)
+		k.last.skipped = 0
+	}
+	k.Decoder.Line(line)
+}
+
+func (k *keepingLast) Skipped(n int64) {
+	k.last.line, k.last.skipped = k.last.line[:0], n
+	k.Decoder.Skipped(n)
 }
 
 // readWhole reads a file meant to be read whole, answering a file past

@@ -205,6 +205,70 @@ func TestAClaudeStreamThatEndsBeforeItsResultIsNotASuccess(t *testing.T) {
 	}
 }
 
+// A RUN WHOSE WRAPPER NEVER COPIED ITS RESULT IS READ FROM ITS STREAM. The
+// result file is the stream's last line, written by the wrapper once the CLI
+// has exited, so a run whose process group died — an OOM kill, a host
+// restart — has none, and it used to be parsed as empty: a run that streamed a
+// whole session, pushed a branch and was killed read "the coding agent
+// produced no output" beside a transcript of everything it did. The stream's
+// last line is what the copy would have held, so it is read in its place:
+// the CLI's result, where it printed one before the wrapper died, and what
+// the stream was saying when it stopped otherwise.
+//
+// Mutation: parse the missing result file as it is, and each case reads as a
+// run that produced no output.
+func TestARunWhoseWrapperDiedIsReadFromItsStream(t *testing.T) {
+	t.Parallel()
+	push := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash",` +
+		`"input":{"command":"git push origin feature"}}]}}`
+	for _, tc := range []struct {
+		name   string
+		stream []string
+		check  func(t *testing.T, res sandbox.Result)
+	}{
+		{"it stopped before it reported", []string{push}, func(t *testing.T, res sandbox.Result) {
+			if res.Success || strings.Contains(res.Error, "produced no output") ||
+				!strings.Contains(res.Error, "stopped before it reported how its run ended") {
+				t.Errorf("success %v, error %q; want a run that stopped before its result", res.Success, res.Error)
+			}
+			if res.Transcript != "[tool] Bash: git push origin feature" {
+				t.Errorf("transcript = %q; want what it did", res.Transcript)
+			}
+		}},
+		{"it reported, then the wrapper died", claudeRunStream, func(t *testing.T, res sandbox.Result) {
+			if !res.Success || res.Text != "Fixed the race and opened https://github.com/acme/api/pull/9" ||
+				res.OutputTokens != 1900 {
+				t.Errorf("result = %+v; want the result message the stream ended on", res)
+			}
+			if res.Transcript != claudeTranscript {
+				t.Errorf("transcript =\n%s\nwant\n%s", res.Transcript, claudeTranscript)
+			}
+		}},
+		{"it wrote nothing at all", nil, func(t *testing.T, res sandbox.Result) {
+			if res.Success || !strings.Contains(res.Error, "produced no output") {
+				t.Errorf("success %v, error %q; want a run that produced no output", res.Success, res.Error)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runner := codingagent.NewClaudeCode()
+			b := box(t, runner)
+			p := paths(b)
+			if len(tc.stream) > 0 {
+				b.Put(p.Stream(), strings.Join(tc.stream, "\n")+"\n")
+			}
+			// No result file, no exit status, no done marker: the poll
+			// ended the run on the wrapper's liveness alone.
+			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			tc.check(t, res)
+		})
+	}
+}
+
 // THE RESULT IS COPIED OUT AFTER THE CLI EXITS, and the exit status is the
 // CLI's own: read into the wrapper's variable before the copy runs, so the
 // copy's own success cannot replace a failure. A CLI whose result is its
