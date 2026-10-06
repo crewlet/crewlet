@@ -174,7 +174,10 @@ describe("spending it", () => {
   });
 
   // THE CONTROL for the sign-in it does not do: the answer carries no session,
-  // so the screen sends the person to the sign-in form rather than in.
+  // so the screen sends the person to the sign-in form rather than in — with
+  // the login it named filled in, under a sentence about the password just
+  // set: it was a blank form under one about an invitation. Mutation: send
+  // the person to a bare `#/login` and the form is blank.
   test("it posts the secret in the body and sends the person to sign in", async () => {
     const sent = engine({
       [`GET ${PATH}`]: VIEW,
@@ -191,7 +194,10 @@ describe("spending it", () => {
     expect(spend?.body).toEqual({ secret: SECRET, password: "correct horse battery staple" });
     expect(spend?.url).not.toContain(SECRET);
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    await waitFor(() => expect(location.hash).toBe("#/login"));
+    await waitFor(() => expect(location.hash).toBe("#/login?login=jane.doe&after=reset"));
+    expect(await screen.findByText(/Your password is set\. Sign in with it/)).toBeDefined();
+    expect(screen.getByLabelText("Login or email address")).toHaveProperty("value", "jane.doe");
+    expect(screen.queryByText(/your invitation was for/)).toBeNull();
   });
 
   test("a link spent between the view and the post becomes the one answer", async () => {

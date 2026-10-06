@@ -154,7 +154,10 @@ function PasswordIsSet({ login }: { login: string }) {
         description="Every session you held has ended, on every device. A second factor you hold is still asked for."
         headingLevel="none"
         action={
-          <Button variant="primary" onClick={() => nav.to(["login"])}>
+          // WITH THE LOGIN, AND SAYING WHERE THEY CAME FROM: the sign-in was a
+          // blank form under "Use the login or email address your invitation
+          // was for", to somebody who had just been told which login to use.
+          <Button variant="primary" onClick={() => nav.to(["login"], { login, after: "reset" })}>
             Sign in
           </Button>
         }

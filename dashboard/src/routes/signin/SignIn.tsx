@@ -35,6 +35,14 @@
  * kept the token would hand the one value that outlives every session to any
  * script that ran in it.
  *
+ * # Arriving from a reset link is said, and its login is typed
+ *
+ * `?login=` fills the login and `?after=reset` says the password was just set
+ * — what the reset screen's own "Sign in" sends — so somebody who was just told
+ * which login to sign in with is not handed a blank form under a sentence about
+ * an invitation. Neither is a credential: a link carrying either fills a field
+ * and changes a sentence, nothing more.
+ *
  * # Already signed in is said, not assumed
  *
  * A browser can arrive here holding a perfectly good session — the reader
@@ -53,7 +61,10 @@ import { auth, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import { SignInPage } from "./SignInPage.tsx";
 
 export function SignIn() {
-  const next = useRoute().query.get("next");
+  const query = useRoute().query;
+  const next = query.get("next");
+  const typed = query.get("login") ?? "";
+  const reset = query.get("after") === "reset";
   const signedIn = useSignedIn();
 
   const [unclaimed, setUnclaimed] = useState(false);
@@ -82,7 +93,9 @@ export function SignIn() {
       lede={
         unclaimed
           ? "Nobody has been invited to this deployment yet."
-          : "Use the login or email address your invitation was for."
+          : reset
+            ? "Your password is set. Sign in with it — a second factor you hold is still asked for."
+            : "Use the login or email address your invitation was for."
       }
     >
       {current && (
@@ -107,7 +120,11 @@ export function SignIn() {
           password.
         </Callout>
       )}
-      <PasswordForm focus={!unclaimed} onSignedIn={(answer) => signedIn(answer, next)} />
+      <PasswordForm
+        focus={!unclaimed}
+        typed={typed}
+        onSignedIn={(answer) => signedIn(answer, next)}
+      />
       <TokenForm open={unclaimed} onSignedIn={(answer) => signedIn(answer, next)} />
     </SignInPage>
   );
@@ -126,13 +143,16 @@ function useWait(): [boolean, (seconds: number) => void] {
 
 function PasswordForm({
   focus,
+  typed,
   onSignedIn,
 }: {
-  /** Whether the login field takes the focus: not where the token is the way in. */
+  /** Whether the form takes the focus: not where the token is the way in. */
   focus: boolean;
+  /** A login already known — `?login=` — or "". The password takes the focus then. */
+  typed: string;
   onSignedIn: (answer: SignedInAs) => void;
 }) {
-  const [login, setLogin] = useState("");
+  const [login, setLogin] = useState(typed);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   // SET BY THE ENGINE, never guessed: it asks for the code only once the
@@ -196,7 +216,7 @@ function PasswordForm({
             aria-describedby={field.describedBy}
             name="username"
             autoComplete="username"
-            autoFocus={focus}
+            autoFocus={focus && typed === ""}
             width="full"
             spellCheck={false}
             value={login}
@@ -212,6 +232,7 @@ function PasswordForm({
             type="password"
             name="password"
             autoComplete="current-password"
+            autoFocus={focus && typed !== ""}
             width="full"
             value={password}
             onChange={(e) => changeCredentials(() => setPassword(e.target.value))}
