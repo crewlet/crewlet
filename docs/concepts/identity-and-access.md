@@ -883,7 +883,10 @@ enrol one**:
   handed a moment earlier, not who is holding it, so it earns no fresh
   step-up window. Recovery codes come after, from the whole session, while the
   password's proof is still inside `step_up` — or after a step-up that
-  presents the new factor.
+  presents the new factor. They are issued **only beside an authenticator
+  app**: held alone, recovery codes are a second factor of their own, and a
+  person who asked for a set with no app would have every later sign-in
+  demand a code that only those ten single-use codes answer.
 - A restricted session enrols **only while its person holds no second
   factor**, decided in the snapshot the factor would land on. Its proof is a
   password alone, and fresh enough for the enrolment's window, so without this

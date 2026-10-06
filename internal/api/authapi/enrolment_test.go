@@ -547,3 +547,50 @@ func (c *ticking) advance(d time.Duration) {
 	defer c.mu.Unlock()
 	c.at = c.at.Add(d)
 }
+
+// RECOVERY CODES ARE ISSUED ONLY BESIDE AN AUTHENTICATOR.
+//
+// A recovery credential is a second factor on its own, so a set issued to
+// somebody holding a password alone made every later sign-in ask for a code
+// only those ten single-use codes could answer. The CONTROL is the same person
+// holding an authenticator app, whose new set is issued. Mutation: drop the
+// check and the password-only person is handed codes and holds a factor.
+func TestRecoveryCodesAreIssuedOnlyBesideAnAuthenticator(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		strip    bool
+		status   int
+		recovery bool
+	}{
+		{"holding an authenticator (the control)", false, http.StatusOK, true},
+		{"holding a password alone", true, http.StatusConflict, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newSignInRig(t)
+			if tc.strip {
+				passwordOnly(r.estate)
+			}
+			rec := r.asPerson(http.MethodPost, "/auth/totp/recovery", "")
+			if rec.Code != tc.status {
+				t.Fatalf("answered %d (%s), want %d", rec.Code, rec.Body, tc.status)
+			}
+			var body map[string]any
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if _, codes := body["codes"]; codes != tc.recovery {
+				t.Errorf("the answer carried codes: %v, want %v (%s)", codes,
+					tc.recovery, rec.Body)
+			}
+			r.estate.mu.Lock()
+			defer r.estate.mu.Unlock()
+			if held := slices.ContainsFunc(r.estate.person.Credentials,
+				func(c iamdomain.Credential) bool {
+					return c.Method == iamdomain.MethodRecovery
+				}); held != tc.recovery {
+				t.Errorf("the person holds recovery codes: %v, want %v", held,
+					tc.recovery)
+			}
+		})
+	}
+}
