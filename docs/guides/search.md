@@ -44,9 +44,9 @@ alike — takes one of three modes, with one vocabulary on every surface:
 
 **The two halves do not read the same text.** The keyword half indexes a
 source's title and its whole body. The semantic half ranks one vector per
-source, computed from its **opening** — the title and the first 8 KiB of the
-body, whitespace collapsed, or less where the model's own per-input bound is
-smaller (see
+source, computed from its **opening** — the title and then the body, whitespace
+collapsed, the first 8 KiB of the two together, or less where the model's own
+per-input bound is smaller (see
 [Where the vectors come from](../concepts/knowledge-system.md#where-the-vectors-come-from)).
 So a passage deep in a long page is found by `hybrid` and `keyword` through the
 words it uses, and never by `semantic`, which cannot see past the window.
