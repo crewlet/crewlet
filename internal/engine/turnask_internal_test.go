@@ -4,8 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // WHAT A TURN WAS ASKED, read off its trigger — never the integration's
@@ -115,5 +118,60 @@ func TestATurnsSendersAreWhoSpokeInOrderOnce(t *testing.T) {
 	})
 	if len(got) != 2 || got[0] != ana || got[1] != bo {
 		t.Fatalf("senders = %+v, want Ana then the CTO", got)
+	}
+}
+
+// WHAT A TURN WAS ASKED REACHES ITS COMPLETED-TURN RECORD where nothing else
+// carries it. A colleague's question woke a turn with no interactions, so the
+// record — and the episode the reflection worker writes from it — knew the
+// turn only as "lead asked a colleague on a2a-1".
+func TestAColleaguesQuestionIsCarriedOnTheTurnsRecord(t *testing.T) {
+	t.Parallel()
+	_, _, done := turnRecords(t, events.New(types.A2ARequest{
+		ChannelID: "a2a-1", Requester: "lead", SenderRole: "Lead",
+		Content: "which test is flaky?",
+	}, events.TraceContext{}))
+	if !strings.Contains(done.Ask, "which test is flaky?") {
+		t.Fatalf("ask = %q, want the colleague's question", done.Ask)
+	}
+}
+
+// AND NOT REPEATED where the interactions carry it: a notification's ask is
+// what its senders said, which the record already holds once.
+func TestANotificationsAskIsNotCarriedTwice(t *testing.T) {
+	t.Parallel()
+	_, _, done := turnRecords(t, chatTrigger("D0ANA"))
+	if len(done.Interactions) == 0 {
+		t.Fatal("the chat wake recorded no interaction, so this asserts nothing")
+	}
+	if done.Ask != "" {
+		t.Fatalf("ask = %q beside %d interactions carrying it", done.Ask, len(done.Interactions))
+	}
+}
+
+// A RESUMED SEGMENT RECORDS THE ASK ITS TURN PARKED WITH — never one read off
+// the completion or the reply that resumed it, which is not what the turn was
+// asked.
+func TestAResumedTurnRecordsTheAskItParkedWith(t *testing.T) {
+	t.Parallel()
+	e, p := starting(t, refusingModels(t))
+	company := e.Company()
+	if err := e.resumeTurn(t.Context(), resumeInput{
+		Company: company,
+		Run: sandbox.PendingRun{
+			TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
+			TaskDescription: "fix the failing test", DelegationDepth: 3,
+		},
+		State: execstate.State{Ask: "the login test fails on main — can you fix it?"},
+		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
+			Org: company.Org},
+		Answer:  "use the main branch",
+		Trigger: chatTrigger("D0ANA"),
+	}); err != nil {
+		t.Fatalf("resumeTurn: %v", err)
+	}
+	done := only[*types.TurnCompleted](t, p, "turn_completed")
+	if done.Ask != "the login test fails on main — can you fix it?" {
+		t.Fatalf("ask = %q, want the one the turn parked with", done.Ask)
 	}
 }

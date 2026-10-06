@@ -87,6 +87,13 @@ type turnTelemetry struct {
 	// off the payload is one it cannot reason about at all.
 	interactions []types.InboundInteraction
 
+	// ask is what the turn was ASKED ([turnAsk]) — read off the trigger on
+	// a dispatch and off the parked conversation on a resume, which
+	// re-reads no trigger — for the completed-turn event to carry where
+	// the interactions do not ([types.TurnCompleted.Ask]) and for a
+	// suspension to park beside the conversation.
+	ask string
+
 	// requester is the seat whose wake started this turn — see
 	// [turnctx.Turn.Requester] — resolved off the same first event the
 	// trigger is described from, or off the parked row on a resume.
@@ -182,6 +189,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// merged digest's own constituent list, which is the same set the
 	// partition held and the one place a merge combined them.
 	t.interactions = e.interactionsOf(req.Ask())
+	t.ask = turnAsk(req.Ask())
 	t.requester = requesterOf(req.Events, t.interactions)
 	// The turn's own span, not the trigger's ids copied forward.
 	//
@@ -462,6 +470,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		EndedAt:       ended,
 		DurationMS:    int(ended.Sub(t.startedAt) / time.Millisecond),
 		TaskSummary:   t.trigger.Summary,
+		Ask:           t.unspokenAsk(),
 		PlanSummary:   planSummary(res),
 		// ReviewOutcome is the reviewer's decision, which is the turn's
 		// decision except where a guard ended it first — so it is read off
@@ -608,6 +617,16 @@ func lastModel(s runner.Spend) string {
 	return ""
 }
 
+// unspokenAsk is the turn's ask for [types.TurnCompleted.Ask]: carried only
+// where no interaction carries it already, since a notification's ask IS its
+// interactions' bodies.
+func (t turnTelemetry) unspokenAsk() string {
+	if len(t.interactions) > 0 {
+		return ""
+	}
+	return t.ask
+}
+
 // planSummary is the reviewer's account of the turn, or the artifact.
 //
 // The learning subsystem reads this to build an episode. The LAST review's
@@ -695,6 +714,10 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// turn for something, so a second run the resumed turn detaches is
 		// still the first requester's.
 		requester: in.Run.Requester,
+		// WHAT IT WAS ASKED, off the parked conversation: the event that
+		// resumed it is a collection or a reply, and its ask is not the
+		// turn's.
+		ask: in.State.Ask,
 		// The resumed turn's OWN span, opened by resumeTurn under the
 		// reconstructed suspended one. This used to be built by hand as
 		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID

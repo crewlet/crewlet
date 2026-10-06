@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -85,6 +86,27 @@ func (t Turn) WorkKey() string {
 		return t.Event.TurnID
 	}
 	return ""
+}
+
+// Ask is what the turn was ASKED, in the trigger's own words: its
+// interactions' bodies, in the order they spoke, or — for a wake that has no
+// interactions (a colleague's question, a schedule's task, a resumed segment)
+// — [types.TurnCompleted.Ask]. "" when the turn was told neither, which is a
+// turn from a build that predates the field and woken by no notification.
+//
+// NEVER the label ([types.TurnCompleted.TaskSummary]), which says what kind
+// of event woke the turn and nothing of what it said.
+func (t Turn) Ask() string {
+	if ask := strings.TrimSpace(t.Event.Ask); ask != "" {
+		return ask
+	}
+	parts := make([]string, 0, len(t.Event.Interactions))
+	for _, in := range t.Event.Interactions {
+		if body := strings.TrimSpace(in.Body); body != "" {
+			parts = append(parts, body)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // DedupeKey is what the redelivery guard remembers, and it is a DIFFERENT

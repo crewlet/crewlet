@@ -4,28 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // EpisodistSource names the worker in a pass result and in its logs.
 const EpisodistSource = "episodist"
-
-// episodeEmbedInput caps what is handed to the embedding provider.
-//
-// Every provider has a token limit and a task summary is not bounded: a
-// coalesced trigger merges N messages, and a webhook body can be a whole
-// diff. The cap is in CHARACTERS because that is what this layer can count
-// without a tokenizer per provider, and 8000 is comfortably inside the
-// ~8k-TOKEN window the third-generation OpenAI models offer — a summary long
-// enough to be truncated here has already said what it is about many times
-// over.
-const episodeEmbedInput = 8000
 
 // Episodist records one completed turn as an episode.
 //
@@ -40,14 +29,27 @@ const episodeEmbedInput = 8000
 // read side runs on; a company whose recall is empty needs to be able to see
 // WHICH gate closed.
 //
+// # What its vector is of
+//
+// The turn WHOLE: its label, what it was asked ([Turn.Ask]) and what it did
+// (its plan summary), as ONE text — the engine's embed seam chunks and pools
+// a text past the model's window rather than cutting it, so a long ask or a
+// long answer is read to its end. The label alone, which is what this used to
+// embed, is the same line for every message on a surface ("Message from Ana:
+// Slack message"), and a vector of it ranked every chat turn alike. The
+// vector is tagged with the model that made it, and recall compares only
+// vectors of the model it is asking with.
+//
 // # It writes even when there is no vector
 //
 // [Episode.Embedding] is nil when the embedder was unreachable, and the row
-// still lands: recall skips such rows while the time-window and outcome
-// queries still surface them, and the lifecycle worker's clustering falls
-// back to its token overlap. A transient embedding outage must never cost an
-// episode — the row cannot be reconstructed later, and the vector can, by
-// nothing more than a re-embed.
+// still lands: similarity recall skips such rows while the time-window,
+// conversation and outcome queries still surface them, and the lifecycle
+// worker never reads a vector at all — it clusters on tool overlap. A
+// transient embedding outage must never cost an episode, and nothing
+// re-embeds one later: the ask is not stored with the row, so the text the
+// vector was of cannot be rebuilt, and a vector of the label and the plan
+// alone would rank beside the whole ones as though it were one.
 type Episodist struct {
 	episodes *Episodes
 	embed    Embed
@@ -136,7 +138,7 @@ func (w *Episodist) Skip(t Turn) string {
 // Reflect implements [Worker].
 func (w *Episodist) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
 	ep := w.episodeOf(t)
-	vector := w.vector(ctx, ep.TaskSummary)
+	vector := w.vector(ctx, episodeText(ep, t.Ask()))
 	ep.Embedding, ep.EmbeddingModel = vector.Values, vector.Model
 
 	written, err := w.episodes.Append(ctx, ep)
@@ -204,18 +206,29 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 	}
 }
 
-// vector embeds the task summary, or reports none.
+// episodeText is what an episode's vector is of: the turn's label, what it
+// was asked and what it did, each that is present, one paragraph apiece.
+func episodeText(ep Episode, ask string) string {
+	parts := make([]string, 0, 3)
+	for _, part := range []string{ep.TaskSummary, ask, ep.PlanSummary} {
+		if part = strings.TrimSpace(part); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// vector embeds an episode's text, or reports none.
 //
 // NEVER an error: see the type comment. The failure is logged where it
 // happens and the row is written without a vector.
-func (w *Episodist) vector(ctx context.Context, summary string) Vector {
-	if w.embed == nil || summary == "" {
+func (w *Episodist) vector(ctx context.Context, text string) Vector {
+	if w.embed == nil || text == "" {
 		return Vector{}
 	}
-	summary = textcut.Bytes(summary, episodeEmbedInput)
 	ctx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
-	vector, err := w.embed(ctx, summary)
+	vector, err := w.embed(ctx, text)
 	if errors.Is(err, ErrNoEmbeddings) {
 		// The company configures none, which is how it is set up rather
 		// than a fault worth a line per turn.

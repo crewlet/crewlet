@@ -192,6 +192,18 @@ type State struct {
 	// that may no longer be readable.
 	Task string `json:"task_description"`
 
+	// Ask is what the turn was ASKED — the trigger's own words, without
+	// the wrapping Task carries — for the segment that finishes the turn to
+	// record ([types.TurnCompleted.Ask]): it is woken by the run's
+	// completion or a person's reply, not by the trigger, so without this
+	// the episode of every coding turn knew it only by its collection's
+	// label.
+	//
+	// Additive within v2: a row written before this existed decodes to "",
+	// and its episode is embedded as its label and what it did, which is
+	// what that build's would have been.
+	Ask string `json:"ask,omitempty"`
+
 	// AgentRun marks a suspension whose executor IS the detached run: a
 	// coding CLI in agent mode drove its own loop, so there is no engine
 	// conversation to re-enter and no dangling call to answer.

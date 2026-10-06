@@ -413,15 +413,34 @@ type TurnCompleted struct {
 	Suspended bool `json:"suspended,omitempty"`
 	// StartedAt / EndedAt bound the turn; DurationMS is the span the learning
 	// workers actually reason about.
-	StartedAt   time.Time `json:"started_at"`
-	EndedAt     time.Time `json:"ended_at"`
-	DurationMS  int       `json:"duration_ms"`
-	TaskSummary string    `json:"task_summary"`
-	// PlanSummary is what the turn set out to do, in the agent's own
-	// words — the executor's submitted summary, or the reviewer's account
-	// of what landed. It keeps its wire name: it is a column in the
-	// episode store and the heading every learning worker renders, and
-	// renaming it would migrate a value to buy a better word.
+	StartedAt  time.Time `json:"started_at"`
+	EndedAt    time.Time `json:"ended_at"`
+	DurationMS int       `json:"duration_ms"`
+	// TaskSummary is the one-line LABEL of the event that woke the turn —
+	// [events.Event.Summary], the line a feed shows ("Message from Ana:
+	// Slack message", "cto asked a colleague on ch-1") — and not what the
+	// turn was asked: that is Interactions' bodies, or Ask.
+	TaskSummary string `json:"task_summary"`
+	// Ask is what the turn was ASKED — the trigger's own words without the
+	// integration's wrapping, the text the turn-start prefetch judged
+	// relevance against — carried ONLY where Interactions does not already
+	// carry it: a colleague's question, a schedule's task, and a resumed
+	// segment, which re-reads no trigger and takes the ask its first
+	// segment was given off the parked conversation. A notification's ask
+	// is its interactions' bodies, and repeating them here would double the
+	// payload for nothing.
+	//
+	// No larger than the trigger it was read from, which crossed the queue
+	// in one message already. An older build leaves it empty, and an
+	// episode written from such a turn is embedded as its label and what
+	// it did.
+	Ask string `json:"ask,omitempty"`
+	// PlanSummary is what the turn DID, in the agent's words: the last
+	// review's account of what had landed where it wrote one — which a
+	// review sending the turn back for another round does — and otherwise
+	// the turn's final answer. It keeps its wire name: it is a column in the
+	// episode store and every learning worker reads it, and renaming it
+	// would migrate a value to buy a better word.
 	PlanSummary string `json:"plan_summary"`
 	// ToolSequence is the tools called during the FINAL executor round.
 	// Last-round-scoped by design: the reflect engine's no-action gate and

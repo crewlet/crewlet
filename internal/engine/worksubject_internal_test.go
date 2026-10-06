@@ -392,6 +392,12 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 		t.Errorf("the suspension carries %+v, want the task written before the park",
 			state.Written)
 	}
+	// AND WHAT THE TURN WAS ASKED, for the segment that finishes it to
+	// record: that segment is woken by the run's completion, whose ask is
+	// not the turn's.
+	if want := turnAsk([]*events.Event{chatTrigger("D0ANA")}); want == "" || state.Ask != want {
+		t.Errorf("the suspension parks the ask %q, want %q", state.Ask, want)
+	}
 	// AND WHAT THE HALF BEFORE THE PARK SPENT, charged to nothing yet: a
 	// chat wake names no item, so the segment that finishes the turn is the
 	// one that may charge it by its sole write — and it pays this half too,
