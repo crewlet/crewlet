@@ -388,6 +388,45 @@ test("an unknown invitation is retried under the key the engine handed back", as
   expect(within(dialog).getByText("https://x/dashboard#/invite/inv-2.s")).toBeTruthy();
 });
 
+// AN UNKNOWN ANSWER'S KEY IS FOR THE REQUEST IT WAS SENT WITH. An address
+// corrected after a dropped connection was sent under the first attempt's key,
+// which the engine refuses as a reused key in words about operation ids — and
+// only the press after it issued the invitation meant. The CONTROL is the case
+// above: sent unchanged, the retry carries the key. Mutation: reuse the key
+// whatever the body and the corrected request carries it.
+test("an unknown invitation corrected before its retry goes under a new key", async () => {
+  const eng = engine({
+    "POST /iam/invitations": [
+      json(503, {
+        error: "unavailable",
+        outcome: "unknown",
+        op_id: "0192f4c8-0000-7000-8000-000000000001",
+        message: "This node cannot answer that right now.",
+      }),
+      json(201, { id: "inv-2", url: "https://x/dashboard#/invite/inv-2.s", expires_at: "" }),
+    ],
+  });
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
+  const dialog = await screen.findByRole("dialog", { name: "Invite a person" });
+  fireEvent.change(within(dialog).getByLabelText("Email address"), {
+    target: { value: "jan@example.com" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
+  await settle();
+  expect(within(dialog).getByText(/Changed, it is a new one/)).toBeTruthy();
+  fireEvent.change(within(dialog).getByLabelText("Email address"), {
+    target: { value: "jane@example.com" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
+  await settle();
+  const [first, second] = eng.writes();
+  expect(second?.body).toMatchObject({ email: "jane@example.com" });
+  expect(second?.key).toMatch(UUID7);
+  expect(second?.key).not.toBe(first?.key);
+  expect(second?.key).not.toBe("0192f4c8-0000-7000-8000-000000000001");
+});
+
 // A REFUSAL IS THE ENGINE'S SENTENCE, with the grants that would admit; and a
 // refused create's key is not sent again with the next attempt.
 test("a refusal is the engine's sentence and the grants that would admit", async () => {

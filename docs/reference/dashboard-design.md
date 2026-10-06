@@ -5758,7 +5758,8 @@ Every one of these is one `/iam` write (`lib/iamWrite.ts`): a `403
 step_up_required` opens the step-up dialog and the same request is replayed; a
 create carries a fresh uuid7 `Idempotency-Key`, kept for the retry an unknown
 answer asks for — **Try again** sends the key the engine handed back, so it
-lands once — while a token's mint and a reset link read no key and a retry
+lands once, and a request changed before it is pressed is a new one under a new
+key, since a create's key sent with another body is refused as reused — while a token's mint and a reset link read no key and a retry
 issues another; a refusal is the engine's sentence with the grants that would
 admit; a `202` says the change is recorded and this node is catching up, and
 — like a stale refusal — leaves the dialog only **Done**, because the gesture

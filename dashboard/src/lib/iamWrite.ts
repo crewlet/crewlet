@@ -31,10 +31,13 @@
  * (`landed`), and an unknown one may have landed whole — the re-read is what
  * shows which.
  *
- * ONE KEY PER GESTURE ([useIamGesture]): minted when the gesture starts, kept
- * for the retry an `unknown` asks for, and replaced after any answer that
- * settled it — a create's key sent again with another body is refused as a
- * reused key.
+ * ONE KEY PER REQUEST ([useIamGesture]): minted when the gesture starts, kept
+ * for the retry an `unknown` asks for — the SAME request sent again — and
+ * replaced after any answer that settled it, and for a request that is not the
+ * one the unknown answer was for. A create's key sent again with another body
+ * is refused as a reused key, in the engine's own words about operation ids:
+ * an address corrected after a dropped connection and sent under the first
+ * attempt's key answered that, and only the press after it issued anything.
  */
 
 import { useCallback, useState } from "react";
@@ -128,7 +131,7 @@ function refusalOf(err: unknown, sent: string): IamAnswer {
       ? "No answer came back, so nothing here knows whether this landed."
       : "The engine could not confirm whether this landed.";
     const next = key
-      ? "Try again: it sends the same operation, which lands once."
+      ? "Try again as it is: it sends the same operation, which lands once. Changed, it is a new one."
       : asked(err.detail) || "Try again: this makes a new one.";
     return { kind: "unknown", key, text: `${said}${changed} ${next}` };
   }
@@ -159,8 +162,9 @@ export interface IamGesture {
   answer: IamAnswer | null;
   /**
    * Send the write. `keyed: false` for the two routes that read no key. The
-   * key is the unknown answer's where the last one was unknown — the retry it
-   * asked for — and a fresh one otherwise.
+   * key is the unknown answer's where the last one was unknown and this is
+   * the request it was for — the retry it asked for — and a fresh one
+   * otherwise.
    */
   run: (req: Omit<IamRequest, "key">, keyed?: boolean) => Promise<IamAnswer | null>;
   /** Forget the last answer, for a dialog that opens again. */
@@ -170,25 +174,32 @@ export interface IamGesture {
 export function useIamGesture(): IamGesture {
   const [busy, setBusy] = useState(false);
   const [answer, setAnswer] = useState<IamAnswer | null>(null);
+  // THE REQUEST THE LAST ANSWER WAS FOR, which an unknown answer's key names.
+  const [sent, setSent] = useState("");
   const run = useCallback(
     async (req: Omit<IamRequest, "key">, keyed = true) => {
       if (busy) return null;
+      const request = JSON.stringify([req.method, req.path, req.query ?? null, req.body ?? null]);
       const key = keyed
-        ? answer?.kind === "unknown" && answer.key
+        ? answer?.kind === "unknown" && answer.key && sent === request
           ? answer.key
           : newActOpID()
         : undefined;
       setBusy(true);
       try {
         const next = await iamWrite({ ...req, ...(key ? { key } : {}) });
+        setSent(request);
         setAnswer(next);
         return next;
       } finally {
         setBusy(false);
       }
     },
-    [answer, busy],
+    [answer, busy, sent],
   );
-  const reset = useCallback(() => setAnswer(null), []);
+  const reset = useCallback(() => {
+    setSent("");
+    setAnswer(null);
+  }, []);
   return { busy, answer, run, reset };
 }
