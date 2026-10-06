@@ -79,6 +79,11 @@ describe("which chunk draws a screen", () => {
   // Every place the sidebar and the palette can send a reader has a chunk that
   // loads — a `routes/<workspace>/index.ts` that stopped exporting a screen
   // would compile (the dispatch picks by name) and fail here.
+  //
+  // THIRTY SECONDS, the budget App.test.tsx gives its own whole-app cases:
+  // this body transforms every workspace's module graph, and run on its own on
+  // a four-core machine with a cold transform cache that alone took past the
+  // runner's five-second default — a failure about the machine, not a chunk.
   test("every destination's chunk loads and exports a screen", async () => {
     for (const d of DESTINATIONS) {
       const where = resolve(d.path);
@@ -86,7 +91,7 @@ describe("which chunk draws a screen", () => {
       const module = await loadChunk(chunkOf(where));
       expect(Object.keys(module).length, d.path.join("/")).toBeGreaterThan(0);
     }
-  });
+  }, 30_000);
 });
 
 describe("a chunk that does not load", () => {
