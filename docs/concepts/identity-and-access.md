@@ -758,15 +758,30 @@ after.
 ### Changing your own password ends everything else
 
 A signed-in person changes their own password with `POST /auth/password`,
-presenting the current one beside the new. **The current password is the
-proof**, verified exactly as a step-up's is: on
-the throttle's curve for the login they are signed in as, under the verify
-cap, and a wrong one is the one refusal every sign-in arm gives and a counted
-failure — with a detail naming the current password as the field, which tells
-somebody already signed in as that person nothing they did not know. That
-verification is the recent proof the change needs, so the route
-asks for no step-up first. The new password is held to the same floor and
-blocklist as every other.
+presenting the current one beside the new. **The proof is a step-up's, taken
+in the same request.** The current password is verified exactly as a step-up's
+is: on the throttle's curve for the login they are signed in as, under the
+verify cap, and a wrong one is the one refusal every sign-in arm gives and a
+counted failure — with a detail naming the current password as the field,
+which tells somebody already signed in as that person nothing they did not
+know. **Somebody who holds a second factor presents its `code` too** — the
+current code from their authenticator app, or one of their recovery codes —
+decided exactly as a step-up decides it: without one the answer is `401
+second_factor_required`, which changes nothing and counts as no attempt; a
+wrong one is the one refusal, counted on [the person's own
+curve](#a-failure-costs-a-wait-never-a-lockout) as well as the pair's; and a
+right one is [spent](#a-code-is-spent-when-it-is-used), as every code is.
+Together that is the recent proof the change needs, so the route asks for no
+step-up first. Somebody who holds no second factor presents the password
+alone, which is the whole of a step-up from them. The new password is held to
+the same floor and blocklist as every other.
+
+The code is asked because of what the change ends. On the current password
+alone, somebody who had a person's session cookie and their password — but
+not their authenticator — could change the password, which ends every other
+session and token the person holds and every outstanding reset link, and so
+lock the real owner out of their own account until an administrator issued
+them a reset link: the takeover a second factor exists to stop.
 
 It is how somebody proves who they are, so it needs **a person present**: a
 request that presented a machine token is refused (`reason: token_refused`), as a second
@@ -780,9 +795,8 @@ link, in the same record that sets it — there is no instant at which the new
 password works and a thief's session still does. **This browser stays signed
 in**: it is handed a new session exactly as a step-up hands one, the session
 it presented ended first and the new one keeping its absolute deadline. Its
-proof is the change itself for somebody who holds no second factor, for whom a
-password *is* the whole of a step-up; for somebody who holds one it stays the
-replaced session's, because the change proved the password and not the code.
+proof is the change itself, dated now, because the change proved everything a
+step-up from that person proves.
 
 A change this node has not applied yet answers `202` with `status:
 password_changed` and **no session**: the epoch a new session is opened at is
@@ -953,10 +967,11 @@ password alone, which is why it is refused off loopback unless
 
 ### A code is spent when it is used
 
-Either second factor works at a sign-in or a step-up, whichever the person
-holds: an app code, or one of their recovery codes when the phone is not to
-hand. Both are **spent by the sign-in they complete**, as a write to the
-person's own credentials decided in the same snapshot that checked them:
+Either second factor works at a sign-in, a step-up or a password change,
+whichever the person holds: an app code, or one of their recovery codes when
+the phone is not to hand. Both are **spent by the sign-in they complete**, as a
+write to the person's own credentials decided in the same snapshot that checked
+them:
 
 - an **app code** records the time step it was accepted at, and a code at or
   before that step is refused. Without it, the drift tolerance — the code

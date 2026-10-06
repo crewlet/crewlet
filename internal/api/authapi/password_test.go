@@ -2,6 +2,7 @@ package authapi_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
 // newPassword is a password every floor here accepts.
@@ -34,10 +36,34 @@ func passwordRig(t *testing.T) (*signInRig, http.Handler) {
 	return r, guarded(t, r)
 }
 
+// holderRig is [passwordRig] over a person who holds an authenticator app and
+// a set of recovery codes beside the password, on a surface clock the case
+// moves — so a session proved before the move and one proved after it are told
+// apart.
+func holderRig(t *testing.T) (*signInRig, http.Handler, *movingClock) {
+	t.Helper()
+	moving := &movingClock{at: clock}
+	r := newSignInRigWith(t, func(o *authapi.Options) {
+		o.Sessions = o.Writer.(*estate)
+		o.Now = moving.now
+	})
+	return r, guarded(t, r), moving
+}
+
 // signedIn signs the rig's person in through h and answers the cookie.
 func signedIn(t *testing.T, h http.Handler) string {
 	t.Helper()
-	login, _ := json.Marshal(map[string]string{"login": "jane.doe", "password": password})
+	return signedInWith(t, h, "")
+}
+
+// signedInWith is [signedIn] presenting code, or none where it is empty.
+func signedInWith(t *testing.T, h http.Handler, code string) string {
+	t.Helper()
+	fields := map[string]string{"login": "jane.doe", "password": password}
+	if code != "" {
+		fields["code"] = code
+	}
+	login, _ := json.Marshal(fields)
 	rec, cookie := send(t, h, http.MethodPost, "/auth/login", string(login), "")
 	if rec.Code != http.StatusOK || cookie == "" {
 		t.Fatalf("the sign-in answered %d with cookie %q: %s", rec.Code, cookie,
@@ -48,10 +74,38 @@ func signedIn(t *testing.T, h http.Handler) string {
 
 // changeBody is a password change's body.
 func changeBody(current, next string) string {
-	body, _ := json.Marshal(map[string]string{
-		"current_password": current, "new_password": next,
-	})
+	return codedChange(current, next, "")
+}
+
+// codedChange is a password change's body presenting a second factor's code,
+// or none where it is empty.
+func codedChange(current, next, code string) string {
+	fields := map[string]string{"current_password": current, "new_password": next}
+	if code != "" {
+		fields["code"] = code
+	}
+	body, _ := json.Marshal(fields)
 	return string(body)
+}
+
+// heldExtra is one carried field of the rig's person's live credential of
+// method, decoded into out — or false where they hold none.
+func heldExtra(t *testing.T, e *estate, method iamdomain.CredentialMethod,
+	field string, out any) bool {
+
+	t.Helper()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, c := range e.person.Credentials {
+		if c.Method != method || !c.RevokedAt.IsZero() {
+			continue
+		}
+		if err := json.Unmarshal(c.Extra[field], out); err != nil {
+			t.Fatalf("the %s credential's %s: %v", method, field, err)
+		}
+		return true
+	}
+	return false
 }
 
 // reaches reports whether a cookie still reaches a guarded route.
@@ -280,5 +334,223 @@ func TestAPendingPasswordChangeOpensNoSessionHere(t *testing.T) {
 		return c.MaxAge < 0 || (!c.Expires.IsZero() && c.Expires.Before(time.Now()))
 	}) {
 		t.Error("the cookie the change was made with was not cleared")
+	}
+}
+
+// A PASSWORD CHANGE ASKS THE SECOND FACTOR ITS PERSON HOLDS, AS A STEP-UP DOES.
+//
+// The change ends every other session and token the person holds, and every
+// reset link. On the current password alone, somebody holding a person's
+// session cookie and their password — but not their authenticator — changed
+// it, signed the owner out everywhere and locked them out until an
+// administrator issued them a reset link. So it is proved as a step-up from
+// them is proved: without the code it is ASKED FOR, changes nothing and is
+// counted as nothing; with a wrong one it is the one refusal, a counted
+// second-factor failure, and changes nothing; with a right one — the app's or
+// a recovery code — it lands, the code is SPENT, and the session this browser
+// is handed is proved NOW, not when the session it replaced was. The CONTROL
+// is a person holding no second factor, whose change takes no code and lands
+// exactly as it always did.
+//
+// Mutations: drop the second-factor check and the code-less change lands;
+// check the code without spending it and the app's step stays where it was
+// and the recovery code stays usable; keep the replaced session's proof for a
+// holder and the replacement is not proved now.
+func TestAPasswordChangeAsksTheSecondFactorItsPersonHolds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		holder bool
+		// code is what the change presents, at the surface's moved clock.
+		code    func(t *testing.T, r *signInRig, at time.Time) string
+		refused httpjson.Code
+		counted bool
+		factor  types.SecondFactor
+	}{
+		{name: "a holder presenting no code", holder: true,
+			code:    func(*testing.T, *signInRig, time.Time) string { return "" },
+			refused: httpjson.CodeSecondFactorRequired},
+		{name: "a holder presenting a wrong code", holder: true,
+			code: func(t *testing.T, _ *signInRig, at time.Time) string {
+				return wrongAppCodeAt(t, at)
+			},
+			refused: httpjson.CodeSignInRefused, counted: true},
+		{name: "a holder presenting the app's code", holder: true,
+			code: func(t *testing.T, _ *signInRig, at time.Time) string {
+				return appCode(t, at)
+			},
+			factor: types.FactorTOTP},
+		{name: "a holder presenting a recovery code", holder: true,
+			code: func(_ *testing.T, r *signInRig, _ time.Time) string {
+				return r.recovery[2]
+			},
+			factor: types.FactorRecovery},
+		{name: "somebody holding no second factor (the control)",
+			code: func(*testing.T, *signInRig, time.Time) string { return "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, h, moving := holderRig(t)
+			signInCode := func(i int) string { return r.recovery[i] }
+			if !tc.holder {
+				passwordOnly(r.estate)
+				signInCode = func(int) string { return "" }
+			}
+			// SIGNED IN TWICE BY RECOVERY CODE, so the app's step is
+			// untouched until the change spends it.
+			here, elsewhere := signedInWith(t, h, signInCode(0)),
+				signedInWith(t, h, signInCode(1))
+			if !reaches(t, h, elsewhere) {
+				t.Fatal("the other session reached nothing before the change; " +
+					"this case tests nothing")
+			}
+			var stepBefore int64
+			heldExtra(t, r.estate, iamdomain.MethodTOTP, "last_step", &stepBefore)
+			var codesBefore []string
+			heldExtra(t, r.estate, iamdomain.MethodRecovery, "verifiers", &codesBefore)
+			r.estate.mu.Lock()
+			opened := len(r.estate.starts)
+			r.estate.mu.Unlock()
+
+			// THE SESSIONS ABOVE WERE PROVED AT clock; the change is
+			// made ten minutes later.
+			moving.advance(10 * time.Minute)
+			at := moving.now()
+			rec, replacement := send(t, h, http.MethodPost, "/auth/password",
+				codedChange(password, newPassword, tc.code(t, r, at)), here)
+			_, failures := r.audit.snapshot()
+
+			if tc.refused != "" {
+				if rec.Code != http.StatusUnauthorized || codeOf(t, rec) != string(tc.refused) {
+					t.Fatalf("answered %d %s, want 401 %s", rec.Code, rec.Body, tc.refused)
+				}
+				if replacement != "" {
+					t.Error("a refused change handed this browser a session")
+				}
+				switch {
+				case len(r.estate.passwordSets) != 0:
+					t.Error("a change without its second factor reached the writer")
+				case !reaches(t, h, elsewhere):
+					t.Error("a change without its second factor ended the other session")
+				case !reaches(t, h, here):
+					t.Error("a change without its second factor ended this browser's session")
+				}
+				r.estate.mu.Lock()
+				started := len(r.estate.starts) - opened
+				r.estate.mu.Unlock()
+				if started != 0 {
+					t.Errorf("a refused change opened %d sessions", started)
+				}
+				var stepAfter int64
+				heldExtra(t, r.estate, iamdomain.MethodTOTP, "last_step", &stepAfter)
+				if stepAfter != stepBefore {
+					t.Errorf("a refused change spent the app's step %d", stepAfter)
+				}
+				if got := len(failures); (got == 1) != tc.counted || got > 1 {
+					t.Errorf("counted %+v, want counted %v", failures, tc.counted)
+				}
+				if tc.counted && failures[0].Method != types.FailSecondFactor {
+					t.Errorf("counted %+v, want a second-factor failure", failures[0])
+				}
+				// THE OLD PASSWORD STILL SIGNS THE PERSON IN.
+				signedInWith(t, h, signInCode(3))
+				return
+			}
+
+			if rec.Code != http.StatusOK || replacement == "" {
+				t.Fatalf("answered %d with cookie %q: %s", rec.Code, replacement, rec.Body)
+			}
+			if len(failures) != 0 {
+				t.Errorf("a change that proved itself counted %v", failures)
+			}
+			switch {
+			case len(r.estate.passwordSets) != 1:
+				t.Errorf("the estate was asked %d password sets, want one",
+					len(r.estate.passwordSets))
+			case reaches(t, h, elsewhere):
+				t.Error("the other session still reaches a guarded route after " +
+					"the password changed")
+			case !reaches(t, h, replacement):
+				t.Error("the replacement session this browser was handed reaches nothing")
+			}
+			// PROVED NOW, whoever changed it.
+			r.estate.mu.Lock()
+			last := r.estate.starts[len(r.estate.starts)-1]
+			r.estate.mu.Unlock()
+			if !last.ProvedAt.Equal(at) {
+				t.Errorf("the replacement was proved at %s, want now (%s), not "+
+					"when the session it replaced was (%s)", last.ProvedAt, at, clock)
+			}
+			// AND THE CODE IS SPENT, as a step-up spends it.
+			var stepAfter int64
+			heldExtra(t, r.estate, iamdomain.MethodTOTP, "last_step", &stepAfter)
+			var codesAfter []string
+			heldExtra(t, r.estate, iamdomain.MethodRecovery, "verifiers", &codesAfter)
+			switch tc.factor {
+			case types.FactorTOTP:
+				if stepAfter != credential.TOTPStep(at) {
+					t.Errorf("the app's last step is %d after the change, want the "+
+						"step its code was for, %d", stepAfter, credential.TOTPStep(at))
+				}
+			case types.FactorRecovery:
+				if len(codesAfter) != len(codesBefore)-1 {
+					t.Errorf("%d recovery codes are left after the change spent "+
+						"one, want %d", len(codesAfter), len(codesBefore)-1)
+				}
+			}
+			ups := emitted[types.IAMStepUpCompleted](r.audit)
+			if len(ups) != 1 || ups[0].SecondFactor != tc.factor {
+				t.Errorf("announced %+v, want one confirmation proved by %q", ups,
+					tc.factor)
+			}
+		})
+	}
+}
+
+// WRONG CODES ON A PASSWORD CHANGE CLIMB THE PERSON'S OWN CURVE.
+//
+// The code is decided on the step-up's path, so it meets the curve keyed on
+// the PERSON as well as the one keyed on the pair: somebody holding the cookie
+// and the password would otherwise divide the pair's curve by every address
+// they hold, and six digits fall to a /48 in about an hour. Three wrong codes
+// from three addresses, and the fourth, from a fourth, is 429 with the seven
+// seconds three failures earn — counted as a turned-away second-factor attempt
+// — and nothing is changed.
+//
+// Mutation: check the code without the person's curve and the fourth
+// address's code is refused like the first, with no wait.
+func TestWrongCodesOnAPasswordChangeClimbThePersonsCurve(t *testing.T) {
+	t.Parallel()
+	r, h, _ := holderRig(t)
+	cookie := signedInWith(t, h, r.recovery[0])
+	wrong := wrongAppCode(t)
+	change := func(i int) *httptest.ResponseRecorder {
+		rec, _ := sendFrom(t, h, fmt.Sprintf("2001:db8:%x::1", i), http.MethodPost,
+			"/auth/password", codedChange(password, newPassword, wrong), cookie)
+		return rec
+	}
+	for i := 1; i <= 3; i++ {
+		if rec := change(i); rec.Code != http.StatusUnauthorized ||
+			codeOf(t, rec) != string(httpjson.CodeSignInRefused) {
+			t.Fatalf("wrong code %d answered %d %s, want the one refusal", i,
+				rec.Code, rec.Body)
+		}
+	}
+	fourth := change(4)
+	if fourth.Code != http.StatusTooManyRequests {
+		t.Fatalf("the fourth wrong code, from a fourth address, answered %d %s, "+
+			"want 429 — each address was a curve of its own", fourth.Code, fourth.Body)
+	}
+	if got := fourth.Header().Get("Retry-After"); got != "7" {
+		t.Errorf("Retry-After %q, want the 7 seconds three wrong codes earn", got)
+	}
+	_, failures := r.audit.snapshot()
+	if last := failures[len(failures)-1]; !last.Throttled ||
+		last.Method != types.FailSecondFactor {
+		t.Errorf("the turned-away code counted as %+v, want a throttled "+
+			"second-factor attempt", last)
+	}
+	if len(r.estate.passwordSets) != 0 {
+		t.Error("a change on a wrong code reached the writer")
 	}
 }

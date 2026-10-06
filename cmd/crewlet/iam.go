@@ -111,8 +111,9 @@ where a second factor they hold still applies. Whatever ends their sessions ends
 an outstanding link too — suspend, revoke, reset-mfa and invalidate-all — so
 issue the link after any of those it is needed beside. A person changes their OWN
 password signed in, through POST /auth/password, which asks for the current one
-and needs a person present — which neither a Tier A token nor a machine token
-is, so this command has no flow for it.
+— and a code from anybody holding a second factor, as a step-up does — and
+needs a person present, which neither a Tier A token nor a machine token is,
+so this command has no flow for it.
 
 A token minted by "iam token" acts as the person or service account it names,
 carrying at most what they hold now, for at most a year (90 days unless -days

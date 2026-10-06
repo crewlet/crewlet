@@ -3,6 +3,7 @@ package authapi_test
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -109,8 +110,17 @@ func send(t *testing.T, h http.Handler, method, path, body string,
 	cookie string) (*httptest.ResponseRecorder, string) {
 
 	t.Helper()
+	return sendFrom(t, h, "203.0.113.9", method, path, body, cookie)
+}
+
+// sendFrom is [send] from source, for a case about which address an attempt
+// came from.
+func sendFrom(t *testing.T, h http.Handler, source, method, path, body string,
+	cookie string) (*httptest.ResponseRecorder, string) {
+
+	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.RemoteAddr = "203.0.113.9:4711"
+	req.RemoteAddr = net.JoinHostPort(source, "4711")
 	if cookie != "" {
 		req.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: cookie})
 	}

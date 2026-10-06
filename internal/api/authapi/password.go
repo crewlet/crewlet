@@ -18,14 +18,29 @@ import (
 
 // A PERSON CHANGES THEIR OWN PASSWORD.
 //
-// # The current password is the proof, and the only one asked
+// # The proof is a step-up's, taken here
 //
 // The route is guarded — a person signed in — and the CURRENT password is
 // verified exactly as a step-up's is: on the throttle's curve for who they are
 // signed in as, through the verify cap, a wrong one a counted failure answered
-// with the one refusal every sign-in arm gives. That verification IS the
-// recent proof the change needs, so the route does not additionally send the
-// person through a step-up first.
+// with the one refusal every sign-in arm gives. A person who HOLDS A SECOND
+// FACTOR presents its code too (`code`), decided as the step-up decides it
+// ([Service.proveSecondFactor]): absent, it is asked for
+// (`second_factor_required`, neither a success nor a failure on the curve);
+// wrong or already spent, it is the one refusal, a failure on the person's own
+// curve as well as the pair's;
+// right, it is SPENT — an app code records its step and a recovery code is
+// removed. Together that IS the recent proof the change needs, so the route
+// does not additionally send the person through a step-up first.
+//
+// THE CODE IS ASKED BECAUSE OF WHAT THE CHANGE ENDS. It took the current
+// password alone, so somebody holding a person's session cookie and their
+// password but not their authenticator changed the password — which ends
+// every other session and token the person holds and every reset link — and
+// locked the real owner out until an administrator issued them a reset link:
+// the takeover the second factor exists to stop, through the one door that
+// did not ask for it. A person holding no second factor is unchanged — their
+// password is the whole of a step-up from them.
 //
 // # Only a person, at a keyboard
 //
@@ -47,10 +62,12 @@ import (
 // ended first, the new one keeping its absolute deadline — so the person stays
 // signed in where they made the change.
 //
-// THE NEW SESSION'S PROOF is now for somebody who holds no second factor, for
-// whom a password IS the whole of a step-up; for somebody who holds one it is
-// the replaced session's, because the change proved the password and not the
-// code, and a step-up from them asks for both.
+// THE NEW SESSION'S PROOF is now, for everybody: the change proves what a
+// step-up from this person proves — the password, and the code where they
+// hold a second factor — so its replacement is as fresh as a step-up's. While
+// the change asked for the password alone it kept the replaced session's
+// instant for a person holding a second factor, which dated that session
+// honestly and still let the change itself through.
 //
 // A REPLACEMENT THAT FAILS AFTER THE CHANGE LANDED answers its own failure: the
 // password is changed and the cookie this request held is over with the
@@ -59,10 +76,12 @@ import (
 // here at all, because the epoch a new session is opened at is read from rows
 // that do not yet hold the move — it says so, and the person signs in again.
 
-// passwordChange is what a change presents.
+// passwordChange is what a change presents: Code is the second factor's,
+// asked only of a person who holds one, exactly as a step-up asks it.
 type passwordChange struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+	Code            string `json:"code"`
 }
 
 // passwordChanged is a change answered without a session: one this node has
@@ -177,6 +196,29 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		refuse("password change: password mismatch")
 		return
 	}
+	// A SECOND FACTOR THE PERSON HOLDS IS PROVED TOO, on the step-up's own
+	// path and in its own words: the password alone was a way to end every
+	// other session the person held, and to lock them out, without the
+	// authenticator a step-up from them would have asked for.
+	var factor factorUse
+	if holdsSecondFactor(held) {
+		if in.Code == "" {
+			// ASKED FOR, and released as neither a success nor a
+			// failure — the step-up's reason: the password proved
+			// itself, and counted a success it would clear the pair
+			// between guesses at the code.
+			httpjson.Fail(w, http.StatusUnauthorized,
+				httpjson.CodeSecondFactorRequired)
+			return
+		}
+		coded := attempt
+		coded.Method = types.FailSecondFactor
+		var factored bool
+		if factor, factored = s.proveSecondFactor(w, r, adm, coded, held,
+			in.Code); !factored {
+			return
+		}
+	}
 	replaced, ok := s.replacedSession(w, r, held)
 	if !ok {
 		return
@@ -239,24 +281,22 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	how := signIn{
-		method: types.SignInPassword, stepUp: true,
+	// PROVED HERE AND NOW, as a step-up's replacement is — see the file's
+	// own doc.
+	s.completeSignIn(w, r, held, signIn{
+		method: types.SignInPassword, factor: factor.factor, stepUp: true,
 		replaces: replaced.Bearer.Lineage.String(),
 		absolute: replaced.Bearer.AbsoluteExpiresAt,
 		because:  ownPasswordChanged,
-	}
-	if holdsSecondFactor(held) {
-		proof := replaced.Session.ProvedAt
-		how.provedAt = &proof
-	}
-	s.completeSignIn(w, r, held, how)
+	})
 }
 
 // mayChangeOwnPassword refuses a request that may not change its own password:
 // the proof verb's row, decided for the caller's own subject on the principal as
-// this request proves it — the current password it presents is a proof taken
-// now, so the verb's recency is met by the request itself, and what the row
-// still decides is that a person is present.
+// this request proves it — the current password it presents, and the code where
+// its person holds a second factor, are a proof taken now, so the verb's
+// recency is met by the request itself, and what the row still decides is that
+// a person is present.
 func (s *Service) mayChangeOwnPassword(w http.ResponseWriter, r *http.Request,
 	principal iam.Principal) bool {
 

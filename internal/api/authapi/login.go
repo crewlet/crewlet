@@ -865,12 +865,11 @@ type signIn struct {
 
 	// provedAt is when this sign-in's person proved who they are, where
 	// that was NOT here and now — and nil for every way in that was: a
-	// password, a second factor, an invitation.
+	// password, a second factor, an invitation, a password change (which
+	// proves what a step-up from its person proves, the code included
+	// where they hold a second factor).
 	//
-	// TWO WAYS IN SET IT. A PASSWORD CHANGE by somebody holding a second
-	// factor keeps the proof of the session it replaces: it proved the
-	// password and not the code, and a step-up from them asks for both.
-	// And an ENROLMENT's replacement session inherits the
+	// ONE WAY IN SETS IT: an ENROLMENT's replacement session inherits the
 	// proof of the enrolment-only session it replaces, because the code
 	// the enrolment checked proves possession of a seed that same session
 	// was handed moments earlier — which says nothing about who is
@@ -891,20 +890,19 @@ type signIn struct {
 // # A sign-in that proved a password and nothing else, where one is required
 //
 // `api.auth.totp: required` says nobody signs in on a password alone. So
-// a sign-in THIS SURFACE verified — the password route, a password step-up, an
-// invitation's redemption — that proved no second factor opens
-// a restricted session. Proving none means holding none: the password route
-// and the step-up demand a code from anybody who holds a factor, and a new
-// person holds none yet.
+// a sign-in THIS SURFACE verified — the password route, a password step-up, a
+// password change, an invitation's redemption — that proved no second factor
+// opens a restricted session. Proving none means holding none: the password
+// route, the step-up and the change demand a code from anybody who holds a
+// factor, and a new person holds none yet.
 //
 // A Tier A exchange never reaches this: presenting the token was its whole
 // proof, and it holds no second factor to enrol.
 //
-// A REPLACEMENT THAT KEEPS ITS SESSION'S PROOF ([signIn.provedAt]) keeps its
-// standing too and is never restricted: it proves nothing the session it
-// replaces had not — a password change by somebody holding a second factor,
-// whose session proved both — or it is the enrolment that lifts the
-// restriction itself.
+// A REPLACEMENT THAT KEEPS ITS SESSION'S PROOF ([signIn.provedAt]) is never
+// restricted: it is the enrolment that lifts the restriction itself. A
+// password change by somebody holding a second factor is not restricted
+// either, for the reason every step-up from them is not: it proved the code.
 func (s *Service) enrolmentOnly(how signIn) bool {
 	if how.provedAt != nil {
 		return false

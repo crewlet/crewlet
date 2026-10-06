@@ -82,7 +82,14 @@ const (
 // nor at either step the drift tolerance also accepts.
 func wrongAppCode(t *testing.T) string {
 	t.Helper()
-	step := credential.TOTPStep(clock)
+	return wrongAppCodeAt(t, clock)
+}
+
+// wrongAppCodeAt is [wrongAppCode] at another instant, for a case whose
+// surface's clock has moved.
+func wrongAppCodeAt(t *testing.T, at time.Time) string {
+	t.Helper()
+	step := credential.TOTPStep(at)
 	accepted := map[string]bool{}
 	for _, at := range []int64{step - 1, step, step + 1} {
 		code, err := credential.TOTPCode(totpSeed, at)
