@@ -126,7 +126,7 @@ func NewDiary(db *store.DB, opts ...DiaryOption) *Diary {
 // seat's next holder can recall the note by meaning. A vector that cannot be
 // had inside [DiaryEmbedBudget] costs the vector and never the note: the row
 // lands without one and the holder's fill gives it one later (see
-// [Diary.Unembedded]).
+// [Diary.Unfilled]).
 //
 // THERE IS NO DUPLICATE GUARD HERE, and a note is stored verbatim. What keeps
 // the diary from filling with paraphrases is upstream of the store: the

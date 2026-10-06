@@ -172,7 +172,7 @@ func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) 
 
 	write(learning.DiaryEntry{ID: "fresh", Kind: learning.DiaryLong,
 		Content: "reviews want tests first", CreatedAt: now})
-	if filled, err := diary.FillEmbeddings(ctx, []learning.DiaryFill{{
+	if filled, err := diary.FillEmbeddings(ctx, []learning.VectorFill{{
 		ID: "keep", Vector: learning.Vector{Values: []float32{0.6, 0.8}, Model: "model-a"},
 	}}); err != nil || filled != 1 {
 		t.Fatalf("FillEmbeddings = %d, %v; want the one note", filled, err)

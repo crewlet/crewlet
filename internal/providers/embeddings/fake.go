@@ -42,18 +42,21 @@ import (
 // It FAILS on request, too, in the provider's own classes: [Fake.Refuse]
 // makes every request carrying a marked input an [ErrRefused] — a whole
 // request, because that is what a provider refuses over one input it cannot
-// take — and [Fake.FailTransiently] makes the next few an [ErrTransient]. So
-// a caller that isolates a poison input or retries a transient one can be
-// tested failing, which a twin that only ever succeeded could not.
+// take — [Fake.FailTransiently] makes the next few an [ErrTransient], and
+// [Fake.FailConfiguration] the next few an [ErrConfiguration]. So a caller
+// that isolates a poison input, retries a transient one or stops on a refused
+// credential can be tested failing, which a twin that only ever succeeded
+// could not.
 type Fake struct {
 	width int
 
-	mu       sync.Mutex
-	model    string
-	limits   Limits
-	refused  []string
-	failing  map[string]int
-	requests [][]string
+	mu            sync.Mutex
+	model         string
+	limits        Limits
+	refused       []string
+	failing       map[string]int
+	misconfigured map[string]int
+	requests      [][]string
 }
 
 var _ BatchEmbedder = (*Fake)(nil)
@@ -128,6 +131,19 @@ func (f *Fake) FailTransiently(marker string, times int) {
 		f.failing = map[string]int{}
 	}
 	f.failing[marker] += times
+}
+
+// FailConfiguration makes the next times requests carrying an input whose
+// prepared text contains marker fail as [ErrConfiguration] — the class a
+// revoked key, a missing model or an endpoint that is not there answers with —
+// and the ones after them succeed.
+func (f *Fake) FailConfiguration(marker string, times int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.misconfigured == nil {
+		f.misconfigured = map[string]int{}
+	}
+	f.misconfigured[marker] += times
 }
 
 // Requests is every request the fake answered or failed, in order, as the
@@ -224,6 +240,13 @@ func (f *Fake) send(ctx context.Context, input []string) error {
 			f.failing[marker] = left - 1
 			return &Error{Model: f.model, Status: 503, Class: ErrTransient,
 				Err: fmt.Errorf("the fake is failing inputs containing %q", marker)}
+		}
+	}
+	for marker, left := range f.misconfigured {
+		if left > 0 && carries(input, marker) {
+			f.misconfigured[marker] = left - 1
+			return &Error{Model: f.model, Status: 401, Class: ErrConfiguration,
+				Err: fmt.Errorf("the fake refuses the credential for inputs containing %q", marker)}
 		}
 	}
 	return nil

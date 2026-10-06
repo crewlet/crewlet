@@ -247,10 +247,10 @@ type Engine struct {
 	// to end it. Nil where memory is.
 	memorySync *memorySync
 
-	// backfill is the loop that fills the vectors the diaries of the seats
-	// this node holds are missing — see diarybackfill.go — and the handle
-	// Stop uses to end it. Nil on a node with no store or no seat host.
-	backfill *diaryBackfill
+	// fill is the loop that fills the vectors the memory of the seats this
+	// node holds is missing — see memoryfill.go — and the handle Stop uses
+	// to end it. Nil on a node with no store or no seat host.
+	fill *memoryFill
 
 	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
 	// nothing from inside a box, which is the ordinary configuration.
@@ -1286,7 +1286,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// for one seat, and no later pass can detect or repair that.
 	e.startIntegrations(ctx)
 	e.startMemorySync(ctx)
-	e.startDiaryBackfill(ctx)
+	e.startMemoryFill(ctx)
 	e.startScheduler(ctx)
 	// The credential pools were attached to the fleet's ledger by equip,
 	// above, so a bench already publishes. This arms the other half: the
@@ -1680,7 +1680,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMemorySync()
 	// AND THE FILL BESIDE IT, for the same reason the learning passes
 	// below stop here: it queries the store that backends.Close closes.
-	e.stopDiaryBackfill()
+	e.stopMemoryFill()
 	// BEFORE backends.Close below, which closes the store the four passes
 	// query. They tick on a detached context on purpose — like the node's
 	// loops, they must not stop at SIGTERM — so nothing else ends them,

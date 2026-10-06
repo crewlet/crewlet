@@ -117,7 +117,7 @@ func TestAWriteWaitsNoLongerThanItsBudgetForAVector(t *testing.T) {
 // vector, or with one of another model, or of no model — newest first, and
 // never a note of the current model, an expired one, another seat's, or one
 // with nothing to embed.
-func TestUnembeddedIsWhatRecallCannotReach(t *testing.T) {
+func TestUnfilledIsWhatRecallCannotReach(t *testing.T) {
 	t.Parallel()
 	db := learningStore(t)
 	d := learning.NewDiary(db)
@@ -142,19 +142,31 @@ func TestUnembeddedIsWhatRecallCannotReach(t *testing.T) {
 	write(longEntry("theirs", "b", "another seat's note", at(7)))
 	write(longEntry("blank", "a", " \n\t ", at(8)))
 
-	got, err := d.Unembedded(context.Background(), "a", testModel, at(10), 10)
+	got, err := d.Unfilled(context.Background(), "a", testModel, at(10), learning.FillCursor{}, 10)
 	if err != nil {
-		t.Fatalf("Unembedded: %v", err)
+		t.Fatalf("Unfilled: %v", err)
 	}
 	ids := make([]string, 0, len(got))
 	for _, e := range got {
 		ids = append(ids, e.ID)
 	}
 	if want := []string{"legacy", "old-model", "bare"}; !slices.Equal(ids, want) {
-		t.Fatalf("unembedded = %v, want %v", ids, want)
+		t.Fatalf("unfilled = %v, want %v", ids, want)
 	}
-	if limited, _ := d.Unembedded(context.Background(), "a", testModel, at(10), 1); len(limited) != 1 {
-		t.Errorf("a limit of 1 returned %d notes", len(limited))
+	if got[0].Text != "embedded before vectors named a model" {
+		t.Errorf("a note's fill text is %q, want its content", got[0].Text)
+	}
+
+	// THE WALK PAGES PAST WHAT IT READ: a page starts strictly after the
+	// last row of the one before, so a row no fill changes is read once a
+	// pass rather than at the front of every page.
+	first, err := d.Unfilled(context.Background(), "a", testModel, at(10), learning.FillCursor{}, 2)
+	if err != nil || len(first) != 2 {
+		t.Fatalf("a page of 2 = %d, %v", len(first), err)
+	}
+	rest, err := d.Unfilled(context.Background(), "a", testModel, at(10), first[1].Cursor, 2)
+	if err != nil || len(rest) != 1 || rest[0].ID != "bare" {
+		t.Fatalf("the page after %v = %v, %v; want only the note past it", first[1].Cursor, rest, err)
 	}
 }
 
@@ -166,7 +178,7 @@ func TestAFillStoresTheVectorOnce(t *testing.T) {
 	db := learningStore(t)
 	d := learning.NewDiary(db)
 	mustWrite(t, d, longEntry("n", "a", "a fact", base))
-	fill := []learning.DiaryFill{{ID: "n", Vector: learning.Vector{
+	fill := []learning.VectorFill{{ID: "n", Vector: learning.Vector{
 		Values: []float32{0.1, 0.2, 0.3, 0.4}, Model: testModel}}}
 
 	filled, err := d.FillEmbeddings(context.Background(), fill)
@@ -180,11 +192,11 @@ func TestAFillStoresTheVectorOnce(t *testing.T) {
 	if again, err := d.FillEmbeddings(context.Background(), fill); err != nil || again != 0 {
 		t.Errorf("a second fill of the same model = %d, %v; want nothing changed", again, err)
 	}
-	if other, err := d.FillEmbeddings(context.Background(), []learning.DiaryFill{{ID: "n",
+	if other, err := d.FillEmbeddings(context.Background(), []learning.VectorFill{{ID: "n",
 		Vector: learning.Vector{Values: []float32{0.4, 0.3, 0.2, 0.1}, Model: "next-model"}}}); err != nil || other != 1 {
 		t.Errorf("a fill of another model = %d, %v; want the note re-embedded", other, err)
 	}
-	if left, _ := d.Unembedded(context.Background(), "a", "next-model", base, 10); len(left) != 0 {
+	if left, _ := d.Unfilled(context.Background(), "a", "next-model", base, learning.FillCursor{}, 10); len(left) != 0 {
 		t.Errorf("after the fill %d notes are still unembedded", len(left))
 	}
 }
@@ -197,14 +209,14 @@ func TestAFillOfTheWrongWidthFailsWhole(t *testing.T) {
 	d := learning.NewDiary(db)
 	mustWrite(t, d, longEntry("a1", "a", "one", base))
 	mustWrite(t, d, longEntry("a2", "a", "two", base))
-	_, err := d.FillEmbeddings(context.Background(), []learning.DiaryFill{
+	_, err := d.FillEmbeddings(context.Background(), []learning.VectorFill{
 		{ID: "a1", Vector: learning.Vector{Values: []float32{1, 0, 0, 0}, Model: testModel}},
 		{ID: "a2", Vector: learning.Vector{Values: []float32{1, 0}, Model: testModel}},
 	})
 	if err == nil {
 		t.Fatal("a fill with a vector of the wrong width was accepted")
 	}
-	if left, _ := d.Unembedded(context.Background(), "a", testModel, base, 10); len(left) != 2 {
+	if left, _ := d.Unfilled(context.Background(), "a", testModel, base, learning.FillCursor{}, 10); len(left) != 2 {
 		t.Errorf("a failed fill left %d of 2 notes unembedded, want both", len(left))
 	}
 }
@@ -212,7 +224,7 @@ func TestAFillOfTheWrongWidthFailsWhole(t *testing.T) {
 // A NOTE AT A WIDTH A RESTART LEFT BEHIND IS UNFILLED, though its model is the
 // current one: one model answers at whatever width is asked, and recall's width
 // filter no longer admits it.
-func TestANoteAtAnOldWidthIsUnembedded(t *testing.T) {
+func TestANoteAtAnOldWidthIsUnfilled(t *testing.T) {
 	t.Parallel()
 	db := learningStore(t)
 	d := learning.NewDiary(db)
@@ -222,7 +234,7 @@ func TestANoteAtAnOldWidthIsUnembedded(t *testing.T) {
 		[]byte{0, 0, 128, 63, 0, 0, 0, 0}, testModel); err != nil {
 		t.Fatalf("store an old-width vector: %v", err)
 	}
-	got, err := d.Unembedded(context.Background(), "a", testModel, base, 10)
+	got, err := d.Unfilled(context.Background(), "a", testModel, base, learning.FillCursor{}, 10)
 	if err != nil || len(got) != 1 || got[0].ID != "narrow" {
 		t.Fatalf("unembedded = %v, %v; want the old-width note", got, err)
 	}

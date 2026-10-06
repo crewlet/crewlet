@@ -2,7 +2,6 @@ package learning
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,7 +23,7 @@ import (
 // refresh_memory, and, never selected, it was the first thing the 500-entry
 // trim evicted. A note is now embedded as it is written ([Diary.Write]), and
 // every note without a vector of the current model is filled by the node
-// holding its seat ([Diary.Unembedded], [Diary.FillEmbeddings]).
+// holding its seat ([Diary.Unfilled], [Diary.FillEmbeddings]).
 //
 // # A filled note travels because setting its vector stamps it
 //
@@ -76,24 +75,31 @@ func (d *Diary) embedNote(ctx context.Context, e DiaryEntry) Vector {
 	return vector
 }
 
-// Unembedded returns up to limit of a seat's live notes that have no vector of
+// Unfilled returns up to limit of a seat's live notes that have no vector of
 // model at this store's width — written before notes were embedded, written
 // while no provider answered, embedded under a model the company has since
-// moved off, or at a width a restart left behind — newest first.
+// moved off, or at a width a restart left behind — newest first, strictly
+// after the cursor (see [FillCursor]).
 //
 // THE WIDTH AS WELL AS THE MODEL, because one model answers at whatever width
 // is asked: a store reopened at a new width holds notes of the same model that
 // recall's width filter no longer admits, and only a fill brings them back.
 //
 // A note with no text is never returned: there is nothing to embed, and a row
-// that could never be filled would be asked about on every pass for ever.
-func (d *Diary) Unembedded(ctx context.Context, agentID, model string, now time.Time, limit int) ([]DiaryEntry, error) {
+// that could never be filled would be read on every pass for ever. A note's
+// vector is of its content, as [Diary.Write] embeds it.
+func (d *Diary) Unfilled(ctx context.Context, agentID, model string, now time.Time,
+	after FillCursor, limit int,
+) ([]Unfilled, error) {
 	if agentID == "" || model == "" {
-		return nil, errors.New("learning: an unembedded-notes read needs an agent and a model")
+		return nil, errors.New("learning: an unfilled-notes read needs an agent and a model")
 	}
 	if limit <= 0 {
 		limit = defaultDiaryListing
 	}
+	args := []any{agentID, store.EncodeTime(now), model, d.vectorBytes(), d.vectorBytes()}
+	args = append(args, cursorArgs(after)...)
+	args = append(args, limit)
 	rows, err := d.db.SQL().QueryContext(ctx,
 		`SELECT `+diaryColumns+` FROM agent_diary
 		 WHERE agent_id = ?
@@ -101,12 +107,21 @@ func (d *Diary) Unembedded(ctx context.Context, agentID, model string, now time.
 		   AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?
 		        OR (? > 0 AND length(embedding) <> ?))
 		   AND trim(content, ' ' || char(9) || char(10) || char(13)) <> ''
-		 ORDER BY created_at DESC, id DESC LIMIT ?`,
-		agentID, store.EncodeTime(now), model, d.vectorBytes(), d.vectorBytes(), limit)
+		   AND (? = 0 OR created_at < ? OR (created_at = ? AND id < ?))
+		 ORDER BY created_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("learning: unembedded diary for %s: %w", agentID, err)
+		return nil, fmt.Errorf("learning: unfilled diary for %s: %w", agentID, err)
 	}
-	return collectDiary(rows)
+	notes, err := collectDiary(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Unfilled, len(notes))
+	for i, note := range notes {
+		out[i] = Unfilled{ID: note.ID, Text: note.Content,
+			Cursor: FillCursor{At: note.CreatedAt, ID: note.ID}}
+	}
+	return out, nil
 }
 
 // vectorBytes is how many bytes a vector at this store's width packs to, or 0
@@ -116,61 +131,16 @@ func (d *Diary) vectorBytes() int {
 	return 4 * d.db.EmbeddingDim()
 }
 
-// DiaryFill is one note's vector, to store with [Diary.FillEmbeddings].
-type DiaryFill struct {
-	ID     string
-	Vector Vector
-}
-
-// FillEmbeddings stores vectors on notes, and reports how many it stored.
+// FillEmbeddings stores vectors on notes, in one transaction, and reports how
+// many it stored.
 //
 // EACH NOTE TAKES A FRESH CHANGE SEQUENCE in the statement that sets its
 // vector — the table's own trigger stamps it — so the memory changelog's
-// watermark carries it to the seat's next holder; see the file comment. A note
-// that already holds a vector of the same model at this width is left alone
-// (and not counted, and not stamped): two passes, or a pass racing the note's
-// own write, fill it once.
-//
-// ONE TRANSACTION, and the vector rule is the writers' own
-// ([encodeVectorColumns]): a vector of the wrong width fails the whole fill —
-// a provider answering another width is a configuration fault, and every
-// vector beside it is suspect — while a non-finite one, or one naming no model,
-// is skipped and the note stays unfilled.
-func (d *Diary) FillEmbeddings(ctx context.Context, fills []DiaryFill) (int, error) {
-	if len(fills) == 0 {
-		return 0, nil
-	}
-	filled := 0
-	err := d.db.Tx(ctx, func(tx *sql.Tx) error {
-		for _, fill := range fills {
-			blob, model, err := encodeVectorColumns(d.db, fill.Vector.Values,
-				fill.Vector.Model, "diary_fill_discarded")
-			if err != nil {
-				return fmt.Errorf("learning: fill diary entry %s: %w", fill.ID, err)
-			}
-			if blob == nil {
-				continue
-			}
-			res, err := tx.ExecContext(ctx, `
-				UPDATE agent_diary
-				   SET embedding = ?, embedding_model = ?
-				 WHERE id = ?
-				   AND (embedding IS NULL OR embedding_model IS NULL
-				        OR embedding_model <> ? OR length(embedding) <> ?)`,
-				blob, model, fill.ID, model, 4*len(fill.Vector.Values))
-			if err != nil {
-				return fmt.Errorf("learning: fill diary entry %s: %w", fill.ID, err)
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return fmt.Errorf("learning: fill diary entry %s: %w", fill.ID, err)
-			}
-			filled += int(n)
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return filled, nil
+// watermark carries it to the seat's next holder; see the file comment. The
+// rest of the rule is every filled table's ([fillVectors]): a note already
+// holding a vector of the same model at this width is left alone and not
+// counted, a vector of the wrong width fails the whole fill, and a non-finite
+// one, or one naming no model, is skipped and the note stays unfilled.
+func (d *Diary) FillEmbeddings(ctx context.Context, fills []VectorFill) (int, error) {
+	return fillVectors(ctx, d.db, diaryFillSQL, "agent_diary", "diary_fill_discarded", fills)
 }

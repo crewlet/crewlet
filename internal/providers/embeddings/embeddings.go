@@ -18,9 +18,10 @@
 //     embed a turn's ask and each completed turn, and rank a seat's own
 //     memories against it; a failure is "no similarity search this turn".
 //   - A seat's diary (internal/learning, internal/engine) embeds each note
-//     as it is written, and the node holding the seat fills, in batches, the
-//     notes left with no vector of the current model; a failure is a note
-//     the next fill asks about again.
+//     as it is written, and the node holding the seat fills the notes left
+//     with no vector of the current model, one [Pass] a minute: a refusal is
+//     split until the note it refuses is alone and that note held back, any
+//     other failure ends the pass, and the next pass is the retry.
 //
 // # Nothing here retries, and what it does instead
 //

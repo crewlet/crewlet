@@ -85,7 +85,7 @@ func TestAFilledVectorReachesAPeerHoldingTheVectorlessNote(t *testing.T) {
 	}
 
 	// THE FILL, on the holder.
-	filled, err := learning.NewDiary(holder).FillEmbeddings(ctx, []learning.DiaryFill{{
+	filled, err := learning.NewDiary(holder).FillEmbeddings(ctx, []learning.VectorFill{{
 		ID: "d1", Vector: learning.Vector{Values: []float32{0.5, 0.5}, Model: "model-a"},
 	}})
 	if err != nil || filled != 1 {
@@ -144,7 +144,7 @@ func TestAReembeddedNoteReplacesAPeersCopyFromTheOldModel(t *testing.T) {
 	}
 	carryRows(t, peer, diary, first)
 
-	if _, err := learning.NewDiary(holder).FillEmbeddings(ctx, []learning.DiaryFill{{
+	if _, err := learning.NewDiary(holder).FillEmbeddings(ctx, []learning.VectorFill{{
 		ID: "d1", Vector: learning.Vector{Values: []float32{0, 1}, Model: "model-b"},
 	}}); err != nil {
 		t.Fatalf("re-embed: %v", err)
@@ -182,7 +182,7 @@ func TestARefillAtANewWidthReplacesAPeersCopyAtTheOld(t *testing.T) {
 	}
 	carryRows(t, peer, diary, first)
 
-	if filled, err := learning.NewDiary(holder).FillEmbeddings(ctx, []learning.DiaryFill{{
+	if filled, err := learning.NewDiary(holder).FillEmbeddings(ctx, []learning.VectorFill{{
 		ID: "d1", Vector: learning.Vector{Values: []float32{0, 1, 0, 0}, Model: "model-a"},
 	}}); err != nil || filled != 1 {
 		t.Fatalf("re-fill at the new width = %d, %v; want the note", filled, err)
