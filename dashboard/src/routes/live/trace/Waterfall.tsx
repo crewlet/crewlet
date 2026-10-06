@@ -63,7 +63,7 @@ import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { fmtCount, fmtDuration, fmtElapsed, fmtTime, plural, relTime } from "~/lib/format.ts";
-import { rounds, type PhaseRecord } from "~/lib/phases.ts";
+import { deliveredLine, rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
@@ -647,7 +647,7 @@ function RunDetail({
           ["Coding agent", span.sub],
           ["Box", record?.sandboxId ? <code className="inline">{record.sandboxId}</code> : ""],
           ["Job", span.launchId ? <code className="inline">{span.launchId}</code> : ""],
-          ["Delivered", record?.deliveredRefs.length ? record.deliveredRefs.join(", ") : ""],
+          ["Delivered", record ? deliveredLine(record) : ""],
           ["Tokens", record && record.totalTokens > 0 ? fmtCount(record.totalTokens) : ""],
         ]}
       />

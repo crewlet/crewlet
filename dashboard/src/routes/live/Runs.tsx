@@ -62,7 +62,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
-import { fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
+import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
 import {
@@ -964,7 +964,7 @@ function CollectedRun({
                 },
                 {
                   label: "Delivered",
-                  value: record.deliveredRefs.length ? record.deliveredRefs.join(", ") : "",
+                  value: deliveredLine(record),
                 },
                 {
                   label: "Tokens",

@@ -439,6 +439,51 @@ test("a collected run's page shows what its job did, off its turn", async () => 
   expect(screen.queryByText("No coding run for this turn")).toBeNull();
 });
 
+// WHAT A RUN DELIVERED IS NOT CUT SHORT UNSAID. The record lists its refs up
+// to a byte bound and counts the rest, so the property names how many more
+// the run's report holds rather than showing the listed part as all of it.
+//
+// Mutation: join `deliveredRefs` alone, as the page did, and the count is
+// gone.
+test("a collected run's delivered refs say how many the record does not list", async () => {
+  mountPage({
+    sandbox_runs: { runs: [] },
+    turn: {
+      turn_id: "turn-1",
+      events: [
+        {
+          id: "p-1",
+          type: "agent_phase_completed",
+          timestamp: "2026-06-15T12:10:00Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "llm",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: {
+            turn_id: "turn-1",
+            phase: "sandbox",
+            iteration: 1,
+            role: "SWE",
+            coding_agent: "claude",
+            launch_id: "job-1",
+            activity_transcript: "opened the pull requests",
+            delivered_refs: ["https://github.com/acme/api/pull/1"],
+            delivered_refs_elided: 3,
+          },
+        },
+      ],
+    },
+  });
+  await settle();
+  expect(
+    screen.getByText("https://github.com/acme/api/pull/1 (+3 more its report names)"),
+  ).toBeTruthy();
+});
+
 // "COULD NOT READ" IS NOT "NONE". The page is drawn from two reads, and a run
 // found in neither is absent only when both answered. It said "Neither the
 // run record nor the turn holds a coding run" whenever ONE read failed — a

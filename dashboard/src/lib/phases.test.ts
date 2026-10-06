@@ -10,6 +10,7 @@
 import { describe, expect, test } from "vitest";
 import {
   decisionLabel,
+  deliveredLine,
   fromLiveCall,
   fromPhaseEvent,
   decisionTone,
@@ -25,6 +26,7 @@ import {
   splitThinking,
   streamedPhases,
   toolCalls,
+  transcriptLength,
   type PhaseRecord,
 } from "./phases.ts";
 import type { EventRecord, LiveCall } from "~/protocol/index.ts";
@@ -663,10 +665,72 @@ describe("delegated workers", () => {
       ),
     )!;
     expect(run.transcript).toBe("[tool] bash: go test");
+    // A WHOLE RECORD SAYS NOTHING WAS LEFT OUT, and so does an older
+    // engine's, which never wrote the counts.
+    expect([run.transcriptElidedLines, run.transcriptElidedBytes, run.deliveredRefsElided]).toEqual(
+      [0, 0, 0],
+    );
     const executor = fromPhaseEvent(phaseEvent({ phase: "execute" }, "2026-01-01T00:00:09Z"))!;
     const review = fromPhaseEvent(phaseEvent({ phase: "review" }, "2026-01-01T00:00:12Z"))!;
     const [turn] = groupTurns([review, run, executor]);
     expect(turn?.phases.map((p) => p.phase)).toEqual(["execute", "sandbox", "review"]);
+  });
+});
+
+// WHAT A RUN'S RECORD LEFT OUT IS SAID WHERE THE RECORD IS SHOWN. The engine
+// holds a long transcript to its start and its end, and the delivered refs to
+// a byte bound, and counts what it left out on the record; a screen that
+// showed the kept part alone would present it as the whole.
+//
+// Mutation: count the transcript's lines without the elided fields, or join
+// the refs without the count, and these go red.
+describe("what a coding run's record left out", () => {
+  test("is read off the record", () => {
+    const run = fromPhaseEvent(
+      phaseEvent({
+        phase: "sandbox",
+        launch_id: "job-1",
+        activity_transcript: "plan\n(3998 line(s), 900 KiB, left out here)\nend",
+        activity_transcript_elided_lines: 3998,
+        activity_transcript_elided_bytes: 921_600,
+        delivered_refs: ["https://github.com/acme/api/pull/1"],
+        delivered_refs_elided: 41,
+      }),
+    )!;
+    expect(run.transcriptElidedLines).toBe(3998);
+    expect(run.transcriptElidedBytes).toBe(921_600);
+    expect(run.deliveredRefsElided).toBe(41);
+    // Two lines kept — the engine's note line is not the run's — of all
+    // four thousand the run wrote.
+    expect(transcriptLength(run)).toBe("2 of 4,000 lines");
+    expect(deliveredLine(run)).toBe(
+      "https://github.com/acme/api/pull/1 (+41 more its report names)",
+    );
+  });
+
+  test("a whole transcript is counted as it is", () => {
+    const whole = { transcript: "a\nb\nc\n", transcriptElidedLines: 0, transcriptElidedBytes: 0 };
+    expect(transcriptLength(whole)).toBe("3 lines");
+    expect(transcriptLength({ ...whole, transcript: "one" })).toBe("1 line");
+  });
+
+  test("a line kept only in part says how much was left out", () => {
+    // One over-long line, kept as its start and its end around the note:
+    // no whole line was left out, so the count names the bytes instead.
+    const partial = {
+      transcript: "start…\n(300 KiB of 1 long line(s) left out here)\n…end",
+      transcriptElidedLines: 0,
+      transcriptElidedBytes: 307_200,
+    };
+    expect(transcriptLength(partial)).toBe("2 lines, 300 KB left out");
+  });
+
+  test("refs the record does not list are counted even when it lists none", () => {
+    expect(deliveredLine({ deliveredRefs: [], deliveredRefsElided: 0 })).toBe("");
+    expect(deliveredLine({ deliveredRefs: ["a", "b"], deliveredRefsElided: 0 })).toBe("a, b");
+    expect(deliveredLine({ deliveredRefs: [], deliveredRefsElided: 7 })).toBe(
+      "+7 more its report names",
+    );
   });
 });
 

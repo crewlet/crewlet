@@ -33,7 +33,7 @@ import type {
   ToolExecution,
   TurnStage,
 } from "~/protocol/index.ts";
-import { tsKey } from "./format.ts";
+import { fmtBytes, fmtExact, plural, tsKey } from "./format.ts";
 import type { Tone } from "~/ui/primitives.tsx";
 
 export interface ToolCall {
@@ -190,6 +190,13 @@ export interface PhaseRecord {
   /** The branches and pull requests the phase delivered. */
   deliveredRefs: string[];
   /**
+   * Delivered refs the run's report named that the record does NOT list:
+   * the record holds them to a byte bound and counts the rest here, so a
+   * screen showing `deliveredRefs` alone would present a part as the whole.
+   * Zero when every ref is listed. `sandbox` phases only.
+   */
+  deliveredRefsElided: number;
+  /**
    * The detached coding run a record reports, on a `sandbox` phase (the run
    * itself) and on the executor that resumed from it. A turn can launch more
    * than one run in an iteration, so on a `sandbox` phase it is part of the
@@ -197,11 +204,21 @@ export interface PhaseRecord {
    */
   launchId: string;
   /**
-   * A coding run's own account of what it did — its tool calls and shell
-   * commands — on a `sandbox` phase only. Tail-capped and redacted by the
-   * engine; empty everywhere else.
+   * A coding run's own account of what it did — what the agent said, one
+   * line per tool call, the calls that failed — on a `sandbox` phase only.
+   * Redacted by the engine, and held to the record's bound by keeping whole
+   * lines from its START and its END with one note line where its middle
+   * was; empty everywhere else.
    */
   transcript: string;
+  /**
+   * How much of the transcript's middle the record's bound left out: whole
+   * lines, and every byte not kept (a single line too long for its half is
+   * kept in part, and counts in the bytes but not the lines). Both zero
+   * when the transcript is whole.
+   */
+  transcriptElidedLines: number;
+  transcriptElidedBytes: number;
   /**
    * What woke the turn this phase belongs to, as [types.Trigger.Map] writes
    * it. `id` and `sender` have always been on the wire and were not declared
@@ -521,8 +538,11 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     // registered, and the refs are what it REPORTS back.
     sandboxId: "",
     deliveredRefs: [],
+    deliveredRefsElided: 0,
     launchId: "",
     transcript: "",
+    transcriptElidedLines: 0,
+    transcriptElidedBytes: 0,
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     timedRounds: timedRounds(call.rounds),
     hostRound: 0,
@@ -615,8 +635,13 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // is one a component is a single line away from drawing.
     sandboxId: String(p.sandbox_id ?? ""),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
+    // ABSENT ON A WHOLE RECORD, and on an older engine's: both read as
+    // nothing left out, which is what such a record is.
+    deliveredRefsElided: num(p.delivered_refs_elided),
     launchId,
     transcript: String(p.activity_transcript ?? ""),
+    transcriptElidedLines: num(p.activity_transcript_elided_lines),
+    transcriptElidedBytes: num(p.activity_transcript_elided_bytes),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     timedRounds: timedRounds(p.rounds),
     hostRound: num(p.host_round),
@@ -674,6 +699,45 @@ export function streamedPhases(
     if (record && keep(record)) out.push(record);
   }
   return out;
+}
+
+/**
+ * How long a coding run's transcript is, as its Activity fold counts it.
+ *
+ * NEVER THE KEPT COUNT AS THE WHOLE. A long transcript reaches the record as
+ * its start and its end with one note line between them, so the lines on the
+ * record are not the lines the run wrote: where whole lines were left out the
+ * count is "kept of all" — the note line is the engine's, not the run's, and
+ * is not counted — and where only part of one over-long line was, it says how
+ * much was left out instead, since a line kept in part is still one line.
+ */
+export function transcriptLength(
+  r: Pick<PhaseRecord, "transcript" | "transcriptElidedLines" | "transcriptElidedBytes">,
+): string {
+  // A trailing line break ends the last line; it does not start another.
+  const shown = r.transcript.replace(/\n$/, "").split("\n").length;
+  if (r.transcriptElidedLines <= 0 && r.transcriptElidedBytes <= 0) {
+    return plural(shown, "line");
+  }
+  const kept = Math.max(shown - 1, 0);
+  if (r.transcriptElidedLines > 0) {
+    return `${fmtExact(kept)} of ${plural(kept + r.transcriptElidedLines, "line")}`;
+  }
+  return `${plural(kept, "line")}, ${fmtBytes(r.transcriptElidedBytes)} left out`;
+}
+
+/**
+ * What a run delivered, as one line: the refs its record lists and, where its
+ * bound left some out, how many more the run's report names — so a reader is
+ * never shown part of the list as all of it. Empty when it delivered nothing.
+ */
+export function deliveredLine(
+  r: Pick<PhaseRecord, "deliveredRefs" | "deliveredRefsElided">,
+): string {
+  const listed = r.deliveredRefs.join(", ");
+  if (r.deliveredRefsElided <= 0) return listed;
+  const more = `${fmtExact(r.deliveredRefsElided)} more its report names`;
+  return listed ? `${listed} (+${more})` : `+${more}`;
 }
 
 /**

@@ -14,9 +14,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
+import type { PhaseRecord } from "~/lib/phases.ts";
 import { buildWaterfall } from "~/lib/waterfall.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
+import { phaseRecord } from "~/test/phaseRecord.ts";
 import { SANDBOX_TAIL_POLL_MS, Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
 
 class InertWebSocket {
@@ -76,7 +78,13 @@ function mount(
     selected: initial = "",
     now = T0 + 60_000,
     org,
-  }: { selected?: string; now?: number; org?: Record<string, unknown> } = {},
+    phases = [],
+  }: {
+    selected?: string;
+    now?: number;
+    org?: Record<string, unknown>;
+    phases?: PhaseRecord[];
+  } = {},
 ) {
   const store = new Store();
   if (org) store.applyOrg(org as never);
@@ -92,7 +100,7 @@ function mount(
     }
     return Promise.resolve({});
   };
-  const model = buildWaterfall({ events, phases: [], now, running: true, parked: true });
+  const model = buildWaterfall({ events, phases, now, running: true, parked: true });
   let selected = initial;
   const draw = () => (
     <ClientContext.Provider value={{ store, socket }}>
@@ -100,7 +108,7 @@ function mount(
         <Router>
           <Waterfall
             model={model}
-            phases={[]}
+            phases={phases}
             marks={steerMarks(events, "turn-1")}
             agent="SWE"
             selected={selected}
@@ -207,6 +215,36 @@ describe("a running coding run's live output", () => {
       await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
     });
     expect(asked).toHaveLength(1);
+  });
+});
+
+// A COLLECTED RUN'S SPAN SAYS WHAT ITS RECORD DOES NOT LIST. The record holds
+// the delivered refs to a byte bound and counts the rest, so the span's
+// "Delivered" names how many more the run's report holds rather than showing
+// the listed part as all of it.
+//
+// Mutation: join `deliveredRefs` alone, as the span did, and the count is
+// gone.
+describe("a collected coding run's span", () => {
+  test("names the refs its record does not list", async () => {
+    const run = phaseRecord({
+      key: "turn-1|sandbox|1|L1",
+      phase: "sandbox",
+      backend: "sandbox",
+      codingAgent: "claude-code",
+      launchId: "L1",
+      at: iso(31_000),
+      durationMs: 30_000,
+      deliveredRefs: ["https://github.com/acme/api/pull/1"],
+      deliveredRefsElided: 3,
+    });
+    mount(PARKED, RUNNING, { phases: [run] });
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
+    await flush();
+    expect(
+      screen.getByText("https://github.com/acme/api/pull/1 (+3 more its report names)"),
+    ).toBeTruthy();
   });
 });
 
