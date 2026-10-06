@@ -569,7 +569,11 @@ A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
 when no charge fits — which every window that refused a round reaches, since
 the refused round is counted — `near`
 at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
-window last turned a charge away, or `-` while it has not. A refused round is
+window last turned a charge away, printed only while its `STATE` is
+`refusing`, and `-` otherwise: a window whose ceiling was raised after it
+refused reads `ok` or `near` and shows `-` there, although it keeps the
+refusal's stamp (`refused_at` on `GET /budgets`) until its next admitted
+charge clears it. A refused round is
 counted like any other, because the vendor billed it, so a window that refused
 one reads `USED` past `LIMIT` by that round — the `eng` day above refused a
 3 000-token round at 99 120 — and every later charge is refused against that

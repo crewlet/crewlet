@@ -265,6 +265,44 @@ func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
 	}
 }
 
+// A RAISED CEILING IS NOT A REFUSAL. A refusal stamp is cleared only by an
+// admitted charge or by the window turning over, so a window whose ceiling was
+// raised after it refused reads ok and still carries refused_at until the
+// seat's next charge. The column prints the stamp only under a window that is
+// still refusing, as every dashboard surface does: printed beside STATE ok it
+// says the window is refusing while its state says it is not, and sends an
+// operator to raise a ceiling that has already been raised.
+func TestBudgetsShowPrintsNoRefusalUnderARaisedCeiling(t *testing.T) {
+	node := newFakeNode(t)
+	node.budgets = []byte(`{"durable":true,"timezone":"Europe/Berlin","near_fraction":0.9,
+  "org":{"windows":[
+    {"period":"day","window":"2026-09-23","resets_at":"2026-09-23T22:00:00Z","used":102120,"state":"ok"}]},
+  "seats":[
+    {"handle":"eng","agent_id":"a1","windows":[
+      {"period":"day","window":"2026-09-23","resets_at":"2026-09-23T22:00:00Z","used":102120,"limit":500000,
+       "refused_at":"2026-09-23T07:29:51Z","state":"ok"},
+      {"period":"week","window":"2026-W39","resets_at":"2026-09-27T22:00:00Z","used":102120,"limit":110000,
+       "refused_at":"2026-09-23T07:29:51Z","state":"near"},
+      {"period":"month","window":"2026-09","resets_at":"2026-09-30T22:00:00Z","used":102120,"limit":100000,
+       "refused_at":"2026-09-23T07:29:51Z","state":"refusing"}]}]}`)
+	cfg := bootstrapForNode(t, node)
+
+	out, _, err := cli(t, "budgets", "show", "-config", cfg)
+	if err != nil {
+		t.Fatalf("budgets show: %v", err)
+	}
+	want := map[string]string{"day": "-", "week": "-", "month": "2026-09-23T07:29:51Z"}
+	rows := rowsFor(out, "eng")
+	if len(rows) != 3 {
+		t.Fatalf("eng rows = %v, want its day, week and month", rows)
+	}
+	for _, row := range rows {
+		if got := row[len(row)-1]; got != want[row[1]] {
+			t.Errorf("eng %s (state %s) ends %q under REFUSING SINCE, want %q", row[1], row[5], got, want[row[1]])
+		}
+	}
+}
+
 // THERE IS NO RESET. A budget's ceilings are per calendar window and each
 // window's allowance comes back when it turns over; room before then is made
 // by raising a ceiling. A `reset` that still parsed would be a verb with no
