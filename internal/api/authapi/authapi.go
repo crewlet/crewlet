@@ -182,6 +182,10 @@ type Directory interface {
 	// the same three answers — the zero value for an id that is no link.
 	// BY ITS OWN ID, for [Directory.InvitationByID]'s reason.
 	ResetByID(ctx context.Context, id string) (iamdomain.ResetRow, error)
+
+	// Person answers one directory row by id, or [iamdomain.ErrNotFound]:
+	// the signed-in caller's own, whose name `GET /auth/session` carries.
+	Person(ctx context.Context, id string) (iamdomain.PersonRow, error)
 }
 
 // Writer is what this surface writes, defined here for Directory's reason.
@@ -403,6 +407,9 @@ type Sealer interface {
 		plaintext string) (string, error)
 	OpenCredential(person, credential string, field iamdomain.Field,
 		sealed string) (string, error)
+
+	// Open opens one of a person's own sealed values ([iamdomain.Sealer.Open]).
+	Open(person string, field iamdomain.Field, sealed string) (string, error)
 }
 
 // Blinds is where the keyed blind an address is matched on comes from.

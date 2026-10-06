@@ -127,6 +127,21 @@ type estate struct {
 	// behindResets, when a case sets it, is the credential set a node
 	// that has not applied this estate's writes reads a reset link from.
 	behindResets []iamdomain.Credential
+
+	// nameSealed is the person's sealed name, or empty for a row that holds
+	// none.
+	nameSealed string
+}
+
+// Person answers the person's directory row, their sealed name on it.
+func (e *estate) Person(_ context.Context, id string) (iamdomain.PersonRow, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if id != e.person.ID {
+		return iamdomain.PersonRow{}, iamdomain.ErrNotFound
+	}
+	return iamdomain.PersonRow{ID: id, Kind: e.person.Kind, Login: e.person.Login,
+		NameSealed: []byte(e.nameSealed)}, nil
 }
 
 // outcome is what one of this estate's writes answers: applied at a position,

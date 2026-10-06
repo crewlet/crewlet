@@ -2,6 +2,7 @@ package authapi_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,10 @@ func (stubDirectory) ResetByID(context.Context, string) (iamdomain.ResetRow, err
 	return iamdomain.ResetRow{}, nil
 }
 
+func (stubDirectory) Person(_ context.Context, id string) (iamdomain.PersonRow, error) {
+	return iamdomain.PersonRow{}, fmt.Errorf("%w: %s", iamdomain.ErrNotFound, id)
+}
+
 type stubWriter struct{}
 
 // applied is a write that landed at a position and was applied here — what a
@@ -215,6 +220,10 @@ func (stubSealer) OpenCredential(person, credentialID string, field iamdomain.Fi
 	sealed string) (string, error) {
 
 	return fixtureSealer.OpenCredential(person, credentialID, field, sealed)
+}
+
+func (stubSealer) Open(person string, field iamdomain.Field, sealed string) (string, error) {
+	return fixtureSealer.Open(person, field, sealed)
 }
 
 // fixtureSealer is the domain's sealer over the one key [stubSealer] seals
