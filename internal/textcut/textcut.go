@@ -121,11 +121,10 @@ func Bytes(s string, max int) string {
 // which is where a process says what went wrong. It is never how a whole log
 // is bounded for a record: that keeps whole lines from both ends and counts
 // the middle, because a log's opening is its plan and a cut to its end loses
-// it. The same two rules hold: the marker is not
-// counted against max, because the cap bounds the content, and the cut never
-// lands inside a rune, because a byte slice taken from the end begins mid-rune
-// whenever the text is not ASCII and a JSON encoder turns that partial rune
-// into U+FFFD.
+// it. The same two rules hold: the marker is not counted against max, because
+// the cap bounds the content, and the cut never lands inside a rune, because a
+// byte slice taken from the end begins mid-rune whenever the text is not ASCII
+// and a JSON encoder turns that partial rune into U+FFFD.
 //
 // It replaced a private rune-counting `tail` in the sandbox's coding-agent
 // runner — a fifth copy of this package's rule, and the only one whose budget
