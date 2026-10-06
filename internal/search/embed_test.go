@@ -89,6 +89,35 @@ func TestTheEmbedDutyReachesTheSearch(t *testing.T) {
 	}
 }
 
+// THE OPENING FITS THE MODEL. The corpus embeds a source's first 8 KiB, and
+// the provider refuses an input past the model's own bound before sending
+// anything — so against a model whose bound is smaller, an 8 KiB opening is not
+// a longer opening but a batch refused on every tick. The duty sends the
+// opening that fits.
+func TestTheCorpusOpeningFitsTheModelsBound(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.SetLimits(embeddings.Limits{InputBytes: 64, BatchInputs: 128, BatchBytes: 1 << 20})
+	h.seedTasks(map[string]string{
+		"t-long": strings.Repeat("a runbook step that keeps on going ", 40),
+	})
+	published, err := h.duty.Tick(t.Context())
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if published != 1 {
+		t.Fatalf("the duty published %d record(s) for one long task under a "+
+			"64-byte model", published)
+	}
+	for _, batch := range h.embedder.batches {
+		for _, text := range batch {
+			if len(text) > 64 {
+				t.Errorf("the duty sent %d bytes to a model that takes 64", len(text))
+			}
+		}
+	}
+}
+
 // A REMOVED TASK'S VECTOR IS WITHDRAWN, and this is the direction nothing else
 // can repair.
 //

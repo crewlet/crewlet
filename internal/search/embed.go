@@ -46,10 +46,11 @@ const (
 	// EmbedBatch is how many texts go in one provider call.
 	//
 	// 128, which is where the round-trip amortisation has essentially
-	// flattened while the request stays comfortably inside every
-	// provider's own input-count ceiling and inside a single HTTP body a
-	// proxy will not refuse. At 8 KiB of input apiece that is a 1 MiB
-	// request in the worst case.
+	// flattened. It is a CALL, not a request: the provider sends a call in
+	// as many requests as the model's own limits need
+	// (embeddings.Limits.Requests) — at 8 KiB of input apiece, 128 inputs
+	// are up to four requests under OpenAI's 300 000-token request total,
+	// and a model that takes fewer inputs a request is sent more of them.
 	EmbedBatch = 128
 
 	// EmbedBatchesPerTick bounds one tick's provider calls.
@@ -92,7 +93,9 @@ const (
 	// field elsewhere: a page's first eight kibibytes are what a semantic
 	// search is about, so cutting keeps the document findable where
 	// refusing would remove it from the corpus entirely with nothing to
-	// say so.
+	// say so. Never past the MODEL's own bound, though, which the provider
+	// enforces ([Embedder.inputBound]): OpenAI's is exactly this, and a
+	// model with a smaller window is sent the opening that fits it.
 	EmbedInputBytes = 8 << 10
 )
 
@@ -210,14 +213,15 @@ type Document struct {
 	Body  string
 }
 
-// text is what is actually sent, cut to the per-source ceiling.
+// text is what is actually sent, cut to bound — [Embedder.inputBound], the
+// per-source ceiling inside the model's own.
 //
-// Through [textcut.Bytes], like every other cut in this package: unmarked,
-// because what the provider receives is embedding INPUT and an appended
-// character would be a token in the vector rather than a note about one.
-func (d Document) text() string {
+// Through [textcut.Bytes], unmarked, because what the provider receives is
+// embedding INPUT and an appended character would be a token in the vector
+// rather than a note about one.
+func (d Document) text(bound int) string {
 	joined := strings.TrimSpace(d.Title) + "\n\n" + strings.TrimSpace(d.Body)
-	return textcut.Bytes(strings.TrimSpace(joined), EmbedInputBytes)
+	return textcut.Bytes(strings.TrimSpace(joined), bound)
 }
 
 // sha is the digest of the exact text that was embedded.
@@ -227,8 +231,8 @@ func (d Document) text() string {
 // re-file, a label, a parent move — produces the same digest and is not paid
 // for again. A digest of the whole body would differ whenever anything below
 // the cut moved, which is text the provider never saw.
-func (d Document) sha() string {
-	sum := sha256.Sum256([]byte(d.text()))
+func (d Document) sha(bound int) string {
+	sum := sha256.Sum256([]byte(d.text(bound)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -330,10 +334,10 @@ type EmbedDeps struct {
 // over. But a budget of time is a cliff that moves: the reading nearly doubled
 // between an idle core and two searchers, it grows with the corpus, and
 // the tick that trains also makes this tick's embedding batches, each a
-// provider call with a fifteen-second timeout of its own — eight of them and
-// the reading pass five minutes at the load measured. Progress has no such
-// cliff: it measures the one thing the bound is for, and needs the exemption
-// anyway.
+// provider call whose requests carry a one-minute ceiling of their own
+// (embeddings.BatchTimeout) — eight of them and the reading pass five minutes
+// at the load measured. Progress has no such cliff: it measures the one thing
+// the bound is for, and needs the exemption anyway.
 type Budget interface {
 	// Advanced says a bounded stretch of the tick's work is done.
 	Advanced()
@@ -630,11 +634,24 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	return published, errors.Join(failed...)
 }
 
+// inputBound is how many bytes of a source this duty sends: [EmbedInputBytes],
+// or the model's own per-input bound where that is smaller.
+//
+// THE MODEL'S BOUND IS A FACT the provider enforces — it refuses an input past
+// it before sending anything — so an opening longer than the model accepts is
+// not a longer opening but a batch refused on every tick. Where the model takes
+// 8 KiB or more, which OpenAI's do at exactly 8 192, this is EmbedInputBytes
+// unchanged, and so is every digest the corpus already carries.
+func (e *Embedder) inputBound() int {
+	return min(EmbedInputBytes, e.deps.Embedder.Limits().InputBytes)
+}
+
 // embed sends one batch and publishes a record per vector it got back.
 func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Document) (int, error) {
+	bound := e.inputBound()
 	texts := make([]string, len(batch))
 	for i, doc := range batch {
-		texts[i] = doc.text()
+		texts[i] = doc.text(bound)
 	}
 	vectors, err := e.deps.Embedder.EmbedBatch(ctx, texts)
 	// THE PROVIDER ANSWERED, WHATEVER IT ANSWERED, which is progress
@@ -659,7 +676,7 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 			// input is not sent.
 			continue
 		}
-		err := e.publish(ctx, source, dim, batch[i], vector)
+		err := e.publish(ctx, source, dim, bound, batch[i], vector)
 		// EACH PUBLISH IS PROGRESS ([Budget]), as a withdrawal's is: one
 		// publish, bounded as every publish is. Counted as one stretch
 		// with the call before it, a batch's hundred and twenty-eight
@@ -691,8 +708,8 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 	return published, nil
 }
 
-// publish writes one embed record.
-func (e *Embedder) publish(ctx context.Context, source Source, dim int, doc Document, vector []float32) error {
+// publish writes one embed record, its digest over the text sent at bound.
+func (e *Embedder) publish(ctx context.Context, source Source, dim, bound int, doc Document, vector []float32) error {
 	subject := Subject{Source: source, ID: doc.ID}
 	packed, err := pack(vector, dim)
 	if err != nil {
@@ -711,7 +728,7 @@ func (e *Embedder) publish(ctx context.Context, source Source, dim int, doc Docu
 		Model:     e.deps.Model,
 		Dim:       dim,
 		SourceRev: doc.Version,
-		TextSHA:   doc.sha(),
+		TextSHA:   doc.sha(bound),
 		Embedding: packed,
 	}
 	return e.append(ctx, subject, rec)
