@@ -65,7 +65,8 @@ Usage:
   crewlet iam unbind ID                                Take the binding back
   crewlet iam grant ID -grants G,...                   Change what somebody carries
   crewlet iam suspend ID                               Stop them acting and end their
-                                                       sessions and tokens; keep the row
+                                                       sessions, tokens and reset link;
+                                                       keep the row
   crewlet iam activate ID                              Let them act again
   crewlet iam remove ID                                Tombstone them and erase what is theirs
   crewlet iam revoke ID                                End every session and token they hold
@@ -106,7 +107,9 @@ included: a map of who can reach a company is worth as much as the grants.
 
 A reset link from "iam reset-password" sets the person a new password once, ends
 every session and token they hold, and signs nobody in: they sign in afterwards,
-where a second factor they hold still applies. A person changes their OWN
+where a second factor they hold still applies. Whatever ends their sessions ends
+an outstanding link too — suspend, revoke, reset-mfa and invalidate-all — so
+issue the link after any of those it is needed beside. A person changes their OWN
 password signed in, through POST /auth/password, which asks for the current one
 and needs a person present — which neither a Tier A token nor a machine token
 is, so this command has no flow for it.
