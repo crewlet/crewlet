@@ -69,7 +69,7 @@ func TestAPageIsSelectedExactlyWhenWhatItsVectorWasComputedFromMoved(t *testing.
 			writePage(t, db, tc.page(base))
 			writeVector(t, db, "page", "p1", current)
 
-			stale, _, err := corpus.Stale(t.Context(), "m", 8, 10)
+			stale, _, err := corpus.Stale(t.Context(), "m", 8, 10, search.Held{})
 			if err != nil {
 				t.Fatalf("Stale: %v", err)
 			}
@@ -110,7 +110,7 @@ func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 		writeVector(t, db, "page", row.id, vectorOf{rev: 1, title: row.title, container: row.container})
 	}
 
-	stale, gone, err := corpus.Stale(t.Context(), "m", 8, 10)
+	stale, gone, err := corpus.Stale(t.Context(), "m", 8, 10, search.Held{})
 	if err != nil {
 		t.Fatalf("Stale: %v", err)
 	}

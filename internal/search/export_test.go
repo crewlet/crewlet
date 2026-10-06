@@ -47,10 +47,11 @@ func ExactTops(ctx context.Context, tx *sql.Tx, queries []sampledDoc, shapes [][
 // ProgressStride is [progressStride].
 const ProgressStride = progressStride
 
-// PageSelection, PageWithdrawals and PageCoverageCount are the page corpus's
-// three statements, for the plan gate.
+// PageSelection, PageOpeningRead, PageWithdrawals and PageCoverageCount are
+// the page corpus's four statements, for the plan gate.
 var (
 	PageSelection     = pageSelection
+	PageOpeningRead   = pageOpeningRead
 	PageWithdrawals   = pageWithdrawals
 	PageCoverageCount = pageCoverageCount
 )

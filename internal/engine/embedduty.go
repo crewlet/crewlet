@@ -136,16 +136,57 @@ type embedDuty struct {
 	budget time.Duration
 
 	// refusals is what the provider has refused alone, kept ACROSS ticks —
-	// the search package's duty is rebuilt every tick — and refusalsOf the
-	// provider it belongs to: the slot an apply stored it in, which is a new
-	// pointer every time an apply builds the provider again. A refusal is a
-	// fact about the provider as it was configured, so a new one starts
-	// with none ([search.Refusals]). Touched only by the loop's own ticks.
-	refusals   *search.Refusals
-	refusalsOf *embeddings.Embedder
+	// the search package's duty is rebuilt every tick — and refusalsFor the
+	// configuration it belongs to ([embedConfiguration]). A refusal is a
+	// fact about the provider as it was configured, so a provider configured
+	// otherwise starts with none ([search.Refusals]); one an apply merely
+	// built again the same keeps it. Touched only by the loop's own ticks.
+	refusals    *search.Refusals
+	refusalsFor embedConfiguration
 
 	stop context.CancelFunc
 	done chan struct{}
+}
+
+// embedConfiguration is what a provider's refusals are a fact about: the model,
+// the width, the limits it holds inputs and requests to, and the endpoint it
+// sends to.
+//
+// # Why the configuration and not the provider
+//
+// The memory used to belong to the provider's SLOT, which every apply fills
+// with a provider built afresh — so an apply that changed nothing about the
+// embeddings (a role added, a channel renamed) and re-activating an unchanged
+// revision to rotate a key both started the memory again, and every input the
+// provider refuses was isolated once more, fifteen requests apiece, on every
+// apply. A refusal is about what the provider will take; what moves that is
+// exactly these four, so a change to any of them — a lowered
+// `max_input_tokens`, another gateway, another model — starts a memory with
+// nothing held, and nothing else does.
+//
+// THE KEY IS NOT IN IT, deliberately: rotating a credential is the documented
+// gesture for a key that leaked, and it says nothing about which texts the
+// model accepts.
+type embedConfiguration struct {
+	model    string
+	width    int
+	limits   embeddings.Limits
+	endpoint string
+}
+
+// configurationOf is the configuration provider embeds under.
+//
+// The endpoint is read only from a provider that reports one: the shipped
+// provider does, and a provider that does not — a test's — is keyed on the
+// other three.
+func configurationOf(provider embeddings.Embedder) embedConfiguration {
+	out := embedConfiguration{
+		model: provider.Model(), width: provider.Width(), limits: provider.Limits(),
+	}
+	if at, ok := provider.(interface{ Endpoint() string }); ok {
+		out.endpoint = at.Endpoint()
+	}
+	return out
 }
 
 // tickReport is what one tick did, for the tests that hold the duty's wiring:
@@ -334,18 +375,15 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 			return report
 		}
 	}
-	// THE PROVIDER'S SLOT, read BEFORE the provider is: an apply landing
-	// between the two reads then pairs this tick's provider with the slot it
-	// replaced, which the next tick finds moved and starts over from — the
-	// other order would carry a retired provider's refusals into the new
-	// one's first hour.
-	slot := d.engine.embeddings.Load()
 	provider, model, configured := d.engine.embedModel()
 	if !configured {
 		return report
 	}
-	if d.refusals == nil || d.refusalsOf != slot {
-		d.refusals, d.refusalsOf = search.NewRefusals(), slot
+	// THE MEMORY FOLLOWS THE CONFIGURATION, read off the very provider this
+	// tick embeds with, so no apply landing between two reads can pair one
+	// provider's refusals with another's.
+	if configuration := configurationOf(provider); d.refusals == nil || d.refusalsFor != configuration {
+		d.refusals, d.refusalsFor = search.NewRefusals(), configuration
 	}
 	tick, bound, release := boundTick(ctx, d.budget)
 	defer release()

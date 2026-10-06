@@ -105,7 +105,7 @@ type oneStaleDocument struct{}
 
 func (oneStaleDocument) Source() search.Source { return search.SourceTask }
 
-func (oneStaleDocument) Stale(context.Context, string, int, int) ([]search.Document, []string, error) {
+func (oneStaleDocument) Stale(context.Context, string, int, int, search.Held) ([]search.Document, []string, error) {
 	return []search.Document{{
 		ID: "suite-task", Container: "SUITE", Version: 1,
 		Title: "The suite's task", Body: "Something to embed.",

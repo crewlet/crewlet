@@ -100,15 +100,37 @@ const (
 	// EmbedRefusalRetry is how long an input the provider refused ALONE is
 	// held back before it is offered again — alone ([Refusals]).
 	//
-	// AN HOUR. Held back, the input costs nothing; offered again, it costs
-	// one request and one log line — so an hour is one request in the
+	// AN HOUR. Held back, the input costs no request and no place in the
+	// selection, which passes over it ([Held]) — only the scan's step over
+	// its key, and the coverage gauge counting it stale. Offered again, it
+	// costs one request and one log line — so an hour is one request in the
 	// 1 920 sixty ticks may make, and one warning an hour per input rather
 	// than one a minute, while a provider that stops refusing it (a gateway
 	// fixed, a content rule relaxed) has it embedded within the hour with
-	// no restart. Shorter buys a quicker retry of a refusal that is almost
-	// always permanent; longer leaves a fixed one unsearchable by meaning
-	// for longer than an operator who fixed it would expect.
+	// no restart, as long as its corpus holds no more refusals than an
+	// hour's retries reach ([EmbedRetriesPerTick]). Shorter buys a quicker
+	// retry of a refusal that is almost always permanent; longer leaves a
+	// fixed one unsearchable by meaning for longer than an operator who
+	// fixed it would expect.
 	EmbedRefusalRetry = time.Hour
+
+	// EmbedRetriesPerTick is how many of one corpus's DUE refusals a tick
+	// offers again, each alone in a request of its own; the rest are held
+	// one more tick, the longest refused first ([Refusals]).
+	//
+	// TWO, because a retry costs a whole request for one source and the
+	// requests are what a corpus is guaranteed a share of: with the two
+	// corpora shipped that share is sixteen and retries take an eighth of
+	// it, and at the eight corpora [NewEmbedder] allows, half of four.
+	// Uncapped, refusals that fall due together — every one a provider met
+	// in one cold fill does, an hour later — took the corpus's whole share
+	// at one request each, and nothing new in that corpus was embedded
+	// until they had all been offered. The price is the retry's reach: 120
+	// an hour a corpus, so a corpus holding more refusals than that offers
+	// each of them less often than hourly — a corpus whose provider refuses
+	// that many has a configuration to fix, and fixing it starts a new
+	// memory with nothing held at all.
+	EmbedRetriesPerTick = 2
 
 	// EmbedInterval is how often the duty ticks.
 	//
@@ -226,7 +248,12 @@ type Corpus interface {
 	// digest of the vector it already has in the asked space
 	// ([Document.StoredSHA]) — together with the sources whose vectors
 	// must be FORGOTTEN because the document is gone.
-	Stale(ctx context.Context, model string, dim, limit int) (stale []Document, gone []string, err error)
+	//
+	// It PASSES OVER every source held holds, asking before it reads the
+	// source's body, and the limit counts only what it returns: it reads
+	// up to limit + held.Len() rows of the selection to return limit
+	// ([Held] says why a filter after the limit is not the same thing).
+	Stale(ctx context.Context, model string, dim, limit int, held Held) (stale []Document, gone []string, err error)
 
 	// Coverage is how many of this corpus's sources carry a CURRENT
 	// vector, and how many sources there are.
@@ -282,6 +309,12 @@ type Document struct {
 	// Version is the source's own version, stored beside the vector so
 	// the next pass can tell a stale row from a current one without
 	// re-embedding anything.
+	//
+	// IT MOVES WHENEVER THE BODY DOES — a task's version on every record,
+	// a page's edit number on every save — and a held refusal is
+	// recognised by it, with the title, before the body is read ([Held]):
+	// a corpus whose version could stand still while the body moved would
+	// hold a rewritten source back as the text it no longer is.
 	Version uint64
 
 	// Title is the source's whole title, and Body the OPENING of its body:
@@ -372,14 +405,18 @@ type EmbedDeps struct {
 
 	// Refusals is what the provider has refused ALONE: the inputs held
 	// back so that one the model will never accept costs a request an hour
-	// rather than fifteen a tick ([Refusals]).
+	// and no place in the selection, rather than fifteen requests a tick
+	// ([Refusals]).
 	//
 	// REQUIRED, and held by the caller ACROSS TICKS — the duty is rebuilt
-	// every tick — for ONE provider: a caller starts a new one whenever it
-	// builds the provider again, because a refusal is a fact about the
-	// provider as it was configured. Nil is refused rather than defaulted
-	// to a memory that lasts one tick, which would isolate the same input
-	// again at the front of every tick for ever.
+	// every tick — for ONE provider CONFIGURATION: a caller starts a new
+	// one whenever what the provider is configured as changes, because a
+	// refusal is a fact about the provider as it was configured, and keeps
+	// it when the provider is merely built again the same — an apply that
+	// changed something else, or a rotated key — since each fresh memory
+	// isolates every refused input again. Nil is refused rather than
+	// defaulted to a memory that lasts one tick, which would isolate the
+	// same input again at the front of every tick for ever.
 	Refusals *Refusals
 
 	// Logger is where a provider failure is reported. A failure to embed
@@ -652,7 +689,6 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 
 	bound := e.inputBound()
 	now := e.deps.Now()
-	e.deps.Refusals.expire(now)
 
 	// ONE SELECTION PER CORPUS PER TICK, ASKED FOR THE WHOLE TICK'S
 	// CEILING. Every request a corpus is granted is formed out of this one
@@ -676,7 +712,8 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	// 50 % rise in this duty's peak footprint before it embeds anything
 	// new. That is the figure to weigh when adding one. None of it is lost
 	// WORK — the selection is derived from the rows, so the next tick asks
-	// again.
+	// again. A held refusal adds one row of keys to its corpus's read and
+	// no body ([Held]).
 	//
 	// TWO SHAPES THAT WOULD BOUND THE READ WERE WEIGHED AND NOT TAKEN,
 	// because each buys it back with something load-bearing:
@@ -697,7 +734,8 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	//     depends on, rather than no waste.
 	queues := make([]*corpusQueue, 0, len(e.deps.Corpora))
 	for _, corpus := range e.deps.Corpora {
-		docs, gone, err := corpus.Stale(ctx, e.deps.Model, dim, EmbedSourcesPerTick)
+		refused := e.deps.Refusals.plan(corpus.Source(), now)
+		docs, gone, err := corpus.Stale(ctx, e.deps.Model, dim, EmbedSourcesPerTick, refused.held)
 		if err != nil {
 			// A SELECTION FAILURE COSTS ITS OWN CORPUS AND NOT THE
 			// TICK, for the same reason a refused input costs only
@@ -716,30 +754,64 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			continue
 		}
 		q := &corpusQueue{source: corpus.Source()}
-		held := 0
+		restated := 0
+		offered := map[string]bool{}
 		for _, doc := range docs {
 			p := pendingOf(doc, bound)
-			if doc.StoredSHA != "" && doc.StoredSHA == p.sha {
+			entry, wasRefused := refused.entries[doc.ID]
+			switch {
+			case doc.StoredSHA != "" && doc.StoredSHA == p.sha:
 				// THE STORED VECTOR IS THIS TEXT'S VECTOR — same model,
 				// same width, same bytes sent — so the source is
-				// restamped, never sent again ([Embedder.restamp]).
+				// restamped, never sent again ([Embedder.restamp]); and
+				// a text with a vector is not one the provider refuses.
+				if wasRefused {
+					e.deps.Refusals.forget(q.source, doc.ID)
+				}
 				q.restamps = append(q.restamps, p)
 				continue
-			}
-			switch e.deps.Refusals.standing(keyOf(q.source, p), now) {
-			case refusalHeld:
-				held++
-				continue
-			case refusalDue:
+			case !wasRefused:
+			case entry.sha != p.sha:
+				// THE TEXT MOVED: a different input from the one the
+				// provider refused, offered at once with its neighbours.
+				e.deps.Refusals.forget(q.source, doc.ID)
+			case refused.retry[doc.ID]:
+				// DUE, and one of this tick's retries: offered ALONE,
+				// so its neighbours are not refused with it.
 				p.alone = true
+				offered[doc.ID] = true
+			default:
+				// HELD, and selected only because its version or title
+				// moved while its text did not — a status, a move — so
+				// it is held again under the new ones and the next
+				// selection passes over it ([Held]).
+				e.deps.Refusals.restate(q.source, doc)
+				restated++
+				continue
 			}
 			q.waiting = append(q.waiting, p)
 		}
-		if held > 0 {
+		for id := range refused.retry {
+			if !offered[id] {
+				// A RETRY THE SELECTION DID NOT RETURN is forgotten:
+				// its source was removed, has a vector by now, or reads
+				// another text — the cases where nothing refused is left
+				// to remember — and that is how the memory of a removed
+				// source ends. A retry passed over only because the
+				// selection filled first with older sources would be
+				// forgotten too; it is then offered with its neighbours
+				// once and isolated again, which is the bounded cost of
+				// having no clock of its own deciding what to forget.
+				e.deps.Refusals.forget(q.source, id)
+			}
+		}
+		if held := refused.held.Len(); held > 0 || len(refused.retry) > 0 {
 			e.deps.Logger.DebugContext(ctx, "search_embed_inputs_held",
 				"source", string(q.source), "held", held,
-				"detail", "inputs the provider refused alone, held back until "+
-					"their retry is due")
+				"restated", restated, "retried", len(offered),
+				"detail", "inputs the provider refused alone: the selection "+
+					"passes over each until its retry is due, and a tick "+
+					"offers a corpus's due ones again alone, a few at a time")
 		}
 		queues = append(queues, q)
 
@@ -916,6 +988,14 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 		return 0, nil
 	case err == nil:
 		t.accepted++
+		for _, p := range group {
+			if p.alone {
+				// ACCEPTED AFTER ALL — a provider fixed, a rule relaxed —
+				// so the memory of its refusal goes with it, whatever
+				// becomes of the vector: it is no longer refused.
+				e.deps.Refusals.forget(q.source, p.doc.ID)
+			}
+		}
 		return e.publishAll(ctx, q.source, dim, group, vectors, t)
 	case errors.Is(err, embeddings.ErrRefused) && len(group) > 1:
 		// SPLIT, AND THE HALVES GO FIRST: the corpus's next turns send
@@ -932,7 +1012,7 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 		t.refused++
 		t.refusedAlone++
 		p := group[0]
-		e.deps.Refusals.refuse(keyOf(q.source, p), e.deps.Now())
+		e.deps.Refusals.refuse(q.source, p, e.deps.Now())
 		e.deps.Logger.WarnContext(ctx, "search_embed_input_refused",
 			"source", string(q.source), "id", p.doc.ID, "model", e.deps.Model,
 			"bytes", len(p.text),
@@ -999,11 +1079,6 @@ func (e *Embedder) publishAll(ctx context.Context, source Source, dim int, group
 		}
 		published++
 		t.sources--
-		if p.alone {
-			// ACCEPTED AFTER ALL — a provider fixed, a rule relaxed —
-			// so the memory of its refusal goes with it.
-			e.deps.Refusals.accept(keyOf(source, p))
-		}
 	}
 	return published, nil
 }
@@ -1364,8 +1439,8 @@ const (
 )
 
 // TaskSelection is the statement [TaskCorpus.Stale] selects stale tasks with,
-// and its arguments; [TaskWithdrawals] and [TaskCoverageCount] are the other
-// two it runs.
+// and its arguments; [TaskOpeningRead], [TaskWithdrawals] and
+// [TaskCoverageCount] are the others it runs.
 //
 // EXPORTED FOR THE TRACKER'S INDEX GATE, which plans every statement that reads
 // `tracker_tasks` against the indexes the tracker declares
@@ -1374,14 +1449,15 @@ const (
 // column nothing ever wrote was kept for this duty's "selection" while the
 // selection the duty does run was certified by nothing.
 func TaskSelection(model string, dim, limit int) (string, []any) {
-	return taskSelectionStatement, []any{embedReadChars, model, dim, model, dim, limit}
+	return taskSelectionStatement, []any{model, dim, model, dim, limit}
 }
 
 // taskSelectionStatement: the tasks with no current vector in the asked space,
-// oldest first, each with the opening of its body and the digest of the vector
-// it has there.
+// oldest first, each with its key, its title and the digest of the vector it
+// has there — and NOT its body, which [TaskOpeningRead] reads for only the
+// tasks the selection keeps ([selectStale]).
 const taskSelectionStatement = `
-	SELECT t.id, t.project_key, t.version, t.title, ` + taskOpening + `,
+	SELECT t.id, t.project_key, t.version, t.title,
 	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
 	FROM tracker_tasks t
 	LEFT JOIN kb_vectors v
@@ -1392,6 +1468,17 @@ const taskSelectionStatement = `
 	       OR v.model <> ? OR v.dim <> ?)
 	ORDER BY t.updated_at
 	LIMIT ?`
+
+// TaskOpeningRead is the statement [TaskCorpus.Stale] reads one selected task's
+// opening with — by its primary key — and its arguments. See [TaskSelection].
+func TaskOpeningRead(id string) (string, []any) {
+	return taskOpeningStatement, []any{embedReadChars, id}
+}
+
+const taskOpeningStatement = `
+	SELECT ` + taskOpening + `
+	FROM tracker_tasks t
+	WHERE t.id = ?`
 
 // TaskWithdrawals is the statement [TaskCorpus.Stale] finds the vectors of
 // removed or purged tasks with, and its arguments. See [TaskSelection].
@@ -1427,29 +1514,14 @@ const taskCoverageStatement = `
 	WHERE ` + taskLive
 
 // Stale implements [Corpus].
-func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
+func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int, held Held) ([]Document, []string, error) {
 	var stale []Document
 	var gone []string
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		statement, args := TaskSelection(model, dim, limit)
-		rows, err := tx.QueryContext(ctx, statement, args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var doc Document
-			var version int64
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := rows.Scan(&doc.ID, &doc.Container, &version,
-				&doc.Title, &doc.Body, &doc.StoredSHA); err != nil {
-				return err
-			}
-			doc.Version = uint64(version)
-			stale = append(stale, doc)
-		}
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := rows.Err(); err != nil {
+		statement, args := TaskSelection(model, dim, limit+held.Len())
+		var err error
+		if stale, err = selectStale(ctx, tx, statement, args, limit, held,
+			taskOpeningStatement); err != nil {
 			return err
 		}
 
@@ -1458,24 +1530,98 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		// for ever — the row it came from is gone, so nothing else will
 		// ever select it.
 		statement, args = TaskWithdrawals(limit)
-		dead, err := tx.QueryContext(ctx, statement, args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = dead.Close() }()
-		for dead.Next() {
-			var id string
-			if err := dead.Scan(&id); err != nil {
-				return err
-			}
-			gone = append(gone, id)
-		}
-		return dead.Err()
+		gone, err = selectGone(ctx, tx, statement, args)
+		return err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return stale, gone, nil
+}
+
+// selectStale runs a corpus's selection — statement, which yields each stale
+// source's id, container, version, title and stored digest, oldest first, and
+// is bound to read up to limit + held.Len() of them — keeps the first limit
+// that held does not hold, and then reads each kept source's opening with
+// opening, by its primary key, inside the same transaction.
+//
+// TWO STATEMENTS RATHER THAN ONE, and the pass-over is why. A held source is
+// recognised by its key ([Held]), so it is passed over before its body is
+// read; read in the selection itself, every held source's body — up to
+// [embedReadChars] characters of a page that may hold 512 KiB, and refused
+// sources are disproportionately the long ones — would be read on every tick
+// to be thrown away. And not a filter inside the selection either: handed the
+// held set as a list (`NOT IN (SELECT value FROM json_each(?))`), this
+// engine's planner compares every row it scans against the WHOLE list —
+// measured over five thousand tasks, 250 ms against 10 ms for the plain
+// selection with four thousand held, and rising with the list — where
+// recognising them here costs a map lookup a row.
+//
+// ONE TRANSACTION, so the openings are of the rows the selection read: a body
+// read in another snapshot could be a newer one than the version and digest
+// the source was selected at, and a vector would be published as one text's
+// while computed from another's.
+func selectStale(ctx context.Context, tx *sql.Tx, statement string, args []any,
+	limit int, held Held, opening string) ([]Document, error) {
+	rows, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	var stale []Document
+	for len(stale) < limit && rows.Next() {
+		var doc Document
+		var version int64
+		if err = rows.Scan(&doc.ID, &doc.Container, &version,
+			&doc.Title, &doc.StoredSHA); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		doc.Version = uint64(version)
+		if held.Holds(doc) {
+			continue
+		}
+		stale = append(stale, doc)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(stale) == 0 {
+		return nil, nil
+	}
+	read, err := tx.PrepareContext(ctx, opening)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = read.Close() }()
+	for i := range stale {
+		if err := read.QueryRowContext(ctx, embedReadChars, stale[i].ID).Scan(&stale[i].Body); err != nil {
+			// NOT EVEN sql.ErrNoRows is an answer here: the row was
+			// read a moment ago in this same snapshot.
+			return nil, fmt.Errorf("read the opening of %s: %w", stale[i].ID, err)
+		}
+	}
+	return stale, nil
+}
+
+// selectGone runs a corpus's withdrawals statement: the ids of vectors whose
+// source is gone.
+func selectGone(ctx context.Context, tx *sql.Tx, statement string, args []any) ([]string, error) {
+	dead, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = dead.Close() }()
+	var gone []string
+	for dead.Next() {
+		var id string
+		if err := dead.Scan(&id); err != nil {
+			return nil, err
+		}
+		gone = append(gone, id)
+	}
+	return gone, dead.Err()
 }
 
 // Coverage implements [Corpus].

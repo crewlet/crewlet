@@ -72,10 +72,11 @@ const (
 
 // pageSelectionStatement: the published pages whose vector in the asked space
 // is missing or was computed from another body, title or container, oldest
-// first, each with the opening of its body and the digest of the vector it has
-// there. Bound: the body's read length, the space twice, the limit.
+// first, each with its key, its title and the digest of the vector it has
+// there — and not its body, which pageOpeningStatement reads for the pages
+// the selection keeps ([selectStale]). Bound: the space twice, the limit.
 const pageSelectionStatement = `
-	SELECT p.id, p.container, p.edit_version, p.title, ` + pageOpening + `,
+	SELECT p.id, p.container, p.edit_version, p.title,
 	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
 	FROM pages_heads p
 	LEFT JOIN kb_vectors v
@@ -88,6 +89,13 @@ const pageSelectionStatement = `
 	       OR v.model <> ? OR v.dim <> ?)
 	ORDER BY p.updated_at
 	LIMIT ?`
+
+// pageOpeningStatement: one selected page's opening, by its primary key.
+// Bound: the body's read length, the page.
+const pageOpeningStatement = `
+	SELECT ` + pageOpening + `
+	FROM pages_heads p
+	WHERE p.id = ?`
 
 // pageWithdrawalsStatement: the vectors of pages trashed, unpublished or
 // purged. Bound: the limit.
@@ -114,11 +122,15 @@ const pageCoverageStatement = `
 	  ON v.source = 'page' AND v.source_id = p.id
 	WHERE ` + pageLive
 
-// pageSelection, pageWithdrawals and pageCoverageCount are the three
-// statements this corpus runs, each with its arguments — one place, so the
-// plan gate explains what runs rather than a copy.
+// pageSelection, pageOpeningRead, pageWithdrawals and pageCoverageCount are
+// the four statements this corpus runs, each with its arguments — one place,
+// so the plan gate explains what runs rather than a copy.
 func pageSelection(model string, dim, limit int) (string, []any) {
-	return pageSelectionStatement, []any{embedReadChars, model, dim, model, dim, limit}
+	return pageSelectionStatement, []any{model, dim, model, dim, limit}
+}
+
+func pageOpeningRead(id string) (string, []any) {
+	return pageOpeningStatement, []any{embedReadChars, id}
 }
 
 func pageWithdrawals(limit int) (string, []any) {
@@ -135,29 +147,14 @@ func pageCoverageCount(model string, dim int) (string, []any) {
 // spends the provider bill on a document no query can return; and a trashed
 // page whose vector survived is findable by meaning after it was thrown away,
 // which is why both directions are here rather than only the first.
-func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
+func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int, held Held) ([]Document, []string, error) {
 	var stale []Document
 	var gone []string
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		statement, args := pageSelection(model, dim, limit)
-		rows, err := tx.QueryContext(ctx, statement, args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var doc Document
-			var edit int64
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := rows.Scan(&doc.ID, &doc.Container, &edit,
-				&doc.Title, &doc.Body, &doc.StoredSHA); err != nil {
-				return err
-			}
-			doc.Version = uint64(edit)
-			stale = append(stale, doc)
-		}
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := rows.Err(); err != nil {
+		statement, args := pageSelection(model, dim, limit+held.Len())
+		var err error
+		if stale, err = selectStale(ctx, tx, statement, args, limit, held,
+			pageOpeningStatement); err != nil {
 			return err
 		}
 
@@ -167,19 +164,8 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		// will ever select it, because the selection above is driven by
 		// the rows that remain.
 		statement, args = pageWithdrawals(limit)
-		dead, err := tx.QueryContext(ctx, statement, args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = dead.Close() }()
-		for dead.Next() {
-			var id string
-			if err := dead.Scan(&id); err != nil {
-				return err
-			}
-			gone = append(gone, id)
-		}
-		return dead.Err()
+		gone, err = selectGone(ctx, tx, statement, args)
+		return err
 	})
 	if err != nil {
 		return nil, nil, err

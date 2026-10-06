@@ -372,6 +372,11 @@ func TestNoBaseURLDialsOpenAI(t *testing.T) {
 	if !strings.Contains(d.url, "api.openai.com") {
 		t.Fatalf("dialled %q, which is not OpenAI", d.url)
 	}
+	// AND IT NAMES THE ENDPOINT IT DIALS, which the corpus duty keys its
+	// memory of refused inputs on: an endpoint left unnamed is OpenAI's.
+	if got := p.Endpoint(); got != embeddings.DefaultBaseURL {
+		t.Fatalf("Endpoint() = %q, want %q", got, embeddings.DefaultBaseURL)
+	}
 }
 
 // A CONFIGURED BASE URL WINS, which is the whole of what makes an
@@ -392,6 +397,9 @@ func TestAConfiguredBaseURLIsDialledInstead(t *testing.T) {
 	}
 	if !strings.HasPrefix(d.url, "https://embeddings.example.com/v1/") {
 		t.Fatalf("dialled %q, want the configured base URL", d.url)
+	}
+	if got := p.Endpoint(); got != "https://embeddings.example.com/v1" {
+		t.Fatalf("Endpoint() = %q, want the configured base URL", got)
 	}
 }
 

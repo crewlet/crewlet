@@ -124,10 +124,11 @@ type Config struct {
 // the same reasoning the chat backend states, and the reason a local
 // embedding server works with no code here at all.
 type Provider struct {
-	client sdk.Client
-	model  string
-	width  int
-	limits Limits
+	client   sdk.Client
+	model    string
+	width    int
+	limits   Limits
+	endpoint string
 
 	// askWidth is whether a request carries `dimensions` ([Config.OmitDimensions]).
 	askWidth bool
@@ -198,6 +199,7 @@ func New(cfg Config) (*Provider, error) {
 		client: sdk.NewClient(opts...),
 		model:  cfg.Model, width: cfg.Dimensions, limits: cfg.Limits,
 		askWidth: !cfg.OmitDimensions,
+		endpoint: baseURL,
 	}, nil
 }
 
@@ -209,6 +211,15 @@ func (p *Provider) Model() string { return p.model }
 
 // Limits implements [Embedder].
 func (p *Provider) Limits() Limits { return p.limits }
+
+// Endpoint is the base URL this provider sends to — [DefaultBaseURL] where the
+// configuration named none.
+//
+// Not part of [Embedder]: what a caller embeds is the same at any endpoint,
+// but what an endpoint REFUSES is not, so the knowledge corpus duty keys its
+// memory of refused inputs on it (internal/engine), beside the model, the
+// width and the limits.
+func (p *Provider) Endpoint() string { return p.endpoint }
 
 // EmbedBatch implements [BatchEmbedder].
 //

@@ -196,9 +196,10 @@ func dutyReads() map[string]struct {
 		sql  string
 		args []any
 	}{
-		"the embed duty's selection":   read(search.TaskSelection("m", 8, 1024)),
-		"the embed duty's withdrawals": read(search.TaskWithdrawals(1024)),
-		"the embed duty's coverage":    read(search.TaskCoverageCount("m", 8)),
+		"the embed duty's selection":    read(search.TaskSelection("m", 8, 1024)),
+		"the embed duty's opening read": read(search.TaskOpeningRead("t-00001")),
+		"the embed duty's withdrawals":  read(search.TaskWithdrawals(1024)),
+		"the embed duty's coverage":     read(search.TaskCoverageCount("m", 8)),
 		"the re-spread walk": {
 			`SELECT id, rank FROM tracker_tasks
 			 WHERE project_key = ? AND length(rank) > 64

@@ -414,11 +414,22 @@ is embedded as it goes. The input refused alone is logged as
 sent and the per-input bound the model's limits assume (a refusal inside that
 bound means `max_input_tokens` is declared wider than the endpoint enforces, or
 the endpoint refuses the text for what it says). It is then **held back for an
-hour**, costing no request, and offered again **alone**: one request and one
-warning an hour, rather than its neighbours' place in every tick. A rewritten
-source is a new text and is offered at once; a config apply that rebuilds the
-provider forgets every refusal; a duty that moves to another node isolates each
-one again once. Any other failure — a rate limit, a timeout, a server down, a
+hour**: the selection passes over it, so it costs no request and takes no
+place in the tick's 1 024 — a thousand refused sources at the front of the
+oldest-first order do not stop anything written after them being embedded.
+What a held source still costs is the coverage figure, which counts it as
+behind for as long as the provider refuses it. When its hour is up it is
+offered again **alone**, one request and one warning, at most two of a
+corpus's a tick, the longest refused first, so refusals that fall due
+together cannot take a corpus's requests either; a corpus holding more than
+the 120 an hour that reaches offers each of them less often than hourly. A
+rewritten source is a new text and is offered at once, with its neighbours; a
+change that leaves its text alone (a status, a move) keeps it held. The
+memory follows the provider's **configuration** — the model, the width, the
+limits and the endpoint — so changing any of those (a lowered
+`max_input_tokens`, another gateway) forgets every refusal and the fix is tried
+at once, while an apply that changes something else, or rotates the key, keeps
+it; a duty that moves to another node isolates each one again once. Any other failure — a rate limit, a timeout, a server down, a
 credential refused — is about the provider rather than an input, so it ends the
 tick's requests and the next tick asks again; nothing is lost, because the
 selection is derived from the rows. A tick in which the provider refused every

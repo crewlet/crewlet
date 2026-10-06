@@ -128,15 +128,19 @@ func TestTheEmbeddingTickIsBoundedByItsProgress(t *testing.T) {
 	}
 }
 
-// THE DUTY'S REFUSALS OUTLIVE ITS TICKS AND NOT ITS PROVIDER.
+// THE DUTY'S REFUSALS OUTLIVE ITS TICKS, AND ITS PROVIDER — NOT ITS
+// CONFIGURATION.
 //
 // The search package's duty is rebuilt every tick, so what the provider refused
 // alone is held here, across them — or a refused input would be isolated again
-// at the front of every tick. And a refusal is a fact about the provider as it
-// was configured: an apply builds the provider again, and the one it builds
-// starts with no memory, so a fixed gateway or a lowered `max_input_tokens` is
-// tried at once rather than an hour later.
-func TestTheDutysRefusalsOutliveItsTicksAndNotItsProvider(t *testing.T) {
+// at the front of every tick. A refusal is a fact about the provider as it was
+// CONFIGURED: an apply builds the provider again, and one built the same — an
+// apply that changed nothing about the embeddings, or a re-activation that
+// rotated the key — keeps the memory, because starting it again re-isolated
+// every refused input, fifteen requests apiece, on every apply. One configured
+// otherwise — a lowered `max_input_tokens`, another gateway — starts with
+// none, so the fix is tried at once rather than an hour later.
+func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNodeOf(t, embeddingDutyCompany)
 	e.stopEmbedding()
@@ -164,15 +168,35 @@ func TestTheDutysRefusalsOutliveItsTicksAndNotItsProvider(t *testing.T) {
 			"holding the refusal", duty.refusals, duty.refusals.Len(), first)
 	}
 
-	// AN APPLY BUILDS THE PROVIDER AGAIN: a new slot, and no memory.
-	var rebuilt embeddings.Embedder = embeddings.NewFake(64)
+	// AN APPLY BUILDS THE PROVIDER AGAIN, configured the same: a new slot,
+	// and the same memory — the source stays held, and nothing is sent.
+	same := embeddings.NewFake(64)
+	var rebuilt embeddings.Embedder = same
 	e.embeddings.Store(&rebuilt)
+	if report := duty.tick(t.Context()); report.published != 0 || len(same.Requests()) != 0 {
+		t.Fatalf("the first tick on a provider built again the same reported %+v "+
+			"after %d request(s), want the refused source still held", report,
+			len(same.Requests()))
+	}
+	if duty.refusals != first || first.Len() != 1 {
+		t.Fatalf("a provider built again with the same configuration lost the " +
+			"refusals of the one it replaced, so every refused input is isolated " +
+			"again on every apply")
+	}
+
+	// CONFIGURED OTHERWISE — a narrower request, here — and the memory starts
+	// again: the source the old configuration refused is tried at once.
+	narrower := embeddings.NewFake(64)
+	narrower.SetLimits(embeddings.Limits{InputBytes: 8192, BatchInputs: 64, BatchBytes: 300_000})
+	var reconfigured embeddings.Embedder = narrower
+	e.embeddings.Store(&reconfigured)
 	if report := duty.tick(t.Context()); report.published != 1 {
-		t.Fatalf("the first tick on a rebuilt provider reported %+v, want the "+
-			"source the old one refused embedded at once", report)
+		t.Fatalf("the first tick on a provider configured otherwise reported %+v, "+
+			"want the source the old configuration refused embedded at once", report)
 	}
 	if duty.refusals == first || duty.refusals.Len() != 0 {
-		t.Fatalf("a rebuilt provider inherited the refusals of the one it replaced")
+		t.Fatalf("a provider configured otherwise inherited the refusals of the " +
+			"one it replaced")
 	}
 }
 

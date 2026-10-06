@@ -195,7 +195,7 @@ func TestASelectionReadsOnlyTheOpeningOfABody(t *testing.T) {
 		search.TaskCorpus{DB: h.db.Replicated().Reader()},
 		search.PageCorpus{DB: h.db.Replicated().Reader()},
 	} {
-		stale, _, err := corpus.Stale(t.Context(), embedModel, 64, 10)
+		stale, _, err := corpus.Stale(t.Context(), embedModel, 64, 10, search.Held{})
 		if err != nil {
 			t.Fatalf("%s: Stale: %v", corpus.Source(), err)
 		}
@@ -333,12 +333,25 @@ func TestARestampPublishesOnlyAVectorWhoseDigestStillMatches(t *testing.T) {
 	}
 }
 
+// observedCorpus is a corpus that records how many sources each of its
+// selections returned.
+type observedCorpus struct {
+	search.Corpus
+	returned []int
+}
+
+func (c *observedCorpus) Stale(ctx context.Context, model string, dim, limit int, held search.Held) ([]search.Document, []string, error) {
+	docs, gone, err := c.Corpus.Stale(ctx, model, dim, limit, held)
+	c.returned = append(c.returned, len(docs))
+	return docs, gone, err
+}
+
 // claimedMatch is the task corpus claiming every source's stored vector is its
 // text's — the selection a racing write leaves behind.
 type claimedMatch struct{ search.TaskCorpus }
 
-func (c claimedMatch) Stale(ctx context.Context, model string, dim, limit int) ([]search.Document, []string, error) {
-	docs, gone, err := c.TaskCorpus.Stale(ctx, model, dim, limit)
+func (c claimedMatch) Stale(ctx context.Context, model string, dim, limit int, held search.Held) ([]search.Document, []string, error) {
+	docs, gone, err := c.TaskCorpus.Stale(ctx, model, dim, limit, held)
 	for i, doc := range docs {
 		sum := sha256.Sum256([]byte(embeddings.Opening(doc.Title+" "+doc.Body, search.EmbedInputBytes)))
 		docs[i].StoredSHA = hex.EncodeToString(sum[:])
@@ -596,9 +609,9 @@ func TestAPermanentlyRefusedInputCannotHoldItsNeighboursBack(t *testing.T) {
 // A refusal is a fact about a provider and a text, not a verdict on the source:
 // a gateway fixed or a content rule relaxed has it embedded at the next retry,
 // and the memory of the refusal goes. A source whose TEXT changed is a
-// different input, offered at once with its neighbours — and the memory of
-// what it used to say, offered nowhere since, is forgotten once twice the
-// retry has passed, or the memory would grow for the life of the process.
+// different input, offered at once with its neighbours, and the memory of what
+// it used to say goes the moment the selection returns it under the new text —
+// one entry a source, so nothing about a text no selection returns is kept.
 func TestARefusedInputIsEmbeddedOnceItIsAccepted(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
@@ -611,7 +624,8 @@ func TestARefusedInputIsEmbeddedOnceItIsAccepted(t *testing.T) {
 		t.Fatalf("%d refusal(s) remembered for two inputs refused alone", got)
 	}
 
-	// t-b IS REWRITTEN: a new text, a new input, offered at once.
+	// t-b IS REWRITTEN: a new text, a new input, offered at once — and the
+	// refusal of what it used to say is gone with it.
 	h.embedder.accept("poison")
 	h.seedTasks(map[string]string{"t-b": "an ordinary body now"})
 	published, err := h.duty.Tick(t.Context())
@@ -619,6 +633,9 @@ func TestARefusedInputIsEmbeddedOnceItIsAccepted(t *testing.T) {
 		t.Fatalf("the tick after t-b was rewritten published %d (%v), want t-b", published, err)
 	}
 	h.drain()
+	if got := h.refusals.Len(); got != 1 {
+		t.Fatalf("%d refusal(s) remembered after t-b was rewritten, want only t-a's", got)
+	}
 
 	// t-a IS ACCEPTED AT ITS RETRY, and forgotten.
 	h.advance(search.EmbedRefusalRetry)
@@ -629,18 +646,161 @@ func TestARefusedInputIsEmbeddedOnceItIsAccepted(t *testing.T) {
 	if got := h.vectors(); got != 2 {
 		t.Fatalf("%d vector(s) stored, want both", got)
 	}
-	if got := h.refusals.Len(); got != 1 {
-		t.Fatalf("%d refusal(s) remembered, want only t-b's old text — t-a's went "+
-			"when it was embedded", got)
+	if got := h.refusals.Len(); got != 0 {
+		t.Fatalf("%d refusal(s) remembered, want none — t-a's went when it was embedded", got)
+	}
+}
+
+// HELD REFUSALS NEVER TAKE THE SELECTION'S PLACES.
+//
+// The selection is oldest first and a refused source is never embedded, so
+// every refusal stays at the front of every selection after it. Filtered out
+// after the selection's limit, each one took a place the tick could not use:
+// with H of them a corpus embedded at most EmbedSourcesPerTick − H sources a
+// tick, and once H reached the limit every selected row was held and nothing
+// written to the corpus afterwards was ever selected again — measured, a fresh
+// task never embedded over five more ticks. Passed over inside the selection,
+// they cost a fresh source nothing.
+//
+// AND WHEN THEY FALL DUE TOGETHER, the tick offers a few of them again — never
+// the corpus's whole share at one request apiece, which would stop the corpus
+// again for as long as it took to offer them all.
+func TestHeldRefusalsNeverTakeTheSelectionsPlaces(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	// ONE INPUT A REQUEST, so each poison is refused alone at the first
+	// request it is in: what is under test is what the held ones cost
+	// afterwards, not how they were isolated.
+	h.embedder.SetLimits(embeddings.Limits{InputBytes: 8192, BatchInputs: 1, BatchBytes: 300_000})
+	h.embedder.refuse("poison")
+	const poisons = search.EmbedSourcesPerTick + 1
+	seed := map[string]string{}
+	for i := range poisons {
+		seed[fmt.Sprintf("t-%05d", i)] = fmt.Sprintf("poison pill number %d", i)
+	}
+	h.seedTasks(seed)
+	for tick := 0; h.refusals.Len() < poisons; tick++ {
+		if tick > poisons/search.EmbedRequestsPerTick+1 {
+			t.Fatalf("after %d ticks only %d of %d poisons were refused alone",
+				tick, h.refusals.Len(), poisons)
+		}
+		if _, err := h.duty.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
 	}
 
-	// AND t-b's OLD TEXT GOES once nothing has offered it for twice the retry.
+	// A FRESH TASK, written after every one of them: embedded at the next
+	// tick, in the only request that tick sends.
+	h.seedTasks(map[string]string{"t-fresh": "a task written afterwards"})
+	sent := len(h.embedder.sent())
+	published, err := h.duty.Tick(t.Context())
+	if err != nil || published != 1 {
+		t.Fatalf("with %d refusals held, the tick published %d (%v), want the "+
+			"fresh task — a corpus whose held refusals fill the selection "+
+			"embeds nothing written to it again", poisons, published, err)
+	}
+	if requests := h.embedder.sent()[sent:]; len(requests) != 1 ||
+		!strings.Contains(requests[0][0], "written afterwards") {
+		t.Fatalf("the tick sent %q, want the fresh task alone and no held refusal", requests)
+	}
+	h.drain()
+
+	// THEY FALL DUE TOGETHER: a few are offered again, alone, and a second
+	// fresh task is embedded beside them in the same tick.
+	h.advance(search.EmbedRefusalRetry)
+	h.seedTasks(map[string]string{"t-fresher": "another task written afterwards"})
+	sent = len(h.embedder.sent())
+	if published, err = h.duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the tick the refusals fell due published %d (%v), want the "+
+			"second fresh task", published, err)
+	}
+	retried := 0
+	for _, request := range h.embedder.sent()[sent:] {
+		if len(request) != 1 {
+			t.Fatalf("a request carried %d inputs; every one is a retry or the "+
+				"fresh task, each alone", len(request))
+		}
+		if strings.Contains(request[0], "poison") {
+			retried++
+		}
+	}
+	if retried != search.EmbedRetriesPerTick {
+		t.Fatalf("the tick offered %d due refusal(s) again, want %d — the rest "+
+			"wait their turn rather than taking the corpus's requests",
+			retried, search.EmbedRetriesPerTick)
+	}
+	if got := h.refusals.Len(); got != poisons {
+		t.Fatalf("%d refusal(s) remembered after the retries were refused again, "+
+			"want all %d", got, poisons)
+	}
+}
+
+// A HELD REFUSAL IS HELD THROUGH A CHANGE THAT LEAVES ITS TEXT ALONE.
+//
+// A task's every record moves its version — a status, a move — and a held
+// source is recognised by its version and title before its body is read. So a
+// change like that has it read once, found to say what it was refused for, and
+// held again under its new version: no request, and the memory keeps it.
+func TestAHeldRefusalIsHeldThroughAChangeThatLeavesItsTextAlone(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.refuse("poison")
+	h.seedTasks(map[string]string{"t-a": "a poison pill"})
+	corpus := &observedCorpus{Corpus: search.TaskCorpus{DB: h.db.Replicated().Reader()}}
+	duty := h.dutyOver(corpus)
+	if _, err := duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	sent := len(h.embedder.sent())
+	h.moveTask("t-a", "OPS")
+	for range 2 {
+		if published, err := duty.Tick(t.Context()); err != nil || published != 0 {
+			t.Fatalf("a tick after the held task moved published %d (%v)", published, err)
+		}
+	}
+	if again := len(h.embedder.sent()); again != sent {
+		t.Fatalf("a held task whose text did not change cost %d request(s) when it "+
+			"moved", again-sent)
+	}
+	// READ ONCE, after the move, and passed over after that: the tick that
+	// read it held it again under its new version.
+	if want := []int{1, 1, 0}; !slices.Equal(corpus.returned, want) {
+		t.Fatalf("the selections returned %v source(s), want %v — the first "+
+			"tick's, the read after the move, and then nothing", corpus.returned, want)
+	}
+	if got := h.refusals.Len(); got != 1 {
+		t.Fatalf("%d refusal(s) remembered after the held task moved, want it held", got)
+	}
+}
+
+// A REMOVED SOURCE'S REFUSAL ENDS AT ITS RETRY.
+//
+// There is no clock deciding what the memory forgets: a refusal goes when its
+// text is embedded, when its text moves, or when its retry falls due and the
+// selection no longer returns the source — which is what a removed source is.
+func TestARemovedSourcesRefusalEndsAtItsRetry(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.embedder.refuse("poison")
+	h.seedTasks(map[string]string{"t-a": "a poison pill"})
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	h.removeTask("t-a")
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := h.refusals.Len(); got != 1 {
+		t.Fatalf("%d refusal(s) remembered before the retry, want the removed one "+
+			"still held — nothing has looked for it yet", got)
+	}
 	h.advance(search.EmbedRefusalRetry)
 	if _, err := h.duty.Tick(t.Context()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
 	if got := h.refusals.Len(); got != 0 {
-		t.Fatalf("%d refusal(s) remembered for texts no selection returns any more", got)
+		t.Fatalf("%d refusal(s) remembered for a source the selection no longer "+
+			"returns", got)
 	}
 }
 
@@ -1446,17 +1606,16 @@ type scriptedCorpus struct {
 
 func (c *scriptedCorpus) Source() search.Source { return c.source }
 
-func (c *scriptedCorpus) Stale(_ context.Context, _ string, _, limit int) ([]search.Document, []string, error) {
+// Stale passes over what held holds and counts only what it returns against
+// limit, as the real corpora do — a twin that filled its limit with held
+// sources would certify the very failure the pass-over removes.
+func (c *scriptedCorpus) Stale(_ context.Context, _ string, _, limit int, held search.Held) ([]search.Document, []string, error) {
 	if c.err != nil {
 		return nil, nil, c.err
 	}
-	n := c.backlog
-	if n < 0 || n > limit {
-		n = limit
-	}
-	docs := make([]search.Document, n)
-	for i := range docs {
-		docs[i] = search.Document{
+	var docs []search.Document
+	for i := 0; len(docs) < limit && (c.backlog < 0 || i < c.backlog); i++ {
+		doc := search.Document{
 			ID:        fmt.Sprintf("%s-%05d", c.source, i),
 			Container: "ENG",
 			Version:   1,
@@ -1464,6 +1623,9 @@ func (c *scriptedCorpus) Stale(_ context.Context, _ string, _, limit int) ([]sea
 			// what lets the embedder's record say which corpus a
 			// provider call was spent on.
 			Title: fmt.Sprintf("%s document %05d", c.source, i),
+		}
+		if !held.Holds(doc) {
+			docs = append(docs, doc)
 		}
 	}
 	return docs, c.gone, nil

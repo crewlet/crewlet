@@ -64,12 +64,14 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		// THE EMBED DUTY'S OWN STATEMENTS, as its corpora run them — the
 		// copy of the task selection this list carried had already drifted
 		// from it by two columns and a predicate.
-		"the embed duty's task selection":   of(search.TaskSelection(model, dim, 100)),
-		"the embed duty's task withdrawals": of(search.TaskWithdrawals(100)),
-		"the embed duty's task coverage":    of(search.TaskCoverageCount(model, dim)),
-		"the embed duty's page selection":   of(search.PageSelection(model, dim, 100)),
-		"the embed duty's page withdrawals": of(search.PageWithdrawals(100)),
-		"the embed duty's page coverage":    of(search.PageCoverageCount(model, dim)),
+		"the embed duty's task selection":           of(search.TaskSelection(model, dim, 100)),
+		"the embed duty's read of a task's opening": of(search.TaskOpeningRead("t-00001")),
+		"the embed duty's task withdrawals":         of(search.TaskWithdrawals(100)),
+		"the embed duty's task coverage":            of(search.TaskCoverageCount(model, dim)),
+		"the embed duty's page selection":           of(search.PageSelection(model, dim, 100)),
+		"the embed duty's read of a page's opening": of(search.PageOpeningRead("s00001")),
+		"the embed duty's page withdrawals":         of(search.PageWithdrawals(100)),
+		"the embed duty's page coverage":            of(search.PageCoverageCount(model, dim)),
 		"the embed duty's read of the vectors it restamps": {
 			search.StoredVectorStatement, []any{"page", "s00001", model, dim}},
 		"the index duty's count of the space": {search.SpaceCountStatement,
@@ -251,6 +253,18 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		"sqlite_autoindex_kb_vectors_1 (source=? AND source_id=?)") {
 		t.Fatalf("the duty's read of the vectors it restamps does not seek "+
 			"kb_vectors' primary key:\n%s", joined)
+	}
+	// A SELECTED SOURCE'S OPENING IS READ BY ITS PRIMARY KEY — a seek per
+	// source the selection kept, and never a walk of the table: it runs up
+	// to a thousand times a tick for each corpus.
+	for _, name := range []string{
+		"the embed duty's read of a task's opening",
+		"the embed duty's read of a page's opening",
+	} {
+		joined := strings.Join(plans[name], "\n")
+		if !strings.Contains(joined, "SEARCH") || !strings.Contains(joined, "id=?") {
+			t.Fatalf("%s does not seek the primary key:\n%s", name, joined)
+		}
 	}
 	// AND THE DUTY COUNTS ITS SPACE ON kb_vectors' MODEL INDEX, every tick —
 	// never by walking the wide table or the covering one.
