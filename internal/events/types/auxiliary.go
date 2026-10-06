@@ -180,16 +180,18 @@ func (p AuxPurpose) Valid() bool {
 // straddling it, and the row lands in the company day it was charged in
 // however late its flush ran.
 type AuxiliarySpend struct {
-	// Agent, AgentHandle and RoleName are the seat the calls were made
-	// for, on every stage but [AuxStageOperator].
+	// Agent, AgentHandle and RoleName are the AGENT seat the calls were
+	// made for — set on every record but a person's.
 	Agent       string `json:"agent_id,omitempty"`
 	AgentHandle string `json:"agent_handle,omitempty"`
 	RoleName    string `json:"role,omitempty"`
 
-	// ActorSeat and ActorRole are the PERSON a call on the operator
-	// surface was made for — the seat handle their credential is bound
-	// to, and its role. NOT `role`: a person is not an agent seat, and the
-	// live projection keys a seat's state on `role`.
+	// ActorSeat and ActorRole are the PERSON the calls were made for,
+	// set instead of the three above: on [AuxStageOperator], the seat
+	// handle a person's credential is bound to; on [AuxStageBackground],
+	// the human seat leading a unit whose pass ran on its chain. Each with
+	// its role. NOT `role`: a person is not an agent seat, and the live
+	// projection keys a seat's state on `role`.
 	ActorSeat string `json:"actor_seat,omitempty"`
 	ActorRole string `json:"actor_role,omitempty"`
 
@@ -242,8 +244,8 @@ func (e AuxiliarySpend) Role() string { return e.RoleName }
 // AgentID is the seat's derived id.
 func (e AuxiliarySpend) AgentID() string { return e.Agent }
 
-// Actor is the person a call on the operator surface was made for, and empty
-// otherwise — which hands the envelope on to the seat's role.
+// Actor is the person the calls were made for, and empty on an agent seat's
+// record — which hands the envelope on to the seat's role.
 func (e AuxiliarySpend) Actor() string { return e.ActorSeat }
 
 // SummaryFor says what was spent, on what, in how many calls.

@@ -41,16 +41,18 @@ const (
 	MaxPending = 4096
 )
 
-// Seat is who an auxiliary call's spend belongs to: an agent seat, or — on the
-// operator stage — a person.
+// Seat is who an auxiliary call's spend belongs to: an agent seat, or a person
+// — a person's question on the operator stage, or a background pass on a unit
+// a person leads.
 type Seat struct {
 	// AgentID, Handle and Role name an agent seat.
 	AgentID string
 	Handle  string
 	Role    string
 
-	// Person and PersonRole name a person: the seat handle their
-	// credential is bound to, and its role. Set instead of the three above.
+	// Person and PersonRole name a person: the human seat's handle — the
+	// one their credential is bound to, or the one leading the unit — and
+	// its role. Set instead of the three above.
 	Person     string
 	PersonRole string
 }
