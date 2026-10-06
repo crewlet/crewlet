@@ -28,10 +28,14 @@
 // What is left here is the cases where no reader takes the text for the whole
 // of something: a diagnostic or a process's tail past a transport ceiling, a
 // marked preview of what the reader can open (a search snippet, an inbox
-// excerpt), and an identifier with a length limit — which keeps a digest of
-// the whole beside the cut, so two that shorten alike still differ. Every one
-// of them is marked, or is an identifier, and a cut that is neither is the bug
-// this package was written to remove.
+// excerpt), an identifier with a length limit — which keeps a digest of the
+// whole beside the cut, so two that shorten alike still differ — and
+// EMBEDDING INPUT, which no reader sees at all: its bound is the embedding
+// model's, its rule is internal/providers/embeddings (Opening for a caller
+// that embeds an opening, EmbedWhole for one that represents the whole text),
+// and it is unmarked because a marker there would be a token in the vector
+// rather than a note about one. Every cut is one of those, and a cut that is
+// none of them is the bug this package was written to remove.
 package textcut
 
 import "unicode/utf8"

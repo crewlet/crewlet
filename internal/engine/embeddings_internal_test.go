@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -178,21 +180,81 @@ func TestNoEmbedderIsANilFuncNotAPanickingOne(t *testing.T) {
 	}
 }
 
-func TestAStoredEmbedderIsHandedOutAsItsEmbedMethod(t *testing.T) {
+// A STORED EMBEDDER IS HANDED OUT AS ITS WHOLE-TEXT FORM: what the prefetch
+// and the episodist embed — a turn's ask, a completed turn — has an end that
+// matters as much as its beginning, and the provider refuses an input past the
+// model's bound before sending it. So a short text is exactly Embed's vector
+// and a long one is the pool of all of it, never "no similarity search".
+func TestAStoredEmbedderEmbedsTheWholeOfWhatItIsHanded(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	var fake embeddings.Embedder = embeddings.NewFake(4)
-	e.embeddings.Store(&fake)
+	fake := embeddings.NewFake(4)
+	var held embeddings.Embedder = fake
+	e.embeddings.Store(&held)
 	embed := e.embedder()
 	if embed == nil {
 		t.Fatal("a stored embedder handed out nothing")
 	}
-	v, err := embed(t.Context(), "the quick brown fox")
+	short := "the quick brown fox"
+	v, err := embed(t.Context(), short)
 	if err != nil {
 		t.Fatalf("embed: %v", err)
 	}
+	alone, err := embeddings.NewFake(4).Embed(t.Context(), short)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if !slices.Equal(v, alone) {
+		t.Fatal("a short text is not the vector Embed gives it")
+	}
+
+	long := strings.Repeat("the deploy keeps failing on staging ", 400)
+	if _, err := fake.Embed(t.Context(), long); !errors.Is(err, embeddings.ErrTooLong) {
+		t.Fatalf("the fixture is wrong: Embed of %d bytes = %v", len(long), err)
+	}
+	v, err = embed(t.Context(), long)
+	if err != nil {
+		t.Fatalf("a text past the model's bound was not embedded whole: %v", err)
+	}
 	if len(v) != 4 {
 		t.Fatalf("vector width = %d, want the embedder's 4", len(v))
+	}
+}
+
+// THE TWIN STARTS WHERE THE DEFAULT PROVIDER IS: the limits a fake embedder
+// enforces out of the box are the ones the configuration resolves for
+// OpenAI's models, so a test certified against the fake was certified against
+// what production refuses — and a change to either side that the other did
+// not follow fails here rather than in a company's corpus.
+func TestTheFakeStartsAtTheDefaultModelsLimits(t *testing.T) {
+	t.Parallel()
+	got, err := (&Engine{}).buildEmbedder(companyWith(t, fmt.Sprintf(embeddingDoc, 1536)))
+	if err != nil {
+		t.Fatalf("buildEmbedder: %v", err)
+	}
+	if fake := embeddings.NewFake(4).Limits(); got.Limits() != fake {
+		t.Fatalf("text-embedding-3-small resolves %+v; the fake starts at %+v", got.Limits(), fake)
+	}
+}
+
+// THE PROVIDER IS BUILT AT THE LIMITS THE CONFIGURATION RESOLVES, a stated one
+// included — a gateway that accepts less than the model is what the field is
+// for, and a provider built at the model's own would send what it refuses.
+func TestAConfiguredEmbedderIsBuiltAtTheStatedLimits(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(fmt.Sprintf(embeddingDoc, 1536),
+		"    api_key: sk-embed\n",
+		"    api_key: sk-embed\n    max_input_tokens: 512\n    max_batch_inputs: 16\n", 1)
+	got, err := (&Engine{}).buildEmbedder(companyWith(t, doc))
+	if err != nil {
+		t.Fatalf("buildEmbedder: %v", err)
+	}
+	want := embeddings.Limits{InputBytes: 512, BatchInputs: 16, BatchBytes: 300_000}
+	if got.Limits() != want {
+		t.Fatalf("Limits() = %+v, want %+v", got.Limits(), want)
+	}
+	if got.Model() != "text-embedding-3-small" {
+		t.Errorf("Model() = %q", got.Model())
 	}
 }
 

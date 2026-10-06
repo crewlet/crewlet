@@ -331,8 +331,19 @@ requests** — again across every corpus together — and those numbers do not m
 with the configured width: providers bill per input *token*, and `dimensions`
 is a truncation parameter the request already carries.
 
-**A batch response has to say which input each vector answers.** The duty sends
-128 texts in one request, and the API allows the results back in any order — so
+**A batch is sent in requests the model accepts.** One call carries up to 128
+sources, and the provider sends it in as many requests as the model's own limits
+need — inputs a request and tokens a request, counted in bytes so no tokenizer is
+needed (see [Configuration](../getting-started/configuration.md#providers)).
+On OpenAI, whose request total is 300 000 tokens, 128 sources of the full 8 KiB
+are four requests; sent as one, a corpus of code, markup or a script that is not
+Latin ran past the total and was refused on every tick. A source past the
+model's per-input bound is refused before anything is sent, and every batch
+request is held to a one-minute ceiling of its own — a single embedding is held
+to fifteen seconds, and a search's query vector to its own two-second budget.
+
+**A batch response has to say which input each vector answers.** A request
+carries many texts, and the API allows the results back in any order — so
 each one is filed by the `index` it carries rather than by where it arrived.
 The engine accepts only a response that maps onto the batch exactly once: as
 many results as inputs, every index inside the batch, no index twice, and

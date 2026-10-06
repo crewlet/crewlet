@@ -68,10 +68,18 @@ default and is the better answer when you want the tool log to be the
 engine's own. See
 [Subscription LLM Backends § Two modes](../concepts/subscription-llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
 
-**Embeddings** (`providers.embeddings`) power the agent-learning subsystem
-(personal diary + episode recall). Any OpenAI-compatible embeddings endpoint
-works via `base_url` — including a self-hosted one. Without an embeddings
-provider the engine still runs; learning features degrade gracefully.
+**Embeddings** (`providers.embeddings`) power the semantic half of a native
+knowledge search — the company's own pages and work items, embedded once for
+the whole fleet, and each search's query — and the agent-learning subsystem's
+similarity recall (personal diary + episode recall). Any OpenAI-compatible
+embeddings endpoint works via `base_url`, including a self-hosted one; a model
+this build does not know states its width and its limits (the tokens one input
+may hold, and the inputs and tokens one request may carry), and so do the
+request limits of `gemini-embedding-001` and `embed-v4.0`, whose compatible
+endpoints document none — see
+[Configuration](configuration.md#providers). Without an embeddings
+provider the engine still runs: search is keyword only, and recall falls back
+to recency.
 
 ---
 

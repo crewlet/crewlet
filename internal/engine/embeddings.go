@@ -42,6 +42,11 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 			"to change the width", cfg.Width(), opened)
 	}
 	env := e.resolver()
+	// THE MODEL'S LIMITS, as the configuration resolves them from what its
+	// vendor documents and what the operator stated: the provider refuses
+	// an input past them before sending it, and packs a batch into requests
+	// they admit.
+	limits := cfg.Limits()
 	provider, err := embeddings.New(embeddings.Config{
 		Model:      env.Value(cfg.Model),
 		Dimensions: cfg.Width(),
@@ -49,6 +54,12 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 		// OPENAI_API_KEY included, resolved through the store-aware chain.
 		APIKey:  cfg.ResolvedKey(env),
 		BaseURL: env.Value(cfg.BaseURL),
+		Limits: embeddings.Limits{
+			InputBytes:    limits.InputBytes,
+			BatchInputs:   limits.BatchInputs,
+			BatchBytes:    limits.BatchBytes,
+			InputOverhead: limits.InputOverhead,
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -64,17 +75,39 @@ func (e *Engine) storeWidth() int {
 	return e.backends.Store.EmbeddingDim()
 }
 
-// embedder is the company's embedder as the prefetch takes it, or nil.
+// embedder is the company's embedder as the prefetch and the episodist take
+// it, or nil.
 //
-// A FUNCTION rather than the interface, because that is what the prefetch's
-// seam asks for — and because it is where the one rule the callers share
-// lives: an error is no vector, never a failure to propagate. Every consumer
-// of a vector here is ranking, and a ranking that could not be computed
-// costs relevance rather than correctness.
+// A FUNCTION rather than the interface, because that is what their seams ask
+// for — and because it is where the one rule the callers share lives: an
+// error is no vector, never a failure to propagate. Every consumer of a
+// vector here is ranking, and a ranking that could not be computed costs
+// relevance rather than correctness.
+//
+// THE WHOLE TEXT, through [embeddings.EmbedWhole], because what these callers
+// embed — a turn's ask, a completed turn — is text whose end matters as much
+// as its beginning, and the provider refuses an input past the model's bound
+// before sending it: handed Embed itself, every ask longer than one input
+// would be no similarity search at all. A text within the bound is one piece
+// and goes through Embed, so it is the vector it always was.
+//
+// BOUNDED BY [embeddings.EmbedTimeout] as a whole, the ceiling a single call
+// has always had here: a long ask is one batch call, whose requests carry a
+// corpus's ceiling rather than a turn start's, and a turn must not wait longer
+// for its similarity search because the ask was long.
 func (e *Engine) embedder() func(context.Context, string) ([]float32, error) {
 	embed := e.embeddings.Load()
 	if embed == nil || *embed == nil {
 		return nil
 	}
-	return (*embed).Embed
+	held := *embed
+	batch, ok := held.(embeddings.BatchEmbedder)
+	if !ok {
+		return held.Embed
+	}
+	return func(ctx context.Context, text string) ([]float32, error) {
+		ctx, cancel := context.WithTimeout(ctx, embeddings.EmbedTimeout)
+		defer cancel()
+		return embeddings.EmbedWhole(ctx, batch, text)
+	}
 }

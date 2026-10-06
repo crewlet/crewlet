@@ -88,10 +88,12 @@ const embedDutyTTL = 3 * search.EmbedInterval
 // embedTickBudget is how long one tick may go without showing progress
 // before it is cut off, the lease renewed or not ([tickBound]).
 //
-// FIVE MINUTES, several times the longest stretch a LIVE tick goes without
+// FIVE MINUTES, more than the longest stretch a LIVE tick goes without
 // showing any. A tick shows progress at every step that has a natural end: a
-// provider call answered — bounded by the provider's own timeout (15 s by
-// default, with no retries) — each vector it publishes or withdraws, which is
+// provider call answered — bounded by its requests' own ceiling
+// ([embeddings.BatchTimeout], a minute a request, with no retries), and on
+// OpenAI a call of 128 sources is at most four requests, four minutes if every
+// one ran to its ceiling — each vector it publishes or withdraws, which is
 // one publish (up to 128 a batch, and 1 024 withdrawals a corpus after a bulk
 // purge, so reported one by one rather than as a stretch), a batch of the
 // index's rollout published, every 1 024 rows the training's reading and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -20,14 +21,42 @@ import (
 const (
 	DefaultBaseURL = "https://api.openai.com/v1"
 
-	// DefaultTimeout bounds one embedding call.
+	// EmbedTimeout bounds one [Provider.Embed] request.
 	//
-	// SHORT, and much shorter than a completion's, because of where this
-	// sits: a turn-start prefetch runs it before a person sees anything,
-	// and the caller's fallback for a slow embedder — no similarity
-	// search — is cheap. Waiting two minutes to avoid it would be the
-	// wrong trade in the one place the trade is obvious.
-	DefaultTimeout = 15 * time.Second
+	// SHORT, and much shorter than a completion's, because of who calls
+	// it: a turn-start prefetch runs it before a person sees anything, and
+	// the caller's fallback for a slow embedder — no similarity search —
+	// is cheap. Waiting two minutes to avoid it would be the wrong trade
+	// in the one place the trade is obvious. A caller with a tighter
+	// budget sets a deadline on its context, which wins (a search's query
+	// vector has two seconds); this is the ceiling for one that sets none.
+	EmbedTimeout = 15 * time.Second
+
+	// BatchTimeout bounds one request of a [Provider.EmbedBatch] call.
+	//
+	// ITS OWN, because the two calls have nothing in common but the wire:
+	// a single Embed carries a query or a turn's ask, while a batch
+	// request carries up to the model's request total — 300 000 tokens on
+	// OpenAI — and the fifteen seconds a turn start can afford is not a
+	// figure about how long a server takes over that many.
+	//
+	// SIXTY SECONDS, derived from what the batch caller's tick allows. The
+	// knowledge corpus duty (internal/search) makes at most eight calls a
+	// tick on a one-minute interval, and the engine cuts a tick off once it
+	// has gone five minutes without progress (internal/engine's
+	// embedTickBudget), counting each answered call as progress. A request
+	// at this ceiling is a fifth of that budget, so one that runs to it is
+	// never itself mistaken for a wedge — and four of them, the most
+	// requests one 128-input call becomes on OpenAI (128 inputs of 8 KiB
+	// against a 300 000-token request), still fit inside it.
+	//
+	// NOTHING HAS MEASURED how long a server takes to embed a full request
+	// — not OpenAI's, and not a CPU-hosted one, which is the deployment
+	// most likely to need longer. The lever for a slow server is not this
+	// ceiling but the request's size: `max_batch_tokens` lowers what one
+	// request carries, and with it how long the server takes over it,
+	// without moving the bound a wedged call is held to.
+	BatchTimeout = time.Minute
 )
 
 // Config builds an embedder.
@@ -48,7 +77,12 @@ type Config struct {
 	// and the secret store are both in reach.
 	APIKey  string
 	BaseURL string
-	Timeout time.Duration
+
+	// Limits is what the model accepts, resolved from the configuration
+	// (config.EmbeddingProvider.Limits). Required, for the reason the width
+	// is: a default here would be a guess at somebody else's model, and
+	// a guess too high is every long input refused by the provider.
+	Limits Limits
 
 	// HTTPClient is the caller's transport, or nil for one built here.
 	HTTPClient *http.Client
@@ -64,6 +98,7 @@ type Provider struct {
 	client sdk.Client
 	model  string
 	width  int
+	limits Limits
 }
 
 // BatchEmbedder RATHER THAN Embedder, because the embed duty in internal/engine
@@ -83,15 +118,14 @@ func New(cfg Config) (*Provider, error) {
 		return nil, errors.New("embeddings: name the vector width; the store's " +
 			"columns are sized from it")
 	}
+	if err := cfg.Limits.Validate(); err != nil {
+		return nil, fmt.Errorf("embeddings: %s: %w", cfg.Model, err)
+	}
 	key := strings.TrimSpace(cfg.APIKey)
 
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
-	}
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = DefaultTimeout
 	}
 
 	// NOTHING FROM THE PROCESS ENVIRONMENT — the chat backend's rule and its
@@ -100,12 +134,16 @@ func New(cfg Config) (*Provider, error) {
 	// points at). Applied first, so the key below is the one that authorizes.
 	opts := append(llmopenai.WithoutAmbientEnvironment(),
 		option.WithBaseURL(baseURL),
-		option.WithRequestTimeout(timeout),
+		// The client's ceiling is the single call's; every request states
+		// its own (EmbedTimeout, BatchTimeout), so this is never the one in
+		// force — it is here so no request can go out with none.
+		option.WithRequestTimeout(EmbedTimeout),
 		// NO SDK RETRIES, for the reason the chat backend gives: its
 		// defaults fire on the whole 429/5xx set, which is exactly what a
-		// caller needs to see rather than have spent for it. Here the
-		// caller's answer is simply "no vector", which is cheaper than
-		// any retry the SDK could do.
+		// caller needs to see rather than have spent for it. The callers
+		// here each have their own answer — a turn degrades, the corpus
+		// asks again on its next tick — and the classified error is what
+		// lets them choose it (see the package doc).
 		option.WithMaxRetries(0),
 		// ALWAYS, AN EMPTY KEY INCLUDED. The SDK loads OPENAI_API_KEY from
 		// the process environment at construction, so skipping this for an
@@ -126,12 +164,18 @@ func New(cfg Config) (*Provider, error) {
 
 	return &Provider{
 		client: sdk.NewClient(opts...),
-		model:  cfg.Model, width: cfg.Dimensions,
+		model:  cfg.Model, width: cfg.Dimensions, limits: cfg.Limits,
 	}, nil
 }
 
 // Width implements [Embedder].
 func (p *Provider) Width() int { return p.width }
+
+// Model implements [Embedder].
+func (p *Provider) Model() string { return p.model }
+
+// Limits implements [Embedder].
+func (p *Provider) Limits() Limits { return p.limits }
 
 // EmbedBatch implements [BatchEmbedder].
 //
@@ -146,28 +190,57 @@ func (p *Provider) Width() int { return p.width }
 // response carries one, since the API documents that results may come back
 // out of order — and the mapping those indices describe is refused outright
 // unless it covers every input exactly once. See [Provider.assignment].
+//
+// AS MANY REQUESTS AS THE MODEL'S LIMITS NEED ([Limits.Requests]), one after
+// another, each under [BatchTimeout]: a batch is a caller's unit of work and a
+// request is the provider's, and the corpus's 128 inputs of up to 8 KiB are
+// over OpenAI's 300 000-token request total whenever the text runs under 3.5
+// bytes a token — code, markup, most scripts that are not Latin — which sent
+// as one request was a batch refused on every tick for ever.
 func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	out := make([][]float32, len(texts))
-	// The inputs the provider is actually asked for, with the slot each
-	// one came from — an empty input is not sent and not billed for.
-	input := make([]string, 0, len(texts))
-	slot := make([]int, 0, len(texts))
+	prepared := make([]string, len(texts))
+	sizes := make([]int, len(texts))
 	for i, text := range texts {
-		if normalized := normalize(text); normalized != "" {
-			input = append(input, normalized)
-			slot = append(slot, i)
+		prepared[i] = Prepare(text)
+		sizes[i] = len(prepared[i])
+	}
+	// EVERY INPUT IS MEASURED BEFORE ANYTHING IS SENT, so an input past
+	// the bound costs no request — and no request the call has already paid
+	// for is thrown away because a later input could never have been sent.
+	groups, err := p.limits.requests(sizes)
+	if err != nil {
+		return nil, p.named(err)
+	}
+	for _, group := range groups {
+		input := make([]string, len(group))
+		for j, at := range group {
+			input[j] = prepared[at]
+		}
+		vectors, err := p.request(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		// group maps each input of the request back to the caller's own
+		// position, which differs from the request's whenever an empty
+		// input was skipped or an earlier request took the inputs before.
+		for j, vector := range vectors {
+			out[group[j]] = vector
 		}
 	}
-	if len(input) == 0 {
-		return out, nil
-	}
+	return out, nil
+}
+
+// request sends one batch request — inputs already prepared, non-empty and
+// inside the limits — and returns one vector per input, in input order.
+func (p *Provider) request(ctx context.Context, input []string) ([][]float32, error) {
 	res, err := p.client.Embeddings.New(ctx, sdk.EmbeddingNewParams{
 		Model:      p.model,
 		Input:      sdk.EmbeddingNewParamsInputUnion{OfArrayOfStrings: input},
 		Dimensions: sdk.Int(int64(p.width)),
-	})
+	}, option.WithRequestTimeout(BatchTimeout))
 	if err != nil {
-		return nil, fmt.Errorf("embeddings: %s: %w", p.model, err)
+		return nil, p.classify(err)
 	}
 	// THE WHOLE MAPPING IS RESOLVED BEFORE ONE SLOT IS WRITTEN — see
 	// [Provider.assignment] for why a per-item decision cannot be made
@@ -176,6 +249,7 @@ func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	if err != nil {
 		return nil, err
 	}
+	out := make([][]float32, len(input))
 	for i, item := range res.Data {
 		raw := item.Embedding
 		vector := make([]float32, len(raw))
@@ -186,12 +260,46 @@ func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 		if err != nil {
 			return nil, err
 		}
-		// at[i] is the INPUT this item answers; slot maps that back to
-		// the caller's own text, which is a different position whenever
-		// an empty input was skipped on the way out.
-		out[slot[at[i]]] = checked
+		// at[i] is the INPUT this item answers.
+		out[at[i]] = checked
 	}
 	return out, nil
+}
+
+// named fills in the model on a [TooLongError] the limits raised, which know
+// the bound but not whose it is.
+func (p *Provider) named(err error) error {
+	var long *TooLongError
+	if errors.As(err, &long) {
+		long.Model = p.model
+	}
+	return err
+}
+
+// classify turns an SDK failure into a classified [Error].
+//
+// A STATUS decides it where there is one ([classForStatus]). Without one, a
+// deadline and a network failure are transient — the provider's own timeout
+// and a caller's deadline alike, since asking again with more time may succeed
+// — while a CANCELLED context is the caller's own doing and is left
+// unclassified: it says nothing about the provider, and errors.Is(err,
+// context.Canceled) still answers through the wrap.
+func (p *Provider) classify(err error) error {
+	var apiErr *sdk.Error
+	if errors.As(err, &apiErr) {
+		if class := classForStatus(apiErr.StatusCode); class != nil {
+			return &Error{Model: p.model, Status: apiErr.StatusCode, Class: class, Err: err}
+		}
+		return fmt.Errorf("embeddings: %s: %w", p.model, err)
+	}
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("embeddings: %s: %w", p.model, err)
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr):
+		return &Error{Model: p.model, Class: ErrTransient, Err: err}
+	}
+	return fmt.Errorf("embeddings: %s: %w", p.model, err)
 }
 
 // assignment resolves which input each item of a batch response answers.
@@ -306,22 +414,25 @@ func (p *Provider) assignment(data []sdk.Embedding, inputs int) ([]int, error) {
 
 // Embed implements [Embedder].
 func (p *Provider) Embed(ctx context.Context, text string) ([]float32, error) {
-	normalized := normalize(text)
-	if normalized == "" {
+	prepared := Prepare(text)
+	if prepared == "" {
 		return nil, ErrEmpty
+	}
+	if len(prepared) > p.limits.InputBytes {
+		return nil, &TooLongError{Model: p.model, Bytes: len(prepared), Limit: p.limits.InputBytes}
 	}
 	res, err := p.client.Embeddings.New(ctx, sdk.EmbeddingNewParams{
 		Model: p.model,
-		Input: sdk.EmbeddingNewParamsInputUnion{OfString: sdk.String(normalized)},
+		Input: sdk.EmbeddingNewParamsInputUnion{OfString: sdk.String(prepared)},
 		// THE WIDTH IS ASKED FOR, not just checked. The third-generation
 		// models support truncation to a shorter width, so a company that
 		// sized its store at 768 gets 768 rather than a refusal — and a
 		// model that ignores the parameter still fails the check below,
 		// which is the case this cannot fix.
 		Dimensions: sdk.Int(int64(p.width)),
-	})
+	}, option.WithRequestTimeout(EmbedTimeout))
 	if err != nil {
-		return nil, fmt.Errorf("embeddings: %s: %w", p.model, err)
+		return nil, p.classify(err)
 	}
 	if len(res.Data) == 0 {
 		return nil, fmt.Errorf("embeddings: %s returned no vector", p.model)

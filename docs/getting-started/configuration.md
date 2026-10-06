@@ -486,7 +486,12 @@ input in (none for OpenAI, whose count is the input's own; sixteen are set
 aside for every other model). So an input of 8 192 bytes is always inside
 OpenAI's 8 192-token window, whatever language it is in — at the price that
 ordinary prose, three to four bytes a token, is held to about a quarter of the
-window.
+window. An input past that bound is refused *before* anything is sent, and a
+batch is sent in as many requests as the model's limits need. What a text too
+long for one input becomes is each caller's choice: the knowledge corpus embeds
+a document's opening, while a turn's ask and an episode are split between words
+into pieces that each fit, embedded in one call, and pooled into one vector —
+so a long ask is still searched by meaning, all of it, rather than refused.
 
 **The width is a contract with the store, not with the model.** Vectors of
 two different widths cannot be compared, so a row written at the wrong one is
@@ -503,11 +508,28 @@ than adapt:
   rather than stored — on every call and not just the first, because a
   gateway or aggregator can move models mid-deployment.
 
-Everything else about an embedding failure is cheap: a timed-out or refused
-call is *no vector*, which every caller reads as "no similarity search this
-turn" and carries on with recency. Nothing here retries — the caller's
-degradation costs less than a retry spent inside a turn-start prefetch
-somebody is waiting on.
+**What a failure costs depends on who asked, so nothing in the provider
+retries.** For a turn starting — diary and episode recall, a search's query
+vector — a timed-out or refused call is *no vector*: recall carries on with
+recency and a hybrid search with its keyword half, and a retry would be spent
+inside a prefetch somebody is waiting on. For the knowledge corpus, a failure is
+a backlog, and the duty asks again on its next tick. What the provider gives
+every caller instead is *which* failure it was, in three classes: **refused**
+(HTTP 400, 413 or 422, or an input past the bound — sent again unchanged it
+will be refused again, so a caller can set that one input aside rather than
+resend its whole batch for ever), **transient** (429, 5xx, a timeout, a network
+failure — asking again later may succeed) and **configuration** (401, 403, 404
+and the other 4xx, or a vector of the wrong width — nothing will succeed until
+`providers.embeddings` is fixed).
+
+**One call's ceiling is not another's.** A single embedding — a query, a turn's
+ask — is held to 15 seconds, because a turn start is waiting on it; a batch
+request carries up to the model's request total (300 000 tokens on OpenAI) and
+is held to 60 seconds, a fifth of the five minutes a corpus tick may go without
+progress. Nothing has measured how long a server takes over a full request —
+OpenAI's or a self-hosted one on CPU, the deployment most likely to need longer.
+If batches time out against a slow server, lower `max_batch_tokens`: a smaller
+request is a shorter one, and the ceiling a stuck call is held to does not move.
 
 ## Tier A (`crewlet.yaml`)
 

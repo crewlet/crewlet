@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 )
 
@@ -477,6 +478,12 @@ type topicalEmbedder struct {
 }
 
 func (e topicalEmbedder) Width() int { return e.width }
+
+func (e topicalEmbedder) Model() string { return "topical" }
+
+// Limits are the fake provider's, which are the default model's: this embedder
+// differs from it in what a vector looks like, never in what it accepts.
+func (e topicalEmbedder) Limits() embeddings.Limits { return embeddings.NewFake(e.width).Limits() }
 
 func (e topicalEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 	h := fnv.New64a()
