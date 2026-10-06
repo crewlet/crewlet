@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -451,6 +452,72 @@ func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decis
 		Asked: true, Model: "judge-model", ProviderKey: "judge-entry",
 		InputTokens: 20, OutputTokens: 10,
 	}, nil
+}
+
+// A JUDGEMENT THE BUDGET REFUSES ENDS THE EXTENSION, AND IS CHARGED ALL THE
+// SAME.
+//
+// The judge runs once a phase is out of rounds and has answered by the time it
+// is charged. A refusal there declines the extension — the outcome of the judge
+// saying no, because a seat at its cap should stop extending rather than die —
+// and the meter has still been handed the judgement, which the fleet's counter
+// records like any round it refuses.
+func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		thinkAndCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"read both"}`, "enough"),
+		text("done"),
+	}}
+	pub := newCapture()
+	// Two 100-token rounds fit; the 30-token judgement after them does not.
+	meter := &ceilingMeter{ceiling: 220}
+	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
+
+	// NOT A FAILED TURN: an over-budget judgement is a declined extension.
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	judged := phasesOfKind(t, pub, "judge")
+	if len(judged) != 1 {
+		t.Fatalf("%d judge phases published, want the one call that ran", len(judged))
+	}
+	if judged[0].Decision != "rescue" {
+		t.Errorf("decision = %q, want rescue: the budget refused the judgement, so "+
+			"the phase was not extended", judged[0].Decision)
+	}
+	if got := prov.n["execute"]; got != 2 {
+		t.Errorf("the executor made %d model calls, want its 2 rounds and no extension", got)
+	}
+	if got := meter.charges(); !slices.Equal(got, []int{100, 100, 30}) {
+		t.Errorf("charges = %v, want both rounds and the refused judgement's 30", got)
+	}
+}
+
+// ceilingMeter records every charge it is handed and refuses one that does
+// not fit its ceiling — recording it all the same, as the fleet's counter
+// does, because the call it charges has already been made.
+type ceilingMeter struct {
+	countingMeter
+	ceiling int
+}
+
+func (m *ceilingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
+	m.mu.Lock()
+	before := 0
+	for _, c := range m.seen {
+		before += c
+	}
+	m.mu.Unlock()
+	if _, err := m.countingMeter.Spend(ctx, tokens); err != nil {
+		return toolloop.SpendOutcome{}, err
+	}
+	if before+tokens > m.ceiling {
+		return toolloop.SpendOutcome{Scope: "agent", Used: before + tokens, Limit: m.ceiling}, nil
+	}
+	return toolloop.SpendOutcome{OK: true}, nil
 }
 
 // countingMeter records every charge the shared budget saw.

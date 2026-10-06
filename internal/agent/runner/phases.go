@@ -1107,8 +1107,11 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 //
 // A CHARGE THAT REFUSES DOES NOT FAIL THE TURN. The extension is a generosity
 // on a phase that has already run out of rounds, and a seat at its cap should
-// stop extending, not die: an over-budget judgement is recorded and treated as
-// "no extension", which is the same outcome as the judge saying no.
+// stop extending, not die: an over-budget judgement is logged, published and
+// treated as "no extension", which is the same outcome as the judge saying no.
+// Its tokens are on the counter either way: the judge has answered by the
+// time it is charged, and a meter records a call it refuses as it records one
+// it admits ([toolloop.BudgetMeter]).
 func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRound int,
 	policy extension.Policy, req extension.Request,
 ) (int, extension.Decision) {
@@ -1155,7 +1158,8 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 	return granted, decision
 }
 
-// charge meters a model call the tool loop did not make.
+// charge meters a model call the tool loop did not make, once it has been
+// made: the meter records it whether or not it fits.
 //
 // An unreachable counter is NOT a refusal — the same three-valued rule the
 // loop's own charge follows — but here both answers end the same way, because
