@@ -411,6 +411,34 @@ describe("signing in with the deployment's token", () => {
   });
 });
 
+// A TAB WHOSE SESSION ENDED ELSEWHERE IS TOLD SO. Another browser's password
+// change, or its "Sign out" of this session, dropped this one on the plain
+// sign-in form as though it had never been signed in. The CONTROLS: a tab
+// nobody read (a fresh one, or one a sign-out emptied) is not told, and one
+// whose session is still good is told whose it holds instead. Mutation: drop
+// the notice, or show it whatever the tab was.
+describe("a tab whose session ended somewhere else", () => {
+  test.each([
+    ["a tab somebody read, holding no session now", "p-1", NOBODY, true],
+    ["a tab nobody read (the control)", null, NOBODY, false],
+    [
+      "a tab whose session is still good (the control)",
+      "p-1",
+      {
+        status: 200,
+        body: { person: "p-1", login: "jane.doe", kind: "person", status: "signed_in" },
+      },
+      false,
+    ],
+  ])("%s", async (_, reader, session, told) => {
+    if (reader) noteReader(reader);
+    engine({ "GET /health": CLAIMED, "GET /auth/session": session as Answer });
+    mount();
+    await answered();
+    expect(screen.queryByText("You were signed out") !== null).toBe(told);
+  });
+});
+
 describe("a browser that is already signed in", () => {
   test("is told whose session it holds, and may carry on as them", async () => {
     engine({

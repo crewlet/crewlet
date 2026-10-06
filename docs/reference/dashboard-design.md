@@ -1785,7 +1785,11 @@ because the socket can learn it before React has mounted, and a sign-in clears
 it. A `403 second_factor_enrolment_required` does the same toward `#/enrol`. A
 `4403`, a `seat_unavailable` and a refusal that names a grant do NOT: the
 person is signed in, and signing in again reaches the same person with the
-same access.
+same access. A tab that was read by somebody (`lib/reader.ts`) and lands here
+holding no session lost it without a sign-out in this tab — one made here
+empties the tab's storage — so the sign-in says **You were signed out** and
+what ends a session elsewhere: a sign-out from another browser or tab, a
+password change, an administrator, its own deadline.
 
 **`next` is an address on this page, or nothing.** It is the one parameter of
 a sign-in an outsider can choose for somebody else — a `#/login?next=…` link in

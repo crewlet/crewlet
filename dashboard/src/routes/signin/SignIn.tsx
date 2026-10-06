@@ -43,6 +43,18 @@
  * an invitation. Neither is a credential: a link carrying either fills a field
  * and changes a sentence, nothing more.
  *
+ * # Signed out from somewhere else is said
+ *
+ * A tab that was read by somebody (`lib/reader.ts`) and finds no session here
+ * lost it without signing out in this tab — a sign-out made here empties the
+ * tab's storage, its reader with it. Something else ended it: a sign-out from
+ * another browser or tab, a password change, an administrator, or its own
+ * deadline. The page says so rather than dropping the person on a plain form
+ * as though they had never been signed in. The engine answers every refused
+ * credential with one `401`, so the sentence names what can end a session
+ * rather than guessing which one did; the person's own Account page lists
+ * each session with what ended it.
+ *
  * # Already signed in is said, not assumed
  *
  * A browser can arrive here holding a perfectly good session — the reader
@@ -55,6 +67,7 @@
 import { useEffect, useState } from "react";
 import { Button, Callout, Disclosure, FormField, Input, Text } from "@crewlethq/ui";
 import { useRoute } from "~/app/router.tsx";
+import { currentReader } from "~/lib/reader.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
 import { auth, RestError, type SessionAnswer } from "~/protocol/index.ts";
@@ -68,7 +81,12 @@ export function SignIn() {
   const signedIn = useSignedIn();
 
   const [unclaimed, setUnclaimed] = useState(false);
-  const [current, setCurrent] = useState<SessionAnswer | null>(null);
+  // UNDEFINED UNTIL `/auth/session` HAS ANSWERED, and null once it answered
+  // nobody: a tab holding a good session must not flash "you were signed out"
+  // for the round trip it takes to say so.
+  const [current, setCurrent] = useState<SessionAnswer | null | undefined>(undefined);
+  // AS THE PAGE OPENED: a sign-in records the next reader before it moves on.
+  const [read] = useState(() => currentReader() !== null);
 
   useEffect(() => {
     let live = true;
@@ -80,7 +98,7 @@ export function SignIn() {
     auth.session().then(
       (session) => live && setCurrent(session),
       // Nobody signed in, which is why this screen is usually open.
-      () => {},
+      () => live && setCurrent(null),
     );
     return () => {
       live = false;
@@ -98,6 +116,13 @@ export function SignIn() {
             : "Use the login or email address your invitation was for."
       }
     >
+      {read && current === null && (
+        <Callout variant="warning" title="You were signed out">
+          Your session in this browser ended without a sign-out here: it was signed out from another
+          browser or tab, ended by a password change or by an administrator, or it timed out. Sign
+          in again to carry on.
+        </Callout>
+      )}
       {current && (
         <Callout
           variant="neutral"
