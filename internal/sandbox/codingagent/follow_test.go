@@ -234,6 +234,39 @@ func TestTwoReadingsOfOneStreamAgree(t *testing.T) {
 	}
 }
 
+// A READING IS THE SAME HOWEVER ITS READS FELL. One decoder follows the stream
+// for the whole reading, so a tool call read in one poll is still known when
+// its result lands in a later one, and the text two owners derive from one
+// stream does not depend on where either one's reads happened to fall — which
+// is what lets a viewer continue across an owner move rather than reset.
+//
+// Mutation: take a fresh decoder for every read, and the failed call read a
+// poll after it was made loses its tool's name.
+func TestAReadingIsTheSameHoweverItsReadsFell(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	whole := strings.Join(claudeRunStream[:len(claudeRunStream)-1], "\n") + "\n"
+	b.Put(p.Stream(), whole)
+	once := read(t, runner.Follow(sandbox.RunHandle{}), b)
+
+	b.Put(p.Stream(), "")
+	reading := runner.Follow(sandbox.RunHandle{})
+	var polled strings.Builder
+	for i := range len(claudeRunStream) - 1 {
+		b.Put(p.Stream(), strings.Join(claudeRunStream[:i+1], "\n")+"\n")
+		polled.WriteString(read(t, reading, b).Text)
+	}
+	if !strings.Contains(once.Text, "[tool] Bash → error") {
+		t.Fatalf("the stream read at once = %q; want its failed call named", once.Text)
+	}
+	if polled.String() != once.Text {
+		t.Errorf("read a line a poll:\n%s\nwant what one read of the whole stream says:\n%s",
+			polled.String(), once.Text)
+	}
+}
+
 // A READING SHOWS WHAT A CLAUDE RUN IS DOING — the transcript of the stream so
 // far, which under `json` was nothing at all until the run ended.
 func TestALiveReadingShowsARunningClaudeRun(t *testing.T) {

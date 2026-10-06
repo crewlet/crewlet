@@ -108,8 +108,9 @@ func TestAClaudeToolResultsBodyNeverReachesTheTranscript(t *testing.T) {
 }
 
 // A FAILED CALL NAMES ITS TOOL AND THE FIRST LINE OF WHY — the tool from the
-// call the result answers, or a plain "tool" for a result whose call was not
-// in this read (a peek starts part-way through the stream).
+// call the result answers, or a plain "tool" for a result whose call this
+// decoder was never fed (a live reading begins part-way through a long
+// stream).
 func TestAFailedClaudeToolCallIsMarked(t *testing.T) {
 	failed := `{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_09",` +
 		`"type":"tool_result","content":[{"type":"text","text":"Error: file not found\nat line 3"}],"is_error":true}]}}`

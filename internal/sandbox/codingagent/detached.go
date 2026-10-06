@@ -58,8 +58,9 @@ type CLI interface {
 	// collects. A layout past this build's own is read as its own.
 	Output(paths Paths, layout int) Output
 
-	// Events is a fresh decoder for one read of this CLI's event stream.
-	// Asked only when [Output.Events] is set.
+	// Events is a new decoder for one of this CLI's event streams, read
+	// whole or followed across many reads ([Decoder]). Asked only when
+	// [Output.Events] is set.
 	Events() Decoder
 
 	// Parse maps this agent's RESULT, read whole, onto a result: the file

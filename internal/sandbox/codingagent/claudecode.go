@@ -160,7 +160,7 @@ func (ClaudeCode) Output(paths Paths, layout int) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result()}
 }
 
-// Events is a fresh decoder for one read of the stream.
+// Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
 
 // Finished is false: this CLI exits cleanly, so the done marker is the signal.

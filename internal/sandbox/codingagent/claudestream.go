@@ -76,14 +76,16 @@ type claudeToolInput struct {
 	Description  string `json:"description"`
 }
 
-// claudeEvents decodes one read of the stream into a transcript. The result
-// itself is read apart ([ClaudeCode.Parse]), from the stream's last line.
+// claudeEvents decodes one stream into a transcript, read whole or followed
+// across reads ([Decoder]). The result itself is read apart
+// ([ClaudeCode.Parse]), from the stream's last line.
 type claudeEvents struct {
 	transcript transcriptLines
 
 	// tools names a pending call by its id, so the result that comes back
-	// for it can say which tool failed. A call is forgotten once its result
-	// arrives, so the map holds only the calls still in flight.
+	// for it can say which tool failed — in the same read or a later one of
+	// a followed stream. A call is forgotten once its result arrives, so the
+	// map holds only the calls still in flight.
 	tools map[string]string
 }
 

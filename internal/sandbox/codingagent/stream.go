@@ -24,9 +24,19 @@ import (
 // nothing here needs the whole of one in memory, and nothing is refused for
 // its size.
 
-// Decoder reads one CLI's event stream a line at a time and says, at the end,
-// what the stream told it — for one read of one stream, so a fresh one is
-// taken per read ([CLI.Events]).
+// Decoder reads one CLI's event stream a line at a time: ONE STREAM per
+// decoder ([CLI.Events]), read either WHOLE — every line, then [Decoder.Result]
+// — or as a LIVE READING across many reads of the growing stream, its entries
+// taken as they come ([Decoder.Entries], what [Runner.Follow] keeps one decoder
+// for, for as long as the reading lasts).
+//
+// SO ITS STATE OUTLIVES A READ, and must depend only on the lines it has been
+// fed — never on where one read ended and the next began. A tool call in one
+// read is named by its result in the next (Claude Code's pending calls), and a
+// run of skipped lines is said where it ends, whichever read that is. Two
+// owners whose reads fell differently derive the same text from the same
+// stream only because of this, and the live view's digest resets every owner
+// move on which they do not.
 type Decoder interface {
 	// Line is one complete line of the stream, without its line break. The
 	// slice is reused once Line returns. A line that is not an event the

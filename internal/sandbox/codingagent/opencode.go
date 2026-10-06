@@ -220,7 +220,7 @@ func (OpenCode) Output(paths Paths, _ int) Output {
 	return Output{Stdout: paths.Result(), Events: true, Terminal: true}
 }
 
-// Events is a fresh decoder for one read of the stream.
+// Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (OpenCode) Events() Decoder { return &openCodeEvents{} }
 
 // Finished reports whether the stream's end says the agent has stopped.
@@ -332,8 +332,8 @@ func decodeOpenCodeEvent(line []byte) (openCodeEvent, bool) {
 	return ev, true
 }
 
-// openCodeEvents decodes one read of the stream into the answer and a
-// readable transcript.
+// openCodeEvents decodes one stream into the answer and a readable
+// transcript, read whole or followed across reads ([Decoder]).
 type openCodeEvents struct {
 	answers    []string
 	transcript transcriptLines
