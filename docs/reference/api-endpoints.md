@@ -576,8 +576,10 @@ day nobody can sign in as a person. What keeps a machine token off the
 gestures that need a person present is therefore never the clock, and it is
 two locks, both in the authority table. Every row that needs a person says so,
 and a request that presented a machine token is refused there
-`403 unauthorized` with `reason: token_refused` and no `grants`, since no
-capability would change it: revealing a secret, every `/iam/*` write that
+`403 unauthorized` with `reason: token_refused`, no `grants`, since no
+capability would change it, and a `detail` saying so — a token cannot do
+this, and its owner must, signed in — because the envelope's `message` is
+about a missing grant: revealing a secret, every `/iam/*` write that
 changes who may do anything, ending every session in the company, changing how
 somebody proves who they are (`POST /auth/totp`, `POST /auth/totp/recovery`,
 and revoking a password, a second factor or the recovery codes through
