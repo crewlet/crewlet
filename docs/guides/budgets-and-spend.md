@@ -143,8 +143,11 @@ screen folds a phase differently from the next:
 
 The other splits — model, provider entry, seat, unit, worker — draw the four
 biggest and fold the rest into one "other" band. **Worker** is the auxiliary
-model's spend by purpose (`memory_filter`, `condense_thread`, …), the same
-calls the Auxiliary band holds, split by what each one was for. **Provider** answers "which of
+model's spend by purpose (`memory_filter`, `condense_thread`, …), split by what
+each call was for. That is part of the Auxiliary band rather than the whole of
+it: the band also holds the round-cap judge and the first-turn onboarding (and
+any phase a newer peer records), which are no purpose, so the Worker split sums
+to the band less those. **Provider** answers "which of
 our configured entries are we paying for", which **model** cannot: a fallback
 chain serves several models under one entry.
 

@@ -298,11 +298,14 @@ type ProviderRow struct {
 // per-seat breakdown already is.
 const TopProviderSeats = 3
 
-// WorkerRow is the per-purpose breakdown of the AUXILIARY spend: what the
-// seats' cheap model was spent on — the turn-start context, each kind of
+// WorkerRow is the per-purpose breakdown of the AUXILIARY MODEL's spend: what
+// the seats' cheap model was spent on — the turn-start context, each kind of
 // compaction, the reflection workers, the background passes, a person's
-// answered question. Every phase of the auxiliary band, broken down by what it
-// was for; its rows sum to that band.
+// answered question. Its rows sum to the records of the `auxiliary` phase
+// ([PhaseAuxiliary]), which is PART of the Auxiliary band and not the whole of
+// it: [PhaseBand] also files the round-cap judge's phase, the first-turn
+// onboarding and any phase this build does not know there, and none of those
+// is a purpose here — so the band is this breakdown plus those phases.
 type WorkerRow struct {
 	Worker string `json:"worker"`
 	Bucket
