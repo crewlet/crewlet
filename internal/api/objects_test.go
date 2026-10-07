@@ -30,28 +30,51 @@ var objectsAt = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 // states, each rendered by the fleet question's own renderer.
 func renderObjectsScenarios(t *testing.T) []byte {
 	t.Helper()
-	lost := objstore.HashOf([]byte("a chunk the store lost"))
+	// A FIXED KEY, so the golden does not move with the random bits a
+	// minted one carries.
+	lost, err := objstore.ParseKey("0199b4f6-0000-7000-8000-00000000a1b2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bent, err := objstore.ParseKey("0199b4f6-0000-7000-8000-00000000c3d4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	audited := objectsAt.Add(-3 * time.Hour)
 	clean := engine.CollectionReport{
 		Node: "data-a", Backend: "s3:https://s3.example.com/files/acme/",
 		Status: collect.Status{
 			Collect: collect.CollectionReport{Completed: true, Listed: 1840, Aged: 1702,
-				Deleted: 12, Referenced: 1690, At: objectsAt},
-			Audit: collect.AuditReport{Completed: true, Referenced: 1828,
-				At: objectsAt.Add(-3 * time.Hour)},
+				Deleted: 12, Referenced: 1690, Retired: 3, Abandoned: 1, At: objectsAt},
+			Audit: collect.AuditReport{Completed: true, Referenced: 1828, At: audited,
+				Found: &collect.AuditFindings{At: audited, Completed: true, Referenced: 1828}},
 		},
 	}
+	findings := &collect.AuditFindings{At: audited, Completed: true, Referenced: 1828,
+		Missing: 1, Damaged: 1, MissingFiles: []collect.MissingFile{
+			{Object: lost, NamedBy: "ENG/reports/q3 plan.md"},
+			{Object: bent, NamedBy: "OPS/runbooks/restore.md", Damaged: true},
+		}}
 	missing := clean
 	missing.Backend = "nats"
 	missing.Status.Audit = collect.AuditReport{Completed: true, Referenced: 1828,
-		Missing: 1, MissingChunks: []objstore.Hash{lost}, At: objectsAt.Add(-3 * time.Hour)}
+		Missing: 1, Damaged: 1, At: audited, Found: findings}
+	// AN AUDIT THAT FAILED AFTER ONE THAT FOUND SOMETHING: the attempt and
+	// its error, and the findings it did not replace.
+	failed := missing
+	failed.Status.Audit = collect.AuditReport{Referenced: 412, At: objectsAt,
+		Error: "objstore/collect: ask the store for a key: the bucket did not answer",
+		Found: findings}
 	skipped := clean
-	skipped.Status.Collect = collect.CollectionReport{Listed: 1840, Aged: 1702,
-		Skipped: "a record this node could not apply may refer to chunks in the store",
-		At:      objectsAt}
+	skipped.Status.Collect = collect.CollectionReport{Listed: 1840, Aged: 1702, Deleted: 500,
+		Skipped:    "a record this node could not apply may refer to objects in the store",
+		SweepError: "s3obj: list the uploads under \"acme/\": AccessDenied",
+		At:         objectsAt}
 	skipped.Status.Audit = collect.AuditReport{}
 	blocks := map[string]queries.FleetObjects{
 		"reported":    queries.RenderObjects(clean),
 		"missing":     queries.RenderObjects(missing),
+		"failed":      queries.RenderObjects(failed),
 		"skipped":     queries.RenderObjects(skipped),
 		"unavailable": {State: queries.ObjectsUnavailable},
 		"not_yet":     {State: queries.ObjectsNotYet},

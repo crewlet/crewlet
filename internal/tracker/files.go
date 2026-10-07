@@ -19,31 +19,48 @@ import (
 // # What a file is here, and what it is not
 //
 // A file is a ROW — its project, its path, its content type, its size, the
-// hash of its content and the ordered list of chunks that content is cut
-// into. The bytes themselves are in the object store (internal/objstore,
-// ADR-0026) — one store the whole fleet shares, the broker's own bucket or an
-// S3 bucket, rather than a copy in every data node's database — and nothing in
-// this package ever reads one. What this package owns is the fact that the
-// file exists and which chunks it is: the manifest on the record IS the
-// reference that keeps those chunks alive, so a file written here is a file
-// whose bytes the collector will never delete, and a file removed here is one
-// whose bytes it may.
+// hash of its content and the OBJECT its bytes were uploaded into. The bytes
+// themselves are in the object store (internal/objstore, ADR-0026) — one
+// store the whole fleet shares, the broker's own bucket or an S3 bucket,
+// rather than a copy in every data node's database — and nothing in this
+// package ever reads one. What this package owns is the fact that the file
+// exists and which object holds it: the object's key on the row IS the
+// reference that keeps that object alive, so a file written here is a file
+// whose bytes the collector will never delete, and a file removed or
+// rewritten here is one whose old object it may.
 //
-// # The bytes go first
+// # The bytes go first, and the write that names them is bounded
 //
-// A writer uploads the chunks BEFORE it writes the record naming them, and the
-// object store keeps an unreferenced chunk for a day for exactly that window.
-// The other order would publish a file whose content is not anywhere yet, and
-// a reader in the gap would be told a file exists and then fail to read it.
+// A writer uploads the object BEFORE it writes the record naming it, and the
+// object store keeps an unnamed object for a day for exactly that window. The
+// other order would publish a file whose content is not anywhere yet, and a
+// reader in the gap would be told a file exists and then fail to read it.
 //
-// # A removal is a stamp, and it drops the chunks
+// AND THE WRITE IS REFUSED once the key it names was minted more than
+// [objstore.RecordWithin] ago, by the clock of the node deciding it
+// ([ErrUploadStale]): the collector judges an object by its key's minting
+// instant as well as by its age in the store, so a write naming an older key
+// could land after a collection read it as nobody's — and name bytes that
+// collection had just deleted. ADR-0027.
+//
+// # A removal is a stamp, and it drops the object
 //
 // The row stays, with who removed it and when, for the reason a task's does:
 // every upsert here is guarded by the record's version and SKIPS an older one,
 // and a guard needs a row to compare against — a deleted row would let a
 // redelivered put bring the file back. What a removal does take away is the
-// chunk list, which is the whole point of removing a file from a store whose
+// object, which is the whole point of removing a file from a store whose
 // bytes are the expensive part.
+//
+// # A file an earlier build kept in chunks
+//
+// A file record of version 12 named its content as a list of
+// content-addressed chunks, which this build reads no more of: decoded, the
+// chunk list is dropped, and the record applies as a LIVE ROW NAMING NO
+// OBJECT — on every node alike, so the rows still agree. Such a file is
+// listed and can be removed or written again; its content is gone
+// ([File.Content] answers false), and the surfaces say so in their own words
+// rather than calling it missing.
 
 // ErrNoFile reports a file this node has no row for, or holds removed.
 //
@@ -51,6 +68,11 @@ import (
 // API says 404, and neither should when what actually happened is a mistyped
 // project key — which is [ErrNoProject].
 var ErrNoFile = errors.New("tracker: no such file")
+
+// ErrUploadStale reports a write naming an object whose key was minted more
+// than [objstore.RecordWithin] before the write was decided: the upload is
+// too old to be named safely, and the file has to be uploaded again.
+var ErrUploadStale = errors.New("tracker: the upload is too old to be recorded")
 
 // The file caps. Refused at WRITE naming the value, never cut.
 const (
@@ -61,15 +83,6 @@ const (
 	// and what one download streams back through one node. Larger artefacts
 	// belong in a store built for them, with a link in the project.
 	MaxFileBytes = 1 << 30
-
-	// MaxFileChunks bounds a manifest, and with it the record.
-	//
-	// FOUR THOUSAND AND NINETY-SIX: a gibibyte at the object store's own
-	// chunk size is 1 024, so this leaves room for a writer that cut
-	// smaller chunks, and a chunk entry is about ninety-one bytes of
-	// record — so the largest manifest is under a third of
-	// [MaxCommitBytes], which TestTheMaximalFileFitsItsRecord measures.
-	MaxFileChunks = 4096
 
 	// MaxFilePath is a path's length in bytes.
 	//
@@ -95,11 +108,12 @@ type File struct {
 	Path        string `json:"path"`
 	ContentType string `json:"content_type,omitempty"`
 
-	// Hash and Size are the whole content's, and Chunks the pieces in
-	// order. All three are empty on a removed file.
+	// Hash and Size are the whole content's, and Object the key of the
+	// object it was uploaded into. All three are empty on a removed file;
+	// Object is also empty on a file an earlier build kept in chunks.
 	Hash   objstore.Hash `json:"hash,omitempty"`
 	Size   int64         `json:"size"`
-	Chunks []FileChunk   `json:"chunks,omitempty"`
+	Object objstore.Key  `json:"object,omitzero"`
 
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
@@ -113,43 +127,27 @@ type File struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// FileChunk is one piece of a file's content.
-//
-// NO PLACEMENT ON THE RECORD. Where a chunk lives is the object store's
-// question, and its answer is one backend the whole fleet shares: the hash is
-// the chunk's whole address there.
-type FileChunk struct {
-	Hash objstore.Hash `json:"hash"`
-	Size int64         `json:"size"`
-}
-
 // Removed reports whether the file has been taken away.
 func (f File) Removed() bool { return f.RemovedAt != nil }
 
-// Manifest is the file's content as the object store reads it back.
-func (f File) Manifest() objstore.Manifest {
-	m := objstore.Manifest{Hash: f.Hash, Size: f.Size}
-	for _, c := range f.Chunks {
-		m.Chunks = append(m.Chunks, objstore.Chunk{Hash: c.Hash, Size: c.Size})
+// Content is the object holding the file's bytes, as the object store reads
+// it back — and false for a file whose row names none: a removed file, or one
+// an earlier build kept in chunks, whose content this build cannot read.
+func (f File) Content() (objstore.Object, bool) {
+	if f.Object.IsZero() {
+		return objstore.Object{}, false
 	}
-	return m
+	return objstore.Object{Key: f.Object, Hash: f.Hash, Size: f.Size}, true
 }
 
-// chunksOf is a manifest's pieces as a record carries them.
-func chunksOf(m objstore.Manifest) []FileChunk {
-	out := make([]FileChunk, 0, len(m.Chunks))
-	for _, c := range m.Chunks {
-		out = append(out, FileChunk{Hash: c.Hash, Size: c.Size})
-	}
-	return out
-}
-
-// FileChunkReferences is the table whose rows keep a file's chunks alive —
+// FileObjectReferences is the table whose rows keep a file's object alive —
 // the declaration internal/objstore/references collects. See
 // [objstore.ReferenceTable] for why a table missing from that list is the
 // mistake that deletes files.
-var FileChunkReferences = objstore.ReferenceTable{
-	Domain: Domain{}.Name(), Table: "tracker_file_chunks", Column: "chunk",
+var FileObjectReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "tracker_files",
+	Key: "object", Hash: "hash", Size: "size",
+	Owner: []string{"project_key", "path"},
 }
 
 // NormalizeFilePath is a path as it is stored and addressed: slash-separated
@@ -165,28 +163,28 @@ func NormalizeFilePath(raw string) (string, error) {
 	p := strings.TrimLeft(strings.TrimSpace(raw), "/")
 	switch {
 	case p == "":
-		return "", fmt.Errorf("tracker: a file needs a path")
+		return "", invalid("a file needs a path")
 	case len(p) > MaxFilePath:
-		return "", fmt.Errorf("tracker: the path is %d bytes and the maximum is %d",
+		return "", invalid("the path is %d bytes and the maximum is %d",
 			len(p), MaxFilePath)
 	case !utf8.ValidString(p):
-		return "", fmt.Errorf("tracker: the path %q is not UTF-8", p)
+		return "", invalid("the path %q is not UTF-8", p)
 	case strings.HasSuffix(p, "/"):
-		return "", fmt.Errorf("tracker: the path %q ends in a slash, which names a "+
+		return "", invalid("the path %q ends in a slash, which names a "+
 			"folder — a file needs a name after it", p)
 	}
 	for _, r := range p {
 		if r < 0x20 || r == 0x7f || r == '\\' {
-			return "", fmt.Errorf("tracker: the path %q carries a control character "+
+			return "", invalid("the path %q carries a control character "+
 				"or a backslash — use / between folders", p)
 		}
 	}
 	for _, seg := range strings.Split(p, "/") {
 		switch seg {
 		case "":
-			return "", fmt.Errorf("tracker: the path %q has an empty folder in it", p)
+			return "", invalid("the path %q has an empty folder in it", p)
 		case ".", "..":
-			return "", fmt.Errorf("tracker: the path %q has a %q in it, which a path "+
+			return "", invalid("the path %q has a %q in it, which a path "+
 				"stored here never resolves — name the file where it lives", p, seg)
 		}
 	}
@@ -198,20 +196,21 @@ func NormalizeFilePath(raw string) (string, error) {
 // slash, a space or a wildcard would address some other file or none.
 func checkFileProject(key string) error {
 	if key == "" || strings.ContainsAny(key, "./ \t\n*>") {
-		return fmt.Errorf("tracker: %q is not a project key a file can live in", key)
+		return invalid("%q is not a project key a file can live in", key)
 	}
 	return nil
 }
 
-// FilePut is one file written: where, what, and the chunks already uploaded.
+// FilePut is one file written: where, what, and the object already uploaded.
 type FilePut struct {
 	Project     string
 	Path        string
 	ContentType string
 
-	// Manifest is the content as the object store holds it — uploaded
-	// BEFORE this write (see the file's head).
-	Manifest objstore.Manifest
+	// Object is the content as the object store holds it — uploaded
+	// BEFORE this write, under a key minted for that upload alone (see the
+	// file's head).
+	Object objstore.Object
 
 	// IfMatch conditions the write on the version the caller read, or is
 	// [NoIfMatch]. A file that does not exist, or was removed, is at
@@ -221,7 +220,9 @@ type FilePut struct {
 	IfMatch uint64
 }
 
-// checkFilePut normalises a put and refuses one that could not be stored.
+// checkFilePut normalises a put and refuses one that could not be stored —
+// which is what keeps every refusal the applier could make
+// ([fileMatches]) unreachable.
 func checkFilePut(put *FilePut) error {
 	put.Project = ProjectKey(put.Project)
 	if err := checkFileProject(put.Project); err != nil {
@@ -235,19 +236,33 @@ func checkFilePut(put *FilePut) error {
 	put.ContentType = strings.TrimSpace(put.ContentType)
 	switch {
 	case len(put.ContentType) > MaxContentType:
-		return fmt.Errorf("tracker: the content type is %d bytes and the maximum is %d",
+		return invalid("the content type is %d bytes and the maximum is %d",
 			len(put.ContentType), MaxContentType)
 	case strings.ContainsAny(put.ContentType, "\r\n"):
-		return fmt.Errorf("tracker: the content type %q spans lines", put.ContentType)
-	case put.Manifest.Size > MaxFileBytes:
-		return fmt.Errorf("tracker: %s is %d bytes and a project's files are at most %d",
-			path, put.Manifest.Size, MaxFileBytes)
-	case len(put.Manifest.Chunks) > MaxFileChunks:
-		return fmt.Errorf("tracker: %s is %d chunks and a file is at most %d",
-			path, len(put.Manifest.Chunks), MaxFileChunks)
+		return invalid("the content type %q spans lines", put.ContentType)
+	case put.Object.Size > MaxFileBytes:
+		return invalid("%s is %d bytes and a project's files are at most %d",
+			path, put.Object.Size, MaxFileBytes)
 	}
-	if err := put.Manifest.Validate(); err != nil {
-		return fmt.Errorf("tracker: the content of %s: %w", path, err)
+	if err := put.Object.Validate(); err != nil {
+		return invalid("the content of %s: %w", path, err)
+	}
+	return nil
+}
+
+// checkUploadAge refuses a put whose object's key was minted more than
+// [objstore.RecordWithin] before now — the instant the write is DECIDED, on
+// the node deciding it.
+//
+// NOTHING IS REFUSED FOR BEING MINTED IN THE FUTURE. A key that a fast clock
+// minted ahead of this one protects itself: the collector deletes nothing
+// whose minting instant is inside its grace, so the only effect of refusing it
+// would be uploads failing from a node whose clock runs ahead.
+func checkUploadAge(put FilePut, now time.Time) error {
+	if age := now.Sub(put.Object.Key.Minted()); age > objstore.RecordWithin {
+		return fmt.Errorf("%w: %s's content was uploaded under a key minted %s ago, "+
+			"and a write may name one minted at most %s before it — upload it again",
+			ErrUploadStale, put.Path, age.Truncate(time.Second), objstore.RecordWithin)
 	}
 	return nil
 }
@@ -270,6 +285,12 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 		OpID:    opID,
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// THE DECIDE'S OWN CLOCK, read here rather than before the
+			// publish: a write retried after its key aged past the bound
+			// is judged at the instant it is decided again.
+			if err := checkUploadAge(put, w.Now()); err != nil {
+				return statelog.Decision{}, err
+			}
 			if err := w.refuseFileProject(ctx, tx, put.Project); err != nil {
 				return statelog.Decision{}, err
 			}
@@ -286,8 +307,8 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 			}
 			post := File{
 				V: DocumentVersion, Project: put.Project, Path: put.Path,
-				ContentType: put.ContentType, Hash: put.Manifest.Hash,
-				Size: put.Manifest.Size, Chunks: chunksOf(put.Manifest),
+				ContentType: put.ContentType, Hash: put.Object.Hash,
+				Size: put.Object.Size, Object: put.Object.Key,
 				CreatedBy: w.Actor, CreatedAt: at, UpdatedBy: w.Actor, UpdatedAt: at,
 			}
 			if live {
@@ -302,8 +323,8 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 	})
 }
 
-// RemoveFile takes a file away. Its chunks stop being referenced, and the
-// object store's collector deletes them on its next pass.
+// RemoveFile takes a file away. Its object stops being named, and the object
+// store's collector deletes it once it is past the grace.
 //
 // A FILE THAT IS NOT THERE IS [ErrNoFile], never a quiet success: a caller
 // removing the wrong path should hear that the one it named did not exist.
@@ -341,7 +362,7 @@ func (w *Writer) RemoveFile(ctx context.Context, opID, project, path string,
 			}
 			post := current
 			post.V, post.Version = DocumentVersion, 0
-			post.Hash, post.Size, post.Chunks = "", 0, nil
+			post.Hash, post.Size, post.Object = "", 0, objstore.Key{}
 			post.UpdatedBy, post.UpdatedAt = w.Actor, at
 			post.RemovedAt, post.RemovedBy = &at, w.Actor
 			return w.decide(stamp, subject, OpPatch, ChangeFileRemoved, scope, opID,
@@ -370,9 +391,21 @@ func (w *Writer) refuseFileProject(ctx context.Context, tx *sql.Tx, key string) 
 	case !held:
 		return fmt.Errorf("%w: %s (or it is not on this node yet: %w)",
 			ErrNoProject, key, statelog.ErrUnavailable)
-	case project.Archived:
-		return fmt.Errorf("tracker: project %s is archived, so it takes no new "+
-			"files; unarchive it first", key)
+	}
+	return AcceptFiles(key, project.Archived)
+}
+
+// AcceptFiles refuses a new file into project when it is archived, marked
+// [ErrInvalid]: the same request can never land, and unarchiving the project
+// is the change that lets it.
+//
+// EXPORTED FOR THE UPLOAD ROUTE, which asks before it streams a body that
+// could be a gibibyte into the store only for the write naming it to be
+// refused here — one sentence for both, so the two refusals cannot drift.
+func AcceptFiles(project string, archived bool) error {
+	if archived {
+		return invalid("project %s is archived, so it takes no new files; "+
+			"unarchive it first", project)
 	}
 	return nil
 }

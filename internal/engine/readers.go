@@ -13,15 +13,19 @@ import (
 // countedReaders is which record version every node applying a log reads, as
 // a writer asks it before publishing a record an older build cannot even
 // defer — the semantic index's records on the vector log (ADR-0028), a
-// person's day on the usage log.
+// person's day on the usage log — and as the object store asks whether any
+// node that keeps files in chunks is left ([chunkEra]) before deleting what
+// that build left behind.
 //
 // THE COUNTED SET, the trim's own: the positions register's rows for the log,
 // and every live data node that has not reported yet — every node that applies
 // it — less every node the fleet has EVICTED, an operator's word that a node
 // is not coming back; without that, an old build's row on a machine nobody
 // will start again would hold the writer back for the life of the deployment.
-// ONE READING for every writer that asks, because two would disagree about who
-// counts.
+// ONE READING for every question of this form, because two copies of the
+// census are two answers to who is still in the fleet, and the copy that
+// forgot the evictions would hold its gate shut for a machine nobody will
+// start again.
 type countedReaders struct {
 	// register is the positions register, holders the live data nodes.
 	register func(context.Context) ([]coord.NodePositions, error)

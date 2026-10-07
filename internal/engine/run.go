@@ -700,8 +700,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// it ran its members on `coordination.type: local` over a clustered
 	// stream — a shape [config.Bootstrap.Validate] refuses by name — so each
 	// member claimed every seat and every duty for itself and saw no peer's
-	// presence, and nothing said so until the object store's membership, a
-	// lease, counted every peer absent on every tick. The engine is the one
+	// presence, and nothing said so: every member ran as a fleet of one, so
+	// nothing it did looked wrong from inside it. The engine is the one
 	// consumer that RUNS Tier A, so it is the one place that cannot assume
 	// its input was checked.
 	//
@@ -768,7 +768,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// lease, because the capacity barrier compares it and a second mint
 	// would be a second identity for one process. It is the owner of every
 	// lease this process holds for itself — the seat host's presence, seats
-	// and duties (node.New below) and the object store's membership alike.
+	// and duties (node.New below) alike.
 	//
 	// AND THE NODE ID ONCE TOO. It was resolved here and then AGAIN a
 	// hundred lines below, from the same bootstrap through the same
@@ -1007,8 +1007,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, err
 	}
 	// THE LEASE TTL IN FORCE, before anything claims a lease on the seat
-	// heartbeat: the object store's membership below is the first, and the
-	// node's seats and the mailbox retirement follow.
+	// heartbeat: the node's presence and seats and the mailbox retirement
+	// all claim one below.
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	// AND THE OBJECT STORE, over the backend the backends opened: every
 	// node reads and writes files through it from boot, whatever mode it
@@ -1111,11 +1111,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// This was `config.NewIncarnation(nodeID)` a second time, so the
 		// coordination store held one process under two owners: its
 		// presence, its seats, every fleet duty and the meter id its token
-		// report is filed under on one, and its object-store membership,
-		// its publish admission and its capacity acknowledgements on the
-		// other. Two owners under one node id is exactly what a second
-		// process running under that id looks like, which is the one thing
-		// a refused membership tells an operator to look for. Every lease
+		// report is filed under on one, and its publish admission and its
+		// capacity acknowledgements on the other. Two owners under one node
+		// id is exactly what a second process running under that id looks
+		// like, and a peer reading the store cannot tell the two apart.
+		// Every lease
 		// this process holds for ITSELF is under e.incarnation; the one
 		// deliberate exception is the mailbox retirement's, which claims a
 		// seat lease as a separate party and must lose to this host — see

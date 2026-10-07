@@ -168,8 +168,10 @@ adr/                      # Architecture decision records — a decision that
                           #   binds more than one package, with the gate that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
-                          #   budgets, secrets, config, llm, and the six
-                          #   integration CLIs — gitlab/github/jira/slack
+                          #   budgets, backup, retention, work, objects,
+                          #   fleet, seats, secrets, config, llm, search, and
+                          #   the six integration CLIs — gitlab/github/
+                          #   jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/
@@ -214,14 +216,19 @@ internal/
 ├── seat/                 # Which seats this node runs, and the watchdog
 ├── store/                # The two local files: this node's own estate, and
 │                         #   the replicated one a state log's applier writes
+├── estate/               # The replicated estate ROUTED: one router on every
+│                         #   node, answering in-process where this node's
+│                         #   copy serves and asking a data node otherwise
+├── objstore/             # The object store: one object per upload, under a
+│                         #   key minted for it and never reused, in one store
+│                         #   the fleet shares — natsobj/ (the default) or
+│                         #   s3obj/ — plus collect/ (the collector) and
+│                         #   references/ (the tables that name an object)
 ├── events/               # The envelope and the typed-payload registry
 ├── a2a/                  # Agent-to-agent channels (one ask, one answer)
 ├── schedule/             # Role/unit cron-style recurring work
 ├── learning/             # What a seat remembers, and memsync/ — the changelog
 │                         #   that carries it when a seat moves node
-│                         #   (there is no task package:
-│                         #   task state lives in the PM tool, and the engine
-│                         #   mirrors none of it)
 ├── knowledge/            # The backend-neutral knowledge-search seam
 ├── providers/            # llm/ (+ chain, credential rotation), embeddings/
 ├── sandbox/              # Code work as a suspended Execute phase

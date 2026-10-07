@@ -939,7 +939,7 @@ The [object store](../concepts/object-store.md)'s **collection and audit do
 not run** in either mode: the `object-collector` duty is a duty, and a node in
 a window claims none — and each pass first pins the estate with a
 `linearizable` read, which is exactly the barrier the mode refuses. They lose
-nothing they would have done: no write lands a file whose chunks a collection
+nothing they would have done: no write lands a file whose object a collection
 would free, and a pass that is due runs on the duty's next turn once a node is
 back in normal mode.
 

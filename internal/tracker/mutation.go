@@ -58,8 +58,10 @@ import (
 // rows, and a purge destroys what the purged task's own records wrote beside
 // its rows ([rewriteVersion]). The purge's row is the one a GATE may carry
 // ([statelog.VersionedField.Gate]): an older build halts at it rather than
-// apply it the old way.
-const RecordVersion = 13
+// apply it the old way. Version 14 is a file put naming the OBJECT its bytes
+// were uploaded into ([File.Object], [FileObjectVersion]) where version 12's
+// named a list of chunks.
+const RecordVersion = 14
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -89,9 +91,22 @@ const baseRecordVersion = 1
 // yields the same empty column wherever it is applied.
 const actorSeatVersion = 5
 
-// fileVersion is the version a file record is written at: the row on its
-// kind in [versionedFields].
+// fileVersion is the version every file record is written at at least: the
+// row on its kind in [versionedFields].
 const fileVersion = 12
+
+// FileObjectVersion is the version a file record naming its OBJECT is written
+// at — every put this build writes; a removal names none and stays at
+// [fileVersion]. A node reading below it is one that still keeps files in
+// content-addressed chunks, which is what the object store's chunk era is
+// counted by (internal/engine's chunk era).
+//
+// A FIELD AN OLDER BUILD WOULD DROP, and the row that drops it is a row
+// naming no object: a build reading 13 decodes a new put around `object`,
+// applies a live file with no content on its copy, and its rows differ from
+// every upgraded node's for good. Stamped here, it RETAINS the put instead
+// and applies it once upgraded.
+const FileObjectVersion = 14
 
 // rewriteVersion is the version from which a record that changes ANOTHER task
 // — a rank order moving it, a purge taking itself out of it — writes that
@@ -298,6 +313,15 @@ var versionedFields = statelog.RecordFields{
 	// HALTS at it ([GateRecordVersion]).
 	{Name: "Op=purge", Since: rewriteVersion, Op: string(OpPurge),
 		Path: []string{"op"}, Equals: string(OpPurge), Gate: true},
+	// A FILE'S OBJECT, at version 14 ([FileObjectVersion]). A build reading
+	// 13 knows the file kind and decodes a put around the key of the object
+	// its bytes were uploaded into, which it has no column for: its copy of
+	// the file would be live and name no content, where every upgraded node
+	// can read it. Stamped here, that build retains the put until it
+	// upgrades. Scoped to the patch op, the one a file is written under;
+	// `object` is a key no other tracker payload carries.
+	{Name: "File.Object", Since: FileObjectVersion, Op: string(OpPatch),
+		Path: []string{"mutation", "object"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

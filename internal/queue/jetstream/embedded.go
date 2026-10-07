@@ -863,11 +863,19 @@ var ErrPayloadCeiling = errors.New("jetstream: the broker's max_payload is " +
 // THE EMBEDDED BROKER IS CONFIGURED TO THE CONTRACT NUMBER and an external one
 // is somebody else's, at nats-server's own 1 MiB default unless they changed
 // it. Below the contract nothing fails at connect: every event over the
-// server's ceiling is refused at its publish, and every chunk of a company's
-// files — a mebibyte of bytes and its framing, one message on the object
-// store's transfer subject — is refused on every upload and every repair, on
-// a node that started cleanly and reports nothing wrong with its broker. So
-// it is refused here, where the one setting that fixes it can be named.
+// server's ceiling is refused at its publish, on a node that started cleanly
+// and reports nothing wrong with its broker. So it is refused here, where the
+// one setting that fixes it can be named.
+//
+// WHAT REACHES THE NUMBER is an event (a state-log record among them) and the
+// answers nodes give each other on the ephemeral verbs: the estate router's
+// gather batches (internal/estate), the fleet turn-detail scatter
+// (internal/eventfan) and the memory read (internal/learning/memread) each
+// fill an answer up to [queue.MaxPayloadBytes]. Below the contract those
+// answers fail too, so lowering it is never a matter of events alone. A
+// company's files cross the same broker, but in messages of 128 KiB
+// (internal/objstore/natsobj), which any server's default carries, so they
+// ask nothing of the ceiling.
 //
 // THE SERVER THIS CONNECTION REACHED, since a client learns the ceiling from
 // that server's INFO alone: a cluster configured unevenly passes here on one
@@ -877,8 +885,8 @@ func carriesTheContract(url string, ceiling int64) error {
 		return nil
 	}
 	return fmt.Errorf("%w: the NATS server at %s accepts messages of at most %d "+
-		"bytes, and this engine sends up to %d — an event up to that size, and "+
-		"every chunk of a company's files with its framing. Set max_payload: "+
+		"bytes, and this engine sends messages of up to %d (an event, or a "+
+		"node's answer to another). Set max_payload: "+
 		"8MB in the configuration of every server in that cluster",
 		ErrPayloadCeiling, url, ceiling, queue.MaxPayloadBytes)
 }

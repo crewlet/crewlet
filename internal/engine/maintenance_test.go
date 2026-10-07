@@ -85,6 +85,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// spend for the life of the deployment, and nothing else would
 		// ever say so.
 		"retired_budget_bucket",
+		// AND THE CHUNK LOCKS a build that kept files in chunks opened,
+		// for the same reason: one bucket, deleted once the tracker
+		// log's census counts no node of that build.
+		"retired_chunk_locks",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —
 		// a change retention, a revision prune and an orphan collector

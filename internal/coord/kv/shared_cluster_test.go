@@ -140,7 +140,6 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 		RebaseRetention:  10 * time.Minute,
 		StatusFreshness:  10 * time.Minute,
 		CustodyRetention: 10 * time.Minute,
-		ChunkLockTTL:     10 * time.Minute,
 	}
 
 	// The lease bucket's leader, and a member that leads neither the lease

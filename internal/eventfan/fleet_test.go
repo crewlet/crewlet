@@ -695,9 +695,16 @@ func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
 	if got.Total != 3 || got.Failed != 2 {
 		t.Errorf("total %d with %d failed, want 3 with 2 — each node's failures summed", got.Total, got.Failed)
 	}
-	last := got.Bars[len(got.Bars)-1]
-	if last.Count != 3 || last.Failed != 2 {
-		t.Errorf("the current bar is %d with %d failed, want 3 with 2", last.Count, last.Failed)
+	// THE BAR OF THE HOUR THEY WERE WRITTEN IN, never simply the newest:
+	// written a minute ago, they are in the PREVIOUS hour's bar for the
+	// first minute of every hour.
+	hour := at.Truncate(time.Hour).Format(time.RFC3339)
+	i := slices.IndexFunc(got.Bars, func(b store.EventBar) bool { return b.At == hour })
+	if i < 0 {
+		t.Fatalf("no bar starts at %s, the hour the events were written in", hour)
+	}
+	if bar := got.Bars[i]; bar.Count != 3 || bar.Failed != 2 {
+		t.Errorf("the bar of %s is %d with %d failed, want 3 with 2", hour, bar.Count, bar.Failed)
 	}
 }
 

@@ -97,3 +97,26 @@ func TestNoRecordReaderNoObjectsBlock(t *testing.T) {
 		t.Error("a surface with no record reader reported an object store anyway")
 	}
 }
+
+// A RECORD A NODE OF THE BUILD BEFORE WROTE STILL SAYS WHAT ITS AUDIT FOUND:
+// that build kept no findings beside the attempt, so during a rolling upgrade
+// the attempt is the findings — and a chunk list under its own name is a field
+// this build simply does not read, never a record it refuses.
+func TestARecordTheBuildBeforeWroteStillShowsItsFindings(t *testing.T) {
+	t.Parallel()
+	fleet := coordmemory.NewFleet()
+	raw := []byte(`{"node":"data-b","backend":"nats","status":{` +
+		`"collect":{"completed":true,"listed":40,"aged":3,"deleted":1,"referenced":2,"refreshed":0,` +
+		`"at":"2026-09-01T12:00:00Z"},` +
+		`"audit":{"completed":true,"referenced":38,"missing":2,` +
+		`"missing_chunks":["` + "aaaa" + `"],"at":"2026-09-01T11:00:00Z"}}}`)
+	if err := fleet.RecordObjectCollection(t.Context(), raw); err != nil {
+		t.Fatal(err)
+	}
+	got := fleetObjects(t, fleet)
+	audited, _ := got["audit"].(map[string]any)
+	found, _ := audited["found"].(map[string]any)
+	if got["state"] != "reported" || found["missing"] != float64(2) || found["referenced"] != float64(38) {
+		t.Fatalf("objects = %v; want the older build's audit shown as its findings", got)
+	}
+}

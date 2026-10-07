@@ -7,23 +7,23 @@ import (
 	"testing"
 )
 
-// A DATABASE FROM BEFORE 0038 COMES THROUGH IT WHOLE: its vectors gain a title
+// A DATABASE FROM BEFORE 0039 COMES THROUGH IT WHOLE: its vectors gain a title
 // that reads as unknown, and its tasks lose two columns nothing ever wrote.
 //
-// Replicated migration 0038 adds `kb_vectors.title` — what a page's vector was
+// Replicated migration 0039 adds `kb_vectors.title` — what a page's vector was
 // computed from, so a rename selects it again — and drops `tracker_tasks`'
 // `embed_rev` and `search_rev` with the partial index on the first, which no
 // build ever wrote anything but a zero into. So the case stands a database up
-// at 0037 with one task and one vector in that shape, lets the real migrator
+// at 0038 with one task and one vector in that shape, lets the real migrator
 // take it forward, and asserts both rows survive: the vector with an EMPTY
 // title, which the duty reads as a title that moved and settles on its next
 // tick, and the task without the two columns — and that the shape every build
-// after 0038 writes is writable.
-func TestADatabaseFromBefore0038ComesThroughItWhole(t *testing.T) {
+// after 0039 writes is writable.
+func TestADatabaseFromBefore0039ComesThroughItWhole(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "replicated.db")
 	old := migratedThrough(t, EstateReplicated, path,
-		"0037_an_eviction_row_names_no_gate_kind.sql")
+		"0038_a_file_row_names_one_object.sql")
 	for _, stmt := range []string{
 		`INSERT INTO tracker_tasks
 			(id, key, project_key, root_id, type, title, status, status_group,
@@ -37,7 +37,7 @@ func TestADatabaseFromBefore0038ComesThroughItWhole(t *testing.T) {
 	} {
 		if _, err := old.ExecContext(t.Context(), stmt); err != nil {
 			_ = old.Close()
-			t.Fatalf("write a row in 0037's shape: %v", err)
+			t.Fatalf("write a row in 0038's shape: %v", err)
 		}
 	}
 	if err := old.Close(); err != nil {
@@ -53,8 +53,8 @@ func TestADatabaseFromBefore0038ComesThroughItWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(applied, "0038_a_vector_names_its_title_and_the_embed_columns_go.sql") {
-		t.Fatalf("0038 did not run on a database at 0037: applied %v", applied)
+	if !slices.Contains(applied, "0039_a_vector_names_its_title_and_the_embed_columns_go.sql") {
+		t.Fatalf("0039 did not run on a database at 0038: applied %v", applied)
 	}
 
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -91,7 +91,7 @@ func TestADatabaseFromBefore0038ComesThroughItWhole(t *testing.T) {
 			t.Errorf("the vector came through titled %q in %q at %d, want an empty "+
 				"title in eng at 4", vectorTitle, container, rev)
 		}
-		// AND THE SHAPES EVERY BUILD AFTER 0038 WRITES.
+		// AND THE SHAPES EVERY BUILD AFTER 0039 WRITES.
 		if _, err := tx.ExecContext(t.Context(), `
 			INSERT INTO tracker_tasks
 				(id, key, project_key, root_id, type, title, status, status_group,

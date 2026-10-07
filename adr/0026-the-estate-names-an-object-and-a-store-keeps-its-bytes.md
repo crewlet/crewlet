@@ -2,34 +2,45 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore`
-- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAChunkIsDeclared`
-- **Cost-when-tried:** an engine-placed store — a placement map over groups of chunk slots, an integer straw2 draw, a balancer, per-node repair, scrub and collection passes, an `objects:` membership lease with its own health, probation and absence counted in ticks — took thirteen packages and files to keep the bytes where one map said, and every one of those rules was a second copy of what the broker or a bucket already does for its own data
+- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`
+- **Cost-when-tried:** an engine-placed store — a placement map over groups of chunk slots, an integer straw2 draw, a balancer, per-node repair, scrub and collection passes, an `objects:` membership lease with its own health, probation and absence counted in ticks — took thirteen packages and files to keep the bytes where one map said, and every one of those rules was a second copy of what the broker or a bucket already does for its own data. Then content-addressed 1 MiB chunks shared between files cost a lock in the coordination store around every re-put and every deletion, a manifest per file, a chunk table beside the file table, and a write record whose size grew with the file
 - **Tag-status:** unreleased
 
 ## The decision
 
 A company's FILES are split in two. Everything the company has to agree on
-about a file — that it exists, what it is called, where it lives, which chunks
-make it up — is a row in the replicated estate, written by a state log's
-applier like any other. The BYTES are cut into content-addressed 1 MiB chunks
-and kept in ONE store the whole fleet shares, chosen in Tier A
-(`store.objects`): by default a JetStream object store bucket on the fleet's
-own broker, replicated at `stream.replicas` across the members exactly as the
-logs are, or an S3-compatible bucket. Every node — a node without `data`
-included — reads and writes chunks through that store directly, and the fleet
-records which store it is so a node configured with another refuses to boot.
+about a file — that it exists, what it is called, where it lives, which object
+holds its bytes and what those bytes hash to — is a row in the replicated
+estate, written by a state log's applier like any other. The BYTES are
+streamed, whole, into ONE OBJECT PER UPLOAD, stored under a key minted for that
+upload alone (a UUIDv7, never derived from the content) in ONE store the whole
+fleet shares, chosen in Tier A (`store.objects`): by default a JetStream object
+store bucket on the fleet's own broker, replicated at `stream.replicas` across
+the members exactly as the logs are, or an S3-compatible bucket. Every node — a
+node without `data` included — streams objects to and from that store
+directly, and the fleet records which store it is so a node configured with
+another refuses to boot.
+
+The ROW carries the whole content's SHA-256 and size beside the key, and every
+read is checked against them by the engine, not by the backend: a bucket
+cannot hold a whole-object SHA-256 for an upload sent in parts, and a reader
+trusting a backend's account of its own bytes would be trusting the thing it
+is checking. The reader holds back the byte that completes a file until the
+whole is verified, so a damaged object always reads short of its size.
 
 The engine places nothing and repairs nothing: the store keeps the copies. What
-is left for the engine is the one thing the store cannot know — which chunks a
+is left for the engine is the one thing the store cannot know — which objects a
 row still names — and that is the cross-package half that makes this a record
-rather than a package doc. The list of tables that name chunks lives with
-neither the consumer nor the collector: a consumer declares its table (and the
-state log whose applier writes it) in `internal/objstore/references`, and a
-test holds that list against the replicated schema in both directions, because
-a table naming chunks that nobody declared is a table whose files the collector
-deletes a day after they were written. The list is the ONLY input the readers
-have — the collector, its audit and the backup each build their statements from
-the declarations — so there is no second statement for it to disagree with.
+rather than a package doc. The list of tables that name objects lives with
+neither the consumer nor the collector: a consumer declares its table (the
+state log whose applier writes it, the key column, the digest and size
+columns, and the columns saying whose it is) in `internal/objstore/references`,
+and a test holds that list against the replicated schema in both directions,
+because a table naming objects that nobody declared is a table whose files the
+collector deletes a day after they were written. The list is the ONLY input
+the readers have — the collector, its audit and the backup each build their
+statements from the declarations — so there is no second statement for it to
+disagree with.
 
 ## Why the obvious alternatives are wrong
 
@@ -44,8 +55,17 @@ repair after every change, a scrub for rot, a collector that may only delete a
 copy once every other holder vouches for its own — each a rule the broker
 already runs for its streams and a bucket runs for its objects. A fleet runs
 three or five data nodes; at three copies on three members a map places every
-chunk on every member anyway. A company whose files outgrow a member's disk
+object on every member anyway. A company whose files outgrow a member's disk
 takes a bucket, whose capacity is its provider's.
+
+**Content-addressed chunks**, which this record decided second, dedupe a file
+written twice and let a write name a chunk somebody else stored. That second
+property is the cost: a chunk the collector judged unnamed could be re-used by
+a writer at the moment it was deleted, which needed a lock in the coordination
+store around both, and the dedupe saved little a company's files actually
+repeat. One object per upload names nothing a second write can share — what it
+costs is that an identical write stores its bytes again, which the seat's own
+write tool skips when the content is the file's already.
 
 **A store per node** — each data node keeping what it was sent — makes a
 download depend on which node is up, and turns a node's loss into the loss of
@@ -54,5 +74,5 @@ its files.
 ## What this does not decide
 
 Where anything other than a file's bytes lives: the estate is still whole on
-every data node. And when a chunk may be deleted, which is
-[ADR-0027](0027-a-deletion-from-the-shared-store-is-judged-under-the-chunks-lock.md).
+every data node. And when an object may be deleted, which is
+[ADR-0027](0027-a-deletion-from-the-shared-store-needs-no-lock.md).

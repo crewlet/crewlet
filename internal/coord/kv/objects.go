@@ -2,10 +2,7 @@ package kv
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -50,78 +47,6 @@ func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (s
 		return string(entry.Value()), nil
 	}
 	return "", contended("AgreeObjectBackend", objectBackendKey)
-}
-
-// chunkLockRecord is one held chunk lock on the wire. The instant is
-// diagnostic: the bucket's age is what lets a lock go.
-type chunkLockRecord struct {
-	Owner string    `json:"owner"`
-	At    time.Time `json:"at"`
-}
-
-// LockChunk takes chunk's lock for owner ([coord.ObjectStores]).
-func (f *FleetStore) LockChunk(ctx context.Context, chunk, owner string) (bool, error) {
-	if chunk == "" || owner == "" {
-		return false, errors.New("coord/kv: a chunk lock needs a chunk and an owner")
-	}
-	raw, err := json.Marshal(chunkLockRecord{Owner: owner, At: time.Now().UTC()})
-	if err != nil {
-		return false, fmt.Errorf("coord/kv: encode the chunk lock: %w", err)
-	}
-	key := encodeKey(chunk)
-	for range fleetCASRetries {
-		_, err = f.create(ctx, f.chunkLocks, key, raw)
-		switch {
-		case err == nil:
-			return true, nil
-		case !errors.Is(err, jetstream.ErrKeyExists):
-			return false, unavailable("lock chunk "+chunk, err)
-		}
-		held, _, found, err := f.chunkLock(ctx, key)
-		switch {
-		case err != nil:
-			return false, err
-		case !found:
-			continue
-		}
-		// A LOCK THIS OWNER ALREADY HOLDS is answered held, so a take
-		// retried after its answer was lost is not refused by itself.
-		return held.Owner == owner, nil
-	}
-	return false, contended("LockChunk", chunk)
-}
-
-// UnlockChunk lets go of chunk's lock if owner holds it, conditioned on the
-// revision it read, so a lock that aged out and was taken by another owner in
-// between is never deleted from under them.
-func (f *FleetStore) UnlockChunk(ctx context.Context, chunk, owner string) error {
-	key := encodeKey(chunk)
-	held, revision, found, err := f.chunkLock(ctx, key)
-	if err != nil || !found || held.Owner != owner {
-		return err
-	}
-	err = f.chunkLocks.Delete(ctx, key, jetstream.LastRevision(revision))
-	if err != nil && !isWrongLastSequence(err) && !errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("unlock chunk "+chunk, err)
-	}
-	return nil
-}
-
-// chunkLock reads one chunk lock from the leader, reporting false when none is
-// held.
-func (f *FleetStore) chunkLock(ctx context.Context, key string) (chunkLockRecord, uint64, bool, error) {
-	entry, err := f.get(ctx, f.chunkLocks, key)
-	switch {
-	case errors.Is(err, jetstream.ErrKeyNotFound):
-		return chunkLockRecord{}, 0, false, nil
-	case err != nil:
-		return chunkLockRecord{}, 0, false, unavailable("read a chunk lock", err)
-	}
-	var held chunkLockRecord
-	if err := json.Unmarshal(entry.Value(), &held); err != nil {
-		return chunkLockRecord{}, 0, false, fmt.Errorf("coord/kv: a chunk lock is unreadable: %w", err)
-	}
-	return held, entry.Revision(), true, nil
 }
 
 // RecordObjectCollection stores the collector's last report, replacing the

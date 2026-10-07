@@ -108,11 +108,9 @@ const MaxPayloadBytes = 8 << 20
 // never queues a request behind another. The cap bounds goroutines and
 // buffered payloads rather than throughput — a request past it waits for a
 // slot, it is never dropped. What it costs in memory is sixty-four of the
-// largest answer THAT registration serves, and the registrations differ by
-// eight times. The object store's answers a chunk at a time — a mebibyte
-// (internal/objstore) — so a data node answering chunks at the cap holds 64
-// MiB of them in flight, and no more however many peers are repairing from
-// it. Three fill an answer up to [MaxPayloadBytes] instead: the estate
+// largest answer THAT registration serves, and most answer in a few
+// kilobytes (a steer, a sandbox tail, the fleet broker's member exchange).
+// Three fill an answer up to [MaxPayloadBytes]: the estate
 // router's gather batches (internal/estate), the fleet turn-detail scatter
 // (internal/eventfan) and the memory read (internal/learning/memread). One of
 // those at the cap, every answer at the ceiling, is 512 MiB held at once — a

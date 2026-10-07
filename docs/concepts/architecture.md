@@ -597,7 +597,6 @@ to the adopted log.
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
 | `crewlet_objects` | The [object store](object-store.md)'s **backend record** — `nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store — and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it. **No age** — an expired record would let the next node record a different store and split the company's files between two |
-| `crewlet_chunk_locks` | One key per file chunk being deleted by the collector or re-stored by a writer, so a deletion can never land between a re-upload of a chunk and the row that names it. Create-only; the bucket's age, **one minute**, is the lock's lifetime, so a holder that dies holding one is let go by the bucket |
 | `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
@@ -617,22 +616,24 @@ to the adopted log.
 | **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
 | **`CREWLET_PAGES_LOG`** | `crewlet.pages.log.>`, **the ordered log the replicated estate's knowledge base is derived from**, and the state log's third domain. The same shape as the tracker's: one subject per object, so two writers saving one page contend at the broker and two saving different pages never do. Retention is bounded by what every node has already applied rather than by age, because a page is a fact for the life of the deployment and removing one is a decision somebody takes rather than a horizon that reaps it while a person is still reading it |
 | **`CREWLET_USAGE_LOG`** | `crewlet.usage.log.>` — the state log's fourth domain, **compacted**: one message per (kind, node, company day, seat or schedule), each the object's whole cumulative value, republished by the node that owns the day whenever it moves and aged out after 181 days. The node is part of every subject, so each object has exactly one writer and nothing is arbitrated |
-| `OBJ_crewlet_files` | `$O.crewlet_files.>` — the [object store](object-store.md)'s bucket, `crewlet_files`, on the default `nats` backend only: one object per file chunk, named by its hash. An ordinary stream at `stream.replicas` copies, so the company's files survive what its logs survive and every backup snapshots it with the rest. Absent when `store.objects.backend` is `s3` |
+| `OBJ_crewlet_files` | `$O.crewlet_files.>` — the [object store](object-store.md)'s bucket, `crewlet_files`, on the default `nats` backend only: one object per upload, named `files/<key>` by a key minted for that upload and never reused, and kept as a run of 128 KiB messages in NATS's own object store format. An ordinary stream at `stream.replicas` copies, so the company's files survive what its logs survive and every backup snapshots it with the rest. Absent when `store.objects.backend` is `s3` |
 
 **Named, not replicated — the object store.** One kind of state answers "who
 has to agree on it?" with *the row does, and the bytes do not*: the content of
-a company's files. The row naming a file — its path, its version, the hashes of
-its chunks — is in the replicated store like every other tracker row. The
-chunks themselves, 1 MiB each and named by their SHA-256, are kept in **one
-store the whole fleet shares**, named by every node's Tier A `store.objects`:
+a company's files. The row naming a file — its path, its version, its size and
+SHA-256, and the key of the one object holding its bytes — is in the replicated
+store like every other tracker row. The object itself, stored once per upload
+under a key minted for it, is kept in **one store the whole fleet shares**,
+named by every node's Tier A `store.objects`:
 by default a JetStream object store bucket on the fleet's own broker,
 `crewlet_files`, backed by the stream **`OBJ_crewlet_files`** at
 `stream.replicas` copies like every other stream, or an S3-compatible bucket.
 Every node reaches it directly, a node without `data` included. Nothing here is
 derived by replay, and the engine places nothing: the store keeps its own
 copies, and the one thing the engine runs beside it is the `object-collector`
-duty, which deletes the chunks no row names and audits that every chunk a row
-names is there. See [Object Store](object-store.md).
+duty, which deletes the objects no row names, abandons uploads that never
+finished, and audits that every object a row names is there and whole. See
+[Object Store](object-store.md).
 
 **Mailboxes and event history are different kinds of stream.** The two
 mailbox streams use *interest* retention — a message lives until its durable
@@ -662,8 +663,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are nineteen of them rather than one with prefixes: three in the lease
-store, sixteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are twenty-one of them rather than one with prefixes: three in the lease
+store, eighteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.

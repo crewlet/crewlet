@@ -212,7 +212,7 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 	// is what TestEveryIndexServesARegisteredQuery establishes and this count
 	// makes visible — an index added without a reader moves this number
 	// before it moves a benchmark, nine that no plan reached were deleted to
-	// reach nineteen, and the embed duty's on `embed_rev` went at 0038: a
+	// reach nineteen, and the embed duty's on `embed_rev` went at 0039: a
 	// column nothing wrote, kept by a gate entry for a selection nothing ran.
 	const want = 18
 	if count != want {

@@ -100,9 +100,9 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 			answer["detail"] = err.Error()
 		case http.StatusServiceUnavailable:
 			// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
-			// fixed hint, never the chunk list, which is the log's.
+			// fixed hint, never the list of objects, which is the log's.
 			answer["error"] = "objects_unreachable"
-			answer["hint"] = "the company's files name chunks the object store " +
+			answer["hint"] = "the company's files name objects the object store " +
 				"did not answer for; check that this node reaches the store " +
 				"store.objects names (the S3 bucket, or the data nodes' NATS " +
 				"bucket) and take the backup again"
@@ -122,7 +122,7 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 // write, and answering 500 would send an operator looking at the engine
 // instead of at their own command.
 //
-// A copy naming chunks the object store did not answer for is a 503: this
+// A copy naming objects the object store did not answer for is a 503: this
 // node is sound and so is the command, and what fails is the store holding the
 // company's files — which clears when it answers again, so it is the one
 // failure here that trying again later can fix.

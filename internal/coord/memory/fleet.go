@@ -47,13 +47,9 @@ type Fleet struct {
 	mailboxes    map[string]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
-	// node records one; chunkLocks every chunk lock not yet let go, with
-	// the instant it was taken, aged at chunkLockTTL as the KV bucket ages
-	// its keys.
+	// node records one, and objectCollection the collector's last report.
 	objectBackend    string
 	objectCollection []byte
-	chunkLocks       map[string]chunkLock
-	chunkLockTTL     time.Duration
 
 	pauses      map[string]coord.SeatPause
 	positions   map[string]coord.NodePositions
@@ -120,8 +116,6 @@ func NewFleet() *Fleet {
 		integrations: map[string][]byte{},
 		mailboxes:    map[string]coord.MailboxRecord{},
 		pauses:       map[string]coord.SeatPause{},
-		chunkLocks:   map[string]chunkLock{},
-		chunkLockTTL: coord.ChunkLockTTL,
 	}
 }
 

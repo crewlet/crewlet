@@ -78,11 +78,13 @@ test("a page of files is listed, and the next page is the engine's own cursor", 
 
 test("a download fetches the bytes with the token, and a refusal is said on the row", async () => {
   serving({ "": { project: "ENG", files: [file("reports/q3 plan.md")], complete: true } });
-  const blob = vi.spyOn(rest, "blob").mockRejectedValueOnce(new Error("no member holds the chunk"));
+  const blob = vi
+    .spyOn(rest, "blob")
+    .mockRejectedValueOnce(new Error("the object store did not answer"));
   mount();
   fireEvent.click(await screen.findByText("Download"));
   await waitFor(() =>
-    expect(screen.getByText(/Not downloaded: no member holds the chunk/)).toBeTruthy(),
+    expect(screen.getByText(/Not downloaded: the object store did not answer/)).toBeTruthy(),
   );
   expect(blob).toHaveBeenCalledWith("/work/files/ENG/reports/q3%20plan.md");
 });

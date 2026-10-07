@@ -2,206 +2,380 @@ package objstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
+	"sync"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/backoff"
 )
 
-// ErrNotFound is a chunk the backend does not hold.
-var ErrNotFound = errors.New("objstore: no such chunk")
-
-// ErrCorrupt is a chunk whose bytes no longer hash to the name it is stored
-// under — never handed to a reader.
-var ErrCorrupt = errors.New("objstore: a chunk's bytes do not match its name")
-
-// Held is one chunk a backend lists: its name and when it was last written.
-type Held struct {
-	Hash Hash
-	// Written is when the chunk was last PUT — a put of a chunk already
-	// held moves it, which is what the collector's grace is measured from.
-	Written time.Time
-}
-
-// Backend is where the bytes live: one store the whole fleet shares.
-//
-// Implemented by the fleet's own JetStream object store (natsobj), by an
-// S3-compatible bucket (s3obj) and by the in-memory twin (memobj), and all of
-// them certified by ONE suite (objstoretest).
-//
-// THE CONTRACT IS FOUR VERBS AND A LISTING, and every one is idempotent.
-// Content addressing is what makes that enough: a name is its bytes, so a put
-// that lands twice stores one thing, and nothing ever has to compare versions.
-type Backend interface {
-	// Put stores data under h, REPLACING any copy already there and
-	// moving its written instant to now — the one property the collector's
-	// grace rests on: a file re-using a chunk the collector has judged old
-	// re-puts it, and the re-put is what makes it young again.
-	Put(ctx context.Context, h Hash, data []byte) error
-
-	// Get answers the bytes stored under h, or [ErrNotFound]. A backend
-	// returns what it holds; checking it against h is [Store]'s.
-	Get(ctx context.Context, h Hash) ([]byte, error)
-
-	// Stat answers when h was last written, or [ErrNotFound].
-	Stat(ctx context.Context, h Hash) (time.Time, error)
-
-	// Delete removes h. Deleting what is not there is not an error.
-	Delete(ctx context.Context, h Hash) error
-
-	// List hands every chunk the backend holds to visit, in no particular
-	// order, stopping at the first error visit returns.
-	List(ctx context.Context, visit func(Held) error) error
-}
-
-// Locks serialises the two writers that can disagree about one chunk: a file
-// re-putting a chunk the store already holds, and the collector deleting it.
-//
-// # Why a lock, and why only there
-//
-// The collector deletes a chunk no row names once it is older than a grace,
-// and a file that re-uses an existing chunk re-puts it to make it young again
-// ([Backend.Put]). Without exclusion, the collector can read the chunk's age,
-// the writer's re-put can land, and the collector's delete can then remove
-// the bytes the writer is about to name — a file whose record lands pointing
-// at nothing. With it, the collector's read of the age and its delete are one
-// step against every re-put, so either the re-put came first (the chunk is
-// young and stays) or the delete did (and the re-put stores it again).
-//
-// A chunk the store does NOT hold needs no lock: nothing can be deleting it,
-// and a put of it is the first copy.
-type Locks interface {
-	// LockChunk takes h for owner, answering false while somebody else
-	// holds it. A holder that dies is let go by the lock's own age.
-	LockChunk(ctx context.Context, h, owner string) (bool, error)
-
-	// UnlockChunk lets go of h if owner holds it.
-	UnlockChunk(ctx context.Context, h, owner string) error
-}
-
-// LockTTL is how long a chunk lock outlives a holder that never let it go.
-//
-// A MINUTE, against [LockedBudget]: what is done under a lock — one stat and
-// one delete, or one put of at most a mebibyte — is bounded well inside it,
-// so a lock can only lapse under a holder that has already given up its
-// request. The cost of the length is how long a writer waits behind a
-// collector that died holding one, which is the rarest case there is.
-const LockTTL = time.Minute
-
-// LockedBudget bounds what a holder does under one chunk lock.
-//
-// TWENTY SECONDS: one put of a mebibyte or one stat and delete, against any
-// backend this package speaks, is a second at its slowest healthy. A third of
-// [LockTTL], so a request abandoned at its deadline has two thirds of the
-// lock still to run before anybody else can take the chunk.
-const LockedBudget = 20 * time.Second
-
-// lockWait is how long a writer waits for a chunk the collector holds before
-// it gives up: two of [LockTTL], so a collector that died holding the lock is
-// outlived by its expiry before the upload fails.
-const lockWait = 2 * LockTTL
+// ErrTooLarge is an object past the limit its caller set.
+var ErrTooLarge = errors.New("objstore: the object is over its size limit")
 
 // Store is the object store as every caller uses it: a [Backend] whose every
-// read is checked against its name, and whose re-puts take the lock the
-// collector deletes under.
+// put is counted and hashed on the way in and minted a key of its own, and
+// whose every read is checked against the row that names the object on the
+// way out.
 type Store struct {
 	backend Backend
-	locks   Locks
-	owner   string
+	now     func() time.Time
+
+	// stall is [ReadStall], a field so a test can watch a stall end a read
+	// without waiting a minute for it.
+	stall time.Duration
 }
 
-// NewStore builds the store over backend. owner names this process in the
-// chunk locks it takes.
-func NewStore(backend Backend, locks Locks, owner string) (*Store, error) {
-	if backend == nil || locks == nil || owner == "" {
-		return nil, errors.New("objstore: a store needs a backend, the chunk locks and an owner")
+// NewStore builds the store over backend, minting keys on the wall clock.
+func NewStore(backend Backend) (*Store, error) { return NewStoreAt(backend, time.Now) }
+
+// NewStoreAt builds the store over backend, minting every key at the instant
+// now answers — so a test can mint keys at the instant its own clock says,
+// which is what a write and the collector both judge a key's age by.
+func NewStoreAt(backend Backend, now func() time.Time) (*Store, error) {
+	if backend == nil || now == nil {
+		return nil, errors.New("objstore: a store needs a backend and a clock")
 	}
-	return &Store{backend: backend, locks: locks, owner: owner}, nil
+	return &Store{backend: backend, now: now, stall: ReadStall}, nil
 }
 
 // Backend is the store's backend, for the collector and the backup.
 func (s *Store) Backend() Backend { return s.backend }
 
-// Locks is the chunk locks the store takes, for the collector.
-func (s *Store) Locks() Locks { return s.locks }
-
-// Owner is the name the store's locks are taken under.
-func (s *Store) Owner() string { return s.owner }
-
-// Put stores one chunk, refusing bytes that are not what h names.
+// Put streams r into a new object, under a key minted for it, and answers what
+// a row names it by: the key, and the digest and size of what r yielded.
 //
-// A chunk the backend already holds is re-put UNDER ITS LOCK — see [Locks] —
-// so a file re-using a chunk the collector is about to delete either makes it
-// young first or stores it again after.
-func (s *Store) Put(ctx context.Context, h Hash, data []byte) error {
-	if !h.Valid() {
-		return fmt.Errorf("%w: %q", ErrBadHash, h)
+// At most limit bytes are read; one more fails the put with [ErrTooLarge],
+// so an upload over its limit is refused having read one byte past it rather
+// than the whole of it.
+//
+// EVERY FAILURE REACHES THE BACKEND AS A FAILED READ — the limit, and ctx
+// ending, as well as r's own — because a failed read is the one failure every
+// backend cleans up after with a context that still works, leaving nothing
+// anybody can find ([Backend.Put]). And the failure the read recorded is the
+// one Put answers, whatever the backend wrapped it in, so a caller's
+// errors.Is sees [ErrTooLarge] or its own reader's error on every backend.
+//
+// THE DIGEST AND THE SIZE ARE THIS STORE'S OWN, counted over the bytes it
+// handed the backend: a backend's account of what it stored is never what a
+// row records.
+func (s *Store) Put(ctx context.Context, r io.Reader, limit int64, m PutMeta) (Object, error) {
+	if limit < 0 {
+		return Object{}, fmt.Errorf("objstore: a put limited to %d bytes", limit)
 	}
-	if got := HashOf(data); got != h {
-		return fmt.Errorf("objstore: put %s with bytes that hash to %s", h, got)
-	}
-	_, err := s.backend.Stat(ctx, h)
+	key := KeyAt(s.now())
+	in := &metered{ctx: ctx, r: r, limit: limit, digest: sha256.New()}
+	err := s.backend.Put(ctx, key.Name(), in, m)
 	switch {
-	case errors.Is(err, ErrNotFound):
-		return s.put(ctx, h, data)
+	case in.err != nil:
+		return Object{}, in.err
 	case err != nil:
-		return fmt.Errorf("objstore: is %s already stored: %w", h, err)
+		return Object{}, fmt.Errorf("objstore: store the object: %w", err)
+	case !in.ended:
+		// A BACKEND THAT STOPPED READING BEFORE THE END stored part of
+		// the content, and the row would record the part as the whole.
+		return Object{}, fmt.Errorf("objstore: the backend stored %s after %d bytes, "+
+			"before the content ended", key, in.n)
 	}
-	return s.Locked(ctx, h, func(ctx context.Context) error {
-		return s.put(ctx, h, data)
-	})
+	return Object{Key: key, Hash: Hash(hex.EncodeToString(in.digest.Sum(nil))), Size: in.n}, nil
 }
 
-func (s *Store) put(ctx context.Context, h Hash, data []byte) error {
-	if err := s.backend.Put(ctx, h, data); err != nil {
-		return fmt.Errorf("objstore: store chunk %s: %w", h, err)
+// metered is a put's reader: counted, hashed, held to its limit and to its
+// context, every failure recorded so [Store.Put] answers it.
+type metered struct {
+	ctx    context.Context
+	r      io.Reader
+	limit  int64
+	digest hash.Hash
+
+	n     int64
+	ended bool
+	err   error
+}
+
+func (m *metered) Read(p []byte) (int, error) {
+	if m.err != nil {
+		return 0, m.err
 	}
+	if m.ended {
+		return 0, io.EOF
+	}
+	if err := m.ctx.Err(); err != nil {
+		m.err = err
+		return 0, err
+	}
+	n, err := m.r.Read(p)
+	if m.n+int64(n) > m.limit {
+		m.err = fmt.Errorf("%w (%d bytes)", ErrTooLarge, m.limit)
+		return 0, m.err
+	}
+	m.n += int64(n)
+	_, _ = m.digest.Write(p[:n])
+	switch {
+	case err == io.EOF:
+		// THE END IS io.EOF ITSELF, for [Fill]'s reason: a wrapped one,
+		// or a cut body's io.ErrUnexpectedEOF, is a failure.
+		m.ended = true
+		return n, io.EOF
+	case err != nil:
+		m.err = fmt.Errorf("objstore: read the object: %w", err)
+		return n, m.err
+	}
+	return n, nil
+}
+
+// Open streams the object o names back, checked against it: every byte is
+// counted and hashed, and the stream ends in [ErrCorrupt] — never io.EOF —
+// where the backend's bytes are not o's.
+//
+// # The byte that completes the file is held back
+//
+// Until the backend has said the object ENDED and the bytes before it hash to
+// o's digest, the reader hands out every byte but the last. Verifying at the
+// end and handing everything out as it came would put the whole of a damaged
+// file into a caller's hands — a response with a complete Content-Length, a
+// backup file of the right size — before the damage was known; held back, a
+// damaged object always reads short of its size, which is what a client and
+// a backup can each see for themselves.
+//
+// # Every read is bounded twice
+//
+// The whole read runs under [ReadBudget] — or ctx's own deadline, where that
+// is sooner — and each Read of the backend under [ReadStall]: a Read that
+// waits longer cancels the stream, so a broker that lost the object's pieces
+// or a connection that went away ends the read in a minute rather than at the
+// end of a budget that may be hours long.
+//
+// A missing object is [ErrNotFound] here, before the first byte.
+func (s *Store) Open(ctx context.Context, o Object) (io.ReadCloser, error) {
+	if err := o.Validate(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, ReadBudget(o.Size))
+	body, err := s.backend.Get(ctx, o.Key.Name(), 0, -1)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("objstore: open %s: %w", o.Key, err)
+	}
+	return &verifier{
+		object: o, body: &watched{ctx: ctx, cancel: cancel, r: body, what: o.Key, stall: s.stall},
+		digest: sha256.New(),
+	}, nil
+}
+
+// verifier is an open object's reader: see [Store.Open].
+type verifier struct {
+	object Object
+	body   *watched
+	digest hash.Hash
+
+	// n is how many bytes the backend has handed over, held ones included.
+	n int64
+	// held is the verified tail, handed out once the whole is checked.
+	held []byte
+	// end is set once the whole object is verified and every held byte
+	// handed out, and err once the read has failed — both for good.
+	end bool
+	err error
+}
+
+func (v *verifier) Read(p []byte) (int, error) {
+	switch {
+	case len(v.held) > 0:
+		n := copy(p, v.held)
+		v.held = v.held[n:]
+		return n, nil
+	case v.err != nil:
+		return 0, v.err
+	case v.end:
+		return 0, io.EOF
+	case len(p) == 0:
+		return 0, nil
+	}
+	if rest := v.object.Size - v.n; rest > 1 {
+		// A READ THAT CANNOT COMPLETE THE FILE is handed out as it
+		// comes: at most every byte but the last, which [verifier.tail]
+		// reads and checks before anything of it is handed out.
+		n, err := v.body.Read(p[:min(int64(len(p)), rest-1)])
+		v.n += int64(n)
+		_, _ = v.digest.Write(p[:n])
+		switch {
+		case err == io.EOF: //nolint:errorlint // the end is io.EOF itself, as [Fill] reads it
+			v.err = fmt.Errorf("%w: %s ended at %d of the %d bytes it was stored as",
+				ErrCorrupt, v.object.Key, v.n, v.object.Size)
+			return n, v.err
+		case err != nil:
+			v.err = fmt.Errorf("objstore: read %s at %d of %d bytes: %w",
+				v.object.Key, v.n, v.object.Size, err)
+			return n, v.err
+		}
+		return n, nil
+	}
+	if err := v.tail(); err != nil {
+		v.err = err
+		return 0, err
+	}
+	v.end = true
+	return v.Read(p)
+}
+
+// tail reads the object's last byte, if it has one, and the end after it, and
+// checks the whole against the row before anything of it is handed out.
+//
+// ONE BYTE PAST THE SIZE IS ASKED FOR, so an object holding more than its row
+// says fails here rather than ending as though it were whole.
+func (v *verifier) tail() error {
+	left := v.object.Size - v.n
+	buf := make([]byte, left+1)
+	n, end, err := Fill(v.body, buf)
+	v.n += int64(n)
+	switch {
+	case err != nil:
+		return fmt.Errorf("objstore: read %s at %d of %d bytes: %w",
+			v.object.Key, v.n, v.object.Size, err)
+	case !end || int64(n) > left:
+		return fmt.Errorf("%w: %s holds more than the %d bytes it was stored as",
+			ErrCorrupt, v.object.Key, v.object.Size)
+	case int64(n) < left:
+		return fmt.Errorf("%w: %s ended at %d of the %d bytes it was stored as",
+			ErrCorrupt, v.object.Key, v.n, v.object.Size)
+	}
+	_, _ = v.digest.Write(buf[:n])
+	if got := Hash(hex.EncodeToString(v.digest.Sum(nil))); got != v.object.Hash {
+		return fmt.Errorf("%w: %s hashes to %s and its row says %s",
+			ErrCorrupt, v.object.Key, got, v.object.Hash)
+	}
+	v.held = buf[:n]
 	return nil
 }
 
-// Locked runs fn holding h's lock, waiting for it while another holder has it
-// and giving up after [lockWait]. fn runs under [LockedBudget].
-func (s *Store) Locked(ctx context.Context, h Hash, fn func(context.Context) error) error {
-	wait, cancel := context.WithTimeout(ctx, lockWait)
-	defer cancel()
-	for attempt := 0; ; attempt++ {
-		got, err := s.locks.LockChunk(wait, string(h), s.owner)
-		if err != nil {
-			return fmt.Errorf("objstore: lock chunk %s: %w", h, err)
-		}
-		if got {
-			break
-		}
-		select {
-		case <-wait.Done():
-			return fmt.Errorf("objstore: chunk %s stayed locked for %v (the collector "+
-				"is judging it, or a holder died and its lock has not aged out): %w",
-				h, lockWait, wait.Err())
-		case <-time.After(backoff.Doubling(attempt, 50*time.Millisecond, 2*time.Second)):
-		}
-	}
-	// LET GO EVEN WHEN THE CALLER'S CONTEXT IS GONE — a release is the
-	// teardown of the lock, and one inheriting a dead context leaves the
-	// chunk held until it ages out.
-	defer func() { _ = s.locks.UnlockChunk(context.WithoutCancel(ctx), string(h), s.owner) }()
-	bounded, stop := context.WithTimeout(ctx, LockedBudget)
-	defer stop()
-	return fn(bounded)
+// Close ends the read, the backend's stream with it.
+func (v *verifier) Close() error { return v.body.Close() }
+
+// watched is a backend's stream under the stall watchdog: a Read that waits
+// longer than [ReadStall] cancels ctx — which every backend's stream answers
+// by ending ([Backend.Get]) — and fails as stalled.
+type watched struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	r      io.ReadCloser
+	what   Key
+	stall  time.Duration
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// Get answers one chunk's bytes, checked against its name: a chunk whose
-// bytes no longer hash to h is [ErrCorrupt], never handed out.
-func (s *Store) Get(ctx context.Context, h Hash) ([]byte, error) {
-	if !h.Valid() {
-		return nil, fmt.Errorf("%w: %q", ErrBadHash, h)
+func (w *watched) Read(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
 	}
-	data, err := s.backend.Get(ctx, h)
+	stalled := false
+	var mu sync.Mutex
+	timer := time.AfterFunc(w.stall, func() {
+		mu.Lock()
+		stalled = true
+		mu.Unlock()
+		w.cancel()
+	})
+	n, err := w.r.Read(p)
+	timer.Stop()
+	mu.Lock()
+	defer mu.Unlock()
+	if stalled && err != nil && err != io.EOF {
+		return n, fmt.Errorf("objstore: %s stalled: the backend handed over nothing "+
+			"for %v: %w", w.what, w.stall, err)
+	}
+	return n, err
+}
+
+// Close ends the read once, the watchdog's context with it.
+func (w *watched) Close() error {
+	w.closeOnce.Do(func() {
+		w.cancel()
+		w.closeErr = w.r.Close()
+	})
+	return w.closeErr
+}
+
+// ReadAt answers the bytes of o from offset off, at most n of them: fewer at
+// the end of the object, and none — without asking the backend — at or past
+// it.
+//
+// CHECKED FOR ITS LENGTH ONLY: a page of an object cannot be checked against
+// the whole object's digest, which is the one the row keeps. A page that is
+// not the length the row's size implies is [ErrCorrupt], and so is a LAST
+// page with a byte after it — an object held longer than its row — since the
+// final page is the one read that can see the object's end; a page of the
+// right length is whatever the backend holds there. It is what a tool reading a
+// page into a model's context takes, where reading the whole object to check
+// one page would be the wrong price. Bounded as [Store.Open] is, by the
+// budget of every byte up to the page's end, because a backend with no ranged
+// read (the broker's) walks the object to the offset.
+func (s *Store) ReadAt(ctx context.Context, o Object, off, n int64) ([]byte, error) {
+	if err := o.Validate(); err != nil {
+		return nil, err
+	}
+	if off < 0 || n < 0 {
+		return nil, fmt.Errorf("objstore: a read of %d bytes at offset %d", n, off)
+	}
+	end := min(off+n, o.Size)
+	if off >= end {
+		return []byte{}, nil
+	}
+	want := end - off
+	// THE LAST PAGE ASKS FOR ONE BYTE MORE THAN THE ROW SAYS IS THERE.
+	// Every backend caps its answer at the range it was asked for, so a
+	// page that asked for exactly `want` could never see an object held
+	// longer than its row; a range running past the end is answered short
+	// ([Backend.Get]), so on a sound object the probe costs nothing. An
+	// interior page asks for its own range: the byte after it is the
+	// object's next one, which proves nothing.
+	ask := want
+	if end == o.Size {
+		ask++
+	}
+	ctx, cancel := context.WithTimeout(ctx, ReadBudget(off+ask))
+	body, err := s.backend.Get(ctx, o.Key.Name(), off, ask)
 	if err != nil {
-		return nil, fmt.Errorf("objstore: read chunk %s: %w", h, err)
+		cancel()
+		return nil, fmt.Errorf("objstore: read %s: %w", o.Key, err)
 	}
-	if got := HashOf(data); got != h {
-		return nil, fmt.Errorf("%w: %s holds bytes that hash to %s", ErrCorrupt, h, got)
+	r := &watched{ctx: ctx, cancel: cancel, r: body, what: o.Key, stall: s.stall}
+	defer func() { _ = r.Close() }()
+	// ONE BYTE PAST THE PAGE, so a backend answering more than the page —
+	// the probe's byte, or one that ignored its range — is caught rather
+	// than cut to fit.
+	page, err := io.ReadAll(io.LimitReader(r, want+1))
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("objstore: read %s at %d: %w", o.Key, off, err)
+	case int64(len(page)) > want && end == o.Size:
+		return nil, fmt.Errorf("%w: %s holds more than the %d bytes its row says it has",
+			ErrCorrupt, o.Key, o.Size)
+	case int64(len(page)) != want:
+		return nil, fmt.Errorf("%w: %s answered %d bytes at %d, and its row says %d are there",
+			ErrCorrupt, o.Key, len(page), off, want)
 	}
-	return data, nil
+	return page, nil
+}
+
+// Stat answers what the backend holds under k — for the backup, which checks
+// that an object its copy names is there.
+func (s *Store) Stat(ctx context.Context, k Key) (Info, error) {
+	info, err := s.backend.Stat(ctx, k.Name())
+	if err != nil {
+		return Info{}, fmt.Errorf("objstore: stat %s: %w", k, err)
+	}
+	return info, nil
+}
+
+// Delete removes k's object. Deleting what is not there is not an error.
+func (s *Store) Delete(ctx context.Context, k Key) error {
+	if err := s.backend.Delete(ctx, k.Name()); err != nil {
+		return fmt.Errorf("objstore: delete %s: %w", k, err)
+	}
+	return nil
 }

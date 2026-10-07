@@ -47,7 +47,7 @@ func (w Work) Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListi
 	return call(ctx, w.r, opFiles, nil, q)
 }
 
-// File answers one file with its manifest.
+// File answers one file with the object holding its bytes.
 func (w Work) File(ctx context.Context, project, path string,
 	fresh statelog.Freshness) (tracker.FileDetail, error) {
 	return call(ctx, w.r, opFile, nil, fileArgs{Project: project, Path: path, Fresh: fresh})
@@ -282,7 +282,7 @@ func (w WorkWriter) EnsureTags(ctx context.Context, opID, project string, tags [
 	return out.Created, out.Warnings, err
 }
 
-// PutFile writes a project's file — its row, naming chunks the caller has
+// PutFile writes a project's file — its row, naming the object the caller has
 // already uploaded through its own object client.
 func (w WorkWriter) PutFile(ctx context.Context, opID string, put tracker.FilePut) (
 	tracker.WriteResult, error) {

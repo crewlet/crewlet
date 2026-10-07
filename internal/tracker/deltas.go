@@ -403,10 +403,11 @@ func viewDeltas(before, after View) map[string]Delta {
 
 // fileDeltas is what changed on one file.
 //
-// THE CONTENT BY ITS HASH AND ITS SIZE, never by its chunks: the chunk list is
-// up to [MaxFileChunks] entries and says nothing a person reading the feed
-// can use, while "the hash moved and the size went from 12 KiB to 40 KiB" is
-// the whole of "somebody rewrote the report".
+// THE CONTENT BY ITS HASH AND ITS SIZE, never by its object: a key is a name
+// minted for one upload and says nothing a person reading the feed can use —
+// two uploads of the same bytes are two keys — while "the hash moved and the
+// size went from 12 KiB to 40 KiB" is the whole of "somebody rewrote the
+// report".
 func fileDeltas(before, after File) map[string]Delta {
 	moved := deltaSet{}
 	// WHOLE: both are bounded where they are written ([MaxFilePath],

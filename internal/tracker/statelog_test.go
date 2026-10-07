@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -257,11 +258,33 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Actor: "lead", ActorKind: tracker.AuthorAgent,
 		}.Encode()
 	case "Subject.Kind=file":
-		// A FILE WRITTEN INTO A PROJECT: the kind is what an older build
-		// has no applier for, and every field of the payload is base.
+		// A FILE TAKEN OUT OF A PROJECT: the kind is what an older build
+		// has no applier for, and every field of a removal's payload is
+		// base — it names no object.
 		body, err := json.Marshal(tracker.File{
 			V: tracker.DocumentVersion, Project: "SUITE", Path: "notes/plan.md",
 			Size: 0, CreatedAt: at, UpdatedAt: at,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.FileSubject("SUITE", "notes/plan.md"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeFileWritten, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
+	case "File.Object":
+		// A FILE PUT, naming the object its bytes were uploaded into —
+		// every put this build writes.
+		body, err := json.Marshal(tracker.File{
+			V: tracker.DocumentVersion, Project: "SUITE", Path: "notes/plan.md",
+			Hash: objstore.HashOf([]byte("the plan")), Size: 8,
+			Object:    objstore.KeyAt(at),
+			CreatedAt: at, UpdatedAt: at,
 		})
 		if err != nil {
 			return nil, err

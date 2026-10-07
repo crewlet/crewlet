@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,7 @@ import (
 // # What every node runs, and what one data node does
 //
 // Every node holds the [objstore.Store] over the backend its Tier A names
-// ([Backends.Objects]) and reads and writes chunks through it: a stateless
+// ([Backends.Objects]) and reads and writes objects through it: a stateless
 // node uploads and downloads files exactly as a data node does, and the
 // backend keeps the copies. The one thing left for the engine is the
 // COLLECTOR — deleting what no row names, and auditing what the backend has
@@ -56,10 +57,10 @@ type objectStore struct {
 // startObjects builds this node's object store over the backend its Tier A
 // named, which [OpenBackends] opened and agreed with the fleet.
 func (e *Engine) startObjects() error {
-	if e.backends == nil || e.backends.Objects == nil || e.backends.Fleet == nil {
+	if e.backends == nil || e.backends.Objects == nil {
 		return nil
 	}
-	store, err := objstore.NewStore(e.backends.Objects, e.backends.Fleet, e.incarnation)
+	store, err := objstore.NewStore(e.backends.Objects)
 	if err != nil {
 		return fmt.Errorf("engine: the object store: %w", err)
 	}
@@ -83,10 +84,11 @@ const collectorPoll = time.Minute
 // TEN MINUTES, ten polls rather than the three every other singleton uses: the
 // lease is renewed between passes, never during one, and a collection lists
 // the whole store — a pass that outlived a three-poll lease would hand the
-// duty to a peer mid-pass. Two collectors at once are safe, since every
-// deletion is judged under its chunk's lock, and only wasteful; ten minutes is
-// what a pass over a few million chunks takes, and a dead holder costs no more
-// than ten minutes of a pass that is due hourly.
+// duty to a peer mid-pass. Two collectors at once are safe — a deletion needs
+// no lock (ADR-0027), and deleting what the other already deleted is not an
+// error — and only wasteful; ten minutes is what a listing of a few million
+// objects takes, and a dead holder costs no more than ten minutes of a pass
+// that is due hourly.
 const collectorDutyTTL = 10 * collectorPoll
 
 // collectorDuty is what the collector's duty remembers between turns.
@@ -119,7 +121,7 @@ type collectionReport struct {
 // startObjectCollector starts the collector's duty against the estate's
 // references. A no-op on a node with no object store, and once the collector
 // has been stopped.
-func (e *Engine) startObjectCollector(ctx context.Context, refs collect.References) error {
+func (e *Engine) startObjectCollector(ctx context.Context, refs collect.References, era collect.ChunkEra) error {
 	o := e.objects
 	if o == nil {
 		return nil
@@ -129,7 +131,7 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	if o.collectorStopped || o.collector != nil {
 		return nil
 	}
-	c, err := collect.New(collect.Options{Store: o.store, References: refs})
+	c, err := collect.New(collect.Options{Store: o.store, References: refs, ChunkEra: era})
 	if err != nil {
 		return fmt.Errorf("engine: the object collector: %w", err)
 	}
@@ -151,10 +153,31 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 	mine := claim == nil // a node with nobody to claim from runs it alone
 	if claim != nil {
 		held, err := claim(ctx)
-		if err != nil && ctx.Err() == nil {
-			log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
+		if err != nil {
+			// UNKNOWN IS NEITHER: a claim that could not be answered
+			// says nothing about who holds the duty, so this node runs
+			// no pass — it cannot say the duty is its own — and keeps
+			// whatever it believed before, the alarm its last audit
+			// raised included. Read as "not mine", a two-second store
+			// blip would clear an alarm about lost files on the one
+			// node reporting it.
+			//
+			// BUT IT FORGETS THE RESUME. While nobody can say who holds
+			// the duty, another node may take it and record a newer
+			// pass — an audit that found files lost — so the next claim
+			// that answers held reads the fleet's record again rather
+			// than run from this node's own, older status and write
+			// those findings out of the record. Resuming twice costs a
+			// read: Restore keeps the newer of each half.
+			duty.mu.Lock()
+			duty.resumed = false
+			duty.mu.Unlock()
+			if ctx.Err() == nil {
+				log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
+			}
+			return
 		}
-		mine = err == nil && held
+		mine = held
 	}
 	duty.mu.Lock()
 	duty.holding = mine
@@ -211,9 +234,10 @@ func (d *collectorDuty) ran(last *time.Time, interval time.Duration, err error) 
 	*last = now
 }
 
-// resumeCollector picks the schedule up from the fleet's record when this
-// node takes the duty, so a duty that moved does not run every pass again at
-// once: the record says when its last holder ran each.
+// resumeCollector picks the schedule and the findings up from the fleet's
+// record when this node takes the duty, so a duty that moved does not run every
+// pass again at once — the record says when its last holder ran each — and
+// does not forget what the last audit found.
 func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
 	raw, found, err := e.backends.Fleet.ObjectCollection(ctx)
 	var last collectionReport
@@ -225,6 +249,11 @@ func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
 		// the cost is a pass run early, never one skipped.
 		log.WarnContext(ctx, "object_collector_schedule_unread", "error", err)
 	}
+	// THE FINDINGS AS WELL AS THE SCHEDULE: the next pass this node records
+	// carries its other half from here, and seeded with nothing it would
+	// write the last audit's findings — and the alarm they raise — out of
+	// the fleet's record an hour after the duty moved.
+	duty.collector.Restore(last.Status)
 	duty.mu.Lock()
 	defer duty.mu.Unlock()
 	duty.resumed = true
@@ -270,10 +299,13 @@ func (e *Engine) stopObjectCollector() {
 	}
 }
 
-// objectsReading fills the object store's half of an alarm reading: what the
-// collector's last audit found missing — on the node holding the collector's
-// duty, and nothing on any other, since the store is one the whole fleet
-// shares and one node's count of it is the fleet's.
+// objectsReading fills the object store's half of an alarm reading: the files
+// the collector's last audit to run to its end found missing or damaged — on
+// the node holding the collector's duty, and nothing on any other, since the
+// store is one the whole fleet shares and one node's count of it is the
+// fleet's. FROM THE FINDINGS, never the last attempt: an audit that failed
+// part of the way through counted a floor, and reading it would clear the
+// alarm whenever the store stopped answering.
 func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 	o := e.objects
 	if o == nil {
@@ -286,8 +318,11 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 	duty.mu.Lock()
 	holding := duty.holding
 	duty.mu.Unlock()
-	if holding {
-		out.ObjectsMissing = duty.collector.Status().Audit.Missing
+	if !holding {
+		return
+	}
+	if found := duty.collector.Status().Audit.Found; found != nil {
+		out.ObjectsMissing = found.Missing + found.Damaged
 	}
 }
 
@@ -313,17 +348,27 @@ var pinnedDomains = sync.OnceValue(func() map[string]bool {
 	return out
 })
 
-// errNoObjectStore is a read of a chunk on an engine built with no object
+// errNoObjectStore is a read of an object on an engine built with no object
 // store — a test's.
 var errNoObjectStore = errors.New("engine: this node runs no object store")
 
-// GetChunk reads one chunk — the backup's read, which carries every chunk its
-// copy names.
-func (e *Engine) GetChunk(ctx context.Context, h objstore.Hash) ([]byte, error) {
+// OpenObject streams one object back, checked against the row that names it
+// ([objstore.Store.Open]) — the backup's read, which copies every object its
+// copy of the estate names.
+func (e *Engine) OpenObject(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
 	if e.objects == nil {
 		return nil, errNoObjectStore
 	}
-	return e.objects.store.Get(ctx, h)
+	return e.objects.store.Open(ctx, o)
+}
+
+// StatObject asks the store what it holds under k — the backup's check of an
+// object a stream snapshot carries.
+func (e *Engine) StatObject(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+	if e.objects == nil {
+		return objstore.Info{}, errNoObjectStore
+	}
+	return e.objects.store.Stat(ctx, k)
 }
 
 // ObjectStore is this node's object store as the tools take it — a NIL
@@ -345,9 +390,9 @@ func (e *Engine) Objects() *objstore.Store {
 	return e.objects.store
 }
 
-// ObjectsStream is the broker stream the company's chunks live in, for the
+// ObjectsStream is the broker stream the company's objects live in, for the
 // backup — empty where they live outside the broker (an S3 bucket), which the
-// backup then copies chunk by chunk.
+// backup then copies object by object.
 func (e *Engine) ObjectsStream() string {
 	if e.backends == nil || e.backends.objectsStream == "" {
 		return ""

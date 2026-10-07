@@ -203,7 +203,7 @@ type WorkDeps struct {
 
 	// Files reads a project's files, FileWriter writes them for one actor,
 	// and Objects stores and reads their bytes. All three or no file tool:
-	// a file is a row naming chunks, and a surface holding one half could
+	// a file is a row naming an object, and a surface holding one half could
 	// only record content it cannot store, or store content nothing names.
 	Files      FileReader
 	FileWriter func(actor Actor) FileWriter

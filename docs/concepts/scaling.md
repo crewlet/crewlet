@@ -167,15 +167,15 @@ held once per data node, so the storage forecast scales with the data nodes
 rather than with the fleet — see [Retention](../guides/retention.md).
 
 **Files are the exception, and the only one.** The content of a company's files
-grows without bound, so it is not in any data node's database: its chunks are
-kept in **one store the whole fleet shares**, which every node reaches
+grows without bound, so it is not in any data node's database: each upload is
+one object kept in **one store the whole fleet shares**, which every node reaches
 directly. On the default `nats` backend that store is a bucket on the fleet's
 own broker, so the files' copies follow `stream.replicas` on the broker's
 members with the same quorum arithmetic as the logs — three members at three
 replicas keep writing files with one down, two members at two replicas cannot
-write with either down — and every member holding a copy holds every chunk, so
-adding data nodes does not add space for files. On `s3` no node holds a chunk
-at all: capacity and copies are the bucket's. The row that names a file is
+write with either down — and every member holding a copy holds every object,
+so adding data nodes does not add space for files. On `s3` no node holds an
+object at all: capacity and copies are the bucket's. The row that names a file is
 still an ordinary replicated row, so listing a project's files is as local as
 any other read; only reading the bytes goes to the store. See
 [Object Store](object-store.md#how-far-it-scales).
