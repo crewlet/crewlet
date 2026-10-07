@@ -123,7 +123,7 @@ type Filter struct {
 // ErrBadCursor refuses an [Filter.After] this reader did not mint.
 var ErrBadCursor = errors.New("pages: that cursor is not one this listing minted")
 
-// DefaultLimit and MaxLimit bound a listing, on [work]'s reasoning.
+// DefaultLimit and MaxLimit bound a listing.
 const (
 	DefaultLimit = 50
 	MaxLimit     = 500
