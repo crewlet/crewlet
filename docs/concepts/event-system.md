@@ -225,8 +225,7 @@ config_revision_applied    # one node's outcome, and how far it got
 # actor_seat the person it is bound to. One per call, whatever became of it;
 # never the arguments. Written by the node the call reached. The event store
 # promotes actor_seat, tool and dir to tags (beside every row's `node`), so a
-# listing — which carries no payload — can still say who, which tool, where;
-# upgrading tags the rows a node already holds the same way (migration 0037)
+# listing — which carries no payload — can still say who, which tool, where
 operator_acted             # an operator tool call that is not a proven read,
                            # from the dashboard (/operator/act) or a person's
                            # assistant (/operator/mcp): tool, transport,

@@ -122,11 +122,6 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 
 // createMigrationLedger creates `schema_migrations`, the table every applied
 // file is recorded in, if the database has none yet.
-//
-// ONE STATEMENT WITH TWO CALLERS: [DB.migrate], and the tests that stand a
-// database up at an OLDER schema to prove what a later migration does to rows
-// written under it. A second copy of this DDL there would be a ledger the real
-// migrator might one day read differently.
 func (d *DB) createMigrationLedger(ctx context.Context) error {
 	if _, err := d.sql.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (

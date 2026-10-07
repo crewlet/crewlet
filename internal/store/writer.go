@@ -203,8 +203,7 @@ func SpendFor(eventType string, payload []byte) *Spend {
 	}
 	if spend.Model == "" {
 		// An entry that names no model is identified by the provider
-		// slot it ran on. The backfill in schema/0015 does the same, so
-		// history and new rows agree on what "model" means.
+		// slot it ran on, so the rollup always has a model to group by.
 		spend.Model = jsonString(body["provider_key"])
 	}
 	return spend

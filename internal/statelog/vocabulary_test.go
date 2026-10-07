@@ -528,7 +528,6 @@ var allowedWithdrawal = map[withdrawalKey]string{
 	{"internal/store/schema/replicated/0032_a_chunk_row_names_its_slot.sql", `tracker_file_chunks`}:       "a migration that reshaped it",
 	{"internal/store/schema/replicated/0036_a_chunk_row_names_only_its_chunk.sql", `tracker_file_chunks`}: "a migration that reshaped it",
 	{"internal/store/schema/replicated/0038_a_file_row_names_one_object.sql", `tracker_file_chunks`}:      "the migration that dropped it",
-	{"internal/store/fileobject_test.go", `tracker_file_chunks`}:                                          "the test of the migration that dropped it",
 }
 
 func sprintOffence(file string, line int, hit, text string) string {
