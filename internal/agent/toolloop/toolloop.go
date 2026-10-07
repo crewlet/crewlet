@@ -221,8 +221,10 @@ type Execution struct {
 	// SERIAL and the question a reader asks of a slow round is which call
 	// held it: the round's own span covers the provider call only, and the
 	// phase's covers everything. Both are zero on an execution nothing
-	// timed — an agent-mode run's bridged calls, which ran inside somebody
-	// else's loop — and zero means "not measured", never "instant".
+	// timed — a call whose arguments did not parse, which is answered
+	// rather than run, and an agent-mode run's bridged calls, which ran
+	// inside somebody else's loop — and zero means "not measured", never
+	// "instant".
 	StartedAt time.Time
 	Duration  time.Duration
 

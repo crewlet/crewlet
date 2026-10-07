@@ -1303,7 +1303,8 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"success":   !ex.Failed,
 			"round":     ex.Round,
 		}
-		// ONLY WHAT WAS MEASURED. An execution nobody timed — an
+		// ONLY WHAT WAS MEASURED. An execution nobody timed — a call
+		// whose arguments did not parse, answered rather than run, or an
 		// agent-mode run's bridged call — has no start, and writing
 		// `duration_ms: 0` for it would state an instant call. Absent is
 		// the honest spelling of "not recorded", and it is the one every

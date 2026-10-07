@@ -40,10 +40,11 @@
  *
  * # What cannot be placed is still shown
  *
- * An agent-mode executor's rounds ran inside somebody else's loop and its
- * calls carry no instants. Those are UNTIMED rows —
- * listed under the waterfall as "not placed on this clock" — rather than bars
- * drawn at an invented position, or dropped. The list says PLACED rather than
+ * A call whose arguments did not parse was answered rather than run, and an
+ * agent-mode executor's rounds ran inside somebody else's loop; neither kind
+ * of call carries instants. Those are UNTIMED rows — listed under the
+ * waterfall as "not placed on this clock" — rather than bars drawn at an
+ * invented position, or dropped. The list says PLACED rather than
  * timed because a call can be measured and still have nowhere to go: timed
  * but unstamped, in a round with no model call of its own to follow. Whether
  * a call was measured at all is [callMeasured]'s, which every surface asks.

@@ -404,9 +404,10 @@ export function toolCalls(raw: unknown): ToolCall[] {
       failed: rec.success === false || Boolean(rec.error),
       // How long the call took, and who answered it: the tool loop times
       // every call and the surface names the origin that served it. Absent
-      // on a row nothing timed (an agent-mode run's bridged call, whose
-      // rounds ran inside somebody else's loop), which reads as 0 / "" —
-      // "not recorded", never "instant" or "the engine's own".
+      // on a row nothing timed (a call whose arguments did not parse, which
+      // was answered rather than run, and an agent-mode run's bridged call,
+      // whose rounds ran inside somebody else's loop), which reads as 0 /
+      // "" — "not recorded", never "instant" or "the engine's own".
       durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
       origin: typeof rec.origin === "string" ? rec.origin : "",
       server: typeof rec.server === "string" ? rec.server : "",
