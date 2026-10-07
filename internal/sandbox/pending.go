@@ -1309,7 +1309,6 @@ type ConversationRef struct {
 // one carries none — so the one explicit check below is the one place two
 // absences would otherwise compare equal and make every such delivery the
 // answer to every such run.
-//
 func (c ConversationRef) Answers(run PendingRun) bool {
 	return run.ConversationKey != "" && run.ConversationKey == c.Identity
 }

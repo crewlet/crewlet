@@ -128,10 +128,9 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 // tags blob nor off [store.EventRecord.Spend]. Spend is set by the WRITE path
 // and never by a read — `finishRecord` does not populate it — so a reader
 // reaching through it would find nil on every row and quietly answer "no
-// attempts" for every turn in the company. The tags blob is populated on
-// read, but only from what the WRITER extracted: schema/0029 backfilled the
-// column for history and could not rewrite every stored blob, so a tag read
-// answers nothing for every turn written before the split. See the field.
+// attempts" for every turn in the company. The column is the one authority
+// every work-key reader uses — the turns list's grouping, the phase-token
+// rollup, the `work_key` filter. See the field.
 //
 // THE WINDOW IS THE DETAIL READ'S, not the turns list's default. [store.Turn]
 // is a listing type and its query takes DefaultTurnDays — a week — when asked

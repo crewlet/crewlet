@@ -1085,18 +1085,15 @@ func TestATurnAndItsAttemptsAreReadAtOneInstant(t *testing.T) {
 	}
 }
 
-// AND A TURN FROM BEFORE THE SPLIT ANSWERS OFF THE BACKFILLED COLUMN.
+// AND A TURN ANSWERS ITS WORK KEY OFF THE COLUMN, never the tags blob.
 //
-// schema/0029 moved the work key into a column of its own and backfilled it
-// from turn_id, which is where it lived; it did not rewrite the stored tags,
-// because those record what the writer extracted from an event that carried no
-// such field. A key read out of the tags therefore answers nothing for every
-// turn in the history the backfill exists to preserve, while /events?work_key=
-// — which filters on the column — returns those same rows.
+// The column is the one authority every work-key reader uses — the
+// /events?work_key= filter among them — so a turn read here must agree with
+// the rows that filter returns. The row below carries the key in its column
+// and NOT in its tags, so a reader that went through the tags answers nothing.
 //
-// Append's Spend is the carrier for every promoted column, so a record setting
-// the key there and not in its tags writes exactly a post-backfill row.
-func TestAPreSplitTurnNamesItsAttemptsFromTheBackfilledColumn(t *testing.T) {
+// Append's Spend is the carrier for every promoted column.
+func TestATurnNamesItsAttemptsFromTheWorkKeyColumn(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	log := db.Events()
@@ -1107,7 +1104,7 @@ func TestAPreSplitTurnNamesItsAttemptsFromTheBackfilledColumn(t *testing.T) {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: id, Type: "agent_phase_completed", Time: at,
 			Category: "lifecycle", Actor: "CEO",
-			// NO work_key TAG, exactly as history carries it.
+			// NO work_key TAG: only the column can answer.
 			Tags: map[string]string{"turn_id": run, "agent_role": "CEO"},
 			Spend: &store.Spend{
 				TurnID: run, WorkKey: key, Phase: "execute",
@@ -1124,9 +1121,8 @@ func TestAPreSplitTurnNamesItsAttemptsFromTheBackfilledColumn(t *testing.T) {
 		map[string]any{"turn_id": "run-2"}))
 
 	if got["work_key"] != "wk-old" {
-		t.Errorf("work_key = %v, want the backfilled column — a tag read "+
-			"answers this for no turn written before schema/0029",
-			got["work_key"])
+		t.Errorf("work_key = %v, want the column's — a tag read answers "+
+			"nothing for this row", got["work_key"])
 	}
 	if n := len(rows(t, got["attempts"])); n != 2 {
 		t.Errorf("%d attempts, want both runs of wk-old", n)

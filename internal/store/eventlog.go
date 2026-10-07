@@ -117,17 +117,11 @@ type EventRecord struct {
 	// WorkKey is the unit of work this row's run was an attempt at — see
 	// ADR-0017 and [ListQuery.WorkKey].
 	//
-	// OFF THE COLUMN, and it is the one promoted value that is NOT a copy
-	// of a tag. schema/0029 backfilled the column from `turn_id`, which is
-	// where the work key lived before the split, and it could not
-	// reasonably rewrite every historical tags blob to match — so for rows
-	// written before that migration the column holds the work key and
-	// `Tags["work_key"]` is empty. A reader going through the tags would
-	// therefore answer "no unit of work" for exactly the history the
-	// backfill exists to preserve, while `/events?work_key=` — which
-	// filters on the column — returned those same rows. One authority,
-	// and it is the column every other work-key reader already uses
-	// (turnlist's grouping, the phase-token rollup, the filter above).
+	// OFF THE COLUMN: one authority, and it is the column every other
+	// work-key reader already uses (turnlist's grouping, the phase-token
+	// rollup, the filter above), so a row read here and a row matched by
+	// `/events?work_key=` can never disagree about which unit of work it
+	// belongs to.
 	WorkKey string `json:"work_key,omitempty"`
 
 	// Payload is the full serialized event. Nil on a listing — see above.
