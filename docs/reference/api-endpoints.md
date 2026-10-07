@@ -2773,7 +2773,12 @@ still waits on that one: if somebody else's answer resumed the run meanwhile
 and it has asked something new since, yours is announced `not_awaiting` rather
 than taken as the answer to a question you never saw. What it became is
 announced on the event stream as `sandbox_run_answered` (`resumed`,
-`not_awaiting` or `gone`), naming the credential and the person. An `unknown`
+`not_awaiting`, `gone`, or `declined` when every attempt to resume the run with
+your answer failed and it was let go of — the run waits on its question again,
+and you answer it again), naming the credential and the person. The node
+holding the seat records your answer on the run before it resumes with it, so
+a node that stops on the way to the resume leaves it for the seat's next
+holder rather than losing it. An `unknown`
 outcome is a delivery the broker never confirmed; answering again is
 harmless, because whichever copy arrives second finds that question no longer
 waiting.

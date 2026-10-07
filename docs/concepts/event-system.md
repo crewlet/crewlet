@@ -258,7 +258,8 @@ sandbox_run_failed         # a run lost, once: published under an id and an
                            # the node that finishes an ending another decided
                            # repeats the same event (the store keys on it)
 sandbox_run_answered       # what an answer to a parked run's question became
-                           # (resumed | not_awaiting | gone), by which route
+                           # (resumed | not_awaiting | gone | declined), by
+                           # which route
                            # (chat | operator) and from whom. The operator
                            # route travels as an inbox wake
                            # (sandbox_answer_given), which is not stored and

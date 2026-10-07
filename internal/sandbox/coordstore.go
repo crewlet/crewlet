@@ -296,6 +296,10 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 	if len(answer.EventIDs) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s names no delivery", turnID)
 	}
+	if !answer.Via.Valid() {
+		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s names no route it came by "+
+			"(via %q)", turnID, answer.Via)
+	}
 	if answer.RecordedAt.IsZero() {
 		answer.RecordedAt = s.clock()
 	}

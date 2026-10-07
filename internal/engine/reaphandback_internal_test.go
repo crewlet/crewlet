@@ -137,7 +137,7 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 		t.Fatalf("Get = %v, %v", found, err)
 	}
 	if _, ok, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", EventIDs: []string{reply.ID.String()},
+		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
 		Events: []json.RawMessage{raw}, PostedAt: asked.Add(time.Minute),
 	}); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)

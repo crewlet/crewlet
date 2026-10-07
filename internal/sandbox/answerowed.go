@@ -316,7 +316,7 @@ func (r Reply) answerOf(now time.Time) RecordedAnswer {
 	answer := RecordedAnswer{
 		// Redacted HERE, at the one place the reply becomes a record a
 		// second store keeps: it is spliced into a phase record verbatim.
-		Text: redact.Secrets(r.Text), By: answererOf(r.trigger()),
+		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat, By: answererOf(r.trigger()),
 		EventIDs: r.ids(), PostedAt: r.Posted(), RecordedAt: now,
 	}
 	for _, ev := range r.Events {
@@ -425,14 +425,30 @@ func (r *answerRetry) spent(now time.Time) bool {
 	return r.failures > 0 && !r.live(now)
 }
 
-// recordAnswer records a delivery as the answer to the run it qualifies for,
-// and starts the resume it owes.
+// recordAnswer records a chat delivery as the answer to the run it qualifies
+// for — see [Coordinator.record].
+func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Reply) (PendingRun, bool, error) {
+	recorded, won, err := c.record(ctx, run, reply.answerOf(c.now()))
+	if err != nil || !won {
+		return PendingRun{}, won, err
+	}
+	log.InfoContext(ctx, "sandbox_clarification_answered",
+		"turn_id", recorded.TurnID, "via", string(types.AnswerViaChat),
+		"conversation", reply.Conv.Identity, "partition", reply.Conv.Partition,
+		"run_conversation", recorded.ConversationKey, "run_partition", recorded.PartitionKey,
+		"asked_at", recorded.AskedAt, "posted_at", recorded.Answer.PostedAt)
+	return recorded, true, nil
+}
+
+// record records an answer on the run it answers, on either route, and makes
+// the run owe the resume it drives ([StatusAnswered]).
 //
 // The resume's first attempt runs INLINE, on the caller's delivery, which is
 // what keeps the ordinary case as immediate as it ever was; whatever it
-// concludes, the delivery is spent — the answer is on the row.
-func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Reply) (PendingRun, bool, error) {
-	recorded, won, err := c.pending.RecordAnswer(ctx, run.TurnID, run.LaunchID, reply.answerOf(c.now()))
+// concludes, the delivery is spent — the answer is on the row, and from here
+// on the row resumes it or hands it back, never the delivery.
+func (c *Coordinator) record(ctx context.Context, run PendingRun, answer RecordedAnswer) (PendingRun, bool, error) {
+	recorded, won, err := c.pending.RecordAnswer(ctx, run.TurnID, run.LaunchID, answer)
 	if err != nil || !won {
 		return PendingRun{}, won, err
 	}
@@ -450,11 +466,6 @@ func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Re
 	// Out of the question set: nobody is waited on, and the screening
 	// offers this seat's mail to no question that already has its answer.
 	c.moveRun(recorded.AgentHandle, run.Status, StatusAnswered)
-	log.InfoContext(ctx, "sandbox_clarification_answered",
-		"turn_id", recorded.TurnID, "via", string(types.AnswerViaChat),
-		"conversation", reply.Conv.Identity, "partition", reply.Conv.Partition,
-		"run_conversation", recorded.ConversationKey, "run_partition", recorded.PartitionKey,
-		"asked_at", recorded.AskedAt, "posted_at", recorded.Answer.PostedAt)
 	return recorded, true, nil
 }
 
@@ -506,8 +517,8 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		return
 	}
 	c.moveRun(claimed.AgentHandle, StatusAnswered, StatusResumed)
-	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer.Text, ""), true,
-		answer.trigger(), runOutcome{
+	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer.Text, answer.attribution()),
+		true, answer.trigger(), runOutcome{
 			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
 		})
 	if disposition == AnswerDeferred {
@@ -517,7 +528,16 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		return
 	}
 	c.settleOwed(ctx, claimed.AgentHandle, claimed.TurnID)
-	c.announceAnswered(ctx, claimed, types.AnswerViaChat, answeredAs(disposition), answer.By, "")
+	outcome := answeredAs(disposition)
+	if outcome == types.AnswerGone && answer.Via == types.AnswerViaOperator && len(answer.Events) > 0 {
+		// ITS COPY SAYS SO. The run ended before any turn took the answer,
+		// so its ending handed the answer by turn back to the seat's inbox,
+		// where it is spent as reaching a run that is gone and announced
+		// there ([Coordinator.AnswerByTurn]) — once, through the outbox that
+		// survives a crash, rather than here and again there.
+		return
+	}
+	c.announceAnswered(ctx, claimed, answer.Via, outcome, answer.By, answer.BySeat)
 }
 
 // owedFailed counts one failed resume of an owed answer, and schedules the next

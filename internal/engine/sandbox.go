@@ -532,8 +532,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     dispatch path a redelivered trigger simply raises a fresh one. So
 	//     it is KEPT.
 	//   - A PERSON'S ANSWER was claimed from the answer recorded on the run
-	//     (or, by turn, from a question still open), so the revert puts the
-	//     run back to owing that answer's resume. Nothing is working, and an
+	//     — a chat reply or an answer by turn, which are both recorded before
+	//     anything is done with them — so the revert puts the run back to
+	//     owing that answer's resume. Nothing is working, and an
 	//     indicator over that wait tells the one person who could move it
 	//     that the run is busy with their reply when it is not — the same
 	//     lie the park exists to stop. So it is CLEARED, and this is the
@@ -542,14 +543,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     route puts a run back to a box that is still working. See
 	//     [sandbox.Coordinator.unclaim].
 	//
-	//     THE ANSWER ITSELF IS NOT LOST. A chat reply is recorded on the run
-	//     before its resume is attempted, so the coordinator retries the
-	//     resume on its own schedule and each attempt raises its own
-	//     indicator off the recorded trigger; an answer by turn is handed
-	//     back to the seat's inbox and comes round again. Neither falls
-	//     through to an ordinary turn, which answered the person with a turn
-	//     rather than with the coding run they were replying to. See
-	//     [sandbox.Coordinator.TryResumeFromAnswer].
+	//     THE ANSWER ITSELF IS NOT LOST. It is recorded on the run before
+	//     its resume is attempted, on either route, so the coordinator
+	//     retries the resume on its own schedule and each attempt raises its
+	//     own indicator off the recorded trigger. It never falls through to
+	//     an ordinary turn, which answered the person with a turn rather
+	//     than with the coding run they were replying to. See
+	//     [sandbox.Coordinator.TryResumeFromAnswer] and
+	//     [sandbox.Coordinator.AnswerByTurn].
 	working := rejoined
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
@@ -735,28 +736,22 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// coming back for this turn.
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
-		// Reverted, so the turn is not over — and BOTH ROUTES BRING THIS
-		// SAME DELIVERY BACK rather than wait for a further one.
+		// Reverted, so the turn is not over — and BOTH KINDS OF RESUME COME
+		// BACK rather than wait for a further signal.
 		//
 		// A BOX'S COMPLETION is NAK'd by the seat's control-topic handler
 		// and redelivered on the broker's own backoff, to this node once
 		// it recovers or to the seat's next owner, until its delivery
 		// budget is spent.
 		//
-		// A PERSON'S ANSWER takes the same return for the same reason:
-		// the offer reports [sandbox.AnswerDeferred] — the run is awaiting
-		// THIS reply again — so the dispatcher hands the delivery back
-		// with a NAK rather than letting it be the ordinary chat message
-		// it looks like, bounded by the deliveries the message itself has
-		// left ([sandbox.AnswerDeliveryReserve], the only clause a seat
-		// handoff does not reset), by [sandbox.MaxAnswerAttempts] within
-		// this process, and by the run's own pause_ttl_seconds — and let
-		// go to the ordinary route past any of them. This comment used to say the resume went back to
-		// awaiting the person "for the conversation's next message rather
-		// than for a redelivery of this one", which described the defect
-		// rather than the design: the reply that carried the answer was
-		// spent on an unrelated turn while the run that asked waited out
-		// its pause TTL for a message that may never come.
+		// A PERSON'S ANSWER is recorded on the run — a chat reply and an
+		// answer by turn alike — so the revert leaves it owed its resume
+		// and the coordinator retries that on its own schedule, bounded by
+		// [sandbox.MaxAnswerAttempts] and the run's own
+		// pause_ttl_seconds, and lets the answer go past them: a chat
+		// reply to the seat's ordinary route, an answer by turn spent as
+		// declined. The delivery that carried it is never handed back for
+		// this; it was spent when the answer was recorded.
 		//
 		// ON THE ROUTE'S OWN TERMS, exactly as the seed above: this is the
 		// same retry rule reached one step later, over the same revert.

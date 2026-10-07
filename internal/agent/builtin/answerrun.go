@@ -66,8 +66,8 @@ type RunDeps struct {
 // can, and it may be paused, busy with another of the seat's coding runs
 // (which it finishes or parks before it takes this answer, as it would a chat
 // reply), restarting or mid-upgrade. What the answer became is announced there
-// as `sandbox_run_answered` (`resumed`, `not_awaiting` or `gone`). What it
-// refuses up front is what this node can know: a run that is not waiting for an
+// as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`).
+// What it refuses up front is what this node can know: a run that is not waiting for an
 // answer (`not_running`), and a fleet whose node holding the seat runs a build
 // that cannot route the answer (`peer_upgrading`) — an older build would read
 // it as an ordinary wake and run a turn about nothing while the run waited on.

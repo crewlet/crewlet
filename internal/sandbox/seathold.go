@@ -58,7 +58,7 @@ import "context"
 // keeps its place, the question keeps its anchor, and a box that outlives
 // `pause_ttl_seconds` meanwhile re-seeds from its branch when the answer
 // arrives. An answer BY TURN waits the same way: one that raced the hold is
-// deferred under it rather than resumed beside the job. The answer used to be
+// deferred under it rather than recorded and resumed beside the job. The answer used to be
 // offered on a held seat, beside the park the hold replaced, and that meant
 // consuming the held seat's mail to look for it — and a consumed message that
 // is not the answer has nowhere to go but back onto the inbox, in a loop.

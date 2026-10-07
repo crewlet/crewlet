@@ -417,21 +417,30 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 		}
 		rig.finished("t1")
 	})
-	t.Run("an answer by turn reached a run that is gone", func(t *testing.T) {
+	t.Run("an answer by turn goes back through the row too", func(t *testing.T) {
 		rig := newCoordRig(t)
 		parkOnAQuestion(t, rig)
 		rig.resumer.failWith(ErrResumeAbandoned)
 		rig.resumer.beforeTurn = true
 		given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "use main",
 			LaunchID: rig.get("t1").LaunchID}
-		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given,
-			events.New(given, events.TraceContext{})); d != AnswerNotMine {
-			t.Fatalf("disposition = %q, want the answer spent on a run that is gone", d)
+		ev := events.New(given, events.TraceContext{})
+		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {
+			t.Fatalf("disposition = %q, want the answer recorded on its run", d)
+		}
+		rig.finished("t1")
+		if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(ev.ID).String()}) {
+			t.Fatalf("handed back %v, want the answer's copy once: no turn ever took it", got)
+		}
+		// THE COPY, ON THE SEAT'S INBOX, finds the run gone, and says so.
+		copied := rig.lastInboxEvent(t)
+		answer, _ := events.DataAs[*types.SandboxAnswerGiven](copied)
+		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), *answer, copied); d != AnswerNotMine {
+			t.Fatalf("the copy = %q, want it spent on a run that is gone", d)
 		}
 		if got := rig.answeredRecords(); len(got) != 1 || got[0].Outcome != types.AnswerGone {
 			t.Fatalf("announced %+v, want one answer that reached a run that is gone", got)
 		}
-		rig.finished("t1")
 	})
 }
 
@@ -813,7 +822,7 @@ func TestRecoveryFencesAParkedRunToTheSeatsNewHolder(t *testing.T) {
 		t.Fatalf("run %q at epoch %d, want it still parked and fenced to the new holder's lease",
 			got.Status, got.OwnerEpoch)
 	}
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(launch), rigLease); err != nil || won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", Tail{Launch: launch, From: Awaiting}, rigLease); err != nil || won {
 		t.Fatalf("the old holder's claim of the answer = %v, %v, want it refused", won, err)
 	}
 }

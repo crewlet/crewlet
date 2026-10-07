@@ -617,7 +617,7 @@ func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) 
 	run := rig.launch("t1")
 	rig.park("t1")
 	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
-		Text: "use main", EventIDs: []string{"r1"}, RecordedAt: rig.now,
+		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"r1"}, RecordedAt: rig.now,
 	}); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
@@ -706,7 +706,7 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 	rig.park("t1")
 
 	// The answer arrives between the reaper's snapshot and its flip.
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(rig.get("t1").LaunchID), Fence{}); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", Tail{Launch: rig.get("t1").LaunchID, From: Awaiting}, Fence{}); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)

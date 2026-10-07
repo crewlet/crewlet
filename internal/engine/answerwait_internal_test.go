@@ -546,8 +546,8 @@ func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
 		t.Fatalf("Marshal: %v", err)
 	}
 	if _, won, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", EventIDs: []string{reply.ID.String()}, Events: []json.RawMessage{raw},
-		PostedAt: reply.Timestamp, RecordedAt: time.Now().UTC(),
+		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
+		Events: []json.RawMessage{raw}, PostedAt: reply.Timestamp, RecordedAt: time.Now().UTC(),
 	}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}

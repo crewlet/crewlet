@@ -139,16 +139,10 @@ func CompletionTail(launch string) Tail {
 	return Tail{Launch: launch, From: []string{StatusRunning}}
 }
 
-// AnswerTail is what an answer BY TURN claims: the job that asked, while it
-// waits. An answer by turn names its run, so it is resumed with directly and
-// never recorded first — and a run whose question already has a recorded
-// answer ([StatusAnswered]) is not waiting for it.
-func AnswerTail(launch string) Tail {
-	return Tail{Launch: launch, From: Awaiting}
-}
-
 // RecordedAnswerTail is what the resume of a RECORDED answer claims: the job
-// that asked, once its reply is on the row. See [StatusAnswered].
+// that asked, once its reply is on the row. See [StatusAnswered]. It is the one
+// tail an answer claims, on either route: a chat reply and an answer by turn are
+// both recorded on the run before anything is done with them.
 func RecordedAnswerTail(launch string) Tail {
 	return Tail{Launch: launch, From: []string{StatusAnswered}}
 }
@@ -1485,7 +1479,8 @@ type Clarification struct {
 }
 
 // RecordedAnswer is a person's reply, recorded on the run it answers before
-// anything is done with it.
+// anything is done with it — on either route: a chat reply matched on its
+// conversation, or an answer by turn that named the run ([RecordedAnswer.Via]).
 //
 // RECORDING IS NOT RESUMING, and splitting the two is the whole point. The
 // reply used to be held by its inbox delivery until a resume succeeded: a
@@ -1501,8 +1496,23 @@ type RecordedAnswer struct {
 	// Text is the reply as the resumed turn is handed it.
 	Text string `json:"text"`
 
-	// By is who gave it, as the delivery's envelope names them.
+	// Via is the route the answer came by: a chat reply matched on its
+	// conversation, or an answer by turn that named the run. Required, and
+	// refused by [PendingStore.RecordAnswer] when it is not one of the two:
+	// it decides how the resumed turn is told who answered, what the
+	// answer's record says, and what a copy of it becomes when it is let go
+	// of — a chat reply becomes the ordinary message it is, while an answer
+	// by turn has no ordinary form, and its copy is spent by the node holding
+	// the seat as an answer the run no longer takes.
+	Via types.AnswerVia `json:"via"`
+
+	// By is who gave it: the chat sender as the delivery's envelope names
+	// them, or the operator credential an answer by turn was given under.
 	By string `json:"by,omitempty"`
+
+	// BySeat is the person an answer by turn's credential is bound to, empty
+	// for a chat reply and for a credential nobody bound.
+	BySeat string `json:"by_seat,omitempty"`
 
 	// EventIDs are the deliveries the answer was made of. A copy of one of
 	// them reaching the seat again is the same answer, already recorded —
@@ -1559,6 +1569,20 @@ type RecordedAnswer struct {
 // Taken reports whether a resumed turn took this answer — see
 // [RecordedAnswer.TakenAt].
 func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
+
+// attribution is who the resumed turn is told gave this answer: the person an
+// answer by turn names — or its credential, where nobody is bound to it — and
+// nobody for a chat reply, whose sender is already in the conversation the
+// resumed turn reports back to.
+func (a RecordedAnswer) attribution() string {
+	if a.Via != types.AnswerViaOperator {
+		return ""
+	}
+	if a.BySeat != "" {
+		return a.BySeat
+	}
+	return a.By
+}
 
 // HandedBack is one copy of a declined answer's delivery, owed to the seat's
 // inbox as the ordinary message it is — see [PendingRun.HandBack].

@@ -402,12 +402,19 @@ const (
 	// AnswerGone — the run is over: its record is gone, or it could not be
 	// resumed at all and was ended.
 	AnswerGone AnswerOutcome = "gone"
+
+	// AnswerDeclined — an answer by turn the run was recorded with and could
+	// not be resumed with, in every attempt the node holding its seat made:
+	// the answer was let go of, the run waits on its question again, and the
+	// person has to answer it again. A chat reply let go of the same way goes
+	// on to its seat as the ordinary message it is, and announces nothing.
+	AnswerDeclined AnswerOutcome = "declined"
 )
 
-// Valid reports whether o is one of the three outcomes.
+// Valid reports whether o is one of the four outcomes.
 func (o AnswerOutcome) Valid() bool {
 	switch o {
-	case AnswerResumed, AnswerNotAwaiting, AnswerGone:
+	case AnswerResumed, AnswerNotAwaiting, AnswerGone, AnswerDeclined:
 		return true
 	}
 	return false
@@ -466,6 +473,8 @@ func (e SandboxRunAnswered) SummaryFor(actor string) string {
 		return lead(actor, "was answered, but its sandbox run was not waiting")
 	case AnswerGone:
 		return lead(actor, "was answered after its sandbox run had ended")
+	case AnswerDeclined:
+		return lead(actor, "was answered, but its sandbox run could not be resumed with the answer")
 	}
 	return lead(actor, "was answered")
 }

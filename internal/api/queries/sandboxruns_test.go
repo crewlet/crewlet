@@ -442,7 +442,7 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if _, won, err := store.RecordAnswer(t.Context(), "to-ana", run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", EventIDs: []string{"reply-1"},
+		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"reply-1"},
 	}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}

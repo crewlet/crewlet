@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -1343,20 +1344,24 @@ func (c *Coordinator) owes(turnID string) bool {
 	return false
 }
 
-// AnswerByTurn resumes the parked run a person answered BY NAMING IT, rather
-// than by replying on the conversation it was asked in.
+// AnswerByTurn records the answer a person gave a parked run BY NAMING IT,
+// rather than by replying on the conversation it was asked in, and resumes the
+// run with it.
 //
-// The run's own row replaces the chat route's lookup, and it is resumed with
-// DIRECTLY rather than recorded first: the delivery names its run AND the
-// question it answers, so where it comes back relative to the seat's other
-// mail decides nothing, and handing it back is safe in a way handing back a
-// chat reply is not (see [Coordinator.TryResumeFromAnswer]). The claim is
-// [PendingStore.ClaimForResume] under [AnswerTail] — out of a question still
-// OPEN — so an answer by turn loses to a chat reply already recorded against
-// the question ([StatusAnswered]) and the two resume it exactly once between
-// them; the resume and settle are the same ([Coordinator.resumeAndSettle]).
-// What it does not share is the chat route's bound, because it has no
-// ordinary route to fall back to — see below.
+// # Recorded first, like a chat reply
+//
+// The answer is RECORDED on the run ([PendingStore.RecordAnswer], as
+// [types.AnswerViaOperator]) before anything is done with it, exactly as the
+// chat route records a reply ([Coordinator.TryResumeFromAnswer]), and from
+// that moment the run owns it: the first attempt at the resume runs inline,
+// every retry is this coordinator's, the seat's inbox waits behind it, and
+// everything that keeps a recorded reply exactly-once keeps this one —
+// the take a resumed turn makes ([ResumeRequest.Begin]), the let-go an ending
+// makes, and the seat's next holder reviving a claim whose node stopped before
+// its turn took the answer ([Coordinator.RecoverSeat]). It was resumed with
+// DIRECTLY instead, held only by the claim: a node that stopped between that
+// claim and the turn left a claim its successor reaped as an abandoned tail,
+// and the answer — whose delivery came back to a run that was gone — was lost.
 //
 // # The question it answers, and no other
 //
@@ -1369,17 +1374,17 @@ func (c *Coordinator) owes(turnID string) bool {
 // second time with the first question's answer presented as the second's.
 // So the delivery carries the question it was given against
 // ([types.SandboxAnswerGiven.LaunchID], stamped off the row the answer was
-// accepted against), and is resumed with only while the run is still waiting
-// on THAT question: the launch identifies it, because every new question
-// comes with a new launch ([PendingStore.BeginLaunch] mints one) and nothing
-// but a launch opens a question — a completion parks only a running job, and
-// a job that has parked never runs again. The claim itself names the launch,
-// so a launch that moves between the read and the claim loses it. An
-// answer whose question is gone is spent as `not_awaiting`, exactly like one
-// that reached a run nobody was waiting on. An answer carrying NO question is
-// refused before the run is read and spent with that reason
-// ([errAnswerNamesNoQuestion]): which question it answers cannot be known, and
-// resuming the run with it would be the pairing this rule exists to stop.
+// accepted against), and is recorded only while the run is still waiting on
+// THAT question: the launch identifies it, because every new question comes
+// with a new launch ([PendingStore.BeginLaunch] mints one) and nothing but a
+// launch opens a question — a completion parks only a running job, and a job
+// that has parked never runs again. The record itself names the launch, so a
+// launch that moves between the read and the write loses it. An answer whose
+// question is gone is spent as `not_awaiting`, exactly like one that reached a
+// run nobody was waiting on. An answer carrying NO question is refused before
+// the run is read and spent with that reason ([errAnswerNamesNoQuestion]):
+// which question it answers cannot be known, and recording it would be the
+// pairing this rule exists to stop.
 //
 // # What the caller does with each answer
 //
@@ -1387,17 +1392,21 @@ func (c *Coordinator) owes(turnID string) bool {
 // NEVER A TURN, so two of the three dispositions mean the same thing to the
 // dispatcher — spend it — and only one hands it back:
 //
-//   - [AnswerConsumed] — the answer resumed the run.
+//   - [AnswerConsumed] — the answer is the run's: recorded now, or already —
+//     a redelivery of the very event a record holds — and its resume is the
+//     coordinator's from here.
 //   - [AnswerNotMine] — the run is not waiting for this answer (another
-//     claimed it, it is running a job, or it has moved on to a question of
-//     its own) or it is gone. Spent: announced as such, and there is nothing
-//     else for the delivery to become.
-//   - [AnswerDeferred] — the run IS waiting and could not be handed this
-//     answer: the row could not be read, the claim could not be confirmed,
-//     or the resume failed and the claim went back. Handed back with a NAK,
-//     so the queue's own backoff spaces the attempts.
+//     answer was recorded first, it is running a job, or it has moved on to a
+//     question of its own), the question let this very answer go
+//     (`declined`, below), or the run is gone. Spent: announced as such, and
+//     there is nothing else for the delivery to become.
+//   - [AnswerDeferred] — the run IS waiting and the answer could not be
+//     recorded against it: the row could not be read, or the record could not
+//     be confirmed. Handed back with a NAK, so the queue's own backoff spaces
+//     the attempts; if the record did land, the redelivery finds it and is
+//     spent as the answer it already is.
 //
-// # Why no attempt ceiling
+// # Why no attempt ceiling on the record
 //
 // The chat route stops offering a reply after [MaxAnswerAttempts] because the
 // reply has somewhere else to go — it is an ordinary message, and being
@@ -1405,14 +1414,21 @@ func (c *Coordinator) owes(turnID string) bool {
 // delivery has nowhere else to go, so giving up early would DROP a person's
 // answer in silence. The bound is the broker's own delivery budget instead,
 // whose end is loud: the message lands on the dead-letter subject with the
-// cause under it.
+// cause under it. Once RECORDED, the resume is bounded like a chat reply's
+// ([MaxAnswerAttempts], [answerWindow]), and an answer every attempt failed to
+// resume with is let go of: the run waits on its question again, and the copy
+// handed back to the seat's inbox is spent here as `declined`, so the person
+// is told to answer again rather than left waiting on a run that is not using
+// their answer.
 //
 // # Who is recorded
 //
 // Every answer that reached a run publishes [types.SandboxRunAnswered], with
 // the route `operator` and the credential and person the answer names —
 // which is the whole of the audit this route needed and the chat route
-// lacked.
+// lacked. An answer recorded on its run publishes it once its resume has
+// become something ([Coordinator.attemptOwed]); one that was not recorded,
+// here.
 func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswerGiven, trigger *events.Event) (AnswerDisposition, error) {
 	answered := func(run PendingRun, outcome types.AnswerOutcome) {
 		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome,
@@ -1420,7 +1436,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	}
 	if given.LaunchID == "" {
 		// NO QUESTION NAMED, so none this answer can be paired with: spent,
-		// and said why, rather than resumed into whatever the run waits on.
+		// and said why, rather than recorded against whatever the run waits on.
 		log.ErrorContext(ctx, "sandbox_answer_names_no_question",
 			"turn_id", given.TurnID, "agent", given.AgentHandle,
 			"answered_by", given.AnsweredBy, "answered_by_seat", given.AnsweredBySeat,
@@ -1429,79 +1445,99 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 				"and the person has to answer the run again")
 		return AnswerNotMine, fmt.Errorf("%w: run %s", errAnswerNamesNoQuestion, given.TurnID)
 	}
-	run, found, err := c.pending.Get(ctx, given.TurnID)
-	if err != nil {
-		// A STORE THAT COULD NOT BE READ IS NOT A RUN THAT IS GONE. Handed
-		// back, and nothing is announced: the answer has not become
-		// anything yet.
-		return AnswerDeferred, fmt.Errorf("sandbox: reading run %s for the answer it was given: %w",
-			given.TurnID, err)
+	delivery := deliveryOf(trigger)
+	if delivery == "" {
+		// NOTHING TO RECORD IT UNDER: a record names the deliveries it was
+		// made of, and a copy coming back is recognised by them.
+		return AnswerNotMine, fmt.Errorf("sandbox: the answer to run %s arrived with no event to "+
+			"record it under", given.TurnID)
 	}
-	if !found {
-		// SETTLED, or never there: a run that is over has no record. What
-		// is known about it is what the answer itself named.
-		answered(PendingRun{TurnID: given.TurnID, AgentHandle: given.AgentHandle}, types.AnswerGone)
-		return AnswerNotMine, nil
+	for range casRetries {
+		run, found, err := c.pending.Get(ctx, given.TurnID)
+		if err != nil {
+			// A STORE THAT COULD NOT BE READ IS NOT A RUN THAT IS GONE.
+			// Handed back, and nothing is announced: the answer has not
+			// become anything yet.
+			return AnswerDeferred, fmt.Errorf("sandbox: reading run %s for the answer it was given: %w",
+				given.TurnID, err)
+		}
+		if !found {
+			// SETTLED, or never there: a run that is over has no record. What
+			// is known about it is what the answer itself named.
+			answered(PendingRun{TurnID: given.TurnID, AgentHandle: given.AgentHandle}, types.AnswerGone)
+			return AnswerNotMine, nil
+		}
+		if run.AgentHandle != given.AgentHandle {
+			// THE ANSWER REACHED ANOTHER SEAT'S INBOX. It is addressed off
+			// the row it was accepted against, so this is a delivery this
+			// seat must not act on — resuming it here would re-enter
+			// another seat's conversation as this one.
+			log.ErrorContext(ctx, "sandbox_answer_misrouted",
+				"turn_id", given.TurnID, "addressed_to", given.AgentHandle,
+				"run_seat", run.AgentHandle,
+				"detail", "an answer by turn arrived on a seat that does not hold the run it "+
+					"names; it is dropped rather than resumed under the wrong seat")
+			return AnswerNotMine, nil
+		}
+		if run.Answer != nil && slices.Contains(run.Answer.EventIDs, delivery) {
+			// THIS VERY ANSWER, ALREADY RECORDED: a redelivery whose
+			// acknowledgement was lost, or the node that recorded it
+			// stopping before it acked. Spent as the answer it is — and if
+			// this node is not already driving its resume, it starts.
+			if run.Status == StatusAnswered && !c.owes(run.TurnID) {
+				c.resumeOwed(ctx, run)
+			}
+			return AnswerConsumed, nil
+		}
+		if slices.Contains(run.DeclinedAnswers, delivery) {
+			// THE QUESTION LET THIS ANSWER GO — every attempt to resume
+			// with it failed — and this is the copy its decline handed
+			// back to the seat, or the original come round again. It has
+			// no ordinary form to become, so it is spent, and the person
+			// told their answer was not used: by the COPY, which the
+			// decline publishes once through the row's outbox, so the
+			// original coming round after it says nothing a second time.
+			log.WarnContext(ctx, "sandbox_answer_declined_spent",
+				"turn_id", run.TurnID, "agent", run.AgentHandle, "delivery", delivery,
+				"detail", "an answer by turn its run could not be resumed with was let go of; "+
+					"the run waits on its question again and has to be answered again")
+			if declinedCopy(run.DeclinedAnswers, delivery) {
+				answered(run, types.AnswerDeclined)
+			}
+			return AnswerNotMine, nil
+		}
+		if !slices.Contains(Awaiting, run.Status) || given.LaunchID != run.LaunchID {
+			// NOT WAITING, OR NOT WAITING ON THE QUESTION THIS ANSWERS: the
+			// run was answered another way, or resumed and moved on to a
+			// question of its own, since the answer was given. See "The
+			// question it answers" above.
+			answered(run, types.AnswerNotAwaiting)
+			return AnswerNotMine, nil
+		}
+		recorded, won, err := c.record(ctx, run, answerGivenOf(given, trigger, c.now()))
+		if err != nil {
+			// THE RECORD MAY HAVE LANDED — the chat route's ambiguous case,
+			// resolved the same way: towards the run. If it did land, the
+			// redelivery finds this very answer on the row and is spent as
+			// it.
+			return AnswerDeferred, fmt.Errorf("sandbox: recording the answer run %s was given: %w",
+				given.TurnID, err)
+		}
+		if !won {
+			// LOST: another answer was recorded first, or the run moved on,
+			// between the read and the record. Read again, so the outcome
+			// is decided against what the store holds now.
+			continue
+		}
+		log.InfoContext(ctx, "sandbox_clarification_answered",
+			"turn_id", recorded.TurnID, "via", string(types.AnswerViaOperator),
+			"answered_by", given.AnsweredBy, "answered_by_seat", given.AnsweredBySeat)
+		c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
+		c.resumeOwed(ctx, recorded)
+		return AnswerConsumed, nil
 	}
-	if run.AgentHandle != given.AgentHandle {
-		// THE ANSWER REACHED ANOTHER SEAT'S INBOX. It is addressed off the
-		// row it was accepted against, so this is a delivery this seat
-		// must not act on — resuming it here would re-enter another
-		// seat's conversation as this one.
-		log.ErrorContext(ctx, "sandbox_answer_misrouted",
-			"turn_id", given.TurnID, "addressed_to", given.AgentHandle,
-			"run_seat", run.AgentHandle,
-			"detail", "an answer by turn arrived on a seat that does not hold the run it "+
-				"names; it is dropped rather than resumed under the wrong seat")
-		return AnswerNotMine, nil
-	}
-	if !slices.Contains(Awaiting, run.Status) || given.LaunchID != run.LaunchID {
-		// NOT WAITING, OR NOT WAITING ON THE QUESTION THIS ANSWERS: the run
-		// was resumed and has moved on to a question of its own since the
-		// answer was given. See "The question it answers" above.
-		answered(run, types.AnswerNotAwaiting)
-		return AnswerNotMine, nil
-	}
-	// THE CLAIM NAMES THE QUESTION'S LAUNCH — the one the answer was given
-	// against, which the check above has just found on the row — so a run
-	// that moves on between that read and this write loses the claim.
-	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, AnswerTail(run.LaunchID),
-		c.leaseOf(run.AgentHandle))
-	if err != nil {
-		// THE CLAIM MAY HAVE LANDED — the chat route's ambiguous case,
-		// resolved the same way: towards the run. If it did land, the
-		// redelivery finds the row claimed, answers not_awaiting, and the
-		// seat's next recovery pass reaps the claim.
-		return AnswerDeferred, fmt.Errorf("sandbox: claiming %s for the answer it was given: %w",
-			run.TurnID, err)
-	}
-	if !won {
-		// Another answer took it first — by turn or on the conversation —
-		// and it is resuming the run with that one; or the run moved on to
-		// another question between the read and the claim; or a newer
-		// lease than this node's owns it.
-		answered(run, types.AnswerNotAwaiting)
-		return AnswerNotMine, nil
-	}
-	log.InfoContext(ctx, "sandbox_clarification_answered",
-		"turn_id", claimed.TurnID, "via", string(types.AnswerViaOperator),
-		"answered_by", given.AnsweredBy, "answered_by_seat", given.AnsweredBySeat)
-	// The claim closed the question and took the seat, as on the chat route.
-	c.moveRun(claimed.AgentHandle, StatusAwaiting, StatusResumed)
-	disposition, err := c.resumeAndSettle(ctx, claimed,
-		answerText(claimed, given.Answer, answererName(given)), true, trigger, runOutcome{
-			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
-		})
-	if disposition == AnswerDeferred {
-		// THE RUN IS AWAITING THIS SAME ANSWER AGAIN, so it comes back —
-		// and nothing is announced, because it has not become anything.
-		return AnswerDeferred, err
-	}
-	answered(claimed, answeredAs(disposition))
-	if disposition == AnswerConsumed {
-		return AnswerConsumed, err
-	}
-	return AnswerNotMine, err
+	return AnswerDeferred, fmt.Errorf("sandbox: run %s kept changing under the answer it was given",
+		given.TurnID)
 }
 
 // errAnswerNamesNoQuestion is an answer by turn that carries no
@@ -1509,6 +1545,43 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 // because the question it answers cannot be known.
 var errAnswerNamesNoQuestion = errors.New("sandbox: the answer names no question it answers " +
 	"(no launch_id), so it is spent without resuming the run")
+
+// declinedCopy reports whether delivery is the COPY a decline handed back for
+// one of the deliveries declined beside it ([declinedCopyID]), rather than one
+// of those deliveries itself.
+func declinedCopy(declined []string, delivery string) bool {
+	for _, id := range declined {
+		original, err := uuid.Parse(id)
+		if err == nil && declinedCopyID(original).String() == delivery {
+			return true
+		}
+	}
+	return false
+}
+
+// answerGivenOf is what recording an answer by turn writes: the answer as the
+// person gave it, the credential and person it names, and the one delivery it
+// arrived in — the [types.SandboxAnswerGiven] event itself, carried so a copy
+// of it can be handed back to the seat should the answer be let go of.
+func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now time.Time) RecordedAnswer {
+	answer := RecordedAnswer{
+		// Redacted HERE, as a chat reply is: it is spliced into a phase
+		// record verbatim.
+		Text: redact.Secrets(given.Answer), Via: types.AnswerViaOperator,
+		By: given.AnsweredBy, BySeat: given.AnsweredBySeat,
+		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
+	}
+	raw, err := json.Marshal(trigger)
+	if err != nil {
+		// Kept without it, as a chat reply's event is: the answer is the
+		// text, and an event that cannot be carried costs only the copy a
+		// let-go would hand back.
+		log.Warn("sandbox_answer_event_unencodable", "event_id", trigger.ID.String(), "error", err.Error())
+		return answer
+	}
+	answer.Events = []json.RawMessage{raw}
+	return answer
+}
 
 // answeredAs is what a settled answer became, from what the resume left the
 // delivery: a turn that ran consumed it, and anything else is a run that is
@@ -1526,16 +1599,6 @@ func answererOf(trigger *events.Event) string {
 		return ""
 	}
 	return trigger.Actor()
-}
-
-// answererName is how an answer by turn names who gave it to the resumed
-// turn: the person where the credential is bound to one, the credential
-// otherwise.
-func answererName(given types.SandboxAnswerGiven) string {
-	if given.AnsweredBySeat != "" {
-		return given.AnsweredBySeat
-	}
-	return given.AnsweredBy
 }
 
 // announceAnswered publishes what an answer to a parked run became.
@@ -1575,10 +1638,10 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 // can have run and concluded something (the delivery is spent). Its callers
 // arrive by different routes and read the pair differently — a completion
 // NAKs on the error and lets the broker's own budget bound the retry (the
-// message names its run, so where it comes back does not matter); an answer
-// by turn is handed back the same way on [AnswerDeferred]; and a RECORDED chat
-// answer is retried by this coordinator on [AnswerDeferred], bounded by
-// [MaxAnswerAttempts] ([Coordinator.attemptOwed]).
+// message names its run, so where it comes back does not matter); and a
+// RECORDED answer — a chat reply or an answer by turn — is retried by this
+// coordinator on [AnswerDeferred], bounded by [MaxAnswerAttempts]
+// ([Coordinator.attemptOwed]).
 //
 // # A recorded answer the run ends without
 //

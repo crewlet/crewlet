@@ -99,6 +99,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"APreSplitRowIsStillAnswerable", testAPreSplitRowIsStillAnswerable},
 		{"ListingsAreStable", testListingsAreStable},
 		{"TheFirstReplyRecordedIsTheAnswer", testTheFirstReplyRecordedIsTheAnswer},
+		{"AnAnswerIsRecordedWithItsRoute", testAnAnswerIsRecordedWithItsRoute},
 		{"AnAnswerIsRecordedOnlyOnTheQuestionThatAsked", testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked},
 		{"AnAnswerIsResumedFromItsRecord", testAnAnswerIsResumedFromItsRecord},
 		{"ADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain", testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain},
@@ -1133,7 +1134,7 @@ func completionOf(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.T
 // answerTo is the tail an answer to the run's current question claims.
 func answerTo(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Tail {
 	t.Helper()
-	return sandbox.AnswerTail(mustGet(t, s, turnID).LaunchID)
+	return sandbox.Tail{Launch: mustGet(t, s, turnID).LaunchID, From: sandbox.Awaiting}
 }
 
 // mustClaim takes a running run's tail, as its job's completion would.
@@ -2326,7 +2327,7 @@ func testALaunchRecordKeptForAnotherJobIsNotThisOnes(
 
 // answerOf is a recorded answer made of one delivery.
 func answerOf(id, text string) sandbox.RecordedAnswer {
-	return sandbox.RecordedAnswer{Text: text, EventIDs: []string{id}, RecordedAt: base}
+	return sandbox.RecordedAnswer{Text: text, Via: types.AnswerViaChat, EventIDs: []string{id}, RecordedAt: base}
 }
 
 // copyOf is the hand-back a decline of delivery id owes the seat: one copy,
@@ -2393,6 +2394,31 @@ func testTheFirstReplyRecordedIsTheAnswer(t *testing.T, s sandbox.PendingStore) 
 	}
 }
 
+// AN ANSWER IS RECORDED WITH THE ROUTE IT CAME BY, on either route, and one that
+// names none is refused: the route is what tells the resumed turn who answered,
+// what the answer's record says, and what a copy of it becomes when it is let
+// go of — an ordinary message, or an answer by turn with no ordinary form.
+func testAnAnswerIsRecordedWithItsRoute(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	routeless := answerOf("r1", "use main")
+	routeless.Via = ""
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, routeless); err == nil || ok {
+		t.Fatalf("an answer naming no route = %v, %v, want refused", ok, err)
+	}
+	byTurn := answerOf("r1", "use main")
+	byTurn.Via, byTurn.By, byTurn.BySeat = types.AnswerViaOperator, "founder-token", "founder"
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, byTurn); err != nil || !ok {
+		t.Fatalf("an answer by turn = %v, %v", ok, err)
+	}
+	got := mustGet(t, s, "t1").Answer
+	if got == nil || got.Via != types.AnswerViaOperator || got.By != "founder-token" || got.BySeat != "founder" {
+		t.Fatalf("recorded %+v, want the answer by turn with the credential and the person it names", got)
+	}
+}
+
 // A RECORD NAMES ITS QUESTION: the launch that asked, while it waits. One for
 // a job that replaced the asker, or for a run that is not waiting, is refused.
 func testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked(t *testing.T, s sandbox.PendingStore) {
@@ -2434,9 +2460,9 @@ func testAnAnswerIsResumedFromItsRecord(t *testing.T, s sandbox.PendingStore) {
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
-	// AN ANSWER BY TURN claims a question still open, and this one is not.
-	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.AnswerTail(launch), sandbox.Fence{}); err != nil || ok {
-		t.Fatalf("an answer by turn claimed a question that already has its answer: %v, %v", ok, err)
+	// A CLAIM OUT OF THE OPEN QUESTION finds it answered, and takes nothing.
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.Tail{Launch: launch, From: sandbox.Awaiting}, sandbox.Fence{}); err != nil || ok {
+		t.Fatalf("a claim out of the open question took one that already has its answer: %v, %v", ok, err)
 	}
 	claimed, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{})
 	if err != nil || !ok || claimed.ClaimedFrom != sandbox.StatusAnswered {
@@ -2519,7 +2545,7 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 		copies = append(copies, copyOf(id))
 	}
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{
-		Text: "a long batch", EventIDs: batch, RecordedAt: base}); err != nil || !ok {
+		Text: "a long batch", Via: types.AnswerViaChat, EventIDs: batch, RecordedAt: base}); err != nil || !ok {
 		t.Fatalf("RecordAnswer of a batch = %v, %v", ok, err)
 	}
 	if _, ok, err := s.DeclineAnswer(ctx, "t1", launch, batch, copies, sandbox.Fence{}); err != nil || !ok {

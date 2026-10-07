@@ -1212,12 +1212,14 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 //
 // # Never a turn
 //
-// Every disposition but one spends the delivery: the answer resumed the run,
-// or the run was not waiting, or it is gone — each announced by the
-// coordinator — and there is nothing else an answer addressed to a run can
-// become. [sandbox.AnswerDeferred] hands the delivery back with a NAK, the
-// spaced return, bounded by the broker's own budget; see
-// [sandbox.Coordinator.AnswerByTurn] for why nothing shorter bounds it.
+// Every disposition but one spends the delivery: the answer was recorded on
+// its run — whose resume is the coordinator's from there, as a chat reply's
+// is — or the run was not waiting, let this answer go, or is gone, each
+// announced by the coordinator; and there is nothing else an answer addressed
+// to a run can become. [sandbox.AnswerDeferred] — the answer could not be
+// recorded — hands the delivery back with a NAK, the spaced return, bounded by
+// the broker's own budget; see [sandbox.Coordinator.AnswerByTurn] for why
+// nothing shorter bounds it.
 //
 // ONE ANSWER PER DELIVERY IN PRACTICE — the event names no conversation, so it
 // partitions on its own id — but the rule holds for any mix: the answers are
@@ -1277,7 +1279,8 @@ func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Co
 }
 
 // handBackAnswer returns an answer BY TURN that the parked coding run it names
-// is still owed, so the broker offers it again.
+// is still owed and could not be recorded against, so the broker offers it
+// again.
 //
 // A NAK, and on this route — and only this one — that is right. The delivery
 // names its run, so where it comes back relative to the seat's other mail
