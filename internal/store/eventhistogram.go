@@ -266,15 +266,12 @@ func (h *EventHistogram) Count(q HistogramQuery, r UnsettledRow, n int) {
 // THE FLOOR IS SNAPPED DOWN LIKE ANY OTHER BOTTOM EDGE, so a window the history
 // clips — the default one of every ask that names no `since` — begins at the
 // bucket the floor cuts, and that first bar is a PARTIAL one: it counts only
-// the rows above the floor. A node cuts it anyway, because this is the window
-// every build cuts from the asker's pinned instant, and a fleet sums its nodes'
-// bars INDEX BY INDEX ([eventfan.MergeSeries]). A build that began such a
-// window at the next bucket instead cut one its peers could not sum: each side
-// named the other's nodes rather than counting them, in both directions, for
-// the whole of a rolling upgrade. So the partial bar is dropped by the ASKER,
-// after the parts are summed ([EventHistogram.InsideHistory]) — what a caller
-// is shown begins at the first whole bucket inside the history, and what one
-// node answers is the shape every build sums.
+// the rows above the floor. A node cuts it anyway: every node cuts this window
+// from the asker's pinned instant, and a fleet sums its nodes' bars INDEX BY
+// INDEX ([eventfan.MergeSeries]), so the parts share their edges by
+// construction. The partial bar is dropped once, from the sum
+// ([EventHistogram.InsideHistory]) — what a caller is shown begins at the first
+// whole bucket inside the history.
 func (q HistogramQuery) Window(now time.Time) (since, until time.Time) {
 	step := q.Bucket.Step()
 	floor := now.Add(-EventHistory)
@@ -339,9 +336,9 @@ func (b EventBucket) HistoryStart(at time.Time) time.Time {
 // ByCategory is left as it is: it counts the window that was asked for, which
 // reaches down to the floor itself.
 //
-// The ASKER'S step, after the parts are summed — never a node's, before it
-// answers — because a part is summed with its peers bar for bar, and the
-// shape every build sums is the cut one.
+// The ASKER'S step, made once on the summed axis rather than by every node on
+// its part: a part is summed with its peers bar for bar, over the window
+// [HistogramQuery.Window] cuts.
 func (h EventHistogram) InsideHistory(at time.Time) EventHistogram {
 	start := h.Bucket.HistoryStart(at)
 	drop := 0

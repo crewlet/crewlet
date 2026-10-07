@@ -257,9 +257,9 @@ func TestAnOversizedReplyIsCutAndKeepsTheTurnsEnding(t *testing.T) {
 //
 // The second scatter's reply carries a node's shares and which of the named
 // turns its page lists; the shares are what a cut gives up, and the listing is
-// the same answer whichever of them fit. Dropped with them, a node that said
-// nothing would be judged by what its shares carry, as a build that cannot
-// say — and a half naming no item would read as listing the turn.
+// the same answer whichever of them fit. Dropped with them, the node would read
+// as listing none of the turns, and a turn its page lists would be paged by a
+// start no page reaches.
 //
 // Mutation: rebuild a cut part from its turns alone, and the listing is gone.
 func TestACutShareStillSaysWhatItsPageLists(t *testing.T) {
@@ -270,18 +270,17 @@ func TestACutShareStillSaysWhatItsPageLists(t *testing.T) {
 			Summary: strings.Repeat("x", 1000)})
 	}
 	const limit = 40 << 10
-	body, err := fit("node-b", turnsPart{Turns: turns, Listed: []string{"t-007"}, Judged: true}, limit, 1)
+	body, err := fit("node-b", turnsPart{Turns: turns, Listed: []string{"t-007"}}, limit, Protocol)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, part, why := decodeReply[turnsPart](body, 1)
+	_, part, why := decodeReply[turnsPart](body, Protocol)
 	if why != "" || len(part.Turns) >= 100 || !part.Full {
 		t.Fatalf("the reply holds %d shares, full %v (%q) — want it cut and saying so",
 			len(part.Turns), part.Full, why)
 	}
-	if !part.Judged || !slices.Equal(part.Listed, []string{"t-007"}) {
-		t.Errorf("the cut reply says judged %v, listed %v — want the node's judgement kept",
-			part.Judged, part.Listed)
+	if !slices.Equal(part.Listed, []string{"t-007"}) {
+		t.Errorf("the cut reply says listed %v — want the node's judgement kept", part.Listed)
 	}
 }
 
@@ -388,43 +387,6 @@ func TestASpendRecordIsOneRowByItsInstantAndItsID(t *testing.T) {
 	}
 }
 
-// A TURN PART HELD TO THE HORIZON COUNTS EVERY ROW IT KEPT ONCE.
-//
-// A node holding 501 to 519 rows of a turn sends its oldest 500 and its newest
-// 20, and the two OVERLAP. A peer on an earlier build, whose clock runs behind
-// the asker's, sends rows from the strip under the asker's horizon too: here
-// 510 rows, the oldest four under it. Held to the horizon, the part keeps 506
-// distinct rows — and the count is exact, since the opening's last row is above
-// the horizon. Counted as the two lengths added, it was 516, so the merged turn
-// said it held ten rows more than it showed: a gap in the middle of a turn it
-// holds whole.
-//
-// Mutation: count `len(head)+len(closing)` in [turnPart.within] and the held
-// count is 516 for 506 rows.
-func TestATurnPartHeldToTheHorizonCountsEachRowOnce(t *testing.T) {
-	t.Parallel()
-	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	var all []store.EventRecord
-	for i := range 510 {
-		all = append(all, store.EventRecord{ID: fmt.Sprintf("r%04d", i),
-			Time: base.Add(time.Duration(i) * time.Second)})
-	}
-	floor := base.Add(4 * time.Second) // r0000 … r0003 lie under it
-	part := turnPart{Head: all[:store.MaxTurnEvents], Closing: all[len(all)-TurnClosingEvents:],
-		Total: len(all), Traces: []store.TurnTrace{}}
-
-	held := part.within(floor)
-	if want := len(all) - 4; held.Total != want || len(union(held.Head, held.Closing)) != want {
-		t.Fatalf("held to the horizon the part counts %d over %d distinct rows, want %d of each",
-			held.Total, len(union(held.Head, held.Closing)), want)
-	}
-	rows, total, _ := MergeTurn(alone(held))
-	if total != len(rows) || rows[0].ID != "r0004" || rows[len(rows)-1].ID != "r0509" {
-		t.Errorf("the merged turn shows %d rows (%s … %s) of %d — a turn held whole reported "+
-			"as cut", len(rows), rows[0].ID, rows[len(rows)-1].ID, total)
-	}
-}
-
 // rowsAt is n rows named prefix0001…, one second apart from a start.
 func rowsAt(prefix string, start time.Time, n int) []store.EventRecord {
 	out := make([]store.EventRecord, 0, n)
@@ -442,64 +404,34 @@ func rowsAt(prefix string, start time.Time, n int) []store.EventRecord {
 // past the last one it sent are older than the other node's rows here, and
 // the obvious merge filled the cap with those instead: a view that presents
 // itself as the trace's opening, with a hole inside it that `truncated` did
-// not say was there. Two ways a part comes to send fewer than it holds, each
-// beside another node's newer rows: the asker's horizon cuts rows off the
-// front of a capped read — an earlier build, behind the asker's clock, sends
-// rows from the strip under the horizon — and a reply cut to fit the
-// transport.
+// not say was there. A part comes to send fewer than it holds when its reply
+// is cut to fit the transport, beside another node's newer rows.
 //
 // Mutation: drop the cut at the oldest last sent row from [MergeTrace], and
-// both cases place the other node's rows past the hole.
+// the other node's rows are placed past the hole.
 func TestAMergedTraceStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	// The peer holds 520 rows of the trace, a0001 … a0520; the asker ten,
-	// each newer than the peer's 500th and older than its 501st's
-	// successors — inside the peer's unsent rows.
+	// each newer than the peer's 300th — inside the peer's unsent rows.
 	peer := rowsAt("a", base, 520)
-	mine := tracePart{Rows: rowsAt("b", base.Add(503*time.Second+500*time.Millisecond), 10), Total: 10}
-	for name, c := range map[string]struct {
-		part     tracePart
-		floor    time.Time
-		last     string
-		shown    int
-		total    int
-		heldPeer bool
-	}{
-		// a0001 … a0003 under the horizon: the capped read is cut to 497.
-		"held to the horizon": {
-			part:  tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)},
-			floor: base.Add(3 * time.Second), last: "a0500", shown: 497, total: 517 + 10,
-		},
-		// A reply cut to its first 300 rows.
-		"cut to fit the transport": {
-			part:  tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)}.keep(300).(tracePart),
-			floor: base.Add(-time.Hour), last: "a0300", shown: 300, total: 520 + 10,
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			parts := []tracePart{mine.within(c.floor), c.part.within(c.floor)}
-			rows, total := MergeTrace(alone(parts...))
-			if len(rows) == 0 || rows[len(rows)-1].ID != c.last || len(rows) != c.shown {
-				t.Fatalf("the merged trace shows %d rows ending at %v, want %d ending at %s — "+
-					"the peer's last sent row, with nothing past its unsent rows", len(rows),
-					ids(rows[max(0, len(rows)-3):]), c.shown, c.last)
-			}
-			if total != c.total || total <= len(rows) {
-				t.Errorf("total = %d over %d rows, want %d — the gap still reported", total, len(rows), c.total)
-			}
-		})
+	mine := tracePart{Rows: rowsAt("b", base.Add(303*time.Second+500*time.Millisecond), 10), Total: 10}
+	// A reply cut to its first 300 rows.
+	cut := tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)}.keep(300).(tracePart)
+	rows, total := MergeTrace(alone(mine, cut))
+	if len(rows) != 300 || rows[len(rows)-1].ID != "a0300" {
+		t.Fatalf("the merged trace shows %d rows ending at %v, want 300 ending at a0300 — "+
+			"the peer's last sent row, with nothing past its unsent rows", len(rows),
+			ids(rows[max(0, len(rows)-3):]))
 	}
-
-	// A PART THE HORIZON CUT TO NOTHING places nothing past its unsent rows
-	// either. Here every row the peer sent lies under the horizon and some it
-	// did not send lie above it, older than every row the asker holds.
-	floor := base.Add(500*time.Second + 500*time.Millisecond)
-	allUnder := tracePart{Rows: peer[:store.MaxTraceEvents], Total: len(peer)}.within(floor)
-	rows, total := MergeTrace(alone(mine.within(floor), allUnder))
-	if len(rows) != 0 || total != 20+10 {
-		t.Errorf("with every row the peer sent under the horizon, the merge shows %v of %d, "+
-			"want nothing placeable of 30", ids(rows), total)
+	if total != 520+10 {
+		t.Errorf("total = %d over %d rows, want 530 — the gap still reported", total, len(rows))
+	}
+	// A NODE THAT SENT NOTHING while holding rows leaves nothing placeable.
+	rows, total = MergeTrace(alone(mine, tracePart{Total: len(peer)}))
+	if len(rows) != 0 || total != 520+10 {
+		t.Errorf("beside a peer that sent none of its rows, the merge shows %v of %d, "+
+			"want nothing placeable of 530", ids(rows), total)
 	}
 	// AND A NODE HOLDING NOTHING IT DID NOT SEND BOUNDS NOTHING: two whole
 	// parts are merged whole, oldest first, up to the cap.
@@ -513,9 +445,10 @@ func TestAMergedTraceStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 // [MergeTrace]'s reason — and its ending is still the turn's last rows.
 //
 // The peer holds 600 rows of the turn and sends its opening and its ending,
-// the 80 between unsent; the asker holds ten rows in that gap. Shown in the
-// opening, they would sit past a hole the opening does not admit to, and they
-// are not in the ending either, which is the peer's last twenty.
+// the 80 between unsent — or, cut to fit the transport, more; the asker holds
+// ten rows in that gap. Shown in the opening, they would sit past a hole the
+// opening does not admit to, and they are not in the ending either, which is
+// the peer's last twenty.
 //
 // Mutation: drop the cut at the oldest last sent row from [MergeTurn], and
 // both cases show the asker's rows past the peer's opening.
@@ -529,19 +462,16 @@ func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 		Traces: []store.TurnTrace{}}
 	for name, c := range map[string]struct {
 		part  turnPart
-		floor time.Time
 		last  string
 		total int
 	}{
-		"held to the horizon": {
-			part: whole, floor: base.Add(3 * time.Second), last: "a0500", total: 597 + 10,
-		},
+		"a capped read": {part: whole, last: "a0500", total: 600 + 10},
 		"cut to fit the transport": {
-			part: whole.keep(200).(turnPart), floor: base.Add(-time.Hour), last: "a0200", total: 600 + 10,
+			part: whole.keep(200).(turnPart), last: "a0200", total: 600 + 10,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rows, total, _ := MergeTurn(alone(mine.within(c.floor), c.part.within(c.floor)))
+			rows, total, _ := MergeTurn(alone(mine, c.part))
 			var shown []string
 			for _, r := range rows {
 				if strings.HasPrefix(r.ID, "b") {

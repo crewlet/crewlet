@@ -56,16 +56,12 @@
 // named row once — unless a node that keeps it, and did not name it, counted
 // it already ([Counted], [once]). One shape and one resolution for every
 // count, because what makes a row unsettled is a property of the row, never of
-// the question that met it. A node on a build before the names counts every
-// row it holds and names none, and is summed as it always was — see [Protocol]
-// for the one count that leaves. Each merge is otherwise exact for a reason it
+// the question that met it. Each merge is otherwise exact for a reason it
 // states:
 // a keyset page is merged k-way on (time, id) and cut at the newest position
 // any FULL page stopped at, a histogram's bars are summed over one pinned
-// window that every build cuts alike — the partial bar a window the history
-// clips begins with is dropped only after the sum, so a node on an earlier
-// build is summed rather than named (short by the rows between the asker's
-// horizon and its own when its clock runs ahead — see [Protocol]) — a turn's
+// window that every node cuts alike — the partial bar a window the history
+// clips begins with is dropped after the sum — a turn's
 // aggregate is re-folded from
 // each node's partial with the SQL's own aggregates, the integrations' outcome
 // counts are summed over a window whose both edges the asker named, and a
@@ -92,18 +88,16 @@
 // question — and every one of these is floored at the thirty-day history
 // horizon, which is a function of WHEN it is asked. So the asker reads its
 // [Fleet.Clock] once per question — to the microsecond, the store's own
-// resolution, or the floor a statement applies and the horizon the asker holds
-// rows to are two edges a tick apart — and sends the instant with it, and every
+// resolution, or the floor a statement applies and the window the asker pins
+// are two edges a tick apart — and sends the instant with it, and every
 // node floors at that instant rather than at its own clock; and one node's
 // part of an answer is read at that one instant throughout (see parts.go), so
 // a count is never floored a moment later than the rows it counts. Floored at
 // each node's own clock, a merged answer was a union of horizons, and a node
 // that answered a second late dropped that second's rows from an axis the
-// answer said covered them. The instant raises no protocol version, so a node
-// on an earlier build answers as of its own clock — and its lookup of one
-// event by id was not floored at all — which is why the asker also HOLDS
-// every row that comes back to its own horizon before it merges anything
-// ([heldTo]); [Protocol] says what that cannot reach.
+// answer said covered them. A node refuses a question that carries no instant,
+// and a node on another protocol version refuses every question by version and
+// is named in the coverage ([Protocol]): none answers as of its own clock.
 //
 // # Nothing above this package may read one node and call it the fleet
 //

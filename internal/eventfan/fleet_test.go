@@ -1,13 +1,10 @@
 package eventfan_test
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
-	"math/rand/v2"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -184,159 +181,6 @@ func TestAPageOfTurnsIsHeldToItsWindowAcrossNodes(t *testing.T) {
 	}
 }
 
-// servesTurnsAsTheEarlierBuild stands a peer that answers a page of turns as a
-// node on the build before this one does, over the shares it holds — its own
-// view of each turn, every row at or above ITS horizon. That build ignores the
-// asker's instant and reads its own clock instead:
-//
-//   - its page is the window from `since` when the asker sent one, and from
-//     `since_days` back from its clock otherwise, floored at its own horizon,
-//     and it lists a turn only when the turn's share starts at or above that
-//     floor — a row between its horizon and the floor makes the turn one that
-//     began before the window — and below `until` and the cursor, and passes
-//     `failed`, newest first, saying it is full when a turn lies past the
-//     page;
-//   - its share of named turns is every one of them, floored at its horizon,
-//     and it says nothing of which it lists.
-func servesTurnsAsTheEarlierBuild(t *testing.T, b *memory.Broker, node string, clock time.Time,
-	shares ...store.TurnPartial,
-) {
-	t.Helper()
-	q := client(t, b)
-	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
-		var req struct {
-			Version  int             `json:"version"`
-			Question string          `json:"question"`
-			Params   json.RawMessage `json:"params"`
-			TurnIDs  []string        `json:"turn_ids"`
-		}
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return nil, err
-		}
-		if req.Question != "turns" || req.Version > 4 {
-			return json.Marshal(map[string]any{"version": 4, "node": node,
-				"error": "this peer answers a page of turns up to v4 alone"})
-		}
-		var p struct {
-			SinceDays int       `json:"since_days"`
-			Since     time.Time `json:"since"`
-			Until     time.Time `json:"until"`
-			Before    time.Time `json:"before"`
-			Failed    *bool     `json:"failed"`
-			Limit     int       `json:"limit"`
-		}
-		if err := json.Unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		turns := []store.TurnPartial{}
-		full := false
-		if len(req.TurnIDs) > 0 {
-			for _, s := range shares {
-				if slices.Contains(req.TurnIDs, s.TurnID) {
-					turns = append(turns, s)
-				}
-			}
-		} else {
-			horizon := clock.Add(-store.EventHistory)
-			floor := p.Since
-			if floor.IsZero() {
-				floor = clock.Add(-time.Duration(cmp.Or(p.SinceDays, 7)) * 24 * time.Hour)
-			}
-			if floor.Before(horizon) {
-				floor = horizon
-			}
-			for _, s := range shares {
-				if s.StartedAt.Before(floor) ||
-					(!p.Until.IsZero() && !s.StartedAt.Before(p.Until)) ||
-					(!p.Before.IsZero() && !s.StartedAt.Before(p.Before)) ||
-					(p.Failed != nil && s.Failed != *p.Failed) {
-					continue
-				}
-				turns = append(turns, s)
-			}
-			slices.SortFunc(turns, func(a, b store.TurnPartial) int { return b.StartedAt.Compare(a.StartedAt) })
-			if limit := cmp.Or(p.Limit, store.DefaultTurnPage); len(turns) > limit {
-				turns, full = turns[:limit], true
-			}
-		}
-		body, err := json.Marshal(map[string]any{"turns": turns, "full": full})
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(body)})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
-}
-
-// A TURN AN EARLIER BUILD READS PAST THE ASKER'S HORIZON STAYS ON THE PAGE.
-//
-// A page of turns asks every node for its share of the turns listed, floored
-// at the history rather than at the window — and a node on a build that
-// ignores the asker's instant floors it at its own clock. One running a second
-// behind the asker folds rows from the strip under the asker's horizon into
-// the turn, so the merged start lands under the horizon, and held against a
-// window starting AT the horizon the turn read as one that began before it and
-// left the page. The turn page asks for its attempts from exactly there, so
-// during an upgrade a turn at the edge of the history was missing from its own
-// list of attempts. Its start is held to the horizon now and its counts keep
-// the strip; a window starting above the horizon still drops a turn whose
-// first rows lie under it, because that turn did begin before the window.
-//
-// Mutation: drop the hold at the horizon from [eventfan.Fleet.Turns] and the
-// turn at the edge of the history is missing from the page.
-func TestATurnAnEarlierBuildReadsPastTheHorizonStaysOnThePage(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
-	horizon := at.Add(-store.EventHistory)
-	strip := horizon.Add(-500 * time.Millisecond)
-	phaseOn(t, a, "a-edge", "t-edge", horizon.Add(time.Minute), 30, "m")
-	completionOn(t, a, "a-edge-done", "t-edge", horizon.Add(2*time.Minute))
-	phaseOn(t, a, "a-late", "t-late", at.Add(-time.Hour), 30, "m")
-	servesTurnsAsTheEarlierBuild(t, broker, "node-old", at.Add(-time.Second),
-		store.TurnPartial{TurnID: "t-edge", AgentRole: "Lead", StartedAt: strip, EndedAt: strip,
-			Phases: 1, TotalTokens: 5, InputTokens: 5},
-		store.TurnPartial{TurnID: "t-late", AgentRole: "Lead", StartedAt: strip, EndedAt: strip,
-			Phases: 1, TotalTokens: 5, InputTokens: 5})
-	fan := fanFrom(a, "node-a", "node-old")
-	fan.Clock = func() time.Time { return at }
-
-	page, coverage, err := fan.Turns(t.Context(), store.TurnQuery{SinceDays: store.MaxTurnDays})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !coverage.Complete {
-		t.Fatalf("coverage %+v", coverage)
-	}
-	var edge *store.Turn
-	for i := range page.Turns {
-		if page.Turns[i].TurnID == "t-edge" {
-			edge = &page.Turns[i]
-		}
-	}
-	if edge == nil {
-		t.Fatalf("the page over the whole history is %v, want the turn at its edge on it", turnIDs(page))
-	}
-	if !edge.StartedAt.Equal(horizon) || edge.TotalTokens != 35 || !edge.Complete {
-		t.Errorf("the turn at the edge starts %s with %d tokens (complete %v), want it held to the "+
-			"horizon %s with both nodes' 35, complete", edge.StartedAt, edge.TotalTokens, edge.Complete, horizon)
-	}
-
-	// A WINDOW STARTING ABOVE THE HORIZON still drops the turn whose first
-	// rows lie under it: it began before the window.
-	page, _, err = fan.Turns(t.Context(), store.TurnQuery{SinceDays: 7})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ids := turnIDs(page); slices.Contains(ids, "t-late") {
-		t.Errorf("the last week lists %v, want no turn whose first rows lie under it", ids)
-	}
-}
-
 func turnIDs(page eventfan.TurnPage) []string {
 	out := []string{}
 	for _, t := range page.Turns {
@@ -386,7 +230,7 @@ func TestAnUnreadableReplyCountsAsMissing(t *testing.T) {
 	for _, answer := range []string{
 		`{"version":99,"node":"node-newer"}`,
 		`not json at all`,
-		`{"version":1,"node":"node-garbled","answer":"not a page"}`,
+		fmt.Sprintf(`{"version":%d,"node":"node-garbled","answer":"not a page"}`, eventfan.Protocol),
 	} {
 		q := client(t, broker)
 		stop, err := q.Serve(t.Context(), eventfan.Subject,
@@ -636,11 +480,10 @@ func TestPhaseTokensAreEveryNodesSpendNewestFirst(t *testing.T) {
 	}
 }
 
-// servesAs stands a peer on the broker that behaves as a build speaking history
-// protocol up to `version` does: it refuses a newer version by name, and answers
-// any other listing with its own row, in the version it was asked — IGNORING
-// every filter, which is exactly what an older build does with a field it
-// cannot read.
+// servesAs stands a peer on the broker that speaks history protocol `version`:
+// it refuses a request in any other version by name, as every node does, and
+// answers one in its own with its row — whatever the question, which is what a
+// node that cannot read this protocol's fields would be doing if it answered.
 func servesAs(t *testing.T, b *memory.Broker, node string, version int, row store.EventRecord) {
 	t.Helper()
 	q := client(t, b)
@@ -651,9 +494,9 @@ func servesAs(t *testing.T, b *memory.Broker, node string, version int, row stor
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, err
 		}
-		if req.Version > version {
+		if req.Version != version {
 			return json.Marshal(map[string]any{"version": version, "node": node, "error": fmt.Sprintf(
-				"this node speaks history protocol up to v%d and was asked in v%d", version, req.Version)})
+				"this node speaks history protocol v%d and was asked in v%d", version, req.Version)})
 		}
 		answer, _ := json.Marshal(map[string]any{"rows": []store.EventRecord{row}, "full": false})
 		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(answer)})
@@ -664,337 +507,171 @@ func servesAs(t *testing.T, b *memory.Broker, node string, version int, row stor
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 }
 
-// A FILTER AN OLDER PEER CANNOT APPLY IS NOT ANSWERED AROUND.
+// A PEER ON ANOTHER PROTOCOL IS NAMED ON EVERY QUESTION, and nothing of it is
+// merged.
 //
-// An older build ignores a parameter it does not know, so a channel or seat
-// filter scattered to it comes back as its UNFILTERED rows, merged in as though
-// they matched. So a request is stamped with the lowest version that answers
-// it: a listing narrowing by nothing new still goes out as v1 and the older
-// peer's rows are part of it, while one narrowing by a v2 filter goes out as v2,
-// the older peer refuses by version, and the coverage names it rather than the
-// page carrying its unmatched row. The histogram is always v2, because its
-// failed split is a field a v1 peer never sends and a sum would read as zero.
+// Every question carries fields only this protocol defines — the asker's
+// instant above all, which every node floors the history at, and the filters
+// and counts each version added — so a node speaking any other version is never
+// asked to answer around them: every question goes out in [eventfan.Protocol],
+// the peer refuses it by version, and the coverage names it in its own words
+// while the rest of the fleet answers as usual. Its row is never merged in as
+// though it matched a filter it could not read, or counted under a horizon it
+// never floored at.
 //
-// Mutation: stamp every request with [eventfan.Protocol], and the plain listing
-// loses the older peer; stamp them all v1, and its row lands on the channel's
-// page.
-func TestAFilterAnOlderPeerCannotApplyIsNotAnsweredAround(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Add(-time.Minute)
-	appendTo(t, a, store.EventRecord{ID: "on-channel", Type: "a2a_asked", Category: "task",
-		Time: at, Tags: map[string]string{"channel_id": "ch-1"}})
-	servesAs(t, broker, "node-old", 1, store.EventRecord{ID: "old-unrelated", Type: "x",
-		Category: "task", Time: at.Add(time.Second)})
-	fan := fanFrom(a, "node-a", "node-old")
-
-	plain, coverage, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !coverage.Complete || len(plain.Rows) != 2 {
-		t.Errorf("a listing with no new filter: %v, coverage %+v — want both nodes' rows "+
-			"and the older peer answering", idsOf(plain.Rows), coverage)
-	}
-
-	narrowed, coverage, err := fan.List(t.Context(), store.ListQuery{ChannelID: "ch-1", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := idsOf(narrowed.Rows); !slices.Equal(got, []string{"on-channel"}) {
-		t.Errorf("the channel's page = %v, want only the row on it — an older peer's "+
-			"unfiltered row must not be merged in as a match", got)
-	}
-	if coverage.Complete || !missing(coverage, "node-old", "v2") {
-		t.Errorf("coverage %+v does not name node-old as unable to answer v2", coverage)
-	}
-
-	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-old", "v2") {
-		t.Errorf("the axis's coverage %+v does not name node-old — its bars carry no "+
-			"failed split and would under-count", coverage)
-	}
-}
-
-// A v3 FILTER IS NOT ANSWERED AROUND BY A v2 PEER.
-//
-// The company's phases used to narrow by a role name; they narrow by the
-// seat's own id now, and a v2 build reads only the role — so it would answer
-// "this seat's phases" with every seat's. A listing and an axis narrowed by
-// `suspended` are the same hazard: a v2 build counts the completion that
-// parked a turn as one that ended it. Each goes out as v3, the v2 peer refuses
-// by version, and the coverage names it; the unnarrowed question is still
-// answered by the whole fleet.
-//
-// Mutation: ask the narrowed phases in v1, and the v2 peer's row is listed as
-// this seat's; drop the Suspended case from [listParams.version], and the axis
-// is summed over the v2 peer's unfiltered bars.
-func TestAV3FilterIsNotAnsweredAroundByAV2Peer(t *testing.T) {
+// Mutation: stamp any question with a version but [eventfan.Protocol], and the
+// peer's row is merged into that answer with the coverage reading complete.
+func TestAPeerOnAnotherProtocolIsNamedOnEveryQuestion(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	a := newNode(t, broker, "node-a")
 	at := time.Now().UTC().Add(-time.Minute)
 	appendTo(t, a, store.EventRecord{ID: "mine", Type: "agent_phase_completed", Category: "agent",
-		Time: at, Tags: map[string]string{"agent_id": "agent-a", "agent_role": "Engineer"},
-		Payload: []byte(`{"phase":"execute"}`)})
-	servesAs(t, broker, "node-v2", 2, store.EventRecord{ID: "twin", Type: "agent_phase_completed",
-		Category: "agent", Time: at.Add(time.Second)})
-	fan := fanFrom(a, "node-a", "node-v2")
-
-	all, coverage, err := fan.Phases(t.Context(), "", 10, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !coverage.Complete || len(all.Rows) != 2 {
-		t.Errorf("the company's phases: %v, coverage %+v — want both nodes' rows", idsOf(all.Rows), coverage)
-	}
-	seat, coverage, err := fan.Phases(t.Context(), "agent-a", 10, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := idsOf(seat.Rows); !slices.Equal(got, []string{"mine"}) {
-		t.Errorf("one seat's phases = %v, want only its own — a v2 peer's unfiltered row is not a match", got)
-	}
-	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
-		t.Errorf("coverage %+v does not name node-v2 as unable to answer v3", coverage)
-	}
-
-	ended := false
-	_, coverage, err = fan.List(t.Context(), store.ListQuery{Suspended: &ended, Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
-		t.Errorf("a listing narrowed by suspended: coverage %+v does not name node-v2", coverage)
-	}
-	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{
-		ListQuery: store.ListQuery{Type: "agent_turn_completed", Suspended: &ended}, Bucket: store.BucketHour,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
-		t.Errorf("an axis narrowed by suspended: coverage %+v does not name node-v2", coverage)
-	}
-}
-
-// A v4 FILTER IS NOT ANSWERED AROUND BY A v3 PEER.
-//
-// The event log's "Failures only" is a `failed` filter now, and a v3 build
-// does not read it — it would answer "the failures" with every event it holds,
-// merged in as though each one matched. The narrowed listing and its axis go
-// out as v4, the v3 peer refuses by version and the coverage names it; the
-// same listing without the filter is still answered by the whole fleet.
-//
-// Mutation: drop the Failed case from [listParams.version], and the v3 peer's
-// clean row is listed as a failure.
-func TestAV4FilterIsNotAnsweredAroundByAV3Peer(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Add(-time.Minute)
-	appendTo(t, a, store.EventRecord{ID: "broke", Type: "sandbox_run_failed", Category: "system", Time: at})
-	servesAs(t, broker, "node-v3", 3, store.EventRecord{ID: "fine", Type: "thing_happened",
-		Category: "system", Time: at.Add(time.Second)})
-	fan := fanFrom(a, "node-a", "node-v3")
-
-	all, coverage, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !coverage.Complete || len(all.Rows) != 2 {
-		t.Errorf("the unnarrowed log: %v, coverage %+v — want both nodes' rows", idsOf(all.Rows), coverage)
-	}
-	failed := true
-	only, coverage, err := fan.List(t.Context(), store.ListQuery{Failed: &failed, Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := idsOf(only.Rows); !slices.Equal(got, []string{"broke"}) {
-		t.Errorf("the failures = %v, want only the one that failed — a v3 peer's clean row is not a match", got)
-	}
-	if coverage.Complete || !missing(coverage, "node-v3", "v4") {
-		t.Errorf("a listing narrowed by failed: coverage %+v does not name node-v3", coverage)
-	}
-	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{
-		ListQuery: store.ListQuery{Failed: &failed}, Bucket: store.BucketHour,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-v3", "v4") {
-		t.Errorf("an axis narrowed by failed: coverage %+v does not name node-v3", coverage)
-	}
-}
-
-// servesUnfloored stands a peer on the broker that behaves as a build before
-// the asker's instant does: it ignores `at`, and answers every row question
-// with BOTH rows it holds — one past the asker's horizon, which its lookup by
-// id never floored and its listings floored at a clock running behind the
-// asker's, and one inside it — in the shape each question's part takes, in the
-// version it was asked.
-func servesUnfloored(t *testing.T, b *memory.Broker, node string, stale, fresh store.EventRecord) {
-	t.Helper()
-	q := client(t, b)
-	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
-		var req struct {
-			Version  int    `json:"version"`
-			Question string `json:"question"`
-			Params   struct {
-				ID string `json:"id"`
-			} `json:"params"`
-		}
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return nil, err
-		}
-		newest := []store.EventRecord{fresh, stale}
-		oldest := []store.EventRecord{stale, fresh}
-		var answer any
-		switch req.Question {
-		case "event":
-			var hit *store.EventRecord
-			for _, r := range newest {
-				if r.ID == req.Params.ID {
-					hit = &r
-				}
-			}
-			answer = map[string]any{"event": hit}
-		case "trace":
-			answer = map[string]any{"rows": oldest, "total": 2}
-		case "turn":
-			answer = map[string]any{"head": oldest, "total": 2,
-				"traces": []store.TurnTrace{{TraceID: stale.TraceID, FirstAt: stale.Time}}}
-		default:
-			// A PAGE THAT FILLED, so the merge would stop at its last row
-			// if that row were not cut away with the rest under the horizon.
-			answer = map[string]any{"rows": newest, "full": true}
-		}
-		body, err := json.Marshal(answer)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(body)})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
-}
-
-// THE ASKER HOLDS EVERY ROW A PEER RETURNS TO ITS OWN HORIZON.
-//
-// The asker's instant raises no protocol version, so a node on an earlier
-// build is still asked, ignores the instant and answers as of its own clock —
-// and that build's lookup of one event by id was not floored at all, so a link
-// to an event past the thirty-day horizon resolved from whichever such node
-// still held a copy, during every upgrade. The asker owns the instant, so it
-// cuts what comes back: the stale row here sits an hour under the asker's
-// horizon on a peer that returns it to every question, and no answer carries
-// it — the link is not found, with every node counted as answering, and a
-// page whose last row was under the horizon no longer claims more behind it.
-//
-// Mutation: drop [heldTo] from any one question in fleet.go and that subtest
-// gets the stale row back.
-func TestAnOlderPeersRowsAreHeldToTheAskersHorizon(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Add(-time.Hour)
-	horizon := at.Add(-store.EventHistory)
-	stale := store.EventRecord{ID: "stale", Type: "agent_phase_completed", Category: "agent",
-		Time: horizon.Add(-time.Hour), TraceID: "tr-1", Actor: "Lead",
-		Tags: map[string]string{"turn_id": "t-1", "agent_role": "Lead"}}
-	fresh := stale
-	fresh.ID, fresh.Time = "fresh", horizon.Add(time.Hour)
-	servesUnfloored(t, broker, "node-old", stale, fresh)
+		Time: at, TraceID: "tr-1", Actor: "Lead",
+		Tags: map[string]string{"turn_id": "t-1", "agent_role": "Lead", "agent_id": "agent-a",
+			"channel_id": "ch-1"}})
+	servesAs(t, broker, "node-old", eventfan.Protocol-1, store.EventRecord{ID: "theirs",
+		Type: "agent_phase_completed", Category: "agent", Time: at.Add(time.Second), TraceID: "tr-1",
+		Tags: map[string]string{"turn_id": "t-1"}})
 	fan := fanFrom(a, "node-a", "node-old")
-	fan.Clock = func() time.Time { return at }
-
-	complete := func(t *testing.T, c eventfan.Coverage) {
+	asked := fmt.Sprintf("v%d", eventfan.Protocol)
+	named := func(t *testing.T, c eventfan.Coverage) {
 		t.Helper()
-		if !c.Complete {
-			t.Fatalf("coverage %+v, want every node answering", c)
+		if c.Complete || !missing(c, "node-old", asked) {
+			t.Errorf("coverage %+v does not name node-old as refusing %s", c, asked)
 		}
 	}
-	t.Run("event", func(t *testing.T) {
-		_, c, err := fan.ByID(t.Context(), "stale")
-		if !errors.Is(err, store.ErrNotFound) {
-			t.Fatalf("a link to an event an hour past the horizon answered %v, want not found", err)
+	mineOnly := func(t *testing.T, rows []store.EventRecord) {
+		t.Helper()
+		if got := idsOf(rows); !slices.Equal(got, []string{"mine"}) {
+			t.Errorf("rows %v, want this node's alone — nothing of a peer that refused is merged", got)
 		}
-		complete(t, c)
-		if rec, _, err := fan.ByID(t.Context(), "fresh"); err != nil || rec.ID != "fresh" {
-			t.Errorf("the event inside the horizon: %q, %v — want it found", rec.ID, err)
-		}
-	})
+	}
 	t.Run("events", func(t *testing.T) {
-		got, c, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		complete(t, c)
-		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.More {
-			t.Errorf("the page is %v (more %v), want only the row inside the horizon and "+
-				"nothing behind it", ids, got.More)
+		for _, q := range []store.ListQuery{{Limit: 10}, {ChannelID: "ch-1", Limit: 10}} {
+			got, c, err := fan.List(t.Context(), q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mineOnly(t, got.Rows)
+			named(t, c)
 		}
 	})
-	t.Run("events by related agent", func(t *testing.T) {
-		got, c, err := fan.List(t.Context(), store.ListQuery{RelatedAgent: "Lead", Limit: 10})
+	t.Run("event_series", func(t *testing.T) {
+		got, c, err := fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
 		if err != nil {
 			t.Fatal(err)
 		}
-		complete(t, c)
-		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) {
-			t.Errorf("the page and its trace siblings are %v, want only the row inside the horizon", ids)
+		if got.Total != 1 {
+			t.Errorf("the axis counts %d, want this node's one row", got.Total)
 		}
+		named(t, c)
+	})
+	t.Run("event", func(t *testing.T) {
+		_, c, err := fan.ByID(t.Context(), "mine")
+		if err != nil {
+			t.Fatal(err)
+		}
+		named(t, c)
 	})
 	t.Run("trace", func(t *testing.T) {
 		got, c, err := fan.Trace(t.Context(), "tr-1")
 		if err != nil {
 			t.Fatal(err)
 		}
-		complete(t, c)
-		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.Total != 1 {
-			t.Errorf("the trace is %v (total %d), want the row inside the horizon, counted once",
-				ids, got.Total)
-		}
+		mineOnly(t, got.Rows)
+		named(t, c)
 	})
 	t.Run("turn", func(t *testing.T) {
 		got, c, err := fan.Turn(t.Context(), "t-1")
 		if err != nil {
 			t.Fatal(err)
 		}
-		complete(t, c)
-		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.Total != 1 ||
-			!slices.Equal(got.Nodes, []string{"node-old"}) {
-			t.Errorf("the turn is %v (total %d) on %v, want node-old's row inside the horizon",
-				ids, got.Total, got.Nodes)
-		}
+		mineOnly(t, got.Rows)
+		named(t, c)
 	})
 	t.Run("phases", func(t *testing.T) {
-		got, c, err := fan.Phases(t.Context(), "", 10, nil)
-		if err != nil {
-			t.Fatal(err)
+		for _, seat := range []string{"", "agent-a"} {
+			got, c, err := fan.Phases(t.Context(), seat, 10, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mineOnly(t, got.Rows)
+			named(t, c)
 		}
-		complete(t, c)
-		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) || got.More {
-			t.Errorf("the company's phases are %v (more %v), want only the row inside the horizon",
-				ids, got.More)
-		}
-	})
-	t.Run("seat_phases", func(t *testing.T) {
 		got, c, err := fan.SeatPhases(t.Context(), "", "Lead", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		complete(t, c)
-		if ids := idsOf(got.Rows); !slices.Equal(ids, []string{"fresh"}) {
-			t.Errorf("the seat's phases are %v, want only the row inside the horizon", ids)
-		}
+		mineOnly(t, got.Rows)
+		named(t, c)
 	})
+	t.Run("turns", func(t *testing.T) {
+		_, c, err := fan.Turns(t.Context(), store.TurnQuery{SinceDays: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		named(t, c)
+	})
+	t.Run("phase_tokens", func(t *testing.T) {
+		_, c, err := fan.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		named(t, c)
+	})
+	t.Run("notification_outcomes", func(t *testing.T) {
+		_, c, err := fan.NotificationOutcomes(t.Context(), store.OutcomeQuery{Since: at.Add(-time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		named(t, c)
+	})
+}
+
+// A NODE ANSWERS ONLY ITS OWN PROTOCOL. An asker on another build sends a
+// question without the fields this one floors and counts by, or with fields it
+// does not know; answered, its merge would read rows this node floored where it
+// never asked, or fields it cannot read. So the node refuses, naming the
+// version it speaks and the one it was asked in — older and newer alike.
+//
+// Mutation: answer a request in an older version, and the asker on it is
+// handed a page.
+func TestANodeAnswersOnlyItsOwnProtocol(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	b := newNode(t, broker, "node-b")
+	at := time.Now().UTC().Add(-time.Minute)
+	appendTo(t, b, store.EventRecord{ID: "on-b", Type: "x", Category: "task", Time: at})
+	params, err := json.Marshal(map[string]any{"limit": 10, "at": at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []int{eventfan.Protocol - 1, eventfan.Protocol + 1} {
+		req, err := json.Marshal(map[string]any{"version": version, "asker": "node-x",
+			"question": "events", "params": json.RawMessage(params)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replies, err := client(t, broker).Ask(t.Context(), eventfan.Subject, req, 1)
+		if err != nil || len(replies) != 1 {
+			t.Fatalf("asked node-b in v%d: %d replies, %v", version, len(replies), err)
+		}
+		var reply struct {
+			Version int             `json:"version"`
+			Error   string          `json:"error"`
+			Answer  json.RawMessage `json:"answer"`
+		}
+		if err := json.Unmarshal(replies[0], &reply); err != nil {
+			t.Fatal(err)
+		}
+		if len(reply.Answer) != 0 || reply.Version != eventfan.Protocol ||
+			!strings.Contains(reply.Error, fmt.Sprintf("v%d", eventfan.Protocol)) ||
+			!strings.Contains(reply.Error, fmt.Sprintf("v%d", version)) {
+			t.Errorf("asked in v%d, node-b replied v%d with %q and answer %s — want a refusal "+
+				"naming both versions", version, reply.Version, reply.Error, reply.Answer)
+		}
+	}
 }
 
 // A HISTOGRAM'S FAILED SPLIT IS EVERY NODE'S, summed bar by bar.
@@ -1039,169 +716,22 @@ func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
 	}
 }
 
-// earlierWindow is the window a node on the build before this one cuts for the
-// axis: that build's [store.HistogramQuery.Window], FROZEN HERE as the peer
-// contract. A fleet mid-upgrade sums that build's bars with this one's index by
-// index, in both directions, so this build has to cut exactly this — and a test
-// reading this build's own function for the reference would agree with any
-// change made to it.
-func earlierWindow(since, until, at time.Time, step time.Duration) (time.Time, time.Time) {
-	floor := at.Add(-store.EventHistory)
-	if since.IsZero() || since.Before(floor) {
-		since = floor
-	}
-	top := until
-	if top.IsZero() {
-		top = at
-	}
-	if top.Before(since) {
-		since = top
-	}
-	since = since.UTC().Truncate(step)
-	end := top.UTC().Truncate(step)
-	if end.Before(top) || end.Equal(since) {
-		end = end.Add(step)
-	}
-	return since, end
-}
-
-// servesTheAxisAsTheEarlierBuild stands a peer on the broker that answers the
-// axis EXACTLY as a node on the build before this one does: it speaks the
-// history protocol up to v4, cuts the window [earlierWindow] cuts from the
-// asker's instant, floors what it counts at its OWN clock rather than at that
-// instant, and counts its chips over the caller's own edges.
-func servesTheAxisAsTheEarlierBuild(t *testing.T, b *memory.Broker, node string, clock time.Time,
-	rows []store.EventRecord,
-) {
-	t.Helper()
-	q := client(t, b)
-	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
-		var req struct {
-			Version  int             `json:"version"`
-			Question string          `json:"question"`
-			Params   json.RawMessage `json:"params"`
-		}
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return nil, err
-		}
-		refuse := func(why string) ([]byte, error) {
-			return json.Marshal(map[string]any{"version": 4, "node": node, "error": why})
-		}
-		switch {
-		case req.Version > 4:
-			return refuse(fmt.Sprintf("this node speaks history protocol up to v4 and was "+
-				"asked in v%d; it is running a different build", req.Version))
-		case req.Question != "event_series":
-			return refuse("this peer answers the axis alone")
-		}
-		var p struct {
-			List struct {
-				Since time.Time `json:"since"`
-				Until time.Time `json:"until"`
-			} `json:"list"`
-			Bucket store.EventBucket `json:"bucket"`
-			At     time.Time         `json:"at"`
-		}
-		if err := json.Unmarshal(req.Params, &p); err != nil {
-			return refuse(err.Error())
-		}
-		step := p.Bucket.Step()
-		since, until := earlierWindow(p.List.Since, p.List.Until, p.At, step)
-		floor := clock.Add(-store.EventHistory)
-		h := store.EventHistogram{Bucket: p.Bucket, Since: since.Format(time.RFC3339),
-			Until: until.Format(time.RFC3339), Bars: []store.EventBar{}, ByCategory: map[string]int{}}
-		counts := map[int64]int{}
-		for _, r := range rows {
-			if r.Time.Before(floor) {
-				continue
-			}
-			if !r.Time.Before(since) && r.Time.Before(until) {
-				counts[r.Time.UTC().Truncate(step).UnixMicro()]++
-				h.Total++
-			}
-			if (p.List.Since.IsZero() || !r.Time.Before(p.List.Since)) &&
-				(p.List.Until.IsZero() || r.Time.Before(p.List.Until)) {
-				h.ByCategory[r.Category]++
-			}
-		}
-		for bar := since; bar.Before(until); bar = bar.Add(step) {
-			h.Bars = append(h.Bars, store.EventBar{At: bar.Format(time.RFC3339), Count: counts[bar.UnixMicro()]})
-		}
-		body, err := json.Marshal(h)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(map[string]any{"version": req.Version, "node": node, "answer": json.RawMessage(body)})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
-}
-
-// EVERY NODE CUTS THE AXIS AS THE BUILD BEFORE IT DID, over every window.
-//
-// The window is the peer contract of the axis, though no version names it: a
-// fleet sums its nodes' parts bar for bar, so a node cutting any window
-// differently from an earlier build's — a window the history clips beginning at
-// the next bucket rather than at the one the floor cuts — is a part that build
-// cannot sum, and one this build cannot sum from it. Neither side refuses by
-// version, so each would name the other's nodes, in both directions, for the
-// whole of a rolling upgrade. Held over windows inside the history, clipped by
-// it, inverted, degenerate and wholly below it, at instants on and off every
-// bucket boundary.
-//
-// Mutation: begin a clipped window at the first whole bucket in
-// [store.HistogramQuery.Window], and the windows the history clips disagree.
-func TestEveryNodeCutsTheAxisAsTheBuildBeforeItDid(t *testing.T) {
-	t.Parallel()
-	base := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
-	rng := rand.New(rand.NewPCG(7, 11))
-	offset := func() time.Duration {
-		return time.Duration(rng.Int64N(int64(40*24*time.Hour))) - 35*24*time.Hour
-	}
-	for i := range 2000 {
-		at := base.Add(time.Duration(rng.Int64N(int64(7 * 24 * time.Hour))))
-		if i%5 == 0 {
-			at = at.Truncate(time.Hour)
-		}
-		bucket := store.EventBuckets[rng.IntN(len(store.EventBuckets))]
-		var since, until time.Time
-		if rng.IntN(3) > 0 {
-			since = at.Add(offset())
-		}
-		if rng.IntN(3) == 0 {
-			until = at.Add(offset())
-		}
-		q := store.HistogramQuery{Bucket: bucket, ListQuery: store.ListQuery{Since: since, Until: until}}
-		gotSince, gotUntil := q.Window(at)
-		wantSince, wantUntil := earlierWindow(since, until, at, bucket.Step())
-		if !gotSince.Equal(wantSince) || !gotUntil.Equal(wantUntil) {
-			t.Fatalf("at %s by %s over [%s, %s): this build cuts %s .. %s and the build "+
-				"before it %s .. %s — a fleet could not sum the two", at, bucket, since, until,
-				gotSince, gotUntil, wantSince, wantUntil)
-		}
-	}
-}
-
-// AN EARLIER BUILD'S AXIS IS SUMMED, a window the history clips included — and
-// shown from its first whole bar.
+// THE AXIS IS SUMMED OVER EVERY NODE AND SHOWN FROM ITS FIRST WHOLE BAR.
 //
 // The default window, any ask that names no `since`, starts at the history
-// floor, which lies mid-bucket whenever the instant does. Every build cuts it
-// down to the bucket the floor falls in, partial first bar and all, so a node on
-// the build before this one answers the window this one's nodes do and is summed
-// with them; the asker drops the partial bar only after the sum. The peer here
-// answers exactly as that build does — its own clock a few seconds behind the
-// asker's, so it floors what it counts lower — and is counted, never named.
+// floor, which lies mid-bucket whenever the instant does. Every node cuts it
+// down to the bucket the floor falls in, partial first bar and all, so the
+// parts sum bar for bar; the asker drops the partial bar from the sum, so the
+// axis shown begins at the first whole bucket inside the history, and its chips
+// still reach the floor on every node.
 //
-// Mutation: begin a clipped window at the first whole bucket on each node, and
-// the earlier build's part is refused and named; drop nothing after the sum, and
-// the axis begins with the partial bar.
-func TestAnEarlierBuildsAxisIsSummedAndShownFromItsFirstWholeBar(t *testing.T) {
+// Mutation: begin a clipped window at the first whole bucket on one node, and
+// its part is refused and named; drop nothing after the sum, and the axis
+// begins with the partial bar.
+func TestTheAxisIsSummedOverEveryNodeAndShownFromItsFirstWholeBar(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
 	// HALF PAST AN HOUR, so the floor is half past too.
 	at := time.Now().UTC().Truncate(time.Hour).Add(-90 * time.Minute)
 	floor := at.Add(-store.EventHistory)
@@ -1211,12 +741,10 @@ func TestAnEarlierBuildsAxisIsSummedAndShownFromItsFirstWholeBar(t *testing.T) {
 	}
 	appendTo(t, a, store.EventRecord{ID: "a-partial", Type: "x", Category: "task", Time: floor.Add(10 * time.Minute)})
 	appendTo(t, a, store.EventRecord{ID: "a-first", Type: "x", Category: "task", Time: first.Add(5 * time.Minute)})
-	servesTheAxisAsTheEarlierBuild(t, broker, "node-old", at.Add(-3*time.Second), []store.EventRecord{
-		{ID: "p-partial", Category: "task", Time: floor.Add(15 * time.Minute)},
-		{ID: "p-first", Category: "task", Time: first.Add(20 * time.Minute)},
-		{ID: "p-recent", Category: "system", Time: at.Add(-10 * time.Minute)},
-	})
-	fan := fanFrom(a, "node-a", "node-old")
+	appendTo(t, b, store.EventRecord{ID: "b-partial", Type: "x", Category: "task", Time: floor.Add(15 * time.Minute)})
+	appendTo(t, b, store.EventRecord{ID: "b-first", Type: "x", Category: "task", Time: first.Add(20 * time.Minute)})
+	appendTo(t, b, store.EventRecord{ID: "b-recent", Type: "x", Category: "system", Time: at.Add(-10 * time.Minute)})
+	fan := fanFrom(a, "node-a", "node-b")
 	fan.Clock = func() time.Time { return at }
 
 	got, coverage, err := fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
@@ -1224,7 +752,7 @@ func TestAnEarlierBuildsAxisIsSummedAndShownFromItsFirstWholeBar(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !coverage.Complete {
-		t.Fatalf("coverage %+v — the earlier build's part was not summed", coverage)
+		t.Fatalf("coverage %+v — a node's part was not summed", coverage)
 	}
 	if got.Since != first.Format(time.RFC3339) {
 		t.Fatalf("since = %s, want the first whole hour inside the history, %s", got.Since, first)
@@ -1238,127 +766,6 @@ func TestAnEarlierBuildsAxisIsSummedAndShownFromItsFirstWholeBar(t *testing.T) {
 	if got.ByCategory["task"] != 4 || got.ByCategory["system"] != 1 {
 		t.Errorf("by_category = %v, want task 4 and system 1 — the chips reach the floor on "+
 			"both nodes", got.ByCategory)
-	}
-}
-
-// AN EARLIER BUILD AHEAD OF THE ASKER'S CLOCK LEAVES ITS STRIP OUT OF THE BARS,
-// and only its strip.
-//
-// That build cuts the asker's window but floors what it counts at its own
-// clock, read when it answers — so a clock running ahead, or an answer that
-// came late, puts its floor ABOVE the asker's horizon, and what it holds
-// between the two is in no bar. When the horizon lies just under a bucket
-// boundary, that strip reaches past the start of the first whole bucket, which
-// the asker shows: the row there is missing from the first bar and from the
-// total, the row past the strip is counted, and the coverage still reads
-// complete, because nothing in the answer says which clock floored it. The
-// peer here runs 25 ms ahead with the horizon 10 ms under the hour.
-//
-// Mutation: drop a bar more after the sum to cover such a peer's strip, and
-// the axis no longer starts at the first whole bucket; refuse or name an
-// earlier build's part, and the coverage reads incomplete.
-func TestAnEarlierBuildAheadOfTheAskerLeavesItsStripOutOfTheBars(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour - 10*time.Millisecond)
-	floor := at.Add(-store.EventHistory)
-	first := store.BucketHour.HistoryStart(at)
-	if got := first.Sub(floor); got != 10*time.Millisecond {
-		t.Fatalf("the first whole hour starts %s above the horizon, want 10ms", got)
-	}
-	appendTo(t, a, store.EventRecord{ID: "a-strip", Type: "x", Category: "task", Time: first.Add(5 * time.Millisecond)})
-	servesTheAxisAsTheEarlierBuild(t, broker, "node-old", at.Add(25*time.Millisecond), []store.EventRecord{
-		{ID: "p-strip", Category: "task", Time: first.Add(5 * time.Millisecond)},
-		{ID: "p-past", Category: "task", Time: first.Add(20 * time.Millisecond)},
-	})
-	fan := fanFrom(a, "node-a", "node-old")
-	fan.Clock = func() time.Time { return at }
-
-	got, coverage, err := fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !coverage.Complete {
-		t.Fatalf("coverage %+v — the earlier build's part was not summed", coverage)
-	}
-	if got.Since != first.Format(time.RFC3339) {
-		t.Fatalf("since = %s, want the first whole hour inside the history, %s", got.Since, first)
-	}
-	if bar := got.Bars[0]; bar.Count != 2 || got.Total != 2 {
-		t.Errorf("the first bar counts %d of a total %d, want 2 of 2 — this node's row and the "+
-			"peer's past its own floor, never the peer's row between the two horizons",
-			bar.Count, got.Total)
-	}
-}
-
-// THIS BUILD'S AXIS IS SUMMED BY AN EARLIER BUILD'S ASKER, the other direction.
-//
-// A node on the build before this one asks in its own version, with the
-// caller's edges and its instant, and sums every reply against its own part —
-// cut by [earlierWindow] — through a window check this build's [MergeSeries]
-// shares with it word for word. This build's answer to that request has to be
-// the window that build cut, or every node on it is named by every node on the
-// earlier one for the length of the upgrade.
-//
-// Mutation: begin a clipped window at the first whole bucket in
-// [store.HistogramQuery.Window], and the earlier asker refuses this node's part.
-func TestThisBuildsAxisIsSummedByAnEarlierBuildsAsker(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	b := newNode(t, broker, "node-b")
-	at := time.Now().UTC().Truncate(time.Hour).Add(-90 * time.Minute)
-	floor := at.Add(-store.EventHistory)
-	appendTo(t, b, store.EventRecord{ID: "b-partial", Type: "x", Category: "task", Time: floor.Add(10 * time.Minute)})
-	appendTo(t, b, store.EventRecord{ID: "b-recent", Type: "x", Category: "task", Time: at.Add(-10 * time.Minute)})
-
-	// THE REQUEST AS THAT BUILD SENDS IT: v2, the listing's filters with no
-	// instant of their own, and the axis's `at`.
-	params, err := json.Marshal(map[string]any{
-		"list": map[string]any{"limit": 0}, "bucket": store.BucketHour, "at": at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, err := json.Marshal(map[string]any{"version": 2, "asker": "node-old",
-		"question": "event_series", "params": json.RawMessage(params)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	asker := client(t, broker)
-	replies, err := asker.Ask(t.Context(), eventfan.Subject, req, 1)
-	if err != nil || len(replies) != 1 {
-		t.Fatalf("asked node-b: %d replies, %v", len(replies), err)
-	}
-	var reply struct {
-		Version int                  `json:"version"`
-		Error   string               `json:"error"`
-		Answer  store.EventHistogram `json:"answer"`
-	}
-	if err := json.Unmarshal(replies[0], &reply); err != nil {
-		t.Fatal(err)
-	}
-	if reply.Error != "" || reply.Version != 2 {
-		t.Fatalf("node-b answered v%d with %q", reply.Version, reply.Error)
-	}
-
-	// THE EARLIER ASKER'S OWN PART: the window it cuts, over a store holding
-	// nothing.
-	since, until := earlierWindow(time.Time{}, time.Time{}, at, time.Hour)
-	own := store.EventHistogram{Bucket: store.BucketHour, Since: since.Format(time.RFC3339),
-		Until: until.Format(time.RFC3339), ByCategory: map[string]int{}}
-	for bar := since; bar.Before(until); bar = bar.Add(time.Hour) {
-		own.Bars = append(own.Bars, store.EventBar{At: bar.Format(time.RFC3339)})
-	}
-	merged, refused := eventfan.MergeSeries(store.HistogramQuery{Bucket: store.BucketHour},
-		[]eventfan.Counted[store.EventHistogram]{{Node: "node-old", Part: own}, {Node: "node-b", Part: reply.Answer}})
-	if len(refused) != 0 {
-		t.Fatalf("the earlier asker refused node-b's part: it answered %s .. %s with %d bars, "+
-			"and that build cut %s .. %s with %d", reply.Answer.Since, reply.Answer.Until,
-			len(reply.Answer.Bars), own.Since, own.Until, len(own.Bars))
-	}
-	if merged.Total != 2 || merged.Bars[0].Count != 1 {
-		t.Errorf("the earlier asker summed total %d with %d in its first bar, want node-b's "+
-			"two rows, one of them in the bar the floor cuts", merged.Total, merged.Bars[0].Count)
 	}
 }
 
@@ -1866,124 +1273,6 @@ func onceEach(seen map[string]int, want []string) []string {
 	return wrong
 }
 
-// A TURN HELD AT THE HORIZON IS ON EXACTLY ONE PAGE OF THE WALK.
-//
-// A turn that began on a node of an earlier build, in the strip under the
-// asker's horizon its clock still reads as history, and resumed on this build
-// half an hour ago is shown from the horizon — and was PAGED by that start,
-// which no node's page reaches: this build's node lists it at its own half,
-// half an hour ago. So wherever the page was cut before the end of the walk —
-// by a node whose page filled, or by the page's size over two nodes that
-// filled neither — the turn sorted last, was cut, and the cursor moved past the
-// half that listed it: on no page at all. It is paged where a node lists it
-// now, which is the earlier build's own start for it when that build lists it
-// (asked for the whole history, it does), and this build's half when it does
-// not — a page of failures where only that half failed.
-//
-// Mutation: page a turn by the start shown for it — and, for the unfiltered
-// walks, ask the window as the asker's horizon, so the earlier build lists
-// none of it — and the turn at the edge is on no page.
-func TestAHeldTurnIsOnExactlyOnePageOfTheWalk(t *testing.T) {
-	t.Parallel()
-	for _, shape := range []struct {
-		name           string
-		nodes, perNode int
-	}{
-		{"a full node's page", 1, 120},
-		{"two unfilled pages past the size", 2, 30},
-	} {
-		for _, failures := range []bool{false, true} {
-			name := shape.name + ", every turn"
-			var q store.TurnQuery
-			if failures {
-				name = shape.name + ", the failures"
-				q.Failed = &failures
-			}
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-				broker := memory.NewBroker()
-				at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
-				horizon := at.Add(-store.EventHistory)
-				roster := []string{"node-old"}
-				var nodes []node
-				for i := range shape.nodes {
-					n := newNode(t, broker, fmt.Sprintf("node-%c", 'a'+i))
-					nodes, roster = append(nodes, n), append(roster, n.id)
-				}
-				want := []string{"t-edge"}
-				for i := range shape.perNode {
-					for j, n := range nodes {
-						turn := fmt.Sprintf("t-%s-%03d", n.id, i)
-						turnOn(t, n, turn, at.Add(-time.Hour-time.Duration(i*len(nodes)+j)*time.Hour), failures)
-						want = append(want, turn)
-					}
-				}
-				turnOn(t, nodes[0], "t-edge", at.Add(-30*time.Minute), failures)
-				servesTurnsAsTheEarlierBuild(t, broker, "node-old", at.Add(-time.Second),
-					store.TurnPartial{TurnID: "t-edge", AgentRole: "Lead",
-						StartedAt: horizon.Add(-500 * time.Millisecond), EndedAt: horizon.Add(-400 * time.Millisecond),
-						Phases: 1, TotalTokens: 5, InputTokens: 5})
-				fan := fanFrom(nodes[0], roster...)
-				fan.Clock = func() time.Time { return at }
-
-				q.SinceDays = store.MaxTurnDays
-				seen, rows := walkTurns(t, fan, q)
-				if wrong := onceEach(seen, want); len(wrong) > 0 {
-					t.Fatalf("the walk over every page: %v", wrong)
-				}
-				if edge := rows["t-edge"]; !edge.StartedAt.Equal(horizon) || edge.TotalTokens != 35 ||
-					edge.Failed != failures {
-					t.Errorf("the turn at the edge starts %s with %d tokens, failed %v — want it held "+
-						"to the horizon %s with both halves' 35, failed %v", edge.StartedAt,
-						edge.TotalTokens, edge.Failed, horizon, failures)
-				}
-			})
-		}
-	}
-}
-
-// A TURN ONLY AN EARLIER BUILD HOLDS IS LISTED, and one wholly under the
-// asker's horizon is not.
-//
-// A node on the build before this one ignores the asker's instant. Asked for a
-// window starting at the asker's horizon while its clock ran behind, it judged
-// a turn with a row in the strip between the two horizons as one that began
-// before the window and left it off its page — and a turn only it held was
-// therefore on no page at all, the turn page's own attempts included, though
-// its later rows are well inside the asker's history. A window reaching the
-// history is asked for as the history now, so that build lists from its own
-// horizon, and the asker holds what it lists to its own: the turn is shown
-// from the horizon, and a turn whose every row lies in the strip is not shown
-// at all, since none of it is history this asker serves.
-//
-// Mutation: ask a window reaching the history as the asker's horizon, and the
-// turn only the earlier build holds is missing; keep a turn with nothing
-// inside the asker's history, and the one in the strip is listed.
-func TestATurnOnlyAnEarlierBuildHoldsIsListed(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
-	horizon := at.Add(-store.EventHistory)
-	turnOn(t, a, "t-here", at.Add(-time.Hour), false)
-	servesTurnsAsTheEarlierBuild(t, broker, "node-old", at.Add(-2*time.Second),
-		store.TurnPartial{TurnID: "t-old", AgentRole: "Lead", StartedAt: horizon.Add(-time.Second),
-			EndedAt: horizon.Add(3 * time.Minute), Phases: 2, TotalTokens: 9, InputTokens: 9},
-		store.TurnPartial{TurnID: "t-strip", AgentRole: "Lead", StartedAt: horizon.Add(-1500 * time.Millisecond),
-			EndedAt: horizon.Add(-time.Second / 2), Phases: 1, TotalTokens: 4, InputTokens: 4})
-	fan := fanFrom(a, "node-a", "node-old")
-	fan.Clock = func() time.Time { return at }
-
-	seen, rows := walkTurns(t, fan, store.TurnQuery{SinceDays: store.MaxTurnDays})
-	if wrong := onceEach(seen, []string{"t-here", "t-old"}); len(wrong) > 0 {
-		t.Fatalf("the whole history: %v", wrong)
-	}
-	if old := rows["t-old"]; !old.StartedAt.Equal(horizon) || old.TotalTokens != 9 {
-		t.Errorf("the earlier build's turn starts %s with %d tokens, want it held to the horizon "+
-			"%s with its 9", old.StartedAt, old.TotalTokens, horizon)
-	}
-}
-
 // A TURN IS PAGED WHERE IT IS LISTED, though it began earlier on a node that
 // does not list it.
 //
@@ -2063,58 +1352,4 @@ func halfOn(t *testing.T, n node, turn string, at time.Time, tags map[string]str
 		Spend: &store.Spend{Phase: "execute", Model: "m", TurnID: turn, TotalTokens: 30, InputTokens: 30},
 	})
 	completionOn(t, n, turn+"-"+n.id+"-done", turn, at.Add(time.Minute))
-}
-
-// THIS BUILD'S SHARE OF A TURN IS READ BY AN EARLIER BUILD'S ASKER, the other
-// direction.
-//
-// The second scatter's answer carries which of the named turns this node's
-// page lists, beside its shares — fields the build before this one does not
-// know. That build asks in its own version, with its own instants and no `at`,
-// and reads the answer into a part of just the shares and `full`, so what it
-// is sent must decode into exactly that, in the version it asked: the shares
-// whole, whatever else rides beside them.
-//
-// Mutation: answer the second scatter in this build's own version, or drop the
-// shares a page does not list, and the earlier asker loses this node's half.
-func TestThisBuildsTurnSharesAreReadByAnEarlierBuildsAsker(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	b := newNode(t, broker, "node-b")
-	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
-	turnOn(t, b, "t-clean-here", at.Add(-time.Hour), false)
-
-	// THE REQUEST AS THAT BUILD SENDS IT: v3, a page of failures over the
-	// last day as two instants, and the turns its first scatter found.
-	params, err := json.Marshal(map[string]any{"since": at.Add(-24 * time.Hour), "failed": true, "limit": 50})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, err := json.Marshal(map[string]any{"version": 3, "asker": "node-old", "question": "turns",
-		"params": json.RawMessage(params), "turn_ids": []string{"t-clean-here"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replies, err := client(t, broker).Ask(t.Context(), eventfan.Subject, req, 1)
-	if err != nil || len(replies) != 1 {
-		t.Fatalf("asked node-b: %d replies, %v", len(replies), err)
-	}
-	var reply struct {
-		Version int    `json:"version"`
-		Error   string `json:"error"`
-		Answer  struct {
-			Turns []store.TurnPartial `json:"turns"`
-			Full  bool                `json:"full"`
-		} `json:"answer"`
-	}
-	if err := json.Unmarshal(replies[0], &reply); err != nil {
-		t.Fatal(err)
-	}
-	if reply.Error != "" || reply.Version != 3 {
-		t.Fatalf("node-b answered v%d with %q, want v3", reply.Version, reply.Error)
-	}
-	if len(reply.Answer.Turns) != 1 || reply.Answer.Turns[0].TurnID != "t-clean-here" || reply.Answer.Full {
-		t.Errorf("node-b's share is %+v, want its half of the named turn — a share is not cut "+
-			"by the page's filters, which its own page does not pass", reply.Answer)
-	}
 }

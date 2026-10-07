@@ -329,19 +329,18 @@ func TestEveryCountOnTheAxisIsFlooredAtTheInstantItIsCutAgainst(t *testing.T) {
 //
 // TWO SHAPES OF ONE AXIS, and each is held. One node's part is cut DOWN to the
 // bucket the floor falls in, that bar counting only the row above the floor:
-// it is the window every build cuts, and a fleet sums its nodes' parts bar for
-// bar, so a node that began at the next bucket instead could not be summed
-// with a peer on an earlier build in either direction. What a caller is shown
-// drops that partial bar and begins at the first whole bucket inside the
-// history, since a bar labelled with the whole bucket and counting only its
-// upper part is what the outward snap exists to prevent.
+// it is the window every node cuts from the asker's instant, and a fleet sums
+// its nodes' parts bar for bar. What a caller is shown drops that partial bar
+// and begins at the first whole bucket inside the history, since a bar
+// labelled with the whole bucket and counting only its upper part is what the
+// outward snap exists to prevent.
 //
 // Mutation: start [store.HistogramQuery.Window] at the first whole bucket and
-// the part's `since` is a bar later than every earlier build's; drop nothing in
-// [store.EventHistogram.InsideHistory] and the axis shown begins with the
-// partial bar; leave its Total alone and it counts the row the dropped bar
-// held.
-func TestAWindowTheFloorClipsIsCutAsEveryBuildCutsItAndShownFromItsFirstWholeBar(t *testing.T) {
+// the part's `since` is a bar later than the window it was asked for; drop
+// nothing in [store.EventHistogram.InsideHistory] and the axis shown begins
+// with the partial bar; leave its Total alone and it counts the row the
+// dropped bar held.
+func TestAWindowTheFloorClipsIsCutAsEveryNodeCutsItAndShownFromItsFirstWholeBar(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	at := time.Now().UTC().Truncate(time.Hour).Add(-90 * time.Minute)
@@ -370,10 +369,10 @@ func TestAWindowTheFloorClipsIsCutAsEveryBuildCutsItAndShownFromItsFirstWholeBar
 		t.Fatalf("histogram: %v", err)
 	}
 	until := at.Truncate(time.Hour).Add(time.Hour)
-	// THE NODE'S PART: from the hour the floor cuts, as every build cuts it.
+	// THE NODE'S PART: from the hour the floor cuts, as every node cuts it.
 	if part.Since != cut.Format(time.RFC3339) || part.Until != until.Format(time.RFC3339) {
 		t.Fatalf("the part's window = %s .. %s, want %s .. %s — down to the hour the "+
-			"floor falls in, the window every build cuts", part.Since, part.Until,
+			"floor falls in, the window every node cuts", part.Since, part.Until,
 			cut.Format(time.RFC3339), until.Format(time.RFC3339))
 	}
 	if b := part.Bars[0]; b.Count != 1 || b.Failed != 1 || part.Total != 3 || part.Failed != 1 {

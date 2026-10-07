@@ -315,18 +315,14 @@ func identities[T any](parts []Counted[T], named func(T) []store.UnsettledRow) [
 // because every row is counted once: each part counts the rows its node keeps,
 // and the rows a custody batch still in flight puts on two nodes are named and
 // added once, by the rule the counts placed them by ([once],
-// [store.EventHistogram.Count]). Every build cuts that window alike
+// [store.EventHistogram.Count]). Every node cuts that window alike
 // ([store.HistogramQuery.Window]), a window the history clips included: down
 // to the bucket the floor falls in, partial first bar and all, which the asker
-// drops only after this sum ([store.EventHistogram.InsideHistory]) — so a node
-// on an earlier build is summed rather than named, though such a node floors
-// what it counts at its own clock, and one running ahead of the asker's leaves
-// its rows between the two horizons out of every bar (see [Protocol]). A part
-// whose window differs anyway (a peer on a build that ignores the pinned
-// clock) cannot be summed bar for bar without adding one node's minute to
-// another's next one; it is left out and its node reported, so the caller names
-// that node rather than drawing a wrong bar — and its named rows and what it
-// keeps are left out with it.
+// drops after this sum ([store.EventHistogram.InsideHistory]). A part whose
+// window differs anyway cannot be summed bar for bar without adding one node's
+// minute to another's next one; it is left out and its node reported, so the
+// caller names that node rather than drawing a wrong bar — and its named rows
+// and what it keeps are left out with it.
 func MergeSeries(q store.HistogramQuery, parts []Counted[store.EventHistogram]) (store.EventHistogram, []string) {
 	if len(parts) == 0 {
 		return store.EventHistogram{}, nil
@@ -444,9 +440,8 @@ func FirstFound(parts []eventPart) (store.EventRecord, bool) {
 // While every node sends its whole capped read, that stop is never above the
 // cap and cutting at the cap is already exact. What makes it necessary is a
 // part that sent FEWER rows than the cap and holds more: a reply cut to fit
-// the transport ([fit]), or a capped read the asker's horizon cut rows off the
-// front of ([heldTo]) — whose unsent rows sit inside the cap's cut, where the
-// obvious merge filled the gap with other nodes' newer rows. The total is what
+// the transport ([fit]) — whose unsent rows sit inside the cap's cut, where
+// the obvious merge filled the gap with other nodes' newer rows. The total is what
 // every node keeps of the trace and every row a custody batch in flight puts on
 // two nodes once ([once]), and it is never cut, so the answer still says what
 // it does not show.

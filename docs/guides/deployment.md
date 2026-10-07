@@ -942,9 +942,6 @@ trace's or a turn's total, a page of turns' tokens, and the integrations' drop
 and merge counts: each data node counts the rows it keeps and names the ones it
 has not settled, and the node you asked counts each named row once
 ([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
-During a rolling upgrade a data node still on an earlier build counts every row
-it holds, so a batch in flight on it can be counted twice until it settles or
-the node is upgraded.
 
 #### What gets stored, and under which category
 

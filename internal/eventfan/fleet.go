@@ -95,8 +95,8 @@ func (f *Fleet) askedAt(pinned time.Time) time.Time {
 //
 // Finer than that, one instant is two edges. Every statement floors at the
 // ENCODED instant, which drops the nanoseconds, while every comparison the
-// asker makes itself — the horizon it holds what comes back to ([heldTo]), the
-// window a caller names beside an answer — reads them. So a row at the floor's
+// asker makes itself — the window it pins, the window a caller names beside an
+// answer — reads them. So a row at the floor's
 // own microsecond was inside the history to the store and under it to the
 // asker: counted by one question of an answer and missing from the listing
 // beside it. Read at the microsecond, the floor is one value on both sides.
@@ -209,16 +209,14 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 	}
 	var replies chan scattered
 	budget := cmp.Or(f.Budget, FleetReadBudget)
-	// THE LOWEST VERSION THAT ANSWERS THIS, so a peer an upgrade has not
-	// reached yet still answers every question it can answer correctly.
-	version := versionOf(q, params)
+	version := Protocol
 	if fan {
 		body, err := json.Marshal(params)
 		if err != nil {
 			return zero, fmt.Errorf("eventfan: encode the %s parameters: %w", q, err)
 		}
 		req, err := json.Marshal(request{
-			Version: version, Asker: f.Self, Question: q, Params: body, TurnIDs: ids, Names: true,
+			Version: version, Asker: f.Self, Question: q, Params: body, TurnIDs: ids,
 		})
 		if err != nil {
 			return zero, fmt.Errorf("eventfan: encode a %s request: %w", q, err)
@@ -304,8 +302,8 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 // whose it is, its part, and — when it is not an answer — why.
 //
 // A REFUSAL IS READ BEFORE THE VERSION, because a peer that refused says why in
-// its own words — an older build naming the version it was asked in is the
-// clearest account there is of why it is missing. An ANSWER in any version but
+// its own words — a node on another build naming the version it was asked in
+// is the clearest account there is of why it is missing. An ANSWER in any version but
 // the one asked is not read at all: its fields are not the ones the merge
 // expects, and a part missing a filter or a summed field is wrong rather than
 // short.
@@ -431,7 +429,6 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 	if err != nil {
 		return Listing{}, Coverage{}, err
 	}
-	g = heldTo(g, q.At)
 	rows, more := MergeListing(g.parts(), q.Limit)
 	coverage := g.coverage
 	if q.RelatedAgent != "" && g.fanned {
@@ -447,7 +444,7 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 				return Listing{}, Coverage{}, err
 			}
 			var siblings [][]store.EventRecord
-			for _, part := range heldTo(sib, q.At).parts() {
+			for _, part := range sib.parts() {
 				siblings = append(siblings, part.Rows)
 			}
 			rows = MergeRelated(rows, union(siblings...), q.Limit, more)
@@ -464,12 +461,12 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 // node cuts the same bars and floors the rows it counts into them at the same
 // instant — see [store.ListQuery.At].
 //
-// THE PARTIAL BAR IS DROPPED HERE, after the sum and never before it. Every
-// node cuts a window the history clips down to the bucket the floor falls in
-// ([store.HistogramQuery.Window]) — the shape every build cuts, so a node on
-// any build is summed with the rest — and the axis a caller is shown begins at
-// the first whole bucket inside the history ([store.EventHistogram.InsideHistory]),
-// cut at the instant every node was asked at.
+// THE PARTIAL BAR IS DROPPED HERE, once, from the sum. Every node cuts a
+// window the history clips down to the bucket the floor falls in
+// ([store.HistogramQuery.Window]), so every part has the same bars, and the
+// axis a caller is shown begins at the first whole bucket inside the history
+// ([store.EventHistogram.InsideHistory]), cut at the instant every node was
+// asked at.
 func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.EventHistogram, Coverage, error) {
 	started := time.Now()
 	q.At = f.askedAt(q.At)
@@ -486,7 +483,7 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 	for _, node := range refused {
 		coverage = coverage.And(Coverage{Complete: false, Nodes: []NodeCoverage{{
 			ID: node, Error: "it answered a different window, so its bars " +
-				"cannot be summed with this node's; it is running a different build",
+				"cannot be summed with this node's",
 		}}})
 	}
 	f.report(QuestionSeries, coverage, started)
@@ -498,9 +495,7 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 // NOT FOUND ANYWHERE is [store.ErrNotFound], and says which nodes could not be
 // asked: a dead link is the ordinary case, and one whose node was merely
 // silent is a different fact. A copy under the history horizon is not found
-// either, whichever node answered with it: a build before the floor read every
-// copy it still held, so the horizon is held HERE, on the asker that owns the
-// instant — see [heldTo].
+// either: every node floors its lookup at the asker's instant.
 func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverage, error) {
 	started := time.Now()
 	at := f.now()
@@ -510,7 +505,7 @@ func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverag
 		return store.EventRecord{}, Coverage{}, err
 	}
 	f.report(QuestionEvent, g.coverage, started)
-	rec, found := FirstFound(heldTo(g, at).parts())
+	rec, found := FirstFound(g.parts())
 	if !found {
 		if missing := g.coverage.Missing(); len(missing) > 0 {
 			return store.EventRecord{}, g.coverage, fmt.Errorf("%w: event %s is held by "+
@@ -530,7 +525,7 @@ func (f *Fleet) Trace(ctx context.Context, id string) (Trace, Coverage, error) {
 	if err != nil {
 		return Trace{}, Coverage{}, err
 	}
-	parts, coverage, err := settle(ctx, f, heldTo(g, at),
+	parts, coverage, err := settle(ctx, f, g,
 		func(p tracePart) []store.UnsettledRow { return p.Unsettled })
 	if err != nil {
 		return Trace{}, Coverage{}, err
@@ -549,7 +544,6 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 	if err != nil {
 		return TurnDetail{}, Coverage{}, err
 	}
-	g = heldTo(g, at)
 	parts, coverage, err := settle(ctx, f, g,
 		func(p turnPart) []store.UnsettledRow { return p.Unsettled })
 	if err != nil {
@@ -591,7 +585,7 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	if err != nil {
 		return Listing{}, Coverage{}, err
 	}
-	rows, more := MergeListing(heldTo(g, at).parts(), limit)
+	rows, more := MergeListing(g.parts(), limit)
 	f.report(QuestionPhases, g.coverage, started)
 	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
@@ -619,7 +613,7 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 	if err != nil {
 		return Listing{}, Coverage{}, err
 	}
-	rows, more := MergeListing(heldTo(g, at).parts(), store.AgentPhaseLimit)
+	rows, more := MergeListing(g.parts(), store.AgentPhaseLimit)
 	f.report(QuestionSeatPhases, g.coverage, started)
 	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
@@ -653,10 +647,10 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 // scatter ([store.EventLog.ListedTurns]). The fold of every share says where
 // the turn began, and that is the start shown; the two differ for a turn whose
 // earliest half its own node does not list — the clean half of a turn that
-// failed later, under a page of failures, or a half under the asker's horizon
-// (below). Paged by the start shown, such a turn sat below a position no page
-// reached: a full node's page or the page's size cut it, and the cursor moved
-// on past the half that did list it, so no page of the walk held it.
+// failed later, under a page of failures. Paged by the start shown, such a turn
+// sat below a position no page reached: a full node's page or the page's size
+// cut it, and the cursor moved on past the half that did list it, so no page
+// of the walk held it.
 func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverage, error) {
 	started := time.Now()
 	if !q.Sort.Valid() {
@@ -679,23 +673,7 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	q.At = f.askedAt(q.At)
 	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
-	history := q.At.Add(-store.EventHistory)
-	// A WINDOW REACHING THE HISTORY IS ASKED FOR AS THE HISTORY, in whole
-	// days, rather than as the asker's horizon. A node on this build reads
-	// the two alike — it floors both at the instant it was handed — but a
-	// build that ignores the instant reads days back from its OWN clock and
-	// an instant as the instant, so handed the asker's horizon while its clock
-	// ran behind, it judged every turn with a row in the strip between the two
-	// horizons as one that began before the window and listed none of them: a
-	// turn only it held was on no page, the turn page's own attempts included.
-	// Asked for its history, it lists them from its own horizon, and the
-	// asker holds them to its own below. It also asks a window with no upper
-	// edge in v1, which every build answers.
-	reachesHistory := q.Since.Equal(history)
 	wire := turnsParamsOf(q)
-	if reachesHistory {
-		wire.Since, wire.SinceDays = time.Time{}, store.MaxTurnDays
-	}
 	first, err := gather(ctx, f, QuestionTurns, wire, nil,
 		func(ctx context.Context) (turnsPart, error) { return turnsPartOf(ctx, f.Local, q) })
 	if err != nil {
@@ -750,9 +728,10 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 				return TurnPage{}, Coverage{}, err
 			}
 			for _, part := range second.parts() {
-				lister := listerOf(part, q, reachesHistory)
+				// WHERE EACH NODE'S PAGE LISTS ITS SHARE, by the node's own
+				// judgement ([turnsPart.Listed]).
 				for _, p := range part.Turns {
-					if lister(p) {
+					if slices.Contains(part.Listed, p.TurnID) {
 						listed.at(p.TurnID, p.StartedAt)
 					}
 				}
@@ -768,28 +747,6 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			coverage = coverage.And(sharesCoverage)
 		}
 		for _, p := range partials {
-			// NO TURN WITH NOTHING INSIDE THE ASKER'S HISTORY. Only a node
-			// on a build that ignores the instant answers one, from the
-			// strip between its horizon and the asker's when its clock runs
-			// behind — and what lies under the horizon is not history this
-			// asker serves.
-			if p.EndedAt.Before(history) {
-				continue
-			}
-			// NO TURN STARTS BELOW THE ASKER'S HORIZON. A share is floored
-			// at the history rather than at the window, and that same node
-			// floors it at its own clock — so it folds rows from the strip
-			// into a turn, and the merged start lands below the horizon.
-			// Held against the window as it stands, that start read as a
-			// turn that began before the window, and the turn left the page
-			// whole — the turn page's own attempts among them, which are
-			// asked from the horizon. So the start shown is held to the
-			// horizon and the counts keep the strip, and the turn is paged
-			// where it is listed; a window starting above the horizon still
-			// drops it, since it did begin before that window.
-			if p.StartedAt.Before(history) {
-				p.StartedAt = history
-			}
 			turns = append(turns, pagedTurn{TurnPartial: p, listedAt: listed[p.TurnID]})
 		}
 		// THE TURN-LEVEL FILTERS AGAIN, over the WHOLE turn: a node lists a
@@ -871,36 +828,6 @@ func (l listings) at(id string, start time.Time) {
 	}
 }
 
-// listerOf reports, for one node's answer to the second scatter, whether its
-// share of a turn is one its page lists.
-//
-// THE NODE'S OWN JUDGEMENT where it gave one ([turnsPart.Judged]). A build
-// before the field gives none, and its share is judged here by what it
-// carries: a start inside the window — or, asked for the whole history, any
-// start, since that build floored both its page and its share at its own
-// horizon — and its own failure and models, which are its page's rows when the
-// start is inside the window. What a share does not carry is whether its rows
-// name the work item a page is narrowed to, so such a half is read as listing
-// the turn whatever it names.
-func listerOf(part turnsPart, q store.TurnQuery, reachesHistory bool) func(store.TurnPartial) bool {
-	if part.Judged {
-		return func(p store.TurnPartial) bool { return slices.Contains(part.Listed, p.TurnID) }
-	}
-	return func(p store.TurnPartial) bool {
-		switch {
-		case !reachesHistory && p.StartedAt.Before(q.Since):
-			return false
-		case !q.Until.IsZero() && !p.StartedAt.Before(q.Until):
-			return false
-		case q.Failed != nil && p.Failed != *q.Failed:
-			return false
-		case q.Model != "" && !slices.Contains(p.Models, q.Model):
-			return false
-		}
-		return true
-	}
-}
-
 // PhaseTokens answers the per-phase spend records of a window from every node,
 // newest first, cut to the query's limit — what the live projection's spend
 // rollup is seeded from.
@@ -934,11 +861,7 @@ func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tok
 // THE INSTANT IS THE ASKER'S, read once when the caller pinned none — and a
 // caller that names a window beside another read passes that read's instant
 // ([Listing.At]), so both halves of one answer share an edge. It is the
-// window's top and the floor's anchor on every node at once. Nothing that comes
-// back is held to the asker's horizon here, because there is nothing to hold:
-// a count carries no instants, and no build that answers this question ignores
-// `at` — the question arrived in the version that sent it (see [Protocol]), and
-// an older build refuses it and is named in the coverage instead.
+// window's top and the floor's anchor on every node at once.
 //
 // Each node counts the rows it KEEPS and names the ones it holds of a custody
 // batch it has not settled ([store.NotificationOutcomes.Unsettled]), and the

@@ -556,28 +556,16 @@ sequenceDiagram
   budget, a build speaking another protocol version, a reply it could not
   read, or its own read failing. A short answer that did not say so would
   read exactly like a quiet company.
-- **A question is asked in the lowest protocol version that answers it.**
-  An older build ignores a filter it does not know and would answer a wider
-  question than was asked, merged in as though it matched; so a listing
-  narrowed by a newer filter (`channel_id`, `seat`, `suspended`, `failed`), a page of
-  turns in a window of two instants (an older build reads only whole days
-  back from its own clock), the
-  company's `phases` narrowed to one seat, which an older build narrowed by a
-  role name two unit seats can share, and the event axis, whose failed split
-  an older build never sends — goes out in the version that introduced it,
-  and a node on the older build refuses by version and is named. So does a
-  question an older build does not know at all, `notification_outcomes`: it
-  is asked in the version that added it. Everything else is still answered by the whole fleet during a
-  rolling upgrade — the axis included, over any window it is asked for, the
-  default one too, because every build cuts its window alike (below). The
-  asker's **instant** (below) is not a filter and
-  raises no version, because refusing it would cost an older node's whole
-  answer. A build that ignores it answers as of its own clock — and the
-  builds before it did not all floor alike: every question but `event` was
-  floored at that build's own clock, a strip as wide as the skew between two
-  clocks, while one event by id was not floored at all and answered with any
-  copy that build still held. So the asker holds what comes back to its own
-  horizon (below).
+- **Every node speaks one protocol version, and only that one.** Each
+  question carries the version its asker speaks, and a node answers only a
+  question in its own; one on any other build refuses by version and is
+  named in the coverage, whatever it holds. No node is asked to answer
+  around a field it cannot read — a filter it would drop, answering a wider
+  question than was asked; a count it would never send, summed as zero; or
+  the asker's instant (below), which it would ignore and answer as of its own
+  clock — so nothing that comes back has to be re-cut or corrected for the
+  build that sent it. A fleet half way through an upgrade answers its history
+  from the nodes on the asker's build, and says so.
 - **Every question is asked at one instant.** The asker reads its clock once
   per question and sends the instant with it, and every node floors the
   30-day history at that instant rather than at its own clock — the events
@@ -588,45 +576,10 @@ sequenceDiagram
   clock, a fleet's answer would be a union of horizons, and a node answering
   late would drop what it held at the edge. The instant is read to the
   **microsecond**, the store's own resolution: finer, the store's floor and
-  the horizon the asker holds rows to (below) round apart, and a row at the
-  floor's own microsecond is counted by one read of an answer and missing
-  from the listing beside it.
-- **The asker holds every row to its own horizon.** Because it owns the
-  instant, the asker cuts every row a node returns at that instant minus 30
-  days before it merges anything — one event, the events page and its trace
-  siblings, a trace, a turn and the phases — so no peer, whatever build it
-  runs, can put a row past the horizon into an answer this build serves, and
-  a link to an event older than 30 days asked of a node on this build or a
-  later one answers `not_found` whatever its peers run. The guarantee is the
-  serving node's: during an upgrade, a request the load balancer hands to a
-  node still on an earlier build is served by that build, which reads its own
-  copy and its peers' unfloored, so such a link can still resolve there to an
-  event inside the day retention keeps past the horizon until that node is
-  upgraded. A trace's or a turn's count is corrected by the rows cut. What
-  arrives only as a count aggregated at an older node's own clock cannot be
-  cut: the axis's
-  `by_category` and the turns a page's second scatter folds can carry that
-  node's strip of clock skew, and nothing wider. A page of turns whose window
-  reaches the horizon is asked for as the whole history, so such a node lists
-  its turns from its own horizon — a turn only it holds included — and the
-  asker drops a turn with nothing above its horizon and lists one whose share
-  reaches into the strip from the horizon — its start held there, its counts
-  keeping the strip — rather than as a turn that began before a window
-  starting at the horizon, which is where the turn page asks for a turn's
-  attempts from. The axis's bars cannot: every
-  build cuts them from the asker's instant alike, and the one bar an older
-  node behind the asker's clock counts its strip in — the first, which the
-  horizon cuts — is dropped after the sum (below). An older node AHEAD of the
-  asker's clock, or one that answers late, is the other direction: it floors
-  above the horizon, so the rows it holds between the two are in no answer
-  rather than in a wider one — on the axis, missing from the first whole bar
-  shown and from the total whenever that strip reaches past the bar's start,
-  with the coverage still complete. The strip is that node's clock lead plus
-  its latency and ends when it is upgraded. The spend window and a page
-  of turns are bounded by edges the asker names.
-  The outcome counts are counts as well and carry no strip at all: every
-  build that answers `notification_outcomes` reads the instant, because the
-  question arrived with it.
+  the window the asker pins round apart, and a row at the floor's own
+  microsecond is counted by one read of an answer and missing from the
+  listing beside it. A question that carries no instant is refused rather than
+  answered as of the node's own clock.
 - **A stateless node's row can sit on two data nodes for a moment.** A node
   without `data` hands its events to one data node in
   [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data) batches, and a batch whose claim failed is
@@ -640,23 +593,18 @@ sequenceDiagram
   the outcome counts: each node counts the rows it **keeps** and names, by
   identity, the rows of a batch it has written and not settled, with whatever
   that count adds them in by; when any node names one, the asker asks every
-  node which of those it keeps (`kept_outcomes`) and adds each named row once —
+  node which of those it keeps (`kept`) and adds each named row once —
   unless a node that keeps it, the batch's keeper, counted it already. That
   second question is asked only while a batch is in flight, so a fleet with no
-  stateless node never asks it. A node on a build before this counts every row
-  it holds, and is summed as before; while a batch it holds is in flight, a row
-  another node names is counted a second time for that node alone, until it is
-  upgraded.
+  stateless node never asks it.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
   visits every row once; a histogram's window is cut at the asker's instant
-  by every build alike — a window the 30-day history clips down to the bucket
+  by every node alike — a window the 30-day history clips down to the bucket
   the horizon falls in, its first bar counting only what lies above the
-  horizon — so every node, whatever its build, cuts the same bars before they
-  are summed, and only then does the asker drop that partial first bar, so
-  the axis shown begins at the first whole bucket inside the history — every
-  bar of it exact for nodes that floor at the asker's instant, and short only
-  by the strip above (an older node ahead of the asker's clock); the outcome
+  horizon — so every node cuts the same bars before they are summed, and only
+  then does the asker drop that partial first bar, so the axis shown begins
+  at the first whole bucket inside the history, every bar of it exact; the outcome
   counts are summed over a window whose both edges the asker names — a
   count over a named window, never one taken from a page of the newest
   events, whose span is its own — with every row counted once (above); and a list of
@@ -665,8 +613,7 @@ sequenceDiagram
   restart is one row folded from both halves, not two half-turns. A turn is
   paged where a node's page lists it — the earliest such start, which every
   node says of its own share — rather than where it began, which for a turn
-  whose earliest half fails the page's filter, or lies under the horizon, is
-  a position no page reaches — and within one microsecond by the turn's id, so
+  whose earliest half fails the page's filter is a position no page reaches — and within one microsecond by the turn's id, so
   the order is total. The cursor is that position and that id, opaque to the
   caller, so a walk of the pages lists every turn once, two that start at one
   microsecond either side of a page's cut included.

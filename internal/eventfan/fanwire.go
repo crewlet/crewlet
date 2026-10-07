@@ -19,26 +19,17 @@ import (
 // [queue.EventQueue.Ask]. So it carries its own small JSON document on the
 // ephemeral verbs.
 //
-// EVOLUTION IS ADDITIVE, on the event envelope's terms and for the same
-// reason: a rolling upgrade puts two builds on one broker. But an older peer
-// IGNORES a field it does not know, and for this wire that is not harmless in
-// two cases: a new FILTER, which the peer drops and answers a WIDER question
-// than was asked — rows merged in as though they matched — and a new ANSWER
-// field a merge sums, which the peer never sends and the merge reads as zero.
-//
-// So every request is stamped with the LOWEST version that answers it, on the
-// tracker's rule for its records (internal/statelog's RecordFields): a
-// question carrying nothing new goes out as v1 and every build answers it,
-// and one that needs a newer field goes out at that field's version, which an
-// older peer refuses by version rather than answering around. A node answers
-// any version from 1 to its own [Protocol] and replies in the version it was
-// asked in, and the asker names a peer that refused — or replied in another
-// version — in the coverage rather than guessing at fields it cannot read.
-// [versionOf] is the table: adding a filter or a summed answer field is adding
-// a row there and moving [Protocol] to its version.
+// ONE VERSION ON THE WIRE. Every request carries the protocol version its asker
+// speaks ([Protocol]) and a node answers only a request in its own: a peer on
+// any other version refuses by version, in its own words, and the asker names
+// it in the coverage rather than reading an answer it cannot vouch for. A field
+// a peer does not know is never answered around — a FILTER it dropped would
+// answer a wider question than was asked, rows merged in as though they
+// matched, and an ANSWER field a merge sums would read as zero from a peer that
+// never sends it — because no peer that does not know it is ever asked. Adding
+// a question, a filter or a field a merge reads is moving [Protocol].
 
-// Protocol is the highest scatter version this build speaks — never, on its
-// own, the version it asks in; see [versionOf].
+// Protocol is the scatter version this build speaks, asks in and answers.
 //
 //   - v1: the base format.
 //   - v2: `channel_id` and `agent_id` on a listing's filters, and the
@@ -51,169 +42,21 @@ import (
 //   - v4: `failed` on a listing's filters — the event log's "Failures only",
 //     which used to narrow the rows a tab had paged in rather than the rows
 //     it was sent.
-//   - v5: the `notification_outcomes` question — what became of the
-//     notifications each third-party app delivered, counted over a window
-//     the asker names — which the integrations answer used to take from the
-//     newest page of notification events, whose span was its own; and its
-//     second, `kept_outcomes`: which of the rows a node named rather than
-//     counted — a custody batch it has written and not settled — each node
-//     keeps, so a row two data nodes hold is counted once. NEW QUESTIONS
-//     rather than new fields: a build before them does not know them, so
-//     asked in v5 it refuses by version and is named in the coverage,
-//     exactly as it names any question it cannot answer. Their parameters
-//     carry the asker's instant from the start, so every build that answers
-//     them floors the window there and nothing they count needs holding (see
-//     [Fleet.NotificationOutcomes]).
-//
-// FOUR ADDITIONS MOVE NO VERSION. The first is the second scatter of `turns`
-// saying which of the named turns the node's page lists (`listed`, `judged`),
-// beside its shares: a build before it never sends them, and the asker reads
-// that as "this node did not say" and judges its shares by what they carry
-// ([Fleet.Turns]) — never as "lists none of them" — while a build before it
-// asking this one ignores them. The second is the asker's instant, `at`, on
-// every question's parameters — the instant the question is asked at, which
-// every node on this build floors the history at (see [store.EventLog]). A
-// build that does not read it answers as of its own clock instead, and the
-// builds before it did NOT all floor alike:
-//
-//   - every question but `event` was floored at that build's own clock, so
-//     its answer differs from the asker's by the rows between two clocks'
-//     thirty-day horizons — a strip as wide as the skew between them;
-//   - `event`, one event by id, was not floored at all, so such a build
-//     answers with any copy it still holds: the day retention keeps past the
-//     horizon, and any age on a node whose sweep has lapsed.
-//
-// So THE ASKER HOLDS WHAT COMES BACK TO ITS OWN HORIZON wherever an answer
-// carries rows with their instants ([heldTo]): one event, a listing and its
-// trace siblings, a trace, a turn and both phase histories are cut at `at` −
-// [store.EventHistory] before anything is merged, so no peer, whatever build it
-// runs, can put a row past the horizon into an answer this build serves, and a
-// dead link asked of a node on this build answers not found whatever its peers
-// run. A link served by a node still on an earlier build is that build's
-// answer, which holds no copy by id to any horizon, until that node is
-// upgraded. What the asker CANNOT re-check is what arrives as a count,
-// aggregated at the older build's own horizon: the axis's `by_category`, the
-// turns a share folds (a page of turns' second scatter is floored at the
-// history, not at the window), and a trace's or a turn's total beyond what it
-// corrects by the rows it dropped. Those can carry the strip and nothing wider.
-// A page of turns whose window reaches the history is asked for AS the
-// history, in days, so such a build lists from its own horizon — a turn only
-// it holds included, which it would judge, handed the asker's horizon while
-// its clock ran behind, as one that began before the window — and the asker
-// drops a turn with nothing above its horizon and holds the start of one whose
-// share reaches into the strip at the horizon, paging it where a node lists it
-// ([Fleet.Turns]). The cut
-// leaves a capped trace or turn holding rows it did not send, after its last
-// one, and the merge places nothing past that row ([MergeTrace], [MergeTurn]) —
-// a view cut short and saying so, never one with a hole. The rest is bounded by
-// edges every build honours: the axis's bars and totals lie inside the window
-// every build cuts from `at` alike, whose first bar — the one the floor cuts,
-// which is where an older build behind the asker's clock counts its strip — the
-// asker drops after summing ([store.EventHistogram.InsideHistory]). The other
-// direction is a strip HELD BACK rather than added: an older build floors at
-// its own clock when it reads, so one ahead of the asker's, or answering late,
-// floors above the horizon, and its rows between the two are in no bar — the
-// first whole bar shown included, whenever that strip reaches past its start —
-// while the coverage reads complete, since nothing in its answer says which
-// clock floored it. The strip is its lead plus its latency, and no asker can
-// re-cut what a count already left out; the spend
-// window and a page of turns name both edges as the asker's instants, and a
-// turn's merged start is held to its window here.
-//
-// It is still not a filter that build would answer around, nor a summed
-// field it would leave at zero — and a version would make that build REFUSE
-// the whole question for the length of an upgrade, costing every row it
-// holds to save that strip. The axis has carried its `at` since v1, for the
-// window it cuts.
-//
-// The third is what every other answer that COUNTS does with a stateless
-// node's row two data nodes hold for a moment (see the package doc): the axis
-// (`event_series`), a `trace`'s and a `turn`'s `total`, and the shares of a
-// page of `turns` count what the node KEEPS and name the rest in `unsettled`,
-// as the outcome counts have since the version that added them — when the
-// request says, in `names`, that its asker reads them. Unasked, a node counts
-// every row it holds and names none, which is all an asker on an earlier build
-// reads: a count with the named rows taken out would be short by exactly the
-// rows nobody adds back. And a build before the field ignores the request's
-// and sends none, which the asker reads as exactly what that build did —
-// counted everything it holds — so its part is summed as it always was. What
-// that leaves is the double count this field exists to end, for that one node
-// and only while a custody batch it holds is in flight: the asker cannot tell
-// a row it holds unsettled from one it keeps, and counts again a row another
-// node names; the second question (`kept_outcomes`, v5) is refused by a build
-// before v5, and such a node is named in the coverage whenever it is asked.
-// A version would make every such build REFUSE the axis, every trace, every
-// turn and every page of turns for the length of an upgrade — every row it
-// holds, to save a count that a minute's settling ends anyway.
-//
-// The fourth is `before_id` on a page of turns: the cursor's second term, the
-// id of the turn the previous page ended on, beside its start in `before`
-// ([store.TurnCursor]). A node on this build resumes at that start, below the
-// id; a build before it reads the start alone and resumes strictly below it,
-// as it always has. That is a NARROWER answer than was asked, never a wider
-// one — the turns that build holds at the very instant the previous page ended
-// on, with an id below that page's last, are on none of its pages, which is
-// the loss the id ends for every other node — and nothing in it is a row the
-// asker would merge as matching: every turn it sends is one the asker's cursor
-// admits. A version would make that build refuse every page of a walk but the
-// first for the length of an upgrade, every turn it holds, to save the turns
-// it holds at one microsecond. And an earlier ASKER sends no id: its cursor,
-// read here, resumes strictly below its start, which is the page its own merge
-// cut.
+//   - v5: the asker's instant, `at`, on every question's parameters — the
+//     instant every node floors the history at (see [store.EventLog]), so no
+//     node answers as of its own clock; the rows a count NAMES rather than
+//     counts, beside every count — a custody batch the node has written and
+//     not settled (see the package doc) — and the second question that
+//     resolves them, `kept`: which of the named rows each node keeps, so a
+//     row two data nodes hold is counted once; the `notification_outcomes`
+//     question, what became of the notifications each third-party app
+//     delivered over a window the asker names, which the integrations answer
+//     used to take from the newest page of notification events, whose span
+//     was its own; `before_id` on a page of turns, the cursor's second term
+//     beside its start ([store.TurnCursor]); and `listed` on the second
+//     scatter of `turns`, which of the named turns the node's page lists, so
+//     the asker pages each turn where a page lists it ([Fleet.Turns]).
 const Protocol = 5
-
-// versionOf is the lowest scatter version that answers one question with
-// these parameters.
-//
-// A HISTOGRAM IS ALWAYS AT LEAST v2, because its answer carries the failed
-// split and a v1 peer would contribute bars with none — a sum that
-// under-counts failures by exactly that node's share, with nothing to say so —
-// and higher when its filters are. A listing is asked in its filters' version,
-// so one narrowing by nothing new is still answered by the whole fleet during
-// an upgrade. The company's phases narrowed to a seat are v3: an older peer
-// reads only the role name the question used to carry, and would answer every
-// seat's. A QUESTION is asked in the version that added it, whatever it
-// carries: no earlier build can answer it at all.
-func versionOf(q Question, params any) int {
-	switch q {
-	case QuestionNotificationOutcomes, QuestionKept:
-		return 5
-	case QuestionSeries:
-		if p, ok := params.(seriesParams); ok {
-			return max(2, p.List.version())
-		}
-		return 2
-	case QuestionEvents:
-		if p, ok := params.(listParams); ok {
-			return p.version()
-		}
-	case QuestionPhases:
-		if p, ok := params.(phasesParams); ok && p.AgentID != "" {
-			return 3
-		}
-	case QuestionTurns:
-		// A PEER THAT READS ONLY `since_days` would answer the last week
-		// for a one-hour bar three days ago — a page of the wrong turns,
-		// every one of which the asker then has to throw away.
-		if p, ok := params.(turnsParams); ok && (!p.Since.IsZero() || !p.Until.IsZero()) {
-			return 3
-		}
-	}
-	return 1
-}
-
-// version is the lowest scatter version that honours every filter set.
-func (p listParams) version() int {
-	switch {
-	case p.Failed != nil:
-		return 4
-	case p.Suspended != nil:
-		return 3
-	case p.ChannelID != "" || p.AgentID != "":
-		return 2
-	}
-	return 1
-}
 
 // Subject is where a history question is scattered: ONE subject for the whole
 // fleet, every node serving it, because the answerers are every node rather
@@ -256,13 +99,7 @@ const (
 	// settled — each node KEEPS, so the asker counts each such row once
 	// whichever data nodes hold it ([once]). It asks about a row by its
 	// identity alone, so one question answers for every count. v5.
-	//
-	// ITS WIRE NAME IS THE FIRST COUNT'S that asked it: v5 added it beside the
-	// outcome counts as `kept_outcomes`, and a build on v5 asks and answers it
-	// by that name. Renamed, the outcome counts of a fleet half way through an
-	// upgrade would name every node on the other build as one that did not
-	// answer — in both directions — for an answer both builds give alike.
-	QuestionKept Question = "kept_outcomes"
+	QuestionKept Question = "kept"
 )
 
 // Questions is the closed set.
@@ -299,12 +136,6 @@ type request struct {
 	// TurnIDs is the second scatter of `turns`: every node's share of
 	// exactly these turns.
 	TurnIDs []string `json:"turn_ids,omitempty"`
-
-	// Names says the asker reads the rows an answer that counts NAMES:
-	// count what you keep, and name what you hold of a custody batch you
-	// have not settled. Absent, every row held is counted and none named,
-	// which is what an earlier asker reads. Unversioned — see [Protocol].
-	Names bool `json:"names,omitempty"`
 }
 
 // reply is one node's answer.
@@ -326,8 +157,12 @@ type reply struct {
 //
 // TAGGED WIRE TYPES rather than the store's query structs marshalled as they
 // are: those carry no tags, so a field renamed in the store would silently
-// become a filter an older peer never applies — a wider answer than was asked
-// for, merged in as though it matched.
+// rename it on the wire, and a peer reading the old name would drop the filter
+// — a wider answer than was asked for, merged in as though it matched.
+//
+// EVERY QUESTION CARRIES THE ASKER'S INSTANT, `at`, and a node refuses one that
+// carries none ([instantOf]): it is what every node floors the history at, and
+// a node answering as of its own clock would answer a different question.
 
 type cursorWire struct {
 	Time time.Time `json:"time"`
@@ -363,18 +198,13 @@ type listParams struct {
 	Before       *cursorWire `json:"before,omitempty"`
 	Limit        int         `json:"limit"`
 
-	// v2 — see [listParams.version].
 	ChannelID string `json:"channel_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
+	Suspended *bool  `json:"suspended,omitempty"`
+	Failed    *bool  `json:"failed,omitempty"`
 
-	// v3.
-	Suspended *bool `json:"suspended,omitempty"`
-
-	// v4.
-	Failed *bool `json:"failed,omitempty"`
-
-	// At is the asker's instant. Unversioned — see [Protocol].
-	At time.Time `json:"at,omitzero"`
+	// At is the asker's instant.
+	At time.Time `json:"at"`
 }
 
 func listParamsOf(q store.ListQuery) listParams {
@@ -407,9 +237,9 @@ type seriesParams struct {
 	// At is the ASKER's clock, so every node cuts the same window and floors
 	// the rows it counts at the same instant.
 	//
-	// THE AXIS'S OWN FIELD, and the one place its instant travels: every
-	// build since v1 reads it here to cut the window, so the listing's own
-	// `at` is left off the filters this carries rather than sent twice.
+	// THE AXIS'S OWN FIELD, and the one place its instant travels: the
+	// listing's own `at` is left off the filters this carries rather than
+	// sent twice, and set from this one when the question is read.
 	At time.Time `json:"at"`
 }
 
@@ -428,9 +258,8 @@ func (p seriesParams) query() store.HistogramQuery {
 type idParams struct {
 	ID string `json:"id"`
 
-	// At is the asker's instant — one for every read of a part. Unversioned;
-	// see [Protocol].
-	At time.Time `json:"at,omitzero"`
+	// At is the asker's instant — one for every read of a part.
+	At time.Time `json:"at"`
 }
 
 type traceRowsParams struct {
@@ -438,8 +267,8 @@ type traceRowsParams struct {
 	Limit    int      `json:"limit"`
 
 	// At is the page's own instant, so the siblings are floored where the
-	// matches were. Unversioned; see [Protocol].
-	At time.Time `json:"at,omitzero"`
+	// matches were.
+	At time.Time `json:"at"`
 }
 
 type turnsParams struct {
@@ -454,17 +283,16 @@ type turnsParams struct {
 	Sort      store.TurnSort `json:"sort,omitempty"`
 	Limit     int            `json:"limit"`
 
-	// v3 — see [versionOf].
 	Since time.Time `json:"since,omitzero"`
 	Until time.Time `json:"until,omitzero"`
 
 	// BeforeID is the cursor's second term, the turn id at `before`
-	// ([store.TurnCursor]). Unversioned — see [Protocol].
+	// ([store.TurnCursor]).
 	BeforeID string `json:"before_id,omitempty"`
 
 	// At is the instant the asker cut the window against, which every node
-	// floors it at. Unversioned — see [Protocol].
-	At time.Time `json:"at,omitzero"`
+	// floors it at.
+	At time.Time `json:"at"`
 }
 
 func turnsParamsOf(q store.TurnQuery) turnsParams {
@@ -480,9 +308,8 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 	return p
 }
 
-// query is the store's question. A cursor with no id — an earlier asker's —
-// resumes strictly below its start, which is what that asker's own merge cut
-// its page by.
+// query is the store's question, its cursor the start and the turn id together
+// ([store.TurnCursor]).
 func (p turnsParams) query(ids []string) store.TurnQuery {
 	q := store.TurnQuery{
 		Since: p.Since, Until: p.Until, At: p.At,
@@ -506,8 +333,8 @@ type phasesParams struct {
 	Limit   int         `json:"limit,omitempty"`
 	Before  *cursorWire `json:"before,omitempty"`
 
-	// At is the asker's instant. Unversioned; see [Protocol].
-	At time.Time `json:"at,omitzero"`
+	// At is the asker's instant.
+	At time.Time `json:"at"`
 }
 
 // phaseTokenParams names the window as the ASKER's two instants, so every node
@@ -519,8 +346,8 @@ type phaseTokenParams struct {
 	AgentRole string    `json:"role,omitempty"`
 	Limit     int       `json:"limit,omitempty"`
 
-	// At is unversioned — see [Protocol].
-	At time.Time `json:"at,omitzero"`
+	// At is the instant the window was cut against.
+	At time.Time `json:"at"`
 }
 
 func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
@@ -536,10 +363,6 @@ func (p phaseTokenParams) query() store.PhaseTokenQuery {
 // outcomeParams is the outcome count's window: its bottom edge and the
 // asker's instant, which is its top edge and the instant the history floor
 // sits under — so every node counts `[since, at)` floored at one horizon.
-//
-// `at` IS NOT OMITTED WHEN ZERO, unlike every other question's: this question
-// carried it from the version that added it, so it is part of the question
-// rather than an unversioned addition, and the asker always sets it.
 type outcomeParams struct {
 	Since time.Time `json:"since,omitzero"`
 	At    time.Time `json:"at"`
@@ -591,11 +414,11 @@ func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.Ev
 			// beside the first.
 			return nil, errAsker
 		}
-		if req.Version < 1 || req.Version > Protocol {
+		if req.Version != Protocol {
 			return encodeError(self, fmt.Sprintf("this node speaks history protocol "+
-				"up to v%d and was asked in v%d; it is running a different build", Protocol, req.Version))
+				"v%d and was asked in v%d; it is running a different build", Protocol, req.Version))
 		}
-		part, err := answer(ctx, local, req.Question, req.Params, req.TurnIDs, req.Names)
+		part, err := answer(ctx, local, req.Question, req.Params, req.TurnIDs)
 		if err != nil {
 			return encodeError(self, err.Error())
 		}
@@ -606,91 +429,68 @@ func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.Ev
 // errAsker is how the asker's own answerer declines its own request.
 var errAsker = errors.New("eventfan: this node asked; it read its own store")
 
-// encodeError is a refusal, stamped with the HIGHEST version this node speaks:
-// it answers nothing, so there is no asked version to echo, and the number is
-// what tells the asker which build refused.
+// encodeError is a refusal, stamped with the version this node speaks: it
+// answers nothing, so there is no asked version to echo, and the number is what
+// tells the asker which build refused.
 func encodeError(self, why string) ([]byte, error) {
 	return json.Marshal(reply{Version: Protocol, Node: self, Error: why})
 }
 
 // answer is ONE node's part of one question, read from its own store.
 //
-// THE SAME FUNCTION FOR THE ASKER AND FOR EVERY PEER, so the asker's own share
-// and a peer's are the same shape by construction rather than by two readers
-// agreeing.
-//
-// AS ITS ASKER READS IT: a count whose asker does not read the rows it names
-// ([request.Names]) counts every row the node holds and names none, which is
-// what an asker on an earlier build reads ([Protocol]). The outcome counts name
-// whoever asks, since they did from the version that added them.
-func answer(ctx context.Context, log *store.EventLog, q Question, params json.RawMessage, ids []string, names bool) (any, error) {
-	old := !names
-	decode := func(into any) error {
+// THE SAME PART READERS FOR THE ASKER AND FOR EVERY PEER, so the asker's own
+// share and a peer's are the same shape by construction rather than by two
+// readers agreeing.
+func answer(ctx context.Context, log *store.EventLog, q Question, params json.RawMessage, ids []string) (any, error) {
+	decode := func(into any, at func() time.Time) error {
 		if err := json.Unmarshal(params, into); err != nil {
 			return fmt.Errorf("the %s parameters do not decode: %w", q, err)
+		}
+		if at != nil {
+			return instantOf(q, at())
 		}
 		return nil
 	}
 	switch q {
 	case QuestionEvents:
 		var p listParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
 		return listPartOf(ctx, log, p.query())
 	case QuestionSeries:
 		var p seriesParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		h, err := log.Histogram(ctx, p.query())
-		if err != nil || !old {
-			return h, err
-		}
-		for _, r := range h.Unsettled {
-			h.Count(p.query(), r, 1)
-		}
-		h.Unsettled = nil
-		return h, nil
+		return log.Histogram(ctx, p.query())
 	case QuestionEvent:
 		var p idParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
 		return eventPartOf(ctx, log, p.ID, p.At)
 	case QuestionTrace:
 		var p idParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		part, err := tracePartOf(ctx, log, p.ID, p.At)
-		if err != nil || !old {
-			return part, err
-		}
-		return part.folded(), nil
+		return tracePartOf(ctx, log, p.ID, p.At)
 	case QuestionTurn:
 		var p idParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		part, err := turnPartOf(ctx, log, p.ID, p.At)
-		if err != nil || !old {
-			return part, err
-		}
-		return part.folded(), nil
+		return turnPartOf(ctx, log, p.ID, p.At)
 	case QuestionTurns:
 		var p turnsParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
-		part, err := turnsPartOf(ctx, log, p.query(ids))
-		if err != nil || !old {
-			return part, err
-		}
-		return part.folded(), nil
+		return turnsPartOf(ctx, log, p.query(ids))
 	case QuestionPhases:
 		var p phasesParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
 		rows, more, err := log.Phases(ctx, p.AgentID, p.Limit, p.Before.cursor(), p.At)
@@ -700,7 +500,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		return listPart{Rows: rows, Full: more}, nil
 	case QuestionSeatPhases:
 		var p phasesParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
 		rows, more, err := log.AgentPhases(ctx, p.AgentID, p.Role, p.Before.cursor(), p.At)
@@ -710,19 +510,21 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		return listPart{Rows: rows, Full: more}, nil
 	case QuestionPhaseTokens:
 		var p phaseTokenParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
 		return spendPartOf(ctx, log, p.query())
 	case QuestionNotificationOutcomes:
 		var p outcomeParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
 		return log.NotificationOutcomes(ctx, p.query())
 	case QuestionKept:
+		// ABOUT ROWS BY THEIR IDENTITY, and at no instant: the rows were
+		// named by a first question that was floored at one.
 		var p keptParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, nil); err != nil {
 			return nil, err
 		}
 		rows, err := log.KeptRows(ctx, p.Rows)
@@ -732,7 +534,7 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		return keptPart{Rows: rows}, nil
 	case QuestionTraceRows:
 		var p traceRowsParams
-		if err := decode(&p); err != nil {
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
 			return nil, err
 		}
 		rows, err := log.TraceRows(ctx, p.TraceIDs, p.Limit, p.At)
@@ -742,7 +544,18 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		return listPart{Rows: rows, Full: len(rows) >= p.Limit}, nil
 	}
 	return nil, fmt.Errorf("this node does not know the history question %q; "+
-		"it is running an older build", q)
+		"it is running a different build", q)
+}
+
+// instantOf refuses a question that carries no instant. Every node floors the
+// history at the asker's instant, so one answering as of its own clock would
+// answer a different question from its peers; and no asker on this protocol
+// sends a question without one.
+func instantOf(q Question, at time.Time) error {
+	if at.IsZero() {
+		return fmt.Errorf("the %s question carries no instant to floor the history at", q)
+	}
+	return nil
 }
 
 // phaseLimit is the page [store.EventLog.Phases] actually reads.
