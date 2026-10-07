@@ -413,17 +413,6 @@ work item — a tracker record whose wakes are the tracker's own (`asked`,
 writes through, which is why the `decision` category exists to filter on at
 all.
 
-They are what is left of a longer list. The eleven types that described an
-engine-owned task object, a role edited in place, a message the engine sent
-itself and a document it wrote (`agent_reassigned`, `role_updated`, the five
-`task_*`, `message_sent`, `a2a_message_delivered`, `document_created` and
-`document_updated`) were retired from the registry together with the live-state
-branches that read them, and the `communication` and `knowledge` categories
-left with the last type each held. The envelope still decodes every one of
-those names losslessly, because a node of an earlier build keeps publishing
-them through a rolling upgrade and rows already written are read back for as
-long as retention keeps them; none may be registered or categorised again.
-
 **Excluded from the store**, each for a stated reason: `agent_turn_progress` (a
 live-only per-round signal whose durable record is `agent_phase_completed`),
 `budget_meters` (a snapshot of the fleet's shared token counters, every capped

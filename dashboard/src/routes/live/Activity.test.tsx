@@ -61,7 +61,7 @@ function mount() {
         events: [
           {
             id: "e-1",
-            type: "task_created",
+            type: "task_assigned",
             category: "task",
             source: "engine",
             actor: "CEO",
@@ -283,7 +283,7 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   ]);
   const live = (id: string, agentId: string, summary: string) => ({
     id,
-    type: "task_created",
+    type: "task_assigned",
     category: "task",
     source: "engine",
     actor: "engine",
