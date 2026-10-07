@@ -76,50 +76,6 @@ func TestAPagesRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 	}
 }
 
-// THE PRODUCTION TABLE STAMPS A CONTAINER'S SETTINGS AT THE VERSION THAT ADDED
-// THEIR EPOCH — a re-stamp of unchanged settings included, since the bytes are
-// the same — and leaves every record that carries no epoch at 1.
-func TestTheContainerEpochIsStampedAtVersionTwo(t *testing.T) {
-	t.Parallel()
-	container := func(mutation string) MutationRecord {
-		rec := stampRecord(0, OpPatch, mutation)
-		rec.Subject = ContainerSubject("ENG")
-		rec.Scope = ScopeSet{Subject: true}
-		return rec
-	}
-	for name, tc := range map[string]struct {
-		rec  MutationRecord
-		want int
-	}{
-		"settings carrying their activation": {
-			container(`{"v":1,"key":"ENG","name":"Engineering","chart_epoch":1767603600000}`), 2},
-		"settings an older build wrote, with none": {
-			container(`{"v":1,"key":"ENG","name":"Engineering"}`), 1},
-		"a page patch": {stampRecord(0, OpPatch, `{"body":"x"}`), 1},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			body, err := Encode(tc.rec)
-			if err != nil {
-				t.Fatalf("encode: %v", err)
-			}
-			if got := stampOf(t, body); got != tc.want {
-				t.Fatalf("stamped %d, want %d", got, tc.want)
-			}
-		})
-	}
-	// A SETTINGS RECORD SET BELOW ITS EPOCH'S VERSION IS REFUSED — which is
-	// the re-stamp at version 1 an older node would have applied without
-	// the stamp, leaving its row open to a stale activation after its
-	// upgrade.
-	below := container(`{"v":1,"key":"ENG","name":"Engineering","chart_epoch":1767603600000}`)
-	below.V = 1
-	if _, err := Encode(below); err == nil ||
-		!strings.Contains(err.Error(), "ContainerPayload.ChartEpoch (version 2)") {
-		t.Fatalf("a container record set at version 1 carrying its epoch encoded: %v", err)
-	}
-}
-
 // A RECORD EVERY BUILD MUST READ NEVER CARRIES A VERSIONED FIELD — a gate, the
 // read index's barrier and a reanchor's generation, stamped or pinned.
 //

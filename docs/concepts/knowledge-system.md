@@ -514,19 +514,10 @@ Two properties differ from the vendor path and both are visible:
   activated earlier never overwrites one activated later — so a node
   restarting on a revision the fleet has since replaced leaves the newer names
   alone, exactly as the chart's projects do (see
-  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A
-  container's settings are the one record this domain writes at record
-  version 2, a later activation that only **re-stamps** unchanged settings
-  included — and every activation re-stamps every container the chart names,
-  since each carries the instant its configuration was activated. So during a
-  rolling upgrade from a build that predates the stamp, a node still on that
-  build holds back every chart-named container, whether or not its settings
-  changed, rather than applying it without its stamp, and with it the page
-  writes in that container, until it is upgraded — and then applies it stamp
-  and all. A re-stamp is not exempt: applied without its stamp it would leave
-  that node's row the one unstamped copy in the fleet after its upgrade, open
-  to the next stale activation it applied, which would walk the container's
-  settings back on every node. Every other record is written at version 1.
+  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A later
+  activation over unchanged settings is still written — a **re-stamp** —
+  because a row left at the older stamp is open to any activation between the
+  two.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is

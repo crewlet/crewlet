@@ -534,20 +534,9 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker today, no record carries a field past the base format, so every
-tracker record is written at version 1; the first field a later build adds
-raises exactly the records that carry it.
-
-In the knowledge base, one kind of record does: a container's settings, at
-version 2, because they carry the activation that wrote them — a later
-activation that only **re-stamps** unchanged settings included. A re-stamp is
-not exempt, because applied without its stamp it would leave that node's row
-the one unstamped copy in the fleet after its upgrade, open to the next stale
-activation it applied. So while an older node is still running, it holds back
-every container a newer node stamped — every space the org chart names, at the
-first activation a newer node applies — together with the page writes in it,
-until it is upgraded. That is one more reason to finish a rolling upgrade
-inside the deferral grace.
+In the tracker and the knowledge base today, no record carries a field past
+the base format, so every record either writes is at version 1; the first
+field a later build adds raises exactly the records that carry it.
 
 ### Values the engine computes are recomputed once
 

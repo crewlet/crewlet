@@ -26,8 +26,8 @@ type Container struct {
 	Purpose string `json:"purpose,omitempty"`
 
 	// ChartEpoch is the configuration activation Name and Purpose were last
-	// written from ([configplane.ActivationStamp]), zero for a container
-	// written before containers carried one. See [Store.EnsureContainer].
+	// written from ([configplane.ActivationStamp]). See
+	// [Store.EnsureContainer].
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
