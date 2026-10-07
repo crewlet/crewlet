@@ -106,7 +106,13 @@ that failed are in the tool lines and the verdict is in **Turn ended**.
 Every field is written **verbatim**, apart from a tool *argument* or a failed
 call's error past the [ledger budgets](turn-engine.md#what-the-ledger-budgets-and-why),
 which is **rewritten** to fit by the seat's auxiliary model before the row is
-written — never cut. Nothing else is touched at write time, and that is
+written — never cut. Where no rewrite can be had it is named by its size and a
+digest instead, and the call line beside it still says which tool ran and
+whether it worked: the model failed, or the seat or the company has no token
+budget left. The rewrite is
+[reflection-stage spend](../guides/budgets-and-spend.md#auxiliary-spend), so it
+waits on the gate the reflection pass waits on, and a turn the budget ended
+pays for none. Nothing else is touched at write time, and that is
 deliberate: this row is the store's only record of the turn, so a trigger
 trimmed on the way in is not a shortened entry, it is the only copy. How much
 of it a later turn is *shown* is a read-side decision — see Cost below — and
@@ -302,7 +308,8 @@ and the [maintenance worker](scaling.md) sweeps past `retention_days`.
 
 Every field of a recorded entry is stored **verbatim** apart from the tool
 arguments and errors past the [ledger budgets](turn-engine.md#what-the-ledger-budgets-and-why),
-which are rewritten to fit — never cut. This row is the store's only record of
+which are rewritten to fit — never cut — or, where no rewrite can be had, named
+by size and digest. This row is the store's only record of
 the turn, so a field cut at write time would not be a shortened rendering — it
 would be the only copy. Bounding what a
 *prompt* shows is a separate decision, made at render time; see Cost above.

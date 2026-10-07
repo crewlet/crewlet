@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -103,5 +104,39 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	free := &org.Role{Name: "Free"}
 	if ok, err := e.learningBudget(meteredCompany(config.TokenBudget{}, free))(ctx, free); err != nil || !ok {
 		t.Fatalf("gate for an uncapped seat = (%v, %v), want (true, nil)", ok, err)
+	}
+}
+
+// A CONVERSATION ENTRY'S REWRITES ASK THE REFLECTION STAGE'S GATE, on the live
+// epoch: they are filed under that stage, and a seat with no room left starts
+// no reflection pass and makes none of them either.
+//
+// Mutation: leave the dispatcher's gate unwired, and a seat whose day is spent
+// still reads as having room.
+func TestTheDispatcherAsksTheReflectionGateBeforeAnEntrysRewrites(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e.epoch.current.Store(c)
+	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{
+		NoteDeferred:  func(string) {},
+		Completions:   ledgerstore.NewMemoryCompletions(),
+		Conversations: ledgerstore.NewMemoryConversations(),
+	}}, e.backends)
+	if d.ReflectionRoom == nil {
+		t.Fatal("the dispatcher has no gate on a conversation entry's rewrites")
+	}
+	if ok, err := d.ReflectionRoom(ctx, lead.Handle()); err != nil || !ok {
+		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
+	}
+	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 100, coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	if ok, err := d.ReflectionRoom(ctx, lead.Handle()); err != nil || ok {
+		t.Fatalf("gate with the day spent = (%v, %v), want (false, nil): the entry's "+
+			"rewrites would be spend past the ceiling", ok, err)
 	}
 }

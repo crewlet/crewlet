@@ -1516,7 +1516,11 @@ the room left *before* it starts:
   calls the [learning subsystem](../concepts/agent-learning.md) makes on a
   seat's behalf. A pass does not start for a seat or company with no room
   left, and each completion it makes is recorded in full on the seat's counter
-  and the company's, past the ceiling included.
+  and the company's, past the ceiling included. The same gate stands in front
+  of the rewrite of a [conversation entry's](../concepts/conversation-sessions.md)
+  long tool payloads, made after a turn under the same reflection stage: with
+  no room left the entry is still written, each such payload named by its size
+  and digest.
 - **A turn's own auxiliary calls** — the memory filter, the knowledge query and
   the episode summary the [turn-start prefetch](../concepts/agent-learning.md)
   asks the seat's auxiliary model for before the first phase opens, and every

@@ -180,6 +180,20 @@ type Dispatcher struct {
 	// fragment for ever.
 	Rewriter func(handle string, use auxspend.Use) ledgerfit.Fitter
 
+	// ReflectionRoom is the PRE-FLIGHT gate on those rewrites: whether the
+	// seat may spend on the reflection stage at all, the same answer the
+	// reflection pass beside them asks for ([Engine.reflectionRoom]) — they
+	// are filed under that stage, being what the seat remembers of a turn
+	// once it is over. Asked once per entry, and only for an entry with a
+	// payload to rewrite. Three-valued: an error is a counter that could not
+	// be read, and the rewrites are made, since the charge on the way out
+	// still counts them.
+	//
+	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s reason.
+	// Nil admits every entry, which is the answer for a dispatcher with no
+	// counter to ask.
+	ReflectionRoom func(ctx context.Context, handle string) (bool, error)
+
 	// FlushSpend publishes what a run's auxiliary calls have cost on this
 	// node so far ([auxspend.Ledger.FlushTurn]) — called once the
 	// conversation entry's rewrites are made, which happen after the turn's
@@ -1435,7 +1449,7 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 			in.BlockedOn = w.Evidence
 		}
 	}
-	if d.Rewriter != nil {
+	if pieces := ledger.SessionPieces(in); d.Rewriter != nil && len(pieces) > 0 {
 		// REWRITTEN BEFORE THE WRITE, never cut: the row is the only copy,
 		// and what a later turn reads of a payload past the budget is what
 		// the seat's auxiliary model made of it. Bounded by the turn's own
@@ -1448,10 +1462,27 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		// over — what the seat remembers, never what the work cost — so
 		// it is counted on the seat's day and kept off the turn's total
 		// and its work item, beside the reflection workers.
-		in.Fitted = ledgerfit.Fit(ctx, d.Rewriter(handle, auxspend.Use{
-			Stage: types.AuxStageReflection, TurnID: runID, WorkKey: workKey,
-		}), ledger.SessionPieces(in))
-		if d.FlushSpend != nil {
+		//
+		// AND GATED AS THAT STAGE IS: a seat or a company with no room left
+		// starts no reflection pass, and makes none of these rewrites
+		// either. A turn the budget ended is the case that matters: its
+		// refused round left the counter past the ceiling, and a rewrite
+		// made now would be spend past it on a turn nobody will read
+		// again until the window turns over. The entry is still written —
+		// a payload that cannot be rewritten is named by its size and
+		// digest, ledgerfit's account of any rewrite it cannot have, and
+		// the call line beside it still says which tool ran and whether
+		// it worked. Unlike the task card (turnspend.go), which a person
+		// reads for exactly that turn, this row is read by the seat's
+		// next turn on the thread, which waits for room anyway.
+		var fitter ledgerfit.Fitter
+		if d.mayReflect(ctx, handle, runID) {
+			fitter = d.Rewriter(handle, auxspend.Use{
+				Stage: types.AuxStageReflection, TurnID: runID, WorkKey: workKey,
+			})
+		}
+		in.Fitted = ledgerfit.Fit(ctx, fitter, pieces)
+		if fitter != nil && d.FlushSpend != nil {
 			d.FlushSpend(ctx, runID)
 		}
 	}
@@ -1469,6 +1500,30 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
 			"conversation", conversation, "error", err)
 	}
+}
+
+// mayReflect asks [Dispatcher.ReflectionRoom] whether a conversation entry's
+// rewrites may be made, and logs the two answers that are not a plain yes.
+func (d *Dispatcher) mayReflect(ctx context.Context, handle, runID string) bool {
+	if d.ReflectionRoom == nil {
+		return true
+	}
+	ok, err := d.ReflectionRoom(ctx, handle)
+	switch {
+	case err != nil:
+		// UNKNOWN, not refused — the reflection pass's own reading.
+		log.WarnContext(ctx, "conversation_rewrite_budget_unknown", "seat", handle,
+			"turn_id", runID, "error", err,
+			"detail", "rewriting the entry's long payloads anyway; the spend is still charged")
+		return true
+	case !ok:
+		log.InfoContext(ctx, "conversation_rewrite_skipped_no_budget", "seat", handle,
+			"turn_id", runID,
+			"detail", "the company or this seat is at its token ceiling, so the entry's "+
+				"long payloads are named by size and digest rather than rewritten")
+		return false
+	}
+	return true
 }
 
 func (d *Dispatcher) history(ctx context.Context, handle, conversation string) ([]ledger.Session, error) {

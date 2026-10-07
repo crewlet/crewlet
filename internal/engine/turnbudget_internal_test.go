@@ -10,9 +10,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -225,5 +229,71 @@ func TestATurnWhoseContextFitsItsDayRunsItsFirstRound(t *testing.T) {
 	}
 	if r.executor.called() == 0 {
 		t.Error("the executor was never called on a day with room left")
+	}
+}
+
+// recordEntry files a conversation entry for a turn whose last round posted a
+// payload past the ledger's budget, through the dispatcher the engine wires,
+// and returns what the entry's calls read.
+func (r *budgetedTurn) recordEntry(t *testing.T) (calls, payload string) {
+	t.Helper()
+	conversations := ledgerstore.NewMemoryConversations()
+	d := r.e.buildDispatcher(Options{Dispatch: &Dispatcher{
+		NoteDeferred: func(string) {}, Completions: ledgerstore.NewMemoryCompletions(),
+		Conversations: conversations,
+	}}, r.e.backends)
+	payload = strings.Repeat("the full incident report, line by line. ", 100)
+	d.RecordSession(t.Context(), "swe", "conv-1", "run-entry", "wk-1", "Message from Ana",
+		turn.Result{Decision: phase.Done, LastWork: &turn.Work{
+			Summary: "posted the report",
+			Calls:   []ledger.Call{{Name: "slack_post", Args: map[string]any{"text": payload}}},
+		}}, time.Now())
+	entries, err := conversations.History(t.Context(), "swe", "conv-1", 0)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("History = %v, %v, want the one entry", entries, err)
+	}
+	return entries[0].Calls, payload
+}
+
+// A TURN THE BUDGET ENDED HAS ITS CONVERSATION ENTRY WRITTEN WITH NO REWRITE.
+//
+// The entry's rewrites are reflection-stage spend, made after the turn, and
+// they ran with no gate at all — so the turn whose refused round left its seat
+// past the day paid for more past it, for a row the seat reads only once the
+// day has turned over. The reflection stage's gate now stands in front of
+// them, as it does in front of the reflection pass: the entry is written, and
+// the long payload is named by size and digest.
+func TestATurnTheBudgetEndedRewritesNothingInItsConversationEntry(t *testing.T) {
+	t.Parallel()
+	r := newBudgetedTurn(t, 1000, 1600)
+	if err := r.run(t); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("runTurn = %v, want the turn ended on the budget", err)
+	}
+	calls, payload := r.recordEntry(t)
+	if n := r.auxiliary.called(); n != 1 {
+		t.Errorf("the auxiliary model was called %d times, want only the turn's own "+
+			"condensation: the entry's rewrite is spend past a day already spent", n)
+	}
+	if got := r.seatDay(t); got != 1600 {
+		t.Errorf("the seat's day holds %d after the entry, want the turn's 1600", got)
+	}
+	if !strings.Contains(calls, compact.Omitted(payload)) {
+		t.Errorf("the entry's call reads %q, want its payload named by size and digest", calls)
+	}
+}
+
+// AND A TURN WITH ROOM LEFT HAS IT REWRITTEN, so the case above is about the
+// window being full rather than about a gate that refuses everything.
+func TestATurnWithRoomLeftRewritesItsConversationEntry(t *testing.T) {
+	t.Parallel()
+	r := newBudgetedTurn(t, 100_000, 1600)
+	_ = r.run(t)
+	before := r.auxiliary.called()
+	calls, _ := r.recordEntry(t)
+	if n := r.auxiliary.called(); n != before+1 {
+		t.Errorf("the auxiliary model was called %d times for the entry, want one rewrite", n-before)
+	}
+	if !strings.Contains(calls, ledgerfit.Condensed) {
+		t.Errorf("the entry's call reads %q, want its payload rewritten", calls)
 	}
 }

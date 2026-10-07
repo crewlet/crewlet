@@ -1375,6 +1375,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 			return e.seatCompactor(e.Company(), handle, use)
 		}
 	}
+	if d.ReflectionRoom == nil {
+		d.ReflectionRoom = func(ctx context.Context, handle string) (bool, error) {
+			return e.reflectionRoom(ctx, e.Company(), handle)
+		}
+	}
 	if d.FlushSpend == nil {
 		d.FlushSpend = e.auxSpend.FlushTurn
 	}

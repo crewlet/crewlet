@@ -29,22 +29,36 @@ func (e *Engine) learningBudget(c *Company) func(context.Context, *org.Role) (bo
 		return nil
 	}
 	return func(ctx context.Context, seat *org.Role) (bool, error) {
-		headroom := e.remainingFor(c, seatHandle(seat))
-		if headroom == nil {
-			// Nothing in the epoch caps this seat's spend.
-			return true, nil
-		}
-		left, err := headroom.Remaining(ctx)
-		if err != nil {
-			// UNKNOWN is not "no". A coordination blip must not silently
-			// stop a company learning; the charge on the way out is what
-			// keeps an unreachable counter from also being a free one.
-			return true, err
-		}
-		// A capped window with nothing left refuses the next token, so
-		// no pass that needs one may start.
-		return left > 0, nil
+		return e.reflectionRoom(ctx, c, seatHandle(seat))
 	}
+}
+
+// reflectionRoom is the REFLECTION STAGE's gate for one seat: whether it may
+// start auxiliary work filed under that stage, which is everything it spends
+// remembering a turn once the turn is over — the reflection pass
+// ([Engine.learningBudget]) and the rewrites of a conversation entry
+// ([Dispatcher.ReflectionRoom]).
+//
+// Three-valued: (true, nil) where nothing in the epoch caps the seat or a
+// capped window has room, (false, nil) where one has none, and an error where
+// the counter could not be read — which the caller treats as room, since a
+// coordination blip must not silently stop a company learning, and the
+// charge on the way out is what keeps an unreachable counter from also being
+// a free one.
+func (e *Engine) reflectionRoom(ctx context.Context, c *Company, handle string) (bool, error) {
+	headroom := e.remainingFor(c, handle)
+	if headroom == nil {
+		// Nothing in the epoch caps this seat's spend.
+		return true, nil
+	}
+	left, err := headroom.Remaining(ctx)
+	if err != nil {
+		// UNKNOWN is not "no".
+		return true, err
+	}
+	// A capped window with nothing left refuses the next token, so no work
+	// that needs one may start.
+	return left > 0, nil
 }
 
 // seatHandle is a seat's handle, tolerating the nil the gate may be handed.

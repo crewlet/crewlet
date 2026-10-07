@@ -504,6 +504,7 @@ for where each stage's spend is drawn:
 | Turn-start prefetch | memory filter, knowledge query, episode summary | the [budget park](agent-runtime.md#the-budget-park): a seat with no room has its delivery parked, so no prefetch runs — and then the turn's meter, as for every in-turn call below |
 | In-turn rewrites | the conversation block's condensation, and every rewrite the turn's ledgers, judge, tools and workers need | the turn's meter: every in-turn auxiliary call is charged through it, so a window one fills is held before the turn's next round is sent, and none is made while it holds a full window — except the task card's, written after the last round as the turn's record |
 | Reflection pass | persist decider, profiler, refiner, single-turn induction | the pass's [no-budget skip](#7-reflector-the-orchestrator) |
+| Conversation entry | the rewrite of the last round's long tool payloads before the thread's [entry](conversation-sessions.md) is written, after the turn | the same gate as the reflection pass, since the entry is what the seat remembers of the turn: with no room left on the seat or the company — a turn the budget ended among them — no rewrite is made, and each long payload is named by size and digest instead |
 | Background learning | episode compaction, clustered synthesis, skill promotion | none: each call is recorded, but these passes do not read the room left before they start |
 
 ## Integration points
