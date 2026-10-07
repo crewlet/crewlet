@@ -97,9 +97,10 @@ type DomainPosition struct {
 	// writer about to publish such a kind reads this across every node the
 	// log counts, and waits for the last to advertise a build that reads it.
 	//
-	// ZERO IS "NOT ADVERTISED" — a row written by a build that predates the
-	// field — and a reader weighs it as a build that reads nothing newer
-	// than the field, never as one that reads everything.
+	// ZERO IS "NOT ADVERTISED" — what a reader holds for a node it counts
+	// from its presence before that node's first report — and a reader
+	// weighs it as a build that reads nothing newer, never as one that
+	// reads everything.
 	RecordVersion int `json:"record_version,omitempty"`
 
 	// LogDiverged reports that the log holds, at this node's checkpoint,
