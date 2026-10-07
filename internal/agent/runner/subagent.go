@@ -171,8 +171,9 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 // all to a seat nothing caps — and subagent reads a ParentRemaining of zero as
 // UNCAPPED. Passed on, an exhausted seat's fan-out got no slice, which is the
 // fail-open direction the error case is refused for; and there is nothing to
-// share, since the phase's own first charge is refused against a window with
-// no room for a single token.
+// share, since the phase's own first call is refused in a window with no room
+// for a single token — held by the turn's meter before it is sent where the
+// meter has seen the window full, and its charge refused where it has not.
 func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 	if r.cfg.Subagent == nil || r.cfg.Subagent.Remaining == nil {
 		// No counter configured: the seat itself runs uncapped, so its
