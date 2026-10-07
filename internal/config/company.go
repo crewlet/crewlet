@@ -681,7 +681,7 @@ type Knowledge struct {
 
 	// KnowledgeScope narrows the search to these containers. Empty is
 	// unscoped — see the type doc for what that means per backend.
-	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces."`
+	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty" desc:"Org-wide read scope. Empty = unscoped."`
 
 	// SkillsContainer is where tool-skill pages live.
 	//

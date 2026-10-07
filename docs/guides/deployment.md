@@ -800,12 +800,9 @@ and where the constants come from — see
 
 ## The store
 
-One local file per node, opened by **Turso** — the only driver. There was a
-second, mainline SQLite behind `store.driver` / `CREWLET_STORE_DRIVER`, and
-both the field and the variable are retired: a config that still sets the field
-is refused with a message saying so, and the variable is read by nothing. The
-file format did not change, so an existing store opens untouched and any
-SQLite-compatible client still reads it.
+One local file per node, opened by **Turso** — the only driver, so there is no
+setting that chooses one. The file is in the SQLite format, so any
+SQLite-compatible client can read it.
 
 **Turso keeps a native library cache, and the engine prepares it before the
 first query.** The driver is pure Go in the sense that matters — no cgo, no C
@@ -822,7 +819,7 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   start; a cache root that cannot be created at all fails the store open with an
   error naming the directory.
 - **A cache that cannot be repaired names the way out**, and there is no
-  second driver to fall back to any more: delete that directory by hand, or
+  second driver to fall back to: delete that directory by hand, or
   point `TURSO_GO_CACHE_DIR` at a writable directory of its own.
 - **The linux binaries need glibc, and there is no musl build.** The database
   engine is a native library loaded with `dlopen`, which makes the binary
@@ -1110,11 +1107,7 @@ logging:
     max_backups: 5      # rotated files kept beside the live one (default 5)
 ```
 
-That block is the only way the file says it. A `debug: true` boolean used to
-sit beside it; it was retired rather than wired up, because two keys setting
-one value is a state where they can disagree and something has to arbitrate.
-A file that still carries it is refused with the line that replaces it, not
-with a spelling check.
+That block is the only way the file says it.
 
 The same settings, on the command line, for one run:
 
@@ -1166,7 +1159,7 @@ level is an enum with a sane default; a path is not. A node that could not
 open the file it was told to write *refuses to start*, naming the path and the
 error, rather than running on stderr alone — an operator who configured a
 durable record and silently did not get one has nothing anywhere pointing at
-why, which is exactly how the retired `debug:` field spent its life. The same
+why. The same
 applies to `$CREWLET_LOG_FILE` on the other commands. Once the node is up, a
 file that *becomes* unwritable — a full disk, a volume pulled away — is the
 opposite case and is handled the opposite way: the failure is announced on

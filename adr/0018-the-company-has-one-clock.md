@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/config`
-- **Enforced-by:** `internal/config.TestTheRetiredClocksAreRefused`
+- **Enforced-by:** `internal/config.TestTheCompanysClockIsTheZoneItNames`
 - **Measured:** a company on `America/Los_Angeles` spent 7 hours of every day (8 in winter) with its "today" on two dates at once; one on `Europe/Berlin`, 1 to 2 hours
 - **Cost-when-tried:** three clocks, and every one of them was right about something. `tracker.native.timezone` was read by a seat's own work tools and nothing else. `scheduling.default_timezone` was read by the scheduler and nothing else. Everything else cut its day on UTC: the dashboard's board (its surface handed the tracker `time.UTC`), a person's own day and the workload (both said "a compound answer has no caller-supplied zone") and the operator's MCP surface, which was given no zone at all. So for the last seven hours of a Los Angeles day the board banded a task "today" while the same row in its assignee's day was marked overdue, an assistant's `due=friday` meant a different Friday from a seat's, and the example company — Berlin tracker, `default_timezone: UTC` — held its 09:00 standups at 10:00 or 11:00 Berlin time. The scheduler's zone was also captured when its loop was armed, so correcting it did nothing until something re-armed the loop.
 - **Tag-status:** unreleased
@@ -18,8 +18,8 @@ all-day date resolves to; and the wall clock a schedule that names no zone of
 its own fires on. The anonymous `org` projection serves it resolved, so a
 dashboard cuts its days where the engine does.
 
-`tracker.native.timezone` and `scheduling.default_timezone` are refused by
-name. A schedule may still name its own `timezone` — that is one piece of
+Neither the tracker nor the scheduler has a clock of its own to configure. A
+schedule may still name its own `timezone` — that is one piece of
 work's wall clock, the Tokyo team's 09:30 standup, and nothing else is cut on
 it. Every zone name, the company's and a schedule's, is read through
 `period.LoadZone`, which refuses the two names that mean whichever host reads

@@ -1210,7 +1210,7 @@
           ]
         },
         "scope": {
-          "description": "Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces.",
+          "description": "Org-wide read scope. Empty = unscoped.",
           "items": {
             "type": [
               "string",

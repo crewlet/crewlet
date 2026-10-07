@@ -9,63 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 )
 
-// THE TWO CLOCKS THE COMPANY'S ONE CLOCK REPLACED ARE REFUSED BY NAME, and
-// each refusal says where the value went (ADR-0018).
-//
-// Both shipped in the example companies, so an operator has them written down;
-// "check the spelling" would send somebody looking for a typo in a key they
-// were told to write. And the scheduler's refusal says the one thing that is
-// not a pure rename: a company that set the two to DIFFERENT zones fired its
-// zone-less schedules on one and cut its tracker's days on the other, and one
-// clock at the top moves the schedules.
-//
-// Strict decoding is what refuses them — no field carries either name any
-// more, so a key the loader silently dropped would be a company running on UTC
-// while its file said Berlin.
-func TestTheRetiredClocksAreRefused(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		doc  string
-		path string
-		says []string
-	}{
-		"the tracker's clock": {
-			"name: Acme\ntracker:\n  native:\n    timezone: Europe/Berlin\n",
-			"tracker.native.timezone",
-			[]string{"top-level `timezone`", "Move the value there"},
-		},
-		"the scheduler's default zone": {
-			"name: Acme\nscheduling:\n  default_timezone: UTC\n",
-			"scheduling.default_timezone",
-			[]string{"top-level `timezone`", "its own `timezone:`"},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			_, err := ParseCompany([]byte(tc.doc))
-			if err == nil {
-				t.Fatal("a retired clock was accepted")
-			}
-			if !errors.Is(err, ErrUnknownField) {
-				t.Errorf("want %v, got %v", ErrUnknownField, err)
-			}
-			if strings.Contains(err.Error(), "check the spelling") {
-				t.Errorf("a key the example companies shipped was reported as "+
-					"a misspelling: %v", err)
-			}
-			if !strings.Contains(err.Error(), tc.path) {
-				t.Errorf("the refusal does not name %s: %v", tc.path, err)
-			}
-			for _, want := range tc.says {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("the refusal does not say %q: %v", want, err)
-				}
-			}
-		})
-	}
-}
-
-// THE ONE CLOCK IS WHAT THE COMPANY WROTE, or UTC when it wrote none.
+// THE ONE CLOCK IS WHAT THE COMPANY WROTE, or UTC when it wrote none
+// (ADR-0018).
 func TestTheCompanysClockIsTheZoneItNames(t *testing.T) {
 	t.Parallel()
 	c, err := ParseCompany([]byte("name: Acme\ntimezone: America/Los_Angeles\n"))

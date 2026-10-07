@@ -117,7 +117,7 @@ six false statements by the time anybody checked.
 | [0015](0015-an-alarm-borrows-its-threshold.md) | An alarm fires at a threshold another decision already made | `TestTheBackupAlarmFiresAtTheAgeThePolicyNames` |
 | [0016](0016-a-protocol-bump-refuses-where-an-envelope-round-trips.md) | A coordination protocol bump refuses where an event envelope round-trips | nothing — declared |
 | [0017](0017-a-turn-id-names-one-run.md) | A turn id names one RUN; the work key names the unit of work | `TestARedeliveredTriggerRunsUnderItsOwnIdentity` |
-| [0018](0018-the-company-has-one-clock.md) | The company has one clock | `TestTheRetiredClocksAreRefused` |
+| [0018](0018-the-company-has-one-clock.md) | The company has one clock | `TestTheCompanysClockIsTheZoneItNames` |
 | [0019](0019-a-token-budget-is-a-periodic-window.md) | A token budget is a periodic window, and the window's turnover is its only reset | `TestAWindowRollsAtItsBoundary` |
 | [0020](0020-a-nodes-own-day-is-a-compacted-domain.md) | A node's own day is a compacted domain, and every node writes only its own | `TestADepartedNodesSpendIsStillAnswered` |
 | [0021](0021-fleet-turn-detail-is-a-scatter.md) | The fleet's turn-level detail is read from every node at query time, and every answer says which nodes it covers | `TestEventReadsGoThroughTheFleet`, `queries.FleetEvents` |

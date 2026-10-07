@@ -964,15 +964,11 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		return loadErr
 	}
 	// AND NOW THE FILE, which is what makes Tier A's `logging:` block mean
-	// anything. Its ancestor `debug: true` was a declared field nothing
-	// ever read: the quickstart told an operator to write it and the
-	// deployment guide said it "raises the log level to DEBUG", and for the
-	// life of the field it did nothing at all. It is retired now rather
-	// than wired up — a file still carrying it is REFUSED, and pointed at
-	// `logging.level` (see config.retiredBootstrapFields) — so this line is
-	// what keeps its replacement from repeating the bug. Lines emitted
-	// BEFORE this point came out under the flags alone, which is the best a
-	// process can do about a file it has not opened yet.
+	// anything: a declared setting nothing reads is one an operator writes
+	// and that does nothing at all, so this line is what makes
+	// `logging.level` take effect. Lines emitted BEFORE this point came out
+	// under the flags alone, which is the best a process can do about a
+	// file it has not opened yet.
 	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
 	// AND THE LOG FILE, the moment the document that names it has been
 	// read. Everything that can still fail below — a keyring that will not
@@ -2209,9 +2205,8 @@ func formatNames() []string {
 //
 // A flag carries its default whether or not anyone typed it, so applying
 // `*logLevel` unconditionally would pin every node at info and make
-// `logging.level: warn` in the file dead on arrival — the same class of bug
-// as the retired `debug:` field, which was declared in Tier A and read by
-// nothing for the whole of its life. isFlagSet is what separates "the
+// `logging.level: warn` in the file dead on arrival: a setting declared in
+// Tier A and read by nothing. isFlagSet is what separates "the
 // operator asked for info" from "nobody said anything", and it is the same
 // idiom [overrideNode] uses for the three node overrides.
 //
@@ -2282,10 +2277,8 @@ func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
 // Every other bad logging value in this binary resolves to a default,
 // because a misspelled log level must never be why a company will not boot.
 // A path is not one of those. An operator who configured a durable record
-// and silently did not get one has nothing anywhere pointing at why — the
-// exact shape of the retired `debug: true` field, which was declared for the
-// whole of its life and read by nothing. The error names the path and the
-// permission that has to change.
+// and silently did not get one has nothing anywhere pointing at why. The
+// error names the path and the permission that has to change.
 //
 // # Detached before it is closed, in that order
 //

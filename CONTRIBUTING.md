@@ -331,10 +331,9 @@ What follows are the prerequisites that legitimately vary by machine.
 - **`TURSO_GO_CACHE_DIR`** is where the store driver's native library lives,
   and it is the one environment variable a store test can be defeated by.
 
-  Turso is the only store driver — `CREWLET_STORE_DRIVER` and the Tier A
-  `store.driver` field are both retired, so there is
-  no dialect intersection to keep statements inside any more and no second
-  suite run. Write `internal/store` against Turso.
+  Turso is the only store driver, so there is no dialect intersection to
+  keep statements inside and no second suite run. Write `internal/store`
+  against Turso.
 
   It is pure Go to *build* (no cgo), but its engine is a ~20 MB binary
   embedded in the driver and extracted at runtime into `$TURSO_GO_CACHE_DIR`

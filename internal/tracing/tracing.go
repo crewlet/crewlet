@@ -30,9 +30,9 @@
 // parent/child link resolves on neither.
 //
 // A second reason, specific to this engine: Tier A is the root of trust and
-// resolves with EnvOnly, and `debug:` was retired on the rule that two keys
-// setting one value is a state where they disagree. A `tracing.endpoint:`
-// field beside OTEL_EXPORTER_OTLP_ENDPOINT would be exactly that.
+// resolves with EnvOnly, and it holds to the rule that two keys setting one
+// value is a state where they disagree. A `tracing.endpoint:` field beside
+// OTEL_EXPORTER_OTLP_ENDPOINT would be exactly that.
 //
 // # What is deliberately NOT spanned
 //

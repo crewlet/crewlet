@@ -39,14 +39,11 @@ func TestContract(t *testing.T) {
 
 // THE ONLY DRIVER LINKED IN IS TURSO, and this is what says so.
 //
-// It replaces TestDriverSelection, which covered a choice that no longer
-// exists: `store.driver` in the Tier A file and CREWLET_STORE_DRIVER both
-// picked between turso and mainline SQLite. Deleting a
-// selector is easy to do halfway — the field goes, the blank import stays,
-// and the binary quietly carries a second storage engine that nothing can
-// reach but that anything with a raw sql.Open can. So the assertion is about
-// the LINKED SET, not about a config field: "sqlite" registered here means
-// modernc.org/sqlite came back into the build.
+// A second driver needs no config field to be in the binary: one blank
+// import puts a second storage engine there that nothing in the engine
+// selects but that anything with a raw sql.Open can reach. So the assertion
+// is about the LINKED SET, not about a config field: "sqlite" registered here
+// means modernc.org/sqlite came into the build.
 func TestTursoIsTheOnlyDriverInTheBinary(t *testing.T) {
 	t.Parallel()
 	linked := sql.Drivers()

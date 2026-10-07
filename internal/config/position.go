@@ -129,7 +129,7 @@ func (idx *bufferIndex) find(line int, match func(placed) bool) (position, bool)
 // So the detail is read with `.` matching a newline — read up to the first
 // one, the failure matched nothing and was reported with no path and no line.
 var (
-	unknownFieldRE    = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
+	unknownFieldRE    = regexp.MustCompile(`^line (\d+): field (\S+) not found in type \S+$`)
 	positionedLineRE  = regexp.MustCompile(`(?s)^line (\d+): (.*)$`)
 	cannotUnmarshalRE = regexp.MustCompile(`^cannot unmarshal (!!\w+)`)
 	syntaxLineRE      = regexp.MustCompile(`^yaml: line (\d+):`)
@@ -137,7 +137,7 @@ var (
 
 // typeFault translates one line of a yaml.TypeError into a fault on the node
 // it is about.
-func (idx *bufferIndex) typeFault(line string, retired map[string]string) *Fault {
+func (idx *bufferIndex) typeFault(line string) *Fault {
 	if f, ok := parseCarried(line); ok {
 		f.pos = idx.input[f.pos]
 		return f
@@ -146,13 +146,6 @@ func (idx *bufferIndex) typeFault(line string, retired map[string]string) *Fault
 		lineNo, _ := strconv.Atoi(m[1])
 		name := strings.Trim(m[2], `"`)
 		pos, _ := idx.find(lineNo, func(c placed) bool { return c.key && c.node.Value == name })
-		// A key that was REMOVED needs its own message. "debug is not a
-		// setting" is true and useless to someone reading a file the
-		// quickstart told them to write: they need the line that replaced
-		// it, not a spelling check.
-		if replacement, gone := retired[retiredKey(m[3], m[2])]; gone {
-			return &Fault{Kind: ErrUnknownField, Detail: replacement, pos: pos}
-		}
 		return &Fault{Kind: ErrUnknownField, pos: pos, Detail: fmt.Sprintf(
 			"%q is not a setting: check the spelling, or the block it belongs under", name)}
 	}

@@ -138,12 +138,10 @@ import (
 
 // driverName is what the Turso driver registers itself as with database/sql.
 //
-// Unexported, and there is no longer a knob that selects it: a store.driver
-// config field and a CREWLET_STORE_DRIVER environment variable both chose
-// between two implementations, and there is one: only Turso has the vector
-// distance functions the agent-learning recall path reads through, so the
-// second driver kept every table and silently lost recall. See internal/config
-// for the retired-key message a file that still sets it gets.
+// Unexported, and nothing selects it: Turso is the one driver because the
+// recall paths (learning's diary and the knowledge base's semantic search)
+// read through its vector distance functions, which no other SQLite driver
+// has. ADR-0007 is the decision.
 const driverName = "turso"
 
 // Defaults for Options. Both are anchored to the dashboard, which is the only
