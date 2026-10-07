@@ -51,8 +51,13 @@
 -- row written from here on, and still one in the right space, where the row
 -- had no searchable vector at all.
 --
--- WHO HAS TO AGREE ON IT: this node alone, like the row. The memory changelog
--- carries columns by name, so the column is additive both ways: a row this
--- build publishes carries `ask`, which an older build does not know and
--- ignores, and a row an older build publishes lacks it and lands as ''.
+-- WHO HAS TO AGREE ON IT: whichever node holds the seat, like the row — the
+-- episode is a seat's memory and rides the seat's compacted memory changelog
+-- (internal/learning/memsync), which carries columns by name. A row this build
+-- publishes carries `ask`, which an older build does not know and ignores; a
+-- row an older build publishes lacks it and lands as ''. And an older build
+-- that HOLDS the seat republishes every row it hydrated without the ask, over
+-- the copy that had it — so memsync takes the column back from a later copy
+-- that carries it ('' only ever moves to a value, never the reverse) rather
+-- than keeping the '' for good (memsync's table.heals).
 ALTER TABLE episodes ADD COLUMN ask TEXT NOT NULL DEFAULT '';

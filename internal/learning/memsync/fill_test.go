@@ -3,6 +3,8 @@ package memsync
 import (
 	"context"
 	"database/sql"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,5 +253,165 @@ func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) 
 	}
 	if len(blob) == 0 || model != "model-a" {
 		t.Fatalf("the peer still holds the vectorless episode: %d bytes in %q", len(blob), model)
+	}
+}
+
+// THE ASK AN OLDER HOLDER LOST IS TAKEN BACK FROM A COPY THAT HAS IT.
+//
+// A holder on a build from before node migration 0042 has no `ask` column: it
+// hydrates the seat's episodes without their asks and, holding the seat with
+// its watermark empty, republishes every one of them — over the copy that had
+// the ask, since the changelog keeps one message a row. A node hydrating that
+// copy lands ''. Taking only a carried vector, its import never took the ask
+// back when a newer holder republished the row, so the node read every such
+// turn without what it was asked, filled its vector without it, and republished
+// both as the seat's whenever it held the seat.
+
+// episodeRow is the history-bearing half of a stored episode.
+type episodeRow struct {
+	ask   string
+	blob  []byte
+	model sql.NullString
+}
+
+// readEpisode reads one episode's ask and vector.
+func readEpisode(t *testing.T, db *store.DB, id string) episodeRow {
+	t.Helper()
+	var row episodeRow
+	if err := db.SQL().QueryRowContext(t.Context(),
+		"SELECT ask, embedding, embedding_model FROM episodes WHERE id = ?", id,
+	).Scan(&row.ask, &row.blob, &row.model); err != nil {
+		t.Fatalf("read %s: %v", id, err)
+	}
+	return row
+}
+
+// askedEpisode writes, on db, the episode e1 with an ask, and — when vector is
+// set — the vector its holder made of its whole text; and returns the rows a
+// publish of the seat's episodes would carry.
+func askedEpisode(t *testing.T, db *store.DB, vector []float32) []Row {
+	t.Helper()
+	at := time.Now().UTC().Add(-time.Hour)
+	episodes := learning.NewEpisodes(db)
+	if _, err := episodes.Append(t.Context(), learning.Episode{
+		ID: "e1", Handle: seat.Handle, Role: "Engineer", TurnID: "t1",
+		StartedAt: at, EndedAt: at, TaskSummary: "Message from Ana: Slack message",
+		Ask: "The staging deploy keeps failing.", PlanSummary: "rolled back the cache change",
+		ReviewOutcome: "done",
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if vector != nil {
+		if filled, err := episodes.FillEmbeddings(t.Context(), []learning.VectorFill{{
+			ID: "e1", Vector: learning.Vector{Values: vector, Model: "model-a"},
+		}}); err != nil || filled != 1 {
+			t.Fatalf("FillEmbeddings = %d, %v", filled, err)
+		}
+	}
+	rows, _, err := export(t.Context(), db.SQL(), tables[1], seat, 0)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("export = %d rows, %v", len(rows), err)
+	}
+	return rows
+}
+
+// asAnOlderBuildCarriesIt is rows as a build before node migrations 0039 and
+// 0042 republishes them: with no model on the vector and no ask.
+func asAnOlderBuildCarriesIt(rows []Row) []Row {
+	out := make([]Row, len(rows))
+	for i, row := range rows {
+		values := make(map[string]any, len(row.Values))
+		for column, cell := range row.Values {
+			if column != "ask" && column != "embedding_model" {
+				values[column] = cell
+			}
+		}
+		out[i] = Row{Table: row.Table, Values: values}
+	}
+	return out
+}
+
+// fillWithoutTheAsk is what a newer node does with the copy an older holder
+// left it: it embeds the row as it stands — without the ask — in model-a.
+func fillWithoutTheAsk(t *testing.T, db *store.DB) {
+	t.Helper()
+	if filled, err := learning.NewEpisodes(db).FillEmbeddings(t.Context(), []learning.VectorFill{{
+		ID: "e1", Vector: learning.Vector{Values: []float32{0.1, 0.9}, Model: "model-a"},
+	}}); err != nil || filled != 1 {
+		t.Fatalf("FillEmbeddings = %d, %v", filled, err)
+	}
+}
+
+func TestAnAskAnOlderHolderLostIsTakenBackWithItsVector(t *testing.T) {
+	t.Parallel()
+	holder, peer := openStore(t), openStore(t)
+	full := askedEpisode(t, holder, []float32{0.5, 0.5})
+	want := readEpisode(t, holder, "e1")
+
+	carryRows(t, peer, tables[1], asAnOlderBuildCarriesIt(full))
+	if got := readEpisode(t, peer, "e1"); got.ask != "" {
+		t.Fatalf("the fixture is wrong: the older build's copy landed the ask %q", got.ask)
+	}
+	fillWithoutTheAsk(t, peer)
+
+	// A newer holder republishes the row whole.
+	carryRows(t, peer, tables[1], full)
+	got := readEpisode(t, peer, "e1")
+	if got.ask != "The staging deploy keeps failing." {
+		t.Fatalf("the peer still holds the ask %q after a copy carrying it arrived", got.ask)
+	}
+	if !slices.Equal(got.blob, want.blob) || got.model.String != "model-a" {
+		t.Fatalf("the peer kept the vector it made without the ask (%d bytes in %q), want "+
+			"the holder's, made from the whole text", len(got.blob), got.model.String)
+	}
+}
+
+// A ROW THAT TAKES ITS ASK BACK FROM A COPY WITH NO VECTOR DROPS THE ONE IT MADE
+// WITHOUT IT, so the holder's fill makes the vector again from the whole text —
+// rather than keeping, beside the ask, a vector of a text the row no longer is.
+func TestAnAskTakenBackWithoutAVectorLeavesTheRowToBeFilledWhole(t *testing.T) {
+	t.Parallel()
+	holder, peer := openStore(t), openStore(t)
+	full := askedEpisode(t, holder, nil)
+	carryRows(t, peer, tables[1], asAnOlderBuildCarriesIt(full))
+	fillWithoutTheAsk(t, peer)
+
+	carryRows(t, peer, tables[1], full)
+	got := readEpisode(t, peer, "e1")
+	if got.ask != "The staging deploy keeps failing." || got.blob != nil || got.model.Valid {
+		t.Fatalf("the peer holds ask %q with %d bytes of vector in %q, want the ask and no "+
+			"vector", got.ask, len(got.blob), got.model.String)
+	}
+	left, err := learning.NewEpisodes(peer).Unfilled(t.Context(), seat.Handle, "model-a",
+		learning.FillCursor{}, 10)
+	if err != nil || len(left) != 1 || !strings.Contains(left[0].Text, "staging deploy") {
+		t.Fatalf("unfilled = %+v, %v; want the row, to be embedded with its ask", left, err)
+	}
+}
+
+// A COPY THAT LOST THE ASK TAKES NOTHING FROM A ROW THAT HAS IT: not the ask's
+// absence, and not the vector made without it — which is of another text, and
+// is not this row's vector however much newer its space. Taken over a stored
+// row with no vector, it was the row's from then on.
+func TestACopyThatLostTheAskTakesNothingFromARowThatHasIt(t *testing.T) {
+	t.Parallel()
+	holder, peer, lossy := openStore(t), openStore(t), openStore(t)
+	full := askedEpisode(t, holder, nil)
+	carryRows(t, peer, tables[1], full)
+
+	carryRows(t, lossy, tables[1], asAnOlderBuildCarriesIt(full))
+	fillWithoutTheAsk(t, lossy)
+	weak, _, err := export(t.Context(), lossy.SQL(), tables[1], seat, 0)
+	if err != nil || len(weak) != 1 {
+		t.Fatalf("export = %d rows, %v", len(weak), err)
+	}
+	carryRows(t, peer, tables[1], weak)
+	got := readEpisode(t, peer, "e1")
+	if got.ask != "The staging deploy keeps failing." {
+		t.Fatalf("a copy without the ask took it away: the peer holds %q", got.ask)
+	}
+	if got.blob != nil || got.model.Valid {
+		t.Fatalf("the peer took a vector made without the ask (%d bytes in %q)",
+			len(got.blob), got.model.String)
 	}
 }

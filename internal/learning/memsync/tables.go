@@ -112,6 +112,24 @@ type table struct {
 	// row since node migration 0042 gave it the ask — so the holder can
 	// make either again.
 	fillsVector bool
+
+	// heals are the columns a carried copy can arrive WITHOUT, and which an
+	// import therefore takes from a later copy that has them: TEXT columns
+	// whose default is '', added after the table was first carried, so a
+	// peer on a build that predates one stores the default for every row it
+	// hydrates and — holding the seat, its watermark empty — republishes
+	// every row with the column missing. The changelog keeps one message a
+	// subject, so that copy REPLACES the one that had the value, and a
+	// node hydrating it lands the default; with DO NOTHING it would keep it
+	// for good, and republish it as the seat's.
+	//
+	// So the column moves from '' to a carried value on import, and never
+	// back: the row is immutable once written, so a value is the row's own
+	// and '' beside it is only a copy that lost it. Every column listed is
+	// part of the text the row's VECTOR is of — the episode's ask is — so a
+	// row that takes one drops the vector made without it (see
+	// [table.onConflict]).
+	heals []string
 }
 
 // tables is every table a seat's memory lives in.
@@ -150,6 +168,9 @@ var tables = []table{
 		blobs:       []string{"embedding"},
 		watermark:   "change_seq",
 		fillsVector: true,
+		// THE ASK, which a build before node migration 0042 does not
+		// carry: see [table.heals].
+		heals: []string{"ask"},
 	},
 	{
 		name:    "counterparty_profiles",
