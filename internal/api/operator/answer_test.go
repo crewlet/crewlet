@@ -10,9 +10,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -32,10 +33,13 @@ func (oneRunbook) Search(context.Context, knowledge.Query) knowledge.Result {
 	}
 }
 
-// countedModel answers every question and counts how often it was asked.
+// countedModel answers every question and counts how often it was asked —
+// behind the auxiliary seam, recording the attribution each call stated, since
+// the seam is what charges and records it.
 type countedModel struct {
 	mu    sync.Mutex
 	calls int
+	uses  []auxspend.Use
 }
 
 func (m *countedModel) Model() string { return "aux" }
@@ -48,8 +52,17 @@ func (m *countedModel) Complete(context.Context, llm.Request) (*llm.Completion, 
 		InputTokens: 300, OutputTokens: 40}, nil
 }
 
-func (m *countedModel) Head(*org.Role, phase.Phase) (chain.Member, error) {
+func (m *countedModel) Auxiliary(_ *org.Role, use auxspend.Use) (chain.Member, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.uses = append(m.uses, use)
 	return chain.Member{Key: "aux", Provider: m}, nil
+}
+
+func (m *countedModel) resolved() []auxspend.Use {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.uses)
 }
 
 func (m *countedModel) asked() int {
@@ -60,22 +73,14 @@ func (m *countedModel) asked() int {
 
 // companyWindows is a company budget that can be spent.
 type companyWindows struct {
-	mu      sync.Mutex
-	spent   bool
-	charged int
+	mu    sync.Mutex
+	spent bool
 }
 
 func (b *companyWindows) Refusing(context.Context) (builtin.BudgetRefusal, bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return builtin.BudgetRefusal{Period: "day", Window: "2026-09-25", Used: 10, Limit: 10}, b.spent, nil
-}
-
-func (b *companyWindows) Charge(_ context.Context, tokens int) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.charged += tokens
-	return nil
 }
 
 // answerSurface is an operator surface serving answer_knowledge, bound by
@@ -122,9 +127,9 @@ func TestAnUnboundTokenCannotAsk(t *testing.T) {
 	if err != nil || !served || !res.Failed || res.Refusal != crewletmcp.RefusalForbidden {
 		t.Fatalf("an unbound token over MCP was answered: (%+v, %v, %v)", res, served, err)
 	}
-	if model.asked() != 0 || budget.charged != 0 {
-		t.Fatalf("an unbound caller spent tokens: %d model calls, %d charged",
-			model.asked(), budget.charged)
+	if model.asked() != 0 || len(model.resolved()) != 0 {
+		t.Fatalf("an unbound caller spent tokens: %d model calls, %d resolutions",
+			model.asked(), len(model.resolved()))
 	}
 
 	status, answer = act(t, h, "founder-secret", builtin.AnswerKnowledgeTool,
@@ -133,9 +138,16 @@ func TestAnUnboundTokenCannotAsk(t *testing.T) {
 		t.Fatalf("the bound person was refused an answer: %d %v", status, answer)
 	}
 	receipt, _ := answer["receipt"].(map[string]any)
-	if !strings.Contains(receipt["answer_md"].(string), "make deploy") || budget.charged != 340 {
-		t.Errorf("the bound person's answer = %v with %d charged, want the model's answer "+
-			"and its 340 tokens", receipt, budget.charged)
+	tokens, _ := receipt["tokens"].(map[string]any)
+	if !strings.Contains(receipt["answer_md"].(string), "make deploy") ||
+		tokens["input"] != float64(300) || tokens["output"] != float64(40) {
+		t.Errorf("the bound person's answer = %v, want the model's answer and its 340 tokens", receipt)
+	}
+	// THE PERSON'S SPEND, as the seam files it: the operator stage, which it
+	// charges to the company's windows alone and records for the person.
+	want := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAnswerKnowledge}
+	if uses := model.resolved(); len(uses) != 1 || uses[0] != want {
+		t.Errorf("the answer was resolved as %+v, want %+v", uses, want)
 	}
 }
 

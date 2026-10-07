@@ -5,18 +5,22 @@ package prefetch
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/search"
 )
 
 var log = logging.Get("agent.prefetch")
@@ -116,6 +120,13 @@ type Blocks struct {
 	// onboarding for its current org chain.
 	OnboardingHint string
 
+	// TurnEmbedding is what became of the turn's one vector: embedded,
+	// failed, or a company with no embeddings — "" where no search asked for
+	// it. Carried out for the reason [Blocks.ThreadContextRead] is: an
+	// episode block that is empty because the embedder failed and one that
+	// is empty because nothing was similar are the same empty string.
+	TurnEmbedding types.EmbedOutcome
+
 	// ThreadContext is the chat thread this turn was woken in, as it stood
 	// at turn start. Empty for every trigger that is not a chat thread
 	// reply — there is then no thread to be missing.
@@ -176,9 +187,30 @@ type Request struct {
 	// Org is the company, for the knowledge search's read scope.
 	Org *org.Organization
 
-	// Task is the trigger as the turn describes it — what everything here
-	// is judged relevant AGAINST.
+	// Task is the trigger as the turn describes it to its executor: the
+	// integration's prompt — triage guidance, how to reply, which ids to
+	// act on — wrapped around what was asked. It is what the executor is
+	// handed, and nothing here judges relevance against it.
 	Task string
+
+	// Ask is what the turn was ASKED, without that wrapping: each
+	// notification's subject and salient body (a coalesced burst's
+	// messages, attributed to their senders), a colleague's question, a
+	// schedule's task. It is what every relevance judgement here is made
+	// against — the ONE vector the turn embeds for the memory and episode
+	// searches, the memory filter, the knowledge-query writer and the
+	// episode summary.
+	//
+	// NOT THE TASK, because the wrapping is what the task is mostly made
+	// of on the commonest wake. A chat message reaches the executor behind
+	// about 1.5 kB of triage scaffolding that is byte-identical on every
+	// turn of that surface: embedded, it dominates the vector, so every
+	// chat turn looked alike; read by the knowledge-query writer, its
+	// worked examples ("@PM open a ticket for @SWE") became search terms;
+	// and read by the memory filter, the roles those examples name read as
+	// people the task involves. An empty Ask is a trigger with nothing in
+	// it to judge — the searches treat it as a thin trigger.
+	Ask string
 
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke. Several on a coalesced trigger, and every one of them gets a
@@ -187,14 +219,20 @@ type Request struct {
 	Senders []learning.Subject
 
 	// RequiresRecon says the trigger is a POINTER rather than the
-	// context — a webhook naming a thing that changed. It gates the two
-	// searches that judge relevance against the trigger text, because
+	// context — a webhook naming a thing that changed. It gates the three
+	// searches that judge relevance against what was asked, because
 	// filtering against a bare pointer returns noise wearing the shape of
 	// relevance.
 	RequiresRecon bool
 
-	// TurnID identifies the turn, for the auxiliary calls' telemetry.
-	TurnID string
+	// Aux is the turn's attribution for every auxiliary call this request
+	// makes — the memory filter, the knowledge query, the episode summary
+	// and the compactions behind the thread and episode blocks: the turn
+	// stage, the run and its work key, and the turn's tally its work item
+	// is charged from. Each call adds its own purpose. It replaced a TurnID
+	// this package was handed "for the auxiliary calls' telemetry" and read
+	// nowhere, which is what those calls' spend reached.
+	Aux auxspend.Use
 
 	// Thread is the chat thread this turn was woken in, when it was woken
 	// in one. The zero value is the ordinary case — a webhook, a scheduled
@@ -207,14 +245,70 @@ type Request struct {
 	Thread notify.Thread
 }
 
-// Models resolves the model a seat's auxiliary work runs on.
+// judgeable says there is something to judge relevance against: the trigger
+// is not a pointer, and it asked something.
 //
-// The phase registry's own signature, so *phase.Registry satisfies it as
-// written — the same seam the learning workers take, and for the same
-// reason: an adapter here would be a second place deciding which model
-// answers a seat's cheap questions.
+// THE THIN-TRIGGER GATE, in one place, so the three searches behind it — the
+// memory filter and its similarity half, the knowledge query, episode recall —
+// can never disagree about which turns they skip.
+func (r Request) judgeable() bool {
+	return !r.RequiresRecon && strings.TrimSpace(r.Ask) != ""
+}
+
+// EmbedBudget bounds embedding the text a similarity search is run against:
+// a turn's ask at turn start, and the hint or query a pull tool passes.
+//
+// [search.QueryEmbedBudget], BY REFERENCE rather than a copy of its figure,
+// because that budget is stated for exactly these readers — "a person typing
+// or a turn starting" — and a tool call has a model waiting on it the same
+// way. What it costs on a slow provider is the similarity half of one turn;
+// what it buys is a turn start that a provider having a bad minute does not
+// hold up by the provider's own fifteen seconds. One text is ONE call at most, however long:
+// a long ask is pooled from pieces sent in one batch.
+const EmbedBudget = search.QueryEmbedBudget
+
+// turnVector is the turn's one vector, computed at most once and only when a
+// search asks for it.
+type turnVector func() (learning.Vector, bool)
+
+// vectorFor embeds r's ask once, for every search in the turn that wants it,
+// and writes what became of it to outcome (nil for a caller that has no
+// summary to report it on) — see [Blocks.TurnEmbedding].
+//
+// ONCE, because the memory and episode searches are judged against the same
+// text: embedding it for each was two billed round trips for one vector. And
+// LAZILY, so a turn whose searches are all gated — a thin trigger, an empty
+// ask, a seat with no diary and no episode store — embeds nothing at all, and
+// its outcome stays unset.
+func (f *Fetcher) vectorFor(ctx context.Context, r Request, outcome *types.EmbedOutcome) turnVector {
+	return sync.OnceValues(func() (learning.Vector, bool) {
+		if !r.judgeable() {
+			return learning.Vector{}, false
+		}
+		bounded, cancel := context.WithTimeout(ctx, EmbedBudget)
+		defer cancel()
+		vector, err := f.embed(bounded, r.Ask)
+		if outcome != nil {
+			switch {
+			case err == nil:
+				*outcome = types.EmbedEmbedded
+			case errors.Is(err, learning.ErrNoEmbeddings):
+				*outcome = types.EmbedUnconfigured
+			default:
+				*outcome = types.EmbedFailed
+			}
+		}
+		return vector, err == nil
+	})
+}
+
+// Models resolves the model a seat's auxiliary work runs on: the engine's ONE
+// auxiliary seam, the same one the learning workers take — which resolves the
+// seat's auxiliary chain off the phase registry, so the answer to "which model
+// answers a seat's cheap questions" is decided in one place — and which records
+// and charges every completion under the attribution each call states.
 type Models interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error)
 }
 
 // Diary is the seat's own memory, as much of it as this package reads.
@@ -231,8 +325,13 @@ type Diary interface {
 }
 
 // Episodes is the seat's record of past turns.
+//
+// Unsearchable is what a pulled search did not reach — the seat's raw turns
+// with no vector of the query's model — so an empty answer can say so rather
+// than tell the seat it has never done the work.
 type Episodes interface {
 	Recall(ctx context.Context, q learning.RecallQuery) ([]learning.Hit, error)
+	Unsearchable(ctx context.Context, handle, model string) (int, error)
 }
 
 // Counterparties is what this seat has observed about other people.
@@ -303,10 +402,20 @@ type Sources struct {
 	// comment on why there is no unfiltered fallback.
 	Models Models
 
-	// Embed turns text into a vector for the similarity searches. Nil
-	// falls back to recency alone, which is a real degradation rather
-	// than a failure: recent memories are still this seat's memories.
-	Embed func(ctx context.Context, text string) ([]float32, error)
+	// Compact rewrites the middle of a chat thread too long to carry
+	// whole — see [splitThread]. Nil rewrites nothing, and those messages
+	// are then left out and counted, which is what the block always did.
+	Compact *compact.Compactor
+
+	// Embed turns text into a vector for the similarity searches, with
+	// the company's CURRENT embedder — read when it is called, never when
+	// the fetcher was built (see [learning.Embed]). Nil, or an answer of
+	// [learning.ErrNoEmbeddings], leaves personal memory its recency half
+	// alone, which is a real degradation rather than a failure — recent
+	// memories are still this seat's memories — and episode recall nothing
+	// at all, because recent turns are not similar work
+	// ([Fetcher.episodeRecall]).
+	Embed learning.Embed
 
 	// SummarizeEpisodes is the operator's switch for whether episode hits
 	// are passed through the auxiliary model. It gates ONLY that call.
@@ -359,7 +468,12 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 			*into = render()
 		})
 	}
-	run(&blocks.PersonalMemory, func() string { return f.personalMemory(ctx, r) })
+	// ONE VECTOR FOR THE TURN, shared by the two searches that rank by it,
+	// and what became of it — written by whichever search asked first, read
+	// once both have finished.
+	var embedded types.EmbedOutcome
+	vector := f.vectorFor(ctx, r, &embedded)
+	run(&blocks.PersonalMemory, func() string { return f.personalMemory(ctx, r, vector) })
 	// Its own goroutine, like the skills block, because it reports a count
 	// alongside its prose.
 	wg.Go(func() {
@@ -368,7 +482,7 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks.RelevantKnowledge = read.text
 		blocks.RelevantKnowledgePages, blocks.RelevantKnowledgeQuery = read.pages, read.query
 	})
-	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
+	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r, vector) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
 	// Its own goroutine rather than a run(), because it is the one block that
 	// reports something back besides its prose.
@@ -387,6 +501,7 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks.ThreadContextStoppedShort = block.stoppedShort
 	})
 	wg.Wait()
+	blocks.TurnEmbedding = embedded
 	return blocks
 }
 
@@ -445,16 +560,20 @@ func recoverSkills(into *string, ids *[]string) {
 	}
 }
 
-// auxCall runs one auxiliary completion for a seat.
+// auxCall runs one auxiliary completion for the request's seat, filed under
+// the request's attribution and the caller's purpose.
 //
 // ONE PLACE, so the timeout, the temperature and the "no tools" rule are the
 // same for all three callers. A tool on the surface invites a model to call
 // it and answer nothing, and there is no tool any of these passes could use.
-func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user string, maxTokens int) (string, bool) {
+func (f *Fetcher) auxCall(ctx context.Context, r Request, purpose types.AuxPurpose,
+	system, user string, maxTokens int,
+) (string, bool) {
 	if f.src.Models == nil {
 		return "", false
 	}
-	member, err := f.src.Models.Head(seat, phase.Auxiliary)
+	seat := r.Seat
+	member, err := f.src.Models.Auxiliary(seat, r.Aux.For(purpose))
 	if err != nil {
 		log.DebugContext(ctx, "prefetch_no_auxiliary_model", "seat", seat.Handle(), "error", err)
 		return "", false

@@ -10,9 +10,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -68,11 +70,15 @@ type (
 // noteLimit caps what refresh_memory puts in front of a model when the model
 // names no limit.
 //
-// A note goes into a prompt, and a dozen half-relevant ones crowd out the task
-// they were fetched for. Five is what a model reads; more is what it skims.
-// Distinct from an episode's limit — that one is the company's
-// learning.episodic.retrieval_limit, and a diary is not an episode history.
-const noteLimit = 5
+// EIGHT, the most the relevance filter itself may pick (the turn-start memory
+// block's own maximum), so a default call shows every note the filter judged
+// relevant. It was five, and the three picks past it were dropped without a
+// word — a model asked for its notes on a topic was told the first five and
+// left to believe that was all of them. A smaller `limit` still narrows, and
+// then the answer SAYS how many more there are. Distinct from an episode's
+// limit — that one is the company's learning.episodic.retrieval_limit, and a
+// diary is not an episode history.
+const noteLimit = 8
 
 // maxEpisodeLimit bounds what a model may ask for. A tool that honoured
 // "limit: 500" would let one call spend a phase's whole context on history.
@@ -198,6 +204,10 @@ type queryEpisodes struct {
 	// what a company with no embeddings has.
 	recall Recaller
 
+	// compact condenses a recalled turn's long ask and account of what it
+	// did; nil names such a text by its size (see [learning.PastTurns]).
+	compact *compact.Compactor
+
 	// limit is the company's configured default hit count. Bounded by
 	// maxEpisodeLimit whatever it says, because the ceiling is about what
 	// fits in a prompt rather than what an operator wants.
@@ -209,8 +219,8 @@ var _ tools.SeatCallable = (*queryEpisodes)(nil)
 func (t *queryEpisodes) Name() string { return QueryEpisodesTool }
 
 func (t *queryEpisodes) Description() string {
-	return "Recall your own past turns — what you were asked, what you " +
-		"did, how it went. Pass `query` to search by MEANING once you know " +
+	return "Recall your own past turns — what woke each one, what you were " +
+		"asked, how it ended and what you did. Pass `query` to search by MEANING once you know " +
 		"what this task actually involves; that is the one to use after " +
 		"recon on a thin trigger, when the block at the top of your prompt " +
 		"said it found nothing. Pass `conversation` to narrow to one thread, " +
@@ -261,20 +271,22 @@ func (t *queryEpisodes) defaultLimit() int {
 //
 // The REFUSAL is a message rather than an empty answer: "nothing resembles
 // this" and "this deployment cannot search by meaning" send a model to
-// opposite places, and the second one has a fallback it can still use.
-func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, error) {
+// opposite places, and the second one has a fallback it can still use. And
+// beside what it found, it reports how many of the seat's turns it could not
+// search ([learning.EpisodeSearch.Unsearched]), which is a third place.
+func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, int, error) {
 	if t.recall == nil {
-		return nil, errNoSimilarity
+		return nil, 0, errNoRecall
 	}
-	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
+	search, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	out := make([]learning.Episode, 0, len(hits))
-	for _, hit := range hits {
+	out := make([]learning.Episode, 0, len(search.Hits))
+	for _, hit := range search.Hits {
 		out = append(out, hit.Episode)
 	}
-	return out, nil
+	return out, search.Unsearched, nil
 }
 
 func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -296,6 +308,13 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		found []learning.Episode
 		err   error
 		scope string
+		// ranked is how the answer is ordered, which is what its header
+		// has to say: a similarity search is MOST SIMILAR first, and
+		// headed "most recent" it read as the seat's latest work.
+		ranked = "most recent"
+		// unsearched is how many of the seat's turns a similarity search
+		// could not reach — no vector of the current model yet.
+		unsearched int
 	)
 	switch query := strings.TrimSpace(argString(args, "query")); {
 	case query != "":
@@ -308,8 +327,11 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		if outcome != "" {
 			want = clampInt(limit*outcomeOverfetch, 1, maxEpisodeLimit)
 		}
-		found, err = t.similar(ctx, turn, query, want)
-		scope = fmt.Sprintf(" like %s", clip(query))
+		found, unsearched, err = t.similar(ctx, turn, query, want)
+		if err != nil {
+			return refused(tools.RefusalUnavailable, similarityRefusal(err)), nil
+		}
+		scope, ranked = fmt.Sprintf(" like %s", clip(query)), "most similar"
 	case argString(args, "conversation") != "":
 		conversation := strings.TrimSpace(argString(args, "conversation"))
 		found, err = t.episodes.ForConversation(ctx, handle, conversation, limit)
@@ -325,23 +347,104 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		scope += fmt.Sprintf(" that ended %s", clip(outcome))
 	}
 	if len(found) == 0 {
+		if unsearched > 0 {
+			// NOT NEW WORK — NOT SEARCHED. Recall compares only turns
+			// with a vector of the query's model, so after a model
+			// change, until the holder has embedded them again, most
+			// of a seat's history is outside the search, and "this is
+			// new work" told a seat it had never done what it did
+			// last week.
+			return tools.Result{Output: fmt.Sprintf(
+				"No earlier turns of yours that could be searched by meaning are%s. %s",
+				scope, unsearchedNote(unsearched))}, nil
+		}
 		return tools.Result{Output: fmt.Sprintf(
 			"No earlier turns of yours%s. This is new work.", scope)}, nil
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Your %d most recent turns%s:\n\n", len(found), scope)
-	for _, ep := range found {
-		fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
-		if ep.TaskSummary != "" {
-			fmt.Fprintf(&b, " — %s", ep.TaskSummary)
-		}
-		b.WriteString("\n")
-		if ep.ReviewOutcome != "" {
-			fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
-		}
+	fmt.Fprintf(&b, "Your %d %s turns%s:\n\n", len(found), ranked, scope)
+	for _, entry := range t.render(ctx, turn, found) {
+		b.WriteString(entry)
+	}
+	if unsearched > 0 {
+		b.WriteString("\n" + unsearchedNote(unsearched))
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+// unsearchedNote says how many turns a search by meaning did not reach, and
+// where they can be read instead.
+func unsearchedNote(n int) string {
+	if n == 1 {
+		return "1 earlier turn has no vector of the current embedding model yet and " +
+			"was not searched — it is being embedded again; read it with " +
+			"`conversation`, or with neither argument for your most recent turns."
+	}
+	return fmt.Sprintf("%d earlier turns have no vector of the current embedding "+
+		"model yet and were not searched — they are being embedded again; read them "+
+		"with `conversation`, or with neither argument for your most recent turns.", n)
+}
+
+// render renders each recalled turn, its long asks and accounts condensed
+// through [learning.PastTurns] — the turn-start block's own rendering — so at
+// most [compact.Parallel] rewrites run at once and ALL of them are held to one
+// [learning.EpisodeRewriteTimeout]: a text no rewrite reached by then is named
+// by its size, and the answer waits at most that long however many turns it
+// carries — where it once waited out the compactor's minute, and its retry,
+// per account, and then thirty seconds for every four rewrites.
+func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
+	// Each rewrite is the turn's own cost, filed under its run.
+	turns := learning.PastTurns(ctx, found, t.compact.For(turn.Seat, turn.Aux()),
+		learning.EpisodeAccountBytes)
+	out := make([]string, len(found))
+	for i, ep := range found {
+		out[i] = renderPastTurn(ep, turns[i])
+	}
+	return out
+}
+
+// renderPastTurn is one entry of query_episodes' answer.
+//
+// A RAW TURN is what woke it, what it was asked, how it ended, and what it did.
+// What woke it is the label of the waking event, MARKED as that — the worker
+// prompts' "woken by" — because unmarked, after the date, a model read
+// "Message from Ana: Slack message" as the question it had been asked; what it
+// was asked is the ask the row stores (node migration 0042, so a turn from
+// before it has none). A COMPACTED ROW stands for a cluster of turns, so it is
+// the pattern, how many turns it stands for and how many of them ended done,
+// and what varied: it has no label and no account of its own, and rendered as
+// a turn it showed nothing but its date.
+func renderPastTurn(ep learning.Episode, past learning.PastTurn) string {
+	var b strings.Builder
+	if ep.Kind == learning.KindCompacted {
+		count := max(ep.Count, 1)
+		fmt.Fprintf(&b, "- %s to %s — %d turns like this: %s\n",
+			ep.StartedAt.Format(time.DateOnly), ep.EndedAt.Format(time.DateOnly), count,
+			ep.CommonTaskPattern)
+		if ep.ReviewOutcome != "" {
+			fmt.Fprintf(&b, "    outcome: %s (%d of %d done)\n", ep.ReviewOutcome, ep.DoneCount(), count)
+		}
+		if notable := strings.TrimSpace(ep.NotablePatterns); notable != "" {
+			fmt.Fprintf(&b, "    what varied: %s\n", notable)
+		}
+		return b.String()
+	}
+	fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
+	if ep.TaskSummary != "" {
+		fmt.Fprintf(&b, " — woken by: %s", ep.TaskSummary)
+	}
+	b.WriteString("\n")
+	if past.Ask != "" {
+		fmt.Fprintf(&b, "    asked: %s\n", past.Ask)
+	}
+	if ep.ReviewOutcome != "" {
+		fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
+	}
+	if past.Account != "" {
+		fmt.Fprintf(&b, "    what it did: %s\n", past.Account)
+	}
+	return b.String()
 }
 
 // --- refresh_memory ------------------------------------------------------- //
@@ -460,7 +563,17 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 			take.Spent)), nil
 	}
 
-	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint)
+	// WHO IS ASKING, as the turn-start filter was told: its per-subject
+	// rule — a preference about somebody not party to the task does not
+	// apply — is unenforceable without it, so the re-filter would surface
+	// "Sam prefers short replies" on a turn where Miles is asking.
+	senders := make([]learning.Subject, 0, len(turn.Senders))
+	for _, sender := range turn.Senders {
+		senders = append(senders, learning.SubjectOf(sender))
+	}
+	// THE TURN'S OWN SPEND: the re-filter runs mid-turn for its work, so its
+	// call is part of the turn's cost and its work item's.
+	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint, senders, turn.Aux())
 	if err != nil {
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
 	}
@@ -482,13 +595,20 @@ func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) to
 		return tools.Result{Output: fmt.Sprintf(
 			"Nothing in your notes bears on %s.", clip(hint))}
 	}
+	more := 0
 	if len(entries) > limit {
-		entries = entries[:limit]
+		entries, more = entries[:limit], len(entries)-limit
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your notes that bear on %s:\n\n", clip(hint))
 	for _, e := range entries {
 		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
+	}
+	if more > 0 {
+		// SAID, never silent: a list cut to a limit reads as the whole
+		// list, and a seat that believes it has every note will act
+		// without the one that was left off.
+		fmt.Fprintf(&b, "- (+%d more that bear on this — ask again with a larger `limit`)\n", more)
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}
 }
@@ -683,10 +803,55 @@ func clampInt(v, lo, hi int) int { //nolint:unparam // see the doc comment
 // so one that matches none costs a single wider search rather than a scan.
 const outcomeOverfetch = 4
 
-// errNoSimilarity is what a deployment with no embeddings answers a `query`
-// with. Its own sentinel so the tool can say which of two very different
-// things happened.
-var errNoSimilarity = errors.New("no embeddings are configured on this deployment")
+// errNoRecall is a registry built with no similarity search at all
+// ([Deps.Recall] nil) — never a company setting, since the engine always
+// wires the prefetch's.
+var errNoRecall = errors.New("no similarity search is wired into this registry")
+
+// similarityRefusal says what stopped a `query`, because each cause sends a
+// model somewhere different and only ONE of them is worth asking again:
+//
+//   - a company with no embeddings will never search by meaning, so the model
+//     should stop asking;
+//   - an embedder that refuses its CONFIGURATION ([embeddings.ErrConfiguration]:
+//     a rejected key, a missing model or endpoint, a vector of a width the
+//     store was not sized for) refuses every query until an operator fixes
+//     providers.embeddings, so the model should stop asking too — and the
+//     operator's fix is named, so a seat that reports it reports the right one;
+//   - an embedder that refuses THIS QUERY ([embeddings.ErrRefused]) refuses it
+//     again unchanged, so only a different query may answer;
+//   - an embedder that could not answer NOW ([embeddings.ErrTransient] — a
+//     429, a 5xx, a network failure — or a deadline) may answer if asked again;
+//   - anything else — an episode store that could not be read, an answer the
+//     engine could not use, a cancelled turn — is said as what it was, with no
+//     promise either way, because nothing classified it;
+//   - and a registry with no search wired is none of these.
+//
+// The embeddings package classifies its failures precisely so a caller can
+// tell these apart, and the class survives every wrap on the way here. Told
+// "calling again may answer" about a revoked key, an executor asked again,
+// was refused identically, and spent rounds of every turn on it until an
+// operator noticed.
+func similarityRefusal(err error) string {
+	const fallback = " Pass `conversation` to read one thread's turns, or neither argument for your most recent ones — neither needs it."
+	switch {
+	case errors.Is(err, learning.ErrNoEmbeddings):
+		return "This company configures no embeddings, so your turns cannot be searched by meaning." + fallback
+	case errors.Is(err, errNoRecall):
+		return "Searching your turns by meaning is not available here." + fallback
+	case errors.Is(err, embeddings.ErrConfiguration):
+		return fmt.Sprintf("Searching your turns by meaning is misconfigured on this deployment (%v): "+
+			"no query will answer until an operator fixes providers.embeddings, so do not search "+
+			"by meaning again until then.", err) + fallback
+	case errors.Is(err, embeddings.ErrRefused):
+		return fmt.Sprintf("The embedder refuses this query (%v) and will refuse it again unchanged; "+
+			"a shorter or differently worded `query` may answer.", err) + fallback
+	case errors.Is(err, embeddings.ErrTransient), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("Searching your turns by meaning failed this time (%v); calling again may answer.", err) + fallback
+	default:
+		return fmt.Sprintf("Searching your turns by meaning could not run (%v).", err) + fallback
+	}
+}
 
 // keepOutcome filters recalled turns by how they ended, preserving order.
 //

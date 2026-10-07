@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // probeTimeout caps a version or status probe.
@@ -375,12 +374,15 @@ func (p *Provider) webProbe(ctx context.Context) string {
 				"Point this entry at a stronger model and run the doctor again",
 			p.agent, comp.OutputTokens)
 	}
+	// WHAT IT SAID, WHOLE: the reader is an operator deciding what to fix,
+	// and a refusal's reason — a sandbox flag, a proxy's answer — is rarely
+	// in its first hundred and twenty bytes, which is where this used to stop.
 	return fmt.Sprintf(
 		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (cli.env / passthrough_env)",
-		p.agent, webProbeURL, textcut.Ellipsis(strings.TrimSpace(comp.Content), 120))
+		p.agent, webProbeURL, strings.TrimSpace(comp.Content))
 }
 
 // reportsCurrentClock reports whether text carries a Unix timestamp within
@@ -486,7 +488,7 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 		return fmt.Sprintf(
 			"failed — the CLI answered but produced no parseable tool call, so seats on "+
 				"this provider will burn a corrective round every turn. It said: %q",
-			textcut.Ellipsis(strings.TrimSpace(comp.Content), 200))
+			strings.TrimSpace(comp.Content))
 	}
 	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)
 }

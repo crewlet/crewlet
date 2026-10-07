@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -97,6 +98,11 @@ type ResumeRequest struct {
 	// no run at all, so on this request its cost was reported nowhere.
 	DeliveredRefs []string
 
+	// DeliveredRefsElided is how many more refs the run reported than
+	// DeliveredRefs lists ([MaxDeliveredRefBytes]), for the resumed phase's
+	// record to say so too.
+	DeliveredRefsElided int
+
 	// InputTokens and OutputTokens are what the job this resume collected
 	// cost, for the resumed segment's charge to the turn's work item
 	// (ADR-0022): that segment is the job's, so it pays for it.
@@ -108,6 +114,19 @@ type ResumeRequest struct {
 	// completion that parked resumed nothing.
 	InputTokens  int
 	OutputTokens int
+
+	// Engine is what the ENGINE spent on the job outside every segment of
+	// the turn — its bridged calls ([LaunchRecord.Bridged]) and the
+	// condensation of the collection this resume runs from, or for an
+	// answer of the one that parked ([LaunchRecord.Condensed]) — for the
+	// same charge: no segment was running to tally it, and this one is the
+	// job's.
+	//
+	// A COLLECTION RETRIED after a failed resume condenses again, and each
+	// attempt is a call the turn's cost carries; only the one the resume
+	// that lands runs from reaches the item, so the item errs short of the
+	// turn, never past it.
+	Engine EngineSpend
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -122,8 +141,14 @@ type ResumeRequest struct {
 // PAST its cap, for the caller to report; the spend is on both counters either
 // way, and the next round the seat or the company attempts is refused against
 // the figure that includes it.
+//
+// companyCharged says an earlier attempt already put the run on the COMPANY's
+// counter and failed on the seat's, so this one records the seat's share alone.
+// An error wrapping a [coord.SeatUncountedError] is that partial, reached now:
+// the company's share is recorded and the seat's is not. Any other error
+// records nothing this caller can count on.
 type Accountant interface {
-	Charge(ctx context.Context, agentID, handle string, tokens int) (refused bool, err error)
+	Charge(ctx context.Context, agentID, handle string, tokens int, companyCharged bool) (refused bool, err error)
 }
 
 // AudienceResolver resolves the audience a coding agent named for its question
@@ -246,6 +271,12 @@ type CoordinatorOptions struct {
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
 
+	// Condense rewrites a collected run's report or failure detail that is
+	// past [MaxRunTextBytes] — see [Condenser]. Nil condenses nothing, and
+	// such a piece keeps its whole lines up to the bound and says how many
+	// it left out.
+	Condense Condenser
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -288,6 +319,7 @@ type Coordinator struct {
 	account Accountant
 	// audience is [CoordinatorOptions.Audience].
 	audience AudienceResolver
+	condense Condenser
 	ended    func(runID string)
 	stopped  func(ctx context.Context, handle, turnID string)
 	now      func() time.Time
@@ -377,6 +409,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
+		condense: opts.Condense,
 		ended:    opts.Ended,
 		stopped:  opts.Stopped,
 		now:      opts.Now,
@@ -590,20 +623,16 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 
 	result, err := c.collect(ctx, run)
 	if err != nil {
-		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID, "error", err.Error())
-		// The job is OVER even though collection failed. Free the seat and
-		// settle the row whatever the cleanup manages: both are network
-		// calls that can fail on their own, and neither failing is a reason
-		// to leave a seat parked on a run that is finished.
-		c.settleFailed(ctx, run, types.SandboxFailureCollect,
-			"the coding job finished but its box could not be read back, so its "+
-				"result is lost; the work it pushed, if any, is on its branch")
-		return nil
+		return c.collectFailed(ctx, run, err)
 	}
 
 	// Carried on the claimed row from here, so that handing the claim back
-	// hands the record back with it — both of them.
-	run.Charged = c.charge(ctx, run, result)
+	// hands the record back with it — every one of them. The first is that
+	// the box answered, which ends any run of failed collections behind this
+	// one: a park or a resume that fails from here hands the claim back with
+	// the job collected, not still failing ([Release.Collected]).
+	run.Collected = true
+	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishPhase(ctx, run, result)
 
 	if result.NeedsInput {
@@ -625,10 +654,96 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
-		DeliveredRefs: result.DeliveredRefs,
-		InputTokens:   result.InputTokens, OutputTokens: result.OutputTokens,
+		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		Engine: run.LaunchFacts().Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 	})
 	return err
+}
+
+// collectFailed answers a collection that could not read its box back: AGAIN,
+// within a bound, and then the run is given up.
+//
+// IT IS SAFE TO ASK AGAIN, which the claim protocol is what proves. Nothing
+// the tail writes happens before a collection succeeds — the charge, the phase
+// record, the park and the resume all follow it — so a failed collection has
+// changed nothing but the claim, and handing that back ([Coordinator.unclaim])
+// leaves the run exactly as the completion found it: running, its box kept
+// alive by the poll, its turn suspended. The completion is then NAK'd and
+// comes back on the queue's backoff, here or on the seat's next owner, and the
+// poll fires a fresh one on its next tick; whichever claims first collects.
+// Settling on the first failure used to destroy the turn — and its charge and
+// its record — over one transport blip, or over the drain whose cancellation
+// was the failure.
+//
+// THE BOUND IS THE WAITER'S OWN, so the engine has one answer to "how long
+// may a box be unreachable": at least [MinConnectFailures] CONSECUTIVE
+// attempts spanning [ConnectGiveUp] since the last collection that read the
+// box, counted on the job's record so a retry on another node, or after a
+// restart, does not start a fresh allowance. Past it the run is settled as
+// unreachable, as it always was. A collection that read the box ends the run
+// of failures behind it, as the waiter's reconnect that succeeds ends its
+// streak: a box collected and then handed back because its resume failed is a
+// box that answered, and its next failure starts a run of its own.
+//
+// A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
+// box its provider reclaimed, and by the time the poll gives a vanished box up
+// it has already waited out that same window.
+//
+// A COLLECTION THIS NODE ITSELF CANCELLED is handed back WITHOUT being
+// counted. A drain, a restart and a seat moving to another node all end the
+// delivery's context mid-read, and that says nothing about the box: counted,
+// it opened the failure window at the moment of the drain, so the first real
+// failure after a restart minutes later was already past the window and gave
+// a reachable run up after one attempt. Only a cancellation is spared — a
+// deadline the delivery ran out of is counted, because a box whose collection
+// always outlasts it would otherwise be retried for ever.
+func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause error) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		log.InfoContext(ctx, "sandbox_collect_interrupted", "turn_id", run.TurnID,
+			"error", cause.Error(),
+			"detail", "the collection was stopped by this node, not by its box; the claim is "+
+				"handed back uncounted and the completion is retried")
+		if err := c.unclaim(ctx, run, true, collectUnrevertedDetail); err != nil {
+			//nolint:nilerr // As below: the run has been ended and announced.
+			return nil
+		}
+		return fmt.Errorf("sandbox: collecting %s was interrupted: %w", run.TurnID, cause)
+	}
+	now := c.now()
+	facts := run.LaunchFacts()
+	attempts := facts.CollectFailures + 1
+	since := facts.CollectFailingSince
+	if since.IsZero() {
+		since = now
+	}
+	gone := errors.Is(cause, ErrBoxGone)
+	if gone || (attempts >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp) {
+		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
+			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
+			"box_gone", gone, "error", cause.Error())
+		// The job is OVER even though collection failed. Free the seat and
+		// settle the row whatever the cleanup manages: both are network
+		// calls that can fail on their own, and neither failing is a
+		// reason to leave a seat parked on a run that is finished.
+		c.settleFailed(ctx, run, types.SandboxFailureCollect,
+			"the coding job finished but its box could not be read back, so its "+
+				"result is lost; the work it pushed, if any, is on its branch")
+		return nil
+	}
+	log.WarnContext(ctx, "sandbox_collect_retried", "turn_id", run.TurnID,
+		"attempt", attempts, "failing_for_s", now.Sub(since).Seconds(), "error", cause.Error(),
+		"detail", "the box could not be read back; the claim is handed back and the "+
+			"collection is retried until it has failed for the poll's give-up window")
+	// COUNTED: the claim did not move the seat's holding count — running and
+	// resumed both hold it — and handing it back to running leaves it there.
+	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, now); err != nil {
+		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
+		// did not go back, so the run has been ended and announced, and a
+		// redelivered completion would find nothing to claim.
+		return nil
+	}
+	return fmt.Errorf("sandbox: collecting %s (attempt %d): %w", run.TurnID, attempts, cause)
 }
 
 // runOutcome is what a finished run reported about itself, for the resumed
@@ -638,8 +753,23 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 // either way: see [ResumeRequest.InputTokens].
 type runOutcome struct {
 	DeliveredRefs []string
-	InputTokens   int
-	OutputTokens  int
+	// DeliveredRefsElided is how many more the run reported than its
+	// record lists — see [MaxDeliveredRefBytes].
+	DeliveredRefsElided int
+	InputTokens         int
+	OutputTokens        int
+	// Engine is what the engine spent on the job between segments — see
+	// [ResumeRequest.Engine].
+	Engine EngineSpend
+}
+
+// parkedEngineSpend is what the engine spent on a parked job outside every
+// segment, for the resume its answer drives: what its bridged calls cost, and
+// what condensing the collection that parked it did — both off the job's own
+// record, since nothing was collected for this resume.
+func parkedEngineSpend(run PendingRun) EngineSpend {
+	facts := run.LaunchFacts()
+	return facts.Bridged.Plus(EngineSpend{Aux: facts.Condensed})
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
@@ -651,9 +781,7 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	result, err := runner.Collect(ctx, box, RunHandle{
-		CommandID: run.CommandID, SessionID: run.SessionID,
-	})
+	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
 		return Result{}, err
 	}
@@ -665,6 +793,9 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 			"detail", "the coding run reported a negative token count or cost; it "+
 				"is read as nothing spent rather than subtracted from the seat's budget")
 	}
+	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
+	// so the phase record, the park and the resumed executor carry one text.
+	result = c.fitResult(ctx, run, result)
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {
@@ -700,35 +831,46 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 //
 // A CHARGE THE COUNTER NEVER ANSWERED IS NOT RECORDED: it may or may not have
 // landed, and offering it again can only over-state the counter, which trips a
-// cap early rather than late — the direction the counter itself takes when a
-// node dies mid-charge.
+// cap early rather than late.
+//
+// A charge that reached the COMPANY and failed on the seat is recorded as that
+// ([PendingRun.CompanyCharged]): the company's share stays counted, and a retry
+// finishes the seat's alone rather than counting the company a second time.
 //
 // A charge that went OVER A CAP is recorded like any other, because it landed
 // like any other: the post-charge records the spend whatever the caps say (see
 // [Accountant]). Reading that answer as "unrecorded" and offering it again is
 // how one over-cap run is charged once per completion retry, which is the
 // double-charge this record exists to stop.
-func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) bool {
+func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) (charged, companyCharged bool) {
 	tokens := result.InputTokens + result.OutputTokens
 	if run.Charged {
 		log.InfoContext(ctx, "sandbox_charge_already_recorded",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
-		return true
+		return true, run.CompanyCharged
 	}
 	if c.account == nil || tokens == 0 {
-		return false
+		return false, run.CompanyCharged
 	}
-	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
-	if err != nil {
+	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens, run.CompanyCharged)
+	var partial *coord.SeatUncountedError
+	switch {
+	case errors.As(err, &partial):
+		log.WarnContext(ctx, "sandbox_accounting_partial", "turn_id", run.TurnID,
+			"agent_id", run.AgentID, "tokens", tokens, "error", err.Error(),
+			"detail", "the company's counter holds this run and the seat's does not; a "+
+				"retry of the completion records the seat's share alone")
+		return false, true
+	case err != nil:
 		log.WarnContext(ctx, "sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
-		return false
+		return false, run.CompanyCharged
 	}
 	if over {
 		log.WarnContext(ctx, "sandbox_spend_over_budget",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
 	}
 	// RECORDED EITHER WAY, because the counters moved either way.
-	return true
+	return true, true
 }
 
 // publishPhase publishes the collected run as a phase of its turn, ONCE per
@@ -801,19 +943,27 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		// the event store.
 		Response:           redact.Secrets(result.Text),
 		ActivityTranscript: redact.Secrets(result.Transcript),
-		InputTokens:        result.InputTokens,
-		OutputTokens:       result.OutputTokens,
-		TotalTokens:        result.InputTokens + result.OutputTokens,
-		CacheReadTokens:    result.CacheReadTokens,
-		CacheWriteTokens:   result.CacheWriteTokens,
-		WorkItem:           run.WorkItem,
-		LaunchID:           run.LaunchID,
-		Backend:            types.BackendSandbox,
-		CodingAgent:        run.CodingAgent,
-		SandboxID:          run.SandboxID,
-		CostUSD:            result.CostUSD,
-		DeliveredRefs:      result.DeliveredRefs,
-		ConversationKey:    run.Conversation(),
+		// What the record's bound left out of the transcript's middle, so a
+		// screen says the record is not the whole log without parsing the
+		// note that stands in the text — see [boundTranscript].
+		ActivityTranscriptElidedLines: result.TranscriptElidedLines,
+		ActivityTranscriptElidedBytes: result.TranscriptElidedBytes,
+		InputTokens:                   result.InputTokens,
+		OutputTokens:                  result.OutputTokens,
+		TotalTokens:                   result.InputTokens + result.OutputTokens,
+		CacheReadTokens:               result.CacheReadTokens,
+		CacheWriteTokens:              result.CacheWriteTokens,
+		WorkItem:                      run.WorkItem,
+		LaunchID:                      run.LaunchID,
+		Backend:                       types.BackendSandbox,
+		CodingAgent:                   run.CodingAgent,
+		SandboxID:                     run.SandboxID,
+		CostUSD:                       result.CostUSD,
+		DeliveredRefs:                 result.DeliveredRefs,
+		// How many more it reported than the record lists, said rather
+		// than dropped — see [MaxDeliveredRefBytes].
+		DeliveredRefsElided: result.DeliveredRefsElided,
+		ConversationKey:     run.Conversation(),
 	}
 	if !facts.StartedAt.IsZero() {
 		rec.StartedAt = facts.StartedAt.UTC()
@@ -903,6 +1053,8 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		Question: result.Question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		// And what condensing this collection cost, paid by the same resume.
+		Condensed: result.Condensed,
 		// WHO IT IS PUT TO, resolved now and written with the question:
 		// the label is the coding agent's own words, and "what is waiting
 		// on me" is a question nobody could answer while it was all the
@@ -1082,6 +1234,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	// that job's one segment, so it is the one that charges them.
 	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer, ""), true, trigger, runOutcome{
 		InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+		Engine: parkedEngineSpend(claimed),
 	})
 	if disposition == AnswerDeferred {
 		// The claim went back and the run is awaiting this same answer
@@ -1197,6 +1350,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	disposition, err := c.resumeAndSettle(ctx, claimed,
 		answerText(claimed, given.Answer, answererName(given)), true, trigger, runOutcome{
 			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+			Engine: parkedEngineSpend(claimed),
 		})
 	if disposition == AnswerDeferred {
 		// THE RUN IS AWAITING THIS SAME ANSWER AGAIN, so it comes back —
@@ -1316,8 +1470,9 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// path below like every other failed resume.
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
-		DeliveredRefs: outcome.DeliveredRefs,
-		InputTokens:   outcome.InputTokens, OutputTokens: outcome.OutputTokens,
+		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
+		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
+		Engine: outcome.Engine,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
@@ -1587,12 +1742,23 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // this answer — a retry keeps it, so the delivery comes back, and an ending
 // drops it, because there is nothing left to come back to.
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
+	return c.unclaimAt(ctx, run, counted, detail, time.Time{})
+}
+
+// unclaimAt is [Coordinator.unclaim] for a claim handed back because the
+// collection it was taken for failed at collectFailedAt — which the release
+// counts onto the job's record ([Release.CollectFailedAt]); zero is any other
+// hand-back.
+func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
+	collectFailedAt time.Time,
+) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
-		Launch: run.LaunchID, To: to, Charged: run.Charged,
-		Published: run.LaunchFacts().Published, Fence: fenceOf(run),
+		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
+		Published: run.LaunchFacts().Published, CollectFailedAt: collectFailedAt,
+		Collected: run.Collected, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:
@@ -1659,15 +1825,16 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 	c.announceFailure(ctx, run, reason, detail)
 }
 
-// The three sentences a stranded claim reaches an operator's board with.
+// The four sentences a stranded claim reaches an operator's board with.
 //
 // One per caller rather than one shared line, because what an operator does
 // about them differs: a question that was never announced is one nobody saw, a
 // question announced but not recorded is one somebody may be composing an
 // answer to that will never be matched, and a resume that could not be given
-// back is work a box had already finished. All three name the coordination
-// store, because a claim that could not be handed back is what brought every
-// one of them here.
+// back is work a box had already finished, and so is a collection that could
+// not read its box back and could not hand the claim back either. All four
+// name the coordination store, because a claim that could not be handed back
+// is what brought every one of them here.
 const (
 	parkUnannouncedDetail = "the coding run stopped to ask a person a question, but neither the " +
 		"question could be announced nor the run's own claim given back to the " +
@@ -1683,6 +1850,10 @@ const (
 		"re-entered, and the run's claim could not be given back to the coordination " +
 		"store for another attempt, so the turn cannot be continued; the work it pushed, " +
 		"if any, is on its branch"
+
+	collectUnrevertedDetail = "the coding job finished but its box could not be read back, and " +
+		"the run's claim could not be given back to the coordination store for another " +
+		"attempt, so its result is lost; the work it pushed, if any, is on its branch"
 )
 
 // reportStopped tells the engine one suspended turn has stopped.
@@ -2133,11 +2304,26 @@ func resumeText(result Result) string {
 	}
 	lines := []string{"The sandbox coding run " + status + "."}
 	if len(result.DeliveredRefs) > 0 {
-		lines = append(lines, "Delivered: "+strings.Join(result.DeliveredRefs, ", "))
+		delivered := "Delivered: " + strings.Join(result.DeliveredRefs, ", ")
+		if result.DeliveredRefsElided > 0 {
+			// SAID, so the executor does not report a short list as all of
+			// it: the rest are in the report it reads below.
+			delivered += fmt.Sprintf(" (and %d more its report names, not listed here)",
+				result.DeliveredRefsElided)
+		}
+		lines = append(lines, delivered)
 	}
 	switch {
 	case result.Text != "":
 		lines = append(lines, "\n"+result.Text)
+		// WHY, BESIDE WHAT IT SAID. A run that wrote a report and still did
+		// not succeed — it crashed after writing it, its question or its
+		// result could not be read, its CLI reported an error after an
+		// answer — used to hand the executor its report alone under "did
+		// NOT fully succeed", with the reason nowhere it could read it.
+		if !result.Success && result.Error != "" && result.Error != result.Text {
+			lines = append(lines, "\nWhy it did not succeed: "+result.Error)
+		}
 	case result.Error != "":
 		lines = append(lines, "\nError: "+result.Error)
 	}

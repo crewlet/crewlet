@@ -9,16 +9,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -46,15 +49,24 @@ import (
 //
 // # What it spends, and against what
 //
-// The AUXILIARY model of the person's own seat, resolved the way every
-// auxiliary pass resolves one — so a company that pointed its cheap work at a
-// small model answers questions on it too — and charged to the COMPANY's
-// windows alone: a person has no seat budget (`token_budget` is on the company
-// and on roles that run turns), so the company's day, week and month are what
-// an answer is judged against. It is GATED before the call — a company whose
-// window has no room is refused `budget_exhausted` and spends nothing — and
-// CHARGED after, because an answer's size is known only from its reply (see
-// [coord.Budgets.PostChargeOrg]).
+// The AUXILIARY model of the person's own seat, resolved through the engine's
+// one auxiliary seam like every auxiliary pass — so a company that pointed its
+// cheap work at a small model answers questions on it too — under the
+// OPERATOR stage, which the seam charges to the COMPANY's windows alone: a
+// person has no seat budget (`token_budget` is on the company and on roles
+// that run turns), so the company's day, week and month are what an answer is
+// judged against. It is GATED here before the call — a company whose window
+// has no room is refused `budget_exhausted` and spends nothing — and CHARGED by
+// the seam after, because an answer's size is known only from its reply (see
+// [coord.Budgets.PostChargeOrg]). The seam also RECORDS it, as
+// `auxiliary_spend` for the person, so the company's spend history holds what
+// its people's questions cost — the answer, and every source condensed for it,
+// each under its own purpose.
+//
+// ONE CHARGE SITE, the seam's. The answer used to charge its own completion and
+// wrap the condensing calls in a second charger of its own, so two copies of
+// "record what a person's question cost" existed beside the seam every other
+// auxiliary call went through — and neither reached an event.
 //
 // # Cached, and on what
 //
@@ -83,13 +95,6 @@ const (
 	// at most.
 	AnswerCacheEntries = 256
 
-	// AnswerQuestionMax bounds the question, in bytes.
-	//
-	// The question IS the search text, so it takes the search's own cap
-	// ([searchQueryMax]): a longer one reaches no ranker usefully and would
-	// only be cut there instead.
-	AnswerQuestionMax = searchQueryMax
-
 	// AnswerPageSources and AnswerTaskSources are how many pages and work
 	// items one answer is written from.
 	//
@@ -102,13 +107,20 @@ const (
 	AnswerPageSources = 5
 	AnswerTaskSources = 3
 
-	// AnswerExcerptBytes is how much of one source the model reads.
+	// AnswerSourceBytes is the most of one source the answering model is
+	// handed — and a source longer than it is CONDENSED to it, for the
+	// question, never cut.
 	//
-	// Four kilobytes, about a thousand tokens: the opening of a runbook
-	// or a task's whole description, and at eight sources a prompt of
-	// about eight thousand tokens — small enough for any auxiliary model's
-	// context and for a person waiting on the answer.
-	AnswerExcerptBytes = 4 << 10
+	// Four kilobytes, about a thousand tokens: a task's whole description,
+	// most runbooks whole, and at eight sources a prompt of about eight
+	// thousand tokens — small enough for any auxiliary model's context and
+	// for a person waiting on the answer. It used to be where every page
+	// was cut, unmarked, so an answer written from the first four
+	// kilobytes of a runbook could only conclude that it had no step four.
+	// A page past it is now rewritten by the same auxiliary model, told the
+	// question, keeping what bears on it — so the step four the question
+	// is about survives wherever on the page it is.
+	AnswerSourceBytes = 4 << 10
 
 	// AnswerMaxTokens caps the answer the model writes.
 	//
@@ -137,9 +149,11 @@ const (
 	AnswerSourceTask = "task"
 )
 
-// AnswerModels resolves the model an answer runs on.
+// AnswerModels resolves the model an answer runs on: the engine's auxiliary
+// seam, which charges and records every completion made through what it hands
+// back under the attribution the call states — here always the operator stage.
 type AnswerModels interface {
-	Head(role *org.Role, ph phase.Phase) (chain.Member, error)
+	Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error)
 }
 
 // BudgetRefusal is the company window that turns an answer away.
@@ -154,14 +168,18 @@ type BudgetRefusal struct {
 	Used, Limit int
 }
 
-// AnswerBudget gates and charges an answer against the company's windows.
+// AnswerBudget gates an answer against the company's windows. The CHARGE is
+// not here: the auxiliary seam [AnswerModels] resolves through makes it, for
+// every call an answer makes.
 type AnswerBudget interface {
 	// Refusing reports the company window with no room left, if any.
 	// THREE-VALUED: an unreadable counter is an error, never "room".
+	//
+	// A YES IS A REFUSAL, not an observation: it is asked immediately
+	// before the answer's first call, and the question is refused on yes,
+	// so an implementation records it as the gate turning that call away
+	// (the window's refusal stamp). Never ask it only to look.
 	Refusing(ctx context.Context) (BudgetRefusal, bool, error)
-	// Charge records what an answer cost. Called after the model answered,
-	// on a context that outlives the caller's.
-	Charge(ctx context.Context, tokens int) error
 }
 
 // TaskReader reads one work item whole, for the description an answer is
@@ -174,13 +192,13 @@ type TaskReader interface {
 // AnswerDeps are what answering needs beyond the search seams the operator
 // surface already has.
 type AnswerDeps struct {
-	// Models resolves the person's seat's auxiliary model. Nil omits the
-	// tool.
+	// Models resolves the person's seat's auxiliary model through the
+	// seam that charges and records it. Nil omits the tool.
 	Models AnswerModels
 
-	// Budget is the company's windows. Nil omits the tool: an answer that
-	// could spend tokens against no counter at all is the one shape this
-	// is built to refuse.
+	// Budget is the company's windows, as the gate reads them. Nil omits
+	// the tool: an answer that could spend tokens against no counter at
+	// all is the one shape this is built to refuse.
 	Budget AnswerBudget
 
 	// Corpus is where this node's knowledge corpus is applied through, and
@@ -191,6 +209,12 @@ type AnswerDeps struct {
 	// Actor is who is asking, off the caller's own credential. Nil omits
 	// the tool.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
+
+	// Rewrites is the cache a source condensed for a question is kept in,
+	// so the same question at the same corpus pays for each rewrite once.
+	// Nil keeps none; every rewrite is still charged and recorded by the
+	// seam Models resolves through.
+	Rewrites *compact.Cache
 }
 
 // AnswerSource is one document an answer was written from, in the order the
@@ -258,7 +282,7 @@ func (t *answerKnowledge) Parameters() map[string]any {
 			"q": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("The question, in plain words. At most %d "+
-					"bytes.", AnswerQuestionMax),
+					"bytes.", knowledge.MaxQueryBytes),
 			},
 		},
 		"required": []any{"q"},
@@ -289,9 +313,17 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if question == "" {
 		return failed(AnswerKnowledgeTool + " needs `q` — the question, in plain words."), nil
 	}
-	// textcut, not a byte slice, for search_knowledge's reason: a cut
-	// through a multi-byte rune is invalid UTF-8 at every reader after it.
-	question = textcut.Bytes(question, AnswerQuestionMax)
+	if knowledge.CheckQuery(question) != nil {
+		// REFUSED, NOT CUT. The question IS the search text, so it takes
+		// the search's own bound ([knowledge.MaxQueryBytes]) — a longer one
+		// reaches no ranker usefully — and an answer to the first four
+		// hundred bytes of a question is an answer to a different one. It
+		// used to be cut to fit, silently, so the answer a person read was
+		// to a question they had not quite asked and nothing said so.
+		return failed(fmt.Sprintf("The question is %d bytes and %s takes at most %d. "+
+			"Ask it in a sentence or two — the search reads keywords, not a document.",
+			len(question), AnswerKnowledgeTool, knowledge.MaxQueryBytes)), nil
+	}
 
 	company := t.org()
 	if company == nil {
@@ -330,7 +362,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalBudgetExhausted, budgetSentence(refusal)), nil
 	}
 
-	sources, excerpts, searched := t.retrieve(ctx, question, company)
+	sources, excerpts, searched := t.retrieve(ctx, question, company, role)
 	if !searched {
 		return refused(tools.RefusalUnavailable, "The company's knowledge could not be "+
 			"searched just now, so this says nothing about whether it is written down. "+
@@ -349,7 +381,10 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return jsonResult(answer)
 	}
 
-	member, err := t.deps.Models.Head(role, phase.Auxiliary)
+	// THE OPERATOR STAGE, which the seam charges to the company's windows
+	// and records for the person — whatever becomes of the answer, since
+	// the tokens are spent at the vendor the moment it replies.
+	member, err := t.deps.Models.Auxiliary(role, answerUse.For(types.AuxAnswerKnowledge))
 	if err != nil {
 		return refused(tools.RefusalUnavailable, fmt.Sprintf("No model is configured "+
 			"to answer with (%v). Nothing was spent.", err)), nil
@@ -366,20 +401,6 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Temperature: llm.Temp(answerTemperature),
 		MaxTokens:   AnswerMaxTokens,
 	})
-	if completion != nil {
-		// CHARGED WHATEVER BECOMES OF THE ANSWER: the tokens are spent at
-		// the vendor the moment it replies, and on a context that
-		// outlives the caller's, because a person closing the palette
-		// between the reply and the write is spend the counter would
-		// otherwise never hear about.
-		if spent := completion.TotalTokens(); spent > 0 {
-			if chargeErr := t.deps.Budget.Charge(context.WithoutCancel(ctx), spent); chargeErr != nil {
-				log.WarnContext(ctx, "knowledge_answer_spend_uncounted", "seat", actor.Seat,
-					"tokens", spent, "model", completion.Model, "error", chargeErr.Error(),
-					"detail", "the company's counter now understates its spend")
-			}
-		}
-	}
 	if err != nil || completion == nil {
 		reason := "it answered nothing"
 		if err != nil {
@@ -438,7 +459,7 @@ func NormalizeQuestion(q string) string {
 // retrieve runs both searches and reads each hit's text. searched is false
 // when NEITHER corpus could be searched — which is not "nothing matched".
 func (t *answerKnowledge) retrieve(ctx context.Context, question string,
-	company *org.Organization) ([]AnswerSource, []prompts.KnowledgeSource, bool) {
+	company *org.Organization, asker *org.Role) ([]AnswerSource, []prompts.KnowledgeSource, bool) {
 
 	sources := []AnswerSource{}
 	var excerpts []prompts.KnowledgeSource
@@ -500,36 +521,108 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 			}
 		}
 	}
+	sources, excerpts = t.condense(ctx, question, asker, sources, excerpts)
 	return sources, excerpts, searched
 }
 
-// pageText is the page's own body where this node holds it, else the search's
-// snippet. An external wiki's body is not this node's to read, so its snippet
-// is what the model reads — and says less.
+// condense makes every source fit [AnswerSourceBytes]: a source within it is
+// handed over whole, and one past it is REWRITTEN for the question by the
+// asker's auxiliary model — through the same seam as the answer, under the
+// operator stage, so it is charged to the company and recorded for the person
+// like the answer is — and marked as a rewrite.
+//
+// A SOURCE THAT CANNOT BE CONDENSED IS DROPPED, from the excerpts and from the
+// list of sources alike. It is neither cut, which would hand the model the
+// opening of a page as the page, nor carried whole, which on a half-megabyte
+// page is a prompt the answering model cannot hold — and it is not listed,
+// because an answer must never cite a source it was not shown.
+func (t *answerKnowledge) condense(ctx context.Context, question string, asker *org.Role,
+	sources []AnswerSource, excerpts []prompts.KnowledgeSource,
+) ([]AnswerSource, []prompts.KnowledgeSource) {
+	fit := compact.New(t.deps.Models, t.deps.Rewrites).For(asker, answerUse)
+	keep := make([]bool, len(excerpts))
+	var group errgroup.Group
+	group.SetLimit(compact.Parallel)
+	for i := range excerpts {
+		group.Go(func() error {
+			text := excerpts[i].Text
+			if len(text) <= AnswerSourceBytes {
+				keep[i] = true
+				return nil
+			}
+			res, err := fit.Focused(ctx, compact.KindSource, text, AnswerSourceBytes, question)
+			if err != nil {
+				log.WarnContext(ctx, "knowledge_answer_source_dropped", "source", sources[i].Ref,
+					"bytes", len(text), "error", err.Error(),
+					"detail", "the source is longer than an answer can read and could not be condensed")
+				return nil
+			}
+			excerpts[i].Text = res.Note() + "\n" + res.Text
+			keep[i] = true
+			return nil
+		})
+	}
+	_ = group.Wait()
+	var keptSources []AnswerSource
+	var keptExcerpts []prompts.KnowledgeSource
+	for i := range excerpts {
+		if keep[i] {
+			keptSources = append(keptSources, sources[i])
+			keptExcerpts = append(keptExcerpts, excerpts[i])
+		}
+	}
+	if keptSources == nil {
+		keptSources = []AnswerSource{}
+	}
+	return keptSources, keptExcerpts
+}
+
+// SnippetOnly is the line a source the answer could not read in full is
+// introduced by, so the model weighs a search snippet as the pointer it is.
+const SnippetOnly = "(only the search snippet — the source itself could not be read here)\n"
+
+// pageText is the page's own body WHOLE where this node holds it, else the
+// search's snippet, SAID to be one. An external wiki's body is not this
+// node's to read, so its snippet is what the model reads — and a model told
+// it is reading a snippet does not conclude the page says nothing more.
 func (t *answerKnowledge) pageText(ctx context.Context, hit knowledge.Hit) string {
 	if t.pages != nil && hit.Backend == pages.Backend && hit.PageID != "" {
 		detail, err := t.pages.Get(ctx, hit.PageID, seatRead)
 		if err == nil {
-			return textcut.Bytes(detail.Page.Body, AnswerExcerptBytes)
+			return detail.Page.Body
 		}
 		log.DebugContext(ctx, "knowledge_answer_page_unread", "page", hit.PageID,
 			"error", err.Error())
 	}
-	return hit.Snippet
+	return snippetOnly(hit.Snippet)
 }
 
-// taskText is the item's description, else the index's excerpt.
+// taskText is the item's description WHOLE, else the index's snippet, said to
+// be one.
 func (t *answerKnowledge) taskText(ctx context.Context, hit tracker.Ranked) string {
 	if t.tasks != nil && hit.ID != "" {
 		detail, err := t.tasks.Task(ctx, hit.ID, tracker.DetailWants{}, seatRead)
 		if err == nil {
-			return textcut.Bytes(detail.Task.Body, AnswerExcerptBytes)
+			return detail.Task.Body
 		}
 		log.DebugContext(ctx, "knowledge_answer_task_unread", "task", hit.ID,
 			"error", err.Error())
 	}
-	return hit.Snippet
+	return snippetOnly(hit.Snippet)
 }
+
+func snippetOnly(snippet string) string {
+	if strings.TrimSpace(snippet) == "" {
+		return ""
+	}
+	return SnippetOnly + snippet
+}
+
+// answerUse is the attribution every call an answer makes states: the
+// OPERATOR stage — a person's spend, on the company's windows alone — with no
+// turn, since none exists. Each call adds its own purpose: the answer
+// [types.AuxAnswerKnowledge], a condensed source `condense_source`.
+var answerUse = auxspend.Use{Stage: types.AuxStageOperator}
 
 // budgetSentence says which window is out and when it comes back.
 func budgetSentence(r BudgetRefusal) string {

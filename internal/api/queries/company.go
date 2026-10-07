@@ -797,6 +797,20 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	return s.Memory.Memory(ctx, s.seatHandleOf(id), p.Int("limit", 0))
 }
 
+// agentEpisode answers one of a seat's episodes WHOLE — what it was asked and
+// what it did, complete — where `agent_memory` lists each as its opening.
+// ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason; an
+// episode the seat no longer holds (the lifecycle dropped or folded it since it
+// was listed) is `episode: null`, an ordinary absence.
+func (s Sources) agentEpisode(ctx context.Context, p Params) (any, error) {
+	id := strings.TrimSpace(p.String("id"))
+	episode := strings.TrimSpace(p.String("episode"))
+	if id == "" || episode == "" {
+		return nil, fmt.Errorf("%w: agent_episode needs the seat's id and an episode", ErrBadParams)
+	}
+	return s.Memory.Episode(ctx, s.seatHandleOf(id), episode)
+}
+
 // memoryOverview answers every agent seat's memory totals — its diary, its
 // episodes, the skills it drafted — and its newest reflection, each counted by
 // the node holding the seat, with the `coverage` naming every holder asked.

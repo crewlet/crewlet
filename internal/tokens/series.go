@@ -87,7 +87,11 @@ const (
 	// BandWorkers is the delegated workers the executor handed tasks to.
 	BandWorkers Band = "workers"
 	// BandAuxiliary is everything that is not the turn's own work: the
-	// learning workers, the round-cap judge and the first-turn onboarding.
+	// seat's auxiliary model (the turn-start context, every compaction
+	// rewrite, the reflection workers, the background learning passes, a
+	// person's answered question — the `auxiliary` phase of an
+	// `auxiliary_spend` record), the round-cap judge and the first-turn
+	// onboarding.
 	BandAuxiliary Band = "auxiliary"
 )
 
@@ -406,7 +410,7 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 			if seats[key] == nil {
 				seats[key] = map[string]bool{}
 			}
-			seats[key][orUnknown(c.AgentID)] = true
+			seats[key][c.who()] = true
 		}
 	}
 

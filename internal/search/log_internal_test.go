@@ -33,6 +33,7 @@ func TestAnEmbedDutyGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 		Model:    "probe-model",
 		Corpora:  []Corpus{struct{ Corpus }{}},
 		Budget:   noBound{},
+		Refusals: NewRefusals(),
 	}
 	duty, err := NewEmbedder(valid)
 	if err != nil {

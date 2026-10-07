@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -212,6 +213,37 @@ func (p Params) Int(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// WholeInt reads a parameter that must be a WHOLE NUMBER, and reports whether
+// it is one: a socket frame's number with no fraction and inside int64, or a
+// query string's integer as [strconv.ParseInt] reads it.
+//
+// FOR A VALUE THE ANSWER DEPENDS ON EXACTLY, which [Params.Int] is not: Int
+// truncates a socket frame's `12.5` to 12, because a dashboard's limit or page
+// size is a filter a typo should not blank a screen over. An offset into a
+// text is not a filter — `after: 12.5` names no byte — and read as 12 it is a
+// different request, answered as though it were the one asked. A caller
+// refuses a false here by name. An absent key is false too; ask [Params.Has]
+// first where absence means something of its own.
+func (p Params) WholeInt(key string) (int64, bool) {
+	switch v := p.values[key].(type) {
+	case float64:
+		// 2^63 is the first float64 past int64's range: MaxInt64 itself is
+		// not a float64, and converting what rounds to it is undefined.
+		if v != math.Trunc(v) || v < -(1<<63) || v >= 1<<63 {
+			return 0, false
+		}
+		return int64(v), true
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case string:
+		n, err := strconv.ParseInt(v, 10, 64)
+		return n, err == nil
+	}
+	return 0, false
 }
 
 // Bool reads a boolean parameter, falling back to def.

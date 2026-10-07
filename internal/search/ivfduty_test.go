@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 )
 
@@ -119,21 +120,33 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 // A MEASUREMENT THAT MISSES THE FLOOR RETRAINS IN THE SAME TICK, rather than
 // recording a failing index for searches to read.
 //
-// Eight topics of about 275 sources each: the index this corpus trains at
-// 2 048 sources meets the floor at half its lists, and measured a day later
-// over the 2 200 the corpus came to rest at it needs every list — a corpus
-// that moved since training, which is what the daily measurement exists to
-// catch. The same tick trains its replacement from the reading already in
-// hand, so the one record it publishes is a new index that passes, and no
-// search is left reading one that does not.
+// Eight topics of about 256 sources each, and the 152 sources the corpus gains
+// after the index is trained at 2 048 all in a NINTH topic its training never
+// saw: each of those is filed in whichever list its noise lands it nearest, so
+// a query among them no longer finds its neighbours in the lists it probes —
+// a corpus that moved since training, which is what the daily measurement
+// exists to catch. The same tick trains its replacement from the reading
+// already in hand, so the one record it publishes is a new index that passes,
+// and no search is left reading one that does not.
+//
+// THE MOVE IS BUILT, NOT DRAWN. This case once rested on the hash of each
+// fixture text happening to produce a corpus whose index failed a day later,
+// and any change to the text the duty sends re-drew it. A spread of 0.8 rather
+// than the 0.5 the other cases use, measured: at 0.5 the retraining over nine
+// tight topics needs more than half its lists and installs no index, which is
+// the verdict another case covers rather than this one.
 func TestAMeasurementThatMissesTheFloorRetrains(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
-	embedder := topicalEmbedder{width: 384, topics: 8}
+	embedder := topicalEmbedder{width: 384, topics: 8, noise: 0.8, drifted: 1}
 	now := time.Unix(1_700_000_000, 0).UTC()
 	duty := indexDuty(t, h, embedder, h.standing(map[string]int{"node-a": search.RecordVersion}),
 		func() time.Time { return now })
-	h.seedTasks(taskBodies(2_200))
+	bodies := taskBodies(2_200)
+	for i := 2_048; i < 2_200; i++ {
+		bodies[fmt.Sprintf("t%05d", i)] = fmt.Sprintf("%s %d", driftMarker, i)
+	}
+	h.seedTasks(bodies)
 	state, _ := runToRest(t, h, duty, embedder.width)
 	if !state.Indexed || state.Head.Lists == 0 || state.Head.TrainedOn != 2_048 {
 		t.Fatalf("the duty came to rest with %+v, want the index trained at 2048", state.Head)
@@ -360,9 +373,10 @@ func boundedDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standi
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: standing, Embedder: embedder, Model: embedModel,
-		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
-		Now:     now,
-		Budget:  budget,
+		Corpora:  []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
+		Now:      now,
+		Budget:   budget,
+		Refusals: search.NewRefusals(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -472,22 +486,49 @@ func publishedKinds(t *testing.T, h *embedHarness) map[search.Source]int {
 // topicalEmbedder embeds a text as its topic's centre plus a little noise,
 // both derived from the text alone — the one property a duty test needs from
 // a provider being that the corpus it produces has topics to find.
+//
+// A text carrying [driftMarker] belongs to one of `drifted` topics PAST the
+// ordinary ones, which is how a case makes a corpus MOVE by construction: the
+// documents written after an index was trained land in a topic its training
+// never saw, rather than in whichever topics a hash happened to favour.
 type topicalEmbedder struct {
 	width, topics int
+
+	// noise is the spread around a topic's centre; zero is 0.5.
+	noise float64
+
+	// drifted is how many topics a drift-marked text is spread over.
+	drifted int
 }
 
+// driftMarker is the word that files a text in a drifted topic.
+const driftMarker = "drift"
+
 func (e topicalEmbedder) Width() int { return e.width }
+
+func (e topicalEmbedder) Model() string { return "topical" }
+
+// Limits are the fake provider's, which are the default model's: this embedder
+// differs from it in what a vector looks like, never in what it accepts.
+func (e topicalEmbedder) Limits() embeddings.Limits { return embeddings.NewFake(e.width).Limits() }
 
 func (e topicalEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(text))
 	sum := h.Sum64()
 	topic := int(sum % uint64(e.topics))
+	if e.drifted > 0 && strings.Contains(text, driftMarker) {
+		topic = e.topics + int(sum%uint64(e.drifted))
+	}
+	spread := e.noise
+	if spread == 0 {
+		spread = 0.5
+	}
 	centre := rand.New(rand.NewPCG(uint64(topic), 0xCE47E))
 	noise := rand.New(rand.NewPCG(sum, 0x401E))
 	out := make([]float32, e.width)
 	for i := range out {
-		out[i] = float32(centre.NormFloat64() + 0.5*noise.NormFloat64())
+		out[i] = float32(centre.NormFloat64() + spread*noise.NormFloat64())
 	}
 	return out, nil
 }

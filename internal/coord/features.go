@@ -90,6 +90,29 @@ const (
 	// read budget on every poll and be told the owner "did not answer".
 	// Asked of the run's OWNER alone ([FeatureReader.OwnerFeature]).
 	FeatureSandboxTail Feature = "sandbox_tail"
+
+	// FeatureSandboxTailCursor — the node answers a tail request by CURSOR:
+	// it keeps one reading per watched run and sends an asker only the
+	// output it does not hold yet, or a reset carrying the last 256 KiB
+	// (internal/sandbox, livefeed.go). An older build ignores a cursor and
+	// answers its 8 KiB window, which a cursor-reading screen would append
+	// to what it holds as though it followed it — so an asker sends a
+	// cursor only to an owner advertising this, and asks every other for
+	// the window it can answer. Asked of the run's OWNER alone.
+	FeatureSandboxTailCursor Feature = "sandbox_tail_cursor"
+
+	// FeatureEnvdAccessToken — the node presents an E2B box's envd access
+	// token on every command and file request it makes to that box
+	// (internal/sandbox, e2b_envd.go), so it can read a box created with
+	// secured access. An older build sends no token, and a secured box's
+	// envd refuses every such request — so a box created secured while one
+	// is live could be polled by it without being read (it may hold the
+	// waiter duty), and a run whose seat it next holds could not be
+	// collected and would be settled as lost. Not a refusal: the E2B create
+	// asks [FeatureReader.AllLiveHave] and makes the box the older shape,
+	// unsecured, until every live node advertises it, because any of them
+	// may hold the waiter or the run's seat next.
+	FeatureEnvdAccessToken Feature = "envd_access_token"
 )
 
 // Features is every feature THIS build honours, which is exactly what a node
@@ -101,7 +124,7 @@ const (
 // fleet told it can do something it cannot.
 var Features = []Feature{
 	FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause, FeatureSteer, FeatureHeldRead,
-	FeatureSandboxTail,
+	FeatureSandboxTail, FeatureSandboxTailCursor, FeatureEnvdAccessToken,
 }
 
 // Valid reports whether this build knows the feature.
@@ -161,9 +184,21 @@ func (r FeatureReader) SeatFeature(ctx context.Context, handle string, feature F
 // presence lease is UNKNOWN — it is draining, or its heartbeat lapsed — never
 // "lacking": nothing says what that process can do.
 func (r FeatureReader) OwnerFeature(ctx context.Context, owner string, feature Feature) (bool, error) {
+	features, err := r.OwnerFeatures(ctx, owner)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(features, feature), nil
+}
+
+// OwnerFeatures is every feature one INCARNATION advertises, for a caller with
+// more than one question about the same process — one read of the fleet's
+// presence rather than one per question. Unknown exactly where
+// [FeatureReader.OwnerFeature] is.
+func (r FeatureReader) OwnerFeatures(ctx context.Context, owner string) ([]Feature, error) {
 	nodes, err := r.Leases.ListLive(ctx, ClassNode)
 	if err != nil {
-		return false, fmt.Errorf("coord: read the fleet's presence: %w", err)
+		return nil, fmt.Errorf("coord: read the fleet's presence: %w", err)
 	}
 	for _, node := range nodes {
 		if node.Owner != owner {
@@ -171,12 +206,12 @@ func (r FeatureReader) OwnerFeature(ctx context.Context, owner string, feature F
 		}
 		status, ok := StatusFromMeta(node.Meta)
 		if !ok {
-			return false, fmt.Errorf("%w: %s published no status on its last heartbeat",
+			return nil, fmt.Errorf("%w: %s published no status on its last heartbeat",
 				ErrFeatureUnknown, node.Resource)
 		}
-		return slices.Contains(status.Features, feature), nil
+		return status.Features, nil
 	}
-	return false, fmt.Errorf("%w: %s has no presence lease (it is draining or its heartbeat "+
+	return nil, fmt.Errorf("%w: %s has no presence lease (it is draining or its heartbeat "+
 		"lapsed)", ErrFeatureUnknown, owner)
 }
 

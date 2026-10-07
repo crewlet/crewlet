@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -73,7 +72,11 @@ type DiaryEntry struct {
 	RetrievalCount  int
 	LastRetrievedAt time.Time
 
-	Embedding []float32
+	// Embedding is the note's vector, and EmbeddingModel the model whose
+	// space it is in — both set or neither, see [Episode.EmbeddingModel].
+	Embedding      []float32
+	EmbeddingModel string
+
 	CreatedAt time.Time
 }
 
@@ -83,12 +86,54 @@ func (d DiaryEntry) Expired(now time.Time) bool {
 }
 
 // Diary is a seat's private observation log.
-type Diary struct{ db *store.DB }
+type Diary struct {
+	db *store.DB
+
+	// embed is what a note is embedded with as it is written, or nil for
+	// a handle that only reads — see [WithEmbed].
+	embed Embed
+}
+
+// DiaryOption configures a [Diary].
+type DiaryOption func(*Diary)
+
+// WithEmbed makes [Diary.Write] embed each note as it is written.
+//
+// A WRITER'S OPTION, and only a writer's: the turn-start prefetch, the memory
+// screen and the retention sweep read the diary and embed nothing, and a
+// handle built for them that embedded on Write would be a second writer
+// nobody declared. The two writers — reflect_and_persist and the post-turn
+// persist decider — are built with it.
+func WithEmbed(embed Embed) DiaryOption {
+	return func(d *Diary) { d.embed = embed }
+}
 
 // NewDiary wraps a database handle.
-func NewDiary(db *store.DB) *Diary { return &Diary{db: db} }
+func NewDiary(db *store.DB, opts ...DiaryOption) *Diary {
+	d := &Diary{db: db}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
+}
 
 // Write records one observation.
+//
+// EMBEDDED IN THE INSERT, when the handle was built [WithEmbed] and the entry
+// carries no vector of its own: the content's vector and its model are
+// written in the same statement as the row, so the memory changelog — which
+// carries a row when it is inserted — carries the vector with it, and the
+// seat's next holder can recall the note by meaning. A vector that cannot be
+// had inside [DiaryEmbedBudget] costs the vector and never the note: the row
+// lands without one and the holder's fill gives it one later (see
+// [Diary.Unfilled]).
+//
+// THERE IS NO DUPLICATE GUARD HERE, and a note is stored verbatim. What keeps
+// the diary from filling with paraphrases is upstream of the store: the
+// reflect dispatcher's redelivery guard on the work key, and the persist
+// decider's prompt, which is shown the seat's recent notes and asked not to
+// repeat one. A byte-exact guard here would catch only the copy that is
+// already caught, and none of the paraphrases.
 func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 	switch {
 	case e.ID == "" || e.AgentID == "":
@@ -109,28 +154,29 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: a %q entry must not carry a deadline", DiaryLong)
 	}
 
+	if len(e.Embedding) == 0 {
+		vector := d.embedNote(ctx, e)
+		e.Embedding, e.EmbeddingModel = vector.Values, vector.Model
+	}
+
 	// Same policy as an episode's embedding, and for the same reason — see
 	// Episodes.encodeEmbedding. A wrong width fails the write; a non-finite
-	// component costs the vector and not the observation.
-	var blob any
-	if len(e.Embedding) > 0 {
-		packed, err := d.db.EncodeVector(e.Embedding)
-		switch {
-		case errors.Is(err, store.ErrVectorNotFinite):
-			log.Warn("diary_embedding_discarded", "entry", e.ID, "error", err.Error())
-		case err != nil:
-			return fmt.Errorf("learning: encode diary embedding: %w", err)
-		default:
-			blob = packed
-		}
+	// component, a vector of zeros, or a vector naming no model, costs the
+	// vector and not the observation.
+	blob, model, err := encodeVectorColumns(d.db, e.Embedding, e.EmbeddingModel,
+		"diary_embedding_discarded")
+	if err != nil {
+		return fmt.Errorf("learning: diary entry %s: %w", e.ID, err)
 	}
 	if _, err := d.db.SQL().ExecContext(ctx, `
 		INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
-			turn_id, metadata, retrieval_count, last_retrieved_at, embedding, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+			turn_id, metadata, retrieval_count, last_retrieved_at, embedding,
+			embedding_model, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		e.ID, e.AgentID, string(e.Kind), e.Content, store.NullTime(e.TTLUntil),
-		e.Source, e.TurnID, jsonObject(e.Metadata), blob, store.EncodeTime(e.CreatedAt),
+		e.Source, e.TurnID, jsonObject(e.Metadata), blob, model,
+		store.EncodeTime(e.CreatedAt),
 	); err != nil {
 		return fmt.Errorf("learning: write diary entry %s: %w", e.ID, err)
 	}
@@ -138,7 +184,8 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 }
 
 const diaryColumns = `id, agent_id, kind, content, ttl_until, source, turn_id,
-	metadata, retrieval_count, last_retrieved_at, embedding, created_at`
+	metadata, retrieval_count, last_retrieved_at, embedding, embedding_model,
+	created_at`
 
 func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	var (
@@ -147,9 +194,11 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 		created            int64
 		ttl, lastRetrieved sql.NullInt64
 		embedding          []byte
+		embeddingModel     sql.NullString
 	)
 	if err := rows.Scan(&e.ID, &e.AgentID, &kind, &e.Content, &ttl, &e.Source,
-		&e.TurnID, &metadata, &e.RetrievalCount, &lastRetrieved, &embedding, &created,
+		&e.TurnID, &metadata, &e.RetrievalCount, &lastRetrieved, &embedding,
+		&embeddingModel, &created,
 	); err != nil {
 		return DiaryEntry{}, err
 	}
@@ -165,6 +214,7 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	if len(embedding) > 0 {
 		if vec, err := store.DecodeVector(embedding); err == nil {
 			e.Embedding = vec
+			e.EmbeddingModel = store.Text(embeddingModel)
 		} else {
 			log.Warn("diary_embedding_undecodable", "entry", e.ID, "error", err)
 		}
@@ -238,7 +288,7 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 	if agentID == "" {
 		return nil, fmt.Errorf("learning: diary recall needs an agent")
 	}
-	if len(q.Embedding) == 0 {
+	if len(q.Embedding) == 0 || q.Model == "" {
 		return nil, ErrNoEmbedding
 	}
 	limit, floor := q.Limit, q.MinSimilarity
@@ -260,6 +310,7 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		        FROM agent_diary
 		        WHERE agent_id = ?
 		          AND embedding IS NOT NULL
+		          AND embedding_model = ?
 		          AND length(embedding) = ?
 		          AND (ttl_until IS NULL OR ttl_until > ?)
 		    )
@@ -267,7 +318,7 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		    ORDER BY distance ASC, created_at DESC, id DESC
 		    LIMIT ?
 		 )`,
-		probe, agentID, width, store.EncodeTime(now), 1-floor, limit)
+		probe, agentID, q.Model, width, store.EncodeTime(now), 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
 	}

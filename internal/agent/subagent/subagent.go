@@ -57,12 +57,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -120,14 +120,6 @@ const (
 // [toolloop.SpendOutcome] carries the scope, so the honest answer is simply a
 // different scope name.
 const ScopeSubagent = "subagent"
-
-// errorLimit caps the failure text carried back to the model, in runes.
-//
-// A panic's message can arrive with a stack behind it and a provider error can
-// carry a whole response body; either would blow past the tool result the
-// parent reads. 500 runes holds two or three sentences — enough to say what
-// stopped, never enough to bury the sibling results it is rendered next to.
-const errorLimit = 500
 
 // controlDenylist is the first-party engine-control surface a sub-agent never
 // gets, whatever the parent names.
@@ -305,6 +297,12 @@ type Config struct {
 	// granted, which is the right shape for a caller that does not want a
 	// worker widening itself at all.
 	Discovery func(surface func() *tools.Surface) []tools.Callable
+
+	// Compact is the PARENT seat's compactor, which rewrites a dependency's
+	// answer that will not fit its share of a dependent task's prompt — see
+	// [dependencyBudget]. The zero value rewrites nothing, and every answer
+	// is then carried whole.
+	Compact compact.Bound
 
 	// Workers are the templates this seat may delegate to, already
 	// narrowed to what its role can see. A task naming one that is not
@@ -561,7 +559,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 				// away work that is already in flight.
 				return Result{
 					ID: r.ID, Worker: r.Worker, Status: StatusFailed,
-					Error: ledger.Elide(err.Error(), errorLimit),
+					Error: err.Error(),
 				}
 			}
 			// THE CLOCK STARTS WHERE THE CAP DOES, and the two
@@ -641,7 +639,10 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		}
 		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
 		res.Status = StatusFailed
-		res.Error = ledger.Elide(fmt.Sprintf("worker panicked: %v", r), errorLimit)
+		// THE MESSAGE WHOLE, the stack in the log line above: the stack
+		// is the operator's, and the message is what the parent needs to
+		// decide whether to retry the task.
+		res.Error = fmt.Sprintf("worker panicked: %v", r)
 	}()
 
 	grant := Permit(cfg.Universe, cfg.parentNames(), task.tools)
@@ -723,7 +724,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		Submits:        submit != nil,
 		Skills:         cfg.Skills,
 	})
-	res.UserPrompt = withDependencies(task.Prompt, deps)
+	res.UserPrompt = withDependencies(ctx, cfg.Compact, task.Prompt, deps)
 
 	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
@@ -847,7 +848,7 @@ func stopReason(ctx context.Context) (kind, reason string) {
 		// The parent turn was torn down. NOT a timeout: nothing exceeded a
 		// cap, and an executor told "timed out" would helpfully retry with
 		// a smaller task against an engine that is shutting down.
-		return KindCancelled, ledger.Elide(cause.Error(), errorLimit)
+		return KindCancelled, cause.Error()
 	}
 }
 
@@ -892,50 +893,82 @@ func newSliceMeter(inner toolloop.BudgetMeter, cap int) *sliceMeter {
 	return &sliceMeter{inner: inner, cap: cap}
 }
 
-// Spend reserves against the slice, then charges the real counter.
+// Spend records a round on the slice and on the parent's counter, and judges
+// it against both.
 //
-// The reservation is taken BEFORE the inner charge and under the lock,
-// because that charge can block: two children of one batch would otherwise
-// both test against the same `used` snapshot, both pass, and both spend —
-// overshooting the slice by a whole child. Reserving first makes the check
-// and the increment one operation, which is the same rule the shared counter
-// itself follows.
+// THE ROUND IS RECORDED WHATEVER THE VERDICT, on both, because a meter is
+// handed tokens a model call has already spent ([toolloop.BudgetMeter]): the
+// vendor billed the round before anything here could judge it. A slice that
+// refused before the parent's counter was asked kept the round off that
+// counter entirely — the seat and the company paid for it and neither heard —
+// and a slice that handed a refused reservation back left its siblings the
+// room the refused round had used, so a smaller round after it was admitted.
+// What a refusal decides is that the worker's round runs no tools and no
+// further round starts.
+//
+// The slice's verdict and its record are ONE step, under the lock, because the
+// parent's charge after it can block: two children of one batch would
+// otherwise both test against the same `used` snapshot, both pass, and both be
+// admitted — overshooting the slice by a whole child. That is the rule the
+// shared counter itself follows.
+//
+// THE PARENT'S REFUSAL OUTRANKS THE SLICE'S. Where both refuse, the answer
+// names the company or the seat: a slice is a share of the seat's room, and an
+// operator told the worker's slice ran out would go looking for a delegation
+// limit while the company is out of tokens — the same outermost-first rule the
+// counter follows between the company and the seat.
 func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	m.mu.Lock()
-	if m.used+tokens > m.cap {
-		used := m.used
-		m.mu.Unlock()
-		return toolloop.SpendOutcome{
-			OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap,
-		}, nil
-	}
+	fits := m.used+tokens <= m.cap
 	m.used += tokens
+	used := m.used
 	m.mu.Unlock()
 
 	outcome, err := m.inner.Spend(ctx, tokens)
 	if err != nil {
-		// The reservation STAYS. An unreachable counter does not say whether
-		// the charge landed, so releasing it would let a sibling spend
-		// tokens that may already be billed. The round is aborted either
-		// way — this only decides what the siblings still running see.
+		// An unreachable counter does not say whether the charge landed.
+		// The slice keeps the round either way: it was spent, and the
+		// round is aborted whatever the slice says.
 		return outcome, err
 	}
 	if !outcome.OK {
-		// A refusal is definite: nothing was charged, so the reservation
-		// goes back. Keeping it would shrink the slice for every sibling
-		// over a charge that never happened.
-		m.mu.Lock()
-		m.used -= tokens
-		m.mu.Unlock()
+		return outcome, nil
+	}
+	if !fits {
+		return toolloop.SpendOutcome{OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap}, nil
 	}
 	return outcome, nil
 }
 
-// Used is what the slice has spent, for a caller reporting on a batch.
-func (m *sliceMeter) Used() int {
+// Refused reports a refusal every further charge of the call is certain to
+// meet: the parent's, where its meter holds one, and otherwise the slice's own
+// once it has no room left for a single token. See
+// [toolloop.BudgetMeter.Refused].
+//
+// THE SLICE IS FINAL. It only grows — every round is recorded on it, refused
+// or not — and its cap is fixed for the call, so once it is spent every worker
+// that starts later, in a later wave or behind max_parallel, would make one
+// full first call (its prompt, its tools, its dependencies' answers) that the
+// vendor bills and the slice refuses. Asked before that call, the worker ends
+// on the slice with no call made. And the parent's outranks the slice's for
+// the reason it does in [sliceMeter.Spend].
+//
+// The parent's refusal is asked on the caller's context, because the parent's
+// meter records a refusal it answers: a worker stopped by the company's full
+// day is the gate turning a call away as surely as its round being refused
+// would be. The slice's own refusal records nothing — no shared counter holds
+// a slice, so there is nowhere a record would be read.
+func (m *sliceMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	if outcome, refused := m.inner.Refused(ctx); refused {
+		return outcome, true
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.used
+	used := m.used
+	m.mu.Unlock()
+	if used < m.cap {
+		return toolloop.SpendOutcome{}, false
+	}
+	return toolloop.SpendOutcome{OK: false, Scope: ScopeSubagent, Used: used, Limit: m.cap}, true
 }
 
 // resolveProvider builds the seat's sub-agent chain.

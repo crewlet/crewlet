@@ -14,7 +14,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { CommandPalette } from "./Palette.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS } from "./hits.ts";
-import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
+import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router } from "../router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
@@ -845,6 +845,38 @@ describe("the colleague question", () => {
     // 201 bytes in a string JavaScript calls 67 long.
     await p.type(`@${"語".repeat(67)}`);
     expect(asked.filter((a) => a.kind === "colleague")).toHaveLength(1);
+  });
+});
+
+describe("the search bound", () => {
+  // THE ENGINE REFUSES A PHRASE PAST ITS SEARCH BOUND rather than cutting it,
+  // so a pasted passage asks neither search nor the answer — the list would
+  // lose its tasks and pages to two refusals and the answer card to a third,
+  // with nothing saying why — and the lead says why instead.
+  test("a term past it asks nothing and says why", async () => {
+    vi.useFakeTimers();
+    engine(() => json({ error: "not_found", detail: "no" }, 404));
+    const p = mount();
+    const searches = () => asked.filter((a) => a.kind === "work_search" || a.kind === "knowledge");
+    const pasted = "why does the deploy keep failing ".repeat(15).trim();
+    await p.type(pasted);
+    await act(async () => {
+      vi.advanceTimersByTime(ANSWER_IDLE_MS * 2);
+    });
+    await act(async () => {});
+    expect(searches()).toEqual([]);
+    expect(posted).toEqual([]);
+    expect(
+      screen.getByText(
+        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+      ),
+    ).toBeDefined();
+    // BYTES, as the engine counts, not characters.
+    await p.type("語".repeat(134));
+    expect(searches()).toEqual([]);
+    // AT the bound it is a search, of both.
+    await p.type("x".repeat(SEARCH_QUERY_MAX));
+    expect(searches().map((a) => a.kind)).toEqual(["work_search", "knowledge"]);
   });
 });
 

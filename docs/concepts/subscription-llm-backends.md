@@ -254,6 +254,21 @@ resume has: the process collecting a run may not be the one that launched
 it, and without it a restart mid-run would leave the reviewer judging a
 turn whose entire tool log is gone.
 
+Each append also carries what the run's bridged calls have cost the engine so
+far — the auxiliary rewrites the seat's tools asked for and the workers the CLI
+delegated to — because those calls happen after the part of the turn that
+launched the run has ended and charged what it spent. The part of the turn that
+resumes from the run pays them to the turn's [work
+item](../guides/work-tracker.md#spend-is-on-the-task), beside the run's own
+tokens. Each call is recorded under the run it was made for — the bridge
+session is given the run's name before its box exists — so a call still in
+flight when the turn launches its next run (a delegated worker outliving the
+CLI that asked for it) is dropped rather than landing on the next run's record,
+where that run's resume would pay for it as its own. A late call that finishes
+after its run was collected but before any next run is recorded on its own run
+and is not paid: the resume paid what the run's record held when it was
+collected, so the task can fall short of the turn's cost and never exceed it.
+
 #### Code work inside the run
 
 A seat whose executor already holds a shell has no use for a second box

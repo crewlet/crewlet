@@ -250,7 +250,7 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: types.GuardMaxIter, Detail: "6 rounds, no done"},
-	}, nil)
+	}, nil, time.Now())
 
 	// All FOUR: the dashboard's summary, the learning record, and the guard
 	// that named the stop. Dropping any one of them takes a whole surface
@@ -288,7 +288,7 @@ func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
 	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: types.GuardUnhandledException, Detail: "panic: nil map"},
-	}, cause)
+	}, cause, time.Now())
 
 	summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
 	if !summary.Failed || summary.ErrorKind != string(types.GuardUnhandledException) {

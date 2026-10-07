@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -189,7 +188,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		return nil, nil
 	}
 
-	member, err := r.models.Head(t.Role, phase.Auxiliary)
+	member, err := r.models.Auxiliary(t.Role, t.Reflecting(types.AuxSkillRefiner))
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model for skill refinement: %w", err)
 	}
@@ -352,7 +351,7 @@ func parseRefinement(completion *llm.Completion) (refinementChoice, bool) {
 		// UNPARSEABLE IS A DECLINE, not an error. The pass must not fail
 		// over a model that answered in prose, and there is nothing to
 		// write either way.
-		log.Debug("skill_refinement_unparseable", "response", preview(raw, 200))
+		log.Debug("skill_refinement_unparseable", "response", raw)
 		return refinementChoice{}, false
 	}
 	if strings.TrimSpace(choice.SkillName) == "" || strings.TrimSpace(choice.Bullet) == "" {
@@ -388,10 +387,8 @@ func buildRefinementPrompt(t Turn, candidates []Skill) string {
 	for _, sk := range candidates {
 		fmt.Fprintf(&b, "\n### %s\n%s\n\n%s\n", sk.Name, sk.Description, sk.Content)
 	}
-	b.WriteString("\nThe turn:\n- Task: ")
-	b.WriteString(orElse(t.Event.TaskSummary, "(no description)"))
-	b.WriteString("\n- Plan: ")
-	b.WriteString(orElse(t.Event.PlanSummary, "(no plan)"))
+	b.WriteString("\nThe turn:\n")
+	describeTurn(&b, t, t.Ask())
 	b.WriteString("\n- Tools called, in order: ")
 	b.WriteString(strings.Join(t.Event.ToolSequence, " -> "))
 	b.WriteString("\n- Outcome: ")

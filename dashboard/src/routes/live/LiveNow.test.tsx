@@ -328,6 +328,14 @@ test("the seat filter asks by handle and matches the push by id", async () => {
     seat: "eng-search",
     bucket: "minute",
   });
+  // THE FEED'S ROWS, on the strip and the seat's latest events alike: the
+  // unselected card is the live ring, which holds no accounting row, and a
+  // seat's card asked without it filled with its spend records after every
+  // turn.
+  await waitFor(() => expect(asked.some((q) => q.kind === "events")).toBe(true));
+  for (const kind of ["event_series", "events"]) {
+    expect(asked.find((q) => q.kind === kind)?.params.feed_only, kind).toBe("true");
+  }
 
   act(() => {
     store.applyEvent(phaseEvent("p-mine", "t-mine", "id-search", { decision: "mine" }));

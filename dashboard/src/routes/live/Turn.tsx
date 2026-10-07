@@ -57,6 +57,7 @@ import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { roundOf } from "~/lib/seats.ts";
 import { buildWaterfall, phaseLabel } from "~/lib/waterfall.ts";
+import { auxiliaryRecords, auxiliaryTokens } from "~/lib/auxiliary.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import { ToolsTab } from "./trace/Tools.tsx";
 import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
@@ -145,9 +146,17 @@ import {
   type Story,
 } from "~/lib/turnstory.ts";
 import { TURN_STOP } from "~/contract/turnbands.ts";
-import { useAgents, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useAgents, useConnection, useEvents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { seatOnTurn, UNSETTLED } from "~/lib/turns.ts";
-import type { EventRecord, LiveCall, TurnRow, TurnStage, WorkItemRef } from "~/protocol/index.ts";
+import type {
+  EventEnvelope,
+  EventRecord,
+  FeedRow,
+  LiveCall,
+  TurnRow,
+  TurnStage,
+  WorkItemRef,
+} from "~/protocol/index.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -169,6 +178,23 @@ function field(event: EventRecord | undefined, key: string): unknown {
 function str(event: EventRecord | undefined, key: string): string {
   const v = field(event, key);
   return typeof v === "string" ? v : "";
+}
+
+/**
+ * The id of the newest `reflection_completed` for this turn the feed holds, or
+ * "" for none — the push that says the turn's reflection pass is over.
+ *
+ * OFF THE PUSHED ENVELOPE'S PAYLOAD: a feed row the snapshot seeded carries
+ * none, and that is the right answer for it — a sentinel that landed before
+ * this page asked is already in the answer it got.
+ */
+export function reflectionSentinel(feed: readonly FeedRow[], turnId: string): string {
+  if (turnId === "") return "";
+  for (const row of feed) {
+    if (row.type !== "reflection_completed") continue;
+    if ((row as EventEnvelope).payload?.turn_id === turnId) return row.id;
+  }
+  return "";
 }
 
 /**
@@ -317,6 +343,13 @@ export interface TurnView {
   tokens: number;
   workerTokens: number;
   workerCount: number;
+  /**
+   * What the seat's auxiliary model spent INSIDE the turn, for its work — its
+   * turn-start context, its ledgers' rewrites, its card (`lib/auxiliary.ts`).
+   * Part of the turn's cost, as the turn list counts it, and outside its
+   * phases; the reflection after it is not in it.
+   */
+  auxTokens: number;
   /** The highest self-iterate round its own phases reached. */
   iterations: number;
   /**
@@ -406,19 +439,27 @@ export function useTurnView(turnId: string): TurnView {
   const liveCall = seatRow?.live_call?.turn_id === turnId ? seatRow.live_call : null;
 
   // THE ANSWER IS ASKED AGAIN when this turn moves on the stream: a phase of
-  // it lands, or its seat's stage changes. The `turn` query is answered once,
-  // and what the phases do not carry — a coding run's announcement, a note's
-  // `agent_turn_steered`, the reflection pass — arrives only in its answer.
+  // it lands, its seat's stage changes, or its reflection pass's sentinel
+  // lands. The `turn` query is answered once, and what the phases do not
+  // carry — a coding run's announcement, a note's `agent_turn_steered`, what
+  // the auxiliary model spent, the reflection pass — arrives only in its
+  // answer. The engine publishes a turn's in-turn spend before its end and a
+  // pass's spend before its sentinel, so those two moments read them whole.
   const landed = useMemo(
     () => phaseEvents.filter((ev) => fromPhaseEvent(ev)?.turnId === turnId).length,
     [phaseEvents, turnId],
   );
-  const moved = useRef({ landed, stage });
+  const feed = useEvents();
+  const reflected = useMemo(() => reflectionSentinel(feed, turnId), [feed, turnId]);
+  const moved = useRef({ landed, stage, reflected });
   useEffect(() => {
-    if (moved.current.landed === landed && moved.current.stage === stage) return;
-    moved.current = { landed, stage };
+    const was = moved.current;
+    moved.current = { landed, stage, reflected };
+    // A sentinel that LEFT the feed's ring is no news about this turn.
+    const sentinel = reflected !== "" && reflected !== was.reflected;
+    if (was.landed === landed && was.stage === stage && !sentinel) return;
     refetch();
-  }, [landed, stage, refetch]);
+  }, [landed, stage, reflected, refetch]);
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
 
@@ -522,6 +563,7 @@ export function useTurnView(turnId: string): TurnView {
   const nested = group?.nested ?? new Map<string, PhaseRecord[]>();
   const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
   const workerCount = phases.filter((p) => p.hostPhase).length;
+  const auxTokens = useMemo(() => auxiliaryTokens(auxiliaryRecords(events), "turn"), [events]);
 
   // RUNNING while a phase is live OR the seat's overlay says it is on this
   // turn: a turn gathering its context has no phase yet, and a parked one
@@ -634,6 +676,7 @@ export function useTurnView(turnId: string): TurnView {
     tokens: own.reduce((n, p) => n + p.totalTokens, 0),
     workerTokens,
     workerCount,
+    auxTokens,
     traceIds,
     // THE HIGHEST ITERATION ITS OWN PHASES REACHED, which is what a reader
     // means by "how many rounds did this take" and what the turns list counts
@@ -730,6 +773,21 @@ export function turnTitle(view: TurnView): string {
 }
 
 /**
+ * What the Tokens fact's figure leaves out, said beside it: the workers' and
+ * the judge's calls, nested under a phase, and the auxiliary spend inside the
+ * turn. The figure and its note together are what the turn list counts for the
+ * same turn.
+ */
+function tokenNote(view: TurnView): string | undefined {
+  const parts: string[] = [];
+  if (view.workerTokens > 0) {
+    parts.push(`+${fmtCount(view.workerTokens)} in ${plural(view.workerCount, "worker")}`);
+  }
+  if (view.auxTokens > 0) parts.push(`+${fmtCount(view.auxTokens)} auxiliary`);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
+/**
  * The facts a turn wears, in the one order — the strip under its title.
  *
  * ONE BUILDER FOR THE PAGE AND THE RAIL, which is `ObjectHeader`'s own rule
@@ -795,11 +853,11 @@ export function turnFacts(
       // THE TURN'S OWN PHASES, and the note is what says so. A worker's
       // tokens are already charged through the shared meter, which is why the
       // engine keeps them out of `total_tokens` and reports them as
-      // `subagent_tokens`.
-      note:
-        counted && view.workerTokens > 0
-          ? `+${fmtCount(view.workerTokens)} in ${plural(view.workerCount, "worker")}`
-          : undefined,
+      // `subagent_tokens`. The AUXILIARY spend inside the turn — its context,
+      // its ledgers' rewrites, its card — is noted the same way, and for the
+      // same reason: it is the turn's cost and no phase's. In and out, with the
+      // notes beside them, add up to the turn list's tokens for the same turn.
+      note: counted ? tokenNote(view) : undefined,
     },
     {
       label: "Cache",

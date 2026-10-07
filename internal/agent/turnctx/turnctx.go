@@ -52,6 +52,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -60,9 +61,11 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion. The two things it POINTS AT that change
-// are [Turn.Written] and [Turn.Calls], each of which only ever grows and
-// authorizes nothing.
+// decision downstream a suggestion. The four things it POINTS AT that change
+// are [Turn.Written], [Turn.Calls] and [Turn.AuxSpend], each of which only
+// ever grows and authorizes nothing, and [Turn.Budget], which only ever learns
+// that a window is full — so the one thing it can decide is to refuse a call,
+// and a tool holding it can make it refuse sooner, never later.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -226,6 +229,18 @@ type Turn struct {
 	// that is on the run's row.
 	Requester string
 
+	// Senders are the parties who triggered this turn, in the order they
+	// spoke — the same people the turn-start memory filter was told about,
+	// carried so a tool that re-runs that filter mid-turn (refresh_memory)
+	// can tell it too: the filter's one hard rule is per subject — a
+	// preference about somebody not party to the task does not apply — and
+	// a filter that does not know who is asking cannot enforce it. Empty
+	// for a turn no identifiable sender woke. A resumed turn re-reads no
+	// trigger, so it carries the senders its turn PARKED with
+	// (execstate.State.Senders), and none for a row parked by a build that
+	// predates them.
+	Senders []types.CanonicalIdentity
+
 	// Phase is the phase session this value was bound for, and empty on
 	// the Turn the engine built for the whole turn. Set only through
 	// [Turn.InPhase], by the frame that builds a phase's tool surface, so
@@ -239,11 +254,55 @@ type Turn struct {
 	// Calls is what this run has called so far, which a derived operation
 	// id reads its repeat count from — see [CallLog].
 	//
-	// One of the two parts of a turn that change, and only by growing: the
+	// One of the parts of a turn that change, and only by growing: the
 	// tool surface appends each call it made, and nothing can rewrite or
 	// drop an entry, so no authorization decision reads it and nothing a
 	// model says reaches it but the calls it actually made.
 	Calls *CallLog
+
+	// AuxSpend is what this turn SEGMENT's auxiliary calls have cost so far
+	// — its turn-start context, every rewrite its ledgers, its judge's
+	// evidence and its tools asked for, a worker's answer condensed for it —
+	// which the segment's charge to its work item adds at the end
+	// (ADR-0022). Every call reaches it through [Turn.Aux], the attribution
+	// the auxiliary seam files the call under.
+	//
+	// A part of a turn that changes, and like the other two only by
+	// growing: the seam adds what a call cost after it returned, and nothing
+	// reads it to decide anything but the charge. Nil outside a turn, which
+	// tallies nothing.
+	AuxSpend *auxspend.Tally
+
+	// Budget is the meter this turn segment's rounds are charged through,
+	// which every in-turn auxiliary call is charged through too and asks
+	// before it is made ([auxspend.Budget]): a window an auxiliary call
+	// fills is then one the segment's next round is held on rather than
+	// sent, billed and refused, and a call made once a window is full is
+	// not made at all. Every call reaches it through [Turn.Aux].
+	//
+	// The last part of a turn that changes, and only toward refusing: it
+	// learns of full windows and forgets one only when the window turns
+	// over. Nil outside a turn, and wherever there is no counter to charge
+	// — the seat's spend is then charged, or not, as before.
+	Budget auxspend.Budget
+}
+
+// Aux is the attribution an auxiliary call made for this turn states: the
+// TURN stage — part of the turn's cost and charged to its work item — this
+// run, its unit of work, the segment's tally and its budget meter, with the
+// call's own purpose added by the caller ([auxspend.Use.For]).
+//
+// AN ARGUMENT, never the context, for this package's own reason: a rewrite
+// started by a goroutine that outlives the turn would otherwise be charged to
+// whichever turn last wrote the context. Nil — a tool surface built outside a
+// turn — is the turn stage with no run, which files the call on the seat's day
+// alone.
+func (t *Turn) Aux() auxspend.Use {
+	if t == nil {
+		return auxspend.Use{Stage: types.AuxStageTurn}
+	}
+	return auxspend.Use{Stage: types.AuxStageTurn, TurnID: t.RunID, WorkKey: t.WorkKey,
+		Tally: t.AuxSpend, Budget: t.Budget}
 }
 
 // InPhase derives the Turn a phase session's tools see: this one, naming the
@@ -261,6 +320,29 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 	}
 	bound := *t
 	bound.Phase = phase
+	return &bound
+}
+
+// WithAuxSpend derives the Turn for calls a DIFFERENT segment pays for: this
+// one, its auxiliary calls tallied on spend rather than on [Turn.AuxSpend].
+//
+// One caller, and the shape of the problem it solves is the reason it exists:
+// an agent-mode executor hands its tool surface to a coding CLI over the
+// bridge, and the CLI goes on calling those tools after the segment that
+// launched it has ended and charged what it spent. Tallied on that segment's
+// tally, every one of those calls was added to a number nothing read again.
+// A copy, for [Turn.InPhase]'s reason; nil in, nil out.
+//
+// [Turn.Budget] is KEPT: the counters are the seat's and the company's
+// whichever segment pays, and the workers the CLI delegates to already charge
+// the launching segment's meter, so its auxiliary calls are judged by the same
+// meter rather than by none.
+func (t *Turn) WithAuxSpend(spend *auxspend.Tally) *Turn {
+	if t == nil {
+		return nil
+	}
+	bound := *t
+	bound.AuxSpend = spend
 	return &bound
 }
 

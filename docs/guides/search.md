@@ -42,6 +42,18 @@ alike — takes one of three modes, with one vocabulary on every surface:
 | `keyword` | the words the query used — BM25 alone | Keyword |
 | `semantic` | what the query means — the vector scan alone | Meaning |
 
+**The two halves do not read the same text.** The keyword half indexes a
+source's title and its whole body. The semantic half ranks one vector per
+source, computed from its **opening** — the title and then the body, whitespace
+collapsed, the first 8 KiB of the two together, or less where the model's own
+per-input bound is smaller (see
+[Where the vectors come from](../concepts/knowledge-system.md#where-the-vectors-come-from)).
+So a passage deep in a long page is found by `hybrid` and `keyword` through the
+words it uses, and never by `semantic`, which cannot see past the window.
+`crewlet search eval` reports, per corpus, how many sources and how much of
+their text lie past it (see
+[What the quality of this can and cannot be promised](../concepts/knowledge-system.md#what-the-quality-of-this-can-and-cannot-be-promised)).
+
 A semantic ranking needs the **query** in the same embedding space as the
 documents. The asking node computes that vector once through the company's
 embeddings provider — the same model and width the corpus is embedded at — and
@@ -54,6 +66,20 @@ embedded is a cache hit for the same phrase searched as knowledge, and for the
 turn-start prefetch. Computing a query's vector is bounded at **two seconds** —
 twice the one-second budget of the scan itself — so a slow provider costs a
 search its meaning half rather than holding the person who asked.
+
+**A query is at most 400 bytes**, on every surface that takes one: a seat's
+`search_knowledge`, `search_work_items` and `answer_knowledge`, the operator's
+tools, the API's `knowledge` and `work_search` (`bad_params`, naming the size
+and the limit) and the dashboard, which sends nothing past it and says why. A
+longer one is **refused, never cut** — a query is a question, and a search on
+its first part answers another one; past four hundred bytes it is a pasted
+thread, which no ranker turns into a better search. This is the opposite of
+what the corpus does with a long page, and deliberately: a source is embedded
+as its opening because one vector stands for one source, while a query's
+vector is always computed from the **whole** query. Every model this build
+knows takes at least 2 032 bytes an input; on a model stated with a narrower
+window (`max_input_tokens`), a query longer than one input is embedded in
+pieces at the model's bound, in one request, and the pieces' vectors pooled.
 
 **A mode asked for is not always a mode served, and every answer says which.**
 It carries `served_mode` (the ranking the hits actually came from), `modes`

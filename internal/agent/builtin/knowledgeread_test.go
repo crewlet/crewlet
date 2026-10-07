@@ -143,9 +143,9 @@ func TestASearchRecordsItsRankedPagesAndItsQuery(t *testing.T) {
 	}
 }
 
-// A LONG QUERY IS CLIPPED ON A RUNE, never through one. The record is a label,
-// and a clip that split a multi-byte rune would be invalid UTF-8 on the wire.
-func TestASearchRecordsALongQueryClippedOnARune(t *testing.T) {
+// A LONG QUERY IS RECORDED WHOLE — the tool already refuses one past its own
+// limit, so the record holds exactly what was searched for.
+func TestASearchRecordsItsQueryWhole(t *testing.T) {
 	t.Parallel()
 	out := &recordingTelemetry{}
 	tool := registered(t, builtin.Deps{
@@ -158,9 +158,8 @@ func TestASearchRecordsALongQueryClippedOnARune(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("published %d reads", len(got))
 	}
-	if q := got[0].Query; q != types.KnowledgeReadQuery(query) || len(q) > types.KnowledgeReadQueryMax {
-		t.Errorf("query = %d bytes %q; want it clipped to %d by the one rule",
-			len(q), q, types.KnowledgeReadQueryMax)
+	if q := got[0].Query; q != query {
+		t.Errorf("query = %d bytes %q; want the %d-byte query whole", len(q), q, len(query))
 	}
 }
 

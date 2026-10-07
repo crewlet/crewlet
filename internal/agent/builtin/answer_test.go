@@ -37,17 +37,15 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 		{"get_work_item(include=comments)", onlyComments(whole)},
 		{"get_work_item(include=history)", onlyHistory(whole)},
 		{"get_work_item(include=links)", onlyLinks(whole)},
-		// THE READ THAT MAKES THE COMMENT EXCERPT HONEST. The page above
-		// carries excerpts precisely because twenty whole bodies is ten
-		// times this ceiling; that is only legitimate while opening ONE
-		// still fits, so a MaxCommentBody raised past this would leave
-		// what somebody wrote unreachable by any tool.
+		// ONE COMMENT BY ID, at [tracker.MaxCommentBody]. A MaxCommentBody
+		// raised past this would leave a thread page — which always
+		// carries at least one whole comment — too heavy to send.
 		{"get_work_item(comment=…)", oneWholeComment(whole)},
-		// THE OTHER WHOLE-VALUE READ, and the one the ceiling used to
-		// make impossible: [tracker.MaxBody] was exactly
-		// [builtin.ToolAnswerBytes], so a body at its cap could not be
-		// sent beside any envelope at all.
-		{"get_work_item(body=true)", wholeBody(whole)},
+		// THE DESCRIPTION, WHOLE, which is now a part of its own: a body
+		// at [tracker.MaxBody] beside a page holding one comment at its
+		// cap is a full answer before anything else is said, so the two
+		// can only both be whole if each can be asked for alone.
+		{"get_work_item(include=body)", onlyBody(whole)},
 		{"get_work_catalogue", maximalCatalogue()},
 		// THE PROJECT LISTING AS A SEAT PAGES IT. Its own cap is the
 		// SCREEN's — two hundred rows, ≈ 93 KiB here, refused for weight
@@ -111,35 +109,33 @@ func TestAMaximalItemIsRefusedRatherThanTruncated(t *testing.T) {
 		"is what names `include`", len(encoded)>>10, builtin.ToolAnswerBytes>>10)
 }
 
-// onlyComments, onlyHistory and onlyLinks are one `include` part each, on the
-// same maximal item.
+// onlyComments, onlyHistory, onlyLinks and onlyBody are one `include` part
+// each, on the same maximal item. A part that is not asked for is not sent —
+// the description included, which is what lets each of these fit.
 func onlyComments(d tracker.TaskDetail) tracker.TaskDetail {
-	d.History, d.Links = nil, nil
+	d.History, d.Links, d.Task.Body = nil, nil, ""
 	return d
 }
 
 func onlyHistory(d tracker.TaskDetail) tracker.TaskDetail {
-	d.Comments, d.Links, d.CommentsCursor = nil, nil, ""
+	d.Comments, d.Links, d.CommentsCursor, d.Task.Body = nil, nil, "", ""
 	return d
 }
 
 func onlyLinks(d tracker.TaskDetail) tracker.TaskDetail {
-	d.Comments, d.History, d.CommentsCursor = nil, nil, ""
+	d.Comments, d.History, d.CommentsCursor, d.Task.Body = nil, nil, "", ""
 	return d
 }
 
-// wholeBody is what `body: true` answers: the item with its description at
-// [tracker.MaxBody] and nothing else beside it.
-func wholeBody(d tracker.TaskDetail) tracker.TaskDetail {
+func onlyBody(d tracker.TaskDetail) tracker.TaskDetail {
 	d.Comments, d.History, d.Links, d.CommentsCursor = nil, nil, nil, ""
-	d.Task.Body = strings.Repeat("b", tracker.MaxBody)
 	return d
 }
 
 // oneWholeComment is what `comment:` answers: that comment ALONE, at
-// [tracker.MaxCommentBody], with no page and no cursor behind it.
+// [tracker.MaxCommentBody], with no page, no cursor and no description.
 func oneWholeComment(d tracker.TaskDetail) tracker.TaskDetail {
-	d.History, d.Links, d.CommentsCursor = nil, nil, ""
+	d.History, d.Links, d.CommentsCursor, d.Task.Body = nil, nil, "", ""
 	d.Comments = []tracker.Comment{{
 		ID: "c", Task: "id", Author: "ana",
 		Body:      strings.Repeat("c", tracker.MaxCommentBody),
@@ -148,37 +144,26 @@ func oneWholeComment(d tracker.TaskDetail) tracker.TaskDetail {
 	return d
 }
 
-// maximalDetail is one task carrying every collection at its cap, AS THE TOOL
-// SENDS IT — so the body is at [builtin.TaskBodyShown] rather than at
-// [tracker.MaxBody].
-//
-// That used to be an exception with a reason, and the reason was wrong. It
-// read: a 64 KiB body IS the answer somebody asked for, so eliding it would
-// answer a different question — true of a caller who NAMED the body, and
-// false of every other, which is all of them. `include` governs the
-// collections beside the task and never the task itself, so a caller handed
-// the weight refusal had no argument that would narrow it, and the body was
-// the one value on a detail read with no bound at all. It has one now, and a
-// caller who does mean the body says `body: true` and gets it whole.
+// maximalDetail is one task carrying every part at its cap, AS THE TOOL
+// SENDS IT — and nothing on it is cut: the description is at
+// [tracker.MaxBody], and the thread page is the heaviest the reader returns,
+// one whole comment at [tracker.MaxCommentBody] (a page always carries at
+// least one comment, and fills with whole ones up to
+// [tracker.CommentPageBytes] otherwise).
 func maximalDetail() tracker.TaskDetail {
 	at := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
 	detail := tracker.TaskDetail{
 		Task: tracker.Task{
 			ID: "id", Key: "ENG-1", Project: "ENG",
 			Title: strings.Repeat("t", tracker.MaxTitle),
-			Body:  strings.Repeat("b", builtin.TaskBodyShown),
+			Body:  strings.Repeat("b", tracker.MaxBody),
 		},
 		CommentsCursor: "1772614800:id",
-	}
-	// THE COMMENT PAGE at its own cap, each body elided as the reader
-	// elides it. Twenty at MaxCommentBody would be 640 KiB — ten times the
-	// ceiling — which is the whole reason the elision exists.
-	for range tracker.DetailComments {
-		detail.Comments = append(detail.Comments, tracker.Comment{
+		Comments: []tracker.Comment{{
 			ID: "c", Task: "id", Author: "ana",
-			Body:      strings.Repeat("c", tracker.CommentBodyShown),
+			Body:      strings.Repeat("c", tracker.MaxCommentBody),
 			CreatedAt: at,
-		})
+		}},
 	}
 	for range tracker.DetailHistoryDefault {
 		detail.History = append(detail.History, tracker.HistoryEntry{

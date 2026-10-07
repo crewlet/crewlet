@@ -2,13 +2,13 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
-	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -17,35 +17,39 @@ import (
 )
 
 // What the operator surface's `answer_knowledge` needs from the engine: the
-// model a person's question runs on, the company's windows it is judged and
-// charged against, and where this node's corpus is applied through. See
+// model a person's question runs on, the company's windows it is judged
+// against, and where this node's corpus is applied through. See
 // internal/agent/builtin/answerknowledge.go for the tool.
 
 // AnswerModels resolves a person's answer model off the CURRENT epoch, per
 // call, because a config apply replaces the registry and the operator surface
 // is built once.
 //
-// UNMETERED on purpose, unlike [Engine.meteredModelsFor]: that wrapper charges
-// a SEAT's counter, and a person is not an agent seat — the tool charges the
-// company's windows itself, through [AnswerBudget].
+// THROUGH THE AUXILIARY SEAM like every other auxiliary call, which on the
+// operator stage the tool states charges the COMPANY's windows alone — a
+// person has no seat budget — and records the spend for the person. It used
+// to resolve off the bare registry and leave the charge to the tool, which
+// made the answer the one auxiliary call outside the seam, charged by a copy
+// of its rule and recorded nowhere.
 func AnswerModels(e *Engine) builtin.AnswerModels { return answerModels{engine: e} }
 
 type answerModels struct{ engine *Engine }
 
-func (m answerModels) Head(role *org.Role, ph phase.Phase) (chain.Member, error) {
-	c := m.engine.Company()
-	if c == nil {
+func (m answerModels) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member, error) {
+	seam := m.engine.auxiliaryFor(m.engine.Company())
+	if seam == nil {
 		return chain.Member{}, phase.ErrNoProviders
 	}
-	return c.Models.Head(role, ph)
+	return seam.Auxiliary(role, use)
 }
 
-// AnswerBudget is the company's windows, as a person's answer is gated and
-// charged against them — or nil where there is no fleet to count on, which
-// omits the tool rather than serving answers no counter hears about.
+// AnswerBudget is the company's windows, as a person's answer is gated against
+// them — or nil where there is no fleet to count on, which omits the tool
+// rather than serving answers no counter hears about. The CHARGE is the seam's
+// ([AnswerModels]).
 //
 // THE COMPANY'S ALONE: a person has no seat budget, so the gate reads the
-// org's counter and the charge is [coord.Budgets.PostChargeOrg].
+// org's counter.
 func AnswerBudget(e *Engine) builtin.AnswerBudget {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil
@@ -53,19 +57,12 @@ func AnswerBudget(e *Engine) builtin.AnswerBudget {
 	return answerBudget{engine: e, budgets: e.backends.Fleet, now: time.Now}
 }
 
-// orgCounter is the slice of the fleet's counters an answer uses: the
-// [budgetCounter] a [meter] reads the company's windows through — so the gate
-// is the very rule the budget park applies, not a copy of it — and the
-// after-the-fact charge. Nothing here calls Charge: an answer's size is known
-// only from its reply, so it is never put through the gate.
-type orgCounter interface {
-	budgetCounter
-	PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error)
-}
-
+// answerBudget reads the company's windows through the [budgetCounter] a
+// [meter] reads them through, so the gate is the very rule the budget park
+// applies, not a copy of it.
 type answerBudget struct {
 	engine  *Engine
-	budgets orgCounter
+	budgets budgetCounter
 	now     func() time.Time
 }
 
@@ -73,28 +70,27 @@ type answerBudget struct {
 func (b answerBudget) basis() budgetBasis { return basisOf(b.engine.Company(), nil) }
 
 // Refusing reports the company window that turns an answer away, by the same
-// rule the budget park and the live meter use ([windowRefuses]): a window
-// whose gate refused a charge and has admitted none since, or one with no
-// room for a single token.
+// rule the budget park and the live meter use ([windowRefuses]): a window with
+// no room for a single token, which every window the gate refused a round in
+// has, since the refused round is counted.
+//
+// AND RECORDS THE REFUSAL ([meter.turnAway]): the tool asks this immediately
+// before an answer's first call and refuses the question on yes, so a yes is
+// the gate turning that call away, and the company's window says so in its
+// `refused_at`. A company whose day a person's answers, a coding run or a
+// background pass had filled used to refuse every question asked of it while
+// every screen said it had refused nothing.
 func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool, error) {
 	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.now}
 	r, found, err := m.refusing(ctx)
 	if err != nil || !found {
 		return builtin.BudgetRefusal{}, false, err
 	}
+	m.turnAway(ctx, r)
 	return builtin.BudgetRefusal{
 		Period: string(r.Window.Period), Window: r.Window.Label,
 		ResetsAt: r.Window.End, Used: r.Used, Limit: r.Limit,
 	}, true, nil
-}
-
-// Charge records an answer's tokens in the company's current windows.
-func (b answerBudget) Charge(ctx context.Context, tokens int) error {
-	windows := coord.WindowsAt(b.now(), b.basis().zone)
-	if _, err := b.budgets.PostChargeOrg(ctx, tokens, windows); err != nil {
-		return fmt.Errorf("engine: charge an answer to the company: %w", err)
-	}
-	return nil
 }
 
 // KnowledgeCorpus is where this node's knowledge corpus is applied through —
@@ -126,3 +122,8 @@ func (e *Engine) KnowledgeCorpus() (string, bool) {
 	}
 	return strings.Join(parts, ","), true
 }
+
+// Rewrites is the cache every compaction this node makes is kept in, for the
+// surfaces outside a turn that condense text the same way — a person's
+// question answered from pages too long to read whole.
+func (e *Engine) Rewrites() *compact.Cache { return e.rewrites }

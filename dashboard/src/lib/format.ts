@@ -451,6 +451,50 @@ export function utf8Bytes(s: string): number {
 
 const encoder = new TextEncoder();
 
+/**
+ * How near its cap a text is before its field starts counting — the last
+ * fifth. Earlier than that a counter is a number a reader is not deciding
+ * anything with; at the cap it is too late to plan the sentence.
+ */
+const COUNT_FROM = 0.8;
+
+/** What one text field says about its size against its cap. */
+export interface TextBudget {
+  bytes: number;
+  limit: number;
+  /** Past the cap: the engine would refuse it. */
+  over: boolean;
+  /** The line under the field — a count near the cap, the refusal past it. */
+  line: string | undefined;
+}
+
+/**
+ * A text's size against the engine's cap, in the engine's unit (UTF-8 bytes,
+ * of what is sent: the trimmed value).
+ *
+ * THE ONE WAY A FORM HOLDS A TEXT TO A CAP: measured and SAID, before the
+ * press, and never cut. A field's `maxLength` is the cut — the browser drops
+ * what a paste carries past it, silently, in characters rather than the
+ * engine's bytes — and a prefill sliced to a length is the same cut made on
+ * the reader's behalf. `remedy` is what the line past the cap tells them to
+ * do, which is the field's to say.
+ */
+export function textBudget(
+  value: string,
+  limit: number,
+  what: string,
+  remedy = "Shorten it.",
+): TextBudget {
+  const bytes = utf8Bytes(value.trim());
+  const over = bytes > limit;
+  const line = over
+    ? `${bytes} bytes — ${what} holds at most ${limit}. ${remedy}`
+    : bytes >= limit * COUNT_FROM
+      ? `${bytes} of ${limit} bytes`
+      : undefined;
+  return { bytes, limit, over, line };
+}
+
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const units = ["B", "KB", "MB", "GB"];

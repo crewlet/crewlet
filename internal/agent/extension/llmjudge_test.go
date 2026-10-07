@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/compact"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -160,7 +163,7 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 	user := model.seen.Messages[1].Content
 	for _, want := range []string{
 		"github_get_pull_request", // the tool log
-		"number=7",                // and its arguments
+		`"number":7`,              // and its arguments
 		"reply to the review comment",
 		"read the thread, then post",
 		"Most you may grant now: 8",
@@ -328,4 +331,203 @@ func TestTheJudgeReportsItsCacheShare(t *testing.T) {
 			t.Errorf("answer %q: the decision carries %+v, want the call's spend with its cache share", answer, d)
 		}
 	}
+}
+
+type judgeFitter struct{ asked []compact.Kind }
+
+func (f *judgeFitter) Fit(_ context.Context, kind compact.Kind, text string, _ int) (compact.Result, error) {
+	f.asked = append(f.asked, kind)
+	return compact.Result{Text: "rewrite of " + string(kind), Compacted: true, From: len(text)}, nil
+}
+
+// WHAT IT LAST SAID IS WHAT IT SAID LAST. The evidence used to be cut to its
+// first eight hundred bytes under a heading promising the last — so a phase
+// that ended by announcing it was done was judged on its opening thoughts.
+// With no compactor it is shown whole; nothing of it is cut away.
+func TestTheJudgeSeesTheEndOfWhatThePhaseSaid(t *testing.T) {
+	t.Parallel()
+	req := judgeReq()
+	req.LastText = strings.Repeat("thinking about the approach. ", 200) + "DONE: posted the reply in the thread."
+	model := &answering{answer: "RESCUE\nx"}
+	if _, err := extension.NewLLMJudge(model, "k").Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(model.seen.Messages[1].Content, "DONE: posted the reply in the thread.") {
+		t.Fatal("the judge was not shown how the phase ended")
+	}
+}
+
+// TWO CALLS THAT DIFFER PAST TWO HUNDRED BYTES STILL READ AS TWO CALLS. The
+// arguments were cut there, so two posts of different bodies sharing an
+// opening rendered identically and a phase making progress read as a loop.
+func TestTwoCallsThatDifferLateStillRenderDifferently(t *testing.T) {
+	t.Parallel()
+	opening := strings.Repeat("Hello team, here is the update. ", 10)
+	req := judgeReq()
+	req.Calls = []ledger.Call{
+		{Name: "post", Args: map[string]any{"text": opening + "first version"}},
+		{Name: "post", Args: map[string]any{"text": opening + "second version"}},
+	}
+	model := &answering{answer: "RESCUE\nx"}
+	if _, err := extension.NewLLMJudge(model, "k").Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	user := model.seen.Messages[1].Content
+	lines := []string{}
+	for _, line := range strings.Split(user, "\n") {
+		if strings.HasPrefix(line, "- post(") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 2 || lines[0] == lines[1] {
+		t.Fatalf("two different calls rendered as one:\n%s", strings.Join(lines, "\n"))
+	}
+	if strings.Contains(user, "…") {
+		t.Error("the judge's evidence was cut")
+	}
+}
+
+// WITH A COMPACTOR, EVIDENCE PAST ITS BUDGET IS REWRITTEN — the task, the
+// last words and an argument — and each rewrite is announced as one.
+func TestTheJudgeCondensesEvidencePastItsBudget(t *testing.T) {
+	t.Parallel()
+	req := judgeReq()
+	req.Task = strings.Repeat("the quoted thread goes on. ", 400) + "THE ASK"
+	req.LastText = strings.Repeat("x", extension.JudgeTextBudget+1)
+	req.Calls = []ledger.Call{{Name: "post", Args: map[string]any{"text": strings.Repeat("body ", 100)}}}
+	fit := &judgeFitter{}
+	model := &answering{answer: "RESCUE\nx"}
+	if _, err := extension.NewLLMJudge(model, "k").WithCompactor(fit).Decide(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	user := model.seen.Messages[1].Content
+	for _, want := range []string{"rewrite of task", "rewrite of produced", "(condensed) rewrite of argument",
+		"condensed by a model"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("missing %q:\n%s", want, user)
+		}
+	}
+	if len(fit.asked) != 3 {
+		t.Errorf("asked for %d rewrites, want 3", len(fit.asked))
+	}
+}
+
+// errFull is the refusal a turn's budget holds once a window is full.
+var errFull = errors.New("toolloop: token budget exhausted (agent day budget)")
+
+// fillingBudget is a turn's budget a rewrite fills: it refuses nothing until
+// the compactor beside it has rewritten something, and everything after.
+type fillingBudget struct {
+	mu   sync.Mutex
+	full bool
+}
+
+func (b *fillingBudget) Held(context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.full {
+		return errFull
+	}
+	return nil
+}
+
+// fillingFitter is the seat's compactor, each rewrite charged to the budget —
+// and taking long enough to be seen on a clock — as a real one's is.
+type fillingFitter struct {
+	budget *fillingBudget
+	took   time.Duration
+	// returned is when the last rewrite came back.
+	returned time.Time
+}
+
+func (f *fillingFitter) Fit(_ context.Context, kind compact.Kind, text string, _ int) (compact.Result, error) {
+	time.Sleep(f.took)
+	f.budget.mu.Lock()
+	f.budget.full = true
+	f.budget.mu.Unlock()
+	f.returned = time.Now()
+	return compact.Result{Text: "rewrite of " + string(kind), Compacted: true, From: len(text)}, nil
+}
+
+// A JUDGE WHOSE OWN EVIDENCE FILLS THE TURN'S WINDOW IS NOT CALLED.
+//
+// Its caller asks the turn's budget before consulting it, and that answer was
+// room; rendering the evidence then rewrote a long task with the seat's
+// auxiliary model, charged to the same counters, and that rewrite filled the
+// window. The judge's call is now certain to be billed and its charge refused,
+// so the judge asks again once the evidence is in hand and calls nothing — and
+// says it was the budget, not a failed judge, and that nothing was called.
+func TestAJudgeWhoseEvidenceFillsTheWindowIsNotCalled(t *testing.T) {
+	t.Parallel()
+	req := judgeReq()
+	req.Task = strings.Repeat("the quoted thread goes on. ", 400) + "THE ASK"
+	budget := &fillingBudget{}
+	model := &answering{answer: "EXTEND 4\nprogressing"}
+	judge := extension.NewLLMJudge(model, "k").
+		WithCompactor(&fillingFitter{budget: budget}).WithHold(budget)
+
+	d, err := judge.Decide(t.Context(), req)
+	if !errors.Is(err, extension.ErrHeld) || !errors.Is(err, errFull) {
+		t.Fatalf("Decide = %v, want ErrHeld carrying the budget's own refusal", err)
+	}
+	if model.calls != 0 {
+		t.Errorf("the judge's model was called %d times on a window its evidence had filled", model.calls)
+	}
+	if d.Asked || d.Tokens() != 0 {
+		t.Errorf("decision = %+v, want nothing asked and nothing to charge", d)
+	}
+
+	granted, rescued := extension.Consider(t.Context(), judge,
+		extension.Policy{Enabled: true, RoundStep: 5, Ceiling: 40}, req)
+	if granted != 0 || rescued.Extend || rescued.Asked ||
+		rescued.Reason != extension.ReasonBudgetExhausted {
+		t.Errorf("Consider = (%d, %+v), want a budget rescue that claims no call", granted, rescued)
+	}
+}
+
+// A JUDGE WHOSE BUDGET HAS ROOM IS CALLED, so the case above is about the
+// window and not about a hold that refuses everything.
+func TestAJudgeWithRoomLeftIsCalled(t *testing.T) {
+	t.Parallel()
+	model := &answering{answer: "EXTEND 4\nprogressing"}
+	judge := extension.NewLLMJudge(model, "k").WithHold(&fillingBudget{})
+	if _, err := judge.Decide(t.Context(), judgeReq()); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if model.calls != 1 {
+		t.Errorf("the model was called %d times, want once", model.calls)
+	}
+}
+
+// THE CALL'S DEADLINE STARTS WHEN THE CALL DOES. JudgeTimeout bounds the one
+// call; rendering the evidence can wait on rewrites first, each under its own
+// deadline, and a timer started before them handed the call whatever they
+// left — none at all after a slow rewrite.
+func TestTheJudgesTimeoutStartsAfterItsEvidenceIsRendered(t *testing.T) {
+	t.Parallel()
+	req := judgeReq()
+	req.Task = strings.Repeat("the quoted thread goes on. ", 400) + "THE ASK"
+	fit := &fillingFitter{budget: &fillingBudget{}, took: 20 * time.Millisecond}
+	model := &deadlineModel{}
+	if _, err := extension.NewLLMJudge(model, "k").WithCompactor(fit).Decide(t.Context(), req); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if !model.had {
+		t.Fatal("the judge's call carried no deadline")
+	}
+	if earliest := fit.returned.Add(extension.JudgeTimeout); model.deadline.Before(earliest) {
+		t.Errorf("the call's deadline is %v before the rewrite returned plus JudgeTimeout: "+
+			"the rewrite's time was taken out of the call's", earliest.Sub(model.deadline))
+	}
+}
+
+// deadlineModel records the deadline its call was made under.
+type deadlineModel struct {
+	deadline time.Time
+	had      bool
+}
+
+func (m *deadlineModel) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	m.deadline, m.had = ctx.Deadline()
+	return &llm.Completion{Content: "RESCUE\nlooping"}, nil
 }

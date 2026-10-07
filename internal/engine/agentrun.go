@@ -73,12 +73,16 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			"api.port on this node and point %s at that listener as a sandbox "+
 			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
 	}
+	// The run's calls, and with each what they have cost the engine so far,
+	// for the segment that resumes from the run to pay — bound to the run's
+	// job by the launch below, before the box that makes them exists.
+	ledger := newBridgeLedger(pending, req.Spend)
 	endpoint := e.bridge.Open(&mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  l.turn.Handle(),
 		Role:    l.seat.Name,
 		Surface: req.Surface,
-		Ledger:  bridgeLedger{store: pending},
+		Ledger:  ledger,
 	})
 	if endpoint == "" {
 		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
@@ -131,6 +135,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		LLM:        agentLLM,
 		Brief:      req.Brief,
 		Task:       l.turn.Task,
+		Opened:     ledger.bind,
 	})
 	if err != nil {
 		// The launch failed, so nothing will ever close this session on

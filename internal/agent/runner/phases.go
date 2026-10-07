@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -68,6 +70,14 @@ type Config struct {
 	// Judge decides round-cap extensions. Nil means every exhaustion goes
 	// straight to the rescue path.
 	Judge extension.Judge
+
+	// Compact rewrites a payload past its budget with the seat's own
+	// auxiliary model: a prior round's argument values, failed calls'
+	// errors and produced text, as the prior-work ledger renders them. The
+	// zero value rewrites nothing, and the ledger then renders a draft
+	// whole and omits a payload by its size — never a cut. See
+	// internal/agent/ledger/ledgerfit for which is which.
+	Compact compact.Bound
 
 	// Subagent is what this turn needs to spawn sub-agents: the company's
 	// caps and a way to read the seat's remaining allowance. Nil leaves
@@ -241,6 +251,10 @@ type RunRecord struct {
 	// DeliveredRefs are the branches and pull requests the run produced.
 	DeliveredRefs []string
 
+	// RefsElided is how many more the run reported than DeliveredRefs lists,
+	// which the coordinator bounds — said on the record rather than dropped.
+	RefsElided int
+
 	// LaunchID is the job this resume collected — the pending-run row's
 	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
 	// more than once, so it is what tells one collected run's record from
@@ -347,6 +361,17 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		// agentrun.go for what that does and does not change. The branch
 		// is here, at the top of the phase, because everything below it
 		// is the native loop's own assembly.
+		//
+		// A REFUSAL ALREADY CERTAIN launches nothing. A native pass is
+		// stopped by its own loop before its first call; this one makes
+		// its calls in a box, post-charged when the run is collected, so
+		// it is asked here — or a run would be paid for whole on a window
+		// already past its ceiling — and again once its brief is built,
+		// since building it can be what fills the window
+		// ([Runner.executeAsAgentRun]).
+		if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
+			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+		}
 		return r.executeAsAgentRun(ctx, round, notes, history)
 	}
 	snapshot := r.cfg.Registry.Snapshot()
@@ -363,7 +388,8 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit, r.executorActive(snapshot))
+	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, round, snapshot, submit,
+		r.executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -446,10 +472,23 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
 	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
-		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
+		PriorWork:           r.priorWork(ctx, history),
 		ConversationHistory: r.cfg.Conversation,
 	})
 	return system, user
+}
+
+// priorWork renders the turn's earlier rounds, every payload past its budget
+// rewritten by the seat's auxiliary model first.
+//
+// Rewritten here, at render, and not when the round closed: the record keeps
+// every payload whole, so the bound is a property of what this prompt can
+// carry rather than of what happened. The compactor caches by content, so the
+// block re-rendered for the executor and again for the reviewer pays for each
+// payload once.
+func (r *Runner) priorWork(ctx context.Context, history []ledger.Iteration) string {
+	fitted := ledgerfit.Fit(ctx, r.cfg.Compact, ledger.IterationPieces(history, r.cfg.SkipNames))
+	return ledger.RenderIterations(history, r.cfg.SkipNames, fitted)
 }
 
 // work is one executor pass, assembled for reporting.
@@ -534,7 +573,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
-	surface, err := r.surfaceWith(ctx, phase.Review, round, snapshot, submit, nil)
+	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Review, round, snapshot, submit, nil)
 	if err != nil {
 		return turn.Review{}, err
 	}
@@ -551,7 +590,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		OpenQuestions:     w.OpenQuestions,
 		Produced:          reviewArtifact(w),
 		ToolLog:           ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
-		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
+		EarlierIterations: r.priorWork(ctx, history),
 		// THE SKILLS AN OPERATOR SCOPED TO REVIEW, which the prompt, the
 		// parser and the docs all supported and nothing ever passed: a
 		// skill authored with `phases: [review]` reached no reviewer.
@@ -1082,10 +1121,22 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 // rather than inside [extension.Consider], which is policy plus a model and
 // has no business knowing about spans, meters or the event vocabulary.
 //
-// A CHARGE THAT REFUSES DOES NOT FAIL THE TURN. The extension is a generosity
+// A CHARGE THAT REFUSES DOES NOT FAIL THE PHASE. The extension is a generosity
 // on a phase that has already run out of rounds, and a seat at its cap should
-// stop extending, not die: an over-budget judgement is recorded and treated as
-// "no extension", which is the same outcome as the judge saying no.
+// stop extending rather than have the phase break under it: an over-budget
+// judgement is logged, published and treated as "no extension", which is the
+// same outcome as the judge saying no. Its tokens are on the counter either
+// way: the judge has answered by the time it is charged, and a meter records a
+// call it refuses as it records one it admits ([toolloop.BudgetMeter]). What
+// the refusal does stop is every model call after it: the meter now holds it,
+// so the next phase's first round — the reviewer's, or the executor's after a
+// correction — is refused before it is made, and the turn ends on the budget
+// without paying for a call certain to be thrown away.
+//
+// AND A JUDGE IS NOT CALLED AT ALL ON A REFUSAL ALREADY CERTAIN: it is a model
+// call like any other, billed and then refused. That happens when a refusal
+// lands inside the phase's last round without being the round's own — a
+// worker it delegated to, refused by the seat or the company.
 func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRound int,
 	policy extension.Policy, req extension.Request,
 ) (int, extension.Decision) {
@@ -1099,6 +1150,20 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 		attribute.Int("crewlet.iteration", iteration),
 		attribute.Int("crewlet.rounds", req.RoundsUsed))
 	defer span.End()
+
+	// A REFUSAL ALREADY CERTAIN calls no judge — see above. Only where the
+	// judge WOULD be called: a policy that declines to ask, or a seat with
+	// no judge, costs nothing, and its own reason is the truer account of
+	// why the phase was not extended.
+	if asks, _ := policy.ShouldAsk(req.RoundsUsed); asks && r.cfg.Judge != nil {
+		if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
+			log.WarnContext(ctx, "extension_judge_over_budget", "phase", ph,
+				"iteration", iteration, "tokens", 0, "error", refused.Error(),
+				"detail", "the budget had already refused this turn, so the judge was not called")
+			span.SetAttributes(attribute.Bool("crewlet.judge_called", false))
+			return 0, extension.Rescue(extension.ReasonBudgetExhausted)
+		}
+	}
 
 	// THE JUDGE'S OWN WALL CLOCK, bracketed here rather than inside
 	// [extension.Consider] for the same reason the span is: that function is
@@ -1132,7 +1197,8 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 	return granted, decision
 }
 
-// charge meters a model call the tool loop did not make.
+// charge meters a model call the tool loop did not make, once it has been
+// made: the meter records it whether or not it fits.
 //
 // An unreachable counter is NOT a refusal — the same three-valued rule the
 // loop's own charge follows — but here both answers end the same way, because
@@ -1256,7 +1322,10 @@ type phaseResult struct {
 // a resumed Execute as well as a fresh one. Injected here because this is the
 // single funnel every phase surface goes through, so a phase that lost the
 // tool mid-turn is not representable.
-func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
+//
+// m is where the surface's own calls are charged — the runner's own segment
+// for every surface but an agent-mode executor's ([meter]).
+func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, submit tools.Callable, active []string, loaded ...string,
 ) (*tools.Surface, error) {
 	if submit != nil {
@@ -1294,7 +1363,7 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// funnel every phase surface goes through, so a fresh Execute and a
 	// RESUMED one get it from one place — and a resumed turn that lost the
 	// tool mid-run is not representable.
-	if entry := r.spawnEntry(ctx, ph, round, snapshot,
+	if entry := r.spawnEntry(ctx, m, ph, round, snapshot,
 		func() *tools.Surface { return surface }); entry.Tool != nil {
 		next, err := snapshot.With(entry)
 		if err != nil {
@@ -1317,7 +1386,7 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// Bound to the turn AS THIS PHASE, so a tool reporting what it did can
 	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
 	surface = tools.NewSurface(ph.String(), snapshot, active).
-		ForTurn(r.cfg.Turn.Context.InPhase(types.Phase(ph)))
+		ForTurn(m.turn.InPhase(types.Phase(ph)))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
 	// what the catalogue showed cannot disagree: both are derived from the
 	// same active list, at the same moment, and the catalogue's "required"

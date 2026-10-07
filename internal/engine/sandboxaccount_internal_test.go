@@ -37,11 +37,11 @@ func dayUsed(ctx context.Context, t *testing.T, fleet *coordmem.Fleet, scope str
 // A COLLECTED RUN'S SPEND IS RECORDED EVEN WHEN IT OVERRAN THE CAP.
 //
 // The run already spent it, minutes or hours earlier and possibly on another
-// node, so no answer can un-spend it. Charging it through the gate recorded
-// NOTHING whenever it did not fit, which is exactly when the cap binds: the
-// counter under-stated the company's spend by the whole run, the next round was
-// admitted against room the run had already used, and the refusal the gate
-// stamped told the dashboard the seat was refusing charges it would still take.
+// node, so no answer can un-spend it. Charging it through the gate, when a
+// refused charge counted nothing, recorded NOTHING whenever it did not fit,
+// which is exactly when the cap binds: the counter under-stated the company's
+// spend by the whole run and the next round was admitted against room the run
+// had already used. It is post-charged, which records it with no verdict.
 func TestACollectedRunIsRecordedEvenPastTheCap(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -55,7 +55,7 @@ func TestACollectedRunIsRecordedEvenPastTheCap(t *testing.T) {
 		t.Fatalf("setup charge = (%+v, %v)", got, err)
 	}
 
-	over, err := accountant(fleet, orgCaps, seatCaps).Charge(ctx, "a-1", "lead", 50)
+	over, err := accountant(fleet, orgCaps, seatCaps).Charge(ctx, "a-1", "lead", 50, false)
 	if err != nil {
 		t.Fatalf("Charge: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestACollectedRunInsideTheCapIsNotOver(t *testing.T) {
 			if _, err := fleet.PostCharge(ctx, scope, tc.prior, coord.WindowsAt(collectedAt, time.UTC)); err != nil {
 				t.Fatalf("setup: %v", err)
 			}
-			over, err := accountant(fleet, tc.org, tc.seat).Charge(ctx, "a-1", "lead", tc.tokens)
+			over, err := accountant(fleet, tc.org, tc.seat).Charge(ctx, "a-1", "lead", tc.tokens, false)
 			if err != nil {
 				t.Fatalf("Charge: %v", err)
 			}
@@ -142,7 +142,7 @@ func TestACollectedRunIsCountedInTheCompanysCollectionDay(t *testing.T) {
 		basis:   func(string) budgetBasis { return budgetBasis{zone: la} },
 		now:     func() time.Time { return collected },
 	}
-	if _, err := a.Charge(t.Context(), "a-1", "lead", 70); err != nil {
+	if _, err := a.Charge(t.Context(), "a-1", "lead", 70, false); err != nil {
 		t.Fatalf("Charge: %v", err)
 	}
 	u, err := fleet.Used(t.Context(), coord.OrgScope, coord.WindowsAt(collected, la))
@@ -151,5 +151,42 @@ func TestACollectedRunIsCountedInTheCompanysCollectionDay(t *testing.T) {
 	}
 	if day := u.In(period.Day); day.Window.Label != "2026-09-22" || day.Used != 70 {
 		t.Fatalf("the collection day reads %+v, want 70 on the Los Angeles 22nd", day)
+	}
+}
+
+// A RUN THE COMPANY ALREADY HOLDS IS CHARGED TO THE SEAT ALONE.
+//
+// A post-charge whose seat write failed keeps the company's share
+// (coord.SeatUncountedError), and the coordinator records that on the run. The
+// retry a failed resume brings is told so, and must finish the seat's share
+// without counting the company a second time — and say whether THAT took the
+// seat past its own ceiling, which is the one figure it wrote.
+func TestARunTheCompanyAlreadyHoldsIsChargedToTheSeatAlone(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	scope := coord.AgentScope("a-1")
+	windows := coord.WindowsAt(collectedAt, time.UTC)
+	// The company's share of the run, as the failed attempt left it.
+	if _, err := fleet.PostChargeOrg(ctx, 50, windows); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if _, err := fleet.PostChargeSeat(ctx, scope, 80, windows); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	over, err := accountant(fleet, coord.Caps{period.Day: 1000}, coord.Caps{period.Day: 100}).
+		Charge(ctx, "a-1", "lead", 50, true)
+	if err != nil {
+		t.Fatalf("Charge: %v", err)
+	}
+	if !over {
+		t.Error("finishing the seat's share took it to 130 of 100 and was not reported over")
+	}
+	if used := dayUsed(ctx, t, fleet, coord.OrgScope); used != 50 {
+		t.Errorf("org used = %d, want the 50 it already held: the company was counted twice", used)
+	}
+	if used := dayUsed(ctx, t, fleet, scope); used != 130 {
+		t.Errorf("seat used = %d, want its 80 and the run's 50", used)
 	}
 }

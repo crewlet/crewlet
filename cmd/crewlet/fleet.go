@@ -23,8 +23,8 @@ import (
 // The metadata group is read and changed from inside a MEMBER, and a removal
 // only through its system account, which nothing outside the member's process
 // can reach — see internal/engine/fleetbroker.go. So `list` is a client of
-// `GET /fleet/broker` and `remove` of its POST, as `crewlet objects` is of the
-// placement map's routes.
+// `GET /fleet/broker` and `remove` of its POST, as `crewlet objects` is of
+// `GET /fleet`.
 //
 // # What list is FOR
 //

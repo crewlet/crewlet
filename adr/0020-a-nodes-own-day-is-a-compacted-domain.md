@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/usage`
 - **Enforced-by:** `internal/usage.TestADepartedNodesSpendIsStillAnswered`
-- **Measured:** the stream holds one message per (node, company day, seat or schedule) for 181 days, so its size is a census rather than a rate: a three-node fleet of forty seats and twenty schedules is about 32 600 messages, and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB against the 1 GiB default ceiling. A seat-day's page reads are capped at 256 (page, via) entries — about 35 KiB — so no record approaches the broker's 1 MiB message limit.
+- **Measured:** the stream holds one message per (node, company day, seat, schedule or person) for 181 days, so its size is a census rather than a rate: a three-node fleet of forty seats and twenty schedules is about 32 600 messages, and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB against the 1 GiB default ceiling. A person's day is a handful of spend cells — well under 1 KiB — and only for the people who asked a question that day, so it moves neither figure. A seat-day's page reads are capped at 256 (page, via) entries — about 35 KiB — so no record approaches the broker's 1 MiB message limit.
 - **Cost-when-tried:** spend, turn and read history was a query over `crewlet_events`, the NODE estate's own audit log, so every answer described the node that happened to serve it. A three-node fleet showed a third of its spend on whichever node the dashboard reached; a "90 days" chart was drawn over the thirty the audit log keeps, with the previous window silently empty at 30 and 90 days; and a node that left the fleet took its share of the company's history with it, so every window after its departure under-reported by exactly what it had spent.
 - **Tag-status:** unreleased
 
@@ -18,9 +18,10 @@ seat's memory.
 
 **The node is part of the subject**, and that is the whole design. A node can
 only derive what its own event log holds, so each node publishes its own days
-and nothing else: one record per (node, day, seat) and per (node, day,
-schedule), re-derived from that node's records and republished WHOLE every time
-it moves. Every object therefore has exactly one writer, so nothing arbitrates
+and nothing else: one record per (node, day, seat), per (node, day, schedule)
+and per (node, day, person) — a human seat the auxiliary model spent for, which
+has no agent id to be a seat's — re-derived from that node's records and
+republished WHOLE every time it moves. Every object therefore has exactly one writer, so nothing arbitrates
 and nothing merges at write time; the reader sums across nodes. An apply
 REPLACES the object's rows under a monotone position guard. Every node's
 applier writes every node's days into its replicated estate, so any node

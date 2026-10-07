@@ -141,6 +141,7 @@ func dump(t *testing.T, db *store.DB) map[string][]string {
 		"usage_tokens":        "day, node, agent_id, phase, worker, model, provider_key",
 		"usage_reads":         "day, node, agent_id, backend, page_id, via",
 		"usage_schedule_runs": "day, node, scope_type, scope_id, name, fired_at, target",
+		"usage_person_tokens": "day, node, person, phase, worker, model, provider_key",
 	}
 	out := map[string][]string{}
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {

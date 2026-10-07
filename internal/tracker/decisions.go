@@ -90,8 +90,10 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 		if err != nil {
 			return err
 		}
+		// EVERY BODY WHOLE: this is the screen's read, which has no
+		// answer ceiling to fit.
 		if out.Asks, out.Total, err = readAsks(ctx, tx, q.Who, anchor.At,
-			MaxDecisions); err != nil {
+			MaxDecisions, 0); err != nil {
 			return err
 		}
 		if out.OldestAt, err = oldestAsk(ctx, tx, q.Who); err != nil {

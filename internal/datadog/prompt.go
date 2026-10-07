@@ -38,6 +38,10 @@ func (Prompt) Source() string { return Backend }
 // rather than filter against a bare pointer.
 func (Prompt) RequiresRecon(notify.Inbound) bool { return true }
 
+// SubjectIsLabel implements [notify.Prompt]: never — the subject is the
+// monitor's rendered alert title, which names what crossed its threshold.
+func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
+
 // Addressed implements [notify.Prompt]: a monitor tagged as this seat's.
 //
 // The SAME split the prompt frames as "your service and your call" against

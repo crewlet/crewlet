@@ -6,6 +6,9 @@ import (
 	"os"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // maxStderrLine caps ONE retained stderr line. REASONED.
@@ -114,19 +117,24 @@ func readBoundedLine(br *bufio.Reader) (line string, truncated bool, err error) 
 	var buf []byte
 	for {
 		chunk, isPrefix, rerr := br.ReadLine()
-		if n := maxStderrLine - len(buf); n > 0 {
-			if len(chunk) > n {
-				chunk, truncated = chunk[:n], true
-			}
-			buf = append(buf, chunk...)
-		} else if len(chunk) > 0 {
+		switch room := maxStderrLine - len(buf); {
+		case truncated:
+			// The line is already cut, and the rest of it is dropped:
+			// a cut on a character boundary can leave a byte or two of
+			// room, and the next chunk does not begin on a character.
+		case len(chunk) > room:
+			// On a character boundary, judged against the bytes that
+			// follow the cut, which this chunk still holds.
+			buf = append(buf, textcut.Bytes(string(chunk), room)...)
 			truncated = true
+		default:
+			buf = append(buf, chunk...)
 		}
 		if rerr != nil {
-			return string(buf), truncated, rerr
+			return wholeRunes(buf, truncated), truncated, rerr
 		}
 		if !isPrefix {
-			return string(buf), truncated, nil
+			return wholeRunes(buf, truncated), truncated, nil
 		}
 	}
 }
@@ -169,4 +177,22 @@ func (s *stderrRelay) drained(d time.Duration) bool {
 // engine, one per server that ever failed that way.
 func (s *stderrRelay) forceClose() {
 	s.closeReadOnce.Do(func() { _ = s.r.Close() })
+}
+
+// wholeRunes is a line that was cut without a character the cut split at its
+// end. The cut inside a chunk is already on a boundary; this catches the one
+// it cannot see, where the cap fell exactly between two of the reader's
+// chunks and the character continued in the second.
+func wholeRunes(buf []byte, truncated bool) string {
+	if truncated {
+		for i := len(buf) - 1; i >= 0 && len(buf)-i <= utf8.UTFMax; i-- {
+			if utf8.RuneStart(buf[i]) {
+				if !utf8.FullRune(buf[i:]) {
+					buf = buf[:i]
+				}
+				break
+			}
+		}
+	}
+	return string(buf)
 }

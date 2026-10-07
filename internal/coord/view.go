@@ -46,9 +46,8 @@ import (
 // # What it is kept small for
 //
 // It holds the LEASES, not a projection of them, so a caller that needs more
-// than an id — a node's profile, what it advertises, a placement map read
-// from the same heartbeat — reads it off the same answer rather than asking
-// the store again.
+// than an id — a node's profile, what it advertises — reads it off the same
+// answer rather than asking the store again.
 
 // MinViewRefresh is the shortest interval between two listings a view makes
 // because a caller invalidated it.

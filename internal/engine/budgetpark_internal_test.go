@@ -178,6 +178,22 @@ func (r *parkRig) spend(t *testing.T, tokens int) {
 	}
 }
 
+// leadDay is the Lead's day on its counter, in the windows of the rig's clock.
+func (r *parkRig) leadDay(t *testing.T) coord.WindowUsage {
+	t.Helper()
+	c := r.e.Company()
+	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle("lead"))
+	if !ok {
+		t.Fatal("the Lead has no agent id")
+	}
+	u, err := r.fleet.Used(t.Context(), coord.AgentScope(id.String()),
+		coord.WindowsAt(r.clock(), c.Config.Location()))
+	if err != nil {
+		t.Fatalf("Used: %v", err)
+	}
+	return u.In(period.Day)
+}
+
 // deliver publishes one trigger to the Lead's inbox, which the in-memory queue
 // hands to the dispatcher before Publish returns.
 func (r *parkRig) deliver(t *testing.T) {
@@ -247,6 +263,57 @@ func TestASpentSeatIsParkedUntilItsWindowTurnsOver(t *testing.T) {
 	}
 	if h := r.holds(); slices.Contains(h, pauseReasonBudget) {
 		t.Errorf("the budget hold outlived the window it waited on: %v", h)
+	}
+}
+
+// A PARK IS THE GATE'S REFUSAL, AND THE COUNTER RECORDS IT.
+//
+// The Lead's day was filled by a post-charge — a collected coding run, a
+// background pass — which refuses nothing and stamps nothing, so no turn ever
+// had a charge refused there: every delivery was parked before one could run.
+// Unrecorded, that window held every message its seat was sent while its
+// refused_at, "last refused" on every screen and `crewlet budgets show` said
+// nothing had ever been refused. The record spends nothing.
+//
+// Mutation: drop the park's record, and the day carries no stamp.
+func TestAParkIsRecordedAsTheGatesRefusal(t *testing.T) {
+	t.Parallel()
+	r := newParkRig(t, "100")
+	r.spend(t, 100)
+	if day := r.leadDay(t); !day.RefusedAt.IsZero() {
+		t.Fatalf("setup: the post-charge stamped the Lead's day at %v", day.RefusedAt)
+	}
+
+	from := time.Now()
+	r.deliver(t)
+	if r.runs() != 0 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("precondition: the seat is not parked (runs %d, holds %v)", r.runs(), r.holds())
+	}
+	day := r.leadDay(t)
+	if day.RefusedAt.Before(from) || day.RefusedAt.After(time.Now()) {
+		t.Fatalf("the Lead's day refused_at = %v, want the instant the park turned its "+
+			"delivery away (in [%v, now])", day.RefusedAt, from)
+	}
+	if day.Used != 100 {
+		t.Errorf("the Lead's day holds %d after the park, want the 100 spent and nothing more", day.Used)
+	}
+}
+
+// A SEAT WITH ROOM LEAVES NO REFUSAL: its delivery runs, and nothing is
+// recorded on its counter — a stamp there would tell every screen the gate is
+// refusing a seat it let through.
+func TestASeatWithRoomIsNotRecordedAsRefused(t *testing.T) {
+	t.Parallel()
+	r := newParkRig(t, "100")
+	fleet, refusals := counted(r.fleet, nil)
+	r.e.backends.Fleet = fleet
+	r.spend(t, 99)
+	r.deliver(t)
+	if r.runs() != 1 {
+		t.Fatalf("a seat with a token of room left ran %d turns", r.runs())
+	}
+	if got := refusals.refused(); len(got) != 0 {
+		t.Errorf("refusals recorded = %v for a seat the park let through", got)
 	}
 }
 
@@ -381,8 +448,11 @@ func TestTheParkWaitsOutTheWindowThatEndsLast(t *testing.T) {
 		})
 	}
 
-	// A window the gate has STAMPED refuses although spend is below its
-	// ceiling: the round that did not fit was larger than the room left.
+	// A STAMP BELOW THE CEILING IS A CEILING RAISED SINCE, and parks nothing.
+	// The gate counts the round it refuses, so the window it refused in read
+	// past the old ceiling; under one raised since, it has room again, and the
+	// stamp stays until an admitted charge clears it. A park taken on the
+	// stamp would hold the seat back from the only charge that could.
 	stamped := u(coord.OrgScope, map[period.Period]int{period.Day: 60})
 	stamped.Windows[0].RefusedAt = parkedAt.Add(-time.Minute)
 	m := &meter{
@@ -390,8 +460,58 @@ func TestTheParkWaitsOutTheWindowThatEndsLast(t *testing.T) {
 		agentScope: "agent:x", basis: budgetBasis{org: coord.Caps{period.Day: 100}, zone: berlin},
 		now: func() time.Time { return parkedAt },
 	}
-	if got, refusing, err := m.refusing(t.Context()); err != nil || !refusing || got.Window.Label != "2026-09-23" {
-		t.Fatalf("a stamped day = (%+v, %v, %v), want it refusing", got, refusing, err)
+	if got, refusing, err := m.refusing(t.Context()); err != nil || refusing {
+		t.Fatalf("a stamped day with room = (%+v, %v, %v), want it not refusing", got, refusing, err)
+	}
+}
+
+// A SEAT PARKED ON A REFUSED ROUND RUNS ONCE ITS CEILING IS RAISED.
+//
+// The ordinary way a seat is parked: its turn's round is refused, which stamps
+// the window and counts the round past the ceiling. Raising the ceiling is the
+// documented way out before the window turns over, and the release asks the
+// counters again under the new ceiling. While the park read the stamp as
+// "refusing", that second ask parked the seat again on the stamp alone — and a
+// stamp is cleared only by an admitted charge, which a parked seat can never
+// make — so the raise released nothing until midnight.
+func TestARaisedCeilingReleasesASeatParkedOnARefusedRound(t *testing.T) {
+	t.Parallel()
+	r := newParkRig(t, "100")
+	m := r.e.meterFor(r.e.Company(), "lead")
+	if m == nil {
+		t.Fatal("the Lead has no meter")
+	}
+	m.now = r.clock
+	r.mu.Lock()
+	r.turnFn = func() (turn.Result, error) {
+		r.mu.Lock()
+		r.turnFn = nil
+		r.mu.Unlock()
+		// The round that did not fit, through the real meter: refused,
+		// stamped and counted.
+		got, err := m.Spend(t.Context(), 150)
+		if err != nil || got.OK {
+			t.Errorf("the round = (%+v, %v), want it refused", got, err)
+		}
+		return turn.Result{}, &toolloop.BudgetError{Scope: got.Scope, Used: got.Used, Limit: got.Limit}
+	}
+	r.mu.Unlock()
+	r.deliver(t)
+	if r.runs() != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("precondition: the refused turn did not park the seat (runs %d, holds %v)",
+			r.runs(), r.holds())
+	}
+	r.renew(t)
+
+	raised := companyFor(t, strings.Replace(leadDoc, "%d", "1000", 1))
+	r.e.epoch.current.Store(raised)
+	r.e.reconcileBudgetParks(t.Context(), raised)
+	if got := r.runs(); got != 2 {
+		t.Fatalf("after the ceiling was raised %d turns ran, want the held delivery run at "+
+			"once (holds %v): the park held the seat on the refusal stamp", got, r.holds())
+	}
+	if slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Errorf("the budget hold outlived the raise: %v", r.holds())
 	}
 }
 
@@ -420,6 +540,14 @@ func (u usageReader) Used(_ context.Context, scope string, w coord.Windows) (coo
 
 func (usageReader) Charge(context.Context, coord.ChargeRequest) (coord.Spend, error) {
 	return coord.Spend{}, errors.New("not used by these cases")
+}
+
+func (usageReader) PostCharge(context.Context, string, int, coord.Windows) (coord.Spend, error) {
+	return coord.Spend{}, errors.New("not used by these cases")
+}
+
+func (usageReader) Refuse(context.Context, string, coord.Caps, coord.Windows) (coord.Usage, error) {
+	return coord.Usage{}, errors.New("not used by these cases")
 }
 
 // unreachableFleet is a fleet whose counters cannot be read. Embedded through

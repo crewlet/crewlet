@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -134,36 +135,71 @@ func (a *audienceSpy) questions() []string {
 	return append([]string(nil), a.asked...)
 }
 
-// ledgerSpy records post-charges.
+// ledgerSpy records post-charges, on the company's counter and the seat's.
 //
 // IT RECORDS AN OVER-CAP CHARGE, which is what the engine's accountant does:
 // it is coord.Budgets.PostCharge underneath, which moves both counters whatever
 // the caps say, and answers whether the run took one PAST its cap. A spy that
 // dropped those tokens would certify a coordinator that offers an over-cap run
 // again on every retry.
+//
+// AND IT KEEPS A PARTIAL as the counter does: a charge that reaches the
+// company and fails on the seat leaves the company's share counted, and a
+// charge handed companyCharged records the seat's share alone. A spy that
+// counted one figure could not tell a retry that finished the seat from one
+// that counted the company twice.
 type ledgerSpy struct {
 	mu      sync.Mutex
-	charged int
+	charged int // the company's counter
+	seat    int // the seat's
 	calls   int
 	over    bool
 	err     error
+	// partial makes the next charge reach the company and fail on the seat.
+	partial bool
+	handed  []bool
 }
 
-func (l *ledgerSpy) Charge(_ context.Context, _, _ string, tokens int) (bool, error) {
+func (l *ledgerSpy) Charge(_ context.Context, agentID, _ string, tokens int, companyCharged bool) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.calls++
+	l.handed = append(l.handed, companyCharged)
 	if l.err != nil {
 		return false, l.err
 	}
-	l.charged += tokens
+	if !companyCharged {
+		l.charged += tokens
+	}
+	if l.partial {
+		l.partial = false
+		return false, fmt.Errorf("engine: %w", &coord.SeatUncountedError{
+			Seat: coord.AgentScope(agentID), Tokens: tokens, Err: errors.New("the seat's write failed"),
+		})
+	}
+	l.seat += tokens
 	return l.over, nil
 }
 
+// total is what the company's counter holds.
 func (l *ledgerSpy) total() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.charged
+}
+
+// seatTotal is what the seat's counter holds.
+func (l *ledgerSpy) seatTotal() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seat
+}
+
+// companyChargedHanded is the companyCharged each charge was handed, in order.
+func (l *ledgerSpy) companyChargedHanded() []bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]bool(nil), l.handed...)
 }
 
 func (l *ledgerSpy) set(over bool, err error) {
@@ -1045,7 +1081,7 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 		want   string
 	}{
 		{"the box cannot be read back", func(r *coordRig) {
-			r.runner.CollectErr = errors.New("the box died mid-read")
+			r.runner.CollectErr = errBoxGoneMidRead
 		}, types.SandboxFailureCollect},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1119,7 +1155,7 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
 			rig.runner.Finish(Result{Success: true})
-			rig.runner.CollectErr = errors.New("the box died mid-read")
+			rig.runner.CollectErr = errBoxGoneMidRead
 			payload, ev := rig.completion("t1")
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 				t.Fatalf("OnCompleted: %v", err)
@@ -1374,7 +1410,7 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	}
 	coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -1436,14 +1472,14 @@ func TestAFinishedTurnTearsTheBoxDown(t *testing.T) {
 	rig.finished("t1")
 }
 
-// A collect that fails means the job is over regardless: the seat must not be
-// left parked on a run that finished.
+// A collect whose box is gone means the job is over regardless: the seat must
+// not be left parked on a run that finished.
 func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -1471,7 +1507,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	}
 	coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true})
-	rig.runner.CollectErr = errors.New("the box died mid-read")
+	rig.runner.CollectErr = errBoxGoneMidRead
 
 	payload, ev := rig.completion("t1")
 	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2146,11 +2182,11 @@ func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
 // accounting
 // ---------------------------------------------------------------------
 
-// A cap cannot un-spend a collected run, so a charge it refuses does not stop
-// the turn: the tokens are spent and the work they bought continues. The
-// refusal itself moves no counter, which is the shared counter's answer to
-// every charge it refuses; this case used to assert the opposite of a spy
-// that recorded refused charges, which the real accountant never did.
+// A cap cannot un-spend a collected run, so a run that takes its seat past a
+// ceiling does not stop the turn: the tokens are spent and the work they
+// bought continues. The accountant post-charges — it records the run whole and
+// only reports that the counter went over — so "over" is a fact about the
+// counter, never a refusal of the run.
 func TestAnOverBudgetChargeDoesNotStopTheResume(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
@@ -2392,6 +2428,94 @@ func TestARunThatWentOverItsCapIsChargedOnceAcrossARetry(t *testing.T) {
 	if got := rig.accountant.total(); got != 1000 {
 		t.Fatalf("charged %d tokens for one run of 1000: an over-cap charge was "+
 			"read as unrecorded and offered again", got)
+	}
+}
+
+// A CHARGE THAT REACHED THE COMPANY AND NOT THE SEAT IS FINISHED, NOT REPEATED.
+//
+// The counter keeps the company's share of a post-charge whose seat write
+// failed, and names the partial. The compensation this replaced took the
+// company's share back, and a resume that then succeeded left the run on
+// neither counter, since only a failed resume brings a collected run back. Now
+// the partial rides the release, and the retry a failed resume brings records
+// the seat's share alone: the company is counted once and the seat once.
+func TestAChargeThatReachedOnlyTheCompanyIsFinishedOnTheRetry(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.partial = true
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	run, found, err := rig.pending.Get(t.Context(), "t1")
+	if err != nil || !found || run.Charged || !run.CompanyCharged {
+		t.Fatalf("the released row = (%+v, %v, %v), want the company's share recorded and "+
+			"the run not wholly charged", run, found, err)
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Errorf("the company was charged %d for one run of 1000: the retry counted it again", got)
+	}
+	if got := rig.accountant.seatTotal(); got != 1000 {
+		t.Errorf("the seat was charged %d for one run of 1000: the retry did not finish its share", got)
+	}
+	if got := rig.accountant.companyChargedHanded(); !slices.Equal(got, []bool{false, true}) {
+		t.Errorf("the charges were handed companyCharged %v, want the retry told the company "+
+			"already holds the run", got)
+	}
+}
+
+// A NEW LAUNCH OWES ITS OWN SPEND WHOLE. The company's share of the previous
+// job is that job's record, and carried into the next one it would tell that
+// job's completion the company already holds it, so the company would never
+// be charged for the second job at all.
+func TestANewLaunchClearsThePreviousJobsCompanyCharge(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.partial = true
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	if !rig.get("t1").CompanyCharged {
+		t.Fatal("setup: the partial charge was not recorded on the row")
+	}
+
+	if _, err := rig.pending.BeginLaunch(t.Context(), rig.get("t1"), Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if run := rig.get("t1"); run.CompanyCharged || run.Charged {
+		t.Fatalf("the relaunched row carries the previous job's charge: charged=%v "+
+			"company_charged=%v", run.Charged, run.CompanyCharged)
+	}
+}
+
+// A PARTIAL WHOSE RESUME SUCCEEDS LEAVES ONLY THE SEAT SHORT. Nothing brings a
+// resumed run back to be charged, so the company's share is the one record
+// the run gets — which is why it is kept rather than taken back.
+func TestAChargeThatReachedOnlyTheCompanyKeepsItWhenTheResumeSucceeds(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.partial = true
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if len(rig.resumer.calls()) != 1 {
+		t.Fatal("a partial charge cost the turn its resume")
+	}
+	if got, seat := rig.accountant.total(), rig.accountant.seatTotal(); got != 1000 || seat != 0 {
+		t.Errorf("company = %d and seat = %d, want the company's 1000 kept and the seat short", got, seat)
 	}
 }
 
@@ -3591,7 +3715,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: "colleague", AgentHandle: "pm", CreatedAt: rig.now,
 	}, Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

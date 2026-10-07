@@ -1413,6 +1413,17 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("episode: %v", err)
 	}
+	// AND A COMPACTED ONE, which carries what it folded in place of a
+	// label and an account — the half a raw row's null leaves unread.
+	if _, err := stores.Episodes.Append(t.Context(), learning.Episode{
+		ID: "ep-folded", Handle: "ceo", WorkKey: "wk-folded", Kind: learning.KindCompacted,
+		Count: 4, SuccessRate: 0.75, CommonTaskPattern: "answering on-call pages",
+		NotablePatterns: "one went to the SRE lead", ReviewOutcome: "done",
+		ToolSequence: []string{"read_alert", "page"},
+		StartedAt:    pinned.Add(-time.Hour), EndedAt: pinned.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("compacted episode: %v", err)
+	}
 	if err := stores.Skills.Insert(t.Context(), learning.Skill{
 		ID: "sk-1", AgentHandle: "ceo", Name: "triage",
 		Description: "read the alert before paging", CreatedAt: pinned, UpdatedAt: pinned,
@@ -1447,7 +1458,22 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 	holdShape(t, "AgentMemory", []map[string]any{body}, false)
 	holdShape(t, "DiaryEntry", rowsOf(t, body["diary"]), false)
 	holdShape(t, "DiaryEntry", []map[string]any{asMap(t, body["latest_reflection"])}, false)
-	holdShape(t, "Episode", rowsOf(t, body["episodes"]), false)
+	episodes := rowsOf(t, body["episodes"])
+	holdShape(t, "Episode", episodes, false)
+	var compactions []map[string]any
+	for _, episode := range episodes {
+		if compaction, ok := episode["compaction"].(map[string]any); ok {
+			compactions = append(compactions, compaction)
+		}
+	}
+	holdShape(t, "EpisodeCompaction", compactions, false)
+	// ONE EPISODE WHOLE, which the listing carries the openings of: the
+	// same row shape, inside its own answer.
+	detail := asMap(t, answer(t, queries.Sources{
+		Memory: &memread.Reader{Owner: "node-a:1", Local: stores},
+	}, "agent_episode", map[string]any{"id": "ceo", "episode": "ep-1"}))
+	holdShape(t, "AgentEpisode", []map[string]any{detail}, false)
+	holdShape(t, "Episode", []map[string]any{asMap(t, detail["episode"])}, false)
 	holdShape(t, "SynthesizedSkill", rowsOf(t, body["skills"]), false)
 	profiles := rowsOf(t, body["counterparties"])
 	holdShape(t, "CounterpartyProfile", profiles, false)

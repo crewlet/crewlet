@@ -292,8 +292,16 @@ var concurrencyCases = []testCase{
 		// And the counter never rewound through all of it: the next
 		// tenure starts above every token ever issued, whether the
 		// previous one ended by release or by lapse.
+		//
+		// ASKED UNTIL IT IS ANSWERED, because the churn's load is still
+		// draining from the store when it is asked — through a leaf, under
+		// the race detector, beside the suite's other cases, its read can
+		// meet the store's own deadline — and an unknown is the legitimate
+		// answer the churn above tolerates. A store that does not answer
+		// within the bound still fails the case.
 		h.lapse()
-		final := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-final:1", TTL: LongTTL})
+		final := h.claimAnswered("seat:ceo", coord.AcquireOptions{Owner: "node-final:1", TTL: LongTTL},
+			time.Minute)
 		if final.Epoch <= maxEpoch {
 			h.t.Fatalf("epoch %d after churn that reached %d — the counter rewound",
 				final.Epoch, maxEpoch)

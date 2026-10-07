@@ -19,7 +19,8 @@ import (
 // is named only by a file row on a data node of the older build — the only
 // rows that ever named one — and that node is counted on the tracker log until
 // it upgrades, leaves, or an operator evicts it, which is exactly the census
-// [countedReaders] takes for the vector log's index. A node that does not run
+// [countedReaders] takes for the vector log's index and the usage log's
+// person days. A node that does not run
 // the log is not counted, and an empty census is NOT over: a store that sees
 // nobody at all cannot see an older node either, while a deletion cannot be
 // taken back.
@@ -50,8 +51,7 @@ func (c chunkEra) Over(ctx context.Context) (bool, error) {
 	if s.Domain(name) == nil {
 		return false, errNoTrackerLog
 	}
-	readers, err := countedReaders(ctx, name, s.fleet.Positions, c.e.holdersOf(),
-		s.identityDomains(), c.e.backends.Store)
+	readers, err := c.e.countedReadersOf(s).readers(ctx, name)
 	if err != nil {
 		return false, err
 	}

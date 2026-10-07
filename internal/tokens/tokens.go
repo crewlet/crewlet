@@ -60,8 +60,9 @@ const DefaultRecentTurns = 50
 // turns is a request to aggregate the whole window into one frame.
 const MaxRecentTurns = 500
 
-// Record is one completed phase's spend — the aggregator's input, and the
-// shape both producers hand it.
+// Record is one spend record — a completed phase's, or an auxiliary record's
+// coalesced calls — the aggregator's input, and the shape both producers hand
+// it.
 type Record struct {
 	EventID   string `json:"event_id"`
 	Timestamp string `json:"timestamp"`
@@ -69,12 +70,26 @@ type Record struct {
 	AgentID   string `json:"agent_id"`
 	AgentRole string `json:"agent_role"`
 
+	// Person is the PERSON an auxiliary record was spent for — the handle
+	// of the human seat a person's question was asked from, or of the one
+	// leading a unit whose pass ran on its chain — and empty on every other
+	// record. A person is no agent seat: no agent id, no seat budget and no
+	// turns, so the per-seat rollup files the spend under the person
+	// rather than under an empty id every person would share.
+	Person string `json:"person,omitempty"`
+
+	// Phase is the phase that ran, and [PhaseAuxiliary] on an auxiliary
+	// record — the `auxiliary_spend` event, which carries no phase of its
+	// own because it is none.
 	Phase string `json:"phase"`
-	// HostPhase is the phase a nested call ran under: an auxiliary
-	// learning worker's own LLM call, or the round-cap extension judge.
+	// HostPhase is the phase a nested call ran under: a delegated worker,
+	// or the round-cap extension judge.
 	HostPhase string `json:"host_phase"`
-	// Worker names the auxiliary worker, and is set only when Phase is
-	// "auxiliary" — which is why the worker rollup keys on the pair.
+	// Worker names what an auxiliary record's calls were FOR — its
+	// purpose, `memory_filter` or `condense_thread` — and is set only when
+	// Phase is "auxiliary", which is why the worker rollup keys on the
+	// pair. A delegated worker's template rides the same field on its
+	// `subagent` phase, and is kept out of that rollup by the pair.
 	Worker string `json:"worker"`
 	Model  string `json:"model"`
 	// ProviderKey is the configured provider entry that served the call.
@@ -93,6 +108,20 @@ type Record struct {
 	TurnID    string `json:"turn_id"`
 	WorkKey   string `json:"work_key,omitempty"`
 	Iteration int    `json:"iteration"`
+
+	// Stage is WHOSE COST an auxiliary record is — `turn`, `reflection`,
+	// `background` or `operator` — and empty on a phase's record, which is
+	// always its turn's. It decides one thing here: whether the record is
+	// part of its turn's cost ([Record.InTurn]).
+	Stage string `json:"stage,omitempty"`
+
+	// Calls is how many provider calls the record covers: a phase's model
+	// rounds, an auxiliary record's coalesced calls. ONE UNIT under one
+	// label everywhere a bucket says "N calls" — it counted RECORDS once,
+	// so a forty-round executor was one call beside a coalesced record of
+	// seventy rewrites. Zero is read as one: a record is at least the call
+	// that produced it, and an older peer's carries no count.
+	Calls int `json:"calls,omitempty"`
 
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
@@ -116,6 +145,42 @@ type Record struct {
 	CostUSD float64 `json:"cost_usd"`
 }
 
+// StageTurn is the auxiliary stage spent inside a turn, for its work —
+// types.AuxStageTurn, named here rather than imported so this package stays a
+// leaf. A test holds the two equal.
+const StageTurn = "turn"
+
+// InTurn reports whether a record is part of its turn's cost: every phase's,
+// and an auxiliary record of the [StageTurn] stage. A TURN'S COST IS DEFINED
+// HERE, ONCE — the turn list, the live window's per-turn rows and the Turn
+// screen all count what this admits — and the reflection after a turn is not in
+// it: it carries the turn's id so the turn's page can draw it, and it is the
+// seat's learning rather than what the work cost.
+func (r Record) InTurn() bool { return r.Stage == "" || r.Stage == StageTurn }
+
+// calls is the record's provider calls, at least the one that produced it.
+func (r Record) calls() int { return max(r.Calls, 1) }
+
+// PhaseCalls is a phase record's provider calls, from the two counts the record
+// carries: its `rounds` list's length — one entry per provider call — where it
+// recorded one, its `rounds_used` where it predates the list, and one where
+// neither says (a judge's single call, a coding run collected whole, whose own
+// calls happened inside a CLI the engine does not see).
+//
+// ONE RULE FOR BOTH PRODUCERS — the event store's writer and the live
+// projection — so a phase counts the same calls on either side of the live
+// edge; node/0040's backfill states it a third time in SQL, held to this one
+// by that migration's test.
+func PhaseCalls(rounds, roundsUsed int) int {
+	switch {
+	case rounds > 0:
+		return rounds
+	case roundsUsed > 0:
+		return roundsUsed
+	}
+	return 1
+}
+
 // Bucket is an accumulated total. Embedded rather than nested, because the
 // wire shape spreads it into each row: {"phase": "execute", "total_tokens":
 // 150, …}, not {"phase": "execute", "bucket": {…}}.
@@ -123,7 +188,9 @@ type Bucket struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
-	Calls        int `json:"calls"`
+	// Calls is how many PROVIDER CALLS the bucket's spend was made in — see
+	// [Record.Calls] for why that, and not a count of records.
+	Calls int `json:"calls"`
 
 	// CacheReadTokens and CacheWriteTokens sum the prompt cache's share of
 	// the calls in this bucket.
@@ -155,7 +222,7 @@ func (b *Bucket) add(r Record) {
 	b.TotalTokens += r.TotalTokens
 	b.CacheReadTokens += r.CacheReadTokens
 	b.CacheWriteTokens += r.CacheWriteTokens
-	b.Calls++
+	b.Calls += r.calls()
 	// A NEGATIVE price is not a rebate, it is a bad payload, and summing it
 	// would silently reduce a company's reported spend. Only a positive one
 	// counts, and only a positive one is priced.
@@ -231,8 +298,14 @@ type ProviderRow struct {
 // per-seat breakdown already is.
 const TopProviderSeats = 3
 
-// WorkerRow is the per-worker breakdown of a rollup — the background duties
-// (reflection, summarisation) that spend tokens outside any seat's turn.
+// WorkerRow is the per-purpose breakdown of the AUXILIARY MODEL's spend: what
+// the seats' cheap model was spent on — the turn-start context, each kind of
+// compaction, the reflection workers, the background passes, a person's
+// answered question. Its rows sum to the records of the `auxiliary` phase
+// ([PhaseAuxiliary]), which is PART of the Auxiliary band and not the whole of
+// it: [PhaseBand] also files the round-cap judge's phase, the first-turn
+// onboarding and any phase this build does not know there, and none of those
+// is a purpose here — so the band is this breakdown plus those phases.
 type WorkerRow struct {
 	Worker string `json:"worker"`
 	Bucket
@@ -248,6 +321,11 @@ type AgentRow struct {
 	Role    string `json:"role"`
 	Handle  string `json:"handle"`
 	AgentID string `json:"agent_id"`
+	// Person marks a PERSON's row rather than a seat's: what the auxiliary
+	// model spent for the human seat named by Handle ([Record.Person]). It
+	// has no agent id, and on a named window no turns, since a person takes
+	// none.
+	Person bool `json:"person,omitempty"`
 	Bucket
 	ByPhase map[string]*Bucket `json:"by_phase"`
 
@@ -419,8 +497,12 @@ func Aggregate(records []Record, opts Options) Rollup {
 		bucketFor(byModel, model).add(r)
 		// The seat a provider row names is its HANDLE where the org has
 		// one, which is what every other surface links by, and the role
-		// otherwise — a name, never a blank entry in "used by".
+		// otherwise — a name, never a blank entry in "used by". A person
+		// is named by their own handle.
 		seat := opts.Handles[role]
+		if r.Person != "" {
+			seat = r.Person
+		}
 		if seat == "" {
 			seat = role
 		}
@@ -432,10 +514,19 @@ func Aggregate(records []Record, opts Options) Rollup {
 			bucketFor(byWorker, r.Worker).add(r)
 		}
 
-		agent := byAgent[role]
+		// A PERSON IS KEYED APART from every seat, by their own handle: a
+		// person's record names no agent role of its own, only the role of
+		// their seat, and a seat's row keyed on that role would take a
+		// person's spend as the seat's.
+		key, handle := role, opts.Handles[role]
+		if r.Person != "" {
+			key, handle = personKey(r.Person), r.Person
+		}
+		agent := byAgent[key]
 		if agent == nil {
-			agent = &AgentRow{Role: role, Handle: opts.Handles[role], ByPhase: map[string]*Bucket{}}
-			byAgent[role] = agent
+			agent = &AgentRow{Role: role, Handle: handle, Person: r.Person != "",
+				ByPhase: map[string]*Bucket{}}
+			byAgent[key] = agent
 		}
 		// The LATEST id seen wins: a seat's runtime id changes across
 		// sessions, and the current one is what a cross-link must use.
@@ -445,10 +536,12 @@ func Aggregate(records []Record, opts Options) Rollup {
 		agent.Bucket.add(r)
 		bucketFor(agent.ByPhase, phase).add(r)
 
-		if r.TurnID == "" {
+		if r.TurnID == "" || !r.InTurn() {
 			// A phase with no turn still counts toward every other
 			// rollup — it is real spend — but it cannot be attributed to
 			// a turn, and inventing a key would make one row per phase.
+			// Nor can a reflection's spend, which names the turn it
+			// learned from and is not that turn's cost ([Record.InTurn]).
 			continue
 		}
 		turn := byTurn[r.TurnID]
@@ -501,7 +594,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 	byTokensThen(out.ByPhase, func(r PhaseRow) (int, string) { return r.TotalTokens, r.Phase })
 	byTokensThen(out.ByModel, func(r ModelRow) (int, string) { return r.TotalTokens, r.Model })
 	byTokensThen(out.ByWorker, func(r WorkerRow) (int, string) { return r.TotalTokens, r.Worker })
-	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, r.Role })
+	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, agentTie(r, r.Role) })
 
 	// Turns are NEWEST FIRST, not biggest first: the table is a tail of
 	// recent activity, and ordering it by size would pin one expensive
@@ -587,8 +680,28 @@ func ranked(m map[string]int) []string {
 	return keys
 }
 
-// PhaseAuxiliary is the phase whose records carry a worker. Named here rather
-// than imported from the event catalogue so this package stays a leaf.
+// personKey is a person's key in a per-seat fold: apart from every seat's,
+// whose keys are roles and agent ids, neither of which contains a NUL.
+func personKey(handle string) string { return "person\x00" + handle }
+
+// agentTie is what equal-total rows of a per-seat fold are ordered by: the key
+// the fold filed the row under — seat, the fold's own key for a seat (a role on
+// the live window, an agent id on a named one) — or the person's.
+//
+// NEVER THE SEAT'S KEY ALONE: every person row on a named window carries one
+// empty agent id and two people of one role share a role, so two people with
+// equal totals compared equal and came back in Go's randomised map order —
+// which [byTokensThen] exists to stop.
+func agentTie(r AgentRow, seat string) string {
+	if r.Person {
+		return personKey(r.Handle)
+	}
+	return seat
+}
+
+// PhaseAuxiliary is the phase an auxiliary record is filed under, and the one
+// whose records carry a worker. Named here rather than imported from the event
+// catalogue so this package stays a leaf.
 const PhaseAuxiliary = "auxiliary"
 
 func bucketFor(m map[string]*Bucket, key string) *Bucket {

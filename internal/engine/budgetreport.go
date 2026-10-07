@@ -237,15 +237,24 @@ func (r *budgetReporter) countersCurrent(ctx context.Context) bool {
 const BudgetNearFraction = 0.9
 
 // windowRefuses reports whether a capped window turns the next charge away:
-// the gate has stamped a refusal on it — only an admitted charge or the window
-// turning over clears one — or it has no room left for a single token, which
-// the gate refuses on the next charge whatever its size.
+// it has no room left for a single token, which the gate refuses on the next
+// charge whatever its size.
+//
+// THE SPEND DECIDES, NEVER THE REFUSAL STAMP. A refused round is counted
+// (coord.Budgets.Charge), so every window the gate has refused reads past its
+// ceiling by the round that crossed it, and this already holds for it. Where
+// the two part, the stamp is the stale one: a ceiling raised since leaves the
+// stamp on a window that has room again — only an admitted charge or the
+// window turning over clears it — and reading the stamp as "refusing" held the
+// seat in the budget park on the stamp alone, so no charge could ever be
+// admitted to clear it, and the room the raise made waited for the window to
+// turn over. The stamp is still reported as when the gate last said no.
 //
 // ONE PREDICATE for the budget park ([meter.refusing]) and the state every
 // meter reports ([budgetState]), so a seat is never parked under a meter that
 // reads as merely near.
 func windowRefuses(slot coord.WindowUsage, ceiling int) bool {
-	return !slot.RefusedAt.IsZero() || slot.Used >= ceiling
+	return slot.Used >= ceiling
 }
 
 // budgetState is the engine's judgement of one window, computed here once so

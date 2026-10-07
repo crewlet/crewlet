@@ -3,11 +3,12 @@ package codingagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // ClaudeCodeName is this runner's config name.
@@ -40,10 +41,20 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // decided by which MCP servers were rendered into its config and which
 // credentials the run env carries — both engine-side, both before the agent
 // starts. A permission prompt would simply hang a headless run.
+//
+// STREAM-JSON, AND --verbose WITH IT. `--output-format json` prints ONE object
+// when the run ends and nothing before it, and in print mode this CLI writes
+// nothing to stderr either — so a run on the engine's default coding agent
+// showed a person nothing while it worked and left no transcript when it was
+// done. stream-json prints every message as it happens, one JSON object a
+// line, ending — as the vendor documents the stream — in the result message,
+// the same object json printed alone. In print mode the CLI refuses
+// stream-json without --verbose ("When using --print,
+// --output-format=stream-json requires --verbose").
 func (ClaudeCode) Command(req sandbox.RunRequest, _ Paths, configPath string) string {
 	parts := []string{
 		"claude", "-p", shellQuote(req.Brief),
-		"--output-format", "json",
+		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
 	}
 	if req.LLM != nil && req.LLM.Model != "" {
@@ -109,125 +120,211 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
+// The layouts a Claude Code job has been launched with.
+const (
+	// claudeJSONLayout is `--output-format json`: ONE object, the result,
+	// printed when the run ends, the CLI's whole stdout in the result file
+	// and nothing streamed. Every build before the layouts were numbered.
+	claudeJSONLayout = 0
+
+	// claudeStreamLayout is stream-json: every message as it happens into
+	// its own file, the result its last line, copied out after the CLI
+	// exits.
+	claudeStreamLayout = 1
+)
+
+// Layout is stream-json's ([claudeStreamLayout]).
+func (ClaudeCode) Layout() int { return claudeStreamLayout }
+
+// Output is where a job of each layout wrote.
+//
+// Under stream-json the EVENT STREAM goes to its own file, read as a stream
+// and from its end, and the RESULT is the stream's last line, which the
+// wrapper copies to the result file after the CLI exits — so the result is
+// read whole from a file of one line however long the stream grew. It exits
+// cleanly, so the done marker is its only completion signal and the poll
+// reads nothing of the stream.
+//
+// A `json` job wrote its stdout to the result file and streamed nothing, so
+// nothing is read as its stream: a build of that layout clears no stream
+// file, and the one in a box it reused is the previous job's.
+//
+// THE RESULT FILE KEEPS ITS NAME across the switch, and that is what a
+// rolling upgrade rests on: a run an older build launched has its one object
+// there, and a build that predates this layout collecting a run this one
+// launched reads its result line there, and both parse the same fields.
+func (ClaudeCode) Output(paths Paths, layout int) Output {
+	if layout <= claudeJSONLayout {
+		return Output{Stdout: paths.Result(), Result: paths.Result()}
+	}
+	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result()}
+}
+
+// Events is a new decoder for one stream, read whole or followed ([Decoder]).
+func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
+
 // Finished is false: this CLI exits cleanly, so the done marker is the signal.
 func (ClaudeCode) Finished(string) bool { return false }
 
-// Parse maps the CLI's JSON output onto a result.
+// Parse maps the CLI's result — the stream's last line, or an older build's
+// whole `json` stdout — onto a result.
 //
 // TOLERANT BY DESIGN: non-JSON or partial output yields a FAILED result
-// carrying the raw text, never an error. A coding agent that crashed should
+// carrying an account of it, never an error. A coding agent that crashed should
 // surface as "did not deliver" and let the turn continue, not blow the turn up
 // — the executor can still report what happened, which is more use to the
 // requester than a failed turn.
+//
+// A RESULT IS AN OBJECT OF TYPE `result`, and nothing else is. Under the
+// stream the result file holds the stream's LAST LINE, whatever it was: a run
+// that died part-way leaves an assistant message or a tool result there, and
+// an object of another type has no subtype and no is_error — read as a
+// result, it was a run that SUCCEEDED and said nothing. The `json` layout's
+// one object carries the same `"type": "result"`, so a run an older build
+// launched is read exactly as before.
 func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	text := strings.TrimSpace(stdout)
 	if text == "" {
 		return sandbox.Result{Error: "the coding agent produced no output"}
 	}
-	obj, ok := decodeObject(text)
+	msg, ok := decodeClaudeResult(text)
 	if !ok {
-		// TAILED, not head-cut. Unparseable output is the case where the
-		// text IS the result — there is no structured field to fall back
-		// to — and the useful part of it (the actual error, after the
-		// banner and the warnings) is at the END, which is exactly what a
-		// 2000-byte head cut discarded. Bounded because this is the CLI's
-		// whole stdout and nothing upstream limits it; marked, so a reader
-		// can tell a cut from a short run.
+		if last := lastLine(text); strings.HasPrefix(last, "{") {
+			// A LINE THAT STARTS AN OBJECT AND IS NOT ONE is a message the
+			// process stopped writing part-way, not an account of anything:
+			// its fragment — of a file it read, as like as not — is no use to
+			// a reader, and it is what the error stream beside it explains.
+			return sandbox.Result{Error: fmt.Sprintf("the coding agent's output ends in a line "+
+				"that is not a whole JSON object (%s), so it never reported how its run ended",
+				humanSize(int64(len(last))))}
+		}
+		// THE OUTPUT IS THE FAILURE'S DETAIL, WHOLE. Unparseable output is
+		// the case where the text IS the account — there is no structured
+		// field to fall back to — and the useful part of it (the actual
+		// error, after the banner and the warnings) is at the END, which a
+		// head cut discarded and a tail cut kept only by luck of size. It
+		// is carried as the Error rather than as a report, because it is
+		// not one: the coordinator condenses a failure past the record's
+		// bound keeping its cause, where a report keeps its findings.
 		return sandbox.Result{
-			Text:  textcut.Tail(text, MaxTranscriptBytes),
-			Error: "the coding agent's output could not be parsed",
+			Error: "the coding agent's output could not be parsed:\n" + text,
 		}
 	}
-
-	resultText := stringField(obj, "result")
-	// subtype names HOW the run ended ("success", "error_max_turns", …), and
-	// is_error whether it failed. Both must be right: a run that hit its
-	// turn cap reports no is_error but did not finish.
-	success := stringOr(obj, "subtype", "success") == "success" && !boolField(obj, "is_error")
+	if msg.Type != "result" {
+		what := "an object with no type"
+		if msg.Type != "" {
+			what = fmt.Sprintf("a %q message", msg.Type)
+		}
+		return sandbox.Result{Error: "the coding agent stopped before it reported how its run ended: " +
+			"the last thing it printed was " + what + ", not its result"}
+	}
 
 	res := sandbox.Result{
-		Text:          resultText,
-		Success:       success,
-		SessionID:     stringField(obj, "session_id"),
-		CostUSD:       floatField(obj, "total_cost_usd"),
-		DeliveredRefs: prPattern.FindAllString(resultText, -1),
+		Text:          msg.Result,
+		Success:       msg.succeeded(),
+		SessionID:     msg.SessionID,
+		CostUSD:       msg.TotalCostUSD,
+		DeliveredRefs: prPattern.FindAllString(msg.Result, -1),
 	}
-	if usage, ok := obj["usage"].(map[string]any); ok {
+	if u := msg.Usage; u != nil {
 		// INPUT TOKENS ARE A SUM, for the reason the engine's own Anthropic
 		// provider states: the vendor's input_tokens is only the UNCACHED
 		// remainder, and a coding run is almost entirely cached rounds —
 		// so reading it alone put a fraction of every run's prompt on the
 		// budget counter and the spend rollup.
-		res.CacheReadTokens = intField(usage, "cache_read_input_tokens")
-		res.CacheWriteTokens = intField(usage, "cache_creation_input_tokens")
-		res.InputTokens = intField(usage, "input_tokens") + res.CacheReadTokens + res.CacheWriteTokens
-		res.OutputTokens = intField(usage, "output_tokens")
+		res.CacheReadTokens = u.CacheReadInputTokens
+		res.CacheWriteTokens = u.CacheCreationInputTokens
+		res.InputTokens = u.InputTokens + res.CacheReadTokens + res.CacheWriteTokens
+		res.OutputTokens = u.OutputTokens
 	}
-	if !success {
-		res.Error = stringField(obj, "error")
-		if res.Error == "" {
-			res.Error = resultText
-		}
+	if !res.Success {
+		res.Error = msg.failure()
 	}
 	return res
 }
 
-// decodeObject reads a JSON object, falling back to the LAST line.
+// claudeResult is the CLI's result message — the stream's last line, and the
+// one object `--output-format json` printed — as the vendor's Agent SDK
+// documents it: `subtype` names HOW the run ended ("success",
+// "error_max_turns", "error_during_execution", "error_max_budget_usd", …),
+// `is_error` whether it failed, `result` the final text of a run that got as
+// far as one, and `errors` what went wrong on a subtype that is not success,
+// which carries no `result` at all.
 //
-// The CLI sometimes prints a banner or a warning before its JSON, so a whole-
-// text parse fails on output that is perfectly good — and the object is always
-// last, because it is the thing the CLI prints when it is done.
-func decodeObject(text string) (map[string]any, bool) {
-	var obj map[string]any
-	if json.Unmarshal([]byte(text), &obj) == nil && obj != nil {
-		return obj, true
-	}
-	lines := strings.Split(text, "\n")
-	last := strings.TrimSpace(lines[len(lines)-1])
-	if last == "" {
-		return nil, false
-	}
-	if json.Unmarshal([]byte(last), &obj) == nil && obj != nil {
-		return obj, true
-	}
-	return nil, false
+// Decoded into named fields so the stream's decoder and [ClaudeCode.Parse] read
+// one shape, and TOLERANTLY (a field of an unexpected type is left zero and
+// the rest still read), because a field the vendor reshapes must cost that
+// field rather than the run's whole account.
+type claudeResult struct {
+	Type         string   `json:"type"`
+	Subtype      string   `json:"subtype"`
+	IsError      bool     `json:"is_error"`
+	Result       string   `json:"result"`
+	Errors       []string `json:"errors"`
+	SessionID    string   `json:"session_id"`
+	TotalCostUSD float64  `json:"total_cost_usd"`
+	Usage        *struct {
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
 }
 
-func stringField(obj map[string]any, key string) string {
-	s, _ := obj[key].(string)
-	return s
+// succeeded is whether the run finished its work. BOTH FIELDS MUST SAY SO: a
+// run that hit its turn cap reports no is_error but did not finish, and one
+// whose model call failed is a success subtype carrying is_error.
+func (r claudeResult) succeeded() bool {
+	return (r.Subtype == "" || r.Subtype == "success") && !r.IsError
 }
 
-func stringOr(obj map[string]any, key, fallback string) string {
-	if s, ok := obj[key].(string); ok {
-		return s
+// failure says how a run that did not succeed ended: the subtype that names
+// how, and whatever the message says about why — its errors, or the final
+// text it got as far as.
+func (r claudeResult) failure() string {
+	how := r.Subtype
+	if how == "success" {
+		how = ""
 	}
-	return fallback
-}
-
-func boolField(obj map[string]any, key string) bool {
-	b, _ := obj[key].(bool)
-	return b
-}
-
-func floatField(obj map[string]any, key string) float64 {
-	switch v := obj[key].(type) {
-	case float64:
-		return v
-	case json.Number:
-		f, _ := v.Float64()
-		return f
+	why := strings.TrimSpace(firstNonBlank(strings.Join(r.Errors, "\n"), r.Result))
+	switch {
+	case how != "" && why != "":
+		return how + ": " + why
+	case how != "":
+		return how
+	case why != "":
+		return why
 	}
-	return 0
+	return "it reported an error and said nothing about it"
 }
 
-func intField(obj map[string]any, key string) int {
-	switch v := obj[key].(type) {
-	case float64:
-		return int(v)
-	case json.Number:
-		n, _ := v.Int64()
-		return int(n)
+// decodeClaudeResult reads the result message, falling back to the LAST line.
+//
+// An older build's `json` layout put the CLI's whole stdout in the result
+// file, where a banner or a warning could precede the object — and the
+// object is always last, because it is the thing the CLI prints when it is
+// done. Under the stream the file is one line already.
+func decodeClaudeResult(text string) (claudeResult, bool) {
+	for _, candidate := range []string{text, lastLine(text)} {
+		if !strings.HasPrefix(candidate, "{") {
+			continue
+		}
+		var msg claudeResult
+		err := json.Unmarshal([]byte(candidate), &msg)
+		var mismatch *json.UnmarshalTypeError
+		// A syntax error is reported before any field is decoded, so a
+		// mismatch means a whole object with one field of another type.
+		if err == nil || errors.As(err, &mismatch) {
+			return msg, true
+		}
 	}
-	return 0
+	return claudeResult{}, false
+}
+
+// lastLine is the text's last line, trimmed.
+func lastLine(text string) string {
+	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+		text = text[i+1:]
+	}
+	return strings.TrimSpace(text)
 }

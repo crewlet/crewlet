@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Reading the document a submission is measured against, and producing the
@@ -171,32 +170,23 @@ func refuseUngated(values map[string]string, reqs []setup.Requirement) error {
 	return nil
 }
 
-// maxSummary bounds a caller's own words in the stored sentence.
-//
-// A short phrase is all this field has ever been: it is rendered inline in the
-// revision list beside the id and the actor, where a longer one would push
-// both off the row.
-const maxSummary = 120
-
 // auditSummary is the sentence stored on the revision.
 //
-// SERVER-GENERATED, and a caller's own text is capped and never trusted to be
-// a sentence: the summary is stored on the revision, returned by
-// GET /config/revisions and rendered on the Config screen, so a caller that
-// pasted a credential into it would put that credential on a screen.
+// SERVER-GENERATED around the caller's own words, which are never trusted to
+// be a sentence: the summary is stored on the revision, returned by
+// GET /config/revisions and rendered on the Config screen.
+//
+// The caller's words are carried WHOLE, on one line. They used to be cut to
+// 120 bytes for a row in the revision list, which is the renderer's to elide
+// and already is for every summary PUT /config stores — so a connect's note
+// was the one summary in the history whose end nobody could read.
 func auditSummary(kind integration.Kind, supplied string) string {
 	base := "connect " + string(kind)
-	supplied = strings.TrimSpace(supplied)
+	// Newlines out: the history renders a summary as one line, and the
+	// revision list is not where a paragraph is read.
+	supplied = strings.Join(strings.Fields(supplied), " ")
 	if supplied == "" {
 		return base
 	}
-	// Newlines out, length capped. What survives is a short phrase, which
-	// is all this field has ever been.
-	supplied = strings.Join(strings.Fields(supplied), " ")
-	// THROUGH textcut, which exists to remove exactly this. A raw
-	// `supplied[:n]` cuts mid-rune whenever a multi-byte character straddles
-	// the boundary, and what is left is invalid UTF-8: the JSON encoder
-	// substitutes it, so the summary stored on the revision and rendered on
-	// the Config screen ends in a replacement character.
-	return base + ": " + textcut.Ellipsis(supplied, maxSummary)
+	return base + ": " + supplied
 }

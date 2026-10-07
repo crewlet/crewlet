@@ -454,7 +454,13 @@ export function RaiseBudgetDialog({
               helper={
                 w
                   ? `${fmtExact(w.used)} tokens spent ${PERIOD_WORDS[period]} · ${resetsWords(w, zone)}${
-                      w.refused_at ? ` · refusing since ${fmtDateTime(w.refused_at)}` : ""
+                      // A STAMP ONLY ON A WINDOW STILL REFUSING. Under a
+                      // ceiling raised since, the stamp stays until the next
+                      // admitted charge clears it, and "last refused" would
+                      // contradict the window's own state.
+                      w.state === "refusing" && w.refused_at
+                        ? ` · last refused ${fmtDateTime(w.refused_at)}`
+                        : ""
                     }`
                   : undefined
               }

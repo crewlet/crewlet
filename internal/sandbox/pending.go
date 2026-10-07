@@ -139,9 +139,34 @@ type Release struct {
 	// on the row by the release itself. See [PendingRun.Charged].
 	Charged bool
 
+	// CompanyCharged is whether the company's share of it is, where the
+	// seat's is not, recorded the same way. See [PendingRun.CompanyCharged].
+	CompanyCharged bool
+
 	// Published is whether the run's own phase record went out, recorded
 	// the same way and for the same reason. See [LaunchRecord.Published].
 	Published bool
+
+	// CollectFailedAt, when set, is the instant a collection of this job
+	// could not read its box back: the release counts it onto the job's
+	// record ([LaunchRecord.CollectFailures]), dating the run of failures
+	// from the first. Zero for a release that is not a failed collection.
+	CollectFailedAt time.Time
+
+	// Collected is whether the claim being handed back READ THE JOB'S BOX
+	// BACK — a collection that succeeded, whose park or resume then failed
+	// — and it ENDS the job's run of failed collections: the release clears
+	// [LaunchRecord.CollectFailures] and [LaunchRecord.CollectFailingSince].
+	//
+	// The bound is on CONSECUTIVE failures, the waiter's own rule (a
+	// reconnect that succeeds clears its streak), and nothing else wrote the
+	// end of one: a box that failed once, was then collected, and was handed
+	// back because its resume failed kept the count and the first failure's
+	// instant, so the next single failure of its re-collection was measured
+	// from before the success and gave a box that had just answered up as
+	// lost. A release cannot say both — a collection either read the box or
+	// it did not — and one that does is refused.
+	Collected bool
 
 	// Fence is the lease the claim was taken under.
 	Fence Fence
@@ -197,6 +222,22 @@ type BridgeCall struct {
 	Output string    `json:"output,omitempty"`
 	Failed bool      `json:"failed,omitempty"`
 	At     time.Time `json:"at"`
+}
+
+// BridgeAppend is one finished bridged call as the bridge hands it to the row
+// — see [PendingStore.AppendBridgeCall].
+type BridgeAppend struct {
+	// Launch is the job the session serves, as [PendingStore.BeginLaunch]
+	// named it — handed to the session through [LaunchRequest.Opened] before
+	// the job's box existed, so no call the box makes can name any other.
+	// REQUIRED: an append naming no job is recorded under none.
+	Launch string
+
+	Call BridgeCall
+
+	// Spent is the session's running total: what every bridged call it has
+	// served so far cost the engine.
+	Spent EngineSpend
 }
 
 // UnitOfWork is the identity this run's once-per-unit-of-work writes collapse
@@ -580,6 +621,24 @@ type PendingRun struct {
 	// clears it, and nothing else does.
 	Charged bool `json:"charged,omitempty"`
 
+	// CompanyCharged is whether this launch's collected tokens are on the
+	// COMPANY's counter while the seat's write failed
+	// ([coord.SeatUncountedError]) — meaningful only while Charged is not.
+	//
+	// The partial is KEPT, never undone: the run spent what it spent, and
+	// the compensation that used to take the company's share back left it
+	// on neither counter whenever the resume then succeeded, since only a
+	// failed resume brings a collected run back to be charged again. Kept
+	// and recorded here, the retry a failed resume does bring finishes the
+	// seat's share alone rather than counting the company twice; a resume
+	// that succeeds leaves only the seat short, by this run.
+	//
+	// Written and cleared exactly as Charged is. An OLDER build reading a
+	// row that carries it ignores the field and charges both counters
+	// again on such a retry: the company is then counted twice for this
+	// one run, which trips its cap early rather than late.
+	CompanyCharged bool `json:"company_charged,omitempty"`
+
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
 	// PausedAt is when this run's box was paused, zero when nothing
@@ -601,6 +660,14 @@ type PendingRun struct {
 	// redelivery. Inferring it from the other fields is unsound — a reused
 	// run keeps its old question.
 	ClaimedFrom string `json:"-"`
+
+	// Collected is TRANSIENT too: set on a claimed row by the completion
+	// tail once THIS claim's collection read the box back, so whichever
+	// hand-back follows — a park or a resume that failed — ends the job's
+	// run of failed collections ([Release.Collected]). Never persisted,
+	// because it is a fact about one claim and the next claim starts
+	// without it.
+	Collected bool `json:"-"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -647,7 +714,7 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 // park is the one state whose box is deliberately held for an open-ended human
 // wait, the completion poll skips it so nothing refreshes its keepalive, and
 // no tail is coming to settle it. Reading the missing stamp as "no snapshot"
-// is what made such a box invisible to [Waiter.reapExpiredPauses] for good.
+// is what made such a box invisible to the reaper ([pauseExpired]) for good.
 //
 // THE FALLBACK IS THE ROW'S OWN LAST WRITE, because on a parked row that write
 // IS the park — the one write that has to land for the run to be parked at all
@@ -699,7 +766,18 @@ type PendingStore interface {
 	// so a resume that relaunched read back as `resumed`, the settle path
 	// could not tell it from a finished turn, and it tore down the box the
 	// new job was running in.
-	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) error
+	//
+	// ANSWERS THE RECORD OF THE JOB IT OPENED — its name, minted here, and
+	// the instant it began — because the store is the one party that knows
+	// the name, and something has to hold it before the job's box can act:
+	// an agent-mode run's bridge session records every call under its own
+	// job ([BridgeAppend.Launch]), and a session that learned the name from
+	// the row later would learn whichever job the row held by then.
+	//
+	// A row a NEWER LEASE holds is refused with an error rather than left
+	// alone with none: a launch told nothing went on to start a job on a row
+	// that never named it, in a box nothing would reclaim.
+	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (LaunchRecord, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
@@ -822,11 +900,29 @@ type PendingStore interface {
 	// already ran because the seat's lease moved would lose evidence of
 	// something that is true either way.
 	//
-	// Reports whether the append landed. FALSE IS NOT AN ERROR: it is a run
-	// whose row is gone, which is the ordinary shape of a late call from a
-	// box that is shutting down, and the caller must not fail the box's
-	// call over it.
-	AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error)
+	// THE SESSION'S SPEND RIDES THE SAME WRITE: what its bridged calls have
+	// cost the engine so far ([BridgeAppend.Spent]), merged onto the job's
+	// record by [EngineSpend.Newest], so the segment that resumes from the
+	// job can pay it ([LaunchRecord.Bridged]).
+	//
+	// PINNED TO ONE JOB. Every append names the job its session serves
+	// ([BridgeAppend.Launch]), and is recorded only while the row holds that
+	// job. A call still in flight when its job was REPLACED — a worker that
+	// outlived a killed CLI, finishing after the reviewer relaunched — is not
+	// recorded: it would land its call and its spend on the next job's
+	// record, and that job's resume would pay for it as its own. One that
+	// finishes after its job's resume CLAIMED it, and before any relaunch, is
+	// recorded on its own job and is NOT PAID: the log is evidence, and a
+	// resume that fails and is retried claims again and reads it, but the
+	// segment that pays for a job pays what the job's record held at its
+	// claim ([ResumeRequest.Engine]). So a late call can leave the task short
+	// of the turn's cost, never past it.
+	//
+	// Reports whether the call was recorded. FALSE IS NOT AN ERROR: it is a
+	// run whose row is gone, or a job that is over — the ordinary shape of a
+	// late call from a box that is shutting down — and the caller must not
+	// fail the box's call over it.
+	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
 
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)
@@ -1055,6 +1151,11 @@ type Clarification struct {
 	InputTokens  int
 	OutputTokens int
 
+	// Condensed is what condensing the collection that parked cost the
+	// seat's auxiliary model, carried to the same resume — see
+	// [LaunchRecord.Condensed].
+	Condensed AuxTokens
+
 	// Answerers is who the question may be answered by, resolved from
 	// Audience against the chart — see [PendingRun.AudienceHandles].
 	Answerers Audience
@@ -1080,6 +1181,11 @@ type BoxRef struct {
 	CodingAgent string
 	SessionID   string
 	PauseTTLSec float64
+
+	// Layout is the job's output layout, from its handle ([RunHandle.Layout]):
+	// written onto the job's own record, since a box attached before its job
+	// starts has none to name.
+	Layout int
 }
 
 // Fence is the ownership token a mutation carries.
@@ -1157,6 +1263,128 @@ type LaunchRecord struct {
 	// RELEASE ([Release.Published]), the one write through which a retry
 	// reaches the publish again.
 	Published bool `json:"published,omitempty"`
+
+	// CollectFailures is how many collections of this job have failed to
+	// read its box back SINCE THE LAST ONE THAT DID, and CollectFailingSince
+	// when the first of those failed — the run of consecutive failures
+	// [Coordinator.OnCompleted] bounds before it gives the job up as
+	// unreachable (see [Coordinator.collectFailed]). A collection that read
+	// the box ends the run ([Release.Collected]).
+	//
+	// ON THE JOB'S RECORD for the reason Published is: each failure hands
+	// the claim back, and the retry that follows may run on another node or
+	// after a restart, so a count held in memory would grant every node a
+	// fresh allowance. WRITTEN BY THE RELEASE ([Release.CollectFailedAt]),
+	// the one write through which a retry reaches the collection again.
+	// An older build that knows the record but not these two drops them
+	// on its own rewrite, which only restarts the allowance; it cannot
+	// extend it past one more window, since the build that counts is the
+	// one that retries.
+	CollectFailures     int       `json:"collect_failures,omitempty"`
+	CollectFailingSince time.Time `json:"collect_failing_since,omitzero"`
+
+	// Bridged is what this job's BRIDGED calls cost the engine — the
+	// auxiliary calls the seat's tools made for the coding agent and the
+	// workers it delegated to — as the newest of the totals the bridge
+	// wrote with its calls ([PendingStore.AppendBridgeCall]). The segment
+	// that resumes from this job pays it to the turn's work item
+	// (ADR-0022), because no segment's tally is open while a job is out.
+	//
+	// ON THE JOB'S RECORD for the reason every fact here is: the resume may
+	// run on another node, after a restart, and a relaunch must not hand
+	// one job's spend to the next. An older build that knows the record
+	// but not this field drops it on its own rewrite, which leaves the
+	// item short of it — the direction a charge that cannot be vouched for
+	// errs in — and never charges it twice.
+	Bridged EngineSpend `json:"bridged_spend,omitzero"`
+
+	// Condensed is what condensing the collection that PARKED this job on
+	// a question cost the seat's auxiliary model ([Result.Condensed]),
+	// written with the question ([PendingStore.MarkAwaiting]) and paid by
+	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
+	Condensed AuxTokens `json:"parked_condensed,omitzero"`
+
+	// Layout is which of its runner's output layouts the job was launched
+	// with ([RunHandle.Layout]), written by [PendingStore.AttachSandbox]
+	// once the job has started.
+	//
+	// ON THE JOB'S RECORD, and that is what makes it safe to read: a box is
+	// reused across the jobs of a turn, by whichever build holds the seat,
+	// and a layout that named no job would tell the next one — launched by
+	// a build that writes elsewhere — to read a file this job left behind.
+	// An older build that knows the record but not this field drops it on
+	// its own rewrite, and the job then reads as layout zero: its result
+	// still parses, from the file every layout writes it to, and only its
+	// transcript is lost — never another job's shown as its own.
+	Layout int `json:"output_layout,omitempty"`
+}
+
+// AuxTokens is what calls to a seat's AUXILIARY model cost, split the way
+// every token figure in the engine is: the whole input, the share of it the
+// provider's prompt cache served and stored (a breakdown, never an addition),
+// and the output.
+type AuxTokens struct {
+	Input      int `json:"input,omitempty"`
+	Output     int `json:"output,omitempty"`
+	CacheRead  int `json:"cache_read,omitempty"`
+	CacheWrite int `json:"cache_write,omitempty"`
+}
+
+// Plus is a and b together.
+func (a AuxTokens) Plus(b AuxTokens) AuxTokens {
+	return AuxTokens{Input: a.Input + b.Input, Output: a.Output + b.Output,
+		CacheRead: a.CacheRead + b.CacheRead, CacheWrite: a.CacheWrite + b.CacheWrite}
+}
+
+// newest is the larger of a and b in each figure — see [EngineSpend.Newest].
+func (a AuxTokens) newest(b AuxTokens) AuxTokens {
+	return AuxTokens{Input: max(a.Input, b.Input), Output: max(a.Output, b.Output),
+		CacheRead: max(a.CacheRead, b.CacheRead), CacheWrite: max(a.CacheWrite, b.CacheWrite)}
+}
+
+// EngineSpend is what the ENGINE spent on a job outside every segment of the
+// turn it belongs to: its own auxiliary calls, and the workers it ran for the
+// job. A coding run's OWN tokens are not here — they are the job's, reported
+// by its CLI ([Result.InputTokens]).
+//
+// Two things put it there, and both happen while no segment is running to
+// tally them: an agent-mode run's calls through the tool bridge, which keep
+// running after the segment that launched it has ended, and the condensation
+// of a collected run's account ([Condenser]), which the coordinator makes
+// between two segments. The segment that resumes from the job pays it
+// ([ResumeRequest.Engine]).
+type EngineSpend struct {
+	Aux AuxTokens `json:"aux,omitzero"`
+	// Workers is how many delegated workers ran, and WorkerInput and
+	// WorkerOutput what they cost between them.
+	Workers      int `json:"workers,omitempty"`
+	WorkerInput  int `json:"worker_input,omitempty"`
+	WorkerOutput int `json:"worker_output,omitempty"`
+}
+
+// Plus is s and o together.
+func (s EngineSpend) Plus(o EngineSpend) EngineSpend {
+	return EngineSpend{Aux: s.Aux.Plus(o.Aux), Workers: s.Workers + o.Workers,
+		WorkerInput: s.WorkerInput + o.WorkerInput, WorkerOutput: s.WorkerOutput + o.WorkerOutput}
+}
+
+// Newest is the larger of s and o in each figure: of two totals one meter
+// took at different moments, the later one, whichever was WRITTEN later.
+//
+// The bridge writes its meter's running total with every call it records, and
+// two calls finishing together race to the row — so the total the earlier
+// call read can land after the later one's. Every figure only grows within one
+// meter, so the larger is the later, and a merge by this never moves a total
+// backwards.
+func (s EngineSpend) Newest(o EngineSpend) EngineSpend {
+	return EngineSpend{Aux: s.Aux.newest(o.Aux), Workers: max(s.Workers, o.Workers),
+		WorkerInput: max(s.WorkerInput, o.WorkerInput), WorkerOutput: max(s.WorkerOutput, o.WorkerOutput)}
+}
+
+// Handle is the job this row holds now, as every read of its box is handed
+// it: its command, its session and the output layout it was launched with.
+func (r PendingRun) Handle() RunHandle {
+	return RunHandle{CommandID: r.CommandID, SessionID: r.SessionID, Layout: r.LaunchFacts().Layout}
 }
 
 // LaunchFacts is the [LaunchRecord] of the job this row holds now, and the

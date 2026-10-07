@@ -39,6 +39,16 @@
 //     "could not be searched" rather than "nothing matched". A turn must not
 //     die because a wiki was slow, nor be told the company has written
 //     nothing down because one did not answer.
+//
+// # The rule every caller honours
+//
+// A QUERY IS BOUNDED, and the bound is declared here ([MaxQueryBytes]) for
+// both of the engine's ranked searches — this seam's and the tracker's item
+// search, which share this package's vocabulary. Every surface refuses a
+// longer one in its own words before it reaches a backend, because best effort
+// would answer "could not be searched" and send the asker back with the same
+// paste; nothing cuts one, because a search on part of a question answers a
+// different question.
 package knowledge
 
 import (

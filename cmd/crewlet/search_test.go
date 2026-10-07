@@ -182,3 +182,87 @@ func TestTheEvalMetricsNameTheFirstStage(t *testing.T) {
 		}
 	}
 }
+
+// THE WINDOW THE REPORT MEASURES AT IS THE ONE THE DUTY EMBEDDED AT.
+//
+// The duty sends each source's opening up to the smaller of 8 KiB and the
+// model's own per-input bound, and the report of what lies past that window is
+// only true at the same number: measured at 8 KiB for a model that took 2 032
+// bytes, it would call three quarters of every long page embedded. The store
+// carries no configuration, so a model this build knows is resolved from its
+// table — its request limits documented or not — and an operator's -window
+// wins, for a bound their configuration lowered.
+func TestTheWindowIsTheOneTheDutyEmbeddedAt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, model string
+		stated      int
+		want        int
+		basis       string
+	}{
+		{"OpenAI's window is the corpus's opening", "text-embedding-3-large", 0,
+			search.EmbedInputBytes, "the corpus's opening"},
+		{"a narrower documented window cuts it", "gemini-embedding-001", 0,
+			2_032, "gemini-embedding-001's own per-input bound"},
+		{"a model this build does not know takes the opening", "my-own-model", 0,
+			search.EmbedInputBytes, "the corpus's opening"},
+		{"a stated window wins", "text-embedding-3-large", 1_000,
+			1_000, "as -window states"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, basis := embeddedWindow(tc.stated, tc.model)
+			if got != tc.want || basis != tc.basis {
+				t.Fatalf("the window for %s is %d (%s), want %d (%s)", tc.model,
+					got, basis, tc.want, tc.basis)
+			}
+		})
+	}
+}
+
+// THE REPORT AND ITS METRICS SAY HOW MUCH OF EACH CORPUS A SEARCH BY MEANING
+// CANNOT SEE — the sources and the bytes past the window, beside the whole — so
+// an operator can read the one number that decides whether a source needs more
+// than one vector, and a schedule can record it.
+func TestTheEvalReportsWhatLiesPastTheWindow(t *testing.T) {
+	t.Parallel()
+	past := windowReport{bytes: 8192, basis: "the corpus's opening",
+		corpora: []search.WindowReport{
+			{Source: search.SourceTask, Sources: 200, Beyond: 3, Bytes: 400_000, BeyondBytes: 20_000},
+			{Source: search.SourcePage, Sources: 40, Beyond: 30, Bytes: 4_000_000, BeyondBytes: 3_000_000},
+		}}
+	var out bytes.Buffer
+	printWindowReport(&out, past)
+	for _, w := range []string{
+		"window       8192 bytes a source (the corpus's opening)",
+		"past window  task  3 of 200 sources (1.5%), 19.5 KiB of 390.6 KiB of text (5.0%)",
+		"past window  page  30 of 40 sources (75.0%), 2.9 MiB of 3.8 MiB of text (75.0%)",
+	} {
+		if !strings.Contains(out.String(), w) {
+			t.Errorf("the report does not say %q:\n%s", w, out.String())
+		}
+	}
+	out.Reset()
+	printWindowMetrics(&out, past)
+	for _, w := range []string{"search_eval_window_bytes 8192\n",
+		`search_eval_window_sources{source="page"} 40` + "\n",
+		`search_eval_window_beyond_sources{source="page"} 30` + "\n",
+		`search_eval_window_text_bytes{source="task"} 400000` + "\n",
+		`search_eval_window_beyond_bytes{source="task"} 20000` + "\n"} {
+		if !strings.Contains(out.String(), w) {
+			t.Errorf("the metrics do not carry %q:\n%s", w, out.String())
+		}
+	}
+}
+
+// A NEGATIVE WINDOW IS REFUSED before anything is opened, rather than read as
+// the default — a report printed under a flag that asked for another window
+// would describe a window nobody chose.
+func TestANegativeWindowIsRefused(t *testing.T) {
+	t.Parallel()
+	var out, errs bytes.Buffer
+	err := runSearchEval([]string{"-store", t.TempDir() + "/absent.db", "-window", "-1"}, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), "-window -1") {
+		t.Fatalf("a negative window answered %v, want a refusal naming -window", err)
+	}
+}

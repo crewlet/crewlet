@@ -139,6 +139,9 @@ export class LiveSocket {
   private isClosed = false;
   private nextQueryId = 1;
   private inflight = new Map<number, Inflight>();
+  /** Seats whose live call is being fetched whole, each with whether a push
+   *  found the call behind again while the fetch was out — see `fetchCalls`. */
+  private fetchingCalls = new Map<string, boolean>();
   private token = "";
   /** Whether the shell has already been asked to collect a token. */
   private askedForToken = false;
@@ -410,7 +413,7 @@ export class LiveSocket {
         this.store.applyEvent(msg.data as never);
         break;
       case "agents":
-        this.store.applyAgents(msg.data);
+        this.fetchCalls(this.store.applyAgents(msg.data));
         break;
       case "seats":
         this.store.applySeats(msg.data);
@@ -461,6 +464,40 @@ export class LiveSocket {
         // like — and the e2e replay asserts that count is zero.
         this.store.noteUnknownPush((msg as { kind?: unknown }).kind);
         break;
+    }
+  }
+
+  /**
+   * Fetch, whole, each seat's live call this tab holds behind what a push
+   * described — the push that moved one of its heavy fields was dropped by the
+   * server's queue (`mergeLiveCall`).
+   *
+   * ONE ASK PER SEAT IN FLIGHT, but a push that finds the call behind while it
+   * is out is NOT the same thing said twice: the answer may have been read
+   * before that push's change, and the store then drops it or takes only the
+   * fields it has newer (`Store.applyLiveCall`). So such a push is remembered,
+   * and once the answer lands BEHIND the pushes applied since — or the ask
+   * fails — the call is asked for again, once, rather than left behind until
+   * the seat's next push, which a frozen failed call or a long round never
+   * sends. An answer at or past them holds everything they named, and ends it.
+   */
+  private fetchCalls(roles: string[]): void {
+    for (const role of roles) {
+      if (this.fetchingCalls.has(role)) {
+        this.fetchingCalls.set(role, true);
+        continue;
+      }
+      this.fetchingCalls.set(role, false);
+      this.query("live_call", { role })
+        .then(
+          (answer) => this.store.applyLiveCall(answer),
+          () => false,
+        )
+        .then((current) => {
+          const again = this.fetchingCalls.get(role) ?? false;
+          this.fetchingCalls.delete(role);
+          if (again && !current) this.fetchCalls([role]);
+        });
     }
   }
 

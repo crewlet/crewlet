@@ -70,14 +70,26 @@ type invocation struct {
 // tail after the last newline is deliberately NOT delivered: a partial JSON
 // object is not parseable, and the buffered copy is what the extractor reads
 // once the process exits, so nothing is lost by waiting.
+//
+// BOUNDED BY THE SINK'S OWN CAP, which it used not to be: the sink drops past
+// [maxOutput] and still reports every byte written, so this kept appending a
+// line with no newline in it for as long as the child printed one — the very
+// memory the cap exists to protect. Past the cap it forwards nothing more,
+// because the answer it would be streaming is refused as clipped anyway.
 type lineTee struct {
-	sink io.Writer
-	on   func(string)
-	buf  []byte
+	sink  io.Writer
+	on    func(string)
+	buf   []byte
+	limit int
+	seen  int
 }
 
 func (t *lineTee) Write(b []byte) (int, error) {
 	n, err := t.sink.Write(b)
+	if t.seen += n; t.seen > t.limit {
+		t.buf = nil
+		return n, err
+	}
 	if n > 0 {
 		t.buf = append(t.buf, b[:n]...)
 		for {
@@ -130,7 +142,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	stderr.limit = maxOutput
 	cmd.Stdout = io.Writer(&stdout)
 	if in.onLine != nil {
-		cmd.Stdout = &lineTee{sink: &stdout, on: in.onLine}
+		cmd.Stdout = &lineTee{sink: &stdout, on: in.onLine, limit: maxOutput}
 	}
 	cmd.Stderr = &stderr
 	procgroup.Set(cmd)

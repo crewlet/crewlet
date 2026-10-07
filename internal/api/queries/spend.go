@@ -190,6 +190,27 @@ func (s Sources) spendCells(ctx context.Context, w spendWindow) ([]tokens.Cell, 
 			Turns: int(r.Turns), Failed: int(r.Failed),
 		})
 	}
+	// AND EVERY PERSON'S, which no seat's row carries: what the auxiliary
+	// model spent for a human seat — a question on the operator surface —
+	// named by the seat's handle, so a window narrowed to that handle is
+	// the person's alone.
+	people, err := usage.PersonSpend(ctx, s.Usage, usage.PersonQuery{
+		From: q.From, To: q.To, Person: w.Seat,
+	})
+	if err != nil {
+		return nil, nil, usageErr(err)
+	}
+	for _, r := range people {
+		cells = append(cells, tokens.Cell{
+			Day: r.Day, Handle: r.Person, Role: r.Role, Person: true,
+			Phase: r.Phase, Worker: r.Worker, Model: r.Model, ProviderKey: r.ProviderKey,
+			Bucket: tokens.Bucket{
+				InputTokens: int(r.Input), OutputTokens: int(r.Output), TotalTokens: int(r.Total),
+				CacheReadTokens: int(r.CacheRead), CacheWriteTokens: int(r.CacheWrite),
+				Calls: int(r.Calls),
+			},
+		})
+	}
 	return cells, seats, nil
 }
 

@@ -23,11 +23,77 @@ func cachedPhase(t *testing.T) []byte {
 		Model: "claude-sonnet-5", ProviderKey: "primary",
 		InputTokens: 1000, OutputTokens: 200, TotalTokens: 1200,
 		CacheReadTokens: 800, CacheWriteTokens: 150,
+		// THREE PROVIDER CALLS, so the producers' call counts are a
+		// number worth agreeing on rather than the one either would
+		// default to.
+		Rounds:     []types.PhaseRound{{Round: 1}, {Round: 2}, {Round: 3}},
+		RoundsUsed: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// THE LIVE WINDOW AND A STORED ONE HAND THE ROLLUP THE SAME AUXILIARY RECORD:
+// the phase it is filed under, its purpose as the worker, its stage, its
+// coalesced calls — and, for a person's, the role of their seat. One record
+// through both producers, for the reason the phase case gives.
+func TestTheLiveAndStoredProducersAgreeOnAnAuxiliaryRecord(t *testing.T) {
+	t.Parallel()
+	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	for name, rec := range map[string]types.AuxiliarySpend{
+		"a seat's": {Agent: "a-1", AgentHandle: "lead", RoleName: "Lead",
+			Stage: types.AuxStageReflection, Purpose: types.AuxSkillRefiner,
+			TurnID: "run-1", WorkKey: "wk-1", Model: "haiku", ProviderKey: "cheap",
+			Calls: 4, InputTokens: 900, OutputTokens: 40, TotalTokens: 940,
+			CacheReadTokens: 300},
+		"a person's": {ActorSeat: "maya", ActorRole: "Founder",
+			Stage: types.AuxStageOperator, Purpose: types.AuxAnswerKnowledge,
+			Model: "haiku", ProviderKey: "cheap", Calls: 1, TotalTokens: 70},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			payload, err := json.Marshal(rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			log := open(t).Events()
+			if err := log.Append(t.Context(), store.EventRecord{
+				ID: "x1", Type: rec.EventType(), Source: "engine", Category: "system",
+				// THE ENVELOPE'S ACTOR, as the publish listener writes it:
+				// the person a person's record was spent for.
+				Actor: rec.Actor(),
+				Time:  at, Tags: store.ExtractTags(payload),
+				Spend: store.SpendFor(rec.EventType(), payload), Payload: payload,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stored := phaseTokens(t, log)
+			var body map[string]any
+			if err := json.Unmarshal(payload, &body); err != nil {
+				t.Fatal(err)
+			}
+			live := livestate.New()
+			live.Apply(&livestate.Envelope{ID: "x1", Type: rec.EventType(),
+				Timestamp: at.Format(time.RFC3339Nano), Category: "system", Payload: body})
+			records := live.SpendRecords()
+			if len(stored) != 1 || len(records) != 1 {
+				t.Fatalf("stored %d, live %d records, want one each", len(stored), len(records))
+			}
+			if stored[0] != records[0] {
+				t.Errorf("the producers disagree about one auxiliary record:\n stored %+v\n   live %+v",
+					stored[0], records[0])
+			}
+			if stored[0].Calls != rec.Calls || stored[0].Phase != "auxiliary" {
+				t.Errorf("the record is %+v, want the auxiliary phase with its %d calls",
+					stored[0], rec.Calls)
+			}
+			if stored[0].Person != rec.ActorSeat {
+				t.Errorf("the record names person %q, want %q", stored[0].Person, rec.ActorSeat)
+			}
+		})
+	}
 }
 
 // appendPhase writes one phase completion the way the publish listener does:

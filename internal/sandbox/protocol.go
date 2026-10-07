@@ -23,8 +23,11 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -179,6 +182,21 @@ type RunHandle struct {
 	CommandID string
 	PID       int
 	SessionID string
+
+	// Layout is which of its runner's OUTPUT LAYOUTS the job was launched
+	// with — where its stdout landed and how its result is read back — as
+	// the runner that started it declares it, recorded on the job's own
+	// record ([LaunchRecord.Layout]) and handed back to every read of it.
+	//
+	// THE LAUNCH SAYS, BECAUSE THE BOX CANNOT. A rolling upgrade puts jobs
+	// launched by two builds into boxes both reuse, and a build that wrote
+	// its stdout somewhere else leaves the file this one streams to as the
+	// PREVIOUS job's: read by layout rather than by what the box holds, a
+	// stale stream was collected as the new job's transcript and shown on
+	// its live view. Each runner numbers its own layouts from ZERO, which is
+	// the layout every build before the declaration launched with, so a job
+	// whose record declares none is read the way it was written.
+	Layout int
 }
 
 // Result is one coding run's outcome.
@@ -209,16 +227,37 @@ type Result struct {
 	// DeliveredRefs are the branches and pull requests the run produced —
 	// what the delivery gate judges a coding turn on.
 	DeliveredRefs []string
-	ChangedFiles  []string
-	Commands      []string
+
+	// DeliveredRefsElided is how many more refs the run reported than its
+	// record lists ([MaxDeliveredRefBytes]). Set by the coordinator.
+	DeliveredRefsElided int
+	ChangedFiles        []string
+	Commands            []string
 
 	Error string
 
-	// Transcript is the agent's streamed activity log — tool calls, shell
-	// commands, todos — captured from its output. It is the observability
-	// surface for an agent that emits no telemetry of its own. Tail-capped
-	// here, redacted at publish.
+	// Transcript is the agent's activity log — what it said, each tool it
+	// called and the first line of what it ran — rebuilt from its own
+	// output, or its stderr where the CLI streams nothing better. It is the
+	// observability surface for an agent that emits no telemetry of its
+	// own. A runner returns it WHOLE and redacted; the coordinator holds it
+	// to the record's bound ([Coordinator.fitResult]) and redacts it again
+	// at publish.
 	Transcript string
+
+	// TranscriptElidedLines and TranscriptElidedBytes are how much of the
+	// transcript's middle the record's bound left out: whole lines, and
+	// every byte not kept. Zero for a transcript kept whole. Set by the
+	// coordinator, never by a runner.
+	TranscriptElidedLines int
+	TranscriptElidedBytes int
+
+	// Condensed is what condensing this result's report, failure or
+	// question to the record's bounds cost the seat's auxiliary model
+	// ([Coordinator.fitResult]) — a failed rewrite included, since it was
+	// still paid for. Set by the coordinator, never by a runner; the segment
+	// that resumes from this collection pays it ([ResumeRequest.Engine]).
+	Condensed AuxTokens
 }
 
 // usageFloored is r with every count of what the run spent made non-negative,
@@ -278,8 +317,44 @@ type Sandbox interface {
 	// which is not proof of either answer.
 	JobRunning(ctx context.Context, commandID string) (bool, error)
 
+	// WriteFile puts content at path whole. A backend that writes the box
+	// from the engine host writes only a regular file where it lies, and
+	// refuses anything else at the path with [ErrNotRegularFile] — a link
+	// there would be followed out of the box, and a named pipe waited on
+	// for good.
 	WriteFile(ctx context.Context, path string, content []byte) error
+
+	// ReadFile reads a file the engine means to read WHOLE — a report, a
+	// question, a marker, a result line — and REFUSES one past
+	// [MaxFileBytes] ([ErrFileTooLarge]) rather than returning its first
+	// part, because a clipped report reads as a finished one. Empty on
+	// missing: a poll for a marker that is not written yet is not an error.
+	//
+	// NEVER FOR A MACHINE STREAM. A coding agent's event log and its stderr
+	// grow with the run and have no size a whole read could honestly refuse
+	// at — the engine keeps a bounded share of them in the end — so they
+	// are read with [Sandbox.OpenFile] or [Sandbox.ReadTail] instead.
+	//
+	// A path that names something other than a regular file is refused with
+	// [ErrNotRegularFile] by a backend that reads the box from the engine
+	// host, for all three reads, because opening one there could block.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
+
+	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
+	// once in bounded memory: a coding agent's event log, read at
+	// collection a line at a time. Nothing is refused for its size, since
+	// the reader holds one piece at a time and decides itself what to keep.
+	// A missing file is a reader that yields nothing, as ReadFile's empty
+	// answer is; the caller closes it.
+	OpenFile(ctx context.Context, path string) (io.ReadCloser, error)
+
+	// ReadTail reads at most n bytes from the END of a file, with the
+	// file's whole size — for a question about a stream's end: has the job
+	// printed its terminal event, what is it doing now, what did it say last
+	// before it failed. A whole read answers each of those at the cost of
+	// the whole stream, every poll, for as long as the run lasts. Empty on
+	// missing, as the others are.
+	ReadTail(ctx context.Context, path string, n int) (FileTail, error)
 
 	// SetTimeout resets the box's wall-clock TTL to seconds from now.
 	//
@@ -299,12 +374,86 @@ type Sandbox interface {
 	Close(ctx context.Context) error
 }
 
+// FileTail is the end of a file, read by [Sandbox.ReadTail].
+type FileTail struct {
+	// Data is the file's last bytes — all of it when the file is no longer
+	// than what was asked for. It begins wherever the byte count put it, so
+	// a reader of lines drops a partial first one ([FileTail.Lines]).
+	Data []byte
+
+	// Size is the whole file's size as the read found it, so a caller can
+	// say how much came before Data rather than present the end as the
+	// whole.
+	Size int64
+}
+
+// Whole reports whether Data is the entire file.
+func (t FileTail) Whole() bool { return int64(len(t.Data)) >= t.Size }
+
+// Before is how many bytes of the file came before Data and were not read.
+func (t FileTail) Before() int64 { return max(t.Size-int64(len(t.Data)), 0) }
+
+// Lines is Data without a first line the window began inside, and how many
+// bytes that partial line held. A tail that is the whole file begins at a
+// line, so nothing is dropped from it; one that began mid-file begins
+// wherever the byte count landed, and the bytes before its first line break
+// are the end of a line nobody can read whole from here.
+func (t FileTail) Lines() ([]byte, int) {
+	if t.Whole() {
+		return t.Data, 0
+	}
+	i := bytes.IndexByte(t.Data, '\n')
+	if i < 0 {
+		return nil, len(t.Data)
+	}
+	return t.Data[i+1:], i + 1
+}
+
+// tailOf is the end of a file held in memory, in the shape every backend's
+// [Sandbox.ReadTail] answers.
+func tailOf(content []byte, n int) FileTail {
+	n = max(n, 0)
+	if len(content) <= n {
+		return FileTail{Data: content, Size: int64(len(content))}
+	}
+	return FileTail{Data: content[len(content)-n:], Size: int64(len(content))}
+}
+
 // ExecOptions are the per-command knobs both exec shapes take.
 type ExecOptions struct {
 	Env        map[string]string
 	Cwd        string
 	TimeoutSec float64
 }
+
+// ErrBoxGone is a [Provider.Connect] that found the box DEFINITIVELY not
+// there — reclaimed by its provider, reaped, its directory removed — as
+// against one that merely could not be reached. The difference decides
+// whether asking again can help: a collection that cannot reach a box is
+// retried, and one whose box is gone is settled at once.
+var ErrBoxGone = errors.New("sandbox: the box is gone")
+
+// boxGone is a backend's own sentence saying a box no longer exists, which is
+// also [ErrBoxGone] — the sentence is what a person reads, the sentinel what
+// a caller acts on.
+type boxGone struct{ err error }
+
+func (g boxGone) Error() string   { return g.err.Error() }
+func (g boxGone) Unwrap() []error { return []error{g.err, ErrBoxGone} }
+
+// ErrBoxPaused is a [Provider.Attach] that found the box PAUSED where its
+// backend cannot read a paused box without waking it — an E2B snapshot, which
+// has no envd to answer, or a paused container, which takes no exec. The box
+// is there; reading it would mean resuming it, which is the one thing the
+// caller asked not to do.
+var ErrBoxPaused = errors.New("sandbox: the box is paused")
+
+// boxPaused is a backend's own sentence saying a box is paused, which is also
+// [ErrBoxPaused].
+type boxPaused struct{ err error }
+
+func (p boxPaused) Error() string   { return p.err.Error() }
+func (p boxPaused) Unwrap() []error { return []error{p.err, ErrBoxPaused} }
 
 // Provider mints sandboxes. Configured under providers.sandbox and swapped
 // wholesale on an apply, mirroring the LLM providers beside it.
@@ -319,8 +468,25 @@ type Provider interface {
 	// The detached lifecycle rests on this: the completion turn — possibly
 	// in a fresh engine after a restart — reattaches to the box that ran the
 	// job, collects its result and tears it down. A PAUSED box auto-resumes
-	// on connect, which is why the reaper must not use it.
+	// on connect, which is why the reaper must not use it, and why neither
+	// may a reader ([Provider.Attach]).
 	Connect(ctx context.Context, sandboxID string) (Sandbox, error)
+
+	// Attach reattaches to an existing box by id WITHOUT RESUMING IT, for a
+	// caller that only reads: a peek at a running job's output, and the
+	// completion poll.
+	//
+	// THE READ MUST CHANGE NOTHING, and through Connect it could not: a
+	// reader that took a running record, then reached the box after the
+	// collection had read it and paused it, woke the box back up — and on
+	// E2B, where nothing renews a box once its record stops running, the
+	// woken box was killed at its TTL and the parked run lost the snapshot
+	// it had been paused to keep. A box this backend cannot read while it
+	// is paused is refused with [ErrBoxPaused]; one whose files the engine
+	// host reads directly is handed back as it is, paused or not. A box
+	// that is gone is [ErrBoxGone], as for Connect. Nothing about the box's
+	// timer or its state moves.
+	Attach(ctx context.Context, sandboxID string) (Sandbox, error)
 
 	// Kill terminates a box by id WITHOUT resuming it.
 	//
@@ -352,12 +518,13 @@ type Runner interface {
 	// Collect reads the finished job's result out of the box.
 	Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error)
 
-	// Peek reads what a job has said about itself SO FAR, without ending,
-	// pausing or otherwise touching it — the live output a person watching
-	// a run is shown ([Output]). Safe on a job in any state: one that has
-	// finished says so, and one that has said nothing yet answers an empty
-	// output rather than an error.
-	Peek(ctx context.Context, box Sandbox, handle RunHandle) (Output, error)
+	// Follow begins a LIVE READING of what a job says about itself, for a
+	// person watching the run ([LiveReading]): advanced a read at a time,
+	// each read adding what the job has written since, settled and
+	// redacted, without ending, pausing or otherwise touching the job. Safe
+	// on a job in any state: one that has finished says so, and one that
+	// has said nothing yet reads as nothing rather than as an error.
+	Follow(handle RunHandle) LiveReading
 }
 
 // RunRequest is one coding run's inputs.

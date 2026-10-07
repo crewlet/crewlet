@@ -192,6 +192,32 @@ type State struct {
 	// that may no longer be readable.
 	Task string `json:"task_description"`
 
+	// Ask is what the turn was ASKED — the trigger's own words, without
+	// the wrapping Task carries — for the segment that finishes the turn to
+	// record ([types.TurnCompleted.Ask]): it is woken by the run's
+	// completion or a person's reply, not by the trigger, so without this
+	// the episode of every coding turn knew it only by its collection's
+	// label.
+	//
+	// Additive within v2: a row written before this existed decodes to "",
+	// and its episode is embedded as its label and what it did, which is
+	// what that build's would have been.
+	Ask string `json:"ask,omitempty"`
+
+	// Senders is who ASKED — every distinct identifiable sender of the
+	// turn's interactions, in the order they first spoke — parked beside
+	// the ask for the reason the ask is: the resumed segment re-reads no
+	// trigger, so it has no interactions to read them off, and a
+	// refresh_memory call it makes re-runs the turn-start memory filter,
+	// whose per-subject rule ("a note about a person applies to a turn that
+	// person is party to") is judged against exactly this list. Without it
+	// every resumed segment told the filter nobody was asking, and a note
+	// about one person could be applied to a turn somebody else started.
+	//
+	// Additive within v2: a row written before this existed decodes to
+	// none, which resumes as that build's did — with no senders.
+	Senders []types.CanonicalIdentity `json:"senders,omitempty"`
+
 	// AgentRun marks a suspension whose executor IS the detached run: a
 	// coding CLI in agent mode drove its own loop, so there is no engine
 	// conversation to re-enter and no dangling call to answer.

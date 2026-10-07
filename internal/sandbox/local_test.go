@@ -5,6 +5,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
@@ -359,6 +361,96 @@ func TestPauseStopsTheTreeAndConnectResumesIt(t *testing.T) {
 		"Connect did not resume the paused box")
 }
 
+// A READER NEVER WAKES A BOX. Attach hands a stopped direct box back STOPPED —
+// its files are the host's and its probe asks the host's kernel, so neither
+// needs the job to run — where Connect would SIGCONT it.
+//
+// Mutation: resume in Attach, and the paused job ticks again.
+func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
+	local := newDirect(t)
+	box := mustCreate(t, local, Spec{})
+	counter := filepath.Join(box.Home(), WorkspaceSubdir, "ticks")
+	handle, err := box.StartBackground(t.Context(),
+		"while true; do echo x >> ticks; sleep 0.02; done", ExecOptions{})
+	if err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return fileSize(counter) > 0 }, "the job never started ticking")
+	if err := box.Pause(t.Context()); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	stopped := fileSize(counter)
+
+	attached, err := local.Attach(t.Context(), box.ID())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if running, err := attached.JobRunning(t.Context(), handle); err != nil || !running {
+		t.Fatalf("the stopped job reads as running=%v, %v; want it alive and readable", running, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if after := fileSize(counter); after != stopped {
+		t.Fatalf("attaching resumed the paused box: %d bytes of work ran after it", after-stopped)
+	}
+}
+
+// A PAUSED CONTAINER IS REFUSED, NEVER UNPAUSED. Its liveness probe is an exec
+// into it, which a paused container refuses, so it cannot be read as it is —
+// and Attach reads the runtime's own state rather than unpausing to find out.
+// The fake runtime here logs every call it is handed and answers `inspect` from
+// a file the test writes.
+//
+// Mutation: unpause in Attach, and the log shows it.
+func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
+	dir := t.TempDir()
+	calls, state := filepath.Join(dir, "calls"), filepath.Join(dir, "paused")
+	runtime := filepath.Join(dir, "runtime")
+	script := "#!/bin/sh\necho \"$@\" >> " + calls + "\n" +
+		"if [ \"$1\" = inspect ]; then read s < " + state + "; echo \"$s\"; fi\n"
+	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	local := &Local{opts: LocalOptions{Placement: Container}, root: filepath.Join(dir, "boxes"), runtime: runtime}
+	layout, err := local.layout("box1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.meta(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logged := func() string {
+		raw, _ := os.ReadFile(calls)
+		return string(raw)
+	}
+
+	if err := os.WriteFile(state, []byte("true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Attach(t.Context(), "box1"); !errors.Is(err, ErrBoxPaused) {
+		t.Fatalf("attaching to a paused container = %v; want ErrBoxPaused", err)
+	}
+	if err := os.WriteFile(state, []byte("false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Attach(t.Context(), "box1"); err != nil {
+		t.Fatalf("attaching to a running container: %v", err)
+	}
+	if strings.Contains(logged(), "unpause") {
+		t.Fatalf("an attach unpaused the container: %q", logged())
+	}
+	if !strings.Contains(logged(), "inspect --format {{.State.Paused}} "+ContainerPrefix+"box1") {
+		t.Fatalf("the runtime was never asked whether the container is paused: %q", logged())
+	}
+	// The log is real: Connect's unpause shows up in it.
+	if _, err := local.Connect(t.Context(), "box1"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !strings.Contains(logged(), "unpause "+ContainerPrefix+"box1") {
+		t.Fatalf("Connect's unpause is not in the log, so the log proves nothing: %q", logged())
+	}
+}
+
 // Teardown of a PAUSED box is the case SIGCONT-first exists for: a stopped
 // process never runs again to handle SIGTERM.
 func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
@@ -573,7 +665,7 @@ func TestTheReaperLeavesABoxWithALiveJobAlone(t *testing.T) {
 	if _, err := box.StartBackground(t.Context(), "sleep 300", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
-	ageBox(t, box.Home(), 2*time.Hour)
+	ageBox(t, box, 2*time.Hour)
 
 	local.reapOrphans(t.Context(), time.Minute)
 
@@ -589,7 +681,7 @@ func TestTheReaperRemovesAnAbandonedBox(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	home := box.Home()
-	ageBox(t, home, 2*time.Hour)
+	ageBox(t, box, 2*time.Hour)
 
 	local.reapOrphans(t.Context(), time.Minute)
 
@@ -604,7 +696,7 @@ func TestTheReaperRemovesAnAbandonedBox(t *testing.T) {
 func TestTheKeepaliveStampIsWhatSparesABoxTheReaper(t *testing.T) {
 	local := newDirect(t)
 	box := mustCreate(t, local, Spec{})
-	ageBox(t, box.Home(), 2*time.Hour)
+	ageBox(t, box, 2*time.Hour)
 
 	if err := box.SetTimeout(t.Context(), 300); err != nil {
 		t.Fatalf("SetTimeout: %v", err)
@@ -638,9 +730,9 @@ func startStranger(t *testing.T) procgroup.Leader {
 }
 
 // recordAsJob writes leader into a box's job record, as StartBackground does.
-func recordAsJob(t *testing.T, home string, leader procgroup.Leader) {
+func recordAsJob(t *testing.T, box Sandbox, leader procgroup.Leader) {
 	t.Helper()
-	if err := recordLeader(boxLayout{id: filepath.Base(home), root: home}, leader); err != nil {
+	if err := recordLeader(layoutOf(t, box), leader); err != nil {
 		t.Fatalf("recording the job: %v", err)
 	}
 }
@@ -655,7 +747,7 @@ func recycled(stranger procgroup.Leader) procgroup.Leader {
 // recordedLeader is the job record StartBackground wrote into a box.
 func recordedLeader(t *testing.T, box Sandbox) procgroup.Leader {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(box.Home(), ".crewlet", "box.pid"))
+	raw, err := os.ReadFile(layoutOf(t, box).pidFile())
 	if err != nil {
 		t.Fatalf("no job record: %v", err)
 	}
@@ -680,8 +772,8 @@ func TestARecycledPidDoesNotKeepADeadBoxAlive(t *testing.T) {
 	}
 	home := box.Home()
 	stranger := startStranger(t)
-	recordAsJob(t, home, recycled(stranger))
-	ageBox(t, home, 2*time.Hour)
+	recordAsJob(t, box, recycled(stranger))
+	ageBox(t, box, 2*time.Hour)
 
 	local.reapOrphans(t.Context(), time.Minute)
 
@@ -711,7 +803,7 @@ func TestARecycledPidIsNeverSignalled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		recordAsJob(t, box.Home(), recycled(stranger))
+		recordAsJob(t, box, recycled(stranger))
 		if err := act(box); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -771,7 +863,7 @@ func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
 
 	// The job's pid now names a stranger: a live process that is not the job.
 	stranger := startStranger(t)
-	recordAsJob(t, box.Home(), recycled(stranger))
+	recordAsJob(t, box, recycled(stranger))
 	if running, err := box.JobRunning(t.Context(), strconv.Itoa(stranger.PID)); err != nil || running {
 		t.Fatalf("JobRunning of a recycled pid = %v, %v; want false: a stranger held the run open", running, err)
 	}
@@ -810,10 +902,10 @@ func TestAnUnreadableJobRecordKeepsTheBox(t *testing.T) {
 	home := box.Home()
 	// A directory where the record belongs reads as an error for any user,
 	// root included, which a permission bit would not.
-	if err := os.MkdirAll(filepath.Join(home, ".crewlet", "box.pid"), 0o700); err != nil {
+	if err := os.MkdirAll(layoutOf(t, box).pidFile(), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	ageBox(t, home, 2*time.Hour)
+	ageBox(t, box, 2*time.Hour)
 
 	local.reapOrphans(t.Context(), time.Minute)
 
@@ -822,8 +914,8 @@ func TestAnUnreadableJobRecordKeepsTheBox(t *testing.T) {
 	}
 }
 
-// A record that is not a process group identity names no job. The file lives
-// inside the box, where the job can write, and a bare pid is exactly the
+// A record that is not a process group identity names no job. A direct box's
+// job runs as the engine's user beside its records, and a bare pid is exactly the
 // identity with no start time: acting on it would reach whatever holds that pid
 // now, so it is neither signalled nor allowed to keep the box.
 func TestAJobRecordWithoutAStartTimeNamesNoJob(t *testing.T) {
@@ -834,7 +926,7 @@ func TestAJobRecordWithoutAStartTimeNamesNoJob(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	home := box.Home()
-	if err := os.WriteFile(filepath.Join(home, ".crewlet", "box.pid"),
+	if err := os.WriteFile(layoutOf(t, box).pidFile(),
 		[]byte(strconv.Itoa(stranger.PID)), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -864,7 +956,7 @@ func TestTheReaperCollectsCredentialsBeforeDeleting(t *testing.T) {
 	if err := os.WriteFile(seeded, []byte(`{"token":"rotated"}`), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	ageBox(t, box.Home(), 2*time.Hour)
+	ageBox(t, box, 2*time.Hour)
 
 	local.reapOrphans(t.Context(), time.Minute)
 
@@ -893,7 +985,7 @@ func TestCreateReapsOrphansLeftByAPreviousEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	ageBox(t, orphan.Home(), 2*time.Hour)
+	ageBox(t, orphan, 2*time.Hour)
 
 	fresh := mustCreate(t, local, Spec{TimeoutSec: 60})
 	if fresh.ID() == orphan.ID() {
@@ -929,16 +1021,23 @@ func TestTheContainerEnvGoesInAFileNeverOnTheCommandLine(t *testing.T) {
 	if !strings.Contains(joined, "--env-file") {
 		t.Fatalf("no --env-file in %s", joined)
 	}
-	blob, err := os.ReadFile(filepath.Join(root, ".crewlet", "env"))
+	blob, err := os.ReadFile(box.layout.envFile())
 	if err != nil {
 		t.Fatalf("env file: %v", err)
 	}
 	if !strings.Contains(string(blob), "ANTHROPIC_API_KEY=sk-ant-secret") {
 		t.Fatalf("env file = %q", blob)
 	}
-	info, err := os.Stat(filepath.Join(root, ".crewlet", "env"))
+	info, err := os.Stat(box.layout.envFile())
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("env file mode = %v, %v; want 0600", info.Mode().Perm(), err)
+	}
+	// AND NOT IN THE MOUNT: the runtime's client reads it on the host, and
+	// a file in the container's home is one its job can replace between
+	// two execs.
+	if within, err := filepath.Rel(box.layout.home(), box.layout.envFile()); err != nil ||
+		!strings.HasPrefix(within, "..") {
+		t.Fatalf("the env file %s is under the box's home %s", box.layout.envFile(), box.layout.home())
 	}
 }
 
@@ -956,7 +1055,7 @@ func TestAnUnrepresentableEnvValueIsDroppedRatherThanForgingAVariable(t *testing
 	if _, err := box.envArgs(nil); err != nil {
 		t.Fatalf("envArgs: %v", err)
 	}
-	blob, err := os.ReadFile(filepath.Join(root, ".crewlet", "env"))
+	blob, err := os.ReadFile(box.layout.envFile())
 	if err != nil {
 		t.Fatalf("env file: %v", err)
 	}
@@ -982,7 +1081,7 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 	if _, err := box.envArgs(nil); err != nil {
 		t.Fatalf("envArgs: %v", err)
 	}
-	blob, _ := os.ReadFile(filepath.Join(root, ".crewlet", "env"))
+	blob, _ := os.ReadFile(box.layout.envFile())
 	if strings.Contains(string(blob), "SETUP_ONLY") {
 		t.Fatalf("the coding job inherited the setup phase's environment: %q", blob)
 	}
@@ -991,18 +1090,21 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 	root := t.TempDir()
 	box := &containerBox{layout: boxLayout{id: "box", root: root}, runtime: "d", container: "c"}
+	// The box's side of its directory, never the directory itself: that
+	// also holds the engine's records about the box.
+	home := box.layout.home()
 
 	got, err := box.hostPath(DefaultHome + "/workspace/notes.md")
 	if err != nil {
 		t.Fatalf("hostPath: %v", err)
 	}
-	if want := filepath.Join(root, "workspace", "notes.md"); got != want {
-		if resolved, _ := filepath.EvalSymlinks(root); got != filepath.Join(resolved, "workspace", "notes.md") {
+	if want := filepath.Join(home, "workspace", "notes.md"); got != want {
+		if resolved, _ := filepath.EvalSymlinks(root); got != filepath.Join(resolved, "home", "workspace", "notes.md") {
 			t.Fatalf("hostPath = %q, want %q", got, want)
 		}
 	}
-	if got, err := box.hostPath(DefaultHome); err != nil || got != root {
-		t.Fatalf("hostPath(home) = %q, %v; want %q", got, err, root)
+	if got, err := box.hostPath(DefaultHome); err != nil || got != home {
+		t.Fatalf("hostPath(home) = %q, %v; want %q", got, err, home)
 	}
 }
 
@@ -1134,11 +1236,39 @@ func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
 	for range 8 {
 		c.Write(make([]byte, captureLimit/4))
 	}
-	if len(c.String()) > captureLimit+64 {
+	if len(c.String()) > captureLimit+128 {
 		t.Fatalf("captured %d bytes, want it bounded near %d", len(c.String()), captureLimit)
 	}
-	if !strings.Contains(c.String(), "truncated") {
-		t.Fatal("truncation was silent")
+	if !strings.Contains(c.String(), "more bytes of output not kept") {
+		t.Fatal("the bound was silent")
+	}
+}
+
+// ONE WRITE CROSSING THE LIMIT IS MARKED TOO, and what is kept ends on a
+// whole line. Only a write that found the buffer already full used to set the
+// marker, so a command printing its output at once was clipped silently —
+// mid-line, and mid-character.
+func TestASingleWritePastTheLimitIsMarkedOnALine(t *testing.T) {
+	line := strings.Repeat("日", 20) + "\n" // 61 bytes: the limit lands inside a rune
+	var c capture
+	c.Write([]byte(strings.Repeat(line, captureLimit/len(line)+10)))
+	got := c.String()
+	kept, note, ok := strings.Cut(got, "\n(")
+	if !ok || !strings.Contains(note, "more bytes of output not kept") {
+		t.Fatalf("a single overflowing write was clipped silently: …%q", got[max(0, len(got)-120):])
+	}
+	if !strings.HasSuffix(kept, strings.TrimSuffix(line, "\n")) || !utf8.ValidString(kept) {
+		t.Error("what was kept does not end on a whole line")
+	}
+	total := len(line) * (captureLimit/len(line) + 10)
+	if want := fmt.Sprintf("(%d more bytes", total-len(kept)-1); !strings.HasPrefix("("+note, want) {
+		t.Errorf("the note %q does not count what was left out (want %s)", note, want)
+	}
+
+	var short capture
+	short.Write([]byte("an error\n"))
+	if short.String() != "an error\n" {
+		t.Errorf("output within the limit changed: %q", short.String())
 	}
 }
 
@@ -1178,15 +1308,29 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
+// layoutOf is where a local box's directory, home and records are.
+func layoutOf(t *testing.T, box Sandbox) boxLayout {
+	t.Helper()
+	switch b := box.(type) {
+	case *directBox:
+		return b.layout
+	case *containerBox:
+		return b.layout
+	}
+	t.Fatalf("%T is not a local box", box)
+	return boxLayout{}
+}
+
 // ageBox backdates a box's creation and keepalive stamps, standing in for time
 // passing without making the suite wait for it.
-func ageBox(t *testing.T, home string, by time.Duration) {
+func ageBox(t *testing.T, box Sandbox, by time.Duration) {
 	t.Helper()
+	layout := layoutOf(t, box)
 	when := time.Now().Add(-by)
-	if err := os.Chtimes(home, when, when); err != nil {
+	if err := os.Chtimes(layout.root, when, when); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
-	alive := filepath.Join(home, ".crewlet", "alive")
+	alive := layout.aliveFile()
 	if _, err := os.Stat(alive); err == nil {
 		if err := os.Chtimes(alive, when, when); err != nil {
 			t.Fatalf("chtimes: %v", err)
@@ -1270,15 +1414,15 @@ func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 	root := t.TempDir()
 	layout := boxLayout{id: "box-1", root: root}
 
-	// A FILE where the metadata directory belongs, so MkdirAll cannot win.
-	if err := os.WriteFile(layout.meta(), []byte("in the way"), 0o600); err != nil {
+	// A FILE where the records directory belongs, so MkdirAll cannot win.
+	if err := os.WriteFile(layout.records(), []byte("in the way"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	err := recordCredentialMap(layout, map[string]string{".claude/.credentials.json": "/host/creds"})
 	if err == nil {
 		t.Fatal("an unwritable credential map was reported as recorded")
 	}
-	if !strings.Contains(err.Error(), layout.meta()) {
+	if !strings.Contains(err.Error(), layout.records()) {
 		t.Errorf("the error does not name the path: %v", err)
 	}
 }

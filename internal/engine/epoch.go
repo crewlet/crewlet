@@ -241,7 +241,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// built only where a coordinator already existed, so on every other
 	// node a broken block was published rather than refused. Nil is a
 	// company that reaches no sandbox cell, which is not a failure.
-	sandboxManager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
+	sandboxManager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel, e.sandboxFleet())
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the revision's providers.sandbox could not be built; "+

@@ -239,9 +239,36 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		EventType: string(n.Kind),
 		Sender:    record.Actor,
 		Subject:   n.Title,
-		Body:      n.Excerpt,
+		Body:      wakeBody(record),
 		Metadata:  meta,
 	}
+}
+
+// wakeBody is what a woken seat reads of a change: a comment WHOLE, from the
+// record that carries it, where the card's excerpt was cut from it.
+//
+// The card excerpt is a preview for a list of notices, whitespace collapsed
+// and cut at [MaxExcerpt]; the wake prompt is the one message a seat ACTS on,
+// and a remark cut at six hundred bytes there reads as the whole of what
+// somebody wrote. RECOGNISED BY DERIVATION, never guessed: the comment is
+// used exactly when the record's excerpt is what [excerpt] makes of it.
+//
+// A NEW PAGE'S wake keeps its excerpt — the page's first line — because the
+// page is not a message: it can run to half a megabyte, and the wake is a
+// pointer to it that its recipient opens with the knowledge-base tools.
+func wakeBody(record MutationRecord) string {
+	n := record.Notify
+	if n == nil || n.Excerpt == "" {
+		return ""
+	}
+	var patch PagePatch
+	if json.Unmarshal(record.Mutation, &patch) != nil || patch.Comment == nil || patch.Comment.Body == nil {
+		return n.Excerpt
+	}
+	if body := *patch.Comment.Body; excerpt(body) == n.Excerpt {
+		return strings.TrimSpace(body)
+	}
+	return n.Excerpt
 }
 
 func (p *Parser) link(pageID string) string {

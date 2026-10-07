@@ -276,8 +276,15 @@ export function Activity() {
   // The SERVER-SIDE filters only — every one but `q`, which is applied in
   // the browser to whatever arrived, so an axis carrying it would be counting
   // a set the engine was never asked about.
+  //
+  // AND THE FEED'S ROWS ALONE, on every page and the axis: the head of this
+  // log is the live ring, which holds no accounting row (`auxiliary_spend`
+  // is stored and kept out of the feed), so a page scrolled on from it that
+  // listed them — or a bar that counted them — would be a different log
+  // from the one the reader started in. A turn's own page reads them.
   const filters = useMemo(
     () => ({
+      feed_only: "true",
       ...(category ? { category } : {}),
       ...(actor ? { actor } : {}),
       ...(seat ? { seat } : {}),

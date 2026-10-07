@@ -38,6 +38,7 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 	if running == nil || running.publisher == nil {
 		return
 	}
+	counted := e.countedReadersOf(s)
 	publisher, err := usage.NewPublisher(usage.PublisherDeps{
 		Store:  e.backends.Store,
 		Log:    running.publisher,
@@ -48,6 +49,12 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 		// by its new handle from the next flush.
 		Zone:   e.Zone,
 		Handle: e.seatHandle,
+		// WHO READS A PERSON'S DAY, by the trim's own counted set: a
+		// person's record is a kind a build before it stops on, so it is
+		// held until every node applying the usage log reads it.
+		Readers: func(ctx context.Context) (map[string]int, error) {
+			return counted.readers(ctx, usage.Domain{}.Name())
+		},
 		// NO LOGGER: the publisher's own lines carry `component=usage`,
 		// the subsystem that wrote them, rather than this package's.
 	})

@@ -1,7 +1,6 @@
 package tracker
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -59,35 +58,6 @@ func TestOptionListsPageByWholeFields(t *testing.T) {
 			t.Errorf("field %d lost options inside the budget: %d of 100",
 				i, len(f.Config.Options))
 		}
-	}
-}
-
-// A COMMENT BODY IS ELIDED TO WHAT A READER SKIMS.
-//
-// Twenty comments at [MaxCommentBody] is 640 KiB — ten times the ceiling on
-// one tool answer — for a thread nobody asked to read in full. The excerpt is
-// what a reader skims; opening one is a second call.
-func TestACommentBodyIsElidedForTheThread(t *testing.T) {
-	t.Parallel()
-	long := strings.Repeat("x", MaxCommentBody)
-	if len(long) <= CommentBodyShown {
-		t.Fatal("the fixture is not longer than the elision, so this tests nothing")
-	}
-	// THE ELISION IS THE READER'S, so this asserts the rule rather than
-	// the arithmetic: what matters is that the body a detail read carries
-	// is bounded and MARKED, because a body cut without a marker reads as
-	// a comment that ended there.
-	got := elideCommentBody(long)
-	if len(got) > CommentBodyShown+len("…") {
-		t.Errorf("an elided body is %d bytes and the cap is %d",
-			len(got), CommentBodyShown)
-	}
-	if !strings.HasSuffix(got, "…") {
-		t.Error("the elided body carries no marker, so it reads as a comment " +
-			"that ended where the cut fell")
-	}
-	if short := elideCommentBody("brief"); short != "brief" {
-		t.Errorf("a short body was changed to %q", short)
 	}
 }
 

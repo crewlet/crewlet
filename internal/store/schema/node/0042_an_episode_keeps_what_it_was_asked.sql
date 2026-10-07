@@ -1,0 +1,63 @@
+-- An episode keeps what its turn was ASKED, so its vector can be made again.
+--
+-- WHAT WAS WRONG. An episode's vector is of the turn whole — its label, what
+-- it was asked and what it did — and the ask was the one of the three the row
+-- did not store: it was read off the completed turn's event as the episode
+-- was written and thrown away. So a row whose vector was missing (written
+-- while the embedder did not answer) or of a model the company has since left
+-- could never be embedded again: the text its vector was of could not be
+-- rebuilt. Recall compares only rows of the query's model, so every such row
+-- dropped out of similarity search for good, and after a model change every
+-- turn a seat had ever taken did — while query_episodes, finding nothing,
+-- told the seat that this was new work.
+--
+-- WHAT IT BUYS. With the ask stored, the vector is a function of the row
+-- alone (learning.episodeText), so the node holding a seat fills it exactly
+-- as it fills a diary note's (internal/engine/memoryfill.go), and
+-- query_episodes can show the seat what a past turn was asked rather than
+-- only the label of the event that woke it.
+--
+-- STORED WHOLE, never cut: it is the text the vector is of, and a turn's ask
+-- is whatever was sent — a chat message, a coalesced burst, a task's whole
+-- description. The largest is bounded by the event that delivered it, which
+-- the transport holds to 8 MiB (queue.MaxPayloadBytes).
+--
+-- WHAT IT COSTS IS NOT BOUNDED BY A COUNT OF ROWS, and this is what does bound
+-- it. The lifecycle's threshold (learning.Options.Threshold, 500 raw rows)
+-- only makes a pass DUE: below it nothing is dropped or folded, and a pass
+-- keeps raw every settled turn of the last thirty days (the compaction's
+-- minimum age; a mid-state one goes after fourteen), every turn that called no
+-- tool for ninety days (it cannot be folded, only aged out), the two exemplars
+-- of every cluster it folds for as long as that summary lives (for ever by
+-- default), and — with no horizon at all — every settled turn that called
+-- tools and never joined a cluster of three alike. A compacted summary keeps
+-- no ask. So a seat taking T turns a day, nearly all of which settle, with a
+-- mean ask of A bytes holds about 30·T·A of asks on each node holding a copy —
+-- 1.5 MB at fifty turns a day of a kilobyte each — plus the asks of its
+-- exemplars and its unclustered turns, which grow for as long as it works.
+--
+-- AND THE MEMORY CHANGELOG HOLDS EVERY ASK THE SEAT WAS EVER ASKED. It keeps
+-- one message per row and deletes do not travel (internal/learning/memsync),
+-- so a row the lifecycle drops or folds keeps its last message there, ask
+-- included: T·A a day for the life of the seat, about 18 MB a year at the
+-- figures above, replayed into every node that hydrates the seat. Beside what
+-- each message already carries that is modest — a row's vector is four bytes
+-- a dimension, 6 KiB at 1 536 before it is encoded — but it does not stop.
+--
+-- '' FOR EVERY ROW ALREADY HERE, and not backfilled: the event log a backfill
+-- would read keeps thirty days of this node's own turns and none of a seat
+-- hydrated from a peer. Such a row's vector is made of what it does store —
+-- its label and what it did — which is a weaker account of the turn than a
+-- row written from here on, and still one in the right space, where the row
+-- had no searchable vector at all.
+--
+-- WHO HAS TO AGREE ON IT: whichever node holds the seat, like the row — the
+-- episode is a seat's memory and rides the seat's compacted memory changelog
+-- (internal/learning/memsync), which carries columns by name. A row this build
+-- publishes carries `ask`, which an older build does not know and ignores; a
+-- row an older build publishes lacks it and lands as ''. And an older build
+-- that HOLDS the seat republishes every row it hydrated without the ask, over
+-- the copy that had it — so memsync takes the column back from a later copy
+-- that carries it ('' only ever moves to a value, never the reverse) rather
+-- than keeping the '' for good (memsync's table.heals).
+ALTER TABLE episodes ADD COLUMN ask TEXT NOT NULL DEFAULT '';

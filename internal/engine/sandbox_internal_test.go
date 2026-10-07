@@ -338,7 +338,7 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
 		// and a nil resolver hands the literal through, which is what an
 		// in-process caller wrote.
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, coord.FeatureReader{Leases: memory.New()})
 		if err != nil {
 			t.Errorf("run_in %q is accepted by the config and cannot be "+
 				"built: %v", placement, err)
@@ -371,7 +371,7 @@ func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 	t.Parallel()
 	spec := &config.SandboxProvider{Fake: true}
 	for _, placement := range config.BackendPlacements() {
-		provider, err := buildSandboxProvider(spec, nil, placement)
+		provider, err := buildSandboxProvider(spec, nil, placement, coord.FeatureReader{Leases: memory.New()})
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)
 		}
@@ -416,7 +416,7 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -577,7 +577,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: chargeAgent, Role: "SWE",
 		CodingAgent: "claude-code",
 	}, sandbox.Fence{}); err != nil {
@@ -766,7 +766,7 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	fleet := memory.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
-	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

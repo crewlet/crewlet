@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -352,5 +353,59 @@ func TestEveryMyWorkBlockHasATotal(t *testing.T) {
 	}
 	if blocks != 7 {
 		t.Errorf("MyWork has %d blocks; the package doc names seven", blocks)
+	}
+}
+
+// AN ASK IS WHOLE OR BY REFERENCE, NEVER CUT. Its body is the question; a body
+// cut at six hundred bytes is a question whose condition is past the cut. The
+// block carries whole bodies up to its budget — the first always — and lists
+// the rest with their size and the read that returns them.
+func TestMyWorkCarriesAsksWholeOrByReference(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const asks = 4
+	bodies := map[string]string{}
+	for i := range asks {
+		task := fmt.Sprintf("asked-%d", i)
+		assign(t, r, task, "ana")
+		body := strings.Repeat(fmt.Sprintf("context %d. ", i), 600) + "WHICH REGION?"
+		id := fmt.Sprintf("c-%d", i)
+		bodies[id] = body
+		askOn(t, r, "op-ask-"+task, task, tracker.Comment{
+			ID: id, Task: task, Author: "ana", AuthorKind: tracker.AuthorHuman,
+			Body: body, Ask: "ana", CreatedAt: wednesday.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	got := r.myWork("ana")
+	if len(got.AskedOfMe) != asks {
+		t.Fatalf("asked_of_me holds %d of %d", len(got.AskedOfMe), asks)
+	}
+	whole, referenced, weight := 0, 0, 0
+	for i, ask := range got.AskedOfMe {
+		switch {
+		case ask.Body != "":
+			if ask.Body != bodies[ask.Comment] {
+				t.Fatalf("ask %s came back as %d of %d bytes", ask.Comment, len(ask.Body), len(bodies[ask.Comment]))
+			}
+			whole++
+			weight += len(ask.Body)
+		case ask.BodyNotIncluded != "":
+			if i == 0 {
+				t.Fatal("the first ask was left out; a block always carries one whole")
+			}
+			if !strings.Contains(ask.BodyNotIncluded, ask.Comment) ||
+				!strings.Contains(ask.BodyNotIncluded, strconv.Itoa(len(bodies[ask.Comment]))+" bytes") {
+				t.Errorf("a left-out ask does not say how to read it: %q", ask.BodyNotIncluded)
+			}
+			referenced++
+		default:
+			t.Fatalf("ask %s carries neither its body nor a reference to it", ask.Comment)
+		}
+	}
+	if whole == 0 || referenced == 0 {
+		t.Fatalf("whole %d, referenced %d — the fixture must exercise both", whole, referenced)
+	}
+	if whole > 1 && weight > tracker.MyWorkAskBytes {
+		t.Fatalf("the block carries %d bytes of whole asks, past its %d", weight, tracker.MyWorkAskBytes)
 	}
 }

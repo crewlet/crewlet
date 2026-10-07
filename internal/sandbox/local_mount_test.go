@@ -175,8 +175,13 @@ func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 	}
 }
 
-// stubBox is a container that shares the box directory faithfully.
+// homeOf is the home of the box whose directory is root: what its container
+// sees at [DefaultHome].
+func homeOf(root string) string { return boxLayout{root: root}.home() }
+
+// stubBox is a container that shares the box's home faithfully.
 type stubBox struct {
+	// root is the host directory the container sees as its home.
 	root string
 	// token, if set, is what `cat` answers instead of the file's content —
 	// a container reading a DIFFERENT filesystem.
@@ -224,12 +229,12 @@ func (b *stubBox) run() (string, error) {
 func TestAFaithfulMountIsAccepted(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	if err := verifyMount(t.Context(), &stubBox{root: root}, boxLayout{id: "b", root: root}); err != nil {
+	if err := verifyMount(t.Context(), &stubBox{root: homeOf(root)}, boxLayout{id: "b", root: root}); err != nil {
 		t.Fatalf("verifyMount: %v", err)
 	}
 	// AND IT LEAVES NOTHING BEHIND: a probe file the agent finds in its own
 	// home is a probe that became part of the brief.
-	entries, err := os.ReadDir(filepath.Join(root, ".crewlet"))
+	entries, err := os.ReadDir(filepath.Join(homeOf(root), ".crewlet"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +252,7 @@ func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	err := verifyMount(t.Context(),
-		&stubBox{root: root, token: "somebody else's box"}, boxLayout{id: "b", root: root})
+		&stubBox{root: homeOf(root), token: "somebody else's box"}, boxLayout{id: "b", root: root})
 	if err == nil {
 		t.Fatal("verifyMount accepted a mount the container cannot see")
 	}
@@ -259,7 +264,7 @@ func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 func TestAContainerThatCannotBeReachedIsRefused(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	if err := verifyMount(t.Context(), &stubBox{root: root, fail: true},
+	if err := verifyMount(t.Context(), &stubBox{root: homeOf(root), fail: true},
 		boxLayout{id: "b", root: root}); err == nil {
 		t.Fatal("verifyMount accepted a box whose exec failed")
 	}
@@ -274,7 +279,7 @@ func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	err := verifyMount(t.Context(),
-		&stubBox{root: root, asFile: true}, boxLayout{id: "b", root: root})
+		&stubBox{root: homeOf(root), asFile: true}, boxLayout{id: "b", root: root})
 	if err == nil {
 		t.Fatal("verifyMount accepted a box directory the engine cannot write into")
 	}
@@ -305,8 +310,8 @@ exec)
   for candidate in "` + filepath.Join(stateDir, "boxes") + `"/*; do root="$candidate"; done
   [ -d "$root" ] || exit 1
   if [ "` + fmt.Sprint(faithful) + `" = false ]; then printf 'another host'; exit 0; fi
-  cat "$root/.crewlet/mount-probe" || exit 1
-  mkdir -p "$root/.crewlet/mount-probe.d" || exit 1
+  cat "$root/home/.crewlet/mount-probe" || exit 1
+  mkdir -p "$root/home/.crewlet/mount-probe.d" || exit 1
   exit 0 ;;
 rm) printf '%s' "$*" >> "` + filepath.Join(t.TempDir(), "removed") + `"; exit 0 ;;
 *) exit 0 ;;

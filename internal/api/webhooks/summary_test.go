@@ -128,21 +128,15 @@ func TestASlackMessagePreviewsItsText(t *testing.T) {
 	}
 }
 
-func TestALongTitleIsTrimmedWithoutBreakingItsCharacters(t *testing.T) {
+func TestALongTitleIsQuotedWholeOnOneLine(t *testing.T) {
 	t.Parallel()
-	// Trimming by bytes through UTF-8 leaves a broken code point, which the
-	// feed renders as a replacement character — and which is invalid JSON's
-	// problem to explain rather than the trimming's.
-	//
-	// The leading "x" is load-bearing. The trim is at 60 characters, and
-	// "é" is 2 bytes: without the offset a BYTE slice at 60 lands exactly
-	// on a character boundary and produces valid UTF-8 anyway. Mutation
-	// testing found that — byte-slicing survived this test until the
-	// fixture stopped aligning with it.
+	// WHOLE: the feed row elides a long line and shows all of it on hover,
+	// so a cut to sixty characters only ever shortened the hover text. And
+	// on ONE line, because a title's own newlines would break the row.
 	e := newEdge(t)
-	title := "x" + strings.Repeat("é", 100)
+	title := "x" + strings.Repeat("é", 100) + " the end"
 	body := []byte(`{"webhookEvent":"jira:issue_created","issue":{"key":"OPS-1",
-	  "fields":{"summary":"` + title + `"}}}`)
+	  "fields":{"summary":"` + title + `\nsecond line"}}}`)
 	if got := e.post(t, "/webhooks/jira", body, atlassianDelivery(body, "jira-secret")).Code; got != http.StatusOK {
 		t.Fatalf("got %d", got)
 	}
@@ -153,11 +147,11 @@ func TestALongTitleIsTrimmedWithoutBreakingItsCharacters(t *testing.T) {
 	summary := e.stream.seen[0].Summary
 	e.stream.mu.Unlock()
 
-	if !strings.Contains(summary, "…") {
-		t.Errorf("a 100-character title was not trimmed: %q", summary)
+	if !strings.Contains(summary, `"`+title+` second line"`) {
+		t.Errorf("a long title was not quoted whole on one line: %q", summary)
 	}
 	if !utf8.ValidString(summary) {
-		t.Errorf("the trim broke a character: %q", summary)
+		t.Errorf("the summary broke a character: %q", summary)
 	}
 }
 
@@ -253,13 +247,13 @@ func TestADatadogPriorityIsPrefixedOnce(t *testing.T) {
 	}
 }
 
-// AND A MONITOR TITLE IS BOUNDED, like every other summary here. It is
-// whatever a person typed into Datadog, stored on the event row and drawn in a
-// feed beside five summaries that all trim.
-func TestADatadogTitleIsBounded(t *testing.T) {
+// AND A MONITOR TITLE IS QUOTED WHOLE, like every other summary here: the
+// feed row is the renderer's to fit, and it elides the line and shows all of
+// it on hover.
+func TestADatadogTitleIsQuotedWhole(t *testing.T) {
 	t.Parallel()
-	got := webhooks.DatadogSummaryForTest(map[string]any{"title": strings.Repeat("x", 500)})
-	if len([]rune(got)) > 200 {
-		t.Errorf("an unbounded title reached the summary: %d runes", len([]rune(got)))
+	title := strings.Repeat("x", 500) + " on db-1"
+	if got := webhooks.DatadogSummaryForTest(map[string]any{"title": title}); !strings.Contains(got, `"`+title+`"`) {
+		t.Errorf("the monitor title was not quoted whole: %q", got)
 	}
 }

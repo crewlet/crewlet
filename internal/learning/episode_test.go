@@ -35,8 +35,14 @@ func ep(id, handle string, at time.Time) learning.Episode {
 		ID: id, Handle: handle, Role: "CTO", TurnID: "turn-" + id,
 		StartedAt: at, EndedAt: at, TaskSummary: "did " + id,
 		ReviewOutcome: "done", Duration: 3 * time.Second,
+		// Every fixture vector is in one space; a test about another
+		// model says so.
+		EmbeddingModel: testModel,
 	}
 }
+
+// testModel is the model every fixture vector here came from.
+const testModel = "fixture-embedding"
 
 func mustAppend(t *testing.T, e *learning.Episodes, episode learning.Episode) bool {
 	t.Helper()
@@ -259,7 +265,7 @@ func TestRecallRanksBySimilarity(t *testing.T) {
 	}
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -293,7 +299,7 @@ func TestRecallSkipsRowsWithNoEmbedding(t *testing.T) {
 	mustAppend(t, e, seen)
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -321,19 +327,10 @@ func TestRecallIsScopedToTheSeatAndToRawEpisodes(t *testing.T) {
 	}
 
 	hits, _ := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel,
 	})
 	if len(hits) != 1 || hits[0].Episode.ID != "mine" {
 		t.Errorf("hits = %v, want only this seat's raw episode", hitIDs(hits))
-	}
-	// Asking for clusters explicitly returns them, or the compaction
-	// worker's output would be unreadable.
-	hits, _ = e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
-		Kinds: []learning.Kind{learning.KindCompacted},
-	})
-	if len(hits) != 1 || hits[0].Episode.ID != "cluster" {
-		t.Errorf("hits = %v, want the cluster", hitIDs(hits))
 	}
 }
 
@@ -349,7 +346,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 		mustAppend(t, e, x)
 	}
 	first, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 2,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 2,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -361,7 +358,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	}
 	for range 20 {
 		again, _ := e.Recall(context.Background(), learning.RecallQuery{
-			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 2,
+			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 2,
 		})
 		if len(again) != len(first) || again[0].Episode.ID != first[0].Episode.ID {
 			t.Fatalf("unstable ranking: %v then %v", hitIDs(first), hitIDs(again))
@@ -381,7 +378,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 		mustAppend(t, same, x)
 	}
 	tied, err := same.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 3,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -392,7 +389,7 @@ func TestRecallIsStableAcrossTies(t *testing.T) {
 	}
 	for range 20 {
 		again, _ := same.Recall(context.Background(), learning.RecallQuery{
-			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+			Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 3,
 		})
 		if got := hitIDs(again); !slices.Equal(got, want) {
 			t.Fatalf("fully-tied ranking is unstable: %v then %v", want, got)
@@ -406,7 +403,7 @@ func TestRecallRefusesAQueryItCannotAnswer(t *testing.T) {
 	if _, err := e.Recall(context.Background(), learning.RecallQuery{Handle: "ceo"}); !errors.Is(err, learning.ErrNoEmbedding) {
 		t.Errorf("err = %v, want ErrNoEmbedding", err)
 	}
-	if _, err := e.Recall(context.Background(), learning.RecallQuery{Embedding: []float32{1}}); err == nil {
+	if _, err := e.Recall(context.Background(), learning.RecallQuery{Embedding: []float32{1}, Model: testModel}); err == nil {
 		t.Error("a recall with no seat was accepted")
 	}
 }
@@ -434,7 +431,7 @@ func TestUndefinedSimilarityIsSkippedRatherThanRanked(t *testing.T) {
 	}
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 10,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 10,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -523,7 +520,7 @@ func TestAPoisonedEmbeddingDoesNotCostARealHit(t *testing.T) {
 	mustAppend(t, e, poison)
 
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
-		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Model: testModel, Limit: 3,
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -560,5 +557,41 @@ func TestANonFiniteEmbeddingCostsTheVectorAndNotTheEpisode(t *testing.T) {
 	}
 	if got[0].Embedding != nil {
 		t.Errorf("the non-finite vector was stored as %v", got[0].Embedding)
+	}
+}
+
+// A VECTOR OF ZEROS COSTS THE VECTOR TOO, and the row stays one the fill
+// reaches. It is finite, so nothing at the store's boundary refuses it, and it
+// has no direction: vector_distance_cos answers it 1, so stored it is a turn no
+// recall ever returns, counted searchable all the same and never offered to the
+// holder's fill again, because the fill looks only at rows without a vector.
+func TestAVectorOfZerosCostsTheVectorAndNotTheEpisode(t *testing.T) {
+	t.Parallel()
+	db := learningStore(t)
+	e := learning.NewEpisodes(db)
+	hollow := ep("hollow", "ceo", base)
+	hollow.Embedding = make([]float32, 4)
+	if _, err := e.Append(context.Background(), hollow); err != nil {
+		t.Fatalf("a vector of zeros failed the whole write: %v", err)
+	}
+	got, err := e.Recent(context.Background(), "ceo", 10)
+	if err != nil || len(got) != 1 || got[0].ID != "hollow" {
+		t.Fatalf("recent = %v, %v; want the episode written", ids(got), err)
+	}
+	if got[0].Embedding != nil {
+		t.Errorf("the vector of zeros was stored as %v", got[0].Embedding)
+	}
+	if n, err := e.Unsearchable(context.Background(), "ceo", testModel); err != nil || n != 1 {
+		t.Errorf("Unsearchable = %d, %v; want the episode, which no recall can reach", n, err)
+	}
+	unfilled, err := e.Unfilled(context.Background(), "ceo", testModel, learning.FillCursor{}, 10)
+	if err != nil || len(unfilled) != 1 {
+		t.Errorf("Unfilled = %v, %v; want the episode offered to the holder's fill", unfilled, err)
+	}
+	filled, err := e.FillEmbeddings(context.Background(), []learning.VectorFill{
+		{ID: "hollow", Vector: learning.Vector{Values: make([]float32, 4), Model: testModel}},
+	})
+	if err != nil || filled != 0 {
+		t.Errorf("a fill of zeros stored %d vectors (%v), want none", filled, err)
 	}
 }

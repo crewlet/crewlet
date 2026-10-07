@@ -41,13 +41,43 @@ interface DiaryEntry {
   retrievals: number;
 }
 
-/** One episode: a completed turn, summarised. */
+/** What a compacted episode row says about the turns it folded. */
+interface EpisodeCompaction {
+  /** What its turns had in common. */
+  common_task_pattern: string;
+  /** How many of its `count` turns ended done, counted from the members by
+   *  the engine. */
+  done: number;
+  /** What varied across them. */
+  notable_patterns: string;
+}
+
+/** One episode: a completed turn, summarised — or, compacted, a cluster of
+ *  them, which carries its pattern, its tally and what varied instead of a
+ *  label and an account. */
 interface Episode {
   id: string;
   turn_id: string;
   agent_handle: string;
+  /** The LABEL of the event that woke the turn ("Message from Ana: Slack
+   *  message") — what woke it, never what it did. */
   task_summary: string;
+  /** What the turn was asked: "" for a turn recorded before the ask was
+   *  stored, and on every compacted row. On a LISTED row this is its opening
+   *  — at most 600 bytes, the engine's `learning.EpisodeAccountBytes`: what a
+   *  seat is shown of a past turn's words before they are condensed, so a text
+   *  listed whole is one a seat was shown whole — and `agent_episode` reads it
+   *  whole. */
+  ask: string;
+  /** The size of the whole ask in bytes: the ask above is all of it exactly
+   *  when this is its length. Zero from a holder on a build that sends no
+   *  size, which sends no ask either — read as a text that is whole. */
+  ask_bytes: number;
+  /** What the turn DID: the review's account of what landed, or its final
+   *  answer — on a listed row its opening, as `ask` is. */
   plan_summary: string;
+  /** The size of the whole account, as `ask_bytes` is the ask's. */
+  plan_summary_bytes: number;
   /** "" when the turn ended without a review outcome. */
   review_outcome: string;
   /** Null when the turn recorded none. */
@@ -63,6 +93,23 @@ interface Episode {
   /** A compacted row stands for a cluster of turns rather than one. */
   compacted: boolean;
   count: number;
+  /** What a compacted row folded; null on a raw row — and on a compacted one
+   *  whose holder runs a build that does not say, which is the holder not
+   *  saying rather than a compaction that recorded nothing. */
+  compaction: EpisodeCompaction | null;
+}
+
+/** One episode read WHOLE, as the `agent_episode` answer sends it: what a
+ *  listed row carries the openings of, complete — answered by the seat's
+ *  holder, which it names. */
+export interface AgentEpisode {
+  /** The handle the answer is about. */
+  handle: string;
+  /** The row with its ask and its account whole, or null when the seat no
+   *  longer holds it — the lifecycle dropped it or folded it into a compacted
+   *  row since it was listed. */
+  episode: Episode | null;
+  held_by: string;
 }
 
 /** One skill the seat drafted from its own repeated work. */

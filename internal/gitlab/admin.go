@@ -52,10 +52,12 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any) e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		// THROUGH [httpx.ReadRefusal] like the client's own read arm: a
+		// raw body here put a proxy's HTML page into the error, cut at
+		// 2 KiB with nothing to say so.
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: httpx.ReadRefusal(resp),
 		}
 	}
 	if out == nil {

@@ -95,8 +95,11 @@ var contract = []Entry{
 		"internal/tracker.TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes"},
 	{"CHANGES", ReadLiteral, "internal/tracker.TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase"},
 	{"GROUP_AXES", ReadLiteral, "internal/tracker.TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes"},
-	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsATasksTextAtTheEnginesCaps"},
-	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsATasksTextAtTheEnginesCaps"},
+	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
+		"internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
 
 	// access.ts
 	{"AccessAnswer", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
@@ -180,8 +183,10 @@ var contract = []Entry{
 
 	// memory.ts
 	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"AgentEpisode", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"DiaryEntry", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"Episode", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"EpisodeCompaction", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"SynthesizedSkill", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"CounterpartyProfile", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"CounterpartySubject", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
@@ -196,7 +201,9 @@ var contract = []Entry{
 	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
 	{"QUERY_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastAReadOfTheGroup"},
 	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
+	{"LIVE_CALL_DETAIL", ReadLiteral, "internal/api/livestate.TestTheDashboardMergesEveryVersionedField"},
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},
+	{"SEARCH_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoSearchTheEngineWouldRefuse"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"DELEGATE_TOOL", ReadScalar, "internal/agent/subagent.TestTheDashboardCountsWorkersOnTheCallTheEngineMakes"},
@@ -204,6 +211,11 @@ var contract = []Entry{
 
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},
+
+	// sandbox.ts
+	{"SANDBOX_TAIL_OUTCOMES", ReadLiteral, "internal/sandbox.TestTheDashboardKnowsEveryTailOutcome"},
+	{"LIVE_OUTPUT_MAX_BYTES", ReadScalar, "internal/sandbox.TestTheDashboardHoldsWhatTheRecordWillHold"},
+	{"SANDBOX_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheOwnersReuse"},
 
 	// fleet.ts
 	{"BROKER_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerKind"},
@@ -223,6 +235,8 @@ var contract = []Entry{
 	{"PageLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
 	{"TaskLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
 	{"LinkedFromStatus", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheBacklinkStatuses"},
+	{"PAGE_TITLE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_MESSAGE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 }
 
 // Contract is every declaration the engine's gates read out of the

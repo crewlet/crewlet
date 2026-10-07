@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -107,14 +107,11 @@ type Summary struct {
 	// and the handoffs, which is the part a single exemplar cannot show.
 	NotablePatterns string
 
-	// Embedding is the summary's vector, or nil when none could be made.
-	//
-	// It comes from the summarizer because that is the component already
-	// talking to a model — and it is optional for the same reason the raw
-	// rows' vectors are: a compacted row with no vector is skipped by
-	// recall and still read by every time-window query. Losing the summary
-	// because its vector could not be computed would be the worse trade.
-	Embedding []float32
+	// THERE IS NO VECTOR HERE, and a compacted row is never embedded. A
+	// field for one sat here with nothing that filled it and nothing that
+	// read it: similarity recall reads raw turns only, because a summary of
+	// a cluster reads in a prompt like one turn that did all of them. Every
+	// time-window and outcome query still reads a compacted row.
 }
 
 // Summarizer folds a cluster of similar turns into one summary.
@@ -728,7 +725,23 @@ func (l *Lifecycle) compact(ctx context.Context, handle string, now time.Time, r
 //
 // Eligible is the exact complement of what the earlier sweeps drop: terminal
 // (see [terminalOutcomes]), unstamped, and old enough that no other reader
-// still wants the detail.
+// still wants the detail — and, of those, only rows a fold could ever take.
+//
+// ROWS THAT CAN NEVER FOLD ARE LEFT OUT BEFORE THE LIMIT, not after it: a
+// turn that called no tools (clustering has nothing to pool it by, and
+// [Lifecycle.dropToolFree] is its horizon) and an exemplar a summary retired
+// (kept raw on purpose, for good — see [splitOrphans]). The batch is the
+// OLDEST BatchSize rows and neither kind ever leaves its old end by folding, so
+// filtered out after the limit they took its slots pass after pass — a fold
+// keeps two exemplars of every cluster for good, and a chat-heavy seat's
+// tool-free turns sit among its oldest candidates until they age out at ninety
+// days — and the window held fewer and fewer rows a fold could take, until
+// once it held none compaction stopped for the seat, threshold or not.
+// [splitOrphans] still checks retirement against the anchors it reads AFTER
+// this, which covers a summary written in between. What can still hold the
+// window is a settled tool-using turn that no cluster of MinClusterSize
+// reaches inside it: such a turn has no horizon, so a seat that gathers a
+// BatchSize of them at its old end folds nothing after that.
 //
 // ORDERED BY (ended_at, id), and the id is load bearing rather than tidy.
 // Clustering is greedy over this order, so two passes that disagree about the
@@ -742,8 +755,14 @@ func (l *Lifecycle) candidates(ctx context.Context, handle string, cutoff time.T
 		   AND consolidated_into_skill_id IS NULL
 		   AND review_outcome IN `+terminalOutcomes+`
 		   AND ended_at < ?
+		   AND tool_sequence IS NOT NULL AND tool_sequence NOT IN ('[]', '')
+		   AND id NOT IN (
+		       SELECT exemplar.value FROM episodes summary,
+		              json_each(summary.exemplar_turn_ids) exemplar
+		       WHERE summary.agent_handle = ? AND summary.kind = 'compacted'
+		         AND json_valid(summary.exemplar_turn_ids))
 		 ORDER BY ended_at ASC, id ASC LIMIT ?`,
-		handle, store.EncodeTime(cutoff), l.opts.BatchSize)
+		handle, store.EncodeTime(cutoff), handle, l.opts.BatchSize)
 	if err != nil {
 		return nil, fmt.Errorf("learning: compaction candidates for %s: %w", handle, err)
 	}
@@ -949,7 +968,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	row := l.buildCompacted(handle, cluster, exemplars, summary)
 	deleted, err := l.tx(ctx, "fold episode cluster", func(tx *sql.Tx) (int64, error) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := insertEpisodeTx(ctx, tx, l.db, row); err != nil {
+		if err := insertSummaryTx(ctx, tx, row); err != nil {
 			return 0, err
 		}
 		return deleteEpisodes(ctx, tx, handle, ids)
@@ -960,7 +979,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	log.InfoContext(ctx, "episode_cluster_compacted",
 		"agent_handle", handle, "cluster_size", len(cluster),
 		"exemplars_kept", len(exemplars), "raw_deleted", deleted,
-		"pattern", textcut.Ellipsis(row.CommonTaskPattern, 120))
+		"pattern", row.CommonTaskPattern)
 	return deleted, true, nil
 }
 
@@ -1066,7 +1085,6 @@ func (l *Lifecycle) buildCompacted(handle string, cluster, exemplars []Episode, 
 		// column is per-turn everywhere else that reads it.
 		ReviewOutcome:     outcome,
 		Duration:          total,
-		Embedding:         s.Embedding,
 		Kind:              KindCompacted,
 		Count:             len(cluster),
 		WorkKey:           foldKey(ids),
@@ -1166,36 +1184,16 @@ func toolJaccard(a, b []string) float64 {
 
 // ---- storage helpers ------------------------------------------------- //
 
-// insertEpisodeTx writes one episode inside a caller's transaction.
+// insertSummaryTx writes one compacted row inside a caller's transaction.
 //
 // It binds [episodeInsertSQL], the same statement Episodes.Append uses, so a
 // summary row is written through exactly the columns every reader scans. The
 // conflict clause on that statement is what makes a repeated fold a no-op.
-func insertEpisodeTx(ctx context.Context, tx *sql.Tx, db *store.DB, ep Episode) error {
-	var blob any
-	if len(ep.Embedding) > 0 {
-		packed, err := db.EncodeVector(ep.Embedding)
-		if err != nil {
-			// The summary is what the LLM call bought; its vector only
-			// decides whether recall can reach the row. Refusing the row
-			// here would spend the call again next pass and fail the same
-			// way, so the row lands unembedded and the reason is logged.
-			log.WarnContext(ctx, "compacted_episode_not_embedded",
-				"episode", ep.ID, "error", err)
-		} else {
-			blob = packed
-		}
-	}
-	_, err := tx.ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
-		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
-		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob,
-		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
-		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
-		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
-		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
-	)
+//
+// WITH NO VECTOR, whatever the row carries: a summary is never embedded (see
+// [Summary]), and similarity recall reads raw turns only.
+func insertSummaryTx(ctx context.Context, tx *sql.Tx, ep Episode) error {
+	_, err := tx.ExecContext(ctx, episodeInsertSQL, episodeInsertArgs(ep, nil, nil)...)
 	return err
 }
 
@@ -1283,15 +1281,43 @@ func cleanStrings(in []string) []string {
 // provider types back in this package's imports.
 type CompleteFunc func(ctx context.Context, role, system, user string) (string, error)
 
+// FitFunc rewrites one text that will not fit budget bytes, on a role's
+// behalf — the engine's compactor, behind a function for [CompleteFunc]'s
+// reason: the compactor and the chain it runs on stay on the engine's side of
+// it, metered there like any auxiliary call. field says which of a
+// turn's two accounts the text is, because what a rewrite must keep differs:
+// a task keeps what was asked and where, an outcome what was delivered.
+type FitFunc func(ctx context.Context, role string, field EpisodeField, text string, budget int) (string, error)
+
+// EpisodeField names one of a turn's prose fields a [FitFunc] is asked to
+// condense.
+type EpisodeField string
+
+const (
+	// FieldTask is [Episode.TaskSummary]: the label of the event that woke
+	// the turn — the only account of what it was asked a stored episode has.
+	FieldTask EpisodeField = "task"
+	// FieldOutcome is [Episode.PlanSummary]: what the turn did.
+	FieldOutcome EpisodeField = "outcome"
+)
+
+// Valid reports whether the field is one this package names.
+func (f EpisodeField) Valid() bool { return f == FieldTask || f == FieldOutcome }
+
 // NewSummarizer builds the model-backed [Summarizer]: it renders the cluster,
 // makes one call, and parses what comes back.
 //
-// It attaches no embedding. The caller that has an embeddings provider can
-// wrap this one and fill [Summary.Embedding]; a compacted row without it is
-// read by every query except similarity recall.
-func NewSummarizer(complete CompleteFunc) Summarizer { return modelSummarizer{complete: complete} }
+// fit condenses a turn's field past [perTurnDetail] before the cluster is
+// rendered — see [RenderCluster]. Nil condenses nothing, and such a field is
+// carried whole.
+func NewSummarizer(complete CompleteFunc, fit FitFunc) Summarizer {
+	return modelSummarizer{complete: complete, fit: fit}
+}
 
-type modelSummarizer struct{ complete CompleteFunc }
+type modelSummarizer struct {
+	complete CompleteFunc
+	fit      FitFunc
+}
 
 func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, error) {
 	if m.complete == nil {
@@ -1305,7 +1331,7 @@ func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, err
 	// chain and attributes the token spend. Dropping it here would compact
 	// every seat's memory on whichever single model the wiring happened to
 	// close over, in a company whose whole point is that seats differ.
-	raw, err := m.complete(ctx, c.Role, CompactorSystemPrompt, RenderCluster(c))
+	raw, err := m.complete(ctx, c.Role, CompactorSystemPrompt, RenderCluster(c, m.condense(ctx, c)))
 	if err != nil {
 		return Summary{}, err
 	}
@@ -1350,36 +1376,105 @@ Rules:
   the agent will see it as low-signal.
 `
 
-// perTurnDetail clamps how much of one turn's prose reaches the prompt.
+// perTurnDetail is the budget one turn's task or plan has in the prompt, past
+// which it is CONDENSED rather than carried — never cut.
 //
 // A cluster can be as large as the batch (200 turns), and every turn renders
-// four lines. At 280 characters each for the task and its summary that is roughly
-// 120 KB, about 30k tokens, in a single call — affordable once a month per
-// seat. Without the clamp one turn carrying a pasted stack trace sets the size
-// of the call.
+// four lines. At 280 bytes each for the task and its plan that is roughly 120
+// KB, about 30k tokens, in a single call — affordable once a month per seat.
+// Without a bound one turn carrying a pasted stack trace sets the size of the
+// call; with a CUT, the compactor inferred the pattern from that turn's first
+// 280 bytes, which is the paste's opening and none of what the turn was for.
+// So a field past it is rewritten by the seat's auxiliary model first — only
+// the outliers, which is a handful of calls on a pass that runs monthly.
 const perTurnDetail = 280
 
+// condense rewrites every task and outcome of the cluster past
+// [perTurnDetail], keyed by the flattened text so [RenderCluster] finds each
+// one. A field that cannot be rewritten is left out of the map and rendered
+// whole.
+//
+// [condenseParallel] at a time, because a long-lived seat's cluster is mostly
+// outliers on its outcome field — a turn's account of what landed is rarely
+// under 280 bytes — so a full batch is a few hundred rewrites, and one at a
+// time each under its own call budget is a pass that holds its lease for
+// hours.
+func (m modelSummarizer) condense(ctx context.Context, c Cluster) map[string]string {
+	if m.fit == nil {
+		return nil
+	}
+	type job struct {
+		field EpisodeField
+		flat  string
+	}
+	var jobs []job
+	seen := map[string]bool{}
+	for _, ep := range c.Episodes {
+		for _, f := range []struct {
+			field EpisodeField
+			text  string
+		}{{FieldTask, ep.TaskSummary}, {FieldOutcome, ep.PlanSummary}} {
+			flat := flatten(f.text)
+			if len(flat) <= perTurnDetail || seen[flat] {
+				continue
+			}
+			seen[flat] = true
+			jobs = append(jobs, job{f.field, flat})
+		}
+	}
+	var (
+		mu  sync.Mutex
+		out = make(map[string]string, len(jobs))
+	)
+	var group errgroup.Group
+	group.SetLimit(condenseParallel)
+	for _, j := range jobs {
+		group.Go(func() error {
+			rewritten, err := m.fit(ctx, c.Role, j.field, j.flat, perTurnDetail)
+			if err != nil {
+				log.DebugContext(ctx, "episode_field_not_condensed", "agent_handle", c.Handle,
+					"field", string(j.field), "bytes", len(j.flat), "error", err.Error())
+				return nil
+			}
+			mu.Lock()
+			out[j.flat] = flatten(rewritten)
+			mu.Unlock()
+			return nil
+		})
+	}
+	_ = group.Wait() // every job answers nil: a failed rewrite is a whole field
+	return out
+}
+
+// condenseParallel is how many of a cluster's rewrites run at once — the
+// compactor's own chunk parallelism, so a pass asks a provider for no more
+// at once than one long rewrite already does.
+const condenseParallel = 4
+
 // RenderCluster is the user half of the compaction prompt: the cluster as a
-// numbered list of brief turn summaries.
-func RenderCluster(c Cluster) string {
+// numbered list of turn summaries.
+//
+// condensed is the rewrite of each task or plan past [perTurnDetail], keyed by
+// its flattened text; a field past the budget that is not in it renders whole.
+// NOTHING IS CUT, the tool sequence included.
+func RenderCluster(c Cluster, condensed map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Cluster of %d similar agent turns from one agent.\n\n", len(c.Episodes))
 	b.WriteString("Turns (numbered):\n")
 	for i, ep := range c.Episodes {
 		tools := "(none)"
 		if len(ep.ToolSequence) > 0 {
-			// SAYS WHEN IT CUTS. The compactor is inferring "how this
-			// agent does this kind of work", and a silently shortened
-			// tool sequence reads as a shorter procedure rather than a
-			// clipped one — which is the pattern it then writes down.
-			shown := ep.ToolSequence
-			tools = strings.Join(shown[:min(8, len(shown))], ", ")
-			if dropped := len(shown) - 8; dropped > 0 {
-				tools += fmt.Sprintf(" (+%d more)", dropped)
-			}
+			// WHOLE. The compactor is inferring "how this agent does
+			// this kind of work", and a shortened tool sequence reads as
+			// a shorter procedure — which is the pattern it then writes
+			// down. Names are short; a turn's whole sequence is cheaper
+			// than the wrong procedure.
+			tools = strings.Join(ep.ToolSequence, ", ")
 		}
-		fmt.Fprintf(&b, "%d. [%s] task: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary))
-		fmt.Fprintf(&b, "   plan: %s\n", oneLine(ep.PlanSummary))
+		// UNDER THE NAMES OF WHAT THEY ARE (see [describeTurn]): the
+		// label of the event that woke the turn, and what the turn did.
+		fmt.Fprintf(&b, "%d. [%s] woken by: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary, condensed))
+		fmt.Fprintf(&b, "   did: %s\n", oneLine(ep.PlanSummary, condensed))
 		fmt.Fprintf(&b, "   tools: %s\n", tools)
 		fmt.Fprintf(&b, "   when: %s\n", ep.EndedAt.UTC().Format(time.DateOnly))
 	}
@@ -1388,16 +1483,21 @@ func RenderCluster(c Cluster) string {
 	return b.String()
 }
 
-// oneLine flattens and clamps one field of a turn.
+// oneLine flattens one field of a turn and takes its rewrite where it has one.
 //
 // Newlines become spaces because the rendering is a numbered list and a turn
 // summary containing its own newlines would look like more turns than there
 // are — a model that miscounts the cluster writes the pattern of a cluster
 // that does not exist.
-func oneLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	return textcut.Ellipsis(s, perTurnDetail)
+func oneLine(s string, condensed map[string]string) string {
+	flat := flatten(s)
+	if rewritten, ok := condensed[flat]; ok && len(flat) > perTurnDetail {
+		return "(condensed) " + rewritten
+	}
+	return flat
 }
+
+func flatten(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // ParseSummary reads a model's answer, tolerating prose around the JSON.
 //
@@ -1426,8 +1526,9 @@ func ParseSummary(raw string) (Summary, error) {
 			NotablePatterns:   jsonText(obj["notable_patterns"]),
 		}, nil
 	}
-	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)",
-		textcut.Ellipsis(text, 200))
+	// THE ANSWER WHOLE: it is bounded by the pass's own output cap, and
+	// the part of an unparseable answer worth reading is rarely its opening.
+	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)", text)
 }
 
 // jsonText reads one string field, answering "" for absent or wrong-typed.

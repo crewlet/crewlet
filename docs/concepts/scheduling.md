@@ -68,7 +68,7 @@ schedules:
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once. |
+| `name` | — (required) | Identifier, unique within the role/unit. Renaming lets a same-minute fire re-run once. It is also what a fire is **labelled** by — the feed's line and the turn's label read `swe was assigned scheduled work morning-smoke` — so every fire of one schedule reads alike, and is [recalled](agent-learning.md#4-episodes-and-query_episodes-search-own-past) alike; the fire's own run id stays in the event's detail. |
 | `cron` | — (required) | 5-field cron expression, evaluated in `timezone`. |
 | `task` | — (required) | The task prompt handed to the runner agent. |
 | `timezone` | the company's [`timezone`](#which-clock-a-schedule-fires-on) | IANA timezone the cron is evaluated in. |

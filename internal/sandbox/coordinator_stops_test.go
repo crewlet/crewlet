@@ -366,7 +366,7 @@ func resumeAbandoned(t *testing.T, rig *coordRig) {
 func noConversation(t *testing.T, rig *coordRig) {
 	jobFinished(t, rig)
 	run := rig.get("t1")
-	if err := rig.pending.BeginLaunch(t.Context(), run, Fence{}); err != nil {
+	if _, err := rig.pending.BeginLaunch(t.Context(), run, Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if run.Status == StatusLaunching {
@@ -624,9 +624,9 @@ func (s *refusingStore) calls() []string {
 	return append([]string(nil), s.seen...)
 }
 
-func (s *refusingStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) error {
+func (s *refusingStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (LaunchRecord, error) {
 	if s.called("BeginLaunch") {
-		return errRefusedCall
+		return LaunchRecord{}, errRefusedCall
 	}
 	return s.inner.BeginLaunch(ctx, run, fence)
 }
@@ -716,11 +716,11 @@ func (s *refusingStore) MarkSuspended(ctx context.Context, turnID string, state 
 	return s.inner.MarkSuspended(ctx, turnID, state)
 }
 
-func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error) {
+func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if s.called("AppendBridgeCall") {
 		return false, errRefusedCall
 	}
-	return s.inner.AppendBridgeCall(ctx, turnID, call)
+	return s.inner.AppendBridgeCall(ctx, turnID, a)
 }
 
 func (s *refusingStore) ListActive(ctx context.Context) ([]PendingRun, error) {

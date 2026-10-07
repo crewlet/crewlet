@@ -4,8 +4,9 @@ import "strings"
 
 // Session is one completed turn of one conversation.
 //
-// Built by the turn engine at turn end from data already in hand — no LLM call
-// — and stored as the payload of a conversation_sessions row.
+// Built by the turn engine at turn end from data already in hand — its
+// structure is never a model's — and stored as the payload of a
+// conversation_sessions row.
 //
 // Why a ledger and not a transcript. The engine can already round-trip a whole
 // LLM conversation: a parked sandbox run persists the full message list,
@@ -42,6 +43,10 @@ type Session struct {
 	// saw, and so a reader — the prompt, the dashboard — never needs the raw
 	// executions. It also fixes what the arguments were: re-rendering later
 	// against a changed surface would silently restate history.
+	//
+	// A payload past [ValueLimit] is in it as the REWRITE the caller made
+	// ([SessionInput.Fitted]), never as a cut: this row is the store's only
+	// record of the turn, so a payload cut here is cut for ever.
 	Calls string `json:"tool_calls,omitempty"`
 
 	// Reply is what the turn said, and it is set ONLY when the turn
@@ -126,11 +131,21 @@ type SessionInput struct {
 	// Delivered says which of [Session.Reply] and [Session.Unsent] the
 	// Reply value belongs in. The caller knows; this package cannot.
 	Delivered bool
+
+	// Fitted is the caller's rewrite of the payloads [SessionPieces] named.
+	// A payload missing from it is recorded whole.
+	Fitted Fitted
+}
+
+// SessionPieces is every payload [BuildSession] would need fitted for this
+// input — what the caller has rewritten before it builds the entry.
+func SessionPieces(in SessionInput) []Piece {
+	return CallPieces(in.Calls, Format(in.Skip, in.Reads))
 }
 
 // BuildSession assembles one entry.
 //
-// VERBATIM, apart from the tool ARGUMENTS FormatCalls elides. Every field here
+// VERBATIM, apart from the tool PAYLOADS the caller fitted. Every field here
 // used to be cut at write time, which made the loss permanent: this row is the
 // store's only record of the turn, so a trigger trimmed at 400 runes was not a
 // shortened entry, it was the only copy. The turn's own rendering budget is a
@@ -142,7 +157,7 @@ func BuildSession(in SessionInput) Session {
 		At:            in.At,
 		Trigger:       in.Trigger,
 		Intent:        in.Intent,
-		Calls:         FormatCalls(in.Calls, Format(in.Skip, in.Reads)),
+		Calls:         FormatCalls(in.Calls, sessionFormat(in)),
 		Decision:      in.Decision,
 		CompletedWork: in.CompletedWork,
 		BlockedOn:     in.BlockedOn,
@@ -158,7 +173,13 @@ func BuildSession(in SessionInput) Session {
 	return s
 }
 
-// InjectedMaxChars bounds the block a TURN is given, by dropping whole entries.
+func sessionFormat(in SessionInput) FormatOptions {
+	opts := Format(in.Skip, in.Reads)
+	opts.Fitted = in.Fitted
+	return opts
+}
+
+// InjectedMaxChars bounds the block a TURN is given.
 //
 // The record is verbatim (see BuildSession); this bounds only the RENDER, and
 // it is the one bound this ledger needs. Each entry carries the seat's own
@@ -168,11 +189,16 @@ func BuildSession(in SessionInput) Session {
 // conversation. That is not a prompt-weight preference: past the model's
 // context it is a turn that cannot run at all.
 //
-// WHOLE ENTRIES, oldest dropped first, and the drop is REPORTED — never a cut
-// inside an entry, which would leave a half-recorded reply reading as the
-// whole of what the seat said. The newest entry always survives however long
-// it is: a block trimmed to nothing tells the next turn this conversation has
-// no history, which is the one thing it must not conclude.
+// THE NEWEST ENTRIES VERBATIM, THE OLDER ONES CONDENSED. A block past the
+// bound keeps its newest entries whole and hands the rest to the caller to be
+// rewritten as one account ([SplitHistory], [HistoryOptions.Earlier]) — never
+// a cut inside an entry, which would leave a half-recorded reply reading as
+// the whole of what the seat said, and no longer a silent drop either, which
+// told a seat whose deliveries were in the dropped half that it had made
+// none. Only where no rewrite can be had are the older entries left out, and
+// the block then says how many. The newest entry always renders whole however
+// long it is: a block trimmed to nothing tells the next turn this
+// conversation has no history, which is the one thing it must not conclude.
 //
 // 24000 bytes is roughly 6k tokens — the order of one iteration of the
 // prior-work ledger, and a small fraction of any model this engine targets.
@@ -180,16 +206,53 @@ func BuildSession(in SessionInput) Session {
 // replies, which is exactly the case an unbounded block cannot serve.
 const InjectedMaxChars = 24000
 
+// EarlierShare is the part of a bound the condensed account of the older
+// entries is given: one quarter, so the entries a turn is most likely to be
+// answering keep three quarters of the room verbatim, and the account of
+// everything before them still has about fifteen hundred tokens — enough to
+// name every delivery a long conversation made.
+const EarlierShare = 4
+
 // HistoryOptions bounds a rendered conversation. The zero value is unbounded,
 // which is what a reader for DISPLAY — the dashboard — wants.
 type HistoryOptions struct {
-	// MaxEntries keeps the newest N.
-	MaxEntries int
-	// MaxChars then drops from the OLDEST end until the block fits. Oldest
-	// first because recency is what a follow-up turn needs: the message it
-	// is answering is the newest one, and the turn before it is the one most
-	// likely to have already answered it.
+	// MaxChars bounds the block. Past it the newest entries render whole
+	// and the older ones as [HistoryOptions.Earlier].
 	MaxChars int
+
+	// Earlier is the caller's condensed account of the entries
+	// [SplitHistory] put in the overflow — [RenderSessions] of them,
+	// rewritten to fit MaxChars/[EarlierShare]. Empty is an account that
+	// could not be had: the block then says how many entries it left out.
+	Earlier string
+}
+
+// SplitHistory divides a conversation into the older entries that do not fit
+// the bound verbatim and the newer ones that do, oldest first in each.
+//
+// Everything fits when the whole block is within MaxChars. Otherwise the
+// newest entries are kept while they fit in what is left after the condensed
+// account's share, and the newest one is kept however long it is.
+func SplitHistory(entries []Session, maxChars int) (overflow, kept []Session) {
+	if maxChars <= 0 || len(RenderSessions(entries)) <= maxChars {
+		return nil, entries
+	}
+	room := maxChars - maxChars/EarlierShare
+	start := len(entries) - 1
+	for start > 0 && len(RenderSessions(entries[start-1:])) <= room {
+		start--
+	}
+	return entries[:start], entries[start:]
+}
+
+// RenderSessions renders entries verbatim, oldest first — the block itself,
+// and the text a caller condenses the overflow from.
+func RenderSessions(entries []Session) string {
+	blocks := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		blocks = append(blocks, renderSession(entry))
+	}
+	return strings.Join(blocks, "\n\n")
 }
 
 // RenderHistory renders prior turns of this conversation as the injected block.
@@ -201,30 +264,21 @@ func RenderHistory(entries []Session, opts HistoryOptions) string {
 	if len(entries) == 0 {
 		return ""
 	}
-	selected := entries
-	if opts.MaxEntries > 0 && len(selected) > opts.MaxEntries {
-		selected = selected[len(selected)-opts.MaxEntries:]
-	}
-	blocks := make([]string, 0, len(selected))
-	for _, entry := range selected {
-		blocks = append(blocks, renderSession(entry))
-	}
-	dropped := len(entries) - len(blocks)
-	if opts.MaxChars > 0 {
-		// The newest entry always survives, however long it is: a block
-		// trimmed to nothing tells the next turn this conversation has no
-		// history, which is the one thing it must not conclude.
-		for len(blocks) > 1 && len(strings.Join(blocks, "\n\n")) > opts.MaxChars {
-			blocks = blocks[1:]
-			dropped++
-		}
-	}
-	out := strings.Join(blocks, "\n\n")
-	if dropped > 0 {
+	overflow, kept := SplitHistory(entries, opts.MaxChars)
+	out := RenderSessions(kept)
+	switch {
+	case len(overflow) == 0:
+	case opts.Earlier != "":
+		// MARKED AS A REWRITE, and as covering a stated number of turns:
+		// a seat reading it as its own words would quote it as something
+		// it said.
+		out = "### Earlier in this conversation (" + itoa(len(overflow)) +
+			" turn(s), condensed)\n" + opts.Earlier + "\n\n" + out
+	default:
 		// SAID OUT LOUD. A silently shortened history reads as the whole
 		// conversation, and a seat that believes it has seen everything it
 		// said will not go and look for the rest.
-		out = "_(" + itoa(dropped) + " earlier turn(s) in this conversation are not " +
+		out = "_(" + itoa(len(overflow)) + " earlier turn(s) in this conversation are not " +
 			"shown; re-read the thread itself if you need them.)_\n\n" + out
 	}
 	return out
@@ -241,7 +295,7 @@ func renderSession(e Session) string {
 		head = "### " + e.At
 	}
 	if e.TurnID != "" {
-		head += " (turn " + shortID(e.TurnID) + ")"
+		head += " (turn " + e.TurnID + ")"
 	}
 	lines := []string{head}
 	for _, kv := range []struct{ label, value string }{
@@ -288,14 +342,4 @@ func renderSession(e Session) string {
 		lines = append(lines, "Turn ended: "+e.Decision)
 	}
 	return strings.Join(lines, "\n")
-}
-
-// shortID trims a turn id for display without assuming it is a UUID. Slicing
-// [:8] blindly panics on anything shorter, and the id is a string the caller
-// supplies.
-func shortID(id string) string {
-	if len(id) <= 8 {
-		return id
-	}
-	return id[:8]
 }

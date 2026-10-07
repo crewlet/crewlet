@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // "Everything about me" — the one call a seat makes at the start of a turn.
@@ -59,6 +58,16 @@ import (
 // is the one person the number is for. A count taken by a second read beside
 // this one would describe a different instant from the rows it heads.
 
+// MyWorkAskBytes is how much ask text the my_work block carries WHOLE.
+//
+// Sixteen kibibytes — a quarter of the 64 KiB one tool answer may weigh, for
+// the reason [CommentPageBytes] gives — because my_work is the call a turn
+// opens with and twenty asks at their 32 KiB cap would be ten answers' worth.
+// Past it, the asks still listed carry their decision, their author and the
+// call that answers them, and say how large the body they left out is; the
+// body itself is one get_work_item away. Never a body cut to fit.
+const MyWorkAskBytes = 16 << 10
+
 // MyWorkRows is how many rows each block carries.
 //
 // TWENTY, and the same for all seven so no block can crowd out another: the
@@ -73,11 +82,18 @@ type AskRow struct {
 	TaskRow
 
 	// Comment is the ask itself — the id an answer replies to, and the
-	// body, so a model can decide without a second read.
+	// body, WHOLE, so a model can decide without a second read.
 	Comment string    `json:"comment"`
 	AskedBy string    `json:"asked_by"`
 	AskedAt time.Time `json:"asked_at"`
 	Body    string    `json:"body"`
+
+	// BodyNotIncluded says the body was left out of this answer, how large
+	// it is, and the call that reads it — set only where a block's byte
+	// budget ([MyWorkAskBytes]) was spent by the asks before it. An ask is
+	// carried WHOLE OR BY REFERENCE, never cut: a question cut at six
+	// hundred bytes is a question whose condition is past the cut.
+	BodyNotIncluded string `json:"body_not_included,omitempty"`
 
 	// AskedBySeat is the person behind an operator token that asked — the
 	// seat the credential was bound to when the ask was written, off the
@@ -295,7 +311,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, who Party, now time.Time,
 	}
 
 	if out.AskedOfMe, out.Totals.AskedOfMe, err = readAsks(ctx, tx, who,
-		dayStart, MyWorkRows); err != nil {
+		dayStart, MyWorkRows, MyWorkAskBytes); err != nil {
 		return err
 	}
 
@@ -477,8 +493,12 @@ func openAsksWhere(who Party) string {
 // THE OPEN ONES ONLY, which is the shipped partial index's own predicate: an
 // ask is open until somebody answers it or resolves it, and a removed comment
 // is not an ask at all.
+//
+// maxBytes is the ask text carried WHOLE before the rest are listed by
+// reference — see [AskRow.BodyNotIncluded]; 0 carries every body, which is
+// what a screen with no ceiling reads.
 func readAsks(ctx context.Context, tx *sql.Tx, who Party,
-	dayStart time.Time, limit int) ([]AskRow, ClaimTotal, error) {
+	dayStart time.Time, limit, maxBytes int) ([]AskRow, ClaimTotal, error) {
 
 	// ONE FROM-AND-WHERE for the page and the count — see [taskBlock] —
 	// and for the oldest ask's instant [Reader.Decisions] reads beside them.
@@ -549,6 +569,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 		byID[row.ID] = row
 	}
 	out := make([]AskRow, 0, len(pending))
+	weight := 0
 	for _, a := range pending {
 		row, held := byID[a.task]
 		if !held {
@@ -562,11 +583,11 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 					a.comment, err)
 			}
 		}
-		out = append(out, AskRow{
+		ask := AskRow{
 			TaskRow: row, Comment: a.comment, AskedBy: a.author,
 			AskedBySeat: seats[a.comment],
 			AskedAt:     store.DecodeTime(a.at),
-			Body:        textcut.Within(a.body, MaxExcerpt),
+			Body:        a.body,
 			Decision:    stored.Decision,
 			Open:        true,
 			// THE LITERAL CALL, composed here rather than described.
@@ -574,7 +595,19 @@ func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 			// answer, and every one it composes differently is a
 			// round spent being refused.
 			Answer: answerCall(row.Key, a.comment, stored.Decision),
-		})
+		}
+		// WHOLE OR BY REFERENCE: the first ask is always whole, and an
+		// ask past the block's budget names its size and its read
+		// rather than arriving as its opening.
+		if maxBytes > 0 && len(out) > 0 && weight+len(a.body) > maxBytes {
+			ask.Body = ""
+			ask.BodyNotIncluded = fmt.Sprintf("%d bytes, left out to keep this answer "+
+				"readable — read it with get_work_item(item=%q, comment=%q)",
+				len(a.body), row.Key, a.comment)
+		} else {
+			weight += len(a.body)
+		}
+		out = append(out, ask)
 	}
 	return out, claim, nil
 }

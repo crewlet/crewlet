@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -122,12 +123,23 @@ func knowledgeRead(turn *turnctx.Turn, via types.KnowledgeReadVia, backend, quer
 // "which of this seat's memories bear on this text" would drift from the block
 // the model was shown at turn start, in the direction nobody looks.
 type Recaller interface {
-	// RecallEpisodes returns past turns similar to text. An error means the
-	// search could not run — a deployment with no embeddings, or a store
-	// that could not be read — which is a different answer from none.
-	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error)
+	// RecallEpisodes returns past turns similar to text, most similar
+	// first, and how many of the seat's turns it could not search. An error
+	// means the search could not run, which is a different answer from
+	// none, and it says why: one wrapping [learning.ErrNoEmbeddings] is a
+	// company with no embeddings, and any other a search that failed — an
+	// embedder that refused or did not answer in time, a store that could
+	// not be read. An embedder's failure keeps its class through the wrap
+	// ([embeddings.ErrConfiguration], [embeddings.ErrRefused],
+	// [embeddings.ErrTransient]), which is what says whether asking again
+	// can help.
+	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) (learning.EpisodeSearch, error)
 
 	// RecallMemories re-runs the personal-memory relevance filter against a
-	// hint, returning what it picked.
-	RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string) ([]learning.DiaryEntry, error)
+	// hint, returning what it picked. senders are who triggered the turn —
+	// what the filter's per-subject rule is judged against — and aux the
+	// turn's attribution, which the filter's model call is filed and charged
+	// under ([turnctx.Turn.Aux]).
+	RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string,
+		senders []learning.Subject, aux auxspend.Use) ([]learning.DiaryEntry, error)
 }

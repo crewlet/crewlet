@@ -32,6 +32,11 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 			"older peer can answer it and must not be excluded", got)
 	}
 	typ := reflect.TypeFor[listParams]()
+	for name := range reapplied {
+		if _, ok := typ.FieldByName(name); !ok {
+			t.Errorf("reapplied names %s, which is no listing filter", name)
+		}
+	}
 	for i := range typ.NumField() {
 		field := typ.Field(i)
 		if v1ListFields[field.Name] {
@@ -47,8 +52,33 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 			// value is a filter too: `suspended: false` narrows as much as
 			// `true` does, so it is the value an older peer must not drop.
 			v.Set(reflect.New(v.Type().Elem()))
+		case reflect.Bool:
+			// A TWO-VALUED ONE NARROWS WHEN TRUE, its zero value being the
+			// whole log.
+			v.SetBool(true)
 		default:
 			t.Fatalf("listParams.%s is a %s; teach this test to set it", field.Name, v.Kind())
+		}
+		if _, ok := reapplied[field.Name]; ok {
+			// A FILTER THE ASKER APPLIES AGAIN asks no version on a listing
+			// or an axis — a peer that drops it answers what the asker
+			// narrows, where raising it cost that peer's whole answer — and
+			// it must then actually be applied again: to a listing's rows
+			// (admits), and to an axis by [Fleet.narrowSeries], which
+			// TestAnOlderPeersFeedAxisIsNarrowedNotRefused drives.
+			if got := versionOf(QuestionEvents, p); got != 1 {
+				t.Errorf("listParams.%s is re-applied by the asker and the listing is "+
+					"asked in v%d, want v1 — every older peer is refused for nothing", field.Name, got)
+			}
+			if p.admits() == nil {
+				t.Errorf("listParams.%s is declared re-applied and admits re-applies nothing", field.Name)
+			}
+			if got := versionOf(QuestionSeries, seriesParams{List: p}); got != 2 {
+				t.Errorf("listParams.%s is set on an axis asked in v%d, want v2 — the asker "+
+					"narrows an older peer's bars, so refusing them costs the axis for nothing",
+					field.Name, got)
+			}
+			continue
 		}
 		if got := versionOf(QuestionEvents, p); got < 2 {
 			t.Errorf("listParams.%s is set and the listing is asked in v%d — a peer "+
@@ -88,5 +118,14 @@ func TestEveryListingFilterSinceV1RaisesTheVersion(t *testing.T) {
 	}
 	if got := versionOf(QuestionTurns, turnsParams{SinceDays: 7}); got != 1 {
 		t.Errorf("a page of turns by days is asked in v%d, want v1", got)
+	}
+	// A LATER PAGE OF SPEND is v5: an older peer ignoring the cursor would
+	// answer the first page again. The first page is v1, so every build
+	// answers it.
+	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{Before: &cursorWire{ID: "x"}}); got != 5 {
+		t.Errorf("a later page of spend is asked in v%d, want v5", got)
+	}
+	if got := versionOf(QuestionPhaseTokens, phaseTokenParams{Limit: 10}); got != 1 {
+		t.Errorf("the first page of spend is asked in v%d, want v1 — every build answers it", got)
 	}
 }

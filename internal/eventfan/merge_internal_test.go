@@ -152,6 +152,70 @@ func TestSeriesSumsAcrossNodes(t *testing.T) {
 	}
 }
 
+// AN AXIS IS TAKEN BACK OUT OF ANOTHER BAR BY BAR — the counts, the failed
+// split, the totals and the category counts, a category left with no rows
+// dropped as the store drops it — and a subtraction that is not of one window,
+// or would leave anything below zero, is refused rather than answered: the two
+// reads then disagree about what the node holds.
+//
+// Mutations: subtract the counts and not the failed split or the facets, keep
+// a category at zero, or answer a negative bar, and this goes red.
+func TestAnAxisIsTakenBackOutOfAnotherBarByBar(t *testing.T) {
+	t.Parallel()
+	axis := func(cat map[string]int, bars ...[2]int) store.EventHistogram {
+		h := store.EventHistogram{Bucket: store.BucketHour, Since: "2026-09-01T00:00:00Z",
+			Until: "2026-09-01T03:00:00Z", ByCategory: cat}
+		for i, b := range bars {
+			h.Bars = append(h.Bars, store.EventBar{
+				At: fmt.Sprintf("2026-09-01T%02d:00:00Z", i), Count: b[0], Failed: b[1]})
+			h.Total += b[0]
+			h.Failed += b[1]
+		}
+		return h
+	}
+	whole := axis(map[string]int{"agent": 6, "system": 3}, [2]int{4, 1}, [2]int{0, 0}, [2]int{5, 2})
+	unfed := axis(map[string]int{"system": 3}, [2]int{1, 0}, [2]int{0, 0}, [2]int{2, 1})
+
+	got, ok := subtractSeries(whole, unfed)
+	if !ok {
+		t.Fatal("an axis of rows the first counted was refused")
+	}
+	if want := []int{3, 0, 3}; !slices.Equal(counts(got), want) {
+		t.Errorf("bars = %v, want %v", counts(got), want)
+	}
+	var failed []int
+	for _, b := range got.Bars {
+		failed = append(failed, b.Failed)
+	}
+	if want := []int{1, 0, 1}; !slices.Equal(failed, want) {
+		t.Errorf("failed split = %v, want %v", failed, want)
+	}
+	if got.Total != 6 || got.Failed != 2 {
+		t.Errorf("total %d with %d failed, want 6 with 2", got.Total, got.Failed)
+	}
+	if _, left := got.ByCategory["system"]; left || got.ByCategory["agent"] != 6 {
+		t.Errorf("facets = %v, want agent 6 and no system key — a category with no rows is absent",
+			got.ByCategory)
+	}
+	if whole.Bars[0].Count != 4 || whole.ByCategory["system"] != 3 {
+		t.Error("the subtraction wrote through to the axis it was taken from")
+	}
+
+	skewed := unfed
+	skewed.Since = "2026-09-01T01:00:00Z"
+	if _, ok := subtractSeries(whole, skewed); ok {
+		t.Error("an axis of another window was taken out bar by bar")
+	}
+	more := axis(map[string]int{"system": 3}, [2]int{5, 0}, [2]int{0, 0}, [2]int{0, 0})
+	if _, ok := subtractSeries(whole, more); ok {
+		t.Error("a subtraction leaving a bar below zero was answered")
+	}
+	facet := axis(map[string]int{"system": 4}, [2]int{1, 0}, [2]int{0, 0}, [2]int{2, 1})
+	if _, ok := subtractSeries(whole, facet); ok {
+		t.Error("a subtraction leaving a category below zero was answered")
+	}
+}
+
 func counts(h store.EventHistogram) []int {
 	out := make([]int, 0, len(h.Bars))
 	for _, b := range h.Bars {
@@ -299,13 +363,20 @@ func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
 		{EventID: "pa-10", Timestamp: at(10)},
 	}}
 	var got []string
-	for _, r := range MergeSpend([]spendPart{cut, whole}, 10) {
+	merged, more := MergeSpend([]spendPart{cut, whole}, 10)
+	if !more {
+		t.Error("a merge with a full part says nothing lies past it")
+	}
+	for _, r := range merged {
 		got = append(got, r.EventID)
 	}
 	if !slices.Equal(got, []string{"pb-12", "pa-10", "pa-9"}) {
 		t.Fatalf("merged %v, want pb-12, pa-10, pa-9 and nothing past the cut", got)
 	}
-	if n := len(MergeSpend([]spendPart{whole}, 1)); n != 1 {
-		t.Errorf("a merge cut at one kept %d", n)
+	if kept, more := MergeSpend([]spendPart{whole}, 1); len(kept) != 1 || !more {
+		t.Errorf("a merge cut at one kept %d (more %v), want one and more behind it", len(kept), more)
+	}
+	if _, more := MergeSpend([]spendPart{whole}, 10); more {
+		t.Error("a merge of one whole part says more lies past it")
 	}
 }

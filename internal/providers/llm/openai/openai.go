@@ -235,20 +235,30 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			if attempt > 1 {
 				req.Send(llm.Delta{Restart: true, Model: p.model})
 			}
-			out, reasoning, sErr := p.streamOnce(ctx, req, params, opt)
-			if errors.Is(sErr, errNoStream) {
+			out, reasoning, unary, sErr := p.streamOnce(ctx, req, params, opt)
+			if unary || errors.Is(sErr, errNoStream) {
 				// This endpoint accepted `stream: true` and answered
 				// without streaming. "OpenAI-compatible" is a de-facto
 				// standard with real variance — a local shim or a proxy
 				// may implement the unary route only — so the capability
 				// is NEGOTIATED rather than assumed, or pushed onto the
 				// operator as a config field they would have to know to
-				// set. Latched: one call per process, never repeated.
+				// set. Latched: found out once per process, never again.
 				p.noStream.Store(true)
 				log.WarnContext(ctx, "provider_does_not_stream",
 					"provider", p.name, "model", p.model,
 					"hint", "the endpoint answered a streaming request without streaming; "+
 						"live phase text will appear per round instead of as it is written")
+				if unary {
+					// THE ANSWER IT GAVE IS THE ANSWER. It was processed
+					// and billed, and asking again would pay twice for a
+					// round whose first answer no counter ever heard of.
+					// Its reasoning, if any, is on the message itself,
+					// where the unary path reads it.
+					return out, nil
+				}
+				// Answered with nothing a completion could be read from,
+				// so there is no answer to keep: asked again, unary.
 				plain := params
 				plain.StreamOptions = sdk.ChatCompletionStreamOptionsParam{}
 				return p.client.Chat.Completions.New(ctx, plain, opt)
@@ -283,15 +293,30 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 // `reasoning_content` is not in the OpenAI schema — it is the convention the
 // reasoning hosts adopted — so the accumulator neither knows nor keeps it, and
 // the assembled message's raw JSON has no trace of it. See [reasoningText].
+//
+// unary reports an endpoint that answered with a whole completion instead of a
+// stream ([httpapi.UnaryAnswer]): that completion is the answer, decoded
+// exactly as the unary path decodes one, and no fragment was forwarded.
 func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.ChatCompletionNewParams, opt option.RequestOption,
-) (*sdk.ChatCompletion, string, error) {
-	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt)
+) (out *sdk.ChatCompletion, reasoning string, unary bool, err error) {
+	var answer sdk.ChatCompletion
+	whole := httpapi.NewUnaryAnswer(func(body []byte) bool {
+		var c sdk.ChatCompletion
+		// A completion carries its choices; an error envelope a gateway
+		// sent with a 2xx status, or an empty body, carries none.
+		if json.Unmarshal(body, &c) != nil || len(c.Choices) == 0 {
+			return false
+		}
+		answer = c
+		return true
+	})
+	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt, option.WithMiddleware(whole.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var acc sdk.ChatCompletionAccumulator
-	var reasoning strings.Builder
+	var thinking strings.Builder
 	events := 0
 	for stream.Next() {
 		events++
@@ -303,7 +328,7 @@ func (p *Provider) streamOnce(
 		}
 		delta := chunk.Choices[0].Delta
 		thought := reasoningText(delta.RawJSON())
-		reasoning.WriteString(thought)
+		thinking.WriteString(thought)
 		req.Send(llm.Delta{Content: delta.Content, Reasoning: thought})
 	}
 	if err := stream.Err(); err != nil {
@@ -311,23 +336,30 @@ func (p *Provider) streamOnce(
 		// that dies MID-BODY is a failure of the call, not a short answer:
 		// returning what accumulated would hand the loop a truncated
 		// response as though the model had finished.
-		return nil, "", err
+		return nil, "", false, err
 	}
 	if events == 0 {
+		if whole.Taken() {
+			return &answer, "", true, nil
+		}
 		// Not a failure of the call — the endpoint simply does not do
 		// this. Distinguished so the caller can fall back rather than fail
 		// a phase over a capability.
-		return nil, "", errNoStream
+		return nil, "", false, errNoStream
 	}
-	out := acc.ChatCompletion
-	return &out, reasoning.String(), nil
+	assembled := acc.ChatCompletion
+	return &assembled, thinking.String(), false, nil
 }
 
 // errNoStream reports an endpoint that accepted a streaming request and
-// answered without streaming.
+// answered with neither a stream nor a completion.
 var errNoStream = errors.New("endpoint did not stream")
 
 // classify turns an SDK failure into the contract's error.
+//
+// WITH WHAT THE ENDPOINT SAID ([Detail]): the SDK's error names the status
+// alone, and the status is all the classification needs — but a reader of the
+// error needs the endpoint's reason, which only its fields still carry.
 func (p *Provider) classify(err error) *llm.Error {
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
@@ -335,7 +367,9 @@ func (p *Provider) classify(err error) *llm.Error {
 		if apiErr.Response != nil {
 			header = apiErr.Response.Header
 		}
-		return httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
+		classified := httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
+		classified.Detail = Detail(apiErr)
+		return classified
 	}
 	return httpapi.FromTransport(err, p.name, p.model)
 }

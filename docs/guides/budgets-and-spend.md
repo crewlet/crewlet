@@ -7,14 +7,16 @@ screen draws it.
 
 | | The **budget counter** | The **spend rollup** |
 |---|---|---|
-| What it is | The fleet's shared counter the budget gate charges before every model round | A breakdown of what the calls consumed, by phase, model, provider entry, worker and seat |
+| What it is | The fleet's shared counter the budget gate charges with every model round, the moment its reply arrives | A breakdown of what the calls consumed, by phase, model, provider entry, auxiliary purpose and seat (or person) |
 | Its window | One calendar window — the day, the ISO week or the month — on the company's clock | The live 24 hours, or any run of 1 to 90 company days |
 | Where it lives | The coordination store (`budgets`), one record per scope | The live projection for the last 24 hours; the replicated `usage` domain for every named window |
-| What it is for | Refusing a charge that does not fit a ceiling | Understanding where the tokens went |
+| What it is for | Stopping a turn whose round did not fit a ceiling, and every round after it | Understanding where the tokens went |
 | Read by | `GET /budgets`, the `budget` push, the meters on the Spend and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the Spend screen's figures and chart |
 
 They are never comparable. The counter is the one figure a ceiling can be divided
-into; the rollup is the one that can say *why*.
+into; the rollup is the one that can say *why*. Both count the same calls —
+every round of a turn and every [auxiliary call](#auxiliary-spend) — and where
+they part, [the reasons are listed](#why-the-counter-and-the-rollup-still-differ).
 
 ## Budget windows
 
@@ -29,8 +31,50 @@ token_budget: {day: 3000000, month: 40000000}
 Every window is cut on the company's one [clock](../getting-started/configuration.md#the-companys-clock):
 a day runs from local midnight to local midnight, a week is the ISO week from
 Monday, a month runs from the 1st. Every model round is charged in all three
-windows it falls in at once, against the company and against its seat, and it
-runs only while every capped window of both has room.
+windows it falls in at once, against the company and against its seat, as soon
+as its reply arrives, and what it asked for runs only while every capped window
+of both had room for it.
+
+A round's size is known only from its reply, so by the time it is judged the
+vendor has billed it, and **a refused round is counted like any other**. The
+window that refused it therefore reads **over its ceiling** by that round — a
+day at 98 000 of 100 000 whose next 4 000-token round is refused reads 102 000
+of 100 000 on `GET /budgets`, the meters on the Spend and seat screens and
+`crewlet budgets show`, and that is the figure the budget park judges — and
+every later round is refused against it until the window turns over or the
+ceiling is raised. The figure is what the company was billed; a counter that
+left the refused round out read lower than the invoice and let the next, smaller
+round in on room that was already spent.
+
+Because every later round is certain to be refused, **a refusal also stops every
+later model call of the turn before it is sent**: the next phase, the round-cap
+judge, the seat's other workers and an agent-mode coding run are refused without
+being made, rather than each billed and then refused — and a call stopped that
+way is the gate's refusal like any other, recorded as the window's `refused_at`
+(the "last refused" on the Spend screens and in `crewlet budgets show`) the
+first time a turn holds one there. The refused round itself
+is the one a turn pays for past its ceiling — and a turn running alongside it,
+on the same company, can still pay for one round of its own before the counter
+tells it. A turn's own [auxiliary calls](#auxiliary-spend) are charged through
+the same meter as its rounds: a context assembly or a rewrite that takes a
+window to its ceiling has its round refused before it is sent too, and the
+turn makes no further auxiliary call while that window is full — its rewrite
+would only feed a round that is never sent. The one exception is the task
+card's rewrite, made after the turn's last round as its record, so a turn the
+budget ended still has a readable card. "Certain" is on the turn's own clock: a turn that began before the
+company's `timezone` moved east can stop on a day the other nodes have already
+turned over. Its message then runs again, because the park finds nothing
+refusing — unless the turn had already written outside the engine, in which
+case it is recorded, as after any refusal.
+
+The same holds wherever the engine turns work away on a window that is already
+full before making a call: a seat's delivery parked until the window turns
+over, a person's `answer_knowledge` question refused, a reflection pass or a
+conversation entry's rewrites declined. Each is the gate's refusal, recorded as
+the window's `refused_at` on the scope a charge would have been refused by —
+the company's before the seat's — so a window that a coding run, a background
+pass or a person's answers filled says when it last turned work away rather
+than reading as one that has refused nothing.
 
 A window's allowance comes back when the window turns over, rolled inside the
 first charge after the boundary — nothing has to run at midnight. There is no
@@ -58,8 +102,9 @@ to 5M", and each node enforces it once it has applied that epoch. See
 ## The spend rollup, and why it has two sources
 
 **The live 24 hours** are held by each node's live projection: the phase records
-of the last day, folded on every node and pushed to the dashboard every few
-seconds. It is instant and it can list recent turns one by one.
+and auxiliary records of the last day, folded on every node and pushed to the
+dashboard every few seconds. It is instant and it can list recent turns one by
+one.
 
 **Every named window** — 7, 30 or 90 days, or two dates you name — is read from
 the replicated [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
@@ -112,12 +157,117 @@ screen folds a phase differently from the next:
 | **Execute** | The seat's own turn doing its work — the executor, and a detached coding run it launched, which is the same work done in a box |
 | **Review** | The reviewer's pass over that work |
 | **Workers** | The short-lived workers an executor delegated tasks to |
-| **Auxiliary** | Everything that is not the turn's own work: the learning workers, the round-cap judge and the first-turn onboarding |
+| **Auxiliary** | Everything that is not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) — the turn-start context, every compaction rewrite, the reflection workers, the background passes and a person's answered questions — the round-cap judge and the first-turn onboarding |
 
 The other splits — model, provider entry, seat, unit, worker — draw the four
-biggest and fold the rest into one "other" band. **Provider** answers "which of
+biggest and fold the rest into one "other" band. **Worker** is the auxiliary
+model's spend by purpose (`memory_filter`, `condense_thread`, …), split by what
+each call was for. That is part of the Auxiliary band rather than the whole of
+it: the band also holds the round-cap judge and the first-turn onboarding (and
+any phase a newer peer records), which are no purpose, so the Worker split sums
+to the band less those. **Provider** answers "which of
 our configured entries are we paying for", which **model** cannot: a fallback
 chain serves several models under one entry.
+
+## Auxiliary spend
+
+Each seat names a cheap model, `llm_auxiliary` (falling back to its `llm`), for
+the questions the engine asks on its behalf rather than the work it does: what
+to remember, what to search for, how to fit a long text into a prompt. Every
+such call goes through one seam that charges the [budget
+counter](#budget-windows) and records the call as an `auxiliary_spend` event,
+which every spend figure folds — the live window, the named windows, a turn's
+page, the turn list and a task's spend. A call a turn makes is charged through
+that turn's own meter, the one its rounds are charged through, so the turn
+knows of a window the call filled before its next round is sent.
+
+Each call states its **stage** — whose cost it is — and its **purpose**:
+
+| Stage | What spent it (purposes) | Charged to | In the turn's cost and its task's spend |
+|---|---|---|---|
+| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what a coding run cost between two parts of the turn — an agent-mode run's bridged tools and the condensing of a collected run's report, failure or question (`condense_report`, `condense_tool_error`, `condense_question`) | the seat and the company | **yes** — the part a coding run cost between two parts of the turn is paid by the part that resumes from it |
+| `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) and the conversation ledger's account of it | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
+| `background` | The episode compaction, clustered synthesis and skill promotion passes (`episode_compaction`, `skill_clustering`, `skill_promotion`) | the seat and the company — the company alone for a unit a person leads | no — no turn |
+| `operator` | A person's question answered on the operator surface (`answer_knowledge`, and `condense_source` for a page too long to read whole) | the company alone: a person has no seat budget | no — no turn |
+
+A compaction's purpose names what it rewrote — `condense_thread`,
+`condense_produced`, `condense_report` — so a rewrite of a chat thread and one
+of a coding run's report are told apart on every breakdown.
+
+**A person is their own row.** What the auxiliary model spends for a person —
+their questions, or a pass resolved on the chain of a unit they lead — names no
+agent seat, so the per-seat breakdowns draw it as the person's row
+(`person: true`), with no turns. It reaches the named windows as the `usage`
+domain's person record, which a node publishes only once every node applying
+the usage log runs a build that reads it; during a rolling upgrade from one
+that does not, a person's spend is on the live window and the counter, and
+joins the named windows when the last node is upgraded. The node keeps those
+days in its own store until then (`usage_held`), so a node restarted
+mid-upgrade still publishes a held day older than yesterday — a day no process
+derives again — once every node reads it.
+
+**Coalesced, a flush behind.** A node's ledger keeps one record per (stage,
+seat or person, turn, purpose, model, provider entry, company day) and
+publishes it every **15 seconds** — and a turn's own records before the turn's
+end is published, and its reflection pass's before that pass's
+`reflection_completed`, so a Turn page open while the turn ends asks for it again
+at each of those moments and reads what its context, its rewrites and its
+learning cost. A compaction of
+seventy rewrites is one record of seventy calls. So the live window trails the
+counter by up to one flush, and a named window by up to two (the flush, and the
+usage publisher's own tick). Every figure's **calls** are provider calls — a
+phase's model rounds, an auxiliary record's coalesced calls — never records.
+
+**What is not counted: embeddings.** The calls that turn text into vectors are
+metered by neither the counter nor the rollup: they run on the embeddings
+provider rather than a seat's model chain, and a token budget does not judge
+them. A company paying for embeddings sees that bill at its embeddings
+provider, and it is made of these calls:
+
+- **The corpus.** The fleet's embedding duty embeds the pages and tasks that
+  changed, once for the whole fleet.
+- **What a seat stores.** A diary note and an episode are embedded as they are
+  written, and the node holding a seat fills every note that has no vector of
+  the current model — after a change of `providers.embeddings.model`, the whole
+  diary, up to 512 notes a minute per node.
+- **What a turn recalls by.** Each turn embeds its ask once at its start, for
+  its memory and episode recall, and `refresh_memory` and `query_episodes`
+  embed the hint they are given each time a seat calls them.
+- **Every knowledge or work search that ranks by meaning** — `semantic`, or
+  `hybrid`, the default, over the engine's own knowledge base and tracker —
+  embeds its query: the
+  turn-start knowledge prefetch (so a turn start makes this call beside its ask
+  vector), `search_knowledge`, `search_work_items`, the retrieval behind
+  `answer_knowledge`, the operator tools, and the API's and the dashboard's
+  search. A query vector is cached per node (1 024 entries, cleared when the
+  model changes), so a phrase searched again soon costs nothing.
+
+### Why the counter and the rollup still differ
+
+They count the same calls, so a gap between them is one of these, each with a
+known size:
+
+- **The flush.** An auxiliary call reaches the rollup up to one 15-second flush
+  after the counter (two for a named window), and a phase record the moment
+  its phase ends.
+- **A node that stopped hard.** A process that dies loses the auxiliary
+  records it had not published: at most one flush of them, plus — if it dies
+  while the broker is refusing them — every refused record it was holding for
+  a retry, up to the 4 096 below. The counter holds that spend, the rollups
+  are short by it.
+- **A broker that refused records.** A node keeps up to 4 096 unpublished
+  records for its next flush — most of an hour of a busy company — and logs
+  any it has to drop past that, with their tokens.
+- **A charge that failed.** A counter the node could not reach is short of
+  that call; the record still reaches the rollup. A charge that reached the
+  company's counter and then failed on the seat's keeps the call on the
+  company and leaves only that seat's counter short of it, logged as
+  `coord_kv_budget_spend_uncounted`.
+- **A person's day during a rolling upgrade** — above.
+- **Upgrade order.** A node without `data` hands its records to a data node
+  (custody), and a data node on an older build drops a type its build does
+  not know. **Upgrade the data nodes first**, so the records of a node without
+  `data` that is already upgraded are kept.
 
 ## Cache share
 

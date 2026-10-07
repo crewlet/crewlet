@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // ClientTimeout bounds one call to Datadog.
@@ -221,41 +220,33 @@ func (c *Client) do(
 // being read into memory whole.
 const maxResponse = 4 << 20
 
-// maxDetail bounds what a refusal contributes to an error string.
-//
-// 2048 bytes, matching the github and gitlab clients, and it is not a
-// cosmetic limit. This error becomes Finding.Detail, which
-// [integration.Observe] stores WITHOUT truncation into a State the fleet
-// writes to one coordination key shared with every other integration —
-// [integration.MaxLastErrorLength]'s own doc names this exact hazard, "a
-// client that pastes a response body into its error is a megabyte", and
-// Finding.Detail is the field its guard does not cover. Datadog's client was
-// that client: a non-JSON refusal put up to 4 MiB of HTML into it.
-const maxDetail = 2048
-
 // detailOf pulls Datadog's own message out of a refusal, so an operator
 // reads what Datadog said rather than a status code.
 //
-// BOUNDED, because the answer to a call that failed is exactly the answer
-// least likely to be the JSON this expects — see [maxDetail]. Cut through
-// [textcut] rather than by slicing, so a multi-byte rune straddling the limit
-// does not become invalid UTF-8 that a JSON encoder silently substitutes.
+// BOUNDED, and not cosmetically: this error becomes Finding.Detail, which
+// [integration.Observe] stores into a State the fleet writes to one
+// coordination key shared with every other integration —
+// [integration.MaxLastErrorLength]'s own doc names this exact hazard, "a
+// client that pastes a response body into its error is a megabyte". Datadog's
+// client was that client: a non-JSON refusal put up to 4 MiB of HTML into it.
+// The bound is [httpx.RefusalBytes] through [httpx.Refusal] in both arms,
+// which marks a body it did not read whole; this used to cut its own 2048
+// bytes on top, after the shaping, with a second marker.
 func detailOf(contentType string, payload []byte) string {
 	var body struct {
 		Errors []string `json:"errors"`
 	}
 	if err := json.Unmarshal(payload, &body); err == nil && len(body.Errors) > 0 {
-		return textcut.Ellipsis(strings.Join(body.Errors, "; "), maxDetail)
+		return httpx.Refusal("text/plain", []byte(strings.Join(body.Errors, "; ")))
 	}
 	// ANYTHING ELSE THROUGH [httpx.Refusal], rather than verbatim: a
 	// refusal that is not the JSON this expects is most often an HTML
 	// page from a gateway, and pasting one into an error puts a rendered
 	// document in a log around a sentence nobody can find.
-	detail := httpx.Refusal(contentType, payload)
-	if detail == "" {
-		return "no detail"
+	if detail := httpx.Refusal(contentType, payload); detail != "" {
+		return detail
 	}
-	return textcut.Ellipsis(detail, maxDetail)
+	return "no detail"
 }
 
 // Org is the organization a credential pair belongs to.

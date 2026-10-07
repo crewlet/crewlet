@@ -13,7 +13,16 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -32,17 +41,40 @@ func segmentSpend(scale int) runner.Spend {
 }
 
 // rollupOf is what a segment's own published records add up to: its phases'
-// tokens, its workers', its judge's, and the job it collected. The per-seat
-// history and the turn's completion event are built from these same records,
-// so no charge to a task may ever come to more than they do.
-func rollupOf(s runner.Spend, jobIn, jobOut int) int {
-	return s.Total() + s.WorkerTokens() + s.JudgeTokens() + jobIn + jobOut
+// tokens, its workers', its judge's, its in-turn auxiliary calls' (the
+// `turn`-stage auxiliary_spend records filed under its run) and the job it
+// collected. The per-seat history and the turn's cost on every screen are
+// built from these same records, so no charge to a task may ever come to
+// more than they do.
+func rollupOf(s runner.Spend, aux auxspend.Spent, jobIn, jobOut int) int {
+	return s.Total() + s.WorkerTokens() + s.JudgeTokens() + aux.Tokens() + jobIn + jobOut
+}
+
+// jobEngineSpend is what the engine spent on a collected job outside every
+// segment: its bridged calls' auxiliary spend and workers, and the
+// condensation of its collection. Published as `turn`-stage auxiliary_spend
+// records under the run and as the workers' own phase records, so it is part
+// of the rollup like everything else.
+var jobEngineSpend = sandbox.EngineSpend{
+	Aux:     sandbox.AuxTokens{Input: 640, Output: 45, CacheRead: 200, CacheWrite: 12},
+	Workers: 1, WorkerInput: 2100, WorkerOutput: 180,
+}
+
+// engineTokens is what an engine spend adds to the rollup.
+func engineTokens(s sandbox.EngineSpend) int {
+	return s.Aux.Input + s.Aux.Output + s.WorkerInput + s.WorkerOutput
+}
+
+// segmentAux is one segment's in-turn auxiliary spend, distinct per scale.
+func segmentAux(scale int) auxspend.Spent {
+	return auxspend.Spent{Calls: 3, Input: 80 * scale, Output: 12 * scale, CacheRead: 40 * scale}
 }
 
 func dispatchTel(item *types.WorkItem) turnTelemetry {
 	t := turnTelemetry{
 		handle: "dev", runID: "run-1", trigger: types.Trigger{Type: "work_item"},
 		startedAt: time.Unix(1_700_000_000, 0).UTC(), written: &turnctx.Written{},
+		auxSpent: auxspend.NewTally(),
 	}
 	if item != nil {
 		copied := *item
@@ -58,14 +90,17 @@ func resumeTel(item *types.WorkItem, carried *execstate.Uncharged, jobIn, jobOut
 	}
 	t.resumed, t.launchID = true, "launch-1"
 	t.jobInput, t.jobOutput, t.uncharged = jobIn, jobOut, carried
+	// A RESUMED SEGMENT'S OWN TALLY, as describeResume gives it.
+	t.auxSpent = auxspend.NewTally()
 	return t
 }
 
 // A TASK'S SPEND NEVER EXCEEDS THE ROLLUP.
 //
 // What a turn charges its work item is a SHARE of what the turn's own records
-// state it spent — the phases, the workers, the judge and the coding runs it
-// collected — and, across every segment of a turn, never more than their sum.
+// state it spent — the phases, the workers, the judge, the auxiliary calls made
+// inside it and the coding runs it collected — and, across every segment of a
+// turn, never more than their sum.
 // Folding anything in twice (a resumed phase's pre-park half, a worker counted
 // inside its host phase and again beside it) would show a task costing more
 // than the company paid for it.
@@ -89,9 +124,15 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 			jobIn, jobOut := 4000, 700
 
 			dispatch := dispatchTel(tc.item)
+			dispatch.auxSpent.Add(segmentAux(1))
 			parked := dispatch.chargeFor(first, turn.Result{Suspended: true}, nil, ended)
 
 			resume := resumeTel(tc.item, parked.carry, jobIn, jobOut)
+			resume.auxSpent.Add(segmentAux(3))
+			// AND WHAT THE ENGINE SPENT ON THE JOB BETWEEN THE TWO — its
+			// bridged calls, its collection's condensation — which no
+			// segment was running to tally, and which the resume pays.
+			resume.jobEngine = jobEngineSpend
 			if tc.sole != nil {
 				resume.written = turnctx.WrittenFrom([]types.WorkItem{*tc.sole}, false)
 			}
@@ -103,7 +144,8 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 					charged += c.record.Spend.Tokens()
 				}
 			}
-			rollup := rollupOf(first, 0, 0) + rollupOf(second, jobIn, jobOut)
+			rollup := rollupOf(first, segmentAux(1), 0, 0) + rollupOf(second, segmentAux(3), jobIn, jobOut) +
+				engineTokens(jobEngineSpend)
 			if charged > rollup {
 				t.Fatalf("the task was charged %d tokens for a turn whose records "+
 					"add up to %d", charged, rollup)
@@ -118,6 +160,52 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 				t.Fatalf("a turn on nothing charged %d tokens", charged)
 			}
 		})
+	}
+}
+
+// A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
+//
+// Between the segment that launched a coding run and the one that resumes from
+// it, the engine spends on the job with no segment running: an agent-mode
+// run's bridged calls — the auxiliary rewrites its tools asked for, the workers
+// it delegated to — and the condensation of the run's account at collection.
+// The resume request carries it, and the resumed segment's charge adds each
+// figure where its own of the same kind goes.
+//
+// Mutation: leave the job's engine spend out of chargeFor, and every figure
+// below comes up short.
+func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
+	t.Parallel()
+	ended := time.Unix(1_700_000_060, 0).UTC()
+	resume := resumeTel(&nativeItem, nil, 0, 0)
+	resume.jobEngine = jobEngineSpend
+	spend := segmentSpend(1)
+	got := resume.chargeFor(spend, turn.Result{Decision: phase.Done}, nil, ended).record.Spend
+
+	// Every figure the job's engine spend carries lands where the segment's
+	// own of the same kind does: workers beside its workers, auxiliary
+	// tokens beside its own auxiliary calls, the cache shares as a
+	// breakdown of the input they came with.
+	aux, job := jobEngineSpend.Aux, jobEngineSpend
+	if want := spend.InputTokens + spend.WorkerInput + spend.JudgeInput +
+		job.WorkerInput + aux.Input; got.Input != want {
+		t.Errorf("input = %d, want %d with the job's workers and auxiliary calls", got.Input, want)
+	}
+	if want := spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput +
+		job.WorkerOutput + aux.Output; got.Output != want {
+		t.Errorf("output = %d, want %d", got.Output, want)
+	}
+	if want := spend.CacheRead + aux.CacheRead; got.CacheRead != want {
+		t.Errorf("cache read = %d, want %d", got.CacheRead, want)
+	}
+	if want := spend.CacheWrite + aux.CacheWrite; got.CacheWrite != want {
+		t.Errorf("cache write = %d, want %d", got.CacheWrite, want)
+	}
+	if want := spend.Workers + job.Workers; got.Workers != want {
+		t.Errorf("workers = %d, want %d with the ones the coding agent delegated to", got.Workers, want)
+	}
+	if got.Turns != 0 {
+		t.Errorf("a resumed segment counted %d turns", got.Turns)
 	}
 }
 
@@ -270,8 +358,9 @@ func TestAnUnwritableChargeIsLoggedNotRaised(t *testing.T) {
 //
 // The task page's turn card is read off the tracker's own row, which outlives
 // the event history and answers on any node — so the summary, the send-back's
-// request and the tools have to ride the record, each cut to the bound the
-// writer holds it to (an overlong one is refused, not cut, over there).
+// request and the tools have to ride the record. The text rides WHOLE until
+// the write, where [turnCard] fits it (an overlong one is refused, not cut,
+// by the writer).
 func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
@@ -289,9 +378,9 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 	if got.Summary != "added the retry" {
 		t.Errorf("summary = %q, want the reviewer's account of what landed", got.Summary)
 	}
-	if len(got.Review) > tracker.MaxTurnSummary || !strings.HasPrefix(got.Review, "add a test") {
-		t.Errorf("review = %d bytes %q, want the send-back's notes cut to %d",
-			len(got.Review), got.Review, tracker.MaxTurnSummary)
+	if got.Review != spend.Review {
+		t.Errorf("review = %d bytes, want the send-back's notes whole until the write",
+			len(got.Review))
 	}
 	want := []tracker.TurnTool{
 		{Name: "create_branch", Calls: 1}, {Name: "run_sandbox", Calls: 3},
@@ -324,5 +413,170 @@ func TestAFailedSegmentNamesThePhaseThatBroke(t *testing.T) {
 		nil, ended).record
 	if done.FailedIn != "" {
 		t.Errorf("a segment that ended %q names a failed phase %q", done.Outcome, done.FailedIn)
+	}
+}
+
+type cardModels struct {
+	answer string
+	err    error
+}
+
+func (m cardModels) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
+	if m.err != nil {
+		return chain.Member{}, m.err
+	}
+	return chain.Member{Key: "aux", Provider: cardProvider(m)}, nil
+}
+
+type cardProvider cardModels
+
+func (cardProvider) Model() string { return "aux" }
+func (p cardProvider) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{Content: p.answer}, nil
+}
+
+// A TURN'S CARD IS WHOLE, REWRITTEN OR POINTED AWAY — NEVER CUT. The card is
+// the one line a person reads for a turn, and a summary cut at its cap read as
+// the turn's whole account.
+func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Writer"}
+	if got := turnCard(t.Context(), compact.Bound{}, "fixed it"); got != "fixed it" {
+		t.Errorf("a short account was altered: %q", got)
+	}
+	long := strings.Repeat("The turn investigated the flaky test and ", 40) + "opened !42."
+	fit := compact.New(cardModels{answer: "Fixed the flaky test; opened !42."}, compact.NewCache()).
+		For(seat, auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"})
+	if got := turnCard(t.Context(), fit, long); got != condensedCard+"Fixed the flaky test; opened !42." {
+		t.Errorf("a long account was not rewritten and marked: %q", got)
+	}
+	got := turnCard(t.Context(), compact.Bound{}, long)
+	if len(got) > tracker.MaxTurnSummary || strings.Contains(got, "investigated") ||
+		!strings.Contains(got, "open the turn") {
+		t.Errorf("an account with no rewrite was %q, want a pointer to the turn and no fragment", got)
+	}
+}
+
+// A TURN'S CARD IS PAID FOR BY ITS TASK. The card is rewritten after the
+// segment's charge was decided — the segment's tally already summed — so the
+// rewrite tallies on its own and is added as the charge is written: a long
+// account condensed for its card is part of what the turn cost the task, like
+// every other auxiliary call the turn made, and is filed under the turn.
+func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Dev"}
+	c := meteredCompany(config.TokenBudget{}, seat)
+	registry, err := phase.NewRegistry([]phase.Entry{{Key: "cheap", Provider: &cardRewriter{
+		answer: "Fixed the flaky test; opened !42.", in: 900, out: 30}}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = registry
+	pub := &capturedEvents{}
+	e := &Engine{auxSpend: auxspend.NewLedger(pub)}
+	e.epoch.current.Store(c)
+
+	tel := dispatchTel(&nativeItem)
+	tel.handle = seat.Handle()
+	tel.auxSpent.Add(segmentAux(1))
+	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil,
+		time.Unix(1_700_000_060, 0).UTC())
+	before := charge.record.Spend
+	charge.record.Summary = strings.Repeat("The turn investigated the flaky test and ", 40) + "opened !42."
+
+	charge = e.withCards(t.Context(), charge)
+	if charge.record.Summary != condensedCard+"Fixed the flaky test; opened !42." {
+		t.Fatalf("the card was not rewritten: %q", charge.record.Summary)
+	}
+	if got, want := charge.record.Spend.Tokens(), before.Tokens()+930; got != want {
+		t.Fatalf("the task is charged %d tokens, want %d: the segment's own and the "+
+			"card rewrite's 930", got, want)
+	}
+	e.auxSpend.Flush(t.Context())
+	recs := pub.records(t)
+	if len(recs) != 1 || recs[0].Stage != types.AuxStageTurn || recs[0].TurnID != "run-1" ||
+		recs[0].Purpose != types.AuxCondense(string(compact.KindOutcome)) {
+		t.Fatalf("the rewrite was recorded as %+v, want the turn's condense_outcome", recs)
+	}
+}
+
+// A TURN THE BUDGET ENDED STILL GETS ITS CARD.
+//
+// The turn's meter holds every call of the turn once a window is full, its
+// auxiliary calls included, because what they would buy feeds a round that is
+// never sent. The card is not such a call: it is written after the segment's
+// last round, as the task's record of the turn — and the turn a budget ended
+// is the one a person most needs the card of. So the card's rewrite is not
+// asked of the meter, and a long account is condensed for it as on any turn.
+func TestATurnTheBudgetEndedStillGetsItsCard(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Dev", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, seat)
+	rewriter := &cardRewriter{answer: "Fixed the flaky test; ran out of budget.", in: 90, out: 10}
+	registry, err := phase.NewRegistry([]phase.Entry{{Key: "cheap", Provider: rewriter}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = registry
+	e := &Engine{auxSpend: auxspend.NewLedger(&capturedEvents{})}
+	e.epoch.current.Store(c)
+
+	// The segment's meter, holding the seat's day its last call filled.
+	fleet := coordmem.NewFleet()
+	m := &meter{budgets: fleet, agentScope: scopeOf(t, c, seat), basis: basisOf(c, seat), now: time.Now}
+	if err := m.Record(t.Context(), 150, time.Now()); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if m.Held(t.Context()) == nil {
+		t.Fatal("the meter holds nothing; this case asserts nothing")
+	}
+	tel := dispatchTel(&nativeItem)
+	tel.handle, tel.budget = seat.Handle(), m
+	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Failed}, nil,
+		time.Unix(1_700_000_060, 0).UTC())
+	charge.record.Summary = strings.Repeat("The turn investigated the flaky test and ", 40) + "stopped."
+
+	charge = e.withCards(t.Context(), charge)
+	if charge.record.Summary != condensedCard+"Fixed the flaky test; ran out of budget." {
+		t.Fatalf("the card of a turn the budget ended was not condensed: %q", charge.record.Summary)
+	}
+}
+
+// cardRewriter answers a card rewrite at a known cost.
+type cardRewriter struct {
+	answer  string
+	in, out int
+}
+
+func (cardRewriter) Model() string { return "aux" }
+func (p *cardRewriter) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{Model: "aux", Content: p.answer, InputTokens: p.in, OutputTokens: p.out}, nil
+}
+
+// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. An
+// agent-mode run's workers ran over the tool bridge while no segment was
+// running, so the segment that resumes from the run is the one that pays for
+// them — and its completion is the one record of the turn that can say they
+// ran, beside the workers it delegated to itself.
+//
+// Mutation: leave the job's workers out of the completion, and this goes red.
+func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
+	t.Parallel()
+	e, p, tel := failing(t)
+	tel.resumed, tel.launchID = true, "launch-1"
+	tel.jobEngine = jobEngineSpend
+	spend := segmentSpend(1)
+
+	e.publishTurnCompleted(t.Context(), tel, spend, turn.Result{Decision: phase.Done}, nil, time.Now())
+
+	got := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
+	job := jobEngineSpend
+	if got.SubagentCount != spend.Workers+job.Workers ||
+		got.SubagentInputTokens != spend.WorkerInput+job.WorkerInput ||
+		got.SubagentOutputTokens != spend.WorkerOutput+job.WorkerOutput ||
+		got.SubagentTokens != spend.WorkerTokens()+job.WorkerInput+job.WorkerOutput {
+		t.Fatalf("the completion counts %d workers, %d in / %d out (%d), want the "+
+			"segment's own and the run's bridged ones together", got.SubagentCount,
+			got.SubagentInputTokens, got.SubagentOutputTokens, got.SubagentTokens)
 	}
 }

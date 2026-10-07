@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -51,7 +52,14 @@ import (
 //   - v4: `failed` on a listing's filters — the event log's "Failures only",
 //     which used to narrow the rows a tab had paged in rather than the rows
 //     it was sent.
-const Protocol = 4
+//   - v5: `before` on a phase-token read — the live spend window's seed,
+//     read in pages so that no one node's reply carries its whole day
+//     ([Fleet.PhaseTokens]).
+//
+// `feed_only` is in no version at all, on a listing or an axis: the asker
+// narrows whatever a peer that did not know it sent ([reapplied]), so asking it
+// at a version of its own would only refuse that peer's whole answer.
+const Protocol = 5
 
 // versionOf is the lowest scatter version that answers one question with
 // these parameters.
@@ -79,6 +87,10 @@ func versionOf(q Question, params any) int {
 		if p, ok := params.(phasesParams); ok && p.AgentID != "" {
 			return 3
 		}
+	case QuestionPhaseTokens:
+		if p, ok := params.(phaseTokenParams); ok && p.Before != nil {
+			return 5
+		}
 	case QuestionTurns:
 		// A PEER THAT READS ONLY `since_days` would answer the last week
 		// for a one-hour bar three days ago — a page of the wrong turns,
@@ -90,7 +102,42 @@ func versionOf(q Question, params any) int {
 	return 1
 }
 
-// version is the lowest scatter version that honours every filter set.
+// reapplied is every filter the ASKER applies again to what each node sent,
+// with how — and so the one kind of filter asked in no version of its own,
+// on a listing or on an axis.
+//
+// A filter on what every row carries in itself, its type, can be applied to
+// whatever a peer sent, so a peer that dropped the filter and answered wider
+// costs a shorter page rather than wrong rows — and raising the version for it
+// would cost that peer's whole answer, which is the worse trade. A LISTING is
+// narrowed row by row ([listParams.admits]). A HISTOGRAM cannot be — a bar is
+// a count — so a peer that did not narrow it is asked a second time, for the
+// axis of exactly the rows it should have left out, and that axis is taken
+// back out of the first one bar by bar ([Fleet.Histogram]). A peer that did
+// narrow it says which types it left out ([seriesPart.KeptOut]), so only what
+// it counted and the asker would not is ever asked about again.
+var reapplied = map[string]string{
+	"FeedOnly": "the activity feed's types, by each row's own type: the asker " +
+		"drops every type events.KeptOutOfFeed names from a listing's rows, and " +
+		"subtracts the axis of each such type a peer counted from that peer's bars",
+}
+
+// admits is the filters this listing sets that the asker re-applies, as one
+// predicate over a row, or nil when it sets none — see [reapplied].
+//
+// THE ASKER'S OWN RULE, whatever a peer's is: a type a later build moves into
+// the feed's unfed class is still a feed row to a peer on the build before,
+// which answers feed_only by its own list, and the rows it sends are narrowed
+// here by this one.
+func (p listParams) admits() func(store.EventRecord) bool {
+	if !p.FeedOnly {
+		return nil
+	}
+	return func(r store.EventRecord) bool { return !events.KeptOutOfFeed(r.Type) }
+}
+
+// version is the lowest scatter version that honours every filter set, but
+// for the ones the asker re-applies itself ([reapplied]).
 func (p listParams) version() int {
 	switch {
 	case p.Failed != nil:
@@ -234,6 +281,16 @@ type listParams struct {
 
 	// v4.
 	Failed *bool `json:"failed,omitempty"`
+
+	// [store.ListQuery.FeedOnly]: the rows the activity feed carries, which
+	// every view merged with the live ring asks for. NO VERSION OF ITS OWN,
+	// on a listing or an axis: the asker narrows what a peer sent
+	// ([reapplied]), so a peer that does not know it — or knows a shorter
+	// list of the types it leaves out — answers what the asker narrows rather
+	// than being refused, which cost a restarted node's feed every older
+	// peer's recent events, and the Live strip and the event log's axis every
+	// older peer's bars, for the length of an upgrade.
+	FeedOnly bool `json:"feed_only,omitempty"`
 }
 
 func listParamsOf(q store.ListQuery) listParams {
@@ -243,7 +300,7 @@ func listParamsOf(q store.ListQuery) listParams {
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
 		ChannelID: q.ChannelID, AgentID: q.AgentID, Suspended: q.Suspended,
-		Failed: q.Failed,
+		Failed: q.Failed, FeedOnly: q.FeedOnly,
 	}
 }
 
@@ -254,7 +311,7 @@ func (p listParams) query() store.ListQuery {
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
 		ChannelID: p.ChannelID, AgentID: p.AgentID, Suspended: p.Suspended,
-		Failed: p.Failed,
+		Failed: p.Failed, FeedOnly: p.FeedOnly,
 	}
 }
 
@@ -327,14 +384,21 @@ type phaseTokenParams struct {
 	Until     time.Time `json:"until"`
 	AgentRole string    `json:"role,omitempty"`
 	Limit     int       `json:"limit,omitempty"`
+
+	// v5: the page a paged read resumes below — see [Fleet.PhaseTokens].
+	// An older peer ignoring it would answer the FIRST page again, which
+	// the merge would dedupe into a page that stops where that one did.
+	Before *cursorWire `json:"before,omitempty"`
 }
 
 func phaseTokenParamsOf(q store.PhaseTokenQuery) phaseTokenParams {
-	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole, Limit: q.Limit}
+	return phaseTokenParams{Since: q.Since, Until: q.Until, AgentRole: q.AgentRole, Limit: q.Limit,
+		Before: cursorOf(q.Before)}
 }
 
 func (p phaseTokenParams) query() store.PhaseTokenQuery {
-	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole, Limit: p.Limit}
+	return store.PhaseTokenQuery{Since: p.Since, Until: p.Until, AgentRole: p.AgentRole, Limit: p.Limit,
+		Before: p.Before.cursor()}
 }
 
 // ---- serving --------------------------------------------------------- //
@@ -410,10 +474,9 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		h, err := log.Histogram(ctx, store.HistogramQuery{
+		return seriesPartOf(ctx, log, store.HistogramQuery{
 			ListQuery: p.List.query(), Bucket: p.Bucket, At: p.At,
 		})
-		return h, err
 	case QuestionEvent:
 		var p idParams
 		if err := decode(&p); err != nil {
@@ -532,7 +595,11 @@ func fit(self string, part any, limit, version int) ([]byte, error) {
 		return encodeError(self, ErrTooLarge.Error())
 	}
 	// THE LARGEST PREFIX THAT FITS, by bisection: each probe is a full
-	// encode, and a page is at most a few hundred rows.
+	// encode, about log2(rows) of them. A listing is a page of at most a few
+	// hundred rows and a spend read one of [PhaseTokenPage] records sized to
+	// fit, so this runs only for rows far larger than their page was sized
+	// for — a cut every question still answers correctly, at the cost of
+	// those encodes inside the fleet read budget.
 	lo, hi := 0, c.rows()-1 // hi: the most rows known NOT to be required to fail
 	var best []byte
 	for lo <= hi {

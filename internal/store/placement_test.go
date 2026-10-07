@@ -166,6 +166,16 @@ var nodeEstatePlacements = []placement{
 		Why:   "The party index over the rows above, and it goes where they go.",
 	},
 	{
+		Table: "usage_held",
+		Why: "A person's day THIS node derived from its own event log and is " +
+			"holding back until every node applying the usage log reads the " +
+			"record. Each node publishes only its own days, so a hold is a fact " +
+			"about this node's own pending publishes; the day every node agrees " +
+			"on is the replicated usage domain's, which a held row has not " +
+			"reached yet. Persisted because no process derives a day older than " +
+			"yesterday again.",
+	},
+	{
 		Table: "conversation_sessions",
 		Why: "What a seat already said in one thread, recorded by the node " +
 			"that ran the turn. Read back only by that seat's next turn on " +
@@ -223,6 +233,14 @@ var nodeEstatePlacements = []placement{
 			"the derived agent id. Re-onboarding is cheap and the marker " +
 			"re-derives from the org chain, so a node that has not seen one " +
 			"runs the pass again rather than being wrong.",
+	},
+	{
+		Table: "memory_change_sequence",
+		Why: "The counter this node stamps its own memory rows from, so its " +
+			"memory sync can carry what changed since its last cycle. It " +
+			"orders THIS node's writes for THIS node's exports, and a peer " +
+			"stamps the rows it hydrates from its own — a shared value would " +
+			"order nothing either node exports.",
 	},
 
 	// -----------------------------------------------------------------
@@ -332,7 +350,7 @@ var nodeEstatePlacements = []placement{
 // # The node estate only, and that is deliberate
 //
 // The page enumerates this estate table by table because a reader is looking
-// for one of seventeen named things. It describes the REPLICATED estate by
+// for one of a couple of dozen named things. It describes the REPLICATED estate by
 // family — "the tracker's own tables", "the knowledge base's" — because sixty
 // rows would be a schema dump rather than a map, and because a table there is
 // reached through a domain rather than named by an operator. Demanding every

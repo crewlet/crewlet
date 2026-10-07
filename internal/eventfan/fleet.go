@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -80,6 +82,32 @@ type Listing struct {
 	// list it is "a node's page filled", which its answer never reads as a
 	// cursor — see listPartOf.
 	More bool
+
+	// Next is where the next page resumes: the last row this page COVERED,
+	// nil when it covered none — which is the end of the walk.
+	//
+	// NOT ALWAYS ITS LAST ROW. A page the asker narrowed itself — a filter an
+	// older peer answered wider than it was asked, re-applied to the rows it
+	// sent ([listParams.admits]) — covered the rows it dropped as well, and
+	// resuming from the last row it kept would ask for them again; a page
+	// whose every row was dropped would carry no cursor at all, and a reader
+	// walking the log would take it for the start of history.
+	Next *store.Cursor
+}
+
+// listingOf is a merged page with its cursor, narrowed by admits AFTER the
+// cursor is taken — see [Listing.Next]. The merge itself runs on what each
+// node sent, unnarrowed, so its stop is where every node's page stopped.
+func listingOf(rows []store.EventRecord, more bool, admits func(store.EventRecord) bool) Listing {
+	out := Listing{Rows: rows, More: more}
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		out.Next = &store.Cursor{Time: last.Time, ID: last.ID}
+	}
+	if admits != nil {
+		out.Rows = slices.DeleteFunc(slices.Clone(rows), func(r store.EventRecord) bool { return !admits(r) })
+	}
+	return out
 }
 
 // Trace is every row of one trace the fleet holds, up to the cap.
@@ -350,13 +378,19 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 		}
 	}
 	f.report(QuestionEvents, coverage, started)
-	return Listing{Rows: rows, More: more}, coverage, nil
+	// NARROWED BY THE ASKER TOO, after the merge: a peer that does not know a
+	// filter re-applied on the rows answers wider than it was asked, and a
+	// trace's sibling rows carry none of the page's filters at all.
+	return listingOf(rows, more, listParamsOf(q).admits()), coverage, nil
 }
 
 // Histogram answers the log's time axis over the fleet.
 //
 // THE WINDOW IS PINNED to this node's clock before anybody is asked, so every
 // node cuts the same bars — see [store.HistogramQuery.At].
+//
+// A FEED-ONLY AXIS IS NARROWED BY THE ASKER, on its own list of the types the
+// feed leaves out, whatever each peer knows: see [Fleet.narrowSeries].
 func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.EventHistogram, Coverage, error) {
 	started := time.Now()
 	if q.At.IsZero() {
@@ -364,24 +398,139 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 	}
 	p := seriesParams{List: listParamsOf(q.ListQuery), Bucket: q.Bucket, At: q.At}
 	g, err := gather(ctx, f, QuestionSeries, p, nil,
-		func(ctx context.Context) (store.EventHistogram, error) { return f.Local.Histogram(ctx, q) })
+		func(ctx context.Context) (seriesPart, error) { return seriesPartOf(ctx, f.Local, q) })
 	if err != nil {
 		return store.EventHistogram{}, Coverage{}, err
 	}
-	others := make([]store.EventHistogram, 0, len(g.peers))
-	for _, p := range g.peers {
-		others = append(others, p.part)
+	peers, coverage, err := f.narrowSeries(ctx, q, g.peers, g.coverage)
+	if err != nil {
+		return store.EventHistogram{}, Coverage{}, err
 	}
-	merged, refused := MergeSeries(g.mine, others)
-	coverage := g.coverage
+	others := make([]store.EventHistogram, 0, len(peers))
+	for _, p := range peers {
+		others = append(others, p.part.EventHistogram)
+	}
+	merged, refused := MergeSeries(g.mine.EventHistogram, others)
 	for _, i := range refused {
 		coverage = coverage.And(Coverage{Complete: false, Nodes: []NodeCoverage{{
-			ID: g.peers[i].node, Error: "it answered a different window, so its bars " +
+			ID: peers[i].node, Error: "it answered a different window, so its bars " +
 				"cannot be summed with this node's; it is running a different build",
 		}}})
 	}
 	f.report(QuestionSeries, coverage, started)
 	return merged, coverage, nil
+}
+
+// narrowSeries takes out of each peer's axis the rows of every type this node
+// keeps out of the feed that the peer counted, and answers the peers' axes as
+// they are to be summed.
+//
+// A BAR CANNOT BE NARROWED AFTER THE FACT, but it can be taken apart: a peer
+// that did not leave a type out — a build that does not know `feed_only`, or
+// one whose list of the feed's types is shorter than this node's — is asked
+// once more, for the axis of that type alone over the same window and buckets,
+// and that axis is subtracted from its bars, its failed split and its category
+// counts. Refusing such a peer instead, by asking `feed_only` at a version of
+// its own, cost the Live strip and the event log's axis every older node's bars
+// for the length of an upgrade.
+//
+// ONE READ, NOT TWO, wherever the peer can narrow: a peer that left a type out
+// says so ([seriesPart.KeptOut]) and is never asked about it again, so in a
+// fleet on one build this asks nothing extra. Where some peer does owe a type,
+// the second read goes to the fleet's one subject like every other and every
+// node answers it — an index range of one type over one window — and only the
+// owing peers' answers are used. And it is EXACT for the peers it
+// does ask, because the axis is subtracted from a read the type's rows could
+// change between only if the peer is still writing them — and a build that
+// counts a type as a feed row is one from before that type was kept out, which
+// for every type in the class today ([events.Unfed]) is a build from before the
+// type existed. A subtraction that would leave a count below zero says the two
+// reads disagree, and that peer is named rather than summed.
+//
+// A peer that answered the axis and not the second read is named too, and left
+// out: its bars hold rows the feed does not.
+func (f *Fleet) narrowSeries(ctx context.Context, q store.HistogramQuery, parts []peer[seriesPart],
+	coverage Coverage,
+) ([]peer[seriesPart], Coverage, error) {
+	if !q.FeedOnly {
+		return parts, coverage, nil
+	}
+	// owed[i] is every type peer i counted that the feed leaves out.
+	owed := make([][]string, len(parts))
+	asked := map[string]bool{}
+	for i, part := range parts {
+		for _, kind := range events.Unfed() {
+			if slices.Contains(part.part.KeptOut, kind) || (q.Type != "" && q.Type != kind) {
+				// Left out already, or an axis that counts no row of it.
+				continue
+			}
+			owed[i] = append(owed[i], kind)
+			asked[kind] = true
+		}
+	}
+	if len(asked) == 0 {
+		return parts, coverage, nil
+	}
+	// EVERY OWED TYPE AT ONCE, so the second read costs one budget however
+	// many types are owed. The asker's own share is never one of them: it
+	// narrowed its axis in its own read.
+	type owedAxis struct {
+		byNode map[string]store.EventHistogram
+		err    error
+	}
+	axes := make(map[string]owedAxis, len(asked))
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	for kind := range asked {
+		wg.Go(func() {
+			only := q
+			only.Type, only.FeedOnly = kind, false
+			p := seriesParams{List: listParamsOf(only.ListQuery), Bucket: q.Bucket, At: q.At}
+			g, err := gather(ctx, f, QuestionSeries, p, nil,
+				func(context.Context) (seriesPart, error) { return seriesPart{}, nil })
+			byNode := make(map[string]store.EventHistogram, len(g.peers))
+			for _, got := range g.peers {
+				byNode[got.node] = got.part.EventHistogram
+			}
+			mu.Lock()
+			axes[kind] = owedAxis{byNode: byNode, err: err}
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	for _, axis := range axes {
+		if axis.err != nil {
+			return nil, Coverage{}, axis.err
+		}
+	}
+
+	out := make([]peer[seriesPart], 0, len(parts))
+	for i, part := range parts {
+		narrowed, why := part.part.EventHistogram, ""
+		for _, kind := range owed[i] {
+			axis, ok := axes[kind].byNode[part.node]
+			if !ok {
+				why = "it counted " + kind + " rows into an axis of the feed's rows, which its " +
+					"build does not leave out, and did not answer the read that would take them back out"
+				break
+			}
+			if narrowed, ok = subtractSeries(narrowed, axis); !ok {
+				why = "it counted " + kind + " rows into an axis of the feed's rows, which its " +
+					"build does not leave out, and the read that would take them back out does not " +
+					"fit its axis: the two disagree, so its bars cannot be narrowed"
+				break
+			}
+		}
+		if why != "" {
+			coverage = coverage.And(Coverage{Complete: false, Nodes: []NodeCoverage{{ID: part.node, Error: why}}})
+			continue
+		}
+		part.part.EventHistogram = narrowed
+		out = append(out, part)
+	}
+	return out, coverage, nil
 }
 
 // ByID answers one event, from whichever node holds it.
@@ -466,7 +615,7 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	}
 	rows, more := MergeListing(g.parts(), limit)
 	f.report(QuestionPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return listingOf(rows, more, nil), g.coverage, nil
 }
 
 // SeatPhases answers one seat's phase records, newest first, payload included.
@@ -493,7 +642,7 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 	}
 	rows, more := MergeListing(g.parts(), store.AgentPhaseLimit)
 	f.report(QuestionSeatPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return listingOf(rows, more, nil), g.coverage, nil
 }
 
 // Turns answers a page of turns, one row per turn however many nodes it ran
@@ -634,6 +783,21 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	return page, coverage, nil
 }
 
+// PhaseTokenPage is how many spend records one node sends in one reply of a
+// paged phase-token read ([Fleet.PhaseTokens]).
+//
+// SIZED FROM THE TRANSPORT. A reply is at most [queue.MaxPayloadBytes] (8 MiB),
+// and a spend record encodes to about 590 bytes of JSON with realistic values
+// — an agent id, a role name, a model id, a turn id and a work key — so 4 096
+// records are about 2.4 MiB: under a third of the ceiling, which leaves room
+// for role names and model ids three times the measured ones before a reply
+// has to be cut. A cut is not a loss here, since the next page resumes from
+// where the cut one stopped, but it is fifteen encodes of a reply past the
+// ceiling inside the fleet read budget, which a page sized under it never
+// pays. A larger page buys fewer round trips only for a fleet holding more
+// than this in its window; a smaller one pages a quiet company.
+const PhaseTokenPage = 4096
+
 // PhaseTokens answers the per-phase spend records of a window from every node,
 // newest first, cut to the query's limit — what the live projection's spend
 // rollup is seeded from.
@@ -641,18 +805,82 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 // THE WINDOW IS PINNED to this node's clock before anybody is asked, for
 // [Fleet.Histogram]'s reason: a peer counting "a day back" from its own clock
 // would answer a window its neighbours did not.
+//
+// # In pages
+//
+// READ IN PAGES OF [PhaseTokenPage], each resuming below the last record the
+// one before kept, until the limit or the window runs out — never in one
+// reply per node. The seed asks for a whole company-day, which on a busy
+// node is more than one reply carries: asked whole, that node's reply was cut
+// to fit the transport, and the merge — which cannot place a record older
+// than the last one a cut node sent — cut EVERY node's records at that
+// node's horizon, so the restarted node's live window started hours short of
+// its day. Each page is exact for [MergeSpend]'s reason, and the pages are
+// disjoint because each resumes strictly below the last.
+//
+// The first page goes out at v1, so every build answers it; a later page
+// carries its cursor at v5, which a peer on an older build refuses by name and
+// the coverage reports. A page this node could not finish — its own read
+// failing, or the read's context ending — stops the walk with the records
+// read so far, which are the window's newest, and the coverage says the
+// answer is short.
 func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, Coverage, error) {
+	return f.phaseTokens(ctx, q, PhaseTokenPage)
+}
+
+// phaseTokens is [Fleet.PhaseTokens] in pages of size records — a parameter so
+// the suite can walk pages of a window it can afford to write.
+func (f *Fleet) phaseTokens(ctx context.Context, q store.PhaseTokenQuery, size int) ([]tokens.Record, Coverage, error) {
 	started := time.Now()
 	q.Since, q.Until = q.Window(time.Now().UTC())
 	q.SinceDays = 0
-	g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(q), nil,
-		func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, q) })
-	if err != nil {
-		return nil, Coverage{}, err
+	q.Before = nil
+	var (
+		out      []tokens.Record
+		coverage Coverage
+	)
+	for pages := 0; ; pages++ {
+		page := q
+		page.Limit = size
+		if q.Limit > 0 {
+			page.Limit = min(page.Limit, q.Limit-len(out))
+		}
+		g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(page), nil,
+			func(ctx context.Context) (spendPart, error) { return spendPartOf(ctx, f.Local, page) })
+		if err != nil {
+			if pages == 0 {
+				return nil, Coverage{}, err
+			}
+			coverage = coverage.And(Coverage{Nodes: []NodeCoverage{{ID: f.Self, Error: fmt.Sprintf(
+				"the window was read %d pages deep and could not be read further: %s",
+				pages, err.Error())}}})
+			break
+		}
+		if pages == 0 {
+			coverage = g.coverage
+		} else {
+			coverage = coverage.And(g.coverage)
+		}
+		records, more := MergeSpend(g.parts(), page.Limit)
+		out = append(out, records...)
+		if !more || len(records) == 0 || (q.Limit > 0 && len(out) >= q.Limit) {
+			break
+		}
+		last := records[len(records)-1]
+		at, err := time.Parse(time.RFC3339Nano, last.Timestamp)
+		if err != nil {
+			// A RECORD NO CURSOR CAN NAME — the store writes every stamp in
+			// this layout, so this is a peer's record that is not one — ends
+			// the walk where it is rather than guessing a resumption.
+			coverage = coverage.And(Coverage{Nodes: []NodeCoverage{{ID: f.Self, Error: fmt.Sprintf(
+				"a spend record's stamp %q names no position, so the window was read "+
+					"no further than it", last.Timestamp)}}})
+			break
+		}
+		q.Before = &store.Cursor{Time: at, ID: last.EventID}
 	}
-	records := MergeSpend(g.parts(), q.Limit)
-	f.report(QuestionPhaseTokens, g.coverage, started)
-	return records, g.coverage, nil
+	f.report(QuestionPhaseTokens, coverage, started)
+	return out, coverage, nil
 }
 
 // ErrRankedCursor refuses a cursor on a page ranked by tokens: a ranking has no

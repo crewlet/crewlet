@@ -41,6 +41,7 @@ type WorkSearcher interface {
 // it.
 type SeatMemory interface {
 	Memory(ctx context.Context, handle string, limit int) (memread.Memory, error)
+	Episode(ctx context.Context, handle, id string) (memread.EpisodeDetail, error)
 	Threads(ctx context.Context, handle, conversation string, limit int) (memread.Threads, error)
 	Overview(ctx context.Context, handles []string) (memread.Overview, error)
 }
@@ -78,6 +79,9 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	mode, err := knowledge.ParseMode(p.String("mode"))
 	if err != nil {
 		return nil, badParams("mode", p.String("mode"), modeNames())
+	}
+	if err = searchTextRefusal(text); err != nil {
+		return nil, err
 	}
 	answer, err := s.WorkSearch.Search(ctx, tracker.SearchQuery{
 		Text: text, Limit: p.Int("limit", DefaultSearchLimit), Mode: mode,

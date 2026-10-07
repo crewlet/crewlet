@@ -1338,6 +1338,12 @@ func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds, k) }
 // makes the record reproducible — and shows 32. Letting one number do both
 // jobs is how a record becomes structurally unable to represent a write the
 // tools accept.
+//
+// NOR THE HISTORY ROW, which it used to: the applier's delta set was trimmed
+// to these thirty-two by field name too, so a commit moving more recorded
+// only the alphabetically first of them, saying nothing about the rest, in a
+// table nothing repairs. The row now carries every field that moved; only a
+// card is trimmed, and it says by how many ([Notify.FieldsOmitted]).
 const MaxDeltas = 32
 
 // MaxExcerpt is how much of a body or a comment a card carries.
@@ -1347,15 +1353,30 @@ const MaxDeltas = 32
 // record that carried an excerpt could not rebuild the row.
 const MaxExcerpt = 600
 
-// Delta is one field's before and after, AS TEXT.
+// Delta is one field's move, AS TEXT.
 //
 // Text rather than the typed value, because a change record is read by a
 // notification card, a person and a model, and every one of them wants
 // "todo → in_progress". The typed value is on the row for anything that
 // needs it.
+//
+// TWO SHAPES, by what the field holds. A value moves FROM one text TO
+// another. A SET — the watchers, an edge kind, the tags — gains and loses
+// members, and its delta says which: [Delta.Added] and [Delta.Removed], each
+// sorted and each member whole, with From and To empty. It used to carry both
+// whole sides joined with ", " and cut to six hundred bytes with a "+N more"
+// count, so the member a commit added was off the end of both sides whenever
+// the set was large — a task waiting on forty others that gained a forty-first
+// recorded two equal-looking lists differing only in their counts, which a
+// renderer read as a member called "+19 more" joining and one called
+// "+18 more" leaving. What a set's commit changed is what joined and what
+// left, and that is always small; the whole set is on the row's document.
 type Delta struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+	// Added and Removed are what a set gained and lost — see [Delta].
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
 }
 
 // TaskParty is one task and who is on it, for the two lists that name
@@ -1531,6 +1552,12 @@ type Notify struct {
 	// task had moved status named neither side of the move.
 	Fields map[string]Delta `json:"fields,omitempty"`
 
+	// FieldsOmitted is how many more fields this change moved than
+	// [Notify.Fields] shows — the ones past [MaxDeltas], by field name.
+	// SAID, because a card that dropped them silently reads as a change
+	// that moved only what it lists.
+	FieldsOmitted int `json:"fields_omitted,omitempty"`
+
 	CommentID string `json:"comment_id,omitempty"`
 
 	// Excerpt is at most MaxExcerpt bytes of what a card should show, cut
@@ -1630,6 +1657,10 @@ func (n *Notify) Validate() error {
 		return invalid("%q is not a change kind this build writes — "+
 			"every kind has exactly one writer, so an unknown one is a wake "+
 			"nothing renders a card for", n.Kind)
+	}
+	if n.FieldsOmitted < 0 {
+		return invalid("a notification says %d fields were left off its card",
+			n.FieldsOmitted)
 	}
 	if len(n.Fields) > MaxDeltas {
 		return invalid("a notification carries %d deltas and a card "+

@@ -529,7 +529,7 @@ func TestAScheduleChangeCarriesTheValuesThatMoved(t *testing.T) {
 		// scale somebody chose.
 		"points": {From: "3", To: "5.5"},
 	} {
-		if got := moved[field]; got != want {
+		if got := moved[field]; got.From != want.From || got.To != want.To || got.Added != nil || got.Removed != nil {
 			t.Errorf("%s = %+v, want %+v", field, got, want)
 		}
 	}
@@ -554,10 +554,10 @@ func TestClearingASizeIsAChange(t *testing.T) {
 	sized := tracker.Task{ID: "t-1", Points: 8, EstimateMinutes: 45}
 	cleared := tracker.Task{ID: "t-1"}
 	moved := tracker.TaskDeltas(sized, cleared, nil)
-	if got := moved["points"]; got != (tracker.Delta{From: "8", To: ""}) {
+	if got := moved["points"]; got.From != "8" || got.To != "" {
 		t.Errorf("points = %+v, want 8 → nothing", got)
 	}
-	if got := moved["estimate"]; got != (tracker.Delta{From: "45m", To: ""}) {
+	if got := moved["estimate"]; got.From != "45m" || got.To != "" {
 		t.Errorf("estimate = %+v, want 45m → nothing", got)
 	}
 	// And a task that never had either reports no change at all, rather
@@ -602,7 +602,7 @@ func TestASameDayScheduleMoveIsRecorded(t *testing.T) {
 			From: "2031-04-16T09:00:00Z",
 			To:   "2031-04-16T17:00:00Z",
 		}
-		if got != want {
+		if got.From != want.From || got.To != want.To {
 			t.Errorf("%s = %+v, want %+v", field, got, want)
 		}
 	}

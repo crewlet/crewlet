@@ -165,8 +165,10 @@ func installFakeAgent(t *testing.T) string {
 	dir := t.TempDir()
 	script := `#!/bin/sh
 # A stand-in for a headless coding CLI. Everything it touches — the findings
-# file, the ask shim, the JSON envelope — is the real protocol.
+# file, the ask shim, the stream-json messages and the result message that
+# ends them — is the real protocol.
 work="$HOME/.crewlet"
+init='{"type":"system","subtype":"init","session_id":"sess-1","tools":["Bash"]}'
 # The invocation, recorded OUTSIDE the box: the box is torn down when the
 # turn finishes, and the argv is what a test asserts about afterwards.
 if [ -n "${FAKE_AGENT_ARGV:-}" ]; then
@@ -176,12 +178,16 @@ case "${FAKE_AGENT_MODE:-succeed}" in
   succeed)
     sleep 0.1
     printf 'Outcome: succeeded\nRan the suite; all green.\nOpened https://github.com/acme/api/pull/7\n' > "$work/findings.md"
-    printf '{"result":"done","subtype":"success","session_id":"sess-1","usage":{"input_tokens":700,"output_tokens":120}}\n'
+    printf '%s\n' "$init"
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"go test ./..."}}]},"session_id":"sess-1"}'
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok","is_error":false}]},"session_id":"sess-1"}'
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1","usage":{"input_tokens":700,"output_tokens":120}}'
     ;;
   ask)
     sleep 0.1
     crewlet-ask "Which branch should I target?" --to requester
-    printf '{"result":"blocked","subtype":"success"}\n'
+    printf '%s\n' "$init"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"blocked","session_id":"sess-1"}'
     ;;
   held)
     # RUNS UNTIL THE TEST SAYS SO, rather than for a fixed time.
@@ -202,7 +208,8 @@ case "${FAKE_AGENT_MODE:-succeed}" in
       waited=$((waited + 1))
     done
     printf 'Outcome: succeeded\nfinished after the restart\n' > "$work/findings.md"
-    printf '{"result":"done","subtype":"success"}\n'
+    printf '%s\n' "$init"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1"}'
     ;;
   *)
     # A MODE THIS SCRIPT DOES NOT KNOW SAYS SO. Falling through silently
@@ -406,6 +413,32 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	})
 	if launch == "" {
 		t.Error("the resumed sandbox phase names no launch_id")
+	}
+	// THE RUN'S STREAM REACHED ITS RECORD: the transcript the runner built
+	// from the stand-in's stream-json messages, and the spend its result
+	// line — the stream's last, copied out by the wrapper — reported.
+	// End to end because the halves are the CLI's flags, the box's shell and
+	// the record's publisher, and each compiles without the others.
+	var record map[string]any
+	waitFor(t, "the run's own phase record", func() bool {
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil)
+		if err != nil {
+			t.Fatalf("phases: %v", err)
+		}
+		for _, row := range rows {
+			var rec map[string]any
+			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "sandbox" {
+				record = rec
+				return true
+			}
+		}
+		return false
+	})
+	if transcript, _ := record["activity_transcript"].(string); transcript != "[tool] Bash: go test ./..." {
+		t.Errorf("the run's transcript is %q; want the one tool call its stream made", transcript)
+	}
+	if input, _ := record["input_tokens"].(float64); input != 700 {
+		t.Errorf("the run's input tokens are %v; want the 700 its result line reported", record["input_tokens"])
 	}
 	// The box is gone: the resumed Execute made no further run_sandbox call,
 	// so the phase was done with it.

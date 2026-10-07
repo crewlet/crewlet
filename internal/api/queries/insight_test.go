@@ -1073,3 +1073,55 @@ func TestKnowledgeHonoursTheModeAndCarriesItsOutcome(t *testing.T) {
 		t.Errorf("an unknown mode answered %v, want bad params", err)
 	}
 }
+
+// A PHRASE PAST THE SEARCH BOUND IS REFUSED AS BAD PARAMS on both ranked
+// searches — naming the parameter, the size and the limit, in the class a
+// caller tests for — and never reaches a searcher. Left to the search, the
+// knowledge one would answer "could not be searched", which is best effort's
+// sentence for a backend that did not answer, and send the reader back to try
+// the same paste again.
+func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("p", knowledge.MaxQueryBytes+1)
+	refused := func(route string, err error) {
+		t.Helper()
+		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, knowledge.ErrQueryTooLong) {
+			t.Fatalf("%s: a %d-byte phrase answered %v, want bad params of the query-too-long class",
+				route, len(long), err)
+		}
+		want := fmt.Sprintf("q is %d bytes, and a search takes at most %d", len(long), knowledge.MaxQueryBytes)
+		if detail := queries.RefusalDetail(err); !strings.HasPrefix(detail, want) {
+			t.Errorf("%s: the refusal reads %q, want it to begin %q", route, detail, want)
+		}
+	}
+
+	w := &stubWork{}
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+		"work_search", map[string]any{"q": long})
+	refused("work_search", err)
+	if w.searchText != "" {
+		t.Error("work_search: a refused phrase still reached the search")
+	}
+
+	var asked knowledge.Mode
+	sources := queries.Sources{
+		Knowledge: func() knowledge.Searcher { return modalSearcher{asked: &asked} },
+		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, sources)
+	_, err = r.Answer(t.Context(), "knowledge", map[string]any{"q": long}, "operator")
+	refused("knowledge", err)
+	if asked != "" {
+		t.Error("knowledge: a refused phrase still reached the searcher")
+	}
+	// AT THE BOUND it is a search on both.
+	at := strings.Repeat("p", knowledge.MaxQueryBytes)
+	if _, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
+		"work_search", map[string]any{"q": at}); err != nil {
+		t.Errorf("work_search at the bound: %v", err)
+	}
+	if _, err := r.Answer(t.Context(), "knowledge", map[string]any{"q": at}, "operator"); err != nil {
+		t.Errorf("knowledge at the bound: %v", err)
+	}
+}

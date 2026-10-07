@@ -433,21 +433,45 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 	return resolved, nil
 }
 
+// ambiguousQuestionBytes is how much prose question text the refusal carries
+// whole before it names the rest by id.
+//
+// Eight kibibytes: a structured ask's question is at most
+// [tracker.MaxDecisionQuestion] and always carried, and an ask in prose is
+// carried whole while they fit — the refusal is read as a tool result, and
+// five questions at their 32 KiB cap would be most of an answer spent on
+// asking which one.
+const ambiguousQuestionBytes = 8 << 10
+
 // ambiguousText is the refusal that lists the open questions, because "which
 // one" is the whole of what the caller has to decide.
+//
+// EACH QUESTION WHOLE OR BY REFERENCE, never cut. It used to show the first
+// hundred and twenty characters of each, unmarked — so two questions that
+// opened the same way read as one question asked twice.
 func ambiguousText(e *tracker.ErrAmbiguousAnswer) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d open questions on this item are addressed to you, so "+
 		"which one this answers cannot be inferred. Pass `answers` with one "+
 		"of these comment ids:", len(e.Asks))
+	room := ambiguousQuestionBytes
 	for i, ask := range e.Asks {
 		if i == tracker.MaxOpenAsksNamed {
 			fmt.Fprintf(&b, "\n  … and more — read the item with "+
 				"get_work_item to see the rest.")
 			break
 		}
-		fmt.Fprintf(&b, "\n  %s — %s: %s", ask.Comment, ask.Author,
-			clip(ask.Excerpt))
+		question := strings.TrimSpace(ask.Question)
+		if question == "" {
+			question = strings.TrimSpace(ask.Body)
+			if len(question) > room && i > 0 {
+				question = fmt.Sprintf("(a question of %d bytes — read it with "+
+					"get_work_item(item=%q, comment=%q))", len(question), e.Task, ask.Comment)
+			} else {
+				room -= len(question)
+			}
+		}
+		fmt.Fprintf(&b, "\n  %s — %s: %s", ask.Comment, ask.Author, clip(question))
 	}
 	return b.String()
 }

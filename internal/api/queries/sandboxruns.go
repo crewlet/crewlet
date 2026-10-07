@@ -51,18 +51,27 @@ type PendingRuns interface {
 // SandboxTails answers a running coding run's live output from the node that
 // owns it — the one method this surface calls of [sandbox.TailReader].
 type SandboxTails interface {
-	Tail(ctx context.Context, turnID, launchID string) (sandbox.TailAnswer, error)
+	Tail(ctx context.Context, q sandbox.TailQuery) (sandbox.TailAnswer, error)
 }
 
 // sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
-// launch while it runs, `not_running` with the record's own status once it is
-// not, or the owning node NAMED where it did not answer (`owner_silent`) or
-// runs a build that cannot (`owner_upgrading`).
+// launch while it runs, `launching` while its box is being made, `not_running`
+// with the record's own status once it is not, `box_paused` for a running
+// record whose box is paused, or the owning node NAMED where it did not answer
+// (`owner_silent`) or runs a build that cannot (`owner_upgrading`).
 //
 // BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
 // more than one job; a request naming only the turn would show whichever job
 // its row holds now, which is a different job from the span a person clicked
 // the moment a second launch replaces the first.
+//
+// BY CURSOR when `cursor` is true: `epoch`, `after` and `digest` say what the
+// asker holds — all three absent for one holding nothing yet — and the answer
+// carries what it lacks, or a reset. WITHOUT `cursor` the answer is the 8 KiB
+// window this route has always answered, because an asker that never said it
+// reads cursors is one that replaces what it shows with each answer: a delta
+// handed to it would read as the whole of the run. A cursor's offset is a
+// whole number of bytes, refused by name otherwise.
 func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 	turnID := strings.TrimSpace(p.String("turn_id"))
 	launchID := strings.TrimSpace(p.String("launch_id"))
@@ -70,7 +79,21 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 		return nil, fmt.Errorf("%w: sandbox_tail needs a turn_id and the launch_id of the "+
 			"run's job", ErrBadParams)
 	}
-	return s.SandboxTail.Tail(ctx, turnID, launchID)
+	q := sandbox.TailQuery{TurnID: turnID, LaunchID: launchID}
+	if p.Bool("cursor", false) {
+		var after int64
+		if p.Has("after") {
+			var whole bool
+			if after, whole = p.WholeInt("after"); !whole || after < 0 {
+				return nil, fmt.Errorf("%w: sandbox_tail's after is the byte offset the asker "+
+					"holds through, a whole number of zero or more", ErrBadParams)
+			}
+		}
+		q.Cursor = &sandbox.TailCursor{
+			Epoch: p.String("epoch"), Offset: after, Digest: p.String("digest"),
+		}
+	}
+	return s.SandboxTail.Tail(ctx, q)
 }
 
 // sandboxRuns answers the board, or — with `audience=<handle>` — the runs

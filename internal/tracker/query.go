@@ -35,9 +35,16 @@ const (
 	// and eight is the widest any view in this model needs.
 	MaxAnyBranches = 8
 
-	// MaxQueryText is the text bound. Four hundred bytes is a sentence, and
-	// the ranker's own posting-scan cap makes a longer one buy nothing.
-	MaxQueryText = 400
+	// MaxQueryText bounds the FIND ([Query.Text]): the longest title, because
+	// a find is a substring of a key or a title and nothing longer than the
+	// longest title can be one. Refused past it rather than run as a LIKE
+	// certain to match nothing — an empty board is read as "there is no such
+	// item", which is the answer a refusal naming the bound does not give.
+	//
+	// It was 400, justified by a ranker's posting-scan cap; there is no
+	// ranker on this grammar, and the 257th to 400th bytes bought a query that
+	// could never match.
+	MaxQueryText = MaxTitle
 
 	// MaxTotals caps the aggregate list, because every entry is another
 	// pass over the same rows.
@@ -983,11 +990,11 @@ func (q *Query) parseBools(p Params) {
 // parseText reads the FIND, which is not a search.
 //
 // `q` here is a substring of a key or a title — "the item I half remember" —
-// and that is the whole of it. RANKED SEARCH OVER THE COMPANY'S PROSE IS
-// `search_knowledge`'s, behind the [knowledge] seam, which is where the
-// analyzer, the inverted list and the vectors are. This grammar has none of
-// them: `kb_docs` and `kb_postings` index PAGES, and nothing has ever put a
-// task in them.
+// and that is the whole of it. RANKED SEARCH over what the company's work SAYS
+// is [Searcher]'s — `search_work_items`, and `work_search` on the API — over
+// the inverted list and the vectors the search index keeps for both corpora.
+// This grammar reads none of them: it is a filter composed into the board
+// query, and a ranking cannot be one (see search.go).
 //
 // So there is no `mode`. Three modes over one behaviour is a knob whose values
 // cannot differ, which is worse than no knob: a caller that asked for
@@ -997,8 +1004,9 @@ func (q *Query) parseText(p Params) error {
 	q.Text = strings.TrimSpace(p.String("q"))
 	if len(q.Text) > MaxQueryText {
 		return fmt.Errorf("tracker: the find text is %d bytes and the bound is "+
-			"%d — this is a substring of a key or a title, and a longer one "+
-			"matches nothing; ask search_knowledge a question this long",
+			"%d — this is a substring of a key or a title, and no title is "+
+			"longer, so a longer one matches nothing; to find work by what it "+
+			"is about, search it (search_work_items, or work_search)",
 			len(q.Text), MaxQueryText)
 	}
 	return nil

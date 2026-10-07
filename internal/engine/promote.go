@@ -142,7 +142,7 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 		// THE RESOLVER, not a writer: see [Engine.promotionWriter].
 		Writer:           e.promotionWriter,
 		Skills:           learning.NewSkills(e.backends.Store),
-		Models:           e.meteredModelsFor(c),
+		Models:           e.auxiliaryFor(c),
 		Units:            e.promotionUnits,
 		MinSiblings:      cfg.MinSiblingCount,
 		JaccardThreshold: cfg.JaccardThreshold,

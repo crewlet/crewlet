@@ -26,6 +26,8 @@ import (
 // clicked.
 //
 // So the exclusions below are deliberate, and stated, rather than left as gaps.
+// So is the one narrowing of the other half: a type in [unfed] is persisted
+// like every other entry here and is kept out of the activity feed.
 var categories = map[string]string{
 	// Lifecycle: the org coming and going, plus the config changes an
 	// operator is most likely to go looking for after the fact — and the
@@ -117,6 +119,9 @@ var categories = map[string]string{
 	"provider_fallback":            "system",
 	"skill_telemetry_write_failed": "system",
 	"subagent_batched":             "system",
+	// What the auxiliary model cost, coalesced per key per flush — PERSISTED
+	// and NOT FED: see [unfed].
+	"auxiliary_spend": "system",
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -208,6 +213,52 @@ var excluded = map[string]string{
 		"thing under a different id",
 }
 
+// unfed are the PERSISTED types the activity feed does not carry, each with the
+// reason.
+//
+// A RULE CHANGE, made once and here rather than as a special case in a reader:
+// "persisted" and "fed" were one fact — a categorised type was a row AND a
+// line of the feed — and the feed is a ring of a few hundred rows (livestate.EventFeedLimit)
+// for the WHOLE COMPANY, because every node's projection is fed by a fleet-wide
+// broadcast. A type that is accounting rather than activity takes those rows
+// from the events a person watching the feed is there for, and a projection
+// that skipped it on its own would leave the startup seed, which reads the
+// feed back out of the store, disagreeing with the stream about what the feed
+// holds. So the class is declared beside the admission list, and every read
+// of the feed's rows asks [KeptOutOfFeed]: the live projection's ring, its
+// startup seed, and every view a reader scrolls on from the ring — the event
+// log's older pages and its axis, the Live screen's activity strip and a
+// seat's latest events — which ask for `feed_only` (store.ListQuery.FeedOnly),
+// so a bar never counts and an older page never lists a row the ring would
+// not hold.
+//
+// An unfed type is still a row with a category: it is in the store, in a
+// turn's and a trace's history, and listed by every read that does not ask
+// for the feed's rows — a type filter, a turn, a trace, a work key.
+//
+// MOVING A TYPE INTO THE CLASS is a change both sides of the history scatter
+// see, because a peer on the build before still counts it as a feed row, and
+// the asker narrows that peer by this list whatever the peer knows
+// (internal/eventfan). A listing it narrows row by row. An axis it takes apart:
+// the peer's answer names the types it left out, and for each one this list
+// holds and that answer does not, the peer is asked for the axis of that type
+// alone and those bars are subtracted from its own. The subtraction is exact
+// when the older build writes none of the type — true of a type new in the
+// build that keeps it out, as auxiliary_spend is. A type an older build still
+// WRITES is subtracted from a second read its new rows can reach and the first
+// did not, so moving one into the class leaves that build's current bar short
+// by what it writes between the two reads, for the length of the upgrade; a
+// difference that goes below zero is refused and the peer named.
+var unfed = map[string]string{
+	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
+		"the auxiliary model cost for one key, several per turn beside the " +
+		"turn's own phases and a burst of them when a compaction runs. In " +
+		"the feed they would push the turns, failures and deliveries a " +
+		"reader watches out of a ring that holds the whole company's last " +
+		"few hundred events; their spend reaches every spend figure through " +
+		"the rollups, and a turn's page reads them by its turn id",
+}
+
 // liveOnly is the subset of [excluded] that still drives the live projection.
 //
 // A subset rather than the same set: agent_turn_progress, the two seat
@@ -233,6 +284,26 @@ func Category(eventType string) (string, bool) {
 // LiveOnly reports whether a type is excluded from the store while still
 // driving the live projection.
 func LiveOnly(eventType string) bool { return liveOnly[eventType] }
+
+// KeptOutOfFeed reports whether a type is one of the [unfed]: persisted, and
+// deliberately not a line of the activity feed.
+//
+// THE NARROWING, NOT THE ADMISSION. A reader holding a categorised envelope
+// asks this and nothing else, so the category stays the one statement that a
+// type is persisted — a type this build does not know, which a newer peer's
+// stored row can be, is a feed row exactly as it was.
+func KeptOutOfFeed(eventType string) bool {
+	_, kept := unfed[eventType]
+	return kept
+}
+
+// Unfed returns every persisted type the activity feed does not carry, sorted —
+// for a reader of the store that rebuilds the feed and has to name them in a
+// filter.
+func Unfed() []string { return slices.Sorted(maps.Keys(unfed)) }
+
+// UnfedReasons returns every unfed type with its reason.
+func UnfedReasons() map[string]string { return maps.Clone(unfed) }
 
 // Excluded reports why a type is kept out of the event store, or "" if it is
 // not deliberately excluded — which, for a type with no category either, means

@@ -138,3 +138,28 @@ func TestAPartialWorkSearchSaysSoToTheSeat(t *testing.T) {
 		t.Errorf("a complete answer carries a partial note: %q", got.Output)
 	}
 }
+
+// A TEXT PAST THE SEARCH'S BOUND IS REFUSED NAMING IT, and never reaches the
+// search — where it would come back as an error the model reads as the
+// tracker failing, rather than as what to send instead. At the bound it is a
+// search.
+func TestALongWorkSearchIsRefusedNotCut(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Search: trk})
+
+	got := callWork(t, reg, builtin.SearchWorkItemsTool, map[string]any{
+		"text": strings.Repeat("w", knowledge.MaxQueryBytes+1),
+	})
+	if !got.Failed || !strings.Contains(got.Output, "takes at most 400") {
+		t.Fatalf("a long text was not refused naming the limit: %q", got.Output)
+	}
+	if len(trk.searched) != 0 {
+		t.Fatal("a refused text still reached the search")
+	}
+	if got := callWork(t, reg, builtin.SearchWorkItemsTool, map[string]any{
+		"text": strings.Repeat("w", knowledge.MaxQueryBytes),
+	}); got.Failed {
+		t.Fatalf("a text at the bound was refused: %q", got.Output)
+	}
+}

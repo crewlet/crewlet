@@ -33,10 +33,11 @@ func init() {
 type Phase string
 
 // The phases a turn can report. PhaseOnboarding, PhaseExecute and PhaseReview
-// are the legs of the turn itself, in the order they run; PhaseSubagent,
-// PhaseAuxiliary and PhaseJudge are nested calls made under one of those, and
-// never appear without a host phase around them. PhaseSandbox is a detached
-// coding run the executor launched, published once when the run is collected.
+// are the legs of the turn itself, in the order they run; PhaseSubagent and
+// PhaseJudge are nested calls made under one of those, and never appear
+// without a host phase around them. PhaseSandbox is a detached coding run the
+// executor launched, published once when the run is collected. PhaseAuxiliary
+// is the odd one out: no phase record carries it — see its own comment.
 //
 // The retired `plan` value has NO CONSTANT here, and that is not an oversight:
 // Phase is a plain string precisely so a value this build does not produce
@@ -49,8 +50,14 @@ const (
 	PhaseExecute    Phase = "execute"
 	PhaseReview     Phase = "review"
 	PhaseSubagent   Phase = "subagent"
-	// PhaseAuxiliary is a learning worker's own LLM call, nested under a host
-	// phase; PhaseJudge is the round-cap extension judge.
+	// PhaseAuxiliary is the band a seat's AUXILIARY model spend is drawn
+	// in, and NO AgentPhaseCompleted carries it: that spend is recorded as
+	// [AuxiliarySpend], a type no state machine reads, because a phase
+	// record drives the live seat state and a reflection call stamped after
+	// its turn ended would have reopened the turn. The value is what the
+	// spend rollups file those records under (their purpose as the worker),
+	// so a reader written for the band reads them. PhaseJudge is the
+	// round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
 	PhaseJudge     Phase = "judge"
 	// PhaseSandbox is the coding run itself: what a detached run_sandbox
@@ -413,15 +420,34 @@ type TurnCompleted struct {
 	Suspended bool `json:"suspended,omitempty"`
 	// StartedAt / EndedAt bound the turn; DurationMS is the span the learning
 	// workers actually reason about.
-	StartedAt   time.Time `json:"started_at"`
-	EndedAt     time.Time `json:"ended_at"`
-	DurationMS  int       `json:"duration_ms"`
-	TaskSummary string    `json:"task_summary"`
-	// PlanSummary is what the turn set out to do, in the agent's own
-	// words — the executor's submitted summary, or the reviewer's account
-	// of what landed. It keeps its wire name: it is a column in the
-	// episode store and the heading every learning worker renders, and
-	// renaming it would migrate a value to buy a better word.
+	StartedAt  time.Time `json:"started_at"`
+	EndedAt    time.Time `json:"ended_at"`
+	DurationMS int       `json:"duration_ms"`
+	// TaskSummary is the one-line LABEL of the event that woke the turn —
+	// [events.Event.Summary], the line a feed shows ("Message from Ana:
+	// Slack message", "cto asked a colleague on ch-1") — and not what the
+	// turn was asked: that is Interactions' bodies, or Ask.
+	TaskSummary string `json:"task_summary"`
+	// Ask is what the turn was ASKED — the trigger's own words without the
+	// integration's wrapping, the text the turn-start prefetch judged
+	// relevance against — carried ONLY where Interactions does not already
+	// carry it: a colleague's question, a schedule's task, and a resumed
+	// segment, which re-reads no trigger and takes the ask its first
+	// segment was given off the parked conversation. A notification's ask
+	// is its interactions' bodies, and repeating them here would double the
+	// payload for nothing.
+	//
+	// No larger than the trigger it was read from, which crossed the queue
+	// in one message already. An older build leaves it empty, and an
+	// episode written from such a turn is embedded as its label and what
+	// it did.
+	Ask string `json:"ask,omitempty"`
+	// PlanSummary is what the turn DID, in the agent's words: the last
+	// review's account of what had landed where it wrote one — which a
+	// review sending the turn back for another round does — and otherwise
+	// the turn's final answer. It keeps its wire name: it is a column in the
+	// episode store and every learning worker reads it, and renaming it
+	// would migrate a value to buy a better word.
 	PlanSummary string `json:"plan_summary"`
 	// ToolSequence is the tools called during the FINAL executor round.
 	// Last-round-scoped by design: the reflect engine's no-action gate and
@@ -575,10 +601,10 @@ type AgentPhaseCompleted struct {
 	// Absent on every other phase, and on a nested phase an older peer
 	// published.
 	HostRound int `json:"host_round,omitempty"`
-	// Worker names the worker behind this call: the learning worker on a
-	// PhaseAuxiliary event, the delegate template on a PhaseSubagent one.
-	// Empty on every other phase, and on an ad-hoc delegation that named
-	// no template.
+	// Worker names the worker behind this call: the delegate template on
+	// a PhaseSubagent event. Empty on every other phase, and on an ad-hoc
+	// delegation that named no template. (The rollups put an
+	// [AuxiliarySpend]'s purpose in the same slot of the auxiliary band.)
 	Worker string `json:"worker"`
 	// TaskID is a delegated task's own id, as the parent wrote it. Set
 	// only on PhaseSubagent, and it is what pairs this phase record with
@@ -710,12 +736,30 @@ type AgentPhaseCompleted struct {
 	// parked on a question never had — its cost was reported nowhere.
 	CostUSD       float64  `json:"cost_usd"`
 	DeliveredRefs []string `json:"delivered_refs,omitempty"`
+	// DeliveredRefsElided is how many more refs the run reported than
+	// DeliveredRefs lists: refs are scraped from the whole report by a
+	// pattern with no count to it, and the record lists them up to a bound,
+	// deduplicated, counting the rest here rather than dropping them unsaid.
+	// ADDITIVE: zero on a record that lists them all and on an older build's,
+	// which listed every match; an older reader ignores it.
+	DeliveredRefsElided int `json:"delivered_refs_elided,omitempty"`
 	// ActivityTranscript is a coding run's own account of what it did —
-	// its tool calls and shell commands, or its stderr where the CLI
-	// streams nothing better — on the PhaseSandbox record only. Tail-capped
-	// and secret-redacted where it is collected. It is the whole
-	// observability surface of an agent that emits no telemetry of its own.
+	// what it said, its tool calls and what they ran, or its stderr where
+	// the CLI streams nothing better — on the PhaseSandbox record only.
+	// Secret-redacted, and held to the record's bound: a long one keeps its
+	// first 64 KiB and its last 192 KiB in whole lines, with a note line
+	// where its middle was. It is the whole observability surface of an
+	// agent that emits no telemetry of its own.
 	ActivityTranscript string `json:"activity_transcript,omitempty"`
+	// ActivityTranscriptElidedLines and ActivityTranscriptElidedBytes count
+	// what that bound left out of the transcript's middle — whole lines, and
+	// every byte not kept — so a screen can say the record is not the whole
+	// log without parsing the note. ADDITIVE: zero on a transcript kept
+	// whole, and on every record an older build published, which kept the
+	// transcript's last 256 KiB marked only by a leading "…"; an older
+	// reader ignores both.
+	ActivityTranscriptElidedLines int `json:"activity_transcript_elided_lines,omitempty"`
+	ActivityTranscriptElidedBytes int `json:"activity_transcript_elided_bytes,omitempty"`
 	// Failed is true when the phase died instead of finishing.
 	//
 	// A phase that raises used to publish NOTHING: the only durable record was

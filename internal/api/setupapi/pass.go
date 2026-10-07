@@ -427,6 +427,7 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 				"loop's next tick reports it")
 		return
 	}
+	integration.LogWhole(ctx, kind, run.Findings, passErr)
 	next, forget := integration.Observe(current, kind, run.Findings, passErr, now)
 	// THE ADDRESS THIS PASS RAN AGAINST, and only where this pass is what
 	// keeps that address current — the same three-way rule the loop applies,

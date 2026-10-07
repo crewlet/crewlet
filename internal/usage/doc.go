@@ -1,6 +1,6 @@
-// Package usage is what each node's seats and schedules did each company day,
-// replicated to every node — the state-log framework's FOURTH domain, and its
-// second COMPACTED one.
+// Package usage is what each node's seats, schedules and people did each
+// company day, replicated to every node — the state-log framework's FOURTH
+// domain, and its second COMPACTED one.
 //
 // # The question it answers, and who has to agree on it
 //
@@ -14,9 +14,9 @@
 // Every node has to agree on a node's day, and only its CURRENT value matters —
 // which is ADR-0014's fourth answer, a compacted changelog. Each node derives
 // its own day from its own event log ([store.DB.UsageForDay]), folds it into
-// one record per (node, day, seat) and per (node, day, schedule), and
-// publishes the record whole; every node's applier writes it into the
-// replicated estate. ADR-0020 is the decision.
+// one record per (node, day, seat), per (node, day, schedule) and per (node,
+// day, person), and publishes the record whole; every node's applier writes it
+// into the replicated estate. ADR-0020 is the decision.
 //
 // # Why the node is part of the identity
 //
@@ -31,7 +31,13 @@
 // counts, its ended turns (count, failed, reviewed, first-pass, send-backs and
 // a mergeable duration [Hist]), and the pages it read — capped at
 // [ReadsPerSeatDay] with the remainder counted. A schedule-day: every fire the
-// node's scheduler recorded. A record is always the cumulative value; an apply
+// node's scheduler recorded. A person-day: what the seats' auxiliary model
+// spent for a human seat — a question answered on the operator surface, a pass
+// on a unit a person leads — by the same cells, and nothing else, since a
+// person has no agent id, no turns and no reads ([KindPerson]); it is record
+// version 2, and the publisher holds it until every node applying the log
+// reads that version, because a build from before the kind stops on it
+// rather than deferring it. A record is always the cumulative value; an apply
 // REPLACES.
 //
 // # What it deliberately is not

@@ -189,12 +189,12 @@ func TestADependencyEdgeRecordsBothEnds(t *testing.T) {
 	}
 
 	// THE AUTHORED END names what this task now waits on.
-	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"","to":"blk"}}` {
+	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"","to":"","added":["blk"]}}` {
 		t.Errorf("the dependent's row recorded %s", got)
 	}
 	// AND THE MIRROR names who now waits on the blocker, under the word
 	// this package already uses for that direction.
-	if got := r.fieldsForSubject("blk"); got != `{"blocking":{"from":"","to":"dep"}}` {
+	if got := r.fieldsForSubject("blk"); got != `{"blocking":{"from":"","to":"","added":["dep"]}}` {
 		t.Errorf("the blocker's row recorded %s", got)
 	}
 
@@ -208,10 +208,10 @@ func TestADependencyEdgeRecordsBothEnds(t *testing.T) {
 		t.Fatalf("Depend (remove): %v", err)
 	}
 	r.drain()
-	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"blk","to":""}}` {
+	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"","to":"","removed":["blk"]}}` {
 		t.Errorf("the removal recorded %s", got)
 	}
-	if got := r.fieldsForSubject("blk"); got != `{"blocking":{"from":"dep","to":""}}` {
+	if got := r.fieldsForSubject("blk"); got != `{"blocking":{"from":"","to":"","removed":["dep"]}}` {
 		t.Errorf("the blocker's removal recorded %s", got)
 	}
 }
@@ -239,7 +239,7 @@ func TestAnUnmirroredEdgeStillRecordsTheAuthoredSide(t *testing.T) {
 	}
 	r.drain()
 
-	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"","to":"blk"}}` {
+	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"","to":"","added":["blk"]}}` {
 		t.Errorf("a half-written edge recorded %s on the dependent", got)
 	}
 	// AND THE BLOCKER'S OWN HISTORY IS UNTOUCHED, which is the honest
@@ -272,7 +272,7 @@ func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 	}
 	r.drain()
 	if got := r.fieldsFor(tracker.ChangeTags); got != `{`+
-		`"tags":{"from":"","to":"regression"},`+
+		`"tags":{"from":"","to":"","added":["regression"]},`+
 		`"tags_version":{"from":"0","to":"1"}}` {
 
 		t.Errorf("a tag declaration recorded %s", got)
@@ -300,7 +300,7 @@ func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 	}
 	r.drain()
 	if got := r.fieldsFor(tracker.ChangeCatalogue); got != `{"types":{`+
-		`"from":"","to":"incident"}}` {
+		`"from":"","to":"","added":["incident"]}}` {
 
 		t.Errorf("a type declaration recorded %s", got)
 	}
@@ -312,7 +312,7 @@ func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 	}
 	r.drain()
 	if got := r.fieldsFor(tracker.ChangeCatalogue); got != `{`+
-		`"fields":{"from":"","to":"severity"},`+
+		`"fields":{"from":"","to":"","added":["severity"]},`+
 		`"policy_version":{"from":"0","to":"1"}}` {
 
 		t.Errorf("a field declaration recorded %s", got)
@@ -525,7 +525,7 @@ func TestAWatchCommitRecordsTheHandlesThatMoved(t *testing.T) {
 		t.Fatalf("watch: %v", err)
 	}
 	r.drain()
-	if got := r.fieldsForSubject("t-1"); got != `{"watchers":{"from":"","to":"bo"}}` {
+	if got := r.fieldsForSubject("t-1"); got != `{"watchers":{"from":"","to":"","added":["bo"]}}` {
 		t.Errorf("starting to watch recorded %s", got)
 	}
 
@@ -538,8 +538,8 @@ func TestAWatchCommitRecordsTheHandlesThatMoved(t *testing.T) {
 	r.drain()
 	// BOTH HALVES OF THE ONE GESTURE, which is what an unwatch is.
 	if got := r.fieldsForSubject("t-1"); got != `{`+
-		`"muted":{"from":"","to":"bo"},`+
-		`"watchers":{"from":"bo","to":""}}` {
+		`"muted":{"from":"","to":"","added":["bo"]},`+
+		`"watchers":{"from":"","to":"","removed":["bo"]}}` {
 
 		t.Errorf("an unwatch recorded %s", got)
 	}

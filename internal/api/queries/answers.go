@@ -393,6 +393,12 @@ var ErrNotFound = errors.New("queries: no such record")
 func Register(r *Registry, s Sources) {
 	if s.State != nil {
 		r.Register("agent", s.agent)
+		// ONE SEAT'S CALL IN FLIGHT, WHOLE: what a tab asks when an `agents`
+		// push names a version of a heavy field newer than the copy it
+		// holds — the push that carried it was dropped. From the projection
+		// alone, so it costs what a push does; `agent` reads the seat's
+		// history from every node as well.
+		r.Register("live_call", s.liveCall)
 		r.Register("tokens", s.tokens)
 	}
 	if s.Events != nil {
@@ -638,6 +644,10 @@ func Register(r *Registry, s Sources) {
 		// ANSWERED BY THE HOLDER, and saying which node that was — see
 		// [Sources.Memory].
 		r.Register("agent_memory", s.agentMemory)
+		// ONE EPISODE WHOLE, which the listing carries the openings of —
+		// a page of fifty whole asks could be more than the transport
+		// takes.
+		r.Register("agent_episode", s.agentEpisode)
 		// EVERY AGENT SEAT'S TOTALS IN ONE ANSWER, each counted by its
 		// holder in one scatter — what the diaries list draws, where a
 		// read per seat would be a lease read and a scatter per row.
@@ -733,6 +743,35 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// exactly the kind of trap that survives until something depends on it.
 	if overlay := s.State.AgentOverlay(role); overlay != nil {
 		answer["live"] = overlay
+	}
+	return answer, nil
+}
+
+// liveCall answers `live_call{role}`: the seat's in-flight call with every
+// field, and the version of each, or null while it has none.
+//
+// The REPAIR for an `agents` push the socket dropped. A push leaves out a heavy
+// field its seat's tabs already hold at the version it names (internal/api/
+// stream's pushAgents), so a tab that missed the push which moved one is
+// holding an older copy than every later push describes, and asks for the call
+// whole here. A seat the projection has not seen is answered null like one
+// between calls: either way there is nothing in flight.
+func (s Sources) liveCall(_ context.Context, p Params) (any, error) {
+	role := s.roleOf(firstOf(p.String("role"), p.String("id")))
+	if role == "" {
+		return nil, fmt.Errorf("%w: live_call needs a role or a handle", ErrBadParams)
+	}
+	// live_call_seq orders this answer against the `agents` pushes for the
+	// same seat: the answer runs on its own goroutine and can be delivered
+	// after a push generated later (a clear, a new call), so the tab drops
+	// an answer whose sequence is behind what it has applied. Always carried,
+	// a null call included — see [livestate.Overlay.LiveCallSeq].
+	answer := map[string]any{"role": role, "live_call": nil, "live_call_seq": 0}
+	if overlay := s.State.AgentOverlay(role); overlay != nil {
+		answer["live_call_seq"] = overlay.LiveCallSeq
+		if overlay.LiveCall != nil {
+			answer["live_call"] = overlay.LiveCall
+		}
 	}
 	return answer, nil
 }
@@ -863,13 +902,17 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// The cursor the caller pages with next, echoed rather than left
 		// for a client to assemble: (time, id) is the table's key and a
 		// client that built it from the last row's fields would be
-		// reimplementing the one thing that must not drift.
-		"next": cursorOf(rows),
+		// reimplementing the one thing that must not drift — and it is
+		// NOT always the last row's, because a page the fleet narrowed
+		// itself covered the rows it dropped ([eventfan.Listing.Next]).
+		"next": cursorAt(listing.Next),
 		// A page shorter than the limit does NOT mean history is
-		// exhausted when a related-agent filter is set: that filter
-		// over-fetches and post-filters, so only a zero-row page ends
-		// the walk. Saying so beats a client inferring it wrongly.
-		"exhausted": len(rows) == 0,
+		// exhausted: a related-agent filter over-fetches and post-filters,
+		// and a page narrowed by the asker drops rows a peer sent. So only
+		// a page that covered nothing ends the walk — one whose rows were
+		// all dropped still has a cursor. Saying so beats a client
+		// inferring it wrongly.
+		"exhausted": listing.Next == nil,
 		// WHICH NODES THE PAGE WAS MERGED FROM. A node that did not answer
 		// is named here, because its rows are simply absent from the page
 		// and nothing else on it could say so.
@@ -971,6 +1014,20 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 			q.Failed = &flag
 		default:
 			return store.ListQuery{}, badParams("failed", raw, []string{"true", "false"})
+		}
+	}
+	// THE ROWS THE ACTIVITY FEED CARRIES, which every view merged with the
+	// live ring asks for: the ring holds no accounting row
+	// ([events.KeptOutOfFeed]), so an older page that did — or an axis
+	// counting them — would show a reader scrolling past the ring a log the
+	// ring never was. Absent is every stored row: the event log's own reads
+	// of a turn, a trace or a type want the accounting rows too.
+	if raw := strings.TrimSpace(p.String("feed_only")); raw != "" {
+		switch raw {
+		case "true", "false":
+			q.FeedOnly = raw == "true"
+		default:
+			return store.ListQuery{}, badParams("feed_only", raw, []string{"true", "false"})
 		}
 	}
 	// THE EVENTS ONE SEAT PUBLISHED, named by its handle — see seatParam.
@@ -1078,15 +1135,15 @@ func instantParam(p Params, name string) (time.Time, error) {
 	return at.UTC(), nil
 }
 
-// cursorOf is the position a caller resumes from, or nil at the end.
-func cursorOf(rows []store.EventRecord) any {
-	if len(rows) == 0 {
+// cursorAt is the position a caller resumes from, as it sends it back, or nil
+// at the end.
+func cursorAt(c *store.Cursor) any {
+	if c == nil {
 		return nil
 	}
-	last := rows[len(rows)-1]
 	return map[string]any{
-		"before_time": last.Time.UTC().Format(time.RFC3339Nano),
-		"before_id":   last.ID,
+		"before_time": c.Time.UTC().Format(time.RFC3339Nano),
+		"before_id":   c.ID,
 	}
 }
 

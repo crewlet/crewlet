@@ -228,13 +228,10 @@ func TestAnAutomaticWatchIsSkippedRatherThanRefusingTheWrite(t *testing.T) {
 // and phrased about the record rather than the field, so a caller past a cap
 // got either silence or a number they could not act on.
 //
-// The comment is where the cost showed: the thread page elides at
-// [tracker.CommentBodyShown] BECAUSE a whole body may be large, and the
-// single-comment read exists to return the rest. Both are sized against
-// MaxCommentBody, so a body stored past it was elided in the page and too
-// heavy for the read that would have returned it — reachable through no tool
-// in the engine. The cap is what makes that elision a pointer instead of a
-// loss.
+// The comment is where the cost shows: a thread page carries every comment
+// WHOLE and at least one, so a body stored past MaxCommentBody would make a
+// page too heavy for one tool answer — reachable through no tool in the
+// engine. The cap is what keeps "whole" deliverable.
 //
 // PER FIELD, because a check that bounded two of three would pass any case
 // written about the interesting one.

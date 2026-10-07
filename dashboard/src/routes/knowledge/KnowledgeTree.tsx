@@ -69,6 +69,7 @@ import { resolve } from "~/app/routes.ts";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { SEARCH_MODES, asSearchMode, defaultSearchMode, modeUnavailable } from "~/lib/search.ts";
@@ -210,7 +211,7 @@ function TreeSearch({ onSearch }: { onSearch: boolean }) {
     if (onSearch) setPicked(urlMode ? asSearchMode(urlMode) : null);
   }, [onSearch, urlMode]);
 
-  const probe = useQuery("knowledge", { q: "", mode: "semantic" }, { pollMs: TREE_POLL_MS });
+  const probe = useSearchQuery("knowledge", { q: "", mode: "semantic" }, { pollMs: TREE_POLL_MS });
   // THE CHECKED SEGMENT IS NEVER ONE DRAWN AS UNAVAILABLE unless the reader
   // asked for it by name: with no embeddings provider the default is Keyword,
   // not a disabled Hybrid a search then silently degrades from.

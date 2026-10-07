@@ -200,10 +200,24 @@ func CopyFileAtomic(src, dst string) (bool, error) {
 		return false, err
 	}
 	defer func() { _ = in.Close() }()
+	if err := ReplaceFile(dst, in); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
+// ReplaceFile puts what content yields at dst, through a temp file in dst's
+// own directory and a rename, at [FileMode] — the write half of
+// [CopyFileAtomic], for a caller that has the source open already.
+//
+// A caller that opened its source in a particular way — a file in a directory
+// somebody else writes, opened once so that what it compares is what it
+// copies — must not hand this a path to open again, which is why it takes a
+// reader. dst's directory must exist.
+func ReplaceFile(dst string, content io.Reader) error {
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".crewlet-tmp-*")
 	if err != nil {
-		return false, err
+		return err
 	}
 	tmpName := tmp.Name()
 	// No-op once the rename has succeeded, and best effort if it did not:
@@ -212,26 +226,23 @@ func CopyFileAtomic(src, dst string) (bool, error) {
 
 	if err := tmp.Chmod(FileMode); err != nil {
 		_ = tmp.Close()
-		return false, err
+		return err
 	}
-	if _, err := io.Copy(tmp, in); err != nil {
+	if _, err := io.Copy(tmp, content); err != nil {
 		_ = tmp.Close()
-		return false, err
+		return err
 	}
 	// Durability before visibility: a rename can be observed before the
 	// data behind it reaches disk, so a crash between the two would leave
 	// a credential file that exists and is empty.
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return false, err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return false, err
+		return err
 	}
-	if err := os.Rename(tmpName, dst); err != nil {
-		return false, err
-	}
-	return true, nil
+	return os.Rename(tmpName, dst)
 }
 
 // FileDigest is the SHA-256 of a file's contents, or "" if it cannot be read.
@@ -246,9 +257,20 @@ func FileDigest(path string) string {
 		return ""
 	}
 	defer func() { _ = f.Close() }()
-	sum := sha256.New()
-	if _, err := io.Copy(sum, f); err != nil {
+	digest, err := Digest(f)
+	if err != nil {
 		return ""
 	}
-	return hex.EncodeToString(sum.Sum(nil))
+	return digest
+}
+
+// Digest is the SHA-256 of what r yields, in [FileDigest]'s form — for a
+// caller that has the file open already, and compares the same descriptor it
+// then copies from ([ReplaceFile]).
+func Digest(r io.Reader) (string, error) {
+	sum := sha256.New()
+	if _, err := io.Copy(sum, r); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }

@@ -1509,6 +1509,156 @@ test("an episode's outcome takes the review decision's own tone", async () => {
   expect(tag("self_iterate").closest(".crewlet-tag")?.className).toContain("warning");
 });
 
+// WHAT WOKE A TURN IS NOT WHAT IT DID. The label of the waking event sat under
+// "What it did", so every chat turn read as having done "Message from Ana";
+// and a compacted row, which has no label, read "The episode recorded no
+// summary" in place of the pattern it was folded into.
+test("an episode says what woke it apart from what it did, and a compacted row its pattern", async () => {
+  mount("#/agents/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          {
+            id: "e1",
+            turn_id: "e1",
+            task_summary: "Message from Ana: Slack message",
+            ask: "The staging deploy keeps failing.",
+            plan_summary: "Rolled staging back to v41.",
+            review_outcome: "done",
+            created_at: "2026-09-21T07:00:00Z",
+          },
+          {
+            id: "c1",
+            turn_id: "",
+            compacted: true,
+            count: 12,
+            compaction: {
+              common_task_pattern: "Triaging a failed staging deploy",
+              done: 9,
+              notable_patterns: "Two went to the SRE lead.",
+            },
+            review_outcome: "done",
+            created_at: "2026-08-01T07:00:00Z",
+          },
+        ],
+        episodes_total: 2,
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("Message from Ana: Slack message")).toBeTruthy());
+  const headers = screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
+  expect(headers).toContain("Woken by");
+  expect(headers).toContain("What it did");
+  const row = (text: string) => screen.getByText(text).closest(".grid-row") as HTMLElement;
+  const cellUnder = (tr: HTMLElement, header: string) =>
+    tr.querySelector(`[data-label="${header}"]`) as HTMLElement;
+  // The turn: its label and its ask under Woken by, its account under What it did.
+  const turn = row("Message from Ana: Slack message");
+  expect(cellUnder(turn, "Woken by").textContent).toContain(
+    "Asked: The staging deploy keeps failing.",
+  );
+  expect(cellUnder(turn, "What it did").textContent).toBe("Rolled staging back to v41.");
+  // The compacted row: how many turns, its pattern and what varied, and its tally.
+  const folded = row("Triaging a failed staging deploy");
+  expect(cellUnder(folded, "Woken by").textContent).toBe("12 turns like this");
+  expect(cellUnder(folded, "What it did").textContent).toContain(
+    "What varied: Two went to the SRE lead.",
+  );
+  expect(cellUnder(folded, "Outcome").textContent).toContain("9 of 12 done");
+  expect(screen.queryByText("The episode recorded no summary")).toBeNull();
+});
+
+// A LONG ASK IS LISTED AS ITS OPENING, MARKED, AND READ WHOLE ON DEMAND. The
+// listing carries an episode's ask and its account as their openings — fifty
+// whole asks could be more than the transport takes, and the holder refused the
+// whole memory read — with each whole text's size beside it; the row says it is
+// an opening and opens the turn whole, from the seat's holder.
+test("a long ask is listed as its marked opening and read whole on demand", async () => {
+  const whole = `${"the deploy log says ".repeat(200)}and then it stopped.`;
+  const opening = whole.slice(0, 600);
+  mount("#/agents/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          {
+            id: "e1",
+            turn_id: "e1",
+            task_summary: "Message from Ana: Slack message",
+            ask: opening,
+            ask_bytes: whole.length,
+            plan_summary: "Read the log and filed the regression.",
+            plan_summary_bytes: 38,
+            review_outcome: "done",
+            created_at: "2026-09-21T07:00:00Z",
+          },
+        ],
+        episodes_total: 1,
+      }),
+      agent_episode: (params: Record<string, unknown>) => ({
+        handle: params.id,
+        held_by: "node-2",
+        episode: {
+          id: params.episode,
+          turn_id: "e1",
+          task_summary: "Message from Ana: Slack message",
+          ask: whole,
+          ask_bytes: whole.length,
+          plan_summary: "Read the log and filed the regression.",
+          plan_summary_bytes: 38,
+          review_outcome: "done",
+          created_at: "2026-09-21T07:00:00Z",
+        },
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("Message from Ana: Slack message")).toBeTruthy());
+  const row = screen
+    .getByText("Message from Ana: Slack message")
+    .closest(".grid-row") as HTMLElement;
+  const woken = row.querySelector('[data-label="Woken by"]') as HTMLElement;
+  expect(woken.textContent).toContain(`Asked: ${opening}…`);
+  // A WHOLE ACCOUNT IS NOT MARKED and offers nothing to open.
+  const did = row.querySelector('[data-label="What it did"]') as HTMLElement;
+  expect(did.textContent).toBe("Read the log and filed the regression.");
+  expect(askedFor("agent_episode")).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole("button", { name: /^Read all/ }));
+  await waitFor(() => expect(screen.getByText(/and then it stopped\./)).toBeTruthy());
+  expect(askedFor("agent_episode")[0]?.params).toEqual({ id: "swe", episode: "e1" });
+});
+
+// A HOLDER THAT DOES NOT SAY WHAT A ROW FOLDED IS NOT A ROW THAT FOLDED
+// NOTHING. A node on an older build sends a compacted row with no compaction;
+// read as zero values it said "The compaction recorded no pattern" and "0 of 12
+// done" — statements about the data, where the holder had said nothing.
+test("a compacted row whose holder does not say what it folded says that, not zeros", async () => {
+  mount("#/agents/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          {
+            id: "c1",
+            turn_id: "",
+            compacted: true,
+            count: 12,
+            compaction: null,
+            review_outcome: "done",
+            created_at: "2026-08-01T07:00:00Z",
+          },
+        ],
+        episodes_total: 1,
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("12 turns like this")).toBeTruthy());
+  const folded = screen.getByText("12 turns like this").closest(".grid-row") as HTMLElement;
+  const did = folded.querySelector('[data-label="What it did"]') as HTMLElement;
+  expect(did.textContent).toContain("Not reported");
+  expect(did.textContent).toContain("older build");
+  expect(document.body.textContent).not.toContain("recorded no pattern");
+  expect(document.body.textContent).not.toContain("0 of 12 done");
+});
+
 // THE CONVERSATION COLUMN IS CAPPED AND A UUID IS CUT TO ITS HEAD: printed
 // whole, a native task's `work:task:<uuid>` took the grid's width and left
 // "What it did" a third of it.

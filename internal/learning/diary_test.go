@@ -27,6 +27,7 @@ func longEntry(id, agent, content string, at time.Time) learning.DiaryEntry {
 	return learning.DiaryEntry{
 		ID: id, AgentID: agent, Kind: learning.DiaryLong,
 		Content: content, CreatedAt: at, Source: "reflect",
+		EmbeddingModel: testModel,
 	}
 }
 
@@ -219,7 +220,7 @@ func TestDiaryRecallRanksAndFiltersLikeEpisodeRecall(t *testing.T) {
 	expired := learning.DiaryEntry{
 		ID: "expired", AgentID: "a", Kind: learning.DiaryShort,
 		Content: "stale", CreatedAt: base, TTLUntil: base.Add(time.Hour),
-		Embedding: []float32{1, 0, 0, 0},
+		Embedding: []float32{1, 0, 0, 0}, EmbeddingModel: testModel,
 	}
 	// Another agent's entry, identical in every way that matters to the
 	// ranking. Without it a recall that ignored the agent scope would still
@@ -232,7 +233,7 @@ func TestDiaryRecallRanksAndFiltersLikeEpisodeRecall(t *testing.T) {
 	}
 
 	hits, err := d.Recall(context.Background(), "a",
-		learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}}, base.Add(2*time.Hour))
+		learning.RecallQuery{Embedding: []float32{1, 0, 0, 0}, Model: testModel}, base.Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestDiaryRecallRefusesWhatItCannotAnswer(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoEmbedding", err)
 	}
 	if _, err := d.Recall(context.Background(), "",
-		learning.RecallQuery{Embedding: []float32{1}}, base); err == nil {
+		learning.RecallQuery{Embedding: []float32{1}, Model: testModel}, base); err == nil {
 		t.Error("a recall with no agent was accepted")
 	}
 }

@@ -777,6 +777,13 @@ function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelCo
   for (const [field, raw] of Object.entries(fields ?? {})) {
     // ENGINE BOOKKEEPING IS NOT A CHANGE A PERSON MADE. See [BOOKKEEPING].
     if (BOOKKEEPING.has(field)) continue;
+    // A SET'S MOVES FIRST: its delta carries empty `from`/`to` beside them,
+    // so the pair arm below would print "— → —" for it.
+    const moved = setMoves(raw);
+    if (moved) {
+      said.push(setClause(field, moved, ctx));
+      continue;
+    }
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
       said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
@@ -786,6 +793,38 @@ function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelCo
     said.push(value ? `${humanize(field)}: ${value}` : humanize(field));
   }
   return said.join(", ");
+}
+
+/**
+ * What a SET gained and lost, when `raw` is a set's delta — `tracker.Delta`'s
+ * `added` and `removed`, each sorted and each member whole — and null for any
+ * other shape.
+ *
+ * A SET RECORDS ITS MOVES, NOT BOTH SIDES. The engine used to carry both
+ * whole sides joined and cut to six hundred bytes, and this module diffed them
+ * to find what joined — which, on a set too large for the cut, found the two
+ * "+N more" counts instead of the member a commit added.
+ */
+function setMoves(raw: unknown): { added: string[]; removed: string[] } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const delta = raw as { added?: unknown; removed?: unknown };
+  const members = (side: unknown) => (Array.isArray(side) ? side.map(scalar).filter(Boolean) : []);
+  const added = members(delta.added);
+  const removed = members(delta.removed);
+  return added.length > 0 || removed.length > 0 ? { added, removed } : null;
+}
+
+/** One set's moves as a label: "Watchers: added Ana, Bo; removed Cy". */
+function setClause(
+  field: string,
+  moved: { added: string[]; removed: string[] },
+  ctx: LabelContext,
+): string {
+  const named = (members: string[]) => members.map((m) => deltaValue(field, m, ctx)).join(", ");
+  const parts: string[] = [];
+  if (moved.added.length > 0) parts.push(`added ${named(moved.added)}`);
+  if (moved.removed.length > 0) parts.push(`removed ${named(moved.removed)}`);
+  return `${humanize(field)}: ${parts.join("; ")}`;
 }
 
 /**
@@ -938,6 +977,27 @@ export function changeClauses(
 ): string[] {
   const out: string[] = [];
   for (const [field, raw] of Object.entries(fields ?? {})) {
+    // A SET'S MOVES, named as what joined and what left — the engine records
+    // exactly that ([setMoves]). A relation reads in its own words ("made it
+    // block ENG-4"); any other set as members added to or removed from it.
+    const moved = setMoves(raw);
+    if (moved) {
+      const relation = RELATION_WORDS[field];
+      const named = (members: string[]) => members.map((m) => deltaValue(field, m, ctx)).join(", ");
+      if (moved.added.length > 0)
+        out.push(
+          relation
+            ? `${relation.added} ${named(moved.added)}`
+            : `added ${named(moved.added)} to the ${fieldWord(field)}`,
+        );
+      if (moved.removed.length > 0)
+        out.push(
+          relation
+            ? `${relation.removed} ${named(moved.removed)}`
+            : `removed ${named(moved.removed)} from the ${fieldWord(field)}`,
+        );
+      continue;
+    }
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (!delta || typeof delta !== "object" || !("from" in delta || "to" in delta)) {
       const value = deltaValue(field, scalar(raw), ctx);
@@ -953,9 +1013,10 @@ export function changeClauses(
         continue;
       }
     }
-    // A RELATION IS A SET OF OTHER TASKS, so the clause names what joined it
-    // and what left it — "made it block ENG-4" rather than "set the blocking
-    // to ENG-4", which read a derived mirror as a field somebody typed into.
+    // THE PARENT IS A SCALAR with relation words, so the clause names what it
+    // was filed under and taken out of — "filed it under ENG-4" rather than
+    // "set the parent to ENG-4". Every other relation is a set, and took the
+    // arm above.
     const relation = RELATION_WORDS[field];
     if (relation) {
       const ids = (side: string) => (side ? side.split(", ") : []);

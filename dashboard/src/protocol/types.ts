@@ -30,6 +30,8 @@ import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
+import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
+import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { AccessAnswer } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
@@ -40,7 +42,7 @@ import type {
   ReconcileFinding,
   ReconcileStatus,
 } from "../contract/integrations.ts";
-import type { AgentMemory, MemoryOverview } from "../contract/memory.ts";
+import type { AgentEpisode, AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type { BackupsAnswer } from "../contract/backups.ts";
 import type {
   LinkedFromStatus,
@@ -385,6 +387,29 @@ export interface LiveCall {
   updated_at: string;
   /** When the call began. Unlike `updated_at`, it never moves. */
   started_at?: string;
+  /**
+   * The version of the copy this call holds of each heavy field
+   * (`LIVE_CALL_DETAIL`). A push names every one and carries a field only
+   * when its version moved; the store fills in the rest from what it holds.
+   * Absent from an engine that versions nothing, whose pushes are whole.
+   */
+  versions?: CallVersions;
+}
+
+/** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
+export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
+
+/** The `live_call{role}` answer: one seat's call in flight, whole, or null. */
+export interface LiveCallAnswer {
+  role: string;
+  live_call: LiveCall | null;
+  /** The overlay sequence this call is at — see `Overlay.live_call_seq`, and
+   *  present beside a null call too. The answer can reach the tab after a push
+   *  that was generated later, so one behind what the store has applied is
+   *  dropped when the slot has since been cleared or taken by another call,
+   *  and otherwise brings only the heavy fields it holds at a newer version
+   *  (`Store.applyLiveCall`). */
+  live_call_seq?: number;
 }
 
 /** One calendar window of one scope's token counter — the day, the ISO week or
@@ -405,10 +430,12 @@ export interface BudgetWindow {
   /** The ceiling, ABSENT where nothing caps the window — never 0. The live
    *  push lists capped windows only, so there it is always present. */
   limit?: number;
-  /** When the window last turned a charge away, in UTC; absent while it has
-   *  not. The gate's own record, kept in the shared counter beside the spend,
-   *  so every node reports the same one; it clears on the scope's next
-   *  admitted charge or when the window turns over. */
+  /** When the window last turned a call away, in UTC; absent while it has
+   *  not: a charge it refused, or work turned away unsent because the window
+   *  was already full (a turn's next call, a parked delivery, a person's
+   *  question, a reflection pass). The gate's own record, kept in the shared
+   *  counter beside the spend, so every node reports the same one; it clears
+   *  on the scope's next admitted charge or when the window turns over. */
   refused_at?: string;
   /** The engine's judgement of the window. The client computes none. */
   state: BudgetState;
@@ -434,6 +461,17 @@ export interface Overlay {
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
+  /** Orders the `live_call` slot across calls and across a clear: the engine's
+   *  own monotonic sequence read when the seat's call last changed — set,
+   *  folded, frozen or cleared to null — carried on every surface the call is,
+   *  a null call included. A tab records the newest it has applied per seat,
+   *  and a push or an answer whose sequence is behind it changes the slot only
+   *  where the slot is still that same call — and then only by a heavy field
+   *  at a newer version — so a `live_call` answer that a clearing or newer-call
+   *  push overtook on the wire cannot put an older call back on screen. Reset
+   *  from each snapshot; comparable only within one node's projection, the
+   *  only one a socket reads between snapshots. */
+  live_call_seq?: number;
   last_error?: ErrorInfo | null;
   budget?: BudgetMeter | null;
   /** The turn the seat is on, or null when it is on none. Always present, for
@@ -610,6 +648,11 @@ export interface AgentSpendRow extends Bucket {
   role: string;
   handle: string;
   agent_id: string;
+  /** A PERSON's row rather than a seat's: what the auxiliary model spent for
+   *  the human seat `handle` names — a question answered on the operator
+   *  surface, or a background pass of a unit they lead. No `agent_id`, and on
+   *  a named window no `turns`. */
+  person?: boolean;
   by_phase: Record<string, Bucket>;
   /** How many of the seat's turns ENDED in the window, and how many failed —
    *  on a named window only. The live window holds phase records and cannot
@@ -3204,29 +3247,73 @@ export interface TurnAnswer {
 }
 
 /**
- * What a running coding run has said so far, read from its box by the node
- * that owns it (`sandbox.Output`). Redacted by the engine; the LAST 8 KiB.
+ * What a running coding run has said, read from its box by the node that owns
+ * it (`sandbox.Output`), redacted by the engine — in one of two shapes, told
+ * apart by `cursor`.
  */
-export interface SandboxOutput {
+export type SandboxOutput = SandboxWindow | SandboxCursorAnswer;
+
+/** What both shapes of a live output carry. */
+interface SandboxOutputBase {
   text: string;
   /** Which of the job's two accounts of itself this is. */
   source: "transcript" | "stderr" | "none";
-  /** The text lost its front to the bound. */
+  /** Output came before what this answer carries and is not in it. */
   cut: boolean;
   /** When the box was read, on the owning node's clock. */
   as_of: string;
   /** The job is over and waiting to be collected; it will not grow again. */
   finished: boolean;
+  /** The most this shape carries, so a caption says the bound from the answer.
+   *  Absent from an older owner's window, which was 8 KiB. */
+  window_bytes?: number;
+}
+
+/**
+ * A WINDOW, for a request that asked by no cursor or an owner that reads none:
+ * the last `window_bytes` (8 KiB) in whole lines, replacing what was shown. It
+ * carries no cursor field at all.
+ */
+export interface SandboxWindow extends SandboxOutputBase {
+  cursor?: undefined;
+}
+
+/**
+ * What a CURSOR lacks: the text after the offset the asker holds through
+ * (`start`), or on `reset` the last `window_bytes` (256 KiB, what the record
+ * will hold) in whole lines, which replaces what it held. Offsets are UTF-8
+ * bytes of the reading named `epoch`; `end` and `digest` go back on the next
+ * request.
+ *
+ * `epoch`, `start`, `end` and `digest` are ALWAYS PRESENT here, 0 included —
+ * a reading that has settled nothing yet answers at end 0 and is followed from
+ * start 0, and an offset the engine left out at 0 once read as absent, so a
+ * delta from 0 was taken for one that did not follow and thrown away.
+ */
+export interface SandboxCursorAnswer extends SandboxOutputBase {
+  cursor: true;
+  epoch: string;
+  start: number;
+  end: number;
+  digest: string;
+  /** The text replaces what the asker holds rather than following it. */
+  reset?: boolean;
+  /** The owner's reading began after the job's own start. */
+  front?: boolean;
+  /** Bytes written but not shown yet, until their redaction is settled. */
+  held?: number;
 }
 
 /**
  * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
- * tail of that job while it runs, `not_running` with the record's own status
- * once it is not, or the owning node NAMED where it did not answer
- * (`owner_silent`) or runs a build that cannot (`owner_upgrading`).
+ * tail of that job while it runs, `launching` while its box is still being
+ * made, `not_running` with the record's own status once it is not,
+ * `box_paused` for a running record whose box is paused (never woken to be
+ * read), or the owning node NAMED where it did not answer (`owner_silent`) or
+ * runs a build that cannot (`owner_upgrading`).
  */
 export interface SandboxTailAnswer {
-  outcome: "tail" | "not_running" | "owner_silent" | "owner_upgrading";
+  outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
   /** The node that owns the run — the one that answered, or did not. */
@@ -3685,12 +3772,16 @@ export interface Frame {
 }
 
 /** The named answers the socket's request/response channel serves. */
-/** One field's before and after, AS TEXT — every renderer of a delta wants
+/** One field's move, AS TEXT — every renderer of a delta wants
  *  "todo → in_progress", and the typed value is on the row for anything that
- *  needs it. */
+ *  needs it. A SET (watchers, an edge kind, tags) carries what it gained and
+ *  lost instead, each sorted and each member whole, with `from` and `to`
+ *  empty (`tracker.Delta`). */
 export interface WorkDelta {
   from: string;
   to: string;
+  added?: string[];
+  removed?: string[];
 }
 
 /** One commit, as the activity feed renders it.
@@ -4365,7 +4456,9 @@ export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
+  live_call: LiveCallAnswer;
   agent_memory: AgentMemory;
+  agent_episode: AgentEpisode;
   memory_overview: MemoryOverview;
   events: EventsPage;
   event_series: EventSeries;

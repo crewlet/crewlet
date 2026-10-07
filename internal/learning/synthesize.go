@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -269,7 +268,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 		return nil, nil
 	}
 
-	member, err := s.models.Head(t.Role, phase.Auxiliary)
+	member, err := s.models.Auxiliary(t.Role, t.Reflecting(types.AuxSkillSynthesizer))
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model for skill synthesis: %w", err)
 	}
@@ -370,7 +369,7 @@ func parseSkillDraft(c *llm.Completion) (skillDraft, bool) {
 		// WARN, not debug: a synthesizer that has stopped decoding is
 		// indistinguishable from a model with nothing to draft, and the
 		// second needs no attention while the first does.
-		log.Warn("skill_draft_undecodable", "response", preview(body, 200))
+		log.Warn("skill_draft_undecodable", "response", body)
 		return skillDraft{}, false
 	}
 	draft.Name = strings.TrimSpace(draft.Name)
@@ -426,10 +425,8 @@ Leave out what happened this time — no ticket numbers, no names, no dates.`
 // buildSynthesisPrompt renders the one turn the draft is distilled from.
 func buildSynthesisPrompt(t Turn) string {
 	var b strings.Builder
-	b.WriteString("Turn summary:\n- Task: ")
-	b.WriteString(orElse(t.Event.TaskSummary, "(no description)"))
-	b.WriteString("\n- Plan: ")
-	b.WriteString(orElse(t.Event.PlanSummary, "(no plan)"))
+	b.WriteString("Turn summary:\n")
+	describeTurn(&b, t, t.Ask())
 	b.WriteString("\n- Tools called, in order: ")
 	b.WriteString(strings.Join(t.Event.ToolSequence, " -> "))
 	b.WriteString("\n- Outcome: ")

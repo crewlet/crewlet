@@ -268,3 +268,27 @@ func TestAPageWakeIsStampedWithItsRecordsInstant(t *testing.T) {
 		}
 	}
 }
+
+// A WOKEN SEAT READS A COMMENT WHOLE, newlines and all — never the card's
+// excerpt of it. The card is a preview cut at MaxExcerpt for a list of
+// notices; the wake is what a seat acts on.
+func TestAPageCommentWakesItsWatchersWithTheWholeComment(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{
+		Title: "Runbook", Body: "prose", Watchers: []string{"carla"},
+	})
+	long := strings.Repeat("Step one looks right to me.\n", 40) + "BUT step four deletes prod."
+	if _, _, err := r.store.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: long}); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+	routed := r.route(r.lastRecord(), pages.Leads{"ENG": "lead"})
+	if len(routed) == 0 {
+		t.Fatal("a comment on a watched page woke nobody")
+	}
+	if got := routed[0].Inbound.Body; got != long {
+		t.Fatalf("the woken seat read %d bytes of a %d-byte comment", len(got), len(long))
+	}
+}

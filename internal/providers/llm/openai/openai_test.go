@@ -21,6 +21,7 @@ import (
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -406,6 +407,113 @@ func TestStatusClassification(t *testing.T) {
 	}
 }
 
+// A CLASSIFIED FAILURE SAYS WHAT THE ENDPOINT SAID.
+//
+// The SDK's error names the status alone ("OpenAI API error: 400 Bad
+// Request"), deliberately, since its URL and the provider's fields can carry
+// secrets — so a context length, a model the gateway does not serve and a
+// parameter the model does not take all read as one 400. The kind is the
+// status's; the reason is the endpoint's, read off the error's fields, redacted
+// and bounded, and never the URL — a gateway's password in it included.
+func TestAClassifiedFailureSaysWhatTheEndpointSaid(t *testing.T) {
+	t.Parallel()
+	key := "sk-proj-" + strings.Repeat("Zq7", 12)
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   []string
+	}{
+		{"the envelope", 400,
+			`{"error":{"message":"This model's maximum context length is 8192 tokens",` +
+				`"type":"invalid_request_error","code":"context_length_exceeded","param":"messages"}}`,
+			[]string{"maximum context length is 8192 tokens", "type invalid_request_error",
+				"code context_length_exceeded", "param messages"}},
+		{"outside the envelope", 404, `{"detail":"gpt-test is not served by this gateway"}`,
+			[]string{"gpt-test is not served by this gateway"}},
+		{"an echoed key", 400,
+			`{"error":{"message":"Incorrect API key provided: ` + key + `","type":"invalid_request_error"}}`,
+			[]string{"Incorrect API key provided", "[REDACTED:"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, tc.status, tc.body)
+			})
+			// A gateway's credentials in the base URL, which the request
+			// URL carries and the error must not.
+			gateway := strings.Replace(url, "http://", "http://gateway:s3cretpass@", 1)
+			_, err := newProvider(t, gateway, nil).Complete(context.Background(), userTurn("hi"))
+			var classified *llm.Error
+			if !errors.As(err, &classified) || classified.Status != tc.status ||
+				classified.Kind != llm.KindFatal {
+				t.Fatalf("Complete = %v, want a fatal HTTP %d", err, tc.status)
+			}
+			for _, want := range append(tc.want, fmt.Sprintf("HTTP %d", tc.status)) {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the error does not say %q: %v", want, err)
+				}
+			}
+			for _, leaked := range []string{key, "s3cretpass", strings.TrimPrefix(url, "http://")} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Errorf("the error carries %q: %v", leaked, err)
+				}
+			}
+			var apiErr *sdk.Error
+			if !errors.As(err, &apiErr) {
+				t.Errorf("errors.As no longer reaches the SDK's error behind %v", err)
+			}
+		})
+	}
+}
+
+// A DETAIL IS A DIAGNOSTIC, NOT A DOCUMENT: an endpoint that answers with a
+// page of text is shown the bound's worth, marked as cut, on one line.
+func TestADetailIsBoundedAndMarked(t *testing.T) {
+	t.Parallel()
+	message := strings.Repeat("the request was refused for a reason\n", 200)
+	got := Detail(&sdk.Error{Message: message, Code: "too_long"})
+	if len(got) > httpx.RefusalBytes+100 {
+		t.Errorf("detail is %d bytes, want it bounded near %d", len(got), httpx.RefusalBytes)
+	}
+	if !strings.Contains(got, "runs past") || strings.Contains(got, "\n") {
+		t.Errorf("detail = %q, want one line marked as cut", got)
+	}
+	if Detail(nil) != "" || Detail(&sdk.Error{StatusCode: 500}) != "" {
+		t.Error("an error that said nothing was given a detail")
+	}
+}
+
+// A KEY THE BOUND RUNS THROUGH IS REDACTED WHOLE, in the envelope's message and
+// in a body outside it alike. Bounded first, the cut left the key's opening —
+// `sk-proj-` and a few characters, too short for any rule to recognise — shown
+// as it was; the body path did exactly that.
+//
+// Mutation: bound a body before redacting it, and its key's opening survives.
+func TestAKeyTheBoundRunsThroughIsRedactedWhole(t *testing.T) {
+	t.Parallel()
+	key := "sk-proj-" + strings.Repeat("Zq7", 12)
+	// The text runs to twelve bytes short of the bound, so a cut at the
+	// bound leaves `sk-proj-Zq7Z` of the key.
+	lead := strings.Repeat("refused ", httpx.RefusalBytes/8)[:httpx.RefusalBytes-12]
+	text := lead + key + " and the rest of the account"
+	for name, apiErr := range map[string]*sdk.Error{
+		"the envelope": {Message: text, Code: "invalid_api_key"},
+		"outside the envelope": {StatusCode: 502, Response: &http.Response{
+			Header: http.Header{"Content-Type": {"text/plain"}},
+			Body:   io.NopCloser(strings.NewReader(text)),
+		}},
+	} {
+		got := Detail(apiErr)
+		if strings.Contains(got, key[:len("sk-proj-")+1]) {
+			t.Errorf("%s: the key's opening survived the bound: …%q", name, got[max(len(got)-80, 0):])
+		}
+		if !strings.Contains(got, "runs past") {
+			t.Errorf("%s: detail = …%q, want it marked as cut", name, got[max(len(got)-80, 0):])
+		}
+	}
+}
+
 func TestRotatesToTheNextKeyWithinOneCall(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, n int) {
@@ -458,6 +566,25 @@ func TestEveryKeyBenchedReportsAnExhaustedPool(t *testing.T) {
 	}
 	if got := llm.KindOf(err); got != llm.KindAuth {
 		t.Fatalf("classified %s, want the kind that did the benching", got)
+	}
+}
+
+// AN EXHAUSTED POOL SAYS WHY ITS LAST KEY WAS BENCHED: a revoked key and a
+// spent quota bench alike, and only the endpoint's own words tell them apart.
+func TestAnExhaustedPoolSaysWhatTheEndpointToldItsLastKey(t *testing.T) {
+	t.Parallel()
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, 429, `{"error":{"message":"You exceeded your current quota",`+
+			`"type":"insufficient_quota","code":"insufficient_quota","param":null}}`)
+	})
+	_, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+	if !errors.Is(err, credential.ErrExhausted) || llm.KindOf(err) != llm.KindRateLimit {
+		t.Fatalf("err = %v, want the pool exhausted on a rate limit", err)
+	}
+	for _, want := range []string{"You exceeded your current quota", "code insufficient_quota"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
+		}
 	}
 }
 
@@ -1115,6 +1242,20 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	}
 	if out.Content != "Hello" {
 		t.Errorf("content = %q, want the unary answer", out.Content)
+	}
+	// ASKED ONCE, AND THE ANSWER IT GAVE IS THE ONE RETURNED, usage and
+	// all. The endpoint processed and billed the streaming request; asking
+	// again unary paid for the round twice, and the first answer reached
+	// no counter and no rollup.
+	if got := api.count(); got != 1 {
+		t.Errorf("the first call cost %d requests, want 1: the endpoint's answer "+
+			"was thrown away and asked for again", got)
+	}
+	if out.InputTokens != 10 || out.OutputTokens != 5 {
+		t.Errorf("tokens = %d/%d, want the 10/5 the endpoint billed", out.InputTokens, out.OutputTokens)
+	}
+	if stream, _ := api.seen()[0].body["stream"].(bool); !stream {
+		t.Error("the first request did not ask to stream, so nothing was negotiated")
 	}
 	before := api.count()
 

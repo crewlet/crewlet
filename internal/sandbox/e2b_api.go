@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The E2B control plane: minting, reclaiming and keeping a box alive.
@@ -139,7 +138,7 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail := readDetail(resp.Body)
+		detail := httpx.ReadRefusal(resp)
 		return &E2BError{
 			Method: method, Path: path, Status: resp.StatusCode,
 			Detail: strings.TrimSpace(detail),
@@ -169,7 +168,28 @@ type e2bBox struct {
 	// the template. Read so a wire mismatch is visible in a log line
 	// rather than as an unexplained 404 from inside a box.
 	EnvdVersion string `json:"envdVersion"`
+
+	// State is `running` or `paused` — the SandboxState of E2B's own
+	// spec, on its `GET /sandboxes/{sandboxID}` answer only ([getBox]);
+	// a create or a connect answers a running box and does not carry it.
+	State string `json:"state,omitempty"`
+
+	// EnvdAccessToken is the credential a SECURED box's envd requires on
+	// every request (`X-Access-Token`; see [e2bAPI.createBox]), and E2B
+	// answers it on the create, on a connect and on a read of the box
+	// alike, so every handle this backend builds carries it whichever of
+	// the three reached the box. Empty for a box made without secured
+	// access, whose envd asks for none. NEVER LOGGED OR STORED: it is the
+	// box's credential, and every call that reaches the box hands it back,
+	// so nothing here has to keep it.
+	//
+	// Source: the Sandbox and SandboxDetail schemas of E2B's OpenAPI spec,
+	// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
+	EnvdAccessToken string `json:"envdAccessToken,omitempty"`
 }
+
+// e2bPaused is the [e2bBox.State] of a snapshot.
+const e2bPaused = "paused"
 
 // host is the per-box envd hostname.
 //
@@ -189,10 +209,31 @@ func (b e2bBox) host(domain string) string {
 // The TTL is the box's own kill timer, refreshed by [E2BSandbox.SetTimeout]
 // on every poll tick — so it bounds how long a box outlives an engine that
 // stopped heart-beating, never how long a job may run.
-func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string) (e2bBox, error) {
+//
+// SECURED WHEN ASKED, and the provider asks once the whole fleet can read
+// such a box ([E2BProvider.Create]). This endpoint secures a box only when
+// `secure` is true; otherwise its envd requires no credential and E2B answers
+// no access token for it. Secured, envd requires the token the create answers
+// ([e2bBox.EnvdAccessToken]) on every request but its health check — E2B's
+// own SDKs have created every box that way since their 2.0 ("Each call to the
+// sandbox controller must include an additional header X-Access-Token with
+// the access token value returned during sandbox creation"). A template whose
+// envd predates secured access (below 0.2.0) is refused by E2B with a message
+// saying to rebuild it, which is the right place for that to surface.
+//
+// `secure` is OMITTED rather than sent false when not asked, so an unsecured
+// create is the request an older build sends, byte for byte.
+//
+// Sources: https://e2b.dev/docs/sandbox/secured-access; the NewSandbox
+// schema in https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml, the
+// create handler that mints a token only for `secure: true`
+// (packages/api/internal/handlers/sandbox_create.go there), and envd's
+// WithAuthorization in packages/envd/internal/api/auth.go.
+func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string, secure bool) (e2bBox, error) {
 	type request struct {
 		TemplateID string            `json:"templateID"`
 		Timeout    int               `json:"timeout,omitempty"`
+		Secure     bool              `json:"secure,omitempty"`
 		EnvVars    map[string]string `json:"envVars,omitempty"`
 		Metadata   map[string]string `json:"metadata,omitempty"`
 	}
@@ -200,6 +241,7 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 	err := a.do(ctx, http.MethodPost, "/sandboxes", request{
 		TemplateID: template,
 		Timeout:    int(timeoutSec),
+		Secure:     secure,
 		EnvVars:    env,
 		// STAMPED SO A LEAK IS ATTRIBUTABLE. A box outlives the process
 		// that made it by design, so an operator looking at a running VM
@@ -254,6 +296,26 @@ func (a *e2bAPI) connectBox(ctx context.Context, sandboxID string, seconds float
 	return out, nil
 }
 
+// getBox reads one sandbox as it is, WITHOUT resuming it or touching its
+// timer: E2B's `GET /sandboxes/{sandboxID}` ("Get a sandbox by id"), whose
+// SandboxDetail answer carries the box's `state` — `running` or `paused` —
+// beside the client id its envd hostname is built from. The read a reader
+// needs, where /connect is the read a resume needs: /connect wakes a paused
+// box ("If the sandbox is paused, it will be resumed") and extends its timer.
+//
+// Source: the SandboxDetail and SandboxState schemas of E2B's OpenAPI spec,
+// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
+func (a *e2bAPI) getBox(ctx context.Context, sandboxID string) (e2bBox, error) {
+	var out e2bBox
+	if err := a.do(ctx, http.MethodGet, "/sandboxes/"+sandboxID, nil, &out); err != nil {
+		return e2bBox{}, err
+	}
+	if out.SandboxID == "" {
+		out.SandboxID = sandboxID
+	}
+	return out, nil
+}
+
 // killBox terminates a sandbox by id, without resuming it.
 //
 // A PAUSED BOX IS KILLED WHERE IT LIES. The reaper's whole reason to exist is
@@ -281,32 +343,4 @@ func (a *e2bAPI) setBoxTimeout(ctx context.Context, sandboxID string, seconds fl
 // pauseBox snapshots a sandbox.
 func (a *e2bAPI) pauseBox(ctx context.Context, sandboxID string) error {
 	return a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/pause", nil, nil)
-}
-
-// detailLimit bounds a vendor's own explanation of a refusal.
-//
-// The whole account of what went wrong — a quota message, a permission
-// name, a validation list — and it reaches an operator and a model as the
-// error's text. Two kilobytes holds any of those; past that it is a vendor
-// serving an HTML page where an API response belongs.
-const detailLimit = 2048
-
-// readDetail reads a refusal's body, SAYING when it cut.
-//
-// An unmarked cut leaves "the explanation is off-screen" and "the vendor
-// explained itself badly" as the same string, which is the distinction the
-// reader most needs — and the read error is reported rather than dropped,
-// because a body that died mid-read is a different fact from a short one.
-func readDetail(body io.Reader) string {
-	raw, err := io.ReadAll(io.LimitReader(body, detailLimit+1))
-	text := strings.TrimSpace(string(raw))
-	switch {
-	case len(raw) > detailLimit:
-		return strings.TrimSpace(textcut.Bytes(string(raw), detailLimit)) +
-			"\n…(the rest of the response is past the 2048-byte cap this build reads)"
-	case err != nil && text == "":
-		return "(the response body could not be read: " + err.Error() + ")"
-	default:
-		return text
-	}
 }
