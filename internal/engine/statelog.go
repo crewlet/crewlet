@@ -2602,9 +2602,9 @@ func passedByAReanchor(domain statelog.Domain, at statelog.Position, found bool,
 // carries is still above the floor.
 //
 // THE HOLD IS THE MECHANISM AND THIS IS THE BELT. A fleet that trimmed past
-// the artefact anyway — a peer on a build that does not honour holds, an
-// operator forcing one — is one this node must not follow into a hole, and the
-// only moment it can still refuse is before the install.
+// the artefact anyway — a hold that went stale while the transfer ran, an
+// operator purging the stream by hand — is one this node must not follow into
+// a hole, and the only moment it can still refuse is before the install.
 func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.DomainLog,
 	m statelog.Manifest) error {
 

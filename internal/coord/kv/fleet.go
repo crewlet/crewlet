@@ -1133,11 +1133,11 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 // KEYED BY PERIOD rather than positional, so a record reads as what it is in
 // `nats kv get` and a period this build does not know is a key it skips
 // rather than a slot it misplaces. Evolution is additive, with the caveat
-// every record here carries: a build that predates a field DROPS it when it
-// rewrites the record, because it re-encodes only what it knows. A refusal
-// stamp an older node drops is the harmless direction — the stamp is what a
-// dashboard shows, never what the gate decides with, and the next refusal by a
-// newer node writes it again.
+// every record here carries: a build that does not know a field DROPS it when
+// it rewrites the record, because it re-encodes only what it knows. So any
+// field a build adds must be one whose loss on a rewrite is harmless, as
+// RefusedAt's is: the stamp is what a dashboard shows, never what the gate
+// decides with, and the next refusal writes it again.
 type tallyRecord struct {
 	Slots map[period.Period]slotRecord `json:"slots"`
 	At    time.Time                    `json:"at,omitzero"`
