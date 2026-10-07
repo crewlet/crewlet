@@ -86,7 +86,7 @@ var dutyCases = []testCase{
 		// A duty is judged by the deadline it asked for, not by whatever
 		// longer horizon the backend keeps duty records for. A dead holder's
 		// scheduler duty has to move within its 30 seconds, not within the
-		// three hours the curator needs.
+		// three hours the learning passes need.
 		duty := coord.WorkerResource("scheduler")
 		first := h.claim(duty, coord.AcquireOptions{Owner: "node-a:1", TTL: ShortTTL, Ungated: true})
 		h.lapse()
