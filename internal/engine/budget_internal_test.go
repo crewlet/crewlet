@@ -516,6 +516,24 @@ func (r *refusalLog) refused() []string {
 	return append([]string(nil), r.scopes...)
 }
 
+// countedFleet is a fleet whose refusals go through a [refusalLog], for a gate
+// the engine builds over its whole fleet rather than over a meter's counter.
+type countedFleet struct {
+	fleetBase
+	log *refusalLog
+}
+
+func (f countedFleet) Refuse(ctx context.Context, scope string, caps coord.Caps, w coord.Windows) (coord.Usage, error) {
+	return f.log.Refuse(ctx, scope, caps, w)
+}
+
+// counted wraps fleet so every refusal handed to it is remembered, and failed
+// with err where err is not nil.
+func counted(fleet *coordmem.Fleet, err error) (countedFleet, *refusalLog) {
+	log := &refusalLog{budgetCounter: fleet, err: err}
+	return countedFleet{fleetBase: fleet, log: log}, log
+}
+
 // stampOf is one scope's refusal stamp in one period, read off the counter.
 func stampOf(t *testing.T, fleet *coordmem.Fleet, scope string, p period.Period, w coord.Windows) time.Time {
 	t.Helper()
@@ -766,6 +784,66 @@ func TestAHeldRefusalReportsTheCountersFigureAtTheRefusal(t *testing.T) {
 	got, held := m.Refused(ctx)
 	if !held || got.Scope != "agent" || got.Used != 150 || got.Limit != 100 {
 		t.Fatalf("Refused = (%+v, %v), want the seat's day at the 150 the counter holds", got, held)
+	}
+}
+
+// A GATE'S REFUSAL STAMPS THE SCOPE A CHARGE WOULD BE REFUSED BY, NOT THE ONE
+// IT WAITS ON.
+//
+// The company's day and the seat's month are both full. A park waits on the
+// month, which ends last; but a charge is judged against the company first,
+// so the company is the one that refuses it, stamped alone, and the seat
+// counted with no verdict of its own. A gate that turns the work away
+// records exactly that — or the seat's screens would say the seat refused
+// calls the company turned away, and the company's would say it refused none.
+// Once the company has room, the seat is what refuses, and its full month is
+// what is stamped.
+//
+// Mutation: record the refusal on the scope the park waits on, and the
+// company's day carries no stamp while the seat's month carries one.
+func TestAGatesRefusalStampsTheScopeAChargeIsRefusedBy(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Month: 100}}
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+	scope, windows := scopeOf(t, c, lead), coord.WindowsAt(clock, time.UTC)
+	if _, err := fleet.PostCharge(ctx, scope, 100, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+
+	r, refusing, err := m.refusing(ctx)
+	if err != nil || !refusing || r.Scope != scope || r.Window.Period != period.Month || r.By != coord.OrgScope {
+		t.Fatalf("refusing = (%+v, %v, %v), want the seat's month waited on and the "+
+			"company refusing", r, refusing, err)
+	}
+	m.turnAway(ctx, r)
+	if stamp := stampOf(t, fleet, coord.OrgScope, period.Day, windows); stamp.IsZero() {
+		t.Error("the company's day, which refuses every charge, carries no stamp")
+	}
+	for _, p := range []period.Period{period.Day, period.Month} {
+		if stamp := stampOf(t, fleet, scope, p, windows); !stamp.IsZero() {
+			t.Errorf("the seat's %s was stamped at %v for a refusal the company makes", p, stamp)
+		}
+	}
+
+	// The next day the company has room, and the seat's month is what
+	// refuses.
+	clock = time.Date(2026, time.March, 15, 9, 0, 0, 0, time.UTC)
+	windows = coord.WindowsAt(clock, time.UTC)
+	r, refusing, err = m.refusing(ctx)
+	if err != nil || !refusing || r.By != scope || r.Window.Period != period.Month {
+		t.Fatalf("refusing the next day = (%+v, %v, %v), want the seat's month refusing",
+			r, refusing, err)
+	}
+	m.turnAway(ctx, r)
+	if stamp := stampOf(t, fleet, scope, period.Month, windows); stamp.IsZero() {
+		t.Error("the seat's month, which refuses every charge now, carries no stamp")
+	}
+	if stamp := stampOf(t, fleet, coord.OrgScope, period.Day, windows); !stamp.IsZero() {
+		t.Errorf("the company's new day was stamped at %v; it has room", stamp)
 	}
 }
 

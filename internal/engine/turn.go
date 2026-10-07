@@ -185,9 +185,10 @@ type Dispatcher struct {
 	// reflection pass beside them asks for ([Engine.reflectionRoom]) — they
 	// are filed under that stage, being what the seat remembers of a turn
 	// once it is over. Asked once per entry, and only for an entry with a
-	// payload to rewrite. Three-valued: an error is a counter that could not
-	// be read, and the rewrites are made, since the charge on the way out
-	// still counts them.
+	// payload to rewrite, so a false is those rewrites turned away — and the
+	// engine's gate records it as the window's refusal. Three-valued: an
+	// error is a counter that could not be read, and the rewrites are made,
+	// since the charge on the way out still counts them.
 	//
 	// A FUNCTION, read per dispatch, for [Dispatcher.Conversation]'s reason.
 	// Nil admits every entry, which is the answer for a dispatcher with no

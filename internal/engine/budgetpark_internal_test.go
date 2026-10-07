@@ -178,6 +178,22 @@ func (r *parkRig) spend(t *testing.T, tokens int) {
 	}
 }
 
+// leadDay is the Lead's day on its counter, in the windows of the rig's clock.
+func (r *parkRig) leadDay(t *testing.T) coord.WindowUsage {
+	t.Helper()
+	c := r.e.Company()
+	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle("lead"))
+	if !ok {
+		t.Fatal("the Lead has no agent id")
+	}
+	u, err := r.fleet.Used(t.Context(), coord.AgentScope(id.String()),
+		coord.WindowsAt(r.clock(), c.Config.Location()))
+	if err != nil {
+		t.Fatalf("Used: %v", err)
+	}
+	return u.In(period.Day)
+}
+
 // deliver publishes one trigger to the Lead's inbox, which the in-memory queue
 // hands to the dispatcher before Publish returns.
 func (r *parkRig) deliver(t *testing.T) {
@@ -247,6 +263,57 @@ func TestASpentSeatIsParkedUntilItsWindowTurnsOver(t *testing.T) {
 	}
 	if h := r.holds(); slices.Contains(h, pauseReasonBudget) {
 		t.Errorf("the budget hold outlived the window it waited on: %v", h)
+	}
+}
+
+// A PARK IS THE GATE'S REFUSAL, AND THE COUNTER RECORDS IT.
+//
+// The Lead's day was filled by a post-charge — a collected coding run, a
+// background pass — which refuses nothing and stamps nothing, so no turn ever
+// had a charge refused there: every delivery was parked before one could run.
+// Unrecorded, that window held every message its seat was sent while its
+// refused_at, "refusing since" on every screen and `crewlet budgets show` said
+// nothing had ever been refused. The record spends nothing.
+//
+// Mutation: drop the park's record, and the day carries no stamp.
+func TestAParkIsRecordedAsTheGatesRefusal(t *testing.T) {
+	t.Parallel()
+	r := newParkRig(t, "100")
+	r.spend(t, 100)
+	if day := r.leadDay(t); !day.RefusedAt.IsZero() {
+		t.Fatalf("setup: the post-charge stamped the Lead's day at %v", day.RefusedAt)
+	}
+
+	from := time.Now()
+	r.deliver(t)
+	if r.runs() != 0 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("precondition: the seat is not parked (runs %d, holds %v)", r.runs(), r.holds())
+	}
+	day := r.leadDay(t)
+	if day.RefusedAt.Before(from) || day.RefusedAt.After(time.Now()) {
+		t.Fatalf("the Lead's day refused_at = %v, want the instant the park turned its "+
+			"delivery away (in [%v, now])", day.RefusedAt, from)
+	}
+	if day.Used != 100 {
+		t.Errorf("the Lead's day holds %d after the park, want the 100 spent and nothing more", day.Used)
+	}
+}
+
+// A SEAT WITH ROOM LEAVES NO REFUSAL: its delivery runs, and nothing is
+// recorded on its counter — a stamp there would tell every screen the gate is
+// refusing a seat it let through.
+func TestASeatWithRoomIsNotRecordedAsRefused(t *testing.T) {
+	t.Parallel()
+	r := newParkRig(t, "100")
+	fleet, refusals := counted(r.fleet, nil)
+	r.e.backends.Fleet = fleet
+	r.spend(t, 99)
+	r.deliver(t)
+	if r.runs() != 1 {
+		t.Fatalf("a seat with a token of room left ran %d turns", r.runs())
+	}
+	if got := refusals.refused(); len(got) != 0 {
+		t.Errorf("refusals recorded = %v for a seat the park let through", got)
 	}
 }
 

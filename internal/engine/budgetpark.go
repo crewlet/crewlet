@@ -34,7 +34,12 @@ import (
 //   - the delivery is DEFERRED with a reason naming the window — `budget: day
 //     window 2026-09-23 resets 2026-09-24T07:00:00Z` — which hands it back
 //     unacked for one of its deliveries, and quiesces the attachment;
-//   - an alarm is armed for the window's end.
+//   - an alarm is armed for the window's end;
+//   - and the refusal is recorded on the shared counter as the gate's
+//     ([meter.turnAway]), so the window's `refused_at` says when its seats
+//     were last turned away — a window a coding run or a background pass
+//     filled used to park every delivery it was sent while reading as one
+//     that had refused nothing.
 //
 // The hold is released at the reset, or at once by an apply that changes what
 // the park was decided under (a ceiling of either scope, or the company's
@@ -162,6 +167,13 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	if err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
+	// THE PARK IS THE GATE SAYING NO, and it is recorded as the window's
+	// refusal ([meter.turnAway]): the delivery it defers is the turn whose
+	// first charge would have been refused, and stamped the window, had it
+	// run. Recorded once the hold is taken, so a park that could not be made
+	// — the delivery NAKed and asked about again — is one refusal and not
+	// two.
+	m.turnAway(ctx, r)
 
 	reason := fmt.Sprintf("budget: %s window %s resets %s",
 		r.Window.Period, r.Window.Label, rfc3339(r.Window.End))

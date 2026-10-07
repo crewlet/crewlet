@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -105,6 +107,89 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	if ok, err := e.learningBudget(meteredCompany(config.TokenBudget{}, free))(ctx, free); err != nil || !ok {
 		t.Fatalf("gate for an uncapped seat = (%v, %v), want (true, nil)", ok, err)
 	}
+}
+
+// A DECLINED REFLECTION IS THE GATE'S REFUSAL, AND THE COUNTER RECORDS IT.
+//
+// The seat's day was filled by a post-charge — its own coding run collected,
+// or its turn's auxiliary calls — which refuses nothing and stamps nothing.
+// The gate then turns away the reflection stage's calls before any is made,
+// the pass's and a conversation entry's rewrites alike: unrecorded, a seat
+// declining every pass read, on every screen and in `crewlet budgets show`,
+// as one that had refused nothing. The seat is stamped, not the company,
+// which caps nothing; nothing is counted; a gate with room records nothing;
+// and a counter that cannot be read is not a refusal, so it records nothing
+// either.
+//
+// Mutation: drop the gate's record, and the seat's day carries no stamp.
+func TestADeclinedReflectionIsRecordedAsTheGatesRefusal(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	base := coordmem.NewFleet()
+	fleet, refusals := counted(base, nil)
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e.epoch.current.Store(c)
+	scope, windows := scopeOf(t, c, lead), coord.WindowsAt(time.Now(), time.UTC)
+	gate := e.learningBudget(c)
+
+	if ok, err := gate(ctx, lead); err != nil || !ok {
+		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
+	}
+	if got := refusals.refused(); len(got) != 0 {
+		t.Fatalf("refusals recorded = %v for a pass the seat had room for", got)
+	}
+
+	if _, err := base.PostCharge(ctx, scope, 100, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	from := time.Now()
+	if ok, err := gate(ctx, lead); err != nil || ok {
+		t.Fatalf("gate with the day spent = (%v, %v), want (false, nil)", ok, err)
+	}
+	if got := refusals.refused(); len(got) != 1 || got[0] != scope {
+		t.Fatalf("refusals recorded = %v, want the seat's one", got)
+	}
+	day := stampOf(t, base, scope, period.Day, windows)
+	if day.Before(from) || day.After(time.Now()) {
+		t.Fatalf("the seat's day refused_at = %v, want the instant the pass was declined "+
+			"(in [%v, now])", day, from)
+	}
+	if company := stampOf(t, base, coord.OrgScope, period.Day, windows); !company.IsZero() {
+		t.Errorf("the company was stamped at %v; it caps nothing and refused nothing", company)
+	}
+
+	// The conversation entry's rewrites ask the same gate, and are a
+	// refusal of their own.
+	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{
+		NoteDeferred:  func(string) {},
+		Completions:   ledgerstore.NewMemoryCompletions(),
+		Conversations: ledgerstore.NewMemoryConversations(),
+	}}, e.backends)
+	if ok, err := d.ReflectionRoom(ctx, lead.Handle()); err != nil || ok {
+		t.Fatalf("the entry's gate with the day spent = (%v, %v), want (false, nil)", ok, err)
+	}
+	if got := refusals.refused(); len(got) != 2 {
+		t.Errorf("refusals recorded = %v, want a second for the entry's rewrites", got)
+	}
+
+	// UNKNOWN IS NOT NO: an unreadable counter declines nothing and records
+	// nothing.
+	unread := &Engine{backends: &Backends{Fleet: unreadableCounted{fleet}}}
+	if ok, err := unread.learningBudget(c)(ctx, lead); err == nil || !ok {
+		t.Fatalf("gate over an unreadable counter = (%v, %v), want (true, an error)", ok, err)
+	}
+	if got := refusals.refused(); len(got) != 2 {
+		t.Errorf("refusals recorded = %v after an unreadable counter, want no more", got)
+	}
+}
+
+// unreadableCounted is a counted fleet whose counters cannot be read.
+type unreadableCounted struct{ countedFleet }
+
+func (unreadableCounted) Used(context.Context, string, coord.Windows) (coord.Usage, error) {
+	return coord.Usage{}, errors.New("the coordination store is unreachable")
 }
 
 // A CONVERSATION ENTRY'S REWRITES ASK THE REFLECTION STAGE'S GATE, on the live

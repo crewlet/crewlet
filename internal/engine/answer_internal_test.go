@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -103,6 +104,81 @@ func TestAnAnswerIsRefusedOnlyByASpentCompanyWindow(t *testing.T) {
 		!refusal.ResetsAt.Equal(month.End) || refusal.Used != 100 || refusal.Limit != 100 {
 		t.Errorf("refusal = %+v, want the month (it ends last), 100 of 100, resetting at %v",
 			refusal, month.End)
+	}
+}
+
+// A REFUSED ANSWER IS THE GATE'S REFUSAL, AND THE COMPANY'S COUNTER RECORDS IT.
+//
+// The company's day was filled by post-charges — a person's earlier answers, a
+// coding run, a background pass — which refuse nothing and stamp nothing, so
+// no charge was ever refused there. The gate refuses the question before any
+// call is made, and that is the call the window turned away: unrecorded, a
+// company refusing every question asked of it read, on every screen and in
+// `crewlet budgets show`, as one that had refused nothing. Only the company is
+// stamped, since a person has no seat budget; nothing is counted; and a
+// question the company has room for records nothing at all.
+//
+// Mutation: drop the gate's record, and the company's day carries no stamp.
+func TestARefusedAnswerIsRecordedAsTheGatesRefusal(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, &org.Role{Name: "Lead"})
+	e, fleet := answerEngine(t, c)
+	logged, refusals := counted(fleet, nil)
+	budget := answerBudget{engine: e, budgets: logged, now: time.Now}
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+
+	if _, err := fleet.PostChargeOrg(ctx, 99, windows); err != nil {
+		t.Fatalf("PostChargeOrg: %v", err)
+	}
+	if _, refusing, err := budget.Refusing(ctx); err != nil || refusing {
+		t.Fatalf("Refusing with a token of room = (%v, %v), want (false, nil)", refusing, err)
+	}
+	if got := refusals.refused(); len(got) != 0 {
+		t.Fatalf("refusals recorded = %v for a question the company had room for", got)
+	}
+
+	if _, err := fleet.PostChargeOrg(ctx, 1, windows); err != nil {
+		t.Fatalf("PostChargeOrg: %v", err)
+	}
+	from := time.Now()
+	if _, refusing, err := budget.Refusing(ctx); err != nil || !refusing {
+		t.Fatalf("Refusing with the company's day spent = (%v, %v), want (true, nil)", refusing, err)
+	}
+	if got := refusals.refused(); len(got) != 1 || got[0] != coord.OrgScope {
+		t.Fatalf("refusals recorded = %v, want the company's one", got)
+	}
+	u, err := fleet.Used(ctx, coord.OrgScope, windows)
+	if err != nil {
+		t.Fatalf("Used: %v", err)
+	}
+	day := u.In(period.Day)
+	if day.RefusedAt.Before(from) || day.RefusedAt.After(time.Now()) || day.Used != 100 {
+		t.Fatalf("the company's day = %+v, want the 100 spent, refused at the question "+
+			"(in [%v, now])", day, from)
+	}
+}
+
+// A REFUSED ANSWER STAYS REFUSED WHEN ITS RECORD CANNOT BE WRITTEN: the stamp
+// is the report of the refusal, and a counter that could not take it changes
+// nothing about the question it was asked of.
+func TestARefusedAnswerStandsWhenItsRecordFails(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, &org.Role{Name: "Lead"})
+	e, fleet := answerEngine(t, c)
+	logged, refusals := counted(fleet, errors.New("the counter is unreachable"))
+	budget := answerBudget{engine: e, budgets: logged, now: time.Now}
+	if _, err := fleet.PostChargeOrg(ctx, 100, coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+		t.Fatalf("PostChargeOrg: %v", err)
+	}
+	refusal, refusing, err := budget.Refusing(ctx)
+	if err != nil || !refusing || refusal.Period != string(period.Day) || refusal.Used != 100 {
+		t.Fatalf("Refusing with an unwritable record = (%+v, %v, %v), want the day's "+
+			"refusal all the same", refusal, refusing, err)
+	}
+	if got := refusals.refused(); len(got) != 1 {
+		t.Errorf("record attempts = %v, want the one", got)
 	}
 }
 

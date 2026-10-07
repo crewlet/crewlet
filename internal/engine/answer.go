@@ -73,12 +73,20 @@ func (b answerBudget) basis() budgetBasis { return basisOf(b.engine.Company(), n
 // rule the budget park and the live meter use ([windowRefuses]): a window with
 // no room for a single token, which every window the gate refused a round in
 // has, since the refused round is counted.
+//
+// AND RECORDS THE REFUSAL ([meter.turnAway]): the tool asks this immediately
+// before an answer's first call and refuses the question on yes, so a yes is
+// the gate turning that call away, and the company's window says so in its
+// `refused_at`. A company whose day a person's answers, a coding run or a
+// background pass had filled used to refuse every question asked of it while
+// every screen said it had refused nothing.
 func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool, error) {
 	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.now}
 	r, found, err := m.refusing(ctx)
 	if err != nil || !found {
 		return builtin.BudgetRefusal{}, false, err
 	}
+	m.turnAway(ctx, r)
 	return builtin.BudgetRefusal{
 		Period: string(r.Window.Period), Window: r.Window.Label,
 		ResetsAt: r.Window.End, Used: r.Used, Limit: r.Limit,
