@@ -389,7 +389,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	if out.Result != "" {
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its CLI printed")
-		if err == nil && refusal == "" && out.Events && out.Result != out.Stdout && strings.TrimSpace(raw) == "" {
+		if err == nil && refusal == "" && out.Events && out.Result != out.Stdout && last.said() &&
+			strings.TrimSpace(raw) == "" {
 			// THE WRAPPER NEVER COPIED IT. The result file is the stream's
 			// last line, written by the wrapper once the CLI has exited, so
 			// a run whose process group died — an OOM kill, a host restart
@@ -398,10 +399,16 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			// line is what the copy would have held: a result message the
 			// CLI did print, or whatever it was saying when it stopped,
 			// which Parse names for what it is.
+			//
+			// ONLY WHERE THE STREAM SAID SOMETHING: the wrapper writes the
+			// file whatever the CLI did, so a CLI that exited at once leaves
+			// it empty beside an empty stream, and there is nothing to read
+			// in its place — nor anything to say about it beside the run's
+			// real failure.
 			raw, refusal = last.resultLine(out.Stdout)
 			log.WarnContext(ctx, "coding_agent_result_from_stream", "agent", r.cli.Name(),
-				"detail", "the result file was never written, so the event stream's last line "+
-					"was read in its place")
+				"detail", "the result file was empty, so the event stream's last line, which "+
+					"the wrapper copies into it, was read in its place")
 		}
 		switch {
 		case err != nil:
@@ -592,14 +599,17 @@ type streamLast struct {
 	skipped int64
 }
 
-// resultLine is the stream's last line read as the result file the wrapper
-// did not write: the line, or a refusal where it was past what one line of a
-// stream may hold — as the copy itself would have been past what a result
-// file is read to.
+// said reports whether the stream ended on anything at all: a line, or one
+// too long to read.
+func (l streamLast) said() bool { return len(l.line) > 0 || l.skipped > 0 }
+
+// resultLine is the stream's last line read in place of the result file: the
+// line, or a refusal where it was past what one line of a stream may hold — as
+// the copy itself would have been past what a result file is read to.
 func (l streamLast) resultLine(stream string) (string, string) {
 	if l.skipped > 0 {
-		return "", fmt.Sprintf("the result its CLI printed (the last line of %s, read because the "+
-			"result file was never written) is %s, past the %s one line of a run's output may hold, "+
+		return "", fmt.Sprintf("the result its CLI printed (the last line of %s, read in place of "+
+			"the result file) is %s, past the %s one line of a run's output may hold, "+
 			"so it was not read", stream, humanSize(l.skipped), humanSize(maxLineBytes))
 	}
 	return string(l.line), ""
