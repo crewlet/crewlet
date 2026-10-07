@@ -478,13 +478,12 @@ node's record, and to say where the work it describes ran. That is also why the
 backup audit record names no node of its own: the route publishes from the node
 that took the copy, so the envelope already says whose disk it is on.
 
-`node` is absent on an event from a build predating the field, and on one
-published through a queue client built without a node, which only a test
-harness builds. Like every envelope field it is additive:
-an older node decodes it as an unknown key, keeps it verbatim and writes it back
-out, so the origin survives a round trip through the half of a rolling upgrade
-that has never heard of it. No payload may declare a field named `node` — the
-envelope owns the key and drops a colliding one.
+`node` is absent only on an event published through a queue client built
+without a node, which only a test harness builds. Like every envelope field it
+is additive: a build that predates a field decodes it as an unknown key, keeps
+it verbatim and writes it back out, which is what lets a successor add one. No
+payload may declare a field named `node` — the envelope owns the key and drops
+a colliding one.
 
 `Data` is the typed half: each registered event type is a Go type with its
 own fields and its own `Summary()` ("who did what", in a person's words) and
