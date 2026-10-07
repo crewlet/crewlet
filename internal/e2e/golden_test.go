@@ -367,11 +367,9 @@ func (n *node) publishWakeKeyed(t *testing.T, handle, text, partition, conversat
 		Body:        text,
 		SalientBody: &body,
 	}, tc)
-	// BOTH KEYS, as the notification service stamps them. A golden wake
-	// that named only the partition would leave the turn's ledger entry
-	// filed through the identity read's peer fallback rather than through
-	// the field this build stamps — green either way, and silent the day
-	// that fallback is the only thing holding it up.
+	// BOTH KEYS, as the notification service stamps them: the identity is
+	// read from its own field alone, so a wake naming only the partition
+	// names no conversation.
 	notify.Stamp(ev, partition, conversation)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
 		topics.AgentInbox(handle), ev); err != nil {

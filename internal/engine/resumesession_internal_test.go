@@ -177,33 +177,6 @@ func TestAResumedTurnWithNoConversationRecordsNothing(t *testing.T) {
 	}
 }
 
-// A ROW FROM BEFORE THE SPLIT CARRIES ONLY THE PARTITION, and the resume files
-// under it rather than recording nothing.
-//
-// The fallback is pinned on both sides of the seam on purpose: [PendingRun] has
-// it because nothing rewrites a parked run and one waits for a person, and
-// here because this is the frame that would otherwise write an empty key — a
-// resumed turn that recorded nothing at all is the gap [Engine.recordResume]
-// exists to close, and such a row would fall straight back into it.
-func TestAResumedRunFromBeforeTheSplitFilesUnderItsPartition(t *testing.T) {
-	t.Parallel()
-	e, conversations := resumingEngine(t)
-	ctx := context.Background()
-
-	e.recordResume(ctx, resumed("", theDMThread), turn.Result{
-		Decision: phase.Done, Delivered: true, Artifact: "shipped the branch",
-	})
-
-	got, err := conversations.History(ctx, "swe", theDMThread, 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("history = %d entries under the one key the row carries, want the "+
-			"resumed turn's own: a pre-split row records nothing at all", len(got))
-	}
-}
-
 // THE TWO VALUES REACH THE ROW IN THE RIGHT FIELDS, which nothing asserted.
 //
 // This is the launch's own mapping, from the running turn onto the record a

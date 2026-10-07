@@ -1107,7 +1107,7 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 // working it — see [Dispatcher.handBackAnswer] for why that return is a NAK.
 //
 // THE CONVERSATION IDENTITY is the disambiguation, and the partition travels
-// beside it for the rows parked before an identity existed. The rule — "the
+// beside it to tell apart runs one conversation admits. The rule — "the
 // next inbound on the question's conversation IS the answer" — is positional
 // within a CONVERSATION rather than within a batch, and the engine's own chat
 // prompt is what forces the distinction: a run launched from a top-level
@@ -1117,8 +1117,9 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 // compared two strings that could not meet and the box waited out its pause
 // TTL with the answer sitting in this very inbox.
 //
-// BOTH VALUES GO, because only the store knows which age of row it is
-// matching. See [sandbox.ConversationRef.Answers].
+// BOTH VALUES GO, because the identity decides which runs a delivery may
+// answer and the partition which of them it does. See
+// [sandbox.ConversationRef.Best].
 //
 // AN ERROR EXPLAINS THE DISPOSITION AND NEVER OVERRIDES IT, which is the exact
 // inversion of what this frame used to do. The coordinator classifies its own
@@ -1144,16 +1145,15 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		Identity:  conversationIdentityOf(evs),
 		Partition: partitionKeyOf(evs),
 	}
-	if conv.Identity == "" && conv.Partition == "" {
+	if conv.Identity == "" {
 		return sandbox.AnswerNotMine, nil
 	}
 	disposition, err := d.Answer(ctx, handle, sandbox.Reply{
 		Conv: conv, Text: DescribeTrigger(evs), Events: evs,
 	})
 	if err != nil {
-		// BOTH KEYS, for the reason the offer carries both: only the
-		// store knows which age of row it is matching, so a line naming
-		// the identity alone cannot say what was compared against what.
+		// BOTH KEYS, for the reason the offer carries both: a line naming
+		// the identity alone cannot say which of its runs was picked.
 		// AND THE DISPOSITION, because the failure alone no longer says
 		// what became of the delivery.
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
@@ -1667,8 +1667,8 @@ func (d *Dispatcher) now() time.Time {
 // on every turn: the ledger, the telemetry, the episodes and a parked run's
 // answer match want the identity, while the coalescing record wants the
 // partition — it records that N events MERGED, which is what the partition
-// decides. The answer match takes both, and only because a row parked by a
-// build that predates the identity holds nothing else to match on. One value
+// decides. The answer match takes both: the identity admits a run and the
+// partition picks between runs one direct message admits. One value
 // answering every question is what filed a seat's own prior turn on a direct
 // message under a key its next turn never looked up, and what lost every
 // clarification a seat was told to ask for in a thread.

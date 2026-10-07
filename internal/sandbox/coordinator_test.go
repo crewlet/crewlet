@@ -2638,12 +2638,11 @@ func TestAnAnswerOutsideTheQuestionsPartitionStillResumesTheRun(t *testing.T) {
 //
 // The match has two keys on each side, and which one decided is the whole
 // diagnosis: a row whose conversation equals the delivery's was admitted on
-// the identity, a row with no conversation was matched on the partition
-// fallback because it predates the split, and two questions parked on one
-// direct-message line are told apart by the partitions alone. Logging the
-// identity by itself — which is what this line did once the match moved onto
-// it — left all three indistinguishable, on the exact path where the two
-// values differ and an operator is asking why THIS run woke.
+// the identity, and two questions parked on one direct-message line are told
+// apart by the partitions alone. Logging the identity by itself — which is
+// what this line did once the match moved onto it — left the two
+// indistinguishable, on the exact path where the two values differ and an
+// operator is asking why THIS run woke.
 func TestTheAnsweredLineNamesBothKeysOfBothEnds(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)

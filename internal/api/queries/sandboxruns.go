@@ -179,7 +179,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"pause_ttl_seconds":  run.PauseTTLSeconds,
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
-		"answerable_in_chat": answerableInChat(run.Conversation()),
+		"answerable_in_chat": answerableInChat(run.ConversationKey),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see

@@ -97,8 +97,6 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"TwoQuestionsOnOneDMAreToldApartByTheirThreads", testTwoQuestionsOnOneDMAreToldApartByTheirThreads},
 		{"AnAnswerOnAnotherConversationMatchesNothing", testAnAnswerOnAnotherConversationMatchesNothing},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
-		{"ARowWithNoIdentityReportsBackToItsPartition", testARowWithNoIdentityReportsBackToItsPartition},
-		{"APreSplitRowIsStillAnswerable", testAPreSplitRowIsStillAnswerable},
 		{"ListingsAreStable", testListingsAreStable},
 		{"TheFirstReplyRecordedIsTheAnswer", testTheFirstReplyRecordedIsTheAnswer},
 		{"AnAnswerIsRecordedWithItsRoute", testAnAnswerIsRecordedWithItsRoute},
@@ -1574,26 +1572,6 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("the run reports back to %q, want the DM line it was launched from",
 			got.ConversationKey)
 	}
-	if got.Conversation() != "chat:D1" {
-		t.Errorf("Conversation() = %q", got.Conversation())
-	}
-}
-
-// A ROW FROM BEFORE THE SPLIT carries only the partition key, and a resume
-// must still know where to report: nothing rewrites a parked run, and one
-// waits for a person, so this row shape outlives any upgrade window.
-func testARowWithNoIdentityReportsBackToItsPartition(t *testing.T, s sandbox.PendingStore) {
-	old := run("t1")
-	old.ConversationKey = ""
-	mustLaunched(t, s, old)
-	got, found, err := s.Get(t.Context(), "t1")
-	if err != nil || !found {
-		t.Fatalf("Get: found=%v err=%v", found, err)
-	}
-	if got.Conversation() != "chat:D1:root-1" {
-		t.Errorf("a pre-split row reports back to %q, want the one key it carries — "+
-			"an empty answer records no ledger entry at all", got.Conversation())
-	}
 }
 
 // THE ENGINE'S OWN PROMPT SENDS THE ANSWER WHERE THE PARTITION CANNOT REACH.
@@ -1691,41 +1669,6 @@ func testAnAnswerOnAnotherConversationMatchesNothing(t *testing.T, s sandbox.Pen
 		Identity: "chat:D2", Partition: "chat:D2:root-9",
 	}); ok {
 		t.Error("a message on another conversation answered this run's question")
-	}
-}
-
-// A PRE-SPLIT ROW IS STILL ANSWERABLE, in both readings of the one value it
-// carries — and it has to be: nothing rewrites a parked run, one waits for a
-// person, so this row shape outlives any upgrade window.
-//
-// Its value is the PARTITION its build derived, so comparing the arriving
-// partition against it reproduces that build's own match exactly. It is
-// compared against the identity as well, which is not a second spelling of
-// the same rule: such a row parked from a top-level DM holds the bare
-// channel, which is precisely what this build calls the identity, so reading
-// it that way is what repairs the rows the defect already stranded.
-func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
-	// Parked from a DM thread by a build that had no identity to write.
-	threaded := run("t1")
-	threaded.ConversationKey = ""
-	mustLaunched(t, s, threaded)
-	park(t, s, "t1")
-	got, ok, err := findAwaiting(t.Context(), s, "swe", answerOnTheDM)
-	if err != nil || !ok || got.TurnID != "t1" {
-		t.Fatalf("find = %q ok=%v err=%v; a row parked before the split stopped "+
-			"being answerable at all", got.TurnID, ok, err)
-	}
-
-	// And one parked from a top-level DM, whose one value is the channel.
-	toplevel := run("t2")
-	toplevel.PartitionKey, toplevel.ConversationKey = "chat:D9", ""
-	toplevel.CreatedAt = base.Add(time.Minute)
-	mustLaunched(t, s, toplevel)
-	park(t, s, "t2")
-	if _, ok, _ := findAwaiting(t.Context(), s, "swe", sandbox.ConversationRef{
-		Identity: "chat:D9", Partition: "chat:D9:root-2",
-	}); !ok {
-		t.Error("a pre-split row parked from a top-level DM is still unanswerable")
 	}
 }
 

@@ -42,8 +42,7 @@ type TurnRef struct {
 	// ConversationKey the durable conversation it belongs to. BOTH travel,
 	// and both are written onto the row: the conversation is what matches a
 	// person's answer back to this run and where the resumed turn reports,
-	// the partition tells two runs parked on one direct message apart and
-	// is all a peer predating the conversation field can match on. See
+	// the partition tells two runs parked on one direct message apart. See
 	// [PendingRun].
 	//
 	// NAMED AS [turnctx.Turn] NAMES THEM, field for field, because that is

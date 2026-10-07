@@ -1098,7 +1098,7 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		SandboxID:          run.SandboxID,
 		CostUSD:            result.CostUSD,
 		DeliveredRefs:      result.DeliveredRefs,
-		ConversationKey:    run.Conversation(),
+		ConversationKey:    run.ConversationKey,
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {
@@ -1167,7 +1167,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// THE IDENTITY, like the launch announcement: this event is
 		// display, and the durable thread is what a person reading the
 		// feed means by the run's conversation.
-		ConversationKey: run.Conversation(),
+		ConversationKey: run.ConversationKey,
 		// The item the run recorded at launch, so the question is shown
 		// against the work it is about.
 		WorkItem: run.WorkItem,

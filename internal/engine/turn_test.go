@@ -86,10 +86,8 @@ func said(sender, body string, at time.Time) *events.Event {
 }
 
 // notifyStamp writes both keys the way internal/notify does — THROUGH THE
-// CONSTANTS, never the literals they hold: with the identity read falling back
-// to the partition field for an older peer's event, a test spelling
-// "conversation_key" out keeps passing whichever field production reads, which
-// is the blind spot node/concurrency_test.go records having shipped once.
+// CONSTANTS, never the literals they hold, so a renamed field fails here
+// rather than leaving a test that writes a field production no longer reads.
 func notifyStamp(e *events.Event, partition, conversation string) {
 	if e.Payload == nil {
 		e.Payload = map[string]any{}

@@ -794,7 +794,7 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 	// under the batch would put the coding work in a row the seat's next
 	// turn on that DM never looks up — the same silence this frame exists
 	// to end.
-	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.Conversation(),
+	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
 		in.Run.TurnID, in.Run.WorkKey, resumeTask(in), res, e.dispatch.now())
 }
 
@@ -1170,7 +1170,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// The conversation is where the resume reports and what admits a
 		// person's answer; the partition states the batch this run was
 		// launched from, which tells two runs parked on one direct message
-		// apart and is all a peer predating the conversation can match on.
+		// apart.
 		PartitionKey:    t.PartitionKey,
 		ConversationKey: t.ConversationKey,
 		// The delivery obligation, so the resumed turn knows whether

@@ -559,13 +559,11 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// function nothing called.
 	partition := prompts.Partition(r.Inbound)
 	conversation := prompts.Conversation(r.Inbound)
-	// THE METADATA COPY CARRIES BOTH, and that is a decision rather than
-	// symmetry: nothing in production reads either back from here — the
-	// envelope below is what every reader uses — but this map is what a
-	// stored event shows a person debugging one, and the envelope's own bag
-	// is not rendered anywhere. A copy holding one of two values under the
-	// older of the two names would tell that person the split had not
-	// happened.
+	// THE METADATA COPY CARRIES BOTH, under the envelope's own field names,
+	// and that is a decision rather than symmetry: nothing in production
+	// reads either back from here — the envelope below is what every reader
+	// uses — but this map is what a stored notification shows a person
+	// debugging one, and the envelope's own bag is not rendered anywhere.
 	if partition != "" {
 		meta[PartitionField] = partition
 	}
