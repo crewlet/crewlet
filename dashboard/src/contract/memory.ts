@@ -41,6 +41,17 @@ interface DiaryEntry {
   retrievals: number;
 }
 
+/** What a compacted episode row says about the turns it folded. */
+interface EpisodeCompaction {
+  /** What its turns had in common. */
+  common_task_pattern: string;
+  /** How many of its `count` turns ended done, counted from the members by
+   *  the engine. */
+  done: number;
+  /** What varied across them. */
+  notable_patterns: string;
+}
+
 /** One episode: a completed turn, summarised — or, compacted, a cluster of
  *  them, which carries its pattern, its tally and what varied instead of a
  *  label and an account. */
@@ -72,13 +83,10 @@ interface Episode {
   /** A compacted row stands for a cluster of turns rather than one. */
   compacted: boolean;
   count: number;
-  /** What a compacted row's turns had in common; "" on a raw row. */
-  common_task_pattern: string;
-  /** How many of a compacted row's `count` turns ended done, counted from the
-   *  members by the engine; 0 on a raw row. */
-  done: number;
-  /** What varied across a compacted row's turns; "" on a raw row. */
-  notable_patterns: string;
+  /** What a compacted row folded; null on a raw row — and on a compacted one
+   *  whose holder runs a build that does not say, which is the holder not
+   *  saying rather than a compaction that recorded nothing. */
+  compaction: EpisodeCompaction | null;
 }
 
 /** One skill the seat drafted from its own repeated work. */

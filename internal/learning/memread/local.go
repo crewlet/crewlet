@@ -161,8 +161,7 @@ type DiaryRow struct {
 // Ana: Slack message") and PlanSummary what the turn DID, and a screen that
 // headed the first "What it did" told an operator every chat turn had done
 // "Message from Ana". A compacted row has neither, so it carries what it is
-// instead — the pattern, how many of its turns ended done and what varied —
-// the same three things query_episodes answers a seat with.
+// instead ([EpisodeRow.Compaction]).
 type EpisodeRow struct {
 	ID          string `json:"id"`
 	TurnID      string `json:"turn_id"`
@@ -188,15 +187,28 @@ type EpisodeRow struct {
 	// Compacted is a row that stands for a cluster of turns, Count of them.
 	Compacted bool `json:"compacted"`
 	Count     int  `json:"count"`
-	// CommonTaskPattern is what a compacted row's turns had in common, ""
-	// on a raw row.
+	// Compaction is what a compacted row's turns had in common, how many of
+	// them ended done and what varied — the three things query_episodes
+	// answers a seat with — and null on a raw row, which says how its one
+	// turn ended in ReviewOutcome.
+	//
+	// NULL ON A COMPACTED ROW TOO, when the holder that answered runs a
+	// build from before the field, which sends none of the three: ONE
+	// OBJECT rather than three fields, because three zero values decoded
+	// from absent keys read as a compaction that recorded no pattern and
+	// none of its turns done, where the truth is that the holder did not
+	// say.
+	Compaction *EpisodeCompaction `json:"compaction"`
+}
+
+// EpisodeCompaction is what a compacted episode row says about its turns.
+type EpisodeCompaction struct {
+	// CommonTaskPattern is what its turns had in common.
 	CommonTaskPattern string `json:"common_task_pattern"`
-	// Done is how many of a compacted row's Count turns ended done,
-	// counted from the members ([learning.Episode.DoneCount]); 0 on a raw
-	// row, whose ReviewOutcome says how its one turn ended.
+	// Done is how many of its turns ended done, counted from the members
+	// ([learning.Episode.DoneCount]).
 	Done int `json:"done"`
-	// NotablePatterns is what varied across a compacted row's turns, "" on
-	// a raw row.
+	// NotablePatterns is what varied across them.
 	NotablePatterns string `json:"notable_patterns"`
 }
 
@@ -415,16 +427,22 @@ func diaryRow(e learning.DiaryEntry) DiaryRow {
 }
 
 func episodeRow(e learning.Episode) EpisodeRow {
-	return EpisodeRow{
+	row := EpisodeRow{
 		ID: e.ID, TurnID: e.TurnID, AgentHandle: e.Handle,
 		TaskSummary: e.TaskSummary, Ask: e.Ask, PlanSummary: e.PlanSummary,
 		ReviewOutcome: e.ReviewOutcome, ToolSequence: e.ToolSequence,
 		SkillsUsed: e.SkillsUsed, ConversationKey: e.ConversationKey,
 		WorkKey: e.WorkKey, CreatedAt: iso(e.StartedAt), EndedAt: iso(e.EndedAt),
 		DurationMs: e.Duration.Milliseconds(), Compacted: e.Kind != learning.KindRaw,
-		Count: e.Count, CommonTaskPattern: e.CommonTaskPattern, Done: e.DoneCount(),
-		NotablePatterns: e.NotablePatterns,
+		Count: e.Count,
 	}
+	if row.Compacted {
+		row.Compaction = &EpisodeCompaction{
+			CommonTaskPattern: e.CommonTaskPattern, Done: e.DoneCount(),
+			NotablePatterns: e.NotablePatterns,
+		}
+	}
+	return row
 }
 
 func skillRow(sk learning.Skill) SkillRow {

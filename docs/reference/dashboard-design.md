@@ -2317,7 +2317,9 @@ a turn; each turn's **Woken by** — the waking event's label, with what it was
 asked under it — apart from **What it did**, its account, because the label
 under "What it did" said every chat turn had done "Message from Ana"; and a
 compacted row as how many turns it stands for, their pattern and what varied,
-and how many of them ended done), the skills it taught itself and who it has worked with (when last,
+and how many of them ended done — or, from a holder on an older build that
+does not send what a row folded, that it is not reported, never "no pattern"
+and "0 of 12 done"), the skills it taught itself and who it has worked with (when last,
 relative, as every list on the profile says it), each header
 the holder's total ("Latest 50 of 142" where the list is a page of it), and the
 **Conversations** it holds a ledger in (`conversation=` opens one) — each

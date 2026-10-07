@@ -1532,9 +1532,11 @@ test("an episode says what woke it apart from what it did, and a compacted row i
             turn_id: "",
             compacted: true,
             count: 12,
-            done: 9,
-            common_task_pattern: "Triaging a failed staging deploy",
-            notable_patterns: "Two went to the SRE lead.",
+            compaction: {
+              common_task_pattern: "Triaging a failed staging deploy",
+              done: 9,
+              notable_patterns: "Two went to the SRE lead.",
+            },
             review_outcome: "done",
             created_at: "2026-08-01T07:00:00Z",
           },
@@ -1564,6 +1566,38 @@ test("an episode says what woke it apart from what it did, and a compacted row i
   );
   expect(cellUnder(folded, "Outcome").textContent).toContain("9 of 12 done");
   expect(screen.queryByText("The episode recorded no summary")).toBeNull();
+});
+
+// A HOLDER THAT DOES NOT SAY WHAT A ROW FOLDED IS NOT A ROW THAT FOLDED
+// NOTHING. A node on an older build sends a compacted row with no compaction;
+// read as zero values it said "The compaction recorded no pattern" and "0 of 12
+// done" — statements about the data, where the holder had said nothing.
+test("a compacted row whose holder does not say what it folded says that, not zeros", async () => {
+  mount("#/agents/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          {
+            id: "c1",
+            turn_id: "",
+            compacted: true,
+            count: 12,
+            compaction: null,
+            review_outcome: "done",
+            created_at: "2026-08-01T07:00:00Z",
+          },
+        ],
+        episodes_total: 1,
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("12 turns like this")).toBeTruthy());
+  const folded = screen.getByText("12 turns like this").closest(".grid-row") as HTMLElement;
+  const did = folded.querySelector('[data-label="What it did"]') as HTMLElement;
+  expect(did.textContent).toContain("Not reported");
+  expect(did.textContent).toContain("older build");
+  expect(document.body.textContent).not.toContain("recorded no pattern");
+  expect(document.body.textContent).not.toContain("0 of 12 done");
 });
 
 // THE CONVERSATION COLUMN IS CAPPED AND A UUID IS CUT TO ITS HEAD: printed

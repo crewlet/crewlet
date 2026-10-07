@@ -133,6 +133,15 @@ function EpisodeWokenCell({ episode: e }: { episode: EpisodeRow }) {
 }
 
 /**
+ * What a holder on an older build leaves out of a compacted row: it does not
+ * send what the row folded, which is the holder not saying — never "the
+ * compaction recorded nothing" or "none of its turns ended done", the two
+ * statements about the data three zero values decoded as.
+ */
+const COMPACTION_UNREPORTED =
+  "Not reported — the node holding this seat runs an older build that does not send what a compaction folded";
+
+/**
  * What a turn did — its account — or, for a compacted row, what its turns had
  * in common and what varied: a compacted row has no account of its own, and
  * drawn as a turn it read "The episode recorded no summary" in place of the
@@ -140,11 +149,13 @@ function EpisodeWokenCell({ episode: e }: { episode: EpisodeRow }) {
  */
 function EpisodeDidCell({ episode: e }: { episode: EpisodeRow }) {
   if (e.compacted) {
-    if (!e.common_task_pattern) return <EmptyValue label="The compaction recorded no pattern" />;
+    const c = e.compaction;
+    if (!c) return <EmptyValue label={COMPACTION_UNREPORTED} />;
+    if (!c.common_task_pattern) return <EmptyValue label="The compaction recorded no pattern" />;
     return (
       <span className="col" style={{ gap: 2 }}>
-        <OneLine text={e.common_task_pattern} />
-        {e.notable_patterns && <OneLine text={`What varied: ${e.notable_patterns}`} caption />}
+        <OneLine text={c.common_task_pattern} />
+        {c.notable_patterns && <OneLine text={`What varied: ${c.notable_patterns}`} caption />}
       </span>
     );
   }
@@ -225,9 +236,10 @@ export function EpisodesCard({
                   >
                     {e.review_outcome}
                   </Tag>
-                  {e.compacted && (
+                  {e.compacted && e.compaction && (
                     <span className="t-caption nowrap">
-                      {e.done.toLocaleString()} of {Math.max(e.count, 1).toLocaleString()} done
+                      {e.compaction.done.toLocaleString()} of{" "}
+                      {Math.max(e.count, 1).toLocaleString()} done
                     </span>
                   )}
                 </span>

@@ -716,11 +716,54 @@ func TestAnEpisodeRowSaysWhatItIs(t *testing.T) {
 	}
 	raw, folded := rows["raw"], rows["folded"]
 	if raw.TaskSummary != "Message from Ana: Slack message" || raw.Ask != "The staging deploy keeps failing." ||
-		raw.PlanSummary != "Rolled staging back to v41." || raw.Done != 0 {
-		t.Errorf("the raw row = %+v, want its label, its ask and what it did, and no tally", raw)
+		raw.PlanSummary != "Rolled staging back to v41." || raw.Compaction != nil {
+		t.Errorf("the raw row = %+v, want its label, its ask and what it did, and no compaction", raw)
 	}
-	if !folded.Compacted || folded.CommonTaskPattern != "Triaging a failed staging deploy" ||
-		folded.Done != 9 || folded.Count != 12 || folded.NotablePatterns != "Two went to the SRE lead." {
-		t.Errorf("the compacted row = %+v, want its pattern, 9 of 12 done and what varied", folded)
+	if c := folded.Compaction; !folded.Compacted || folded.Count != 12 || c == nil ||
+		c.CommonTaskPattern != "Triaging a failed staging deploy" || c.Done != 9 ||
+		c.NotablePatterns != "Two went to the SRE lead." {
+		t.Errorf("the compacted row = %+v (%+v), want its pattern, 9 of 12 done and what varied",
+			folded, folded.Compaction)
+	}
+}
+
+// A COMPACTED ROW FROM A HOLDER THAT DOES NOT SAY WHAT IT FOLDED SAYS NOTHING
+// ABOUT IT. A holder on a build from before the compaction was sent answers a
+// compacted row with none of its pattern, its tally or what varied. Decoded into
+// three plain fields they were "no pattern" and "0 of 12 done" — statements
+// about the data, on a screen re-serving the row — where the truth was that the
+// holder did not say; as one object they are absent, and re-served as null.
+func TestACompactedRowFromAnOlderHolderCarriesNoCompaction(t *testing.T) {
+	t.Parallel()
+	// The row as such a build sends it: every key it knew, and no others.
+	older := []byte(`{"id":"folded","turn_id":"","agent_handle":"swe",
+		"task_summary":"","plan_summary":"","review_outcome":"done",
+		"tool_sequence":["read","page"],"skills_used":null,"conversation_key":"",
+		"work_key":"wk","created_at":"2026-09-01T07:00:00Z",
+		"ended_at":"2026-09-01T08:00:00Z","duration_ms":0,"compacted":true,"count":12}`)
+	var row memread.EpisodeRow
+	if err := json.Unmarshal(older, &row); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !row.Compacted || row.Count != 12 || row.Compaction != nil {
+		t.Fatalf("the older holder's row decoded as %+v with compaction %+v, want a "+
+			"compacted row of 12 that says nothing about what it folded", row, row.Compaction)
+	}
+	served, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(served, &keys); err != nil {
+		t.Fatalf("decode the re-served row: %v", err)
+	}
+	if got, ok := keys["compaction"]; !ok || string(got) != "null" {
+		t.Fatalf("the re-served row carries compaction %s (present %v), want null", got, ok)
+	}
+	for _, key := range []string{"common_task_pattern", "done", "notable_patterns"} {
+		if _, ok := keys[key]; ok {
+			t.Errorf("the re-served row carries %q at its top level, which reads as the "+
+				"compaction's own word", key)
+		}
 	}
 }

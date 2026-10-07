@@ -3609,10 +3609,11 @@ which.
   ],
   "diary_total": 142,
   "episodes": [
-    { "id", "turn_id", "agent_handle", "task_summary", "plan_summary",
+    { "id", "turn_id", "agent_handle", "task_summary", "ask", "plan_summary",
       "review_outcome", "tool_sequence", "skills_used",
       "conversation_key", "work_key", "created_at", "ended_at",
-      "duration_ms", "compacted", "count" }
+      "duration_ms", "compacted", "count",
+      "compaction": { "common_task_pattern", "done", "notable_patterns" } }
   ],
   "episodes_total": 38,
   "skills": [
@@ -3658,6 +3659,15 @@ when the diary holds none.
 **Every key is present on every answer**, as an empty list or a zero rather
 than an absent one: a caller cannot tell "this seat has learned nothing" from
 "this answer does not carry that half" if the key is simply not there.
+
+**An episode says what it is.** `task_summary` is the label of the event that
+woke the turn, `ask` what it was asked (`""` for a turn recorded before the ask
+was stored) and `plan_summary` what it did. A compacted row stands for `count`
+turns and carries `compaction` instead — what they had in common, how many of
+them ended `done`, counted from the members, and what varied — which is `null`
+on a raw row. It is `null` on a compacted row too when the holder runs a build
+that does not send it: that is the holder not saying, never a compaction that
+recorded no pattern and none of its turns done.
 
 ### `memory_overview`
 
