@@ -2640,7 +2640,7 @@ export interface WorkPersonState {
   version: number;
   /** How far ahead a snooze may be set, in SECONDS — the engine's bound, so a
    *  screen offers only the presets the write accepts. */
-  max_snooze_ahead?: number;
+  max_snooze_ahead: number;
   held: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -3245,8 +3245,8 @@ export interface TurnAnswer {
    *  part. */
   coverage?: Coverage;
   /** Which of them RAN it: the nodes whose own store held any of its events,
-   *  sorted. Absent from an older node's answer. */
-  nodes?: string[];
+   *  sorted — empty when no answering node held them yet. */
+  nodes: string[];
 }
 
 /**
@@ -4005,9 +4005,8 @@ export interface WorkRanked {
   type: string;
   status: string;
   assignee?: string;
-  /** The item's own priority, drawn as the Board draws it. Optional: an
-   *  older node's hit does not carry it. */
-  priority?: string;
+  /** The item's own priority, drawn as the Board draws it. */
+  priority: string;
   /** A PLACE, 1-based, and deliberately NOT a score. The arithmetic that
    *  ordered these — score within a method, reciprocal rank fusion across
    *  methods, per slice of the corpus — is finished before a coordinator sees
@@ -4188,12 +4187,11 @@ export interface Viewer {
   /** The tools `POST /operator/act/{tool}` serves this caller: every write
    *  the operator catalogue holds for a token bound to a seat, and EMPTY for
    *  an anonymous or unbound caller, who may not act (ADR-0024). */
-  acts?: string[];
+  acts: string[];
   /** The project this person's create lands in when it names none — the
    *  engine's own default for their seat, which `create_work_item` applies.
-   *  "" when their team and every team above it owns none. Optional: an
-   *  older node does not send it. */
-  project?: string;
+   *  "" when their team and every team above it owns none. */
+  project: string;
 }
 
 /** One seat a name could mean, and why. */

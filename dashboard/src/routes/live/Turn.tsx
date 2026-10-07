@@ -578,7 +578,9 @@ export function useTurnView(turnId: string): TurnView {
   const startedAt =
     tsKey(str(opened, "started_at")) ||
     (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
-  const nodes = data?.nodes?.length ? data.nodes : liveCall?.node ? [liveCall.node] : [];
+  // No answering node holding the turn's events yet (or the answer not read
+  // yet) leaves the node the live call reports running it.
+  const nodes = data?.nodes.length ? data.nodes : liveCall?.node ? [liveCall.node] : [];
 
   // ONE WINDOW FOR THE HEADER AND THE WATERFALL. A turn with no closing
   // record has no measured length, and the header used to derive one from

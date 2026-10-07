@@ -118,7 +118,7 @@ function mount(
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false, ...answer })
+      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false, nodes: [], ...answer })
       : Promise.resolve({});
   return frame(store, socket);
 }
@@ -415,7 +415,7 @@ test("a running turn's streamed phases keep the empty state away", async () => {
   // log yet, which is exactly the deep-link-while-running race.
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false })
+      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false, nodes: [] })
       : Promise.resolve({});
   // `failed` is optional on a query row and required on a streamed envelope;
   // this phase did not fail.
@@ -440,7 +440,7 @@ test("the trace buttons name this turn's traces, not the tab's", async () => {
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false })
+      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false, nodes: [] })
       : Promise.resolve({});
   // Another seat's turn, landing in the same tab a moment before this one's.
   store.applyEvent({
@@ -757,7 +757,7 @@ test("a turn with only its opening record is headed by its seat and its wake", a
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events: [opening], truncated: false })
+      ? Promise.resolve({ turn_id: TURN, events: [opening], truncated: false, nodes: [] })
       : Promise.resolve({});
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -851,6 +851,7 @@ function onTurn(stage: "phase" | "parked") {
     what === "turn"
       ? Promise.resolve({
           turn_id: TURN,
+          nodes: [],
           events: [phase("2026-09-13T10:01:30Z", 90_000)],
           truncated: false,
         })
@@ -885,7 +886,7 @@ test("a turn nobody is running and nothing closed says it has not settled", asyn
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events, truncated: false })
+      ? Promise.resolve({ turn_id: TURN, events, truncated: false, nodes: [] })
       : Promise.resolve({});
   frame(store, socket);
   // THE ANSWER IS IN — the Timeline's rows are drawn from it — and still no
@@ -974,6 +975,7 @@ test("a watch link lands on the transcript with the running phase open", async (
     what === "turn"
       ? Promise.resolve({
           turn_id: TURN,
+          nodes: [],
           events: [
             phase("2026-09-13T10:00:20Z", 20_000, { phase: "onboarding" }),
             phase("2026-09-13T10:00:40Z", 20_000, { phase: "execute" }),
@@ -1006,7 +1008,7 @@ function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tai
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events, truncated: false })
+      ? Promise.resolve({ turn_id: TURN, events, truncated: false, nodes: [] })
       : what === "sandbox_tail" && tail
         ? Promise.resolve(tail)
         : Promise.resolve({});
@@ -1305,7 +1307,7 @@ test("the rail's phase strip says when the engine decided for the reviewer", asy
   });
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
-      ? Promise.resolve({ turn_id: TURN, events: [review], truncated: false })
+      ? Promise.resolve({ turn_id: TURN, events: [review], truncated: false, nodes: [] })
       : Promise.resolve({});
   render(
     <ClientContext.Provider value={{ store, socket }}>
