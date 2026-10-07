@@ -490,9 +490,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		if verdict := opts.Client.verify(ctx, token.Value, user.ID); verdict == provision.VerdictRejected {
 			// SWEPT, NOT LEFT. keep is 0, which no token id ever is, so
 			// this retires the one just minted along with every earlier
-			// one this tool owns — exactly the pile a previous build of
-			// this loop left behind. An administrator's own tokens are
-			// named differently and are never touched.
+			// token this tool minted on the account, such as one a pass
+			// that stopped between minting and retiring left behind. An
+			// administrator's own tokens are named differently and are
+			// never touched.
 			swept, rerr := retirePrevious(ctx, opts,
 				mintGroup(opts, group.ID), user.ID, seat, 0)
 			delete(minted, seat.Handle)
@@ -1181,15 +1182,10 @@ func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool) Si
 	if !registeringHooks {
 		return SigningPlan{Action: SigningUntouched}
 	}
-	// -rotate REACHES THE SIGNING SECRET, not just the seat tokens.
-	//
-	// It has to. Until the provisioning fix, the minted key went into
-	// GitLab's plaintext `token` attribute, so the instance echoed it back
-	// in cleartext on every delivery — into request logs, into any proxy in
-	// front of the engine, and into the stored delivery headers. Every key
-	// installed by an older Crewlet is therefore compromised, and a
-	// provisioner that could not replace one would leave the operator
-	// editing environment variables by hand to recover.
+	// -rotate REACHES THE SIGNING SECRET, not just the seat tokens, so an
+	// operator who believes the key leaked, or rotates on a schedule, has
+	// one command for it rather than editing environment variables by hand
+	// to recover.
 	//
 	// Deliberately gated on the flag rather than done on every run: minting
 	// a signing secret every time would re-point the hook at a key the
@@ -1546,27 +1542,17 @@ const DefaultWebhookName = "crewlet"
 // somewhere else is not this engine's and is left alone. That is the whole of
 // what the URL match was protecting, kept without the orphans.
 //
-// A HOOK WITH NO NAME IS ADOPTED, and that is the one arm worth arguing.
-// GitLab has taken a name since 17.1 and this engine never sent one, so every
-// hook it has ever registered is nameless — including the orphans this change
-// exists to sweep up. Refusing to touch them would leave exactly those behind
-// for ever, which is the bug rather than the fix. What it costs is the case
-// the name is there to settle: two deployments of one company on one instance,
-// BOTH still nameless, where the first pass after this change adopts whatever
-// it finds, keeps one and removes the rest. That resolves itself on the
-// following pass — the survivor now carries a name, the other deployment
-// re-creates its own under its own name, and from then on neither can see the
-// other's. One flap, once, against orphans that otherwise accumulate for ever.
+// A HOOK WITH NO NAME IS NOT OURS. Every hook this engine registers carries
+// its name ([hookBody]), and an instance that would not keep it is refused
+// before its hook outlives the pass (see [confirmHook]), so a nameless hook at
+// this path is somebody else's — a person's, or another tool's — and is left
+// alone.
 //
-// Two DEPLOYMENTS watching one instance is what the name settles from then
-// on, because they share this document: they set
-// `integrations.gitlab.webhook_name` to two values, exactly as they would
-// Jira's or Datadog's.
+// Two DEPLOYMENTS watching one instance is what the name settles, because they
+// share this document: they set `integrations.gitlab.webhook_name` to two
+// values, exactly as they would Jira's or Datadog's.
 func ours(hook Hook, name string) bool {
-	if !strings.HasSuffix(hook.URL, webhookPath) {
-		return false
-	}
-	return hook.Name == name || hook.Name == ""
+	return strings.HasSuffix(hook.URL, webhookPath) && hook.Name == name
 }
 
 // mine is every hook at one container that this deployment registered, in the
@@ -1614,31 +1600,44 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, name, target, 
 			// nineteen event flags of it, every few minutes for the life
 			// of the deployment.
 			//
-			// No re-read either. [confirmSigned] exists because a GitLab
+			// No re-read either. [confirmHook] exists because a GitLab
 			// older than 19.1 takes a signing token, ignores it and
 			// answers 200 — a claim about a WRITE. Nothing was written,
 			// and [Hook.Converged] already required the instance to
 			// report a signing token on this very listing, which is the
-			// same fact confirmSigned would go back for.
+			// same fact confirmHook would go back for.
 			return nil
 		}
 		if err := c.UpdateGroupHook(ctx, groupID, hook.ID, name, target, secret); err != nil {
 			return fmt.Errorf("gitlab: update group hook: %w", err)
 		}
-		return confirmSigned("group hook", func() ([]Hook, error) {
+		return confirmHook("group hook", func() ([]Hook, error) {
 			return c.GroupHooks(ctx, groupID)
-		}, target)
+		}, name, target)
 	}
-	if _, err := c.CreateGroupHook(ctx, groupID, name, target, secret); err != nil {
-		return fmt.Errorf("gitlab: create group hook: %w", err)
+	created, createErr := c.CreateGroupHook(ctx, groupID, name, target, secret)
+	if createErr != nil {
+		return fmt.Errorf("gitlab: create group hook: %w", createErr)
 	}
-	return confirmSigned("group hook", func() ([]Hook, error) {
+	return removeIfUnnamed(ctx, confirmHook("group hook", func() ([]Hook, error) {
 		return c.GroupHooks(ctx, groupID)
-	}, target)
+	}, name, target), func(ctx context.Context) error {
+		return c.DeleteGroupHook(ctx, groupID, created.ID)
+	})
 }
 
-// confirmSigned reads the hook back and refuses to call the run a success
-// unless GitLab says it now holds a signing token.
+// errUnnamed is a hook read back without the name this engine wrote: an
+// instance older than GitLab 17.1, which takes the attribute, ignores it and
+// answers 200.
+var errUnnamed = errors.New("the instance did not keep the hook's name")
+
+// confirmHook reads the hook back and refuses to call the run a success unless
+// GitLab says it carries this deployment's name and now holds a signing token.
+//
+// THE NAME FIRST, because it is what every later pass finds the hook by
+// ([ours]). A hook the instance would not name is one no pass can recognise
+// as this deployment's, so it is [errUnnamed], and the create path removes it
+// rather than leave it to be created again on every pass ([removeIfUnnamed]).
 //
 // THE WRITE SUCCEEDING PROVES NOTHING. `signing_token` arrived in GitLab
 // 19.0 and went generally available in 19.1; an older instance takes the
@@ -1650,13 +1649,18 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, name, target, 
 // `signing_token_present` is the only thing GitLab will say about it: the
 // token itself is never returned. That is enough, because what is being
 // confirmed is that a signing token EXISTS, not which one.
-func confirmSigned(what string, list func() ([]Hook, error), target string) error {
+func confirmHook(what string, list func() ([]Hook, error), name, target string) error {
 	hooks, err := list()
 	if err != nil {
 		return fmt.Errorf("gitlab: re-read the %s to confirm it can sign: %w", what, err)
 	}
+	unnamed := false
 	for _, hook := range hooks {
 		if hook.URL != target {
+			continue
+		}
+		if hook.Name != name {
+			unnamed = unnamed || hook.Name == ""
 			continue
 		}
 		if !hook.SigningTokenPresent {
@@ -1669,7 +1673,30 @@ func confirmSigned(what string, list func() ([]Hook, error), target string) erro
 		}
 		return nil
 	}
+	if unnamed {
+		return fmt.Errorf("gitlab: the %s at %s came back with no name, so no later "+
+			"pass could recognise it as this deployment's. Hook names need GitLab "+
+			"17.1 or newer, and signing tokens 19.1: %w", what, target, errUnnamed)
+	}
 	return fmt.Errorf("gitlab: the %s at %s is not there after writing it", what, target)
+}
+
+// removeIfUnnamed removes a hook this pass has just CREATED when [confirmHook]
+// found the instance did not keep its name, and returns the confirmation's own
+// answer with any failure of the removal appended.
+//
+// Left in place, the hook is nobody's: [ours] will not adopt it, so the next
+// pass creates another, and an instance that ignores the name would gather one
+// unsigned hook per pass for as long as the integration is enabled. DETACHED,
+// because the failure being undone may be a cancelled context.
+func removeIfUnnamed(ctx context.Context, confirmed error, remove func(context.Context) error) error {
+	if !errors.Is(confirmed, errUnnamed) {
+		return confirmed
+	}
+	if err := remove(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("%w (and removing the hook it created failed: %w)", confirmed, err)
+	}
+	return confirmed
 }
 
 // ensureProjectHooks registers one hook per declared project.
@@ -1722,16 +1749,19 @@ func ensureProjectHook(ctx context.Context, c *Client, project, name, target, se
 		if err := c.UpdateProjectHook(ctx, project, hook.ID, name, target, secret); err != nil {
 			return fmt.Errorf("gitlab: update hook on %s: %w", project, err)
 		}
-		return confirmSigned("hook on "+project, func() ([]Hook, error) {
+		return confirmHook("hook on "+project, func() ([]Hook, error) {
 			return c.ProjectHooks(ctx, project)
-		}, target)
+		}, name, target)
 	}
-	if _, err := c.CreateProjectHook(ctx, project, name, target, secret); err != nil {
-		return fmt.Errorf("gitlab: create hook on %s: %w", project, err)
+	created, createErr := c.CreateProjectHook(ctx, project, name, target, secret)
+	if createErr != nil {
+		return fmt.Errorf("gitlab: create hook on %s: %w", project, createErr)
 	}
-	return confirmSigned("hook on "+project, func() ([]Hook, error) {
+	return removeIfUnnamed(ctx, confirmHook("hook on "+project, func() ([]Hook, error) {
 		return c.ProjectHooks(ctx, project)
-	}, target)
+	}, name, target), func(ctx context.Context) error {
+		return c.DeleteProjectHook(ctx, project, created.ID)
+	})
 }
 
 // gatedByTier reports whether a failure is GitLab withholding a licensed

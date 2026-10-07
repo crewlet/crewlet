@@ -86,9 +86,12 @@ type adminInstance struct {
 	// signsNothing models a GitLab older than 19.1: it ACCEPTS the
 	// signing_token attribute, ignores it, and answers 200 — so the write
 	// succeeds and the hook still cannot sign. That is the only failure
-	// mode confirmSigned exists for, and it is invisible without a fake
+	// mode confirmHook exists for, and it is invisible without a fake
 	// that reproduces it.
 	signsNothing bool
+	// namesNothing models a GitLab older than 17.1: it accepts a hook's
+	// `name`, ignores it, and answers 200, so the hook reads back nameless.
+	namesNothing bool
 	updatedHooks []string
 	deletedHooks []string
 
@@ -270,15 +273,6 @@ func (h hookRow) render() map[string]any {
 	return out
 }
 
-// legacyHook is the hook an older Crewlet registered: the right URL, the
-// signing key in GitLab's plaintext `token` attribute, and no signing token
-// at all — which is the state a current pass has to repair.
-func legacyHook(id int, target string) hookRow {
-	return hookRow{id: id, attrs: map[string]any{
-		"url": target, "token": testSigningSecret,
-	}}
-}
-
 // foreignHook is somebody else's registration on the same instance, which a
 // pass must never re-point.
 func foreignHook(id int, target string) hookRow {
@@ -334,7 +328,7 @@ func (f *adminInstance) writeHook(rows []hookRow, id int, body map[string]any) [
 		if rows[i].id != id {
 			continue
 		}
-		for name, value := range body {
+		for name, value := range f.kept(body) {
 			rows[i].attrs[name] = value
 		}
 		rows[i].signed = f.signs(body)
@@ -837,7 +831,7 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		hook := hookRow{
-			id: len(f.projectHooks[project]) + 1, attrs: held(body), signed: f.signs(body),
+			id: len(f.projectHooks[project]) + 1, attrs: f.kept(body), signed: f.signs(body),
 		}
 		if f.projectHooks == nil {
 			f.projectHooks = map[string][]hookRow{}
@@ -868,7 +862,7 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 				"message": "signing_token must be whsec_<base64> over 32 bytes"})
 			return
 		}
-		hook := hookRow{id: len(f.hooks) + 1, attrs: held(body), signed: f.signs(body)}
+		hook := hookRow{id: f.nextGroupHookID(), attrs: f.kept(body), signed: f.signs(body)}
 		f.hooks = append(f.hooks, hook)
 		json.NewEncoder(w).Encode(hook.render())
 
@@ -913,6 +907,27 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// kept is the attributes of a write the instance stores: all of them, bar the
+// name on an instance too old to take one.
+func (f *adminInstance) kept(body map[string]any) map[string]any {
+	out := held(body)
+	if f.namesNothing {
+		delete(out, "name")
+	}
+	return out
+}
+
+// nextGroupHookID mints a group hook id no hook has held, the way GitLab
+// does: a count of the hooks there now would hand a deleted hook's id to the
+// next one created.
+func (f *adminInstance) nextGroupHookID() int {
+	next := 1
+	for _, row := range f.hooks {
+		next = max(next, row.id+1)
+	}
+	return next
+}
+
 // signs is what GitLab reports on the next GET: a signing token is present
 // when one was sent and this instance is new enough to honour it.
 func (f *adminInstance) signs(body map[string]any) bool {
@@ -930,7 +945,7 @@ func (f *adminInstance) signs(body map[string]any) bool {
 // this suite as valid while a real instance rejected it — which is exactly
 // the shape of bug this whole change exists to undo. An empty value is not
 // checked here: it means "no signing token", which is a different thing and
-// is what confirmSigned catches.
+// is what confirmHook catches.
 func badSigningToken(body map[string]any) bool {
 	token, _ := body["signing_token"].(string)
 	if token == "" {
@@ -1479,7 +1494,8 @@ func TestAnExistingHookIsUpdatedRatherThanDuplicated(t *testing.T) {
 	f := newAdminInstance()
 	f.hooks = []hookRow{
 		foreignHook(9, "https://someone-else.example.com/hook"),
-		legacyHook(10, "https://crewlet.example.com/webhooks/gitlab"),
+		// Ours, and not converged: it carries no digest of the key.
+		namedHook(10, "crewlet", "https://crewlet.example.com/webhooks/gitlab"),
 	}
 	if _, err := reconcileAgainst(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
@@ -2407,7 +2423,7 @@ func TestAnExistingProjectHookIsUpdated(t *testing.T) {
 	f := newAdminInstance()
 	f.noGroupHooks = true
 	f.projectHooks = map[string][]hookRow{
-		"nimbus/api": {legacyHook(4, "https://crewlet.example.com/webhooks/gitlab")},
+		"nimbus/api": {namedHook(4, "crewlet", "https://crewlet.example.com/webhooks/gitlab")},
 	}
 	if _, err := reconcileAgainst(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
@@ -2700,53 +2716,51 @@ func TestTheHookIsStillWrittenWhenTheConfirmationFails(t *testing.T) {
 	}
 }
 
-// THE OLD PLAINTEXT TOKEN IS CLEARED, NOT JUST STOPPED BEING SET.
+// A GITLAB THAT WILL NOT NAME A HOOK IS REFUSED, AND LEAVES NO HOOK BEHIND.
 //
-// A hook an older Crewlet created holds the 32-byte signing key in GitLab's
-// `token` attribute, which GitLab echoes back in cleartext on every
-// delivery. An update that writes only `signing_token` leaves it there — and
-// the hook now signs correctly, so nothing ever looks wrong again while a
-// live key keeps going out in the clear.
-//
-// Sending the empty string is what removes it; omitting the field means
-// "leave whatever is there", which is the state being cleaned up.
-func TestTheLegacyPlaintextTokenIsCleared(t *testing.T) {
+// Older than 17.1, an instance takes the hook's `name`, ignores it and answers
+// 200. Every later pass finds this deployment's hook BY that name, so a hook
+// that came back nameless is one no pass will ever recognise: left in place,
+// each pass of the reconcile loop created another, and an instance too old to
+// serve the integration gathered one unsigned hook per pass for as long as it
+// stayed enabled. The create is undone and the refusal names the version.
+func TestAGitLabThatCannotNameAHookIsRefusedAndLeavesNoHook(t *testing.T) {
 	t.Parallel()
-	f := newAdminInstance()
-	// A hook from before the fix: same URL, so the reconcile updates it.
-	f.hooks = []hookRow{legacyHook(4, "https://crewlet.example.com/webhooks/gitlab")}
+	for _, level := range []string{"group", "project"} {
+		t.Run(level, func(t *testing.T) {
+			t.Parallel()
+			f := newAdminInstance()
+			f.namesNothing = true
+			f.signsNothing = true
+			f.noGroupHooks = level == "project"
 
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.hookBodies) != 1 {
-		t.Fatalf("%d hook writes, want one update", len(f.hookBodies))
-	}
-	body := f.hookBodies[0]
-	token, present := body["token"]
-	if !present {
-		t.Fatal("the update omits `token` entirely, so GitLab keeps the old " +
-			"plaintext value and goes on echoing it on every delivery")
-	}
-	if token != "" {
-		t.Errorf("token = %q, want the empty string that clears it", token)
-	}
-	if body["signing_token"] == "" || body["signing_token"] == nil {
-		t.Error("the update carries no signing token, so the hook cannot sign")
+			for pass := 1; pass <= 2; pass++ {
+				_, err := reconcileAgainst(t, f, newRecordingSink(),
+					map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+				if err == nil {
+					t.Fatalf("pass %d succeeded against an instance that does not keep a hook's name", pass)
+				}
+				if !strings.Contains(err.Error(), "17.1") {
+					t.Errorf("pass %d: the refusal does not name the version floor: %v", pass, err)
+				}
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			left := len(f.hooks)
+			for _, rows := range f.projectHooks {
+				left += len(rows)
+			}
+			if left != 0 {
+				t.Errorf("%d hooks left (group %+v, projects %+v), want none: a hook no "+
+					"pass can recognise was left behind", left, f.hooks, f.projectHooks)
+			}
+		})
 	}
 }
 
-// -rotate REPLACES THE SIGNING SECRET, not just the seat tokens.
-//
-// The key installed by any Crewlet before the signing_token fix went into
-// GitLab's plaintext `token` attribute, so the instance echoed it back in
-// cleartext on every delivery — into request logs, into any proxy in front
-// of the engine, and into the stored delivery headers. Every one of those
-// keys is compromised, and a provisioner that could not replace one would
-// leave the operator editing environment variables by hand.
+// -rotate REPLACES THE SIGNING SECRET, not just the seat tokens, so an
+// operator who believes the key leaked, or rotates on a schedule, has one
+// command for it rather than editing environment variables by hand.
 func TestRotateReplacesTheSigningSecret(t *testing.T) {
 	t.Parallel()
 
@@ -3375,7 +3389,7 @@ func TestAConvergedGroupHookIsNotRewritten(t *testing.T) {
 	if len(f.hookBodies) != 0 {
 		t.Errorf("a converged pass wrote the hook again: %v", f.hookBodies)
 	}
-	// AND ONE LISTING, not two. confirmSigned re-read the hook after every
+	// AND ONE LISTING, not two. confirmHook re-read the hook after every
 	// write to prove the instance honoured the signing token; with nothing
 	// written there is nothing to confirm, and the listing the pass already
 	// took is what said the token is there.
@@ -3565,8 +3579,8 @@ func TestAHookWithTLSVerificationOffIsPutBack(t *testing.T) {
 }
 
 // A HOOK THAT REPORTS NO SIGNING TOKEN IS ALWAYS WRITTEN, whatever else about
-// it matches. That is the state a GitLab older than 19.1 leaves behind and
-// the state an older Crewlet's hook is in, and it is the difference between
+// it matches. That is the state a GitLab older than 19.1 leaves behind, and
+// it is the difference between
 // an integration that works and one that has been silently unauthenticated
 // since it was created.
 func TestAHookWithNoSigningTokenIsAlwaysWritten(t *testing.T) {
@@ -4090,36 +4104,6 @@ func TestTheGroupHookGoesWhenTheCompanyMovesToProjectHooks(t *testing.T) {
 	}
 	if len(f.projectHooks["nimbus/api"]) != 1 {
 		t.Errorf("project hooks = %+v, want one", f.projectHooks["nimbus/api"])
-	}
-}
-
-// A NAMELESS HOOK IS ADOPTED RATHER THAN STRANDED.
-//
-// GitLab has taken a name on a hook since 17.1 and this engine never sent
-// one, so every hook it has ever registered is nameless — the orphans this
-// change exists to sweep up included. A name match that refused to touch them
-// would leave exactly those behind for ever.
-func TestANamelessHookThisEngineLeftIsAdopted(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.hooks = []hookRow{
-		legacyHook(9, "https://old-tunnel.example.com/webhooks/gitlab"),
-	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.hooks) != 1 {
-		t.Fatalf("hooks = %+v, want the nameless one re-pointed rather than a second", f.hooks)
-	}
-	if len(f.updatedHooks) != 1 || !strings.HasSuffix(f.updatedHooks[0], "/hooks/9") {
-		t.Fatalf("updated %v, want hook 9 adopted", f.updatedHooks)
-	}
-	if got := f.hooks[0].attrs["name"]; got != gitlab.DefaultWebhookName {
-		t.Errorf("the adopted hook is named %v, want %q — it has to be findable "+
-			"by the next pass", got, gitlab.DefaultWebhookName)
 	}
 }
 

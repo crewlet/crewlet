@@ -820,16 +820,14 @@ type Hook struct {
 	// Name is what says a hook is THIS deployment's, and it is the only
 	// field that survives a change of public base.
 	//
-	// GitLab has taken a name on a group or project hook since 17.1, which
-	// every instance this engine can talk to already exceeds: a signing
-	// token needs 19.1 (see [Hook.SigningTokenPresent]), so there is no
-	// version that can serve this integration and not store this.
-	//
-	// EMPTY IS A REAL ANSWER and it is not "somebody else's". GitLab sends
-	// `null` for a hook registered without one, which decodes to the zero
-	// string — and every hook an earlier build of this engine made is in
-	// exactly that state. See [ours], which adopts one rather than
-	// stranding it.
+	// GitLab has taken a name on a group or project hook since 17.1, and a
+	// signing token needs 19.1 (see [Hook.SigningTokenPresent]), so every
+	// version that can serve this integration stores it. An older instance
+	// ignores the name and answers 200; [confirmHook] reads the hook back
+	// and refuses it, removing a hook it has just created, because a
+	// nameless hook is one no later pass can recognise as this
+	// deployment's. `null` — a hook somebody registered without a name —
+	// decodes to "", which is never this deployment's.
 	Name string `json:"name"`
 
 	// Description is where this engine records WHICH signing key the hook
@@ -845,9 +843,9 @@ type Hook struct {
 	// signing with the previous key while the engine verified with the new
 	// one and refused every delivery — on a surface reporting ready.
 	//
-	// Empty on a hook an older build registered, which compares unequal and
-	// is rewritten once. That is the correct direction: a hook this engine
-	// cannot place is one it should re-key.
+	// Empty on a hook whose description somebody cleared at GitLab, which
+	// compares unequal and is rewritten once. That is the correct
+	// direction: a hook this engine cannot place is one it should re-key.
 	Description string `json:"description"`
 
 	// SigningTokenPresent is the ONLY thing GitLab will say about a hook's
@@ -929,13 +927,13 @@ func (h *Hook) UnmarshalJSON(raw []byte) error {
 // [hookBody] writes all three.
 // They used to be the caller's business, which worked only while the caller
 // SELECTED on the address: now that [ours] selects on the name, a hook this
-// pass has to re-point — or a nameless one it has just adopted — would
-// otherwise answer "converged" and be left exactly as it was found.
+// pass has to re-point would otherwise answer "converged" and be left exactly
+// as it was found.
 //
 // # How the key is compared at all
 //
-// GitLab never returns a hook's `signing_token` or its legacy plaintext
-// `token`, so a direct comparison is impossible and this used to settle for
+// GitLab never returns a hook's `signing_token`, so a direct comparison is
+// impossible and this used to settle for
 // "it holds SOME token", with the caller supplying the other half from its
 // own run: a pass that had just minted knew the hook could not be carrying
 // the new value and wrote regardless. That was blind to every rotation
@@ -950,14 +948,6 @@ func (h *Hook) UnmarshalJSON(raw []byte) error {
 // and GitLab gives back, and the answer is then read off the same listing as
 // every other clause here — the same on every node, with nothing carried down
 // from whichever process happened to mint.
-//
-// The legacy plaintext token is covered by the same reasoning rather than
-// left out of it. A hook an older Crewlet created holds the signing key in
-// `token` and has NO signing token, so [Hook.SigningTokenPresent] is false,
-// so it is never converged and the first pass after the upgrade re-writes it
-// — which is what clears the plaintext field. There is no state where a hook
-// both reports a signing token and still carries the old cleartext one,
-// because the write that produced the first also cleared the second.
 func (h Hook) Converged(name, target, digest string) bool {
 	if h.Name != name || h.URL != target || h.Description != digest {
 		return false
@@ -1206,27 +1196,13 @@ func hookBody(name, target, secret string) map[string]any {
 		//     X-Gitlab-Token, which GitLab's own docs call "not
 		//     recommended" and "weaker".
 		//
-		// This sent the minted whsec_ key in `token`. GitLab did exactly
-		// what it was asked: it never signed, and it echoed a 32-byte HMAC
-		// key back in cleartext on every delivery. The engine, verifying
-		// signatures, then rejected everything — measured against a live
-		// 19.3.0 instance, and misread at the time as GitLab not
-		// supporting the scheme. It supports it from 19.1; the hook was
-		// asked for the other one.
+		// The key goes in `signing_token` and never in `token`: given the
+		// whsec_ key there, GitLab does exactly what it is asked — it never
+		// signs, and it echoes a 32-byte HMAC key back in cleartext on
+		// every delivery, which the engine, verifying signatures, then
+		// rejects. Measured against a live 19.3.0 instance. Signing is
+		// supported from 19.1.
 		"signing_token": secret,
-		// AND THE PLAINTEXT FIELD IS EXPLICITLY CLEARED.
-		//
-		// Not merely "no longer set": a hook an older Crewlet created holds
-		// the signing key in `token`, and an update that only writes
-		// `signing_token` leaves it there — so GitLab goes on echoing a
-		// live HMAC key in cleartext on every delivery, for ever, from a
-		// hook that now also signs correctly and therefore never looks
-		// wrong again.
-		//
-		// Sending the empty string is what removes it. Omitting the field
-		// means "leave whatever is there", which is exactly the state that
-		// needs clearing.
-		"token": "",
 		// TLS verification stays ON. A provisioner that turned it off to
 		// make a self-signed development instance work would leave it off
 		// in production, where the hook carries a signing secret.
