@@ -46,9 +46,8 @@ import (
 // counts' own statements read, so a row is added back by the rule that counted
 // it ([EventHistogram.Count], [TurnPartial.Add], [NotificationOutcomes.Add]).
 //
-// ON THE WIRE between nodes (internal/eventfan), and its first four fields are
-// the shape the outcome counts' first build sent — so every field after them
-// is omitted when empty, and a build that reads only those four reads this.
+// ON THE WIRE between nodes (internal/eventfan), where every field but the
+// identity is omitted when empty: a count reads only the fields it adds by.
 type UnsettledRow struct {
 	Time time.Time `json:"time"`
 	ID   string    `json:"id"`

@@ -966,8 +966,7 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 		run.Extra[key] = value
 	}
 	// A null state is NO state. The struct writes one for a run that has
-	// none, as every build before this one did, and a raw field reads the
-	// null back as four bytes — which every `len(...) == 0` asking "is a
+	// none, and a raw field reads the null back as four bytes — which every `len(...) == 0` asking "is a
 	// conversation parked here?" would answer wrongly.
 	if bytes.Equal(bytes.TrimSpace(run.ExecuteState), []byte("null")) {
 		run.ExecuteState = nil

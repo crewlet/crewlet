@@ -763,19 +763,15 @@ func formatMessages(messages []llm.Message, shed int) ([]sdk.MessageParam, error
 			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, m.Failed))
 
 		case len(m.ToolCalls) > 0:
-			// A turn another backend wrote — or one parked by a build that
-			// kept no blocks — rebuilt from the neutral view, WITHOUT ITS
-			// THINKING. Another vendor's reasoning has no Anthropic
-			// signature to carry, and a block rebuilt here is not the
-			// block that was signed: the order and the text around it are
-			// this function's rather than the model's, which is the edit
-			// that invalidates it. Leaving it out is never a 400. A turn
-			// another vendor wrote never had a block to lose — a turn with
-			// no thinking is what every non-Claude turn looks like, and the
-			// vendor accepts one anywhere — and the turns a pre-Raw build
-			// parked all precede every turn a resumed loop writes, so the
-			// blocks they lose are a run dropped from the FRONT, the one
-			// removal the vendor's history check accepts.
+			// A turn another backend wrote, rebuilt from the neutral view
+			// WITHOUT ITS THINKING. Another vendor's reasoning has no
+			// Anthropic signature to carry, and a block rebuilt here is not
+			// the block that was signed: the order and the text around it
+			// are this function's rather than the model's, which is the
+			// edit that invalidates it. Leaving it out is never a 400: such
+			// a turn never had a block to lose — a turn with no thinking is
+			// what every non-Claude turn looks like, and the vendor accepts
+			// one anywhere.
 			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
 			if strings.TrimSpace(m.Content) != "" {
 				blocks = append(blocks, sdk.NewTextBlock(m.Content))

@@ -1025,8 +1025,8 @@ func outcomeOn(t *testing.T, n node, id, kind, app string, at time.Time) {
 // is the top edge and where the history is floored. Node-b's rows sit on every
 // edge: at the bottom (in), a second under it (out), at the instant (out), and
 // a second above the asker's horizon, which is under node-b's own clock's (in
-// on the window that reaches it). A build before the question refuses it by
-// version, and a node that never answers is named for the budget.
+// on the window that reaches it). A node that never answers is named for the
+// budget.
 //
 // Mutation: answer from the asker's store alone, or keep one node's count where
 // two name the same app, and gitlab is short; leave either edge off the wire

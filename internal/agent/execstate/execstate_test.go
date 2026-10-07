@@ -347,8 +347,8 @@ func TestAnEmptyBlobIsNotAnError(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("Decode(nil) = %+v, %v, %v; want a clean miss", got, ok, err)
 	}
-	// A row written with no state at all carries a JSON null, and every
-	// build before this one wrote exactly that for a launching run.
+	// A row written with no state at all carries a JSON null, which is what
+	// a launching run's row holds.
 	for _, empty := range []string{"null", "{}", " { } "} {
 		if got, ok, err := execstate.Decode(json.RawMessage(empty)); err != nil || ok {
 			t.Fatalf("Decode(%s) = %+v, %v, %v; want a clean miss", empty, got, ok, err)
