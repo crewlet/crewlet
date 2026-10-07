@@ -13,7 +13,7 @@
  * is where page and rail agree: `ObjectHeader` takes this list on both.
  */
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BrokerCell, Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
@@ -265,13 +265,13 @@ describe("the lease tables", () => {
     target_epoch: 3,
   };
 
-  function mountFleet(id?: string) {
+  function mountFleet(id?: string, answer: typeof placed = placed) {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
     location.hash = id ? `#/settings/nodes/${id}` : "#/settings/nodes";
     const store = new Store();
     const socket = new LiveSocket(store);
     (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-      what === "fleet" ? Promise.resolve(placed) : new Promise(() => {});
+      what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
     return render(
       <ClientContext.Provider value={{ store, socket }}>
         <Router>
@@ -301,6 +301,44 @@ describe("the lease tables", () => {
     const since = relTime(ACQUIRED, Date.now());
     expect(seats?.rows).toHaveLength(1);
     expect(seats?.rows[0]?.textContent).toContain(since);
+  });
+
+  // SINCE SORTS BY THE INSTANT, NOT ITS SPELLING. The engine writes the stamp
+  // with as many fractional digits as it has, so within one second
+  // "…:00.5Z" spells LOWER than "…:00Z" while it is half a second later: read
+  // as text, ascending put the newer tenure first. Both lease tables sort it.
+  test("Since sorts oldest first by the instant in both lease tables", async () => {
+    const answer = {
+      ...placed,
+      nodes: [node({ id: "harness-0", seats: 2 })],
+      seats: [
+        {
+          handle: "seat-later",
+          node: "harness-0",
+          acquired_at: "2020-05-01T08:02:00.5Z",
+          expires_in: 33,
+        },
+        {
+          handle: "seat-earlier",
+          node: "harness-0",
+          acquired_at: "2020-05-01T08:02:00Z",
+          expires_in: 33,
+        },
+      ],
+    };
+    for (const id of [undefined, "harness-0"]) {
+      const view = mountFleet(id, answer);
+      expect(await screen.findByText("integration-reconciler")).toBeDefined();
+      const seats = [...view.container.querySelectorAll<HTMLElement>(".grid-wrap")].find((g) =>
+        [...g.querySelectorAll(".grid-head > .grid-th")].some((h) => h.textContent === "Seat"),
+      )!;
+      fireEvent.click(within(seats).getByRole("button", { name: "Since" }));
+      const order = [...seats.querySelectorAll<HTMLElement>(".grid-row")].map((r) =>
+        r.textContent?.includes("seat-earlier") ? "earlier" : "later",
+      );
+      expect(order, id ?? "the fleet").toEqual(["earlier", "later"]);
+      cleanup();
+    }
   });
 
   test("a node's own Leases table says since when it has held each seat", async () => {
