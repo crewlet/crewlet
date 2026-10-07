@@ -35,9 +35,8 @@ import (
 // the census's SKELETON of the task: its creation and its status, assignee and
 // project changes with nothing else in them, because the flow census answers
 // the past from those rows and a purge takes a task out of it only from the
-// instant it happened. The writer puts a purge on the log at
-// [tracker.RewriteVersion], and it is that version that destroys these rows
-// ([TestAPurgeDestroysWhatItsTaskWroteFromItsRewriteVersionOnly]).
+// instant it happened. [TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework]
+// holds the same apply through the real framework loop.
 func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -149,26 +148,10 @@ func TestAPurgeLeavesNoCopyOfTheTaskBehind(t *testing.T) {
 	}
 }
 
-// A PURGE DESTROYS WHAT ITS TASK'S OWN RECORDS WROTE FROM
-// [tracker.RewriteVersion], AND A VERSION-1 PURGE APPLIES EXACTLY AS EVERY BUILD
-// BEFORE THAT VERSION APPLIED IT — through the real framework loop, over the
-// real log.
-//
-// Destroying the history's content, the notices, the turn records and the
-// dependency mirror changed what a purge's APPLY does, and a record's apply is
-// a function of its version ([tracker.RecordVersion]). Applied to a version-1
-// record the new way, the same record would leave these rows on every node
-// that applied it before the rewrite and remove them on every node replaying
-// it now — after
-// adopting a snapshot, or beside an older build in a rolling upgrade — and the
-// identity claim says every node holds the same rows.
-//
-// So the version-1 half holds the rule every earlier build applied, stated as
-// what it touched: the thirteen object tables its purge deleted from, the
-// census it lowered, and the three tables it only ADDED to (its deletion
-// marker, its own history row, the notices that row routed). Every other row
-// in every table the identity claim covers is byte-identical before and after.
-func TestAPurgeDestroysWhatItsTaskWroteFromItsRewriteVersionOnly(t *testing.T) {
+// A PURGE DESTROYS WHAT ITS TASK'S OWN RECORDS WROTE — through the real
+// framework loop, over the real log, from the record exactly as the writer put
+// it there.
+func TestAPurgeDestroysWhatItsTaskWroteThroughTheFramework(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	const secret = "the merger with Contoso"
@@ -178,7 +161,7 @@ func TestAPurgeDestroysWhatItsTaskWroteFromItsRewriteVersionOnly(t *testing.T) {
 	// THE CONTENT, in every place a record puts it: a comment mentioning
 	// somebody (a history row, its document and an inbox notice), a turn's
 	// spend, a dependent (an edge on it, a mirror row on the purged task),
-	// and a child (re-parented by every version).
+	// and a child (re-parented).
 	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{
 			Comment: &tracker.Comment{ID: "c-1", Body: secret, Author: "jane"},
@@ -210,84 +193,27 @@ func TestAPurgeDestroysWhatItsTaskWroteFromItsRewriteVersionOnly(t *testing.T) {
 		t.Fatalf("the premise: record %d is a %s, want the purge", purgeAt, written.Op)
 	}
 
-	for _, version := range []int{1, tracker.RewriteVersion} {
-		t.Run("version "+itoa(version), func(t *testing.T) {
-			// THE SAME PURGE AT THIS VERSION. A version-1 one carries the
-			// scope every writer before the rewrite version stated: the
-			// task and its project.
-			rec := written
-			rec.V = version
-			if version < tracker.RewriteVersion {
-				rec.Scope = tracker.ScopeSet{Subject: true, Container: "ENG"}
-			}
-			body, err := json.Marshal(rec)
-			if err != nil {
-				t.Fatalf("encode the version-%d purge: %v", version, err)
-			}
-			before, after := applyPurgeThroughARunner(t, r, purgeAt, body)
-
-			if _, held := after["tracker_tasks"]; !held {
-				t.Fatal("the dump read no task table")
-			}
-			if slices.ContainsFunc(after["tracker_tasks"], func(row string) bool {
-				return strings.HasPrefix(row, `["t-1",`)
-			}) {
-				t.Fatal("the purged task's row survives the purge")
-			}
-			if version < tracker.RewriteVersion {
-				assertTheRuleBeforeTheRewrite(t, before, after)
-				return
-			}
-			assertTheTasksRecordsAreGone(t, after, secret)
-		})
+	body, err := json.Marshal(written)
+	if err != nil {
+		t.Fatalf("encode the purge: %v", err)
 	}
-}
-
-// assertTheRuleBeforeTheRewrite fails unless a purge touched exactly what
-// every build before [tracker.RewriteVersion] did: its thirteen DELETE targets
-// and the project census, plus additions (never a removal) to its marker, its
-// history row and the notices that row routed.
-func assertTheRuleBeforeTheRewrite(t *testing.T, before, after map[string][]string) {
-	t.Helper()
-	deleted := map[string]bool{
-		"tracker_references": true, "tracker_task_keys": true,
-		"tracker_watchers": true, "tracker_collaborators": true,
-		"tracker_task_tags": true, "tracker_relations": true,
-		"tracker_task_deps": true, "tracker_checklist_items": true,
-		"tracker_field_values": true, "tracker_task_closure": true,
-		"tracker_body_revisions": true, "tracker_comments": true,
-		"tracker_tasks": true,
-		// The census moved down with the row.
-		"tracker_projects": true,
+	before, after := applyPurgeThroughARunner(t, r, purgeAt, body)
+	if _, held := after["tracker_tasks"]; !held {
+		t.Fatal("the dump read no task table")
 	}
-	added := map[string]bool{
-		"tracker_deletions": true, "tracker_history": true,
-		"tracker_notifications": true,
+	if slices.ContainsFunc(after["tracker_tasks"], func(row string) bool {
+		return strings.HasPrefix(row, `["t-1",`)
+	}) {
+		t.Fatal("the purged task's row survives the purge")
 	}
-	for _, table := range tracker.ReproducibleTables {
-		was, is := before[table], after[table]
-		switch {
-		case deleted[table]:
-			continue
-		case added[table]:
-			for _, row := range was {
-				if !slices.Contains(is, row) {
-					t.Errorf("a version-1 purge removed a %s row every build before "+
-						"the rewrite version kept: %s", table, row)
-				}
-			}
-		case !slices.Equal(was, is):
-			t.Errorf("a version-1 purge changed %s, which no build before the "+
-				"rewrite version touched:\n  before %v\n  after  %v", table, was, is)
-		}
-	}
-	// The rows the fixture is about, named, so a failure above has a
+	// The rows the fixture is about, named, so a failure below has a
 	// premise to read against.
 	for _, table := range []string{"tracker_turns", "tracker_task_dependents"} {
 		if len(before[table]) == 0 {
 			t.Errorf("the premise: the fixture wrote no %s row", table)
 		}
 	}
+	assertTheTasksRecordsAreGone(t, after, secret)
 }
 
 // assertTheTasksRecordsAreGone fails unless nothing the purged task's own

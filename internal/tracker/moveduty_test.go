@@ -1,21 +1,12 @@
 package tracker_test
 
 import (
-	"context"
-	"database/sql"
-	"encoding/json"
-	"errors"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -404,139 +395,6 @@ func TestALeafsMoveIsOneRecord(t *testing.T) {
 	}
 }
 
-// THE MARK IS WRITTEN AT THE VERSION THAT ADDED IT, AND NOTHING ELSE IS RAISED
-// TO IT.
-//
-// A build that reads only the version before the mark decodes a patch by
-// dropping the field it does not know and applies the rest — a root re-homed
-// with no mark on that node's row where every newer node holds one. At the
-// mark's own version that build retains the record instead. Every other record
-// stays below it, at whatever its own fields need, because a retained record
-// holds back every later record nested under its scope.
-func TestTheMoveMarkIsWrittenAtTheVersionThatAddedIt(t *testing.T) {
-	t.Parallel()
-	markAt := moveMarkVersion(t)
-	if got := (tracker.Domain{}).RecordVersion(); got < markAt {
-		t.Fatalf("this build reads record version %d, below the mark's %d", got, markAt)
-	}
-	r := moveFixture(t, "m-kid")
-	start := r.logEnd(t)
-	if _, err := r.writer.MoveTaskToProject(t.Context(),
-		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil); err != nil {
-		t.Fatalf("the move: %v", err)
-	}
-	end := r.logEnd(t)
-	marks := 0
-	for seq := start + 1; seq <= end; seq++ {
-		rec := r.recordAt(t, seq)
-		var patch tracker.TaskPatch
-		carriesMark := rec.Subject.Kind == tracker.KindTask &&
-			json.Unmarshal(rec.Mutation, &patch) == nil && patch.Moving != nil
-		switch {
-		case carriesMark:
-			marks++
-			if rec.V != markAt {
-				t.Errorf("the %s record on %s carries the mark at version %d, "+
-					"want %d", rec.Op, rec.Subject, rec.V, markAt)
-			}
-		case rec.V >= markAt:
-			t.Errorf("the %s record on %s carries no mark and is stamped %d — "+
-				"a build before the mark retains it, and everything nested "+
-				"under its scope with it", rec.Op, rec.Subject, rec.V)
-		}
-	}
-	if marks != 2 {
-		t.Errorf("the move wrote %d record(s) carrying the mark, want 2 — the "+
-			"root's move and the mark coming down", marks)
-	}
-
-	generation, _, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
-		Generation: 2, By: "ops-1", Writer: "node-a", At: wednesday,
-	})
-	if err != nil {
-		t.Fatalf("encode a generation: %v", err)
-	}
-	if env, err := tracker.DecodeEnvelope(generation.Payload); err != nil || env.V != 1 {
-		t.Errorf("a generation record carries version %d (%v), want 1 — an older "+
-			"node retains it and never makes the transition", env.V, err)
-	}
-}
-
-// A BUILD THAT READS ONLY UP TO THE VERSION BEFORE THE MARK RETAINS THE MARKED
-// RECORDS RATHER THAN APPLYING HALF OF THEM — through the real framework loop,
-// over the real log — and goes on applying the records it can read.
-func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
-	t.Parallel()
-	r := moveFixture(t, "m-kid")
-	if _, err := r.writer.MoveTaskToProject(t.Context(),
-		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil); err != nil {
-		t.Fatalf("the move: %v", err)
-	}
-	// AND A BARRIER, which every build must apply: one is appended for
-	// every linearizable read, on every node, through the whole upgrade.
-	barrier, err := tracker.EncodeBarrier(statelog.Envelope{Kind: statelog.BarrierKind})
-	if err != nil {
-		t.Fatalf("encode a barrier: %v", err)
-	}
-	if _, _, err := r.log.Append(t.Context(), tracker.Domain{}.Stream().SubjectPrefix+
-		"."+tracker.BarrierSubject().String(), "", nil, barrier); err != nil {
-		t.Fatalf("append a barrier: %v", err)
-	}
-	end := r.logEnd(t)
-
-	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
-	t.Cleanup(func() { _ = olderNode.Close() })
-	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: beforeMoveMark{markAt: moveMarkVersion(t)}, Spec: tracker.Domain{}.Stream(),
-		Applier: tracker.NewApplier("node-older"),
-		Fetch:   &trackerLogFetch{log: r.log, next: 1},
-		Log:     r.log,
-		Node:    olderNode,
-		DB:      older,
-	})
-	if err != nil {
-		t.Fatalf("build the older node's applier: %v", err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- runner.Run(ctx) }()
-	deadline := time.Now().Add(20 * time.Second)
-	for runner.Committed().Seq < end {
-		if time.Now().After(deadline) {
-			cancel()
-			t.Fatalf("the older node reached %d of %d", runner.Committed().Seq, end)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	cancel()
-	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("the older node's loop: %v", err)
-	}
-
-	value := func(query string) string {
-		t.Helper()
-		var v string
-		if err := older.Read(t.Context(), func(tx *sql.Tx) error {
-			return tx.QueryRowContext(t.Context(), query).Scan(&v)
-		}); err != nil {
-			t.Fatalf("%s: %v", query, err)
-		}
-		return v
-	}
-	if got := value(`SELECT project_key FROM tracker_tasks WHERE id = 'm-root'`); got != "ENG" {
-		t.Errorf("the older node applied the marked move of the root — it is in "+
-			"%s there, with no mark on its row", got)
-	}
-	if got := value(`SELECT COUNT(*) FROM tracker_log_deferred`); got != "2" {
-		t.Errorf("the older node retained %s record(s), want the two carrying the "+
-			"mark — and never the barrier", got)
-	}
-	if got := value(`SELECT project_key FROM tracker_tasks WHERE id = 'm-kid'`); got != "OPS" {
-		t.Errorf("the older node holds m-kid in %s, want OPS — the records it can "+
-			"read are not held back by the root's", got)
-	}
-}
-
 // stopMoveAt runs a move of m-root into OPS that the broker refuses at one
 // descendant, and applies what landed: a walk that stopped there. It returns
 // the move's operation id.
@@ -575,80 +433,4 @@ func (r *roundTrip) recordAt(t *testing.T, seq uint64) tracker.MutationRecord {
 		t.Fatalf("decode record %d: %v", seq, err)
 	}
 	return rec
-}
-
-// beforeMoveMark is this domain as the build before the cross-project move's
-// mark sees it: reading every record version up to the one the mark added.
-type beforeMoveMark struct {
-	tracker.Domain
-	markAt int
-}
-
-func (d beforeMoveMark) RecordVersion() int { return d.markAt - 1 }
-
-// moveMarkVersion is the version the field table says the mark closed on.
-func moveMarkVersion(t *testing.T) int {
-	t.Helper()
-	for _, field := range tracker.VersionedFields() {
-		if field.Name == "TaskPatch.Moving" {
-			return field.Since
-		}
-	}
-	t.Fatal("the field table names no TaskPatch.Moving")
-	return 0
-}
-
-// trackerLogFetch hands a framework loop every record on a harness's log, in
-// order.
-type trackerLogFetch struct {
-	log  *js.DomainLog
-	mu   sync.Mutex
-	next uint64
-}
-
-func (f *trackerLogFetch) Fetch(ctx context.Context, maxMessages, _ int,
-	wait time.Duration) ([]statelog.Message, error) {
-
-	end, err := f.log.End(ctx)
-	if err != nil {
-		return nil, err
-	}
-	f.mu.Lock()
-	var out []statelog.Message
-	for f.next <= end && len(out) < maxMessages {
-		_, payload, storedAt, ok, err := f.log.At(ctx, f.next)
-		if err != nil {
-			f.mu.Unlock()
-			return nil, err
-		}
-		if ok {
-			out = append(out, statelog.Message{
-				Seq: f.next, StoredAt: storedAt, Payload: payload,
-				Ack: func() error { return nil },
-			})
-		}
-		f.next++
-	}
-	f.mu.Unlock()
-	if len(out) == 0 {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(min(wait, 50*time.Millisecond)):
-		}
-	}
-	return out, nil
-}
-
-func (f *trackerLogFetch) Pending(ctx context.Context) (uint64, error) {
-	end, err := f.log.End(ctx)
-	if err != nil {
-		return 0, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.next > end {
-		return 0, nil
-	}
-	return end - f.next + 1, nil
 }

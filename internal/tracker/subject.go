@@ -32,8 +32,8 @@
 // by the writer (see [ScopeSet]), and a purge is the record that writes the
 // most objects that are not its subject. Every one of them is a CROSS-OBJECT
 // effect the purge's scope has to name. What each effect writes is a DOCUMENT
-// change as well as a row change from [rewriteVersion] on, and a task reached
-// by several of them is rewritten once with all of them:
+// change as well as a row change, and a task reached by several of them is
+// rewritten once with all of them:
 //
 //   - its DEPENDENTS: their `waiting_on` relation to it is taken out of their
 //     documents, and their dependency edges naming it deleted;
@@ -47,9 +47,6 @@
 //   - its SUBTREE: each direct child is re-parented onto the purged task's own
 //     parent, document and pointer, and every descendant's ancestry is
 //     rebuilt.
-//
-// A purge below [rewriteVersion] writes the rows alone, and leaves the blockers'
-// mirror rows standing, as every build before it did ([purgeDeletes]).
 //
 // The writer names all of them, each at its own project's path — a descendant
 // may be filed in another project than the purged task ([purgeReach]) — and the
@@ -88,10 +85,8 @@
 // A change to how the applier treats a field it ALREADY copies is the same
 // hazard with no new field to carry it, and takes the same gate: a marker the
 // writer sets and a row that stamps it, with the new rule applied only to a
-// record at that version or above. An older build's record is then applied
-// by that build's rule on every node — [actorSeatVersion] (the history row's
-// seat) and [keepsPlaceVersion] (a task write carrying its board place
-// through rather than re-filing the rank its document holds) are the two.
+// record at that version or above, so a record the build before the change
+// wrote is applied by that build's rule on every node.
 //
 // A column the applier COMPUTES from the rows it holds, rather than copies out
 // of a record, is the other half: no record version can see it, because what

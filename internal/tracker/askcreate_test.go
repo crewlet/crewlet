@@ -1,7 +1,6 @@
 package tracker_test
 
 import (
-	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -123,51 +122,6 @@ func TestACreatesAskIsAQuestionAndNothingElse(t *testing.T) {
 	if end != 1 {
 		t.Errorf("the log holds %d records after only refused creates, want "+
 			"the seeded project alone", end)
-	}
-}
-
-// A CREATE CARRYING ITS ASK IS RETAINED BY A BUILD THAT CANNOT READ IT.
-//
-// A build reading 5 decodes a create as a bare task and writes no comment row
-// from it, so its copy of the item would have no question on it for good. The
-// create carrying an ask is stamped at 6; a create carrying none is still 1,
-// so an older node holds back only the records it would apply lossily.
-func TestACreateCarryingItsAskIsRetainedByABuildThatCannotReadIt(t *testing.T) {
-	t.Parallel()
-	for name, c := range map[string]struct {
-		ask  *tracker.Comment
-		want int
-	}{
-		"filed as a question": {&tracker.Comment{ID: "c-q", Ask: "ana", Body: "?"}, 6},
-		"a plain create":      {nil, 1},
-	} {
-		mutation, err := json.Marshal(tracker.TaskCreate{Task: newTask("t-1"), Comment: c.ask})
-		if err != nil {
-			t.Fatalf("%s: marshal: %v", name, err)
-		}
-		body, err := tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "op-" + name, Subject: tracker.TaskSubject("t-1"),
-				Op: tracker.OpCreate, CreatedAt: wednesday,
-				Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
-			},
-			Kind: tracker.ChangeCreated, Mutation: mutation,
-			Actor: "dev", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-		if err != nil {
-			t.Fatalf("%s: encode: %v", name, err)
-		}
-		env, err := tracker.Domain{}.Envelope(body)
-		if err != nil {
-			t.Fatalf("%s: envelope: %v", name, err)
-		}
-		if env.V != c.want {
-			t.Errorf("%s: stamped %d, want %d", name, env.V, c.want)
-		}
-		if c.want > 5 && env.ReadableBy(5) {
-			t.Errorf("%s: a build reading version 5 would apply it and drop "+
-				"the question", name)
-		}
 	}
 }
 

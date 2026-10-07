@@ -324,42 +324,25 @@ func (a *Applier) applyCounter(ctx context.Context, tx *sql.Tx, c applyContext) 
 	return affected(res)
 }
 
-// placeTask writes one placement of a rank order, by the rule of the record's
-// own version ([rewriteVersion]).
+// placeTask writes one placement of a rank order.
 //
-// FROM [rewriteVersion], INTO THE MOVED TASK'S DOCUMENT, not its rank column alone
-// ([rewriteOther]): the document is what the task's own next record is merged
-// from, and a rank written only to the column was put back by it — every drag
-// undone by the next edit to the card that was dragged. And only a task in
-// the order's project: a placement is a position in one project's order,
-// which is the container the record's scope names, so a task filed elsewhere
-// has no position in it and a write to it would be outside what the record
-// declared.
-//
-// BELOW [rewriteVersion], THE COLUMN ALONE AND WHEREVER THE TASK IS FILED, which is
-// what every build before that version wrote for the same record — and what every
-// node that applied one already holds. Applying an older record by the newer
-// rule on a node that replays it would give that node rows no other node has.
+// INTO THE MOVED TASK'S DOCUMENT, not its rank column alone ([rewriteOther]):
+// the document is what the task's own next record is merged from, and a rank
+// written only to the column was put back by it — every drag undone by the
+// next edit to the card that was dragged. And only a task in the order's
+// project: a placement is a position in one project's order, which is the
+// container the record's scope names, so a task filed elsewhere has no
+// position in it and a write to it would be outside what the record declared.
 func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
 	placement Placement) (int, error) {
 
-	if c.record.V >= rewriteVersion {
-		return rewriteOther(ctx, tx, placement.Task, c, movedColumns{rank: true}, func(task *Task) bool {
-			if task.Project != project {
-				return false
-			}
-			task.Rank = placement.Rank
-			return true
-		})
-	}
-	res, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET rank = ?, scoped_through = ?
-		WHERE id = ? AND ? > MAX(version, scoped_through)`,
-		string(placement.Rank), c.packed, placement.Task, c.packed)
-	if err != nil {
-		return 0, err
-	}
-	return affected(res)
+	return rewriteOther(ctx, tx, placement.Task, c, movedColumns{rank: true}, func(task *Task) bool {
+		if task.Project != project {
+			return false
+		}
+		task.Rank = placement.Rank
+		return true
+	})
 }
 
 // applyRankOrder writes a project's manual order.

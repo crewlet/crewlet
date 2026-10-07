@@ -1,7 +1,6 @@
 package tracker_test
 
 import (
-	"database/sql"
 	"slices"
 	"testing"
 	"time"
@@ -317,47 +316,6 @@ func TestANoticeCarriesItsCommentTurnSeatAndAsk(t *testing.T) {
 	if head.ActorSeat != "ana" || head.Ask == nil || head.Ask.Choice != "hold" {
 		t.Errorf("the feed's newest row is seat %q with ask %+v, want ana and "+
 			"the choice", head.ActorSeat, head.Ask)
-	}
-}
-
-// A RECORD FROM BEFORE VERSION 5 STORES NO SEAT, on any build.
-//
-// Records carried `actor_seat` for the wake before the history row had a
-// column for it, so a build reading 4 applied them and wrote no seat. A build
-// copying the seat from every record would disagree with that build about
-// every operator's change, for good. So the column is copied only from a
-// record whose version says every node applying it has the column.
-func TestAnOlderRecordsSeatIsNeverStored(t *testing.T) {
-	t.Parallel()
-	for name, c := range map[string]struct {
-		version int
-		want    string
-	}{
-		"version 4": {4, ""},
-		"version 5": {5, "jane-founder"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			h := newApplyHarness(t)
-			record := taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil)
-			record.Kind = tracker.ChangeCreated
-			record.V = c.version
-			record.Actor, record.ActorKind = "founder", tracker.AuthorOperator
-			record.OperatorID, record.ActorSeat = "founder", "jane-founder"
-			if _, err := h.apply(record, time.Unix(1_700_000_100, 0).UTC()); err != nil {
-				t.Fatalf("apply: %v", err)
-			}
-			var got string
-			if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
-				return tx.QueryRowContext(t.Context(),
-					`SELECT actor_seat FROM tracker_history`).Scan(&got)
-			}); err != nil {
-				t.Fatalf("read the history row: %v", err)
-			}
-			if got != c.want {
-				t.Errorf("a %s record stored seat %q, want %q", name, got, c.want)
-			}
-		})
 	}
 }
 

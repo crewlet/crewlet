@@ -37,31 +37,10 @@ import (
 // field introduced, because such a build would accept a newer peer's record
 // at that version and drop the field it was minted for.
 //
-// Version 2 is the turn record's spend split: [TurnSpend.Workers] and
-// [TurnSpend.SentBack]. Version 3 is a person's seen-through GENERATION
-// ([Position.Generation]), which a build reading 2 decoded and then stored as
-// the bare sequence. Version 4 is a structured ask: [Comment.Decision] and
-// [Comment.Choice]. Version 5 is [MutationRecord.ActorSeat] as a HISTORY
-// value — see [actorSeatVersion]. Version 6 is a create that carries the
-// question its task was filed as: [TaskCreate.Comment]. Version 7 is a
-// project's lead-owned target date: [Project.TargetDate]. Version 8 is a task
-// write that carries its place through: [MutationRecord.KeepsPlace] — see
-// [keepsPlaceVersion]. Version 9 is a create that says which chat surface and
-// conversation its task was filed from: [TaskCreate.Origin]. Version 10 is a
-// turn record's account of what the segment did: [TurnRecord.Summary],
-// [TurnRecord.Review], [TurnRecord.Tools] and [TurnRecord.FailedIn]. Version
-// 11 is the cross-project move's marker on a task patch: [TaskPatch.Moving].
-// Version 12 is the file KIND ([KindFile]): a build reading 11 knows every
-// field of a file record and not the kind, and would fault at the end of its
-// dispatch. Version 13 is a rank order and a purge whose APPLY changed — each
-// writes every OTHER task it changes into that task's document as well as its
-// rows, and a purge destroys what the purged task's own records wrote beside
-// its rows ([rewriteVersion]). The purge's row is the one a GATE may carry
-// ([statelog.VersionedField.Gate]): an older build halts at it rather than
-// apply it the old way. Version 14 is a file put naming the OBJECT its bytes
-// were uploaded into ([File.Object], [FileObjectVersion]) where version 12's
-// named a list of chunks.
-const RecordVersion = 14
+// Every field the tracker writes is in the base format today, so the table is
+// empty and this is 1: the next field this build's successor adds is the first
+// to take a version of its own.
+const RecordVersion = 1
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -76,83 +55,6 @@ const RecordVersion = 14
 // later version could add to it, and [MutationRecord.Encode] refuses either one
 // carrying a versioned field ([RecordEnvelope.readByEveryBuild]).
 const baseRecordVersion = 1
-
-// actorSeatVersion is the record version from which the applier copies
-// [MutationRecord.ActorSeat] onto the history row.
-//
-// THE FIELD IS OLDER THAN THE COLUMN. Records have carried `actor_seat` for
-// the wake's actor exclusion since before the history row had anywhere to put
-// it, so a build reading 4 applies such a record and writes no seat. A build
-// that copied the seat from EVERY record would therefore disagree with that
-// build about every row an operator's write produced — permanently, on a table
-// the fleet compares byte for byte. So the seat is stamped at this version (the
-// row in [versionedFields], which makes the older build retain it) and copied
-// only from a record at this version or above: a record an older build wrote
-// yields the same empty column wherever it is applied.
-const actorSeatVersion = 5
-
-// fileVersion is the version every file record is written at at least: the
-// row on its kind in [versionedFields].
-const fileVersion = 12
-
-// FileObjectVersion is the version a file record naming its OBJECT is written
-// at — every put this build writes; a removal names none and stays at
-// [fileVersion].
-//
-// A FIELD AN OLDER BUILD WOULD DROP, and the row that drops it is a row
-// naming no object: a build reading 13 decodes a new put around `object`,
-// applies a live file with no content on its copy, and its rows differ from
-// every upgraded node's for good. Stamped here, it RETAINS the put instead
-// and applies it once upgraded.
-const FileObjectVersion = 14
-
-// rewriteVersion is the version from which a record that changes ANOTHER task
-// — a rank order moving it, a purge taking itself out of it — writes that
-// task's DOCUMENT beside its rows ([rewriteOther]), and from which a purge
-// destroys the rows the purged task's own records wrote: its history, the
-// notices those routed, its turn records and its dependency mirror
-// ([forgetRecords], [purgeDeletes]). The two rows in [versionedFields] that
-// stamp a rank order and a purge at it are the rank order's placements and
-// the purge's op.
-//
-// # Why the rule is chosen by the record and not by the build
-//
-// The two records' APPLY changed and their shape did not: an older rank order
-// and an older purge carry exactly the bytes one at this version does. Applied
-// by whichever build happened to apply it, the same record would be applied
-// one way by a build from before the change and another by a build from after
-// it — in a rolling upgrade, and on every node that replays the log's older
-// records after adopting a snapshot — and the rows the identity claim says are
-// identical on every node ([Domain.ClaimsIdentity]) would differ for ever. So
-// the rule is a function of the record: a record below this version is applied
-// by the rule every build before it applied, for as long as one is in the log,
-// and a record at it by the new one. A node too old to read it RETAINS a rank
-// order (see the deferral contract in [statelog]) and HALTS at a purge, which
-// is a gate ([GateRecordVersion]) — the two answers a build has for a record it
-// cannot apply, and neither of them is applying it the old way.
-const rewriteVersion = 13
-
-// keepsPlaceVersion is the record version from which a task write takes the
-// task's rank from its ROW rather than from its document.
-//
-// AN OLDER ORDER MOVED THE COLUMN AND NEVER THE DOCUMENT. After its create a
-// task's place is written by its project's order ([Applier.applyRankOrder]),
-// which below [rewriteVersion] sets `tracker_tasks.rank` and leaves the task's
-// own document alone — so for every such order still in the log the
-// document's `rank` is only the key the task was filed or last re-homed at. A
-// build reading 7 merges every task write into the DOCUMENT and upserts the
-// row from the result, which puts a dragged card back where it was filed the
-// next time anybody touches it. A build that took the rank from the column on
-// every record would therefore disagree with that build about every task
-// written after a drag — permanently, on a table the fleet compares byte for
-// byte, with nothing ever re-deriving a rank. So the rule is the
-// [actorSeatVersion] rule: every task patch, removal and restore this build
-// writes carries [MutationRecord.KeepsPlace] (the row in [versionedFields],
-// which makes a build reading 7 retain it rather than apply it the old way),
-// and the column is carried through only for a record at this version or
-// above. A record an older build wrote is applied exactly as that build
-// applied it, wherever it is applied.
-const keepsPlaceVersion = 8
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
@@ -176,151 +78,7 @@ const keepsPlaceVersion = 8
 // A field that no tag has shipped is still a field two builds of one rolling
 // upgrade disagree about, so "nothing has been released" does not exempt a new
 // field from its row.
-var versionedFields = statelog.RecordFields{
-	// THE TURN'S SPEND SPLIT, both at version 2. A build reading 1 adds a
-	// turn's tokens to its task and has no column for how many workers it
-	// delegated to or how often a reviewer sent it back — applied there,
-	// the task's `spend_workers` and `spend_sent_back` would stay behind
-	// its peers' for good. Scoped to the turn op because `workers` is the
-	// kind of key another payload could come to carry.
-	{Name: "TurnSpend.Workers", Since: 2, Op: string(OpTurn),
-		Path: []string{"mutation", "spend", "workers"}},
-	{Name: "TurnSpend.SentBack", Since: 2, Op: string(OpTurn),
-		Path: []string{"mutation", "spend", "sent_back"}},
-	// A PERSON'S SEEN-THROUGH GENERATION, at version 3. It was always in
-	// the JSON, which is why this row is about the APPLIER rather than the
-	// decoder: a build reading 2 stores `seen_through` as the bare
-	// sequence, so a person record past a reanchor applied there reads
-	// back as generation zero and that node's copy of the person differs
-	// from every peer's for good. The zero generation is omitted from the
-	// JSON, so only a record that needs the newer applier is held back.
-	// Scoped to the patch op, which is the only op a person is written
-	// under; no task patch carries `seen_through`.
-	{Name: "Person.SeenThrough.Generation", Since: 3, Op: string(OpPatch),
-		Path: []string{"mutation", "seen_through", "generation"}},
-	// A DECISION AND A CHOICE, both at version 4. A build reading 3 has no
-	// field for either, so it would write the comment row with both
-	// dropped from its document: its copy of the ask would offer no
-	// options, and its copy of the answer would name none — for good, on
-	// a table the fleet compares byte for byte. A comment rides only a
-	// task PATCH, which is why both rows are scoped to that op.
-	{Name: "Comment.Decision", Since: 4, Op: string(OpPatch),
-		Path: []string{"mutation", "comment", "decision"}},
-	{Name: "Comment.Choice", Since: 4, Op: string(OpPatch),
-		Path: []string{"mutation", "comment", "choice"}},
-	// THE SEAT BEHIND AN OPERATOR'S WRITE, at version 5. Not a new key —
-	// the record has carried it for the wake's exclusion — but a new
-	// COLUMN: the history row stores it from this version, so a build
-	// reading 4 would apply the record and leave the column empty where
-	// every upgraded node fills it. Every op, because every op an
-	// operator makes writes a history row.
-	{Name: "MutationRecord.ActorSeat", Since: actorSeatVersion,
-		Path: []string{"actor_seat"}},
-	// THE QUESTION A TASK WAS FILED AS, at version 6. A build reading 5
-	// decodes a create as a bare task and writes no comment row from it,
-	// so its copy of the item would have no ask on it — nothing in its
-	// `asked_of_me`, nothing for an answer to close — for good. Scoped to
-	// the create op, because a patch has carried `comment` since the base
-	// format.
-	{Name: "TaskCreate.Comment", Since: 6, Op: string(OpCreate),
-		Path: []string{"mutation", "comment"}},
-	// A PROJECT'S TARGET DATE, at version 7. A build reading 6 decodes the
-	// project document around it: its `tracker_projects.target_date` stays
-	// NULL where every upgraded node holds the day, and its copy of the
-	// document drops the key — for good, on a table the fleet compares byte
-	// for byte. EVERY OP, because a project document is written whole by
-	// both a lead's edit and the chart apply that carries the date through,
-	// and no other record's payload has a `target_date` to collide with.
-	{Name: "Project.TargetDate", Since: 7,
-		Path: []string{"mutation", "target_date"}},
-	// A TASK WRITE THAT KEEPS ITS PLACE, at version 8. Not a new value but a
-	// new APPLY RULE — see [keepsPlaceVersion]: a build reading 7 would
-	// apply the record by re-upserting the rank its document holds, which
-	// is the key the task was filed at rather than the one its project's
-	// order gave it, and its row would differ from every upgraded node's
-	// for good. On the record's root rather than in the payload because it
-	// states how the record is applied, and every op, because the ops that
-	// carry it (a task's patch, removal and restore) are three.
-	{Name: "MutationRecord.KeepsPlace", Since: keepsPlaceVersion,
-		Path: []string{"keeps_place"}},
-	// WHERE A TASK WAS FILED FROM, at version 9. A build reading 8 decodes
-	// the create around it and writes identical rows — the history row
-	// keeps the record's own bytes — but its copy of the task has no origin
-	// any reader of that build could serve, and the rule is that a field
-	// every node must agree on is held back rather than applied by a build
-	// that cannot read it. Scoped to the create op, the only record that
-	// carries one.
-	{Name: "TaskCreate.Origin", Since: 9, Op: string(OpCreate),
-		Path: []string{"mutation", "origin"}},
-	// WHAT A TURN SEGMENT DID, all four at version 10. A build reading 9
-	// writes the turn row with the record's own bytes and so the same row —
-	// but it has no reader for any of the three, and the rule [TaskCreate.
-	// Origin] states holds here too: a field every node must be able to
-	// serve is held back by a build that cannot, rather than applied by it.
-	// Scoped to the turn op, the only record that carries them; `summary`
-	// and `tools` are keys another payload could come to carry.
-	// (`failed_in` rides the same version: which phase failed is part of
-	// the same account, and a build that cannot serve it holds it back.)
-	{Name: "TurnRecord.Summary", Since: 10, Op: string(OpTurn),
-		Path: []string{"mutation", "summary"}},
-	{Name: "TurnRecord.Review", Since: 10, Op: string(OpTurn),
-		Path: []string{"mutation", "review"}},
-	{Name: "TurnRecord.Tools", Since: 10, Op: string(OpTurn),
-		Path: []string{"mutation", "tools"}},
-	{Name: "TurnRecord.FailedIn", Since: 10, Op: string(OpTurn),
-		Path: []string{"mutation", "failed_in"}},
-	// THE CROSS-PROJECT MOVE'S MARK, at version 11. A build reading 10
-	// decodes the patch by dropping the one field it does not know and
-	// applies the rest — a root re-homed with no mark on that node's row,
-	// where every newer node holds one, and a duty on that node that never
-	// finishes the walk the mark names. Stamped here, that build RETAINS
-	// the record instead and applies it once upgraded. Only the root's own
-	// move and the mark coming down carry it, so a rolling upgrade holds
-	// back the root of a subtree somebody moved, until its walk is done,
-	// and nothing else. Scoped to the patch op, the only one that carries
-	// it; `moving` is a key a project or a person document could come to
-	// carry, and neither is a task.
-	{Name: "TaskPatch.Moving", Since: 11, Op: string(OpPatch),
-		Path: []string{"mutation", "moving"}},
-	// THE FILE KIND, at version 12 ([fileVersion]). Not a field but a KIND,
-	// and that is why the row names a value: a build reading 11 decodes a
-	// file record's every field and has no applier for its kind, so it
-	// would reach the end of its dispatch and fault — a node wedged at that
-	// position for as long as the record is in the log. Stamped here, it
-	// RETAINS the record instead, which holds back only that file's own
-	// address until the node upgrades. Every op, because a file is written
-	// under several.
-	{Name: "Subject.Kind=file", Since: fileVersion,
-		Path: []string{"subject", "kind"}, Equals: string(KindFile)},
-	// A RANK ORDER WHOSE APPLY CHANGED, at version 13 ([rewriteVersion]).
-	// Not a new key: an older rank order carries the same placements. What
-	// changed is the apply — it writes each moved task's document as well as
-	// its rank column — so a build reading 12 would apply a new rank order
-	// the old way and leave every moved task's document behind its peers'.
-	// Stamped here, that build retains it, holding back the project's order
-	// on that node until it upgrades. Scoped to the patch op, which is the
-	// one a rank order is published under; no other patch has placements.
-	{Name: "RankOrder.Placements", Since: rewriteVersion, Op: string(OpPatch),
-		Path: []string{"mutation", "placements"}},
-	// A PURGE WHOSE APPLY CHANGED, at version 13 ([rewriteVersion]), for
-	// the rank order's reason: a purge carries the bytes it always did, and
-	// its apply now also takes the purged task out of every other task's
-	// document and destroys what the task's own records wrote. A purge is a
-	// GATE, which an older build cannot defer and must not apply the old
-	// way, so this is the one row a gate may carry: a build reading 12
-	// HALTS at it ([GateRecordVersion]).
-	{Name: "Op=purge", Since: rewriteVersion, Op: string(OpPurge),
-		Path: []string{"op"}, Equals: string(OpPurge), Gate: true},
-	// A FILE'S OBJECT, at version 14 ([FileObjectVersion]). A build reading
-	// 13 knows the file kind and decodes a put around the key of the object
-	// its bytes were uploaded into, which it has no column for: its copy of
-	// the file would be live and name no content, where every upgraded node
-	// can read it. Stamped here, that build retains the put until it
-	// upgrades. Scoped to the patch op, the one a file is written under;
-	// `object` is a key no other tracker payload carries.
-	{Name: "File.Object", Since: FileObjectVersion, Op: string(OpPatch),
-		Path: []string{"mutation", "object"}},
-}
+var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.
@@ -916,9 +674,8 @@ type MutationRecord struct {
 
 	// ActorSeat is the chart seat the writing credential is BOUND to
 	// with `contact.crewlet_operator_id`, and it has two readers: the
-	// wake's own actor exclusion, and — from record version 5, through
-	// the history row's `actor_seat` — the screen that draws who made a
-	// change. Empty for a token nobody bound and for every writer that
+	// wake's own actor exclusion, and — through the history row's
+	// `actor_seat` — the screen that draws who made a change. Empty for a token nobody bound and for every writer that
 	// already IS a seat.
 	//
 	// IT IS NOT AN AUTHOR. [MutationRecord.Actor] stays the token and
@@ -935,20 +692,7 @@ type MutationRecord struct {
 	// `jane-founder`, and a founder was woken by every item their own
 	// assistant filed and every comment it left.
 	//
-	// ADDITIVE, like every field beside it: a build with no field for it
-	// keeps it in [MutationRecord.Extra], re-encodes it unchanged and
-	// routes exactly as it did before — which is what a rolling upgrade
-	// rests on.
 	ActorSeat string `json:"actor_seat,omitempty"`
-
-	// KeepsPlace says this task write leaves the task where its project's
-	// ORDER put it: the applier carries the row's rank through rather than
-	// re-writing the one the task's document was filed at. Set by the
-	// writer on every task patch, removal and restore, and read through the
-	// record's VERSION — see [keepsPlaceVersion] — because what it exists
-	// to do is stamp every such record at a version an older build retains
-	// rather than applies by its own rule.
-	KeepsPlace bool `json:"keeps_place,omitempty"`
 
 	TurnID  string   `json:"turn_id,omitempty"`
 	Chain   []string `json:"chain,omitempty"`
@@ -1100,7 +844,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "operator_id", "actor_seat",
-	"keeps_place", "turn_id", "chain", "batch_id", "kind", "notify",
+	"turn_id", "chain", "batch_id", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.

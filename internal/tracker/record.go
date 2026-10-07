@@ -738,12 +738,6 @@ type TaskPatch struct {
 	// split: a separate mark could land without the move behind it, or the
 	// move without the mark, and either is a state no reader can tell
 	// from the other.
-	//
-	// A NEW FIELD ON A SHARED RECORD, so it has its row in
-	// [versionedFields] and a record carrying it is stamped at that
-	// version. Merging is a base-format field every build reads; this one
-	// the build before it would drop, and that node would then hold a row
-	// the rest of the fleet does not.
 	Moving *bool `json:"moving,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,
@@ -1410,14 +1404,11 @@ type Person struct {
 // # The generation is stored, and omitted when it is zero
 //
 // The row keeps it PACKED into `seen_through`, as every durable position in
-// this domain is kept: stored as the bare sequence, the generation was dropped
-// on apply, so after a reanchor a person's position read back as generation
-// zero and every notice in the new generation compared above it — an inbox
-// that could never be read past again. A zero generation is omitted from the
-// JSON because a build that stored the bare sequence has nowhere to put any
-// other one: a record carrying a non-zero generation is stamped at the version
-// that stores it (see versionedFields), and one carrying none stays readable by
-// every build.
+// this domain is kept, so a reanchor compares correctly: a position kept as the
+// bare sequence would read back as generation zero after one, and every notice
+// in the new generation would compare above it — an inbox that could never be
+// read past again. A zero generation is omitted from the JSON, which keeps a
+// position in a stream's first generation to its two meaningful keys.
 type Position struct {
 	Stream     string `json:"stream"`
 	Generation uint32 `json:"generation,omitempty"`

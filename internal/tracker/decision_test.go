@@ -2,7 +2,6 @@ package tracker_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -178,59 +177,6 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 		if errors.Is(err, tracker.ErrInvalid) != c.invalid {
 			t.Errorf("%s: %v marked invalid %v, want %v", name, err,
 				errors.Is(err, tracker.ErrInvalid), c.invalid)
-		}
-	}
-}
-
-// A DECISION RECORD IS RETAINED BY A BUILD THAT CANNOT READ IT.
-//
-// A build reading version 3 has no field for a decision or a choice: applied
-// there, its copy of the ask would offer no options and its copy of the answer
-// would name none, for good. So a comment carrying either is stamped at 4, and
-// a comment carrying neither still at 1 — an old node holds back only what it
-// would apply lossily.
-func TestADecisionRecordIsRetainedByABuildThatCannotReadIt(t *testing.T) {
-	t.Parallel()
-	answers := "c-ask"
-	for name, c := range map[string]struct {
-		comment tracker.Comment
-		want    int
-	}{
-		"an ask with a decision": {tracker.Comment{
-			ID: "c-ask", Ask: "pm", Body: "?", Decision: decisionFixture()}, 4},
-		"an answer with a choice": {tracker.Comment{
-			ID: "c-ans", Answers: &answers, Body: "go", Choice: "ship"}, 4},
-		"a plain ask": {tracker.Comment{ID: "c-q", Ask: "pm", Body: "?"}, 1},
-	} {
-		mutation, err := json.Marshal(tracker.TaskPatch{Comment: &c.comment})
-		if err != nil {
-			t.Fatalf("%s: marshal: %v", name, err)
-		}
-		body, err := tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "op-" + name, Subject: tracker.TaskSubject("t-1"),
-				Op: tracker.OpPatch, CreatedAt: wednesday,
-				Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
-			},
-			Kind: tracker.ChangeComment, Mutation: mutation,
-			Actor: "dev", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-		if err != nil {
-			t.Fatalf("%s: encode: %v", name, err)
-		}
-		env, err := tracker.Domain{}.Envelope(body)
-		if err != nil {
-			t.Fatalf("%s: envelope: %v", name, err)
-		}
-		if env.V != c.want {
-			t.Errorf("%s: stamped %d, want %d", name, env.V, c.want)
-		}
-		if c.want > 3 && env.ReadableBy(3) {
-			t.Errorf("%s: a build reading version 3 would apply it and drop "+
-				"the field", name)
-		}
-		if !env.ReadableBy(tracker.RecordVersion) {
-			t.Errorf("%s: this build cannot read what it writes", name)
 		}
 	}
 }

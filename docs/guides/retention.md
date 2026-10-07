@@ -1384,17 +1384,6 @@ cut to its kind, its instant and those three changes, because the work flow
 answers the past by walking them backward and a purge takes the task out of
 that series only from the moment it happened.
 
-That is what a purge **this build writes** does (a task purge at record version
-13 — see [what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
-A purge written by an earlier build is applied, on every node and on every
-replay, exactly as that build applied it: the object rows go, and the task's
-history, notices, turn records and mirror rows stay, because every node that
-applied it at the time kept them and a node applying it differently would hold
-rows its peers do not. This build has no gesture that reaches them: the task is
-already gone, so purging it again is refused as already purged — only a retry
-of the purge that did it, under its own operation id, is answered, with that
-purge's outcome.
-
 The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked
 up — which is the point of asking. The **reason is required** because it is the

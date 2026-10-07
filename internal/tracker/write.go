@@ -1663,16 +1663,9 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 		// [Provenance.Seat]. Empty for every writer that is already a
 		// seat, which is every in-engine caller.
 		ActorSeat: w.Seat,
-		// EVERY TASK WRITE THAT MERGES INTO A HELD ROW keeps the place
-		// the project's order gave it, and says so — which is what
-		// stamps it at a version a build still re-writing the filed rank
-		// retains rather than applies. See [keepsPlaceVersion]. A create
-		// mints its rank and a purge removes the row, so neither carries
-		// it.
-		KeepsPlace: mergesIntoRow(subject, op),
-		TurnID:     w.TurnID,
-		Chain:      w.Chain,
-		Notify:     notify,
+		TurnID:    w.TurnID,
+		Chain:     w.Chain,
+		Notify:    notify,
 	}
 	encoded, err := record.Encode()
 	if err != nil {

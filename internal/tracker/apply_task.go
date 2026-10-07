@@ -34,17 +34,9 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return a.purgeTask(ctx, tx, c)
 	}
 
-	current, filed, held, err := readTaskRow(ctx, tx, id)
+	current, held, err := readTask(ctx, tx, id)
 	if err != nil {
 		return 0, err
-	}
-	if held && c.record.V < keepsPlaceVersion {
-		// A RECORD AN OLDER BUILD WROTE, applied by that build's rule: the
-		// rank its document was filed at, not the one the order moved the
-		// row to. Every node applies it this way whichever build it runs,
-		// which is the only way two builds reading one log keep one row —
-		// see [keepsPlaceVersion].
-		current.Rank = filed
 	}
 	if held && c.packed <= int64(max(current.Version, current.ScopedThrough)) {
 		// A REDELIVERY OR A REPROCESS, and both are ordinary traffic. The
@@ -320,24 +312,13 @@ func effectiveOf(c applyContext) (time.Time, error) {
 // readTask reads the stored task, reporting whether the row exists — with the
 // rank its ROW holds, which is the task's place on its board.
 //
-// THE RANK IS THE COLUMN'S, never the document's. After its create a task's
-// place is the ORDER's to write — [Applier.applyRankOrder] moves the column
-// and stamps `scoped_through`, and deliberately leaves the task's own document
-// alone — so the document's copy is whatever the create or the last project
-// move minted. Every writer deciding against a task, and the applier merging a
-// record at [keepsPlaceVersion] or above, reads the place from here, so a task
-// write carries the order's key through unchanged and only a record that
-// MINTS one — a create, a move into another project — changes it.
+// THE RANK IS THE COLUMN'S. After its create a task's place is the ORDER's to
+// write, and [Applier.applyRankOrder] writes it into the task's document and
+// its `rank` column alike ([rewriteOther]); the column is the extracted copy
+// every board reads, and a task write merges against it so it carries the
+// order's key through unchanged. Only a record that MINTS one — a create, a
+// move into another project — changes it.
 func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
-	task, _, held, err := readTaskRow(ctx, tx, id)
-	return task, held, err
-}
-
-// readTaskRow is [readTask] plus the rank the task's DOCUMENT holds — the key
-// it was filed or last re-homed at — which is what a record below
-// [keepsPlaceVersion] is applied with, because it is what the build that
-// wrote that record applies it with.
-func readTaskRow(ctx context.Context, tx *sql.Tx, id string) (Task, Rank, bool, error) {
 	var document []byte
 	var version, scoped int64
 	var rank string
@@ -346,35 +327,18 @@ func readTaskRow(ctx context.Context, tx *sql.Tx, id string) (Task, Rank, bool, 
 		id).Scan(&document, &version, &scoped, &rank)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Task{}, "", false, nil
+		return Task{}, false, nil
 	case err != nil:
-		return Task{}, "", false, fmt.Errorf("tracker: read task %s: %w", id, err)
+		return Task{}, false, fmt.Errorf("tracker: read task %s: %w", id, err)
 	}
 	var task Task
 	if err := json.Unmarshal(document, &task); err != nil {
-		return Task{}, "", false, fmt.Errorf("tracker: decode the stored task %s: %w", id, err)
+		return Task{}, false, fmt.Errorf("tracker: decode the stored task %s: %w", id, err)
 	}
 	task.Version = uint64(version)
 	task.ScopedThrough = uint64(scoped)
-	filed := task.Rank
 	task.Rank = Rank(rank)
-	return task, filed, true, nil
-}
-
-// mergesIntoRow reports whether a record on subject is applied by MERGING into
-// a task row that already exists — the three ops [mergeTask] decodes as a
-// [TaskPatch]. Those are the records that carry [MutationRecord.KeepsPlace]:
-// a create mints its own rank and a purge removes the row, so neither has a
-// place to keep.
-func mergesIntoRow(subject Subject, op OpKind) bool {
-	if subject.Kind != KindTask {
-		return false
-	}
-	switch op {
-	case OpPatch, OpTombstone, OpRestore:
-		return true
-	}
-	return false
+	return task, true, nil
 }
 
 // mergeTask produces the new state from the stored one and the record.
@@ -1128,7 +1092,7 @@ func activeOf(task Task) bool {
 // grandparent, or the root when the purged task was one — and its subtree's
 // ancestry is rebuilt. Depth can only fall, so no cap is crossed by the move.
 //
-// # From [rewriteVersion], what it writes of OTHER tasks, it writes into their DOCUMENTS
+// # What it writes of OTHER tasks, it writes into their DOCUMENTS
 //
 // A task's derived rows — its parent pointer, its relations, its dependency
 // edges and its mirror of who waits on it — are a pure function of its own
@@ -1142,21 +1106,13 @@ func activeOf(task Task) bool {
 // stamped `scoped_through` rather than `version`: a record may move only its
 // own subject's version ([Task]).
 //
-// A PURGE BELOW [rewriteVersion] fixes the rows alone, as every build before it did
-// ([Applier.reparentRows]): applying an older record by the newer rule on a
-// node that replays it would give that node documents no other node holds
-// ([rewriteVersion]).
-//
-// # From [rewriteVersion], it destroys what the task's own records wrote
+// # It destroys what the task's own records wrote
 //
 // The object tables are the smaller half of what a task leaves: every history
 // row keeps its record's whole mutation, every inbox notice an excerpt, every
 // turn record its spend, and the dependency mirror its edges
-// ([forgetRecords], [purgeDeletes]). A purge at that version deletes them in the same
-// transaction. A purge BELOW it leaves every one of them exactly where
-// every build before it left them — the rows its nodes hold — because the
-// same record applied two ways is the divergence this log exists to prevent;
-// its content stays readable until the rows are otherwise replaced.
+// ([forgetRecords], [purgeDeletes]), and the purge deletes them in the same
+// transaction.
 //
 // Those tasks are named in the purge's SCOPE, which the writer enumerates
 // ([purgeReach]); the list of what a purge writes of another task is the
@@ -1220,14 +1176,12 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		written += n
 	}
 	// WHICH OTHER TASKS NAME IT, read while the rows that say so are still
-	// here: from [rewriteVersion] each is rewritten below, once.
-	var others map[string]otherEdit
-	if c.record.V >= rewriteVersion {
-		if others, err = othersNaming(ctx, tx, id, children); err != nil {
-			return 0, err
-		}
+	// here: each is rewritten below, once.
+	others, err := othersNaming(ctx, tx, id, children)
+	if err != nil {
+		return 0, err
 	}
-	for _, statement := range purgeDeletes(id, c.record.V) {
+	for _, statement := range purgeDeletes(id) {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, statement.sql, statement.args...)
 		if err != nil {
@@ -1256,12 +1210,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	var moved int
-	if c.record.V >= rewriteVersion {
-		moved, err = a.rewriteNaming(ctx, tx, id, task.Parent, children, others, c)
-	} else {
-		moved, err = a.reparentRows(ctx, tx, children, task.Parent)
-	}
+	moved, err := a.rewriteNaming(ctx, tx, id, task.Parent, children, others, c)
 	if err != nil {
 		return 0, err
 	}
@@ -1272,12 +1221,10 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	// WHAT ITS OWN RECORDS WROTE, from [rewriteVersion] alone — see the doc above.
-	forgotten := 0
-	if c.record.V >= rewriteVersion {
-		if forgotten, err = forgetRecords(ctx, tx, id, historyID(c)); err != nil {
-			return 0, fmt.Errorf("tracker: purge %s at %s: %w", id, c.position, err)
-		}
+	// WHAT ITS OWN RECORDS WROTE — see the doc above.
+	forgotten, err := forgetRecords(ctx, tx, id, historyID(c))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: purge %s at %s: %w", id, c.position, err)
 	}
 	return written + marker + moved + history + forgotten, nil
 }
@@ -1288,23 +1235,16 @@ type purgeStatement struct {
 	args []any
 }
 
-// purgeDeletes is every DELETE a purge of id at record version v issues
-// against the object tables, in the order it issues them.
+// purgeDeletes is every DELETE a purge of id issues against the object tables,
+// in the order it issues them.
 //
-// BELOW [rewriteVersion], EXACTLY THE LIST EVERY BUILD BEFORE IT ISSUED, and nothing
-// else: that list is what the nodes that applied such a record hold, and a
-// node replaying one — after adopting a snapshot, or on this build beside an
-// older one in a rolling upgrade — must write the same rows or hold ones no
-// other node does ([rewriteVersion]). It left the DEPENDENCY MIRROR standing,
-// because the mirror table arrived after the list was written: the purged
-// task's own list of who waits on it, and every blocker's entry naming it.
-//
-// FROM [rewriteVersion] THE MIRROR GOES WITH THE REST, both halves, which is the
-// rewritten purge's half of the same fix [forgetRecords] is: a row keyed on
-// an id nothing resolves any more is a copy of the task's edges nobody can
-// reach and nothing removes.
-func purgeDeletes(id string, v int) []purgeStatement {
-	statements := []purgeStatement{
+// THE DEPENDENCY MIRROR GOES WITH THE REST, both halves — the purged task's own
+// list of who waits on it, and every blocker's entry naming it — which is this
+// list's half of the same fix [forgetRecords] is: a row keyed on an id nothing
+// resolves any more is a copy of the task's edges nobody can reach and nothing
+// removes.
+func purgeDeletes(id string) []purgeStatement {
+	return []purgeStatement{
 		{`DELETE FROM tracker_references WHERE from_task = ? OR to_task = ?`, []any{id, id}},
 		{`DELETE FROM tracker_task_keys WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_watchers WHERE task_id = ?`, []any{id}},
@@ -1312,29 +1252,20 @@ func purgeDeletes(id string, v int) []purgeStatement {
 		{`DELETE FROM tracker_task_tags WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_relations WHERE task_id = ? OR other_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
+		{`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`, []any{id, id}},
+		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
+		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
 	}
-	if v >= rewriteVersion {
-		statements = append(statements, purgeStatement{
-			`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`,
-			[]any{id, id},
-		})
-	}
-	return append(statements,
-		purgeStatement{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
-		purgeStatement{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
-		purgeStatement{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
-		purgeStatement{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
-		purgeStatement{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
-		purgeStatement{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
-	)
 }
 
 // forgetRecords destroys what a purged task's own records wrote beside its
 // rows: the inbox notices its rows routed and its turn records go, and of its
 // history only a SKELETON stays — every row but the purge's own (keep) that
-// moves a count the flow census walks, with its content taken out. A
-// [rewriteVersion] purge's alone: below it a purge leaves every one of them, as
-// every build before that version did ([purgeDeletes] says why).
+// moves a count the flow census walks, with its content taken out.
 //
 // THESE HOLD THE CONTENT, which is what a purge is for. A history row keeps
 // its record's whole mutation in `document` — every title, every body and
@@ -1471,39 +1402,6 @@ func censusRows(ctx context.Context, tx *sql.Tx, id, keep string) ([]skeletonRow
 	return out, rows.Err()
 }
 
-// reparentRows is a purge's re-parenting BELOW [rewriteVersion]: each child's
-// pointer moves onto parent on the row alone, and its subtree's ancestry is
-// rebuilt.
-//
-// The rule every build before [rewriteVersion] applied, kept for the records
-// they wrote. Its flaw is the one that version exists for — the child's document
-// still names the purged task, and the child's next record puts the pointer
-// back — and it is not repaired here, because the nodes that applied such a
-// record hold exactly this.
-//
-// AFTER THE DELETES, deliberately: [Applier.maintainClosure] walks the parent
-// chain, and run before them it would walk through the row this purge is
-// removing and write an ancestry naming it.
-func (a *Applier) reparentRows(ctx context.Context, tx *sql.Tx, children []string,
-	parent *string) (int, error) {
-
-	written := 0
-	for _, child := range children {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET parent_id = ? WHERE id = ?`,
-			parent, child); err != nil {
-			return 0, fmt.Errorf("tracker: re-parent %s: %w", child, err)
-		}
-		written++
-		n, err := a.maintainClosure(ctx, tx, Task{ID: child, Parent: parent})
-		if err != nil {
-			return 0, err
-		}
-		written += n
-	}
-	return written, nil
-}
-
 // otherEdit is everything a rewritten purge changes in ONE other task's
 // document.
 //
@@ -1630,13 +1528,11 @@ func (a *Applier) rewriteNaming(ctx context.Context, tx *sql.Tx, id string,
 // movedColumns are the row columns a rewrite of ANOTHER task moves beside its
 // document.
 //
-// ONLY THOSE, and never every column the document could derive: a task can
-// hold a column its document does not agree with — a rank a version-1 rank
-// order wrote to the column alone, a pointer a version-1 purge moved on the row
-// alone ([rewriteVersion]) — and a rewrite that re-derived every column would
-// put a purged parent back under a task a later purge merely unlinked, or undo
-// a drag because a purge touched the card. What a rewrite does not move, it
-// leaves as the row holds it.
+// ONLY THOSE, and never every column the document could derive: the UPDATE
+// states exactly what this record's change is about — a placement moves the
+// rank, a purge's re-parenting the pointer — and leaves every other column as
+// the row holds it, so a rewrite never re-writes a column some other record is
+// the author of.
 type movedColumns struct {
 	parent bool
 	rank   bool

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/tracker`
-- **Enforced-by:** `internal/tracker.TestADecisionRecordIsRetainedByABuildThatCannotReadIt`, `internal/tracker.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
+- **Enforced-by:** `internal/tracker.TestADecisionIsValidatedField`, `internal/tracker.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
 - **Cost-when-tried:** "no decision engine" was read as "no decision structure". A question that needed somebody to choose travelled as prose on an `ask` comment — the options somewhere in the body, the recommendation a sentence among others, the evidence links a reader went looking for — and the answer was prose the asker then had to map back onto the options it had in mind. The dashboard design dropped its "Also posts to Slack" line because nothing could keep it; when the line came back as `inform`, the tracker accepted it from an operator, for a surface the company did not run and for a channel nothing declared, and a second answer to one ask landed beside the first, claiming to close a question the first had already closed.
 - **Tag-status:** unreleased
 
@@ -28,8 +28,7 @@ The engine enforces **exactly three things**, and forbids itself a fourth:
 1. **The shape** — a decision is well formed, rides only the comment that
    asks, and never changes after it was asked, because an answer names an
    option by id and options edited under it would change what the answer
-   meant. A record carrying one is version-gated, so a build that cannot read
-   it retains it rather than applying the comment without it.
+   meant.
 2. **The answer** — a `choice` names an option of the ask it answers, checked
    against that ask's own row inside the writer's decide, and an ask is
    answered once.
