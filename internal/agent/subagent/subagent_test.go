@@ -2579,11 +2579,8 @@ func TestAWorkerThatTimedOutStillReportsHowLongItTook(t *testing.T) {
 //
 // The Result carries Executions and Narration keyed on the SAME round number,
 // which is the whole contract a consumer interleaves them on. Publishing the
-// executions alone left every delegated worker's card as bare tool rows with
-// nothing that asked for them, and pushed the worker's reasoning into the
-// dashboard's pre-narration fallback — where it renders under a heading
-// claiming the record predates rounds being kept apart, which is false: it is
-// what this build publishes for every worker.
+// executions alone would leave every delegated worker's card as bare tool rows
+// with nothing that asked for them, and the worker's reasoning nowhere on it.
 func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

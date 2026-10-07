@@ -502,10 +502,9 @@ describe("a tool call's arguments", () => {
 });
 
 // A CODING RUN IS NOT A MODEL CALL, and its card says what it is. It has no
-// rounds because the engine drove none, so the fallback that labels a joined
-// response "recorded before rounds were kept apart" would misname the report
-// the run wrote back — and the run's activity log, the whole account of what
-// an agent with no telemetry did, has to be reachable from the card.
+// rounds because the engine drove none, so its response is the report the run
+// wrote back — and the run's activity log, the whole account of what an agent
+// with no telemetry did, has to be reachable from the card.
 describe("a coding run's card", () => {
   const RUN = phase({
     key: "turn-1|sandbox|1|job-1",
@@ -517,11 +516,10 @@ describe("a coding run's card", () => {
     transcript: "[tool] bash: git clone\n[tool] bash: go test ./...",
   });
 
-  test("shows the report and the activity, never the legacy transcript", () => {
+  test("shows the report and the activity", () => {
     render(<PhaseCard record={RUN} defaultOpen />);
     expect(screen.getByText("Report")).toBeDefined();
     expect(screen.getByText(/Fixed the flake/)).toBeDefined();
-    expect(screen.queryByText(/recorded before rounds were kept apart/)).toBeNull();
     const activity = screen.getByRole("button", { name: /^Activity/ });
     fireEvent.click(activity);
     expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();

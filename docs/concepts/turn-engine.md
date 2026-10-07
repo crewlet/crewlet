@@ -1220,11 +1220,10 @@ find.
 
 **Every phase, workers included.** A [delegated worker](#workers) publishes
 the same `subagent` phase event with the same pair, because its card is the
-same round ledger and reads it the same way. Publishing its executions alone
-left every worker's ledger as bare tool rows with nothing that asked for them,
-and pushed its reasoning into the consumer's pre-narration fallback — where
-it renders under a heading saying the record predates rounds being kept
-apart, which for a record this build just wrote is simply false.
+same round ledger and reads it the same way: its narration is what puts the
+worker's reasoning and prose beside the tool calls each round made, where its
+executions alone would leave the ledger as bare tool rows with nothing that
+asked for them.
 
 **And one scale per phase, not per loop invocation.** The tool loop numbers
 its rounds from 1 each time it is *entered*, and an extended phase enters it

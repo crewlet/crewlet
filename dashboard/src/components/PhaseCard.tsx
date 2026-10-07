@@ -95,11 +95,11 @@ import {
 import {
   decisionLabel,
   decisionTone,
-  ledgerOf,
   phaseDuration,
   type PhaseRecord,
   type Refusal,
   type Round,
+  rounds,
   stopNote,
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
@@ -529,11 +529,11 @@ export function PhaseCard({
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
-  const { ledger, legacy } = ledgerOf(record);
+  const ledger = rounds(record.tools, record.narration, record.partial, record.timedRounds);
   // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
-  // engine drove none — the run's own loop happened in a box — so what the
-  // legacy fallback would label "recorded before rounds were kept apart" is
-  // the report the run wrote back, and it carries an activity log instead.
+  // engine drove none — the run's own loop happened in a box — so its
+  // `response` is the report the run wrote back, and it carries an activity
+  // log instead.
   const codingRun = record.phase === "sandbox";
   const streaming = ledger.some((r) => r.streaming);
   // A PARKED TURN'S CALL IS SILENT ON PURPOSE: the executor suspended into a
@@ -891,9 +891,6 @@ export function PhaseCard({
             </section>
           )}
 
-          {/* A phase recorded before the engine sent per-round narration. The
-              join cannot be undone, so it is shown whole rather than guessed
-              apart — see `ledgerOf`. */}
           {codingRun && record.response.trim() && (
             <section className="col gap-1">
               <div className="t-label">
@@ -915,38 +912,13 @@ export function PhaseCard({
             </Disclosure>
           )}
 
-          {legacy && !codingRun && (
-            <>
-              {legacy.thinking && (
-                <Disclosure
-                  title="Thinking"
-                  count={`${legacy.thinking.length} chars`}
-                  variant="aside"
-                  headingLevel="none"
-                  lazy
-                >
-                  <Words text={legacy.thinking} muted />
-                </Disclosure>
-              )}
-              {legacy.answer.trim() && (
-                <section className="col gap-1">
-                  <div className="t-label">
-                    Transcript
-                    <span className="muted"> · recorded before rounds were kept apart</span>
-                  </div>
-                  <Words text={legacy.answer.trim()} />
-                </section>
-              )}
-            </>
-          )}
-
           {/* The only genuinely empty state. A ROUND is never empty —
               `narrations()` drops an entry blank in both fields and a round
               built from a tool call has tools — so a per-round placeholder
               was unsatisfiable. A PHASE with no rounds yet is real: the
               provider call has not returned, and until the engine streams
               tokens there is nothing else to show for it. */}
-          {record.live && !ledger.length && !legacy && (
+          {record.live && !ledger.length && (
             <div className="row gap-2">
               <span className="waiting-dot" aria-hidden="true" />
               <span className="t-caption">

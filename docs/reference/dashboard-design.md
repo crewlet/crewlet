@@ -3101,9 +3101,10 @@ rules fix it, and each one names a specific mechanism:
    separated by a blank line and prose contains blank lines — so splitting
    it on the leading `<think>` tag showed round 1's thinking as "the
    reasoning" and every later round's thinking as "the model output", tags
-   and all. The engine now sends the split it already knows, at the point
-   the round's assistant message is appended. A phase recorded before that
-   has only the joined string and is shown whole rather than guessed apart.
+   and all. So the engine sends the split it already knows, at the point
+   the round's assistant message is appended, and the card reads the rounds
+   from that alone — the joined string is rendered only as a coding run's
+   report, whose rounds happened in its box.
 
    **A round that answered in prose where a call was owed says what became of
    it.** A phase that finishes only by a tool call — the executor's

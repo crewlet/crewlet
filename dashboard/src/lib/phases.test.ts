@@ -17,12 +17,10 @@ import {
   groupTurns,
   mergePhases,
   phaseKey,
-  ledgerOf,
   narrations,
   phaseDuration,
   phaseStart,
   rounds,
-  splitThinking,
   stopNote,
   streamedPhases,
   timedRounds,
@@ -429,20 +427,6 @@ describe("a round that reached nobody", () => {
 });
 
 describe("presentation rules", () => {
-  test("reasoning is split off the front of the answer", () => {
-    // The engine keeps a phase's reasoning as a <think> prefix of Response,
-    // so this is a documented shape rather than a guess.
-    const { thinking, answer } = splitThinking("<think>weighing it up</think>\nShipped it.");
-    expect(thinking).toBe("weighing it up");
-    expect(answer.trim()).toBe("Shipped it.");
-  });
-
-  test("a response with no reasoning is left alone", () => {
-    const { thinking, answer } = splitThinking("Shipped it.");
-    expect(thinking).toBe("");
-    expect(answer).toBe("Shipped it.");
-  });
-
   test("a decision is rendered as what it MEANS", () => {
     // The outcome and the review decision are on the wire and rendered
     // nowhere else, so the single most useful fact about a phase — what it
@@ -592,34 +576,6 @@ describe("a round that answered in prose where a call was owed", () => {
   });
 });
 
-describe("a phase recorded before narration existed still renders", () => {
-  // Those events are already in the store, and an applied write is history
-  // rather than source: they have to keep rendering.
-  const legacyRecord = {
-    tools: toolCalls([{ name: "search", round: 1 }]),
-    narration: [],
-    response: "<think>pondering</think>\nthe answer",
-  };
-
-  test("the joined response is shown whole rather than guessed apart", () => {
-    const { ledger, legacy } = ledgerOf(legacyRecord);
-    expect(ledger.map((r) => r.round)).toEqual([1]);
-    expect(legacy).toEqual({ thinking: "pondering", answer: "the answer" });
-  });
-
-  test("narration, when present, wins outright", () => {
-    const { legacy } = ledgerOf({
-      ...legacyRecord,
-      narration: narrations([{ round: 1, content: "proper" }]),
-    });
-    expect(legacy).toBeNull();
-  });
-
-  test("a phase with neither offers no empty transcript block", () => {
-    expect(ledgerOf({ tools: [], narration: [], response: "" }).legacy).toBeNull();
-  });
-});
-
 describe("a round being written is not a round that is finished", () => {
   test("the partial becomes the newest round, marked streaming", () => {
     const ledger = rounds(
@@ -645,26 +601,18 @@ describe("a round being written is not a round that is finished", () => {
     expect(ledger[0]!.abandoned.map((a) => a.content)).toEqual(["first try died here"]);
   });
 
-  test("a live phase with only a partial is not treated as a legacy record", () => {
-    // Otherwise the joined `response` fallback would render alongside it and
-    // the same words would appear twice.
-    const { ledger, legacy } = ledgerOf({
-      tools: [],
-      narration: [],
-      partial: { round: 1, content: "writing" },
-      response: "writing",
-    });
-    expect(legacy).toBeNull();
+  test("a live phase with only a partial renders it once", () => {
+    const ledger = rounds([], [], { round: 1, content: "writing" });
     expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toMatchObject({ round: 1, streaming: true, content: "writing" });
   });
 
   test("a finished phase has no partial at all", () => {
-    const { ledger } = ledgerOf({
-      tools: toolCalls([{ name: "a", round: 1 }]),
-      narration: narrations([{ round: 1, content: "done" }]),
-      partial: null,
-      response: "done",
-    });
+    const ledger = rounds(
+      toolCalls([{ name: "a", round: 1 }]),
+      narrations([{ round: 1, content: "done" }]),
+      null,
+    );
     expect(ledger.every((r) => !r.streaming)).toBe(true);
   });
 });

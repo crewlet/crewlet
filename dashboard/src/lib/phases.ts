@@ -213,8 +213,9 @@ export interface PhaseRecord {
   userSections: PromptSection[] | null;
   response: string;
   tools: ToolCall[];
-  /** Per-round model turns. Empty on a phase recorded before the engine
-      sent them — see `ledgerOf`. */
+  /** Per-round model turns: one entry per round that wrote reasoning or
+      text. Empty until a round comes back, on a phase whose rounds only
+      called tools, and on a coding run, whose rounds happened in its box. */
   narration: Narration[];
   /** The round being written right now. Live phases only. */
   partial: PartialRound | null;
@@ -514,34 +515,6 @@ export function rounds(
     r.abandoned = narrations(partial.abandoned);
   }
   return [...byRound.values()].sort((a, b) => a.round - b.round);
-}
-
-/**
- * The phase's rounds, however this build's engine described them.
- *
- * A phase recorded before the engine sent `round_narration` has only the
- * joined `response`, and those events are already in the store — an applied
- * write is history, not source, so they have to keep rendering. The join
- * cannot be undone (its parts are separated by a blank line and prose
- * contains blank lines), so the fallback does not try: it puts the whole
- * response in one trailing pseudo-round, which is what the reader used to
- * get, and every round that DOES have narration renders properly.
- */
-export function ledgerOf(record: {
-  tools: ToolCall[];
-  narration: Narration[];
-  partial?: PartialRound | null;
-  timedRounds?: TimedRound[];
-  response: string;
-}): {
-  ledger: Round[];
-  legacy: { thinking: string; answer: string } | null;
-} {
-  const ledger = rounds(record.tools, record.narration, record.partial, record.timedRounds);
-  if (record.narration.length > 0 || record.partial) return { ledger, legacy: null };
-  const legacy = splitThinking(record.response);
-  if (!legacy.thinking && !legacy.answer.trim()) return { ledger, legacy: null };
-  return { ledger, legacy };
 }
 
 /** The first message with this role that carries text, or null. */
@@ -1143,20 +1116,6 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
  */
 export function triggerHeadline(trigger: PhaseRecord["trigger"]): string {
   return trigger?.summary || trigger?.type || "turn";
-}
-
-/**
- * Split the model's reasoning off the front of its answer.
- *
- * The engine keeps a phase's reasoning as a `<think>` prefix of `Response`, so
- * this is a documented shape rather than a guess. Reasoning is collapsed by
- * default: it is long, it is not the answer, and a reader scanning a turn for
- * what it DID should not have to scroll past what it considered.
- */
-export function splitThinking(response: string): { thinking: string; answer: string } {
-  const m = /^\s*<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>\s*/i.exec(response ?? "");
-  if (!m) return { thinking: "", answer: response ?? "" };
-  return { thinking: (m[1] ?? "").trim(), answer: (response ?? "").slice(m[0].length) };
 }
 
 /**
