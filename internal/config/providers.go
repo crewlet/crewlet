@@ -1028,9 +1028,13 @@ type EmbeddingProvider struct {
 	// needs nothing, and states a LOWERING limit only once every node runs a
 	// build that enforces it. Any other company states its limits in the
 	// document it imports offline (`crewlet config import`) on the FIRST
-	// node it upgrades, before that node starts: the node publishes the
-	// revision as it boots, and the older nodes apply it, without the
-	// limits, until each is upgraded in turn.
+	// DATA node it upgrades, before that node starts: the node publishes
+	// the revision as it boots, and the older nodes apply it, without the
+	// limits, until each is upgraded in turn. Not a node without `data`:
+	// its store is scratch, which the offline import refuses, an older data
+	// node's PUT refuses the new keys, and started with no company file it
+	// boots on the fleet's revision, which this rule refuses to run — so it
+	// is upgraded after a data node has published the corrected revision.
 	MaxInputTokens int `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty" js:"min=0" desc:"Most tokens one input may hold; 0 takes the named model's documented window. Required for a model this build does not know; may only lower a documented one."`
 	MaxBatchInputs int `yaml:"max_batch_inputs,omitempty" json:"max_batch_inputs,omitempty" js:"min=0" desc:"Most inputs one request may carry; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
 	MaxBatchTokens int `yaml:"max_batch_tokens,omitempty" json:"max_batch_tokens,omitempty" js:"min=0" desc:"Most tokens one request may carry, summed over its inputs; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`

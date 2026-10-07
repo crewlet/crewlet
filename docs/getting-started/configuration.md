@@ -509,11 +509,17 @@ So:
 - **On OpenAI's models**, an upgrade needs nothing: every limit is documented.
   If you mean to *lower* one for a gateway, state it once every node runs this
   build, because until then an older node does not enforce it.
-- **On any other model**, state the limits on the **first** node you upgrade:
-  with that node stopped, import the corrected document offline
+- **On any other model**, state the limits on the **first data node** you
+  upgrade — one with the `data` role, whose store is not scratch: with that
+  node stopped, import the corrected document offline
   (`crewlet config import company.yaml`), then start it. It publishes the
   revision as it boots, and the older nodes apply it — without the limits —
-  and keep running until each is upgraded in turn.
+  and keep running until each is upgraded in turn. A node **without** `data`
+  cannot be first: its store is scratch, so `crewlet config import` refuses
+  it, every older data node's `PUT /config` refuses the new keys, and started
+  with no company file it boots on the fleet's revision, which this build
+  refuses to run while it lacks the limits. Upgrade such a node only after a
+  data node has published the corrected revision.
 
 The engine counts **bytes** against those token limits rather than shipping a
 tokenizer per vendor: every tokenizer these models use emits at most one token
