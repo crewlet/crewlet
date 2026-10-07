@@ -156,6 +156,91 @@ func TestADeclineStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
 	}
 }
 
+// WHAT A RUN OWES THE SEAT IS BOUNDED BY ONE DECLINE. R1 is let go of and its
+// copy published, but clearing it from the row keeps failing; R2 is recorded,
+// fails every resume and is let go of in turn. Its decline WAITS for R1's copy
+// to be cleared — the answer stays recorded and owed, the row carries R1's copy
+// and nothing more — and lands the moment it is, handing R2 back once. Without
+// the bound, every answer let go of while the broker or the store kept failing
+// grew the row by one more batch of copies.
+func TestADeclineWaitsForTheCopiesAlreadyOwed(t *testing.T) {
+	rig := newCoordRig(t)
+	store := &refusingStore{inner: rig.pending}
+	rig.coordinator.pending = store
+	r1 := owedAnAnswerItCannotResume(t, rig)
+	store.refuse = []string{"ClearHandBack"}
+	rig.fireRetries() // R1's last attempt fails; it is let go of and published, not cleared
+	r1Copy := declinedCopyID(r1.ID).String()
+	if got := rig.get("t1"); got.Status != StatusAwaiting || len(got.HandBack) != 1 {
+		t.Fatalf("run = %q hand-back %+v, want the question reopened with R1's copy still owed",
+			got.Status, got.HandBack)
+	}
+
+	r2 := replyAt("use dev", r1.Timestamp.Add(time.Minute))
+	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		chatReply(answerOnTheDM, "use dev", r2)); d != AnswerConsumed {
+		t.Fatalf("R2 = %q, want it recorded", d)
+	}
+	for range MaxAnswerAttempts - 1 {
+		if rig.fireRetries() != 1 {
+			t.Fatal("R2's failed resume scheduled no retry")
+		}
+	}
+	got := rig.get("t1")
+	if got.Status != StatusAnswered || got.Answer == nil || !slices.Equal(got.Answer.EventIDs, []string{r2.ID.String()}) {
+		t.Fatalf("run = %q answer %+v, want R2 still recorded and owed while R1's copy is "+
+			"uncleared", got.Status, got.Answer)
+	}
+	if len(got.HandBack) != 1 || got.HandBack[0].ID != r1Copy {
+		t.Fatalf("hand-back = %+v, want R1's copy and nothing more: what a row owes is bounded "+
+			"by one decline", got.HandBack)
+	}
+
+	store.refuse = nil
+	rig.fireRetries()
+	r2Copy := declinedCopyID(r2.ID).String()
+	handed := rig.handedBack()
+	r2s := 0
+	for _, id := range handed {
+		if id == r2Copy {
+			r2s++
+		}
+	}
+	if slices.ContainsFunc(handed, func(id string) bool { return id != r1Copy && id != r2Copy }) ||
+		!slices.Contains(handed, r1Copy) || r2s != 1 || handed[len(handed)-1] != r2Copy {
+		t.Fatalf("handed back %v, want R1's copy (repeated under its one id while it could not "+
+			"be cleared) and then R2's once", handed)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting || len(got.HandBack) != 0 {
+		t.Fatalf("run = %q hand-back %+v, want the question reopened owing nothing", got.Status,
+			got.HandBack)
+	}
+}
+
+// A SECOND ANSWER GETS ITS OWN ATTEMPTS. R1 was let go of and its copy is still
+// owed, so the run's retry series is alive — with R1's attempts all spent. R2
+// is recorded and its first resume fails: it is retried on its own count, not
+// let go of on the strength of R1's.
+func TestASecondAnswerGetsItsOwnAttempts(t *testing.T) {
+	rig := newCoordRig(t)
+	r1 := owedAnAnswerItCannotResume(t, rig)
+	rig.failPublishes(errors.New("the broker is unreachable"))
+	rig.fireRetries() // R1 is let go of; its copy is owed and the series kept for it
+
+	r2 := replyAt("use dev", r1.Timestamp.Add(time.Minute))
+	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		chatReply(answerOnTheDM, "use dev", r2)); d != AnswerConsumed {
+		t.Fatalf("R2 = %q, want it recorded", d)
+	}
+	if got := rig.get("t1"); got.Status != StatusAnswered || got.Answer == nil {
+		t.Fatalf("run = %q answer %+v after R2's first failed resume, want R2 still owed its "+
+			"attempts", got.Status, got.Answer)
+	}
+	if got := rig.retries.delays(); !slices.Equal(got, []time.Duration{answerRetryDelay(1)}) {
+		t.Fatalf("next attempt in %v, want R2's first retry at %v", got, answerRetryDelay(1))
+	}
+}
+
 // AND A RUN THAT ENDS WITH A COPY STILL OWED hands it back as its record goes:
 // what a decline owes is the seat's, and nothing reads a deleted row again.
 // Here the next reply is recorded and resumes the run to its end before the

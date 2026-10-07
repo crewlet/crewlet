@@ -280,21 +280,54 @@ func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, a
 	if len(answer) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: declining an answer to run %s that names no delivery", turnID)
 	}
-	return s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	owed := false
+	declined, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusAnswered || run.LaunchID != launch || run.Answer == nil ||
 			outranked(*run, fence) || !slices.Equal(run.Answer.EventIDs, answer) {
 			return false
 		}
-		declined := slices.Clone(answer)
+		if owed = len(run.HandBack) > 0; owed {
+			return false
+		}
+		ids := slices.Clone(answer)
 		for _, copied := range handBack {
-			declined = append(declined, copied.ID)
+			ids = append(ids, copied.ID)
 		}
 		run.Status = run.Answer.declinedTo()
 		run.Answer = nil
-		run.DeclinedAnswers = boundedDeclined(append(run.DeclinedAnswers, declined...))
-		run.HandBack = append(run.HandBack, handBack...)
+		run.DeclinedAnswers = boundedDeclined(run.DeclinedAnswers, ids)
+		run.HandBack = slices.Clone(handBack)
 		return true
 	})
+	if err == nil && owed {
+		err = fmt.Errorf("sandbox: declining the answer to run %s: %w", turnID, ErrHandBackOwed)
+	}
+	return declined, won, err
+}
+
+// OweHandBack records the copies a run that is about to end owes the seat. See
+// the contract on [PendingStore].
+func (s *CoordStore) OweHandBack(ctx context.Context, turnID, launch string, handBack []HandedBack,
+	fence Fence,
+) (bool, error) {
+	if len(handBack) == 0 {
+		return false, fmt.Errorf("sandbox: owing run %s's seat a hand-back of nothing", turnID)
+	}
+	owed := false
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.LaunchID != launch || outranked(*run, fence) {
+			return false
+		}
+		if owed = len(run.HandBack) > 0; owed {
+			return false
+		}
+		run.HandBack = slices.Clone(handBack)
+		return true
+	})
+	if err == nil && owed {
+		err = fmt.Errorf("sandbox: owing run %s's seat a hand-back: %w", turnID, ErrHandBackOwed)
+	}
+	return won, err
 }
 
 // ClearHandBack removes published copies from a run's hand-back. See the
@@ -316,15 +349,26 @@ func (s *CoordStore) ClearHandBack(ctx context.Context, turnID string, ids []str
 	return won, err
 }
 
-// boundedDeclined keeps the NEWEST [maxDeclinedAnswers] declined ids. An id
-// that falls off is one whose copies have long since been delivered or
-// dropped; the bound is what stops a question that is answered and declined
-// over and over from growing its row without limit.
-func boundedDeclined(ids []string) []string {
-	if len(ids) <= maxDeclinedAnswers {
-		return ids
+// boundedDeclined is the declined ids once a decline adds its own: EVERY id of
+// the newest decline, and as many of the earlier ones, newest first, as fit
+// within [maxDeclinedAnswers]. An earlier id that falls off is one whose copies
+// have long since been delivered — a decline lands only on a row that owes
+// none ([ErrHandBackOwed]) — and the bound is what stops a question that is
+// answered and declined over and over from growing its row without limit.
+//
+// THE NEWEST DECLINE WHOLE, even past the bound. Its copies are the ones still
+// owed or just published, and an id of theirs that fell off would let that
+// copy, arriving on the seat's inbox, be recorded as the answer to the very
+// question that let it go — and circle the run it already failed to reach. A
+// plain newest-sixteen cut did exactly that to an answer of more than eight
+// deliveries (a batch is up to twenty), dropping its originals and the first
+// of its copies on the way in.
+func boundedDeclined(earlier, newest []string) []string {
+	keep := max(maxDeclinedAnswers-len(newest), 0)
+	if len(earlier) > keep {
+		earlier = earlier[len(earlier)-keep:]
 	}
-	return slices.Clone(ids[len(ids)-maxDeclinedAnswers:])
+	return append(slices.Clone(earlier), newest...)
 }
 
 // ClaimOwnership moves a run to this node, refusing to steal a newer lease.
@@ -532,6 +576,9 @@ func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence, whi
 		}
 		if !found || outranked(run, fence) || !slices.Contains(whileIn, run.Status) {
 			return PendingRun{}, false, nil
+		}
+		if len(run.HandBack) > 0 {
+			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrHandBackOwed)
 		}
 		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
 		if err != nil {

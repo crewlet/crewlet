@@ -13,6 +13,7 @@ package sandboxtest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -96,6 +97,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AnAnswerIsResumedFromItsRecord", testAnAnswerIsResumedFromItsRecord},
 		{"ADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain", testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain},
 		{"ADeclineOwesItsCopiesInTheSameWrite", testADeclineOwesItsCopiesInTheSameWrite},
+		{"WhatARowOwesTheSeatIsBoundedAndOutlivesNothing", testWhatARowOwesTheSeatIsBoundedAndOutlivesNothing},
+		{"AnEndingRecordsTheReplyItLetsGoOnItsClaim", testAnEndingRecordsTheReplyItLetsGoOnItsClaim},
 		{"ANewQuestionForgetsTheLastOnesAnswer", testANewQuestionForgetsTheLastOnesAnswer},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -2176,6 +2179,7 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r2", "use dev")); err != nil || !ok {
 		t.Errorf("a new reply to the reopened question = %v, %v, want it recorded", ok, err)
 	}
+	published(t, s, "r1-copy")
 	if ok, err := decline(t, s, launch, "r2"); err != nil || !ok {
 		t.Fatalf("DeclineAnswer: %v, %v", ok, err)
 	}
@@ -2185,6 +2189,7 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 		if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf(id, "x")); err != nil || !ok {
 			t.Fatalf("RecordAnswer %s = %v, %v", id, ok, err)
 		}
+		published(t, s, fmt.Sprintf("r%d-copy", i+2))
 		if ok, err := decline(t, s, launch, id); err != nil || !ok {
 			t.Fatalf("DeclineAnswer %s = %v, %v", id, ok, err)
 		}
@@ -2192,6 +2197,135 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 	got = mustGet(t, s, "t1")
 	if len(got.DeclinedAnswers) != 16 || got.DeclinedAnswers[15] != "r22-copy" {
 		t.Errorf("declined = %v, want the newest 16", got.DeclinedAnswers)
+	}
+
+	// AND THE NEWEST DECLINE WHOLE, however many deliveries its answer was:
+	// a copy of it whose id fell off would answer the question that let it
+	// go, and circle the run it already failed to reach.
+	published(t, s, "r22-copy")
+	var batch []string
+	var copies []sandbox.HandedBack
+	for i := range 12 {
+		id := fmt.Sprintf("b%d", i)
+		batch = append(batch, id)
+		copies = append(copies, copyOf(id))
+	}
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{
+		Text: "a long batch", EventIDs: batch, RecordedAt: base}); err != nil || !ok {
+		t.Fatalf("RecordAnswer of a batch = %v, %v", ok, err)
+	}
+	if _, ok, err := s.DeclineAnswer(ctx, "t1", launch, batch, copies, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("DeclineAnswer of a batch = %v, %v", ok, err)
+	}
+	got = mustGet(t, s, "t1")
+	for _, copied := range copies {
+		if !slices.Contains(got.DeclinedAnswers, copied.ID) || !slices.Contains(got.DeclinedAnswers, copied.Original) {
+			t.Fatalf("declined = %v: a decline of %d deliveries lost %s or its copy",
+				got.DeclinedAnswers, len(batch), copied.Original)
+		}
+	}
+}
+
+// published clears one copy a decline owed t1, the way a publisher does once
+// the copy is out.
+func published(t *testing.T, s sandbox.PendingStore, id string) {
+	t.Helper()
+	if ok, err := s.ClearHandBack(t.Context(), "t1", []string{id}); err != nil || !ok {
+		t.Fatalf("ClearHandBack(%s) = %v, %v", id, ok, err)
+	}
+}
+
+// WHAT A ROW OWES THE SEAT IS BOUNDED BY ONE DECLINE, and outlives nothing it
+// has not handed back. A second decline, and a record of copies for an ending,
+// are refused while earlier copies are owed — the answer stays recorded and
+// owed, and nothing grows — and a run that owes copies is not deleted until
+// they are cleared, because nothing reads a deleted row again.
+func testWhatARowOwesTheSeatIsBoundedAndOutlivesNothing(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer r1 = %v, %v", ok, err)
+	}
+	if ok, err := decline(t, s, launch, "r1"); err != nil || !ok {
+		t.Fatalf("DeclineAnswer r1 = %v, %v", ok, err)
+	}
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r2", "use dev")); err != nil || !ok {
+		t.Fatalf("RecordAnswer r2 = %v, %v", ok, err)
+	}
+
+	// A SECOND DECLINE WAITS for the first one's copies.
+	if ok, err := decline(t, s, launch, "r2"); !errors.Is(err, sandbox.ErrHandBackOwed) || ok {
+		t.Fatalf("a decline over owed copies = %v, %v, want refused with ErrHandBackOwed", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusAnswered || got.Answer == nil ||
+		!slices.Equal(got.Answer.EventIDs, []string{"r2"}) || len(got.HandBack) != 1 {
+		t.Fatalf("run = %q answer %+v hand-back %+v, want r2 still recorded and only r1's copy "+
+			"owed", got.Status, got.Answer, got.HandBack)
+	}
+
+	// NOR IS THE RUN DELETED while it owes them, and it says what it owes.
+	owing, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active)
+	if !errors.Is(err, sandbox.ErrHandBackOwed) || ended ||
+		len(owing.HandBack) != 1 || owing.HandBack[0].ID != "r1-copy" {
+		t.Fatalf("Finish over owed copies = %v, %+v, %v, want refused with the copies it owes",
+			ended, owing.HandBack, err)
+	}
+	if _, found, err := s.Get(ctx, "t1"); err != nil || !found {
+		t.Fatalf("the run owing its seat a reply was deleted: %v, %v", found, err)
+	}
+	// AN ENDING OUTSIDE ITS LICENSE is still refused as one, not as a debt.
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, nil); err != nil || ended {
+		t.Fatalf("an unlicensed Finish = %v, %v, want a plain refusal", ended, err)
+	}
+
+	// ONCE HANDED BACK, both go through.
+	published(t, s, "r1-copy")
+	if ok, err := decline(t, s, launch, "r2"); err != nil || !ok {
+		t.Fatalf("DeclineAnswer r2 once r1's copy was out = %v, %v", ok, err)
+	}
+	published(t, s, "r2-copy")
+	if _, ended, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active); err != nil || !ended {
+		t.Fatalf("Finish once nothing is owed = %v, %v", ended, err)
+	}
+}
+
+// AN ENDING THAT LETS A REPLY GO RECORDS IT FIRST, on the claim it ends: only on
+// the run the caller claimed, on that launch, and only one decline's worth.
+func testAnEndingRecordsTheReplyItLetsGoOnItsClaim(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	owe := func(launch string) (bool, error) {
+		return s.OweHandBack(ctx, "t1", launch, []sandbox.HandedBack{copyOf("r1")}, sandbox.Fence{})
+	}
+	// NOT A CLAIM: a parked run is nobody's to end with a reply.
+	if ok, err := owe(launch); err != nil || ok {
+		t.Fatalf("OweHandBack on a run nobody claimed = %v, %v, want refused", ok, err)
+	}
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.AnswerTail(launch)); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if ok, err := owe("another-launch"); err != nil || ok {
+		t.Fatalf("OweHandBack for another launch = %v, %v, want refused", ok, err)
+	}
+	if _, err := s.OweHandBack(ctx, "t1", launch, nil, sandbox.Fence{}); err == nil {
+		t.Error("a hand-back of nothing was accepted")
+	}
+	if ok, err := owe(launch); err != nil || !ok {
+		t.Fatalf("OweHandBack on the claim = %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); len(got.HandBack) != 1 || got.HandBack[0].ID != "r1-copy" {
+		t.Fatalf("hand-back = %+v, want r1's copy owed", got.HandBack)
+	}
+	if ok, err := owe(launch); !errors.Is(err, sandbox.ErrHandBackOwed) || ok {
+		t.Fatalf("a second OweHandBack over owed copies = %v, %v, want ErrHandBackOwed", ok, err)
+	}
+	if ok, err := s.OweHandBack(ctx, "gone", launch, []sandbox.HandedBack{copyOf("r1")},
+		sandbox.Fence{}); err != nil || ok {
+		t.Errorf("OweHandBack on a run that does not exist = %v, %v", ok, err)
 	}
 }
 

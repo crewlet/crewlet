@@ -49,6 +49,12 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // resume that proved nothing has lost nothing by trying again.
 var ErrResumeAbandoned = errors.New("sandbox: the resumed turn broke and must not be resumed again")
 
+// ErrHandBackOwed is a store's refusal to delete a run, or to record more
+// copies on it, while it still owes the seat's inbox the copies it carries
+// ([PendingRun.HandBack]). The answer is to publish and clear them first
+// ([Coordinator.deliverHandBack]) and then ask again.
+var ErrHandBackOwed = errors.New("sandbox: the run still owes the seat a reply it has not handed back")
+
 // Resumer re-enters a suspended Execute loop.
 //
 // The one seam between the sandbox layer and the agent layer, and it is
@@ -752,7 +758,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs,
 		InputTokens:   result.InputTokens, OutputTokens: result.OutputTokens,
-	})
+	}, nil)
 	return err
 }
 
@@ -1020,7 +1026,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
-		if unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, true, parkUnannouncedDetail, nil); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, as at the record below: the
 			// claim did not go back, so the run has been ended and a
 			// redelivered completion would find no record to claim.
@@ -1052,7 +1058,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 			"detail", "the question could not be recorded, so the run is not parked; its "+
 				"claim is given back for the completion to be retried, or the run is "+
 				"ended where it cannot be")
-		if unclaimErr := c.unclaim(ctx, run, true, parkUnrecordedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, true, parkUnrecordedDetail, nil); unclaimErr != nil {
 			//nolint:nilerr // Deliberate: the claim was not handed back,
 			// so the run has been SETTLED and there is nothing left for
 			// a redelivered completion to claim. Sending it back would
@@ -1337,7 +1343,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	disposition, err := c.resumeAndSettle(ctx, claimed,
 		answerText(claimed, given.Answer, answererName(given)), true, trigger, runOutcome{
 			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
-		})
+		}, nil)
 	if disposition == AnswerDeferred {
 		// THE RUN IS AWAITING THIS SAME ANSWER AGAIN, so it comes back —
 		// and nothing is announced, because it has not become anything.
@@ -1419,8 +1425,14 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 // by turn is handed back the same way on [AnswerDeferred]; and a RECORDED chat
 // answer is retried by this coordinator on [AnswerDeferred], bounded by
 // [MaxAnswerAttempts] ([Coordinator.attemptOwed]).
+//
+// OWED is what the seat is owed if the resume turns out to be impossible and
+// ends the run without the turn ever running — the copies of a recorded answer
+// whose delivery was acknowledged long ago, on a retry's route — and nil where
+// the caller still holds the delivery that drove it and hands it on itself
+// ([Coordinator.oweOnEnding]).
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
-	answer string, success bool, trigger *events.Event, outcome runOutcome,
+	answer string, success bool, trigger *events.Event, outcome runOutcome, owed []HandedBack,
 ) (AnswerDisposition, error) {
 	if len(run.ExecuteState) == 0 {
 		// No suspended conversation to resume, and the turn cannot
@@ -1436,6 +1448,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
 			"detail", "the row carried no suspended conversation; the turn "+
 				"cannot be resumed and the run is failed")
+		c.oweOnEnding(ctx, run, owed)
 		c.settleFailed(ctx, run, types.SandboxFailureNoConversation,
 			"the run record carried no suspended conversation, so the turn that "+
 				"started it cannot be continued")
@@ -1506,7 +1519,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// conversation is permanently lost with the row stranded in resumed.
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
-		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail, owed); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent
@@ -1724,8 +1737,11 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // where the claim went back (or had already moved on), and the release's own
 // error where the run was ended in its place. The caller's own error is not
 // this answer — a retry keeps it, so the delivery comes back, and an ending
-// drops it, because there is nothing left to come back to.
-func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
+// drops it, because there is nothing left to come back to. owed is what that
+// ending owes the seat ([Coordinator.resumeAndSettle]).
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string,
+	owed []HandedBack,
+) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	to := claimedFrom(run)
@@ -1739,6 +1755,7 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool,
 			"turn_id", run.TurnID, "revert_to", to, "error", err.Error(),
 			"detail", "the claim could not be handed back, so nothing would ever pick "+
 				"this run up; it is ended and announced instead")
+		c.oweOnEnding(ctx, run, owed)
 		c.settleFailed(ctx, run, types.SandboxFailureClaimStranded, detail)
 		// AUTHORITATIVE, not assumed: the settle moved the row and this
 		// call moved the counts, and neither knows what the other found.
@@ -1918,7 +1935,8 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 }
 
 // endRecord deletes a run's record — while its status is one this ending is
-// licensed for — and REPORTS THE STOP where the deletion was this call's.
+// licensed for, and once it owes the seat nothing ([Coordinator.finishHandingBack])
+// — and REPORTS THE STOP where the deletion was this call's.
 //
 // THE ONE PLACE A RUN'S RECORD IS DELETED, which is what makes it the one place
 // that can say a suspended turn is over, and why the report is made here rather
@@ -1957,7 +1975,7 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 // settle has no use for.
 func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, fence Fence, whileIn []string,
 ) (PendingRun, bool, error) {
-	settled, ended, err := c.pending.Finish(ctx, run.TurnID, fence, whileIn)
+	settled, ended, err := c.finishHandingBack(ctx, run, fence, whileIn)
 	if err != nil {
 		c.reportStopped(ctx, run)
 		// FORGOTTEN ON THE SAME GATE THE STOP TAKES, and for the same
@@ -1972,20 +1990,69 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, fence Fence
 	}
 	c.reportStopped(ctx, settled)
 	c.clearAnswerAttempts(settled.AgentHandle, settled.TurnID)
-	// A REPLY A DECLINE STILL OWED THE SEAT goes out with the record that
-	// owed it, read off the record as it was deleted: the hand-back is the
-	// seat's rather than the run's, and nothing reads a deleted row again.
-	// The ids are derived, so a copy the decline itself already published
-	// is the same message again.
-	if len(settled.HandBack) > 0 {
-		if _, err := c.publishCopies(ctx, settled.AgentHandle, settled.HandBack); err != nil {
-			log.ErrorContext(ctx, "sandbox_answer_handback_failed",
-				"turn_id", settled.TurnID, "agent", settled.AgentHandle, "error", err.Error(),
-				"detail", "the run ended with a reply it owed the seat unpublished, and the "+
-					"reply could not be handed to the seat")
-		}
-	}
 	return settled, true, nil
+}
+
+// finishHandingBack is [PendingStore.Finish] for a row that may still owe the
+// seat copies of a reply ([PendingRun.HandBack]): the copies go out FIRST, and
+// the delete only once the row owes nothing.
+//
+// # In that order, across a crash at each step
+//
+// A reply a run owes the seat is recorded nowhere but on its row. It used to
+// be published off the record the delete handed back, AFTER the delete, so a
+// process that stopped between the two lost the reply with the only record of
+// it. The store now refuses to delete a row that owes copies
+// ([ErrHandBackOwed]), and this publishes and clears them and asks again:
+// stopped before the publish, the row still owes them and its next reader —
+// this node's retry, or the seat's next holder — publishes them; stopped after
+// the publish, they are published again under the same derived ids, which the
+// inbox's same-id dedupe and the completion ledger collapse; stopped after the
+// clear, the row owes nothing and its next ending deletes it.
+//
+// A PUBLISH THAT FAILS KEEPS THE ROW, and the ending is owed rather than
+// forgotten: this node retries the hand-back and then the delete, holding the
+// seat's inbox until the copies are out ([Coordinator.oweEnding]), and returns
+// the failure as the delete's, which every caller already reads as "the record
+// may be there".
+func (c *Coordinator) finishHandingBack(ctx context.Context, run PendingRun, fence Fence,
+	whileIn []string,
+) (PendingRun, bool, error) {
+	var handed []string
+	for range casRetries {
+		settled, ended, err := c.pending.Finish(ctx, run.TurnID, fence, whileIn)
+		if !errors.Is(err, ErrHandBackOwed) {
+			return settled, ended, err
+		}
+		owed := handBackIDs(settled.HandBack)
+		if slices.Equal(owed, handed) {
+			// THE SAME COPIES AGAIN: they are out, and clearing them is
+			// what did not land. Publishing them once more would change
+			// nothing, so the ending waits for the retry rather than going
+			// round here.
+			c.oweEnding(ctx, settled, fence, whileIn)
+			return PendingRun{}, false, fmt.Errorf("sandbox: ending run %s: the reply it owed "+
+				"its seat is handed back but could not be cleared from it", run.TurnID)
+		}
+		if err := c.deliverHandBack(ctx, settled); err != nil {
+			c.oweEnding(ctx, settled, fence, whileIn)
+			return PendingRun{}, false, fmt.Errorf("sandbox: ending run %s, which owes its seat "+
+				"a reply it could not hand back: %w", run.TurnID, err)
+		}
+		handed = owed
+	}
+	c.oweEnding(ctx, run, fence, whileIn)
+	return PendingRun{}, false, fmt.Errorf("sandbox: ending run %s: it kept owing its seat a "+
+		"reply after handing one back", run.TurnID)
+}
+
+// handBackIDs are the ids of what a row owes the seat, in order.
+func handBackIDs(owed []HandedBack) []string {
+	ids := make([]string, 0, len(owed))
+	for _, copied := range owed {
+		ids = append(ids, copied.ID)
+	}
+	return ids
 }
 
 // finish ends a run: its box is reclaimed, its record deleted, and — where the
@@ -2176,8 +2243,8 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 		// say they were). Owed to the seat rather than to the run, so it
 		// is this holder's to publish — before the mailbox opens, so the
 		// copies are waiting with the rest of the seat's mail when it
-		// does. A run ended above published what it still carried as its
-		// record went ([Coordinator.endRecord]); an answered run's owed
+		// does. A run ended above published what it still carried before
+		// its record went ([Coordinator.endRecord]); an answered run's owed
 		// resume publishes it first ([Coordinator.retryOwed]).
 		if len(run.HandBack) > 0 &&
 			slices.Contains([]string{StatusRunning, StatusAwaiting, StatusReseed}, run.Status) {

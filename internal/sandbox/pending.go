@@ -556,8 +556,23 @@ type PendingRun struct {
 	//
 	// It is the row's and survives everything the row does — a new question,
 	// a relaunch, a recorded answer — because what it owes is owed to the
-	// seat rather than to any question; a run that ENDS publishes what it
-	// still carries as its record is deleted ([Coordinator.endRecord]).
+	// seat rather than to any question. A run that ENDS publishes what it
+	// still carries BEFORE its record is deleted, and the delete refuses
+	// while anything is owed ([PendingStore.Finish], [Coordinator.endRecord]):
+	// published after, a crash between the delete and the publish lost the
+	// copies with the only record of them.
+	//
+	// BOUNDED BY ONE DECLINE. A write that adds copies lands only on a row
+	// that owes none ([ErrHandBackOwed]), so the row never carries more than
+	// one let-go answer's deliveries — at most one inbox batch
+	// ([queue.DefaultBatchOptions], 20 events by default) — which is the size
+	// of the [PendingRun.Answer] the copies were made from. Unbounded, a
+	// broker that kept refusing the publishes while answers kept being
+	// recorded and let go grew the row by one batch each time. Past the
+	// bound nothing is lost: the refused decline leaves the answer recorded
+	// and owed, the seat's inbox stays held behind it, and the retry
+	// publishes the copies already owed before it decides again
+	// ([Coordinator.retryOwed]).
 	HandBack []HandedBack `json:"hand_back,omitempty"`
 
 	// WorkItem is the one work item the launching turn was charged to, nil
@@ -870,6 +885,12 @@ type PendingStore interface {
 	// NOT AN ERROR: the run is already gone, which is the ordinary shape of
 	// two parties reaching the end of one run, or a newer lease owns it, or
 	// its status is not one this ending was licensed for.
+	//
+	// A ROW THAT STILL OWES THE SEAT COPIES IS NOT DELETED ([ErrHandBackOwed],
+	// with the row as it stands): the copies are the seat's, nothing reads a
+	// deleted row again, and a delete before their publish loses them to a
+	// crash between the two. The caller publishes them, clears them and
+	// ends the run again ([Coordinator.endRecord]).
 	Finish(ctx context.Context, turnID string, fence Fence, whileIn []string) (PendingRun, bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
@@ -973,8 +994,30 @@ type PendingStore interface {
 	// holding exactly the answer made of the deliveries named, and no newer
 	// lease outranks the fence. Returns the row as written IFF THIS CALL
 	// DID. FALSE IS NOT AN ERROR.
+	//
+	// AND ONLY ON A ROW THAT OWES THE SEAT NOTHING YET: one that still
+	// carries an earlier decline's unpublished copies refuses with
+	// [ErrHandBackOwed], which is what bounds [PendingRun.HandBack] — see
+	// there.
 	DeclineAnswer(ctx context.Context, turnID, launch string, answer []string,
 		handBack []HandedBack, fence Fence) (PendingRun, bool, error)
+
+	// OweHandBack records copies a run that is about to END owes the seat's
+	// inbox ([PendingRun.HandBack]), for the ending to publish before it
+	// deletes the row ([PendingStore.Finish]).
+	//
+	// It is the decline's outbox for the one other way a recorded answer is
+	// let go of: a retried resume whose run turns out to be over — no
+	// conversation to re-enter, or a claim that could not be given back —
+	// so the reply it carried has nowhere to go but the seat's inbox, and
+	// the delivery that brought it was acknowledged long ago.
+	//
+	// Only while the run is still the claim the caller took
+	// ([StatusResumed], on that launch) and no newer lease outranks the
+	// fence; FALSE IS NOT AN ERROR. A row that already owes copies refuses
+	// with [ErrHandBackOwed], for the bound [PendingRun.HandBack] states.
+	OweHandBack(ctx context.Context, turnID, launch string, handBack []HandedBack,
+		fence Fence) (bool, error)
 
 	// ClearHandBack removes the copies a decline owed the seat's inbox that
 	// have now been published, by their ids, and reports whether it removed

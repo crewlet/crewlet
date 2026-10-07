@@ -80,6 +80,11 @@ import (
 // resumable: the seat's next holder, or this node after a restart, is offered
 // the next qualifying reply.
 //
+// A RETRY WHOSE RUN TURNS OUT TO BE GONE lets the answer go the same way: its
+// copies are recorded on the claimed row as owed before the run is ended
+// ([Coordinator.oweOnEnding]), and the ending hands them back before it deletes
+// the row ([Coordinator.endRecord]).
+//
 // # A retry the seat's own conditions refuse
 //
 // WAITS FOR WHAT REFUSED IT, rather than re-checking on a timer: every
@@ -117,7 +122,9 @@ func answerRetryDelay(failures int) time.Duration {
 // decline costs a whole series of [MaxAnswerAttempts] failed resumes — about
 // two and a half minutes — so a question collecting this many has been failing
 // to resume for twenty minutes, and the replies that fell off the front of the
-// list were delivered as ordinary messages long before.
+// list were delivered as ordinary messages long before. The newest decline is
+// kept whole past it, because its copies are the ones still owed or just
+// published (see [boundedDeclined]).
 const maxDeclinedAnswers = 16
 
 // Condition names what a refused retry is waiting for, so that the signal
@@ -379,9 +386,22 @@ type answerRetry struct {
 	// attempting, failing or handing back. See [Coordinator.Readmit].
 	waiting Condition
 
+	// ending is an ending of the run that was decided and kept its record
+	// for the reply the record still owes the seat: once the hand-back is
+	// out, the series ends the run under the same license. Nil for every
+	// other series. See [Coordinator.oweEnding].
+	ending *owedEnding
+
 	// stop cancels the pending attempt, reporting whether it had not yet
 	// started.
 	stop func() bool
+}
+
+// owedEnding is the license an ending was decided under — see
+// [Coordinator.endRecord].
+type owedEnding struct {
+	fence   Fence
+	whileIn []string
 }
 
 // live reports whether the series may make another attempt.
@@ -406,6 +426,17 @@ func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Re
 	if err != nil || !won {
 		return PendingRun{}, won, err
 	}
+	// A NEW ANSWER IS A NEW SERIES. The run's series can still be alive when
+	// this lands — kept to publish what an earlier answer's decline owes the
+	// seat — and its count is that earlier answer's: carried over, it spent
+	// this answer's attempts before this answer had one, and let it go after
+	// a single failed resume.
+	c.mu.Lock()
+	if r := c.retries[recorded.TurnID]; r != nil {
+		r.launch, r.failures, r.first = recorded.LaunchID, 0, c.now()
+		r.window = answerWindow(recorded)
+	}
+	c.mu.Unlock()
 	// Out of the question set: nobody is waited on, and the screening
 	// offers this seat's mail to no question that already has its answer.
 	c.moveRun(recorded.AgentHandle, run.Status, StatusAnswered)
@@ -423,14 +454,23 @@ func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Re
 // reply any more and it is the ordinary message it looks like.
 func (c *Coordinator) resumeOwed(ctx context.Context, run PendingRun) (gone bool) {
 	c.owe(ctx, run.AgentHandle, run.TurnID)
-	return c.attemptOwed(ctx, run)
+	// THE DELIVERY IS IN THE CALLER'S HAND, so a run that turns out to be
+	// gone owes the seat nothing: the caller works the delivery as the
+	// ordinary message it is.
+	return c.attemptOwed(ctx, run, false)
 }
 
 // attemptOwed makes one attempt at an owed answer's resume, and settles what
 // the attempt leaves: done (the hold lifted), failed (another attempt
 // scheduled, or the answer declined once the bounds are spent), or the run
 // terminally gone, which it reports.
-func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) (gone bool) {
+//
+// handBack is whether a run that turns out to be gone owes the seat its reply:
+// true on a retry, whose delivery was acknowledged when the answer was
+// recorded, so the reply is handed back as the ordinary message it is — and
+// recorded on the row as owed BEFORE the run is ended ([PendingStore.OweHandBack]),
+// so a crash between the ending and the publish cannot lose it.
+func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun, handBack bool) (gone bool) {
 	answer := run.Answer
 	if answer == nil {
 		// An answered row always carries its answer; one that does not
@@ -455,10 +495,14 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) (gone boo
 		return false
 	}
 	c.moveRun(claimed.AgentHandle, StatusAnswered, StatusResumed)
+	var owed []HandedBack
+	if handBack {
+		owed = handBackOf(*answer)
+	}
 	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer.Text, ""), true,
 		answer.trigger(), runOutcome{
 			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
-		})
+		}, owed)
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
 		// the same answer on it, owed the same resume.
@@ -544,10 +588,12 @@ func (c *Coordinator) retryOwed(turnID string) {
 	r := c.retries[turnID]
 	var handle, launch string
 	var spent bool
+	var ending *owedEnding
 	if r != nil {
 		r.stop, r.waiting = nil, ""
 		handle, launch = r.handle, r.launch
 		spent = r.spent(c.now())
+		ending = r.ending
 	}
 	c.mu.Unlock()
 	if r == nil {
@@ -555,11 +601,18 @@ func (c *Coordinator) retryOwed(turnID string) {
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
 	if err != nil {
+		if ending != nil {
+			// A READ IS NOT A RESUME, and an ending owes no attempt: the
+			// row is read again on the hand-back's own spacing.
+			c.scheduleOwed(turnID, answerRetryCeiling)
+			return
+		}
 		c.owedFailed(ctx, PendingRun{TurnID: turnID, AgentHandle: handle, LaunchID: launch},
 			fmt.Errorf("sandbox: reading run %s for its recorded answer: %w", turnID, err))
 		return
 	}
 	if !found {
+		c.endingDone(turnID)
 		c.settleOwed(ctx, handle, turnID)
 		return
 	}
@@ -576,6 +629,23 @@ func (c *Coordinator) retryOwed(turnID string) {
 			c.scheduleOwed(turnID, answerRetryCeiling)
 			return
 		}
+	}
+	if ending != nil {
+		// THE RUN WAS ALREADY ENDED, and kept its record only for the reply
+		// it owed the seat, which is out now: the record goes, under the
+		// license the ending was decided with. One that owes the seat
+		// something again is owed again, by [Coordinator.endRecord] itself.
+		c.endingDone(turnID)
+		if _, _, err := c.endRecord(ctx, run, ending.fence, ending.whileIn); err != nil {
+			log.WarnContext(ctx, "sandbox_finish_failed", "turn_id", turnID, "error", err.Error(),
+				"detail", "the run's reply is handed back but its record was not deleted; the "+
+					"seat's next recovery pass reaps it")
+		}
+		// RECOUNTED: the kept record was still a live row to every recount
+		// made while it waited, and the seat's counts are the store's answer.
+		c.syncSeat(ctx, handle)
+		c.settleOwed(ctx, handle, turnID)
+		return
 	}
 	if run.Status != StatusAnswered || run.LaunchID != launch {
 		// Over, resumed, declined or relaunched since: nothing is owed.
@@ -602,18 +672,79 @@ func (c *Coordinator) retryOwed(turnID string) {
 			return
 		}
 	}
-	if gone := c.attemptOwed(ctx, run); gone {
-		// THE RUN ENDED UNDER THE ATTEMPT — settled and announced as
-		// lost — and the delivery that carried the reply was acknowledged
-		// long ago, so nothing would ever bring the reply to the seat.
-		// Handed back as the ordinary message it is, as the inline
-		// attempt's caller does with the delivery still in hand.
-		if _, err := c.publishCopies(ctx, run.AgentHandle, handBackOf(*run.Answer)); err != nil {
-			log.ErrorContext(ctx, "sandbox_answer_handback_failed",
-				"turn_id", run.TurnID, "agent", run.AgentHandle, "error", err.Error(),
-				"detail", "the run this reply answered has ended and the reply could not "+
-					"be handed to the seat as an ordinary message")
-		}
+	// A RUN THAT ENDS UNDER THE ATTEMPT — settled and announced as lost —
+	// owes the seat the reply, because the delivery that carried it was
+	// acknowledged long ago and nothing else would ever bring it back. It
+	// is recorded on the row as owed before the run is ended, and the ending
+	// hands it back before it deletes the row (see [Coordinator.oweOnEnding]):
+	// the inline attempt's caller hands on the delivery it still holds
+	// instead. It used to be published here, AFTER the ending had deleted
+	// the only record of it, so a crash between the two lost it.
+	c.attemptOwed(ctx, run, true)
+}
+
+// oweOnEnding records on a claimed run, before the run is ended, the copies of
+// a reply the ending lets go of ([PendingStore.OweHandBack]), so the ending
+// hands them back before it deletes the row ([Coordinator.endRecord]) and a
+// crash anywhere between the two leaves them owed on a row whoever reads it
+// next publishes. Nothing to record is nothing to do.
+//
+// A ROW THAT CANNOT CARRY THEM — the write refused, or the run no longer the
+// claim this node took — gets them published here, before the ending, which
+// is the order that cannot lose them to anything but the process stopping in
+// the same instant the store is failing: published twice is the same message
+// under the same derived ids, which the inbox's same-id dedupe and the
+// completion ledger collapse.
+func (c *Coordinator) oweOnEnding(ctx context.Context, run PendingRun, owed []HandedBack) {
+	if len(owed) == 0 {
+		return
+	}
+	recorded, err := c.pending.OweHandBack(ctx, run.TurnID, run.LaunchID, owed, fenceOf(run))
+	if err == nil && recorded {
+		return
+	}
+	log.WarnContext(ctx, "sandbox_answer_handback_unrecorded",
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "error", errDetail(err),
+		"detail", "the run is ending without the reply it was answered with, and the reply "+
+			"could not be recorded on it as owed to the seat, so it is handed back now")
+	if _, err := c.publishCopies(ctx, run.AgentHandle, owed); err != nil {
+		log.ErrorContext(ctx, "sandbox_answer_handback_failed",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "error", err.Error(),
+			"detail", "the run this reply answered is ending and the reply could neither be "+
+				"recorded as owed to the seat nor handed to it")
+	}
+}
+
+// oweEnding keeps an ending this node decided and could not finish, for the
+// reply its row still owes the seat ([Coordinator.endRecord]): the row was not
+// deleted because the copies it carries could not be published. The seat's
+// inbox is held behind them, as it is behind a decline's, and a retry on the
+// hand-back's spacing publishes them and then ends the run under the same
+// license — or, if the seat moves first, its next holder's recovery pass does
+// both.
+func (c *Coordinator) oweEnding(ctx context.Context, run PendingRun, fence Fence, whileIn []string) {
+	if run.AgentHandle == "" {
+		return
+	}
+	c.mu.Lock()
+	r := c.retries[run.TurnID]
+	if r == nil {
+		r = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID, first: c.now(),
+			window: answerWindow(run)}
+		c.retries[run.TurnID] = r
+	}
+	r.ending = &owedEnding{fence: fence, whileIn: slices.Clone(whileIn)}
+	c.mu.Unlock()
+	c.owe(ctx, run.AgentHandle, run.TurnID)
+	c.scheduleOwed(run.TurnID, answerRetryCeiling)
+}
+
+// endingDone forgets an owed ending, for a series about to settle it.
+func (c *Coordinator) endingDone(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if r := c.retries[turnID]; r != nil {
+		r.ending = nil
 	}
 }
 
@@ -919,6 +1050,12 @@ func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 // lifts the seat's inbox hold if nothing else needs it.
 func (c *Coordinator) settleOwed(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
+	if r := c.retries[turnID]; r != nil && r.ending != nil {
+		// AN ENDING STILL OWES THE SEAT ITS REPLY — kept by the ending this
+		// very attempt made — so the series, and the seat's hold, stay.
+		c.mu.Unlock()
+		return
+	}
 	if r := c.retries[turnID]; r != nil {
 		if r.stop != nil && r.stop() {
 			c.inflight.Done()
