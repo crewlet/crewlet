@@ -1208,8 +1208,7 @@ export function decisionMeaning(
  * What a phase's decision means, said in words rather than left as an enum.
  *
  * An unknown value falls through verbatim rather than being dropped, which is
- * what keeps a row written by a build this bundle predates readable: the retired
- * `plan` phase's `plan` / `direct` / `skip` still render as themselves.
+ * what keeps a newer build's decision readable: it renders as itself.
  */
 export function decisionLabel(phase: string, decision: string, rescued = false): string {
   if (!decision) return "";

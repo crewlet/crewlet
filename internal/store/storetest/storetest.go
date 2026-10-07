@@ -1008,7 +1008,7 @@ func testSpendDerived(t *testing.T, db *store.DB) {
 	write(t, log, store.EventRecord{
 		ID: "byhand", Type: "agent_phase_completed", Source: "agent",
 		Time: time.Now().UTC().Add(-time.Minute), Category: "agent",
-		Payload: []byte(`{"phase":"plan","provider_key":"anthropic",` +
+		Payload: []byte(`{"phase":"execute","provider_key":"anthropic",` +
 			`"turn_id":"t1","iteration":2,"input_tokens":10,` +
 			`"output_tokens":5,"total_tokens":15}`),
 	})
@@ -1024,7 +1024,7 @@ func testSpendDerived(t *testing.T, db *store.DB) {
 	if rec.TotalTokens != 15 || rec.InputTokens != 10 || rec.OutputTokens != 5 {
 		t.Errorf("token counts lost: %+v", rec)
 	}
-	if rec.Phase != "plan" || rec.TurnID != "t1" || rec.Iteration != 2 {
+	if rec.Phase != "execute" || rec.TurnID != "t1" || rec.Iteration != 2 {
 		t.Errorf("call identity lost: %+v", rec)
 	}
 	// An entry naming no model is identified by the provider slot it ran

@@ -114,7 +114,7 @@ func TestAWeekBucketIsTheCompanysISOWeek(t *testing.T) {
 func TestTheFourPhaseBandsFoldEveryPhase(t *testing.T) {
 	t.Parallel()
 	for phase, want := range map[string]tokens.Band{
-		"execute": tokens.BandExecute, "sandbox": tokens.BandExecute, "plan": tokens.BandExecute,
+		"execute": tokens.BandExecute, "sandbox": tokens.BandExecute,
 		"review":    tokens.BandReview,
 		"subagent":  tokens.BandWorkers,
 		"auxiliary": tokens.BandAuxiliary, "judge": tokens.BandAuxiliary,

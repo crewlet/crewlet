@@ -578,7 +578,6 @@ const PHASE_WORD: Record<string, string> = {
   review: "Review",
   sandbox: "Coding run",
   subagent: "Workers",
-  plan: "Plan",
   judge: "Judge",
   onboarding: "Onboarding",
   auxiliary: "Auxiliary",

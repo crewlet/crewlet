@@ -4829,8 +4829,8 @@ Notes:
   are replicated whole, and what bounds them is time, not presence.
 - `by_phase` covers every phase the [Turn Engine](../concepts/turn-engine.md)
   emits (`onboarding`, `execute`, `review`, `subagent`, `auxiliary`, `judge`,
-  `sandbox`), as recorded; a store that predates the two-stage redesign also
-  holds `plan`. The series folds these into four bands; the rollup does not.
+  `sandbox`), as recorded. The series folds these into four bands; the rollup
+  does not.
 - `by_provider` answers "which configured entry (`providers.llm.<key>`) do we
   pay for", which `by_model` cannot: a fallback chain serves several models
   under one key. `models` is every model the entry answered with, biggest
@@ -4885,7 +4885,7 @@ path — its buckets are company days, which only the usage domain holds.
 
 | Band | Phases |
 |------|--------|
-| `execute` | `execute`, `sandbox` (a detached coding run is the executor's own work done elsewhere), and the retired `plan` |
+| `execute` | `execute`, `sandbox` (a detached coding run is the executor's own work done elsewhere) |
 | `review` | `review` |
 | `workers` | `subagent` — the workers an executor delegated to |
 | `auxiliary` | `auxiliary`, `judge`, `onboarding`, and any phase this build does not know |

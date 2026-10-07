@@ -439,10 +439,10 @@ describe("presentation rules", () => {
   });
 
   test("a decision this build does not know still renders as itself", () => {
-    // Store rows outlive the bundle that reads them: the retired plan phase's
-    // verdicts are in every event log written before the redesign, and a
-    // label that dropped them would blank the one column explaining the row.
-    expect(decisionLabel("plan", "direct")).toBe("direct");
+    // A newer build's phase or decision reaches this bundle on the same
+    // stream, and a label that dropped it would blank the one column
+    // explaining the row.
+    expect(decisionLabel("teleport", "beamed")).toBe("beamed");
     expect(decisionLabel("execute", "teleported")).toBe("teleported");
   });
 
@@ -891,11 +891,11 @@ describe("a decision carries its own tone", () => {
   });
 
   test("a decision this build cannot read takes no hue", () => {
-    // A row written by a build this bundle predates still renders, and a hue it
-    // was never given is not invented for it. `subagent` is deliberately in
+    // A newer build's decision still renders, and a hue it was never given is
+    // not invented for it. `subagent` is deliberately in
     // here: every status but `ok` already sets the record's `failed` flag and
     // draws a danger pill, so a second one beside it reports one stop twice.
-    expect(decisionTone("plan", "direct")).toBe("neutral");
+    expect(decisionTone("teleport", "beamed")).toBe("neutral");
     expect(decisionTone("subagent", "timed_out")).toBe("neutral");
     expect(decisionTone("execute", "")).toBe("neutral");
     expect(decisionTone("", "blocked")).toBe("neutral");
