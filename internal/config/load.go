@@ -125,12 +125,12 @@ func LoadCompany(path string) (*Company, error) {
 // Its callers are `crewlet run`'s `-company` and `-import-company` seed, and
 // the vendor commands (`crewlet gitlab provision` and its siblings) that act
 // on the company the file describes. The difference from [LoadCompany] is
-// the admission rules (see [Company.ValidateRunnable]). A company file that
-// ran yesterday and breaks an admission rule added since must still start
-// the node that runs it and still be provisionable, or every upgrade of a
-// file-based deployment carrying an old duplicate is an outage. Most boots
-// never write the file anywhere: it is byte for byte the revision the store
-// already holds, or a bootstrap seed the store's own company outranks. The
+// the admission rules (see [Company.ValidateRunnable]): running a company
+// depends on none of them, so a file that breaks one must still start the
+// node that runs it when the store already holds it, and still be
+// provisionable. Most boots never write the file anywhere: it is byte for
+// byte the revision the store already holds, or a bootstrap seed the store's
+// own company outranks. The
 // admission rules apply where the file IS written as a revision, which the
 // seed decides and checks with [Company.ValidateAdmission] before it imports,
 // and `crewlet config import` and `crewlet validate` use [LoadCompany].
@@ -298,8 +298,8 @@ func ParseMemberNode(doc *yaml.Node, out any) error {
 // # It does not validate, and every caller decides what to hold it to
 //
 // A stored revision was valid under the rules of the build that WROTE it,
-// which is not necessarily this one: a later build adds a rule, and a peer on
-// an older build keeps activating documents that break it. A reader that
+// which is not necessarily this one: during a rolling upgrade a newer peer
+// can store a document this build's rules would refuse. A reader that
 // validated here made such a revision unreadable to every caller at once,
 // including the ones that could repair it. GET /config answered 500, a PUT
 // and a PATCH failed opening their own merge base, and export refused, so the

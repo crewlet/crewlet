@@ -111,7 +111,7 @@ the [admission rules](../concepts/configuration.md#what-a-stored-revision-is-hel
 only when it is actually written as a new revision (`-company` into an empty
 store, `-import-company` over a different company): a file that is already the
 active revision, or a bootstrap the store's own company outranks, starts the
-node even when it carries a duplicate name stored before the rule existed.
+node even when it carries a duplicate name.
 To change a **running** fleet with no restart at all, use
 [`crewlet config import`](#crewlet-config-import), which goes through the
 node's API. The path comes from the

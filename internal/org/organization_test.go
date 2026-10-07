@@ -591,7 +591,7 @@ func TestManagesExpansion(t *testing.T) {
 		},
 		{
 			// Organization.Unit answers with the first unit of a name, and
-			// so must the expansion: a stored revision can still hold two.
+			// so must the expansion: an applied revision can still hold two.
 			name: "a duplicated unit name expands to the first unit",
 			org: &Organization{
 				Name:  "T",

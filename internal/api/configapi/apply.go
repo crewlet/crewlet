@@ -601,9 +601,11 @@ func (s *Service) Reload(ctx context.Context, summary string, author store.Autho
 		// build cannot run would move every node onto a refusal. The answer
 		// names the field, and PUT or PATCH is how it is corrected.
 		//
-		// The RUNNABLE rules only. A reload is the credential-rotation
-		// gesture, and refusing it for an admission rule the stored
-		// document predates would make a rotation impossible until somebody
+		// The RUNNABLE rules only, like every apply. A reload is the
+		// credential-rotation gesture, and refusing it for an admission
+		// rule — which an apply does not enforce, since a newer peer may
+		// have admitted the document under rules this build does not
+		// share — would make a rotation impossible until somebody
 		// restructured the org. The answer's warnings name each one.
 		rules: (*config.Company).ValidateRunnable,
 		// THE STORED BYTES, UNCHANGED, which is what re-publishing the

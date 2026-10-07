@@ -449,8 +449,9 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	// which revision it is and that an offline import is the way out: the
 	// node is not serving its API yet.
 	//
-	// The RUNNABLE rules only: a stored revision that breaks an admission
-	// rule added after it was written still runs, and the reconciler warns
+	// The RUNNABLE rules only, like every apply: an admission rule is one
+	// an apply does not enforce, because a newer peer may have admitted the
+	// revision under rules this build does not share. The reconciler warns
 	// about it once it applies the epoch (see
 	// [config.Company.ValidateRunnable]).
 	if err := company.ValidateRunnable(); err != nil {

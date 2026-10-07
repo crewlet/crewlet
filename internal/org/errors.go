@@ -49,8 +49,8 @@ var (
 	// collide here, which is why the handle rule does not cover it.
 	//
 	// An ADMISSION rule (see [Organization.ValidateAdmission]): refused on
-	// a document somebody submits, reported as a warning on a stored
-	// revision that predates it.
+	// a document somebody submits, reported as a warning on a revision
+	// being applied.
 	ErrDuplicateSeatName = errors.New("duplicate seat name")
 
 	// ErrDuplicateUnitName reports two units carrying one name, anywhere in

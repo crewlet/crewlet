@@ -157,8 +157,8 @@ func TestAnUnknownFieldInAStoredRevisionIsToleratedNotFatal(t *testing.T) {
 
 // A STORED REVISION DECODES WHATEVER IT BREAKS, AND VALIDATION IS SEPARATE.
 //
-// A revision was valid under the build that wrote it, and a later build (or
-// an older peer still activating) can hold one this build refuses. When the
+// A revision was valid under the build that wrote it, and a newer peer in a
+// rolling upgrade can store one this build refuses. When the
 // decode validated, such a revision was unreadable to every reader at once:
 // GET /config, export, and the prior of the very write that would correct it.
 // So the decode answers the document, and the refusal belongs to whoever is

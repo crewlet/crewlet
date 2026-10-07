@@ -86,10 +86,11 @@ the owning role or unit. A written document is also held to the cron
 expression with five fields and an invalid value (`61 * * * *`,
 `0 9 * * MON-FRY`) is refused at that schedule's `cron`, naming the field
 and the value. The grammar is an
-[admission rule](configuration.md#what-a-stored-revision-is-held-to): a stored
-revision written before it was checked still applies, its node logs
-`org_admission_warning`, and that one schedule is skipped on every tick
-with `schedule_parse_failed` naming it while the rest of the company runs.
+[admission rule](configuration.md#what-a-stored-revision-is-held-to): a
+revision being applied that carries one (a newer peer's, admitted under other
+rules) still applies, its node logs `org_admission_warning`, and that one
+schedule is skipped on every tick with `schedule_parse_failed` naming it while
+the rest of the company runs.
 
 ### Which clock a schedule fires on
 

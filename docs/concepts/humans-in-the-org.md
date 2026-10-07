@@ -205,8 +205,8 @@ written: `llm` and every per-phase `llm_*` chain, `sandbox`, `token_budget`,
 `behavioral_guidelines`. A seat's own GitHub App (`integrations.github`) is
 refused on a human seat as well, because a person acts on GitHub as their
 own `contact.github_login`. That refusal is an [admission
-rule](configuration.md#what-a-stored-revision-is-held-to): a stored company
-that already carries the block still runs, and the next write that keeps it
+rule](configuration.md#what-a-stored-revision-is-held-to): a revision being
+applied that carries the block still runs, and the next write that keeps it
 is refused. The reverse holds too: `contact` or `availability` on an agent
 seat is refused with a hint to set `kind: human`.
 

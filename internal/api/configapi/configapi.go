@@ -804,9 +804,10 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		// naming the field, where the open used to fold it into the keyring
 		// hint above.
 		//
-		// The RUNNABLE rules only, like every apply: an old revision that
-		// breaks an admission rule added since still runs, and reverting to
-		// a working company must not be refused over a rule it predates.
+		// The RUNNABLE rules only, like every apply: an admission rule is
+		// one an apply does not enforce, since a newer peer may have
+		// admitted the revision under rules this build does not share, and
+		// reverting to a company that runs must not be refused over one.
 		// The answer's warnings name each one, and each node warns about
 		// it when it applies the epoch.
 		rules: (*config.Company).ValidateRunnable,

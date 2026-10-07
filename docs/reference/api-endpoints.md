@@ -327,7 +327,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead), `unit` (a root seat's `unit:`), `manages` (one `manages` entry, at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
-  - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company stored before the rule answers with one, one beside each entity the violation names.
+  - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
 #### Dry runs
@@ -659,8 +659,8 @@ hierarchy (see [What a write answers](#what-a-write-answers)),
 runnable rule of this build (a reload is an apply, so it re-publishes only a
 company every node can run; correct it with `PUT` or `PATCH`). A document that
 breaks only an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to),
-such as a duplicate seat or unit name stored before the rule existed, reloads:
-that is how a credential rotation still reaches a company carrying one. Its
+such as a duplicate seat or unit name a newer peer admitted, reloads: that is
+how a credential rotation still reaches a company carrying one. Its
 answer lists each violation as an `admission` warning.
 
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
@@ -672,8 +672,7 @@ A read never validates what it reads. `GET /config`, a revision read, a diff,
 the reference index, the entity reads and the prior a write restores its masks
 from all open a stored revision as it is, even one this build's validator would
 refuse: a revision is valid under the build that wrote it, and a later build
-(or an older peer still activating during a rolling upgrade) can leave one in
-the store that this build refuses. What validates is whatever would RUN a
+can leave one in the store that this build refuses. What validates is whatever would RUN a
 document, and to the rules its question needs:
 
 - **A write** (`PUT`, `PATCH`, a per-entity `PUT`, a `/setup` submission that

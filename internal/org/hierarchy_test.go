@@ -330,7 +330,7 @@ func TestUnitAccessors(t *testing.T) {
 	}
 }
 
-// A SEAT'S UNIT IS FOUND BY THE SEAT, NOT BY ITS NAME. A stored revision can
+// A SEAT'S UNIT IS FOUND BY THE SEAT, NOT BY ITS NAME. An applied revision can
 // still hold two seats of one name, and found by name the second one was given
 // the first one's unit: its prompt named a team it is not in, and its
 // onboarding chain was the other seat's, so moving it re-onboarded nothing.

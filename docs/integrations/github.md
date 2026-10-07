@@ -201,7 +201,7 @@ seat's own app, the identity an agent acts as, and nothing creates, installs
 or reconciles an app for a person. A document that gives one to a human seat
 is refused at that block; the rule is an [admission
 rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a
-stored company that already carries one still runs.
+revision being applied that carries one still runs.
 
 ## One GitHub App per agent
 

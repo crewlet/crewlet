@@ -193,7 +193,8 @@ units:
 // THEM IS NEITHER IMPORTED NOR VALIDATED.
 //
 // The two doors meet the same document differently on purpose: the store
-// holds what an older build admitted, and a file is somebody's new submission.
+// holds what a build admitted under its own rules — a newer peer's may differ
+// from this one's — and a file is somebody's new submission.
 func TestDuplicateNamesBootFromTheStoreAndAreRefusedFromAFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
@@ -334,7 +335,7 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 		db := seedStore(t)
 		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
 			CreatedByKind: store.AuthorOperator,
-			Source:        "file", CreatedBy: "node", Summary: "seeded before the rule",
+			Source:        "file", CreatedBy: "node", Summary: "admitted under other rules",
 			Payload: document, CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatal(err)
@@ -372,9 +373,9 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 // THE VENDOR COMMANDS ACT ON A COMPANY FILE WITH DUPLICATE NAMES.
 //
 // They read the company a node runs and write none of it as a revision, so the
-// admission rules are not theirs to enforce: a deployment whose file carries a
-// duplicate from before the rule must still be provisionable after the
-// upgrade that added it. Each command is expected to get PAST the load and
+// admission rules are not theirs to enforce: running a company depends on none
+// of them, so a deployment whose file carries a duplicate must still be
+// provisionable. Each command is expected to get PAST the load and
 // stop on its own business (this company enables no integration), which is
 // what the absence of the loader's "company config" prefix shows.
 func TestVendorCommandsReadACompanyFileWithDuplicateNames(t *testing.T) {

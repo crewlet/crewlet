@@ -563,11 +563,11 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	// mutated this node; refused here, it has touched nothing and the node
 	// is serving its previous epoch exactly as it was.
 	//
-	// The RUNNABLE rules only. A revision that breaks an admission rule was
-	// admitted by a build that did not have that rule (this node's own past,
-	// or an older peer mid-upgrade), and it runs exactly as it did before the
-	// rule existed; refusing it here is how a working company goes down on
-	// upgrade. It is applied, and warned about below.
+	// The RUNNABLE rules only. A revision activated by a peer whose
+	// admission rules differ from this build's — a newer peer mid-upgrade —
+	// runs on that peer, and refusing it here would take this half of the
+	// fleet off the epoch. It is applied, and its admission violations are
+	// warned about below.
 	cfg, err := config.DecodeCompany(document)
 	if err != nil {
 		return configplane.StatusError, nil, fmt.Errorf("engine: parse revision %s: %w",

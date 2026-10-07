@@ -7,11 +7,11 @@ import (
 )
 
 // The admission rules: seat names and unit names are unique across the whole
-// company. They are a CLASS of their own, apart from Validate, because stored
-// companies predate them and still run exactly as they did; the config layer
-// refuses a submitted document for breaking one and applies a stored revision
-// with a warning. What these pin is the rule itself, its class, and the shape
-// of what it reports.
+// company. They are a CLASS of their own, apart from Validate, because a
+// company that breaks one still runs and a newer peer may admit a revision
+// under rules this build does not share; the config layer refuses a submitted
+// document for breaking one and applies a revision with a warning. What these
+// pin is the rule itself, its class, and the shape of what it reports.
 
 // violations flattens a joined error into the leaf errors that wrap sentinel.
 func violations(err, sentinel error) []error {

@@ -147,9 +147,10 @@ func (o *Organization) Unit(name string) *Unit {
 // once to be the durable handle and a name is prose somebody renames — so the
 // id is the spelling that cannot move, and the unit answering by name is the
 // one that can. The pair is refused as a duplicate key on any document
-// submitted since that rule existed (see [Organization.ValidateAdmission]);
-// this settles what a STORED revision carrying one resolves to, rather than
-// leaving it to walk order.
+// submitted to this build (see [Organization.ValidateAdmission]), but an
+// admission rule is not enforced on an apply, so this settles what a revision
+// applied under the runnable rules resolves to, rather than leaving it to
+// walk order.
 //
 // A REFERENCE NAMING NOTHING IS nil, never an error and never a guess. A
 // stored unit may legitimately name a team the chart no longer has, so what
@@ -457,8 +458,9 @@ type managesIndex struct {
 	seats map[string]struct{}
 	// unitSeats is each unit's seat names, descendants included, in
 	// [Unit.AllRoles] order. The FIRST unit carrying a name owns it, the
-	// same answer [Organization.Unit] gives: a stored revision can still
-	// hold two units of one name, and an expansion that read the last one
+	// same answer [Organization.Unit] gives: an applied revision can still
+	// hold two units of one name, since an apply does not enforce the
+	// admission rules, and an expansion that read the last one
 	// while every lookup read the first would manage one team while
 	// reporting another.
 	unitSeats map[string][]string
@@ -750,14 +752,15 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 // schedule on a human lead never fires. This method holds them, and nothing
 // may run a company that breaks one.
 //
-// ADMISSION rules were added after companies already existed, and a company
-// that breaks one still runs exactly as it did before the rule: two units
-// called "Platform" resolve references to the first of them today and did
-// yesterday. [Organization.ValidateAdmission] holds them. A document somebody
-// submits is refused for breaking one, while a STORED revision that breaks one
-// is applied with a warning, because refusing it would take a running company
-// down on upgrade (or on the older half of a rolling one) over a rule its
-// author never saw. The config layer decides which class a caller runs.
+// ADMISSION rules are authoring hygiene: a company that breaks one still runs
+// — two units called "Platform" resolve references to the first of them.
+// [Organization.ValidateAdmission] holds them. They are the part of the rule
+// set a later build may add to or relax, so a document somebody submits is
+// refused for breaking one, while a revision being APPLIED that breaks one is
+// applied with a warning: during a rolling upgrade a newer peer may activate a
+// revision it admitted under rules this build does not share, and refusing it
+// here would split the fleet's epoch. The config layer decides which class a
+// caller runs.
 func (o *Organization) Validate() error {
 	var errs []error
 	for _, r := range o.Roles {
@@ -979,11 +982,10 @@ func foldUnitKey(s string) string {
 // and in front of the builder twice for each unit carrying it.
 //
 // An ADMISSION rule (see the class note above [Organization.Validate]), like
-// the duplicate seat name beside it. Companies holding two units of one name
-// were admitted before the rule and run exactly as they did, so a submitted
-// document is refused for it while a stored revision is applied with a
-// warning. An id collision cannot reach a stored revision that predates the
-// field at all, so nothing is grandfathered by the class that had a choice.
+// the duplicate seat name beside it: a company holding two units of one key
+// still runs, references resolving through [Organization.UnitByRef]'s
+// tie-break, so a submitted document is refused for it while an applied
+// revision is warned about.
 func (o *Organization) validateUnitKeys() error {
 	units := o.placedUnits()
 	// byKey indexes a group by the FOLDED text every member of it answers
