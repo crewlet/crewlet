@@ -174,7 +174,8 @@ export interface PhaseRecord {
       unique per execution. See `adr/0017`. */
   turnId: string;
   /** The unit of work behind that run: what groups a redelivered trigger's
-      attempts. Empty for a trigger with no ledgerable id. */
+      attempts. Empty for a run with no ledgerable trigger (a scheduled fire,
+      a sub-agent). */
   workKey: string;
   phase: string;
   iteration: number;
@@ -1070,10 +1071,8 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       const startedAt = from > 0 ? new Date(from).toISOString() : "";
       return {
         turnId,
-        // OFF THE PHASES, and the first that HAS one rather than the first
-        // phase: a record written before the identities were split carries
-        // none, and a turn whose opening phase is such a record still belongs
-        // to whatever unit of work its later phases name.
+        // OFF THE PHASES: every phase of one run carries the run's key, so
+        // the first that has one names it.
         workKey: ordered.find((r) => r.workKey)?.workKey ?? "",
         role: ordered[0]?.role ?? "",
         phases: own,

@@ -134,13 +134,9 @@ export interface EventRecord {
   failed?: boolean;
   /**
    * The unit of work this row's run was an attempt at — see `adr/0017`.
-   *
-   * OFF THE PROMOTED COLUMN server-side, and it is the one promoted value that
-   * is not a copy of a tag: migration `0029` backfilled the column from
-   * `turn_id`, which is where the work key lived before the split, and
-   * deliberately left the stored payloads and tags blobs alone. So a reader
-   * going through `payload.work_key` answers nothing for every turn written
-   * before the split, while this field answers for all of them.
+   * Off the promoted column server-side. Absent on an event no run published,
+   * and on one from a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
 }
@@ -354,8 +350,8 @@ export interface LiveCall {
   turn_id: string;
   /**
    * The unit of work behind that run — what groups a trigger's attempts.
-   * Absent on a row an engine from before the split wrote, where `turn_id`
-   * carries it instead.
+   * Absent for a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
   phase: string;
@@ -543,8 +539,8 @@ export interface SandboxRun {
    *  `sandbox_tail` is asked by. Empty on a run the live projection knows of
    *  before its durable row is read. */
   launch_id?: string;
-  /** The unit of work behind that run. Absent on a row written before the
-   *  identities were split. */
+  /** The unit of work behind that run. Absent on a turn with no ledgerable
+   *  trigger, and on a live entry whose durable row has not been read yet. */
   work_key?: string;
   agent_handle: string;
   role: string;
@@ -4098,8 +4094,8 @@ export interface TurnRow {
   turn_id: string;
   /**
    * The unit of work behind that run — what groups a trigger's attempts.
-   * Absent on a row an engine from before the split wrote, where `turn_id`
-   * carries it instead.
+   * Absent for a run with no ledgerable trigger (a scheduled fire, a
+   * sub-agent).
    */
   work_key?: string;
   agent_id?: string;

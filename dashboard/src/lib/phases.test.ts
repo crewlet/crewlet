@@ -211,7 +211,7 @@ describe("identity", () => {
     const done = fromPhaseEvent(phaseEvent({ work_key: "wk-7" }))!;
     expect(done.turnId).toBe("t1");
     expect(done.workKey).toBe("wk-7");
-    // Absent for a trigger with no ledgerable id, and EMPTY rather than
+    // Absent for a run with no ledgerable trigger, and EMPTY rather than
     // undefined so nothing downstream has to test for two absences.
     expect(fromPhaseEvent(phaseEvent())!.workKey).toBe("");
   });
