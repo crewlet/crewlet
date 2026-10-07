@@ -130,7 +130,7 @@ type directBox struct {
 var _ Sandbox = (*directBox)(nil)
 
 func (b *directBox) ID() string   { return b.layout.id }
-func (b *directBox) Home() string { return b.layout.root }
+func (b *directBox) Home() string { return b.layout.home() }
 
 // childEnv is the allowlisted host environment plus the box's home and the run
 // env.
@@ -141,7 +141,7 @@ func (b *directBox) Home() string { return b.layout.root }
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
-	home := b.layout.root
+	home := b.layout.home()
 	env["HOME"] = home
 	env["XDG_CONFIG_HOME"] = filepath.Join(home, ".config")
 	env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
@@ -299,9 +299,9 @@ func reap(proc *exec.Cmd) { _ = proc.Wait() }
 func (b *directBox) resolve(path string) (string, error) {
 	rel := path
 	if filepath.IsAbs(path) {
-		root, err := filepath.EvalSymlinks(b.layout.root)
+		root, err := filepath.EvalSymlinks(b.layout.home())
 		if err != nil {
-			root = filepath.Clean(b.layout.root)
+			root = filepath.Clean(b.layout.home())
 		}
 		clean := filepath.Clean(path)
 		// An absolute path that already names somewhere in the box is the
@@ -309,13 +309,13 @@ func (b *directBox) resolve(path string) (string, error) {
 		// box reports.
 		if within, err := filepath.Rel(root, clean); err == nil && !strings.HasPrefix(within, "..") {
 			rel = within
-		} else if within, err := filepath.Rel(filepath.Clean(b.layout.root), clean); err == nil && !strings.HasPrefix(within, "..") {
+		} else if within, err := filepath.Rel(filepath.Clean(b.layout.home()), clean); err == nil && !strings.HasPrefix(within, "..") {
 			rel = within
 		} else {
 			return "", b.escapeError(path)
 		}
 	}
-	resolved, err := hostbox.SafeJoin(b.layout.root, rel)
+	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
 	switch {
 	case errors.Is(err, hostbox.ErrEscape):
 		return "", b.escapeError(path)
@@ -332,7 +332,7 @@ func (b *directBox) escapeError(path string) error {
 	return localErrorf("local sandbox (run_in %q) refuses to touch %q: it is outside "+
 		"the box at %s. Direct mode has no filesystem virtualisation, so this would write to "+
 		"the engine host itself. Put the file under the box's home, or use "+
-		"run_in %q.", Direct, path, b.layout.root, Container)
+		"run_in %q.", Direct, path, b.layout.home(), Container)
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
@@ -445,9 +445,10 @@ func (b *directBox) Close(ctx context.Context) error {
 
 // containerBox is a [Sandbox] backed by a long-lived container.
 //
-// The box directory is bind-mounted at [DefaultHome], so in-box paths are
-// identical to a remote backend's and file reads and writes happen on the HOST
-// side of the mount — no copy round trip through the runtime.
+// The box's home — never its records ([boxLayout]) — is bind-mounted at
+// [DefaultHome], so in-box paths are identical to a remote backend's and file
+// reads and writes happen on the HOST side of the mount, with no copy round
+// trip through the runtime.
 type containerBox struct {
 	layout      boxLayout
 	runtime     string
@@ -474,7 +475,7 @@ func (b *containerBox) workdir() string { return DefaultHome + "/" + WorkspaceSu
 func (b *containerBox) hostPath(path string) (string, error) {
 	clean := filepath.Clean(path)
 	if clean == DefaultHome {
-		return b.layout.root, nil
+		return b.layout.home(), nil
 	}
 	prefix := DefaultHome + "/"
 	rel := path
@@ -487,15 +488,15 @@ func (b *containerBox) hostPath(path string) (string, error) {
 		return "", localErrorf("%q is outside the sandbox home mount at %s; write it with a "+
 			"setup-step command instead of a file entry", path, DefaultHome)
 	}
-	resolved, err := hostbox.SafeJoin(b.layout.root, rel)
+	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
 	switch {
 	case errors.Is(err, hostbox.ErrEscape):
 		return "", localErrorf("%q resolves outside the sandbox home mount at %s — it would be "+
-			"written to the engine host itself", path, b.layout.root)
+			"written to the engine host itself", path, b.layout.home())
 	case err != nil:
 		// Not an escape — see [directBox.resolve].
 		return "", localErrorf("%q could not be resolved under the sandbox home mount at %s: %v",
-			path, b.layout.root, err)
+			path, b.layout.home(), err)
 	}
 	return resolved, nil
 }
@@ -505,8 +506,12 @@ func (b *containerBox) hostPath(path string) (string, error) {
 // NOT "-e KEY=value": a process's argv is world-readable on a normal Linux box
 // (/proc/<pid>/cmdline, and every ps on the host), and this env carries the
 // seat's LLM key and whatever code-host token role.sandbox.env declares. A file
-// the runtime reads keeps them off the command line; it lives inside the box,
-// which is already 0700, and is written 0600.
+// the runtime reads keeps them off the command line; it is one of the box's
+// RECORDS, under its 0700 directory and written 0600 — and beside its home,
+// never in it. The runtime's client reads it on the host, so the container
+// has no need of it, and inside the mount the job could replace it between
+// two execs: with a link that this rewrite followed to overwrite whatever host
+// file it named, or with a named pipe whose open never returned.
 //
 // Rewritten per call rather than kept: extra differs between the setup steps
 // and the coding job, and a stale file would hand one phase another's
@@ -535,7 +540,7 @@ func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 		}
 		lines = append(lines, assignment)
 	}
-	if err := os.MkdirAll(b.layout.meta(), hostbox.DirMode); err != nil {
+	if err := os.MkdirAll(b.layout.records(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("container sandbox %s could not write its env file: %v", b.layout.id, err)
 	}
 	blob := strings.Join(lines, "\n") + "\n"

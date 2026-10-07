@@ -93,5 +93,6 @@ func directBox(t *testing.T) sandbox.Sandbox {
 }
 
 func containerBox(t *testing.T) sandbox.Sandbox {
-	return sandbox.NewContainerBoxAt(t.TempDir())
+	box, _ := sandbox.NewContainerBoxAt(t.TempDir())
+	return box
 }

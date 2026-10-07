@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -77,19 +78,43 @@ func DefaultBoxRoot() string {
 // box layout
 // ---------------------------------------------------------------------
 
-// boxLayout is where one box's files live on the engine host.
+// boxLayout is where one box's files live on the engine host: one directory,
+// root, holding TWO SIDES that must never be one.
 //
-// Everything the box needs to be SELF-DESCRIBING lives under .crewlet/:
-// Connect is handed nothing but an id, possibly in a different process from
-// the one that created the box, so anything a reconnect must know has to be on
-// disk rather than in the object Create returned.
+// HOME is the box's side — the coding agent's HOME, its checkout and its run
+// files, and in container mode the only directory bind-mounted into the
+// container, so everything under it is written by whatever runs in the box.
+// RECORDS is the engine's side: what the engine itself must know about the box
+// to manage it, kept beside the home rather than inside it. A box has to be
+// SELF-DESCRIBING — Connect is handed nothing but an id, possibly in a
+// different process from the one that created it, so anything a reconnect must
+// know is on disk rather than in the object Create returned — and that record
+// is only worth keeping if the box cannot rewrite it. They used to share the
+// home's .crewlet/, where a containerised agent could replace the credential
+// map with one naming any host file as the "shared login" to write a box file
+// back over at teardown, the env file with a link the next exec's rewrite
+// followed out of the box, and either with a named pipe whose open blocked the
+// poll, the collection, the pause reaper and the orphan reaper for good.
+//
+// In direct mode the job runs as the engine's own user with no mount, so it
+// can reach the records too; nothing here is a boundary there, which is what
+// direct mode is documented to be.
 type boxLayout struct {
 	id   string
 	root string
 }
 
-func (l boxLayout) workspace() string { return filepath.Join(l.root, WorkspaceSubdir) }
-func (l boxLayout) meta() string      { return filepath.Join(l.root, ".crewlet") }
+// home is the box's own side: its HOME, and its mount in container mode.
+func (l boxLayout) home() string { return filepath.Join(l.root, "home") }
+
+// records is the engine's side, out of the box's reach in container mode.
+func (l boxLayout) records() string { return filepath.Join(l.root, "records") }
+
+func (l boxLayout) workspace() string { return filepath.Join(l.home(), WorkspaceSubdir) }
+
+// meta is the box's own .crewlet/, where its runner's markers, reports and
+// shim live — the box's side, never a record.
+func (l boxLayout) meta() string { return filepath.Join(l.home(), ".crewlet") }
 
 // pidFile records the detached job's process group so teardown can reach it
 // even in a fresh engine that never held the handle.
@@ -98,7 +123,7 @@ func (l boxLayout) meta() string      { return filepath.Join(l.root, ".crewlet")
 // bare pid: the file is read back by a later process, possibly hours on, and a
 // pid alone may by then lead a stranger's group. Signalling that would reach
 // somebody else's processes, and probing it would keep a dead box alive.
-func (l boxLayout) pidFile() string { return filepath.Join(l.meta(), "box.pid") }
+func (l boxLayout) pidFile() string { return filepath.Join(l.records(), "box.pid") }
 
 // aliveFile is the keepalive stamp — the local counterpart of a remote box's
 // TTL.
@@ -108,17 +133,17 @@ func (l boxLayout) pidFile() string { return filepath.Join(l.meta(), "box.pid") 
 // the box's entire life. Anything reading it as "recently used" is reading a
 // constant. This file is touched on every SetTimeout, which the waiter calls
 // once per poll for exactly the box it is keeping alive.
-func (l boxLayout) aliveFile() string { return filepath.Join(l.meta(), "alive") }
+func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), "alive") }
 
 // credentialsFile records the credential map this box was seeded with, so a
 // reconnect knows which files to sync back. Without it a reconnected box
 // closes with an empty map and the login the coding agent refreshed mid-run is
 // discarded — and every production teardown goes through Connect or Kill,
 // never the object Create returned, so that would be every run.
-func (l boxLayout) credentialsFile() string { return filepath.Join(l.meta(), "credentials.json") }
+func (l boxLayout) credentialsFile() string { return filepath.Join(l.records(), "credentials.json") }
 
 // envFile is the container runtime's --env-file. See containerBox.envArgs.
-func (l boxLayout) envFile() string { return filepath.Join(l.meta(), "env") }
+func (l boxLayout) envFile() string { return filepath.Join(l.records(), "env") }
 
 // seedCredentials copies the CLI login into the box before the coding agent
 // runs.
@@ -128,7 +153,7 @@ func (l boxLayout) envFile() string { return filepath.Join(l.meta(), "env") }
 // write a host file every time a box was created.
 func seedCredentials(l boxLayout, files map[string]string) {
 	for relative, source := range files {
-		dst, err := hostbox.SafeJoin(l.root, relative)
+		dst, err := hostbox.SafeJoin(l.home(), relative)
 		if err != nil {
 			localLog.Warn("local_sandbox_credential_path_refused",
 				"sandbox_id", l.id, "path", relative, "error", err.Error())
@@ -152,29 +177,60 @@ func seedCredentials(l boxLayout, files map[string]string) {
 //
 // Read through SafeJoin for the same reason the seed is written through it: a
 // "../../" key would otherwise copy an arbitrary host file out of the box's
-// directory and over the credential store.
+// directory and over the credential store. The map itself is the box's RECORD
+// — written by the engine at Create, out of the box's reach — so where a login
+// is written back to is the operator's profile and never the box's say.
 func collectCredentials(l boxLayout, files map[string]string) {
 	for relative, source := range files {
-		src, err := hostbox.SafeJoin(l.root, relative)
+		src, err := hostbox.SafeJoin(l.home(), relative)
 		if err != nil {
 			continue
 		}
-		if info, err := os.Stat(src); err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		if info, err := os.Stat(source); err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		if hostbox.FileDigest(src) == hostbox.FileDigest(source) {
-			continue
-		}
-		if ran, err := hostbox.CopyFileAtomic(src, source); err != nil {
+		if ran, err := writeBackCredential(src, source); err != nil {
 			localLog.Warn("local_sandbox_credential_writeback_failed",
 				"sandbox_id", l.id, "file", relative, "error", err.Error())
 		} else if ran {
 			localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
 		}
 	}
+}
+
+// writeBackCredential copies the box's src over the shared login dst when it
+// differs, and reports whether it did.
+//
+// OPENED ONCE, as a box's files are read ([openHostRegular]), and the digest
+// and the copy both read that one descriptor: a file checked by its path and
+// then opened by it again is two reads of whatever the path names at each
+// moment, and the box's side is the one that names it. So a pipe there answers
+// at once as what it is rather than blocking a teardown, a link is refused
+// rather than followed, and what is written back is the file that was
+// compared.
+func writeBackCredential(src, dst string) (bool, error) {
+	if info, err := os.Stat(dst); err != nil || !info.Mode().IsRegular() {
+		return false, nil
+	}
+	in, err := openHostRegular(src)
+	switch {
+	case absent(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	defer func() { _ = in.Close() }()
+	digest, err := hostbox.Digest(in)
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", src, err)
+	}
+	if digest == hostbox.FileDigest(dst) {
+		return false, nil
+	}
+	if _, err := in.Seek(0, io.SeekStart); err != nil {
+		return false, fmt.Errorf("rereading %s: %w", src, err)
+	}
+	if err := hostbox.ReplaceFile(dst, in); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // recordCredentialMap persists the box's credential map so Connect can sync it
@@ -193,8 +249,8 @@ func recordCredentialMap(l boxLayout, files map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("encoding the credential map: %w", err)
 	}
-	if err := os.MkdirAll(l.meta(), hostbox.DirMode); err != nil {
-		return fmt.Errorf("preparing %q: %w", l.meta(), err)
+	if err := os.MkdirAll(l.records(), hostbox.DirMode); err != nil {
+		return fmt.Errorf("preparing %q: %w", l.records(), err)
 	}
 	if err := os.WriteFile(l.credentialsFile(), blob, hostbox.FileMode); err != nil {
 		return fmt.Errorf("writing %q: %w", l.credentialsFile(), err)
@@ -202,22 +258,64 @@ func recordCredentialMap(l boxLayout, files map[string]string) error {
 	return nil
 }
 
-// readCredentialMap is the map recorded at Create; empty when absent.
+// readCredentialMap is the map recorded at Create: nil when none was.
+//
+// A RECORD THAT CANNOT BE USED IS SAID, and read as no map: every reconnect
+// reads it before it answers — the poll's, the collection's, the pause
+// reaper's and the orphan reaper's — and none of them may fail over a list of
+// logins to write back, so what is lost is the write-back of a refreshed
+// login, which the warning names.
 func readCredentialMap(l boxLayout) map[string]string {
-	blob, err := os.ReadFile(l.credentialsFile())
+	blob, err := readRecord(l.credentialsFile())
+	if absent(err) {
+		return nil
+	}
+	if err == nil {
+		var files map[string]string
+		if err = json.Unmarshal(blob, &files); err == nil {
+			return files
+		}
+	}
+	localLog.Warn("local_sandbox_credential_map_unreadable", "sandbox_id", l.id,
+		"path", l.credentialsFile(), "error", err.Error(),
+		"detail", "the box's record of the logins it was seeded with could not be used, so a "+
+			"login the run refreshed is not written back to the shared credential directory")
+	return nil
+}
+
+// maxRecordBytes bounds one read of a box's record. The largest the engine
+// writes is the credential map — a CLI profile's few credential files, each a
+// relative path and a host path — which is a few hundred bytes; a mebibyte is
+// a hundred and twenty-eight entries at the longest paths a filesystem takes,
+// so a record past it is not one this engine wrote and is not read whole into
+// memory to find that out.
+const maxRecordBytes = 1 << 20
+
+// readRecord is one of the engine's records about a box, read the way every
+// file under a box's directory is read on the engine host: only a REGULAR FILE
+// WHERE IT LIES ([openHostRegular]), so a record that is a named pipe answers
+// at once as what it is rather than blocking whoever asked, and a link is
+// refused rather than followed. An absent record answers [fs.ErrNotExist].
+func readRecord(path string) ([]byte, error) {
+	f, err := openHostRegular(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	var files map[string]string
-	if err := json.Unmarshal(blob, &files); err != nil {
-		return nil
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(f, maxRecordBytes+1))
+	if err != nil {
+		return nil, &fs.PathError{Op: "read", Path: path, Err: err}
 	}
-	return files
+	if len(raw) > maxRecordBytes {
+		return nil, fmt.Errorf("%s is past %d KiB, which no record this engine writes is, "+
+			"so it was not read", path, maxRecordBytes>>10)
+	}
+	return raw, nil
 }
 
 // touchAlive refreshes the box's keepalive stamp. Never fatal.
 func touchAlive(l boxLayout) {
-	if err := os.MkdirAll(l.meta(), hostbox.DirMode); err != nil {
+	if err := os.MkdirAll(l.records(), hostbox.DirMode); err != nil {
 		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 		return
 	}
@@ -237,9 +335,10 @@ func touchAlive(l boxLayout) {
 	}
 }
 
-// recordLeader writes the detached job's group identity into the box.
+// recordLeader writes the detached job's group identity into the box's
+// records.
 func recordLeader(l boxLayout, leader procgroup.Leader) error {
-	if err := os.MkdirAll(l.meta(), hostbox.DirMode); err != nil {
+	if err := os.MkdirAll(l.records(), hostbox.DirMode); err != nil {
 		return err
 	}
 	return os.WriteFile(l.pidFile(), []byte(leader.String()), hostbox.FileMode)
@@ -256,12 +355,15 @@ func recordLeader(l boxLayout, leader procgroup.Leader) error {
 // it, and every signalling path withholds its signal.
 //
 // A box with no record started no job. A record that exists and cannot be
-// read is the unknown answer, like a kernel record that cannot be read.
+// read — something other than a regular file at its path included, read the
+// way every record is ([readRecord]) — is the unknown answer, like a kernel
+// record that cannot be read.
 //
-// A record that does not parse is logged and read as no job. The file lives
-// inside the box, where the job itself can write, so its content is input
-// rather than a fact; and a bare pid from a build that recorded only that is
-// exactly the identity with no start time [procgroup.ParseLeader] refuses.
+// A record that does not parse is logged and read as no job. Only a direct
+// box has one, and its job runs as the engine's own user beside its records,
+// so the file's content is input rather than a fact; and a bare pid from a
+// build that recorded only that is exactly the identity with no start time
+// [procgroup.ParseLeader] refuses.
 func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 	leader, found, err := readJobRecord(l)
 	if err != nil || !found {
@@ -277,8 +379,8 @@ func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 // readJobRecord is the job identity a box recorded, false when it recorded
 // none it can use. See [jobGroup] for which failures are which answer.
 func readJobRecord(l boxLayout) (procgroup.Leader, bool, error) {
-	raw, err := os.ReadFile(l.pidFile())
-	if errors.Is(err, fs.ErrNotExist) {
+	raw, err := readRecord(l.pidFile())
+	if absent(err) {
 		return procgroup.Leader{}, false, nil
 	}
 	if err != nil {
@@ -445,8 +547,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	if err = os.Chmod(layout.root, hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not secure local sandbox %s at %s: %v", id, layout.root, err)
 	}
-	if err = os.MkdirAll(filepath.Join(layout.root, ".tmp"), hostbox.DirMode); err != nil {
+	if err = os.MkdirAll(filepath.Join(layout.home(), ".tmp"), hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not create local sandbox %s tmpdir: %v", id, err)
+	}
+	if err = os.MkdirAll(layout.records(), hostbox.DirMode); err != nil {
+		return nil, localErrorf("could not create local sandbox %s records at %s: %v",
+			id, layout.records(), err)
 	}
 
 	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
@@ -463,7 +569,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	touchAlive(layout)
 
 	if l.opts.Placement == Direct {
-		localLog.Info("local_sandbox_created", "sandbox_id", id, "placement", string(Direct), "home", layout.root)
+		localLog.Info("local_sandbox_created", "sandbox_id", id, "placement", string(Direct), "home", layout.home())
 		return &directBox{layout: layout, env: spec.Env, credentials: spec.CredentialFiles}, nil
 	}
 
@@ -516,7 +622,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	argv := []string{
 		l.runtime, "run", "-d",
 		"--name", name,
-		"-v", layout.root + ":" + DefaultHome,
+		"-v", layout.home() + ":" + DefaultHome,
 		"-w", DefaultHome + "/" + WorkspaceSubdir,
 		"-e", "HOME=" + DefaultHome,
 		// A reaping PID 1. The detached coding job is backgrounded inside an
@@ -712,7 +818,7 @@ const exitPollInterval = 20 * time.Millisecond
 // added or removed directly in it, and a box's root entries are all made at
 // Create — so the root mtime is the box's birth time, frozen, however busy the
 // coding agent inside workspace/ is. Reaping on it deleted the checkout, the
-// seeded credentials and .crewlet/box.pid of every run that lasted longer than
+// seeded credentials and the job record of every run that lasted longer than
 // the TTL, while its process tree kept going: without the pid file nothing
 // could ever kill it, so the job became an unkillable orphan writing into a
 // directory that no longer existed.

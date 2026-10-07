@@ -32,8 +32,7 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 			return box, box.Home()
 		},
 		"container": func(t *testing.T) (sandbox.Sandbox, string) {
-			root := t.TempDir()
-			return sandbox.NewContainerBoxAt(root), root
+			return sandbox.NewContainerBoxAt(t.TempDir())
 		},
 	}
 	kinds := map[string]func(t *testing.T, host string){
