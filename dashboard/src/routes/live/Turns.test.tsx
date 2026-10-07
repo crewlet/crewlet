@@ -18,6 +18,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { TurnRow } from "~/protocol/index.ts";
 import { Turns } from "./Turns.tsx";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -84,7 +85,7 @@ function mountWith(
 ): { asked: Asked[] } {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg(org as never);
   const socket = new LiveSocket(store);
   const asked: Asked[] = [];
@@ -114,7 +115,7 @@ function mountWith(
 function mount(turns: TurnRow[], agents: unknown[] = []) {
   location.hash = "#/live/turns";
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
   if (agents.length) store.applyAgents(agents);
   const socket = new LiveSocket(store);
@@ -184,7 +185,7 @@ test("a parked turn is marked parked, and an open one running or not settled by 
 test("the seat in the address is sent to the engine as its handle", async () => {
   location.hash = "#/live/turns?seat=ceo";
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
   const socket = new LiveSocket(store);
   const asked: Record<string, unknown>[] = [];

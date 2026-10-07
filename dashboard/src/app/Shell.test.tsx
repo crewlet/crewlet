@@ -25,6 +25,7 @@ import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
 import { Project } from "~/routes/work/Project.tsx";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -987,7 +988,7 @@ describe("the page header", () => {
     location.hash = "#/settings";
     const { store, socket } = answering({});
     mountShell(store, socket);
-    act(() => store.applyHealth({ status: "ok", applied_epoch: 2, nodes: 1 }));
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const config = Array.from(column.querySelectorAll("a")).find((a) =>
@@ -1022,7 +1023,7 @@ describe("the page header", () => {
     const asked: { what: string }[] = [];
     const { store, socket } = answering({}, asked);
     mountShell(store, socket, <Publishing />);
-    act(() => store.applyHealth({ status: "ok", applied_epoch: 3, nodes: 2 }));
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 3, nodes: 2 })));
     await settle();
     expect(asked.filter((a) => a.what === "fleet")).toEqual([]);
     const column = screen.getByRole("navigation", { name: "Settings sections" });
@@ -1091,13 +1092,7 @@ test("the health card reads the push and links to the nodes", async () => {
   mountShell(store, socket);
   act(() => {
     store.setConnected(true);
-    store.applyHealth({
-      status: "healthy",
-      configured: true,
-      nodes: 3,
-      applied_epoch: 42,
-      alarms: { count: 0 },
-    });
+    store.applyHealth(healthFrame({ nodes: 3, applied_epoch: 42, alarms: { count: 0 } }));
   });
   const card = document.querySelector<HTMLAnchorElement>("a.health-card");
   expect(card?.getAttribute("href")).toBe("#/settings/nodes");

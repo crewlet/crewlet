@@ -15,6 +15,7 @@ import { applyState } from "./AfterSaveStrip.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
 import { toastText } from "~/testing.tsx";
+import { healthFrame } from "~/test/health.ts";
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -49,11 +50,11 @@ describe("what the strip says", () => {
   const saved = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
 
   test("a node that has applied the epoch, with no fleet answer, is applied", () => {
-    expect(applyState(saved, { status: "ok", applied_epoch: 4 }, null)).toMatchObject({
+    expect(applyState(saved, healthFrame({ applied_epoch: 4 }), null)).toMatchObject({
       message: "Applied.",
       resolved: true,
     });
-    expect(applyState(saved, { status: "ok", applied_epoch: 3 }, null)).toMatchObject({
+    expect(applyState(saved, healthFrame({ applied_epoch: 3 }), null)).toMatchObject({
       message: "The engine is applying it.",
       resolved: false,
     });
@@ -165,7 +166,7 @@ describe("in the builder", () => {
   test("the strip follows the saved revision and offers the diff", async () => {
     const engine = new Engine(company());
     const store = await save(engine, () => null);
-    act(() => store.applyHealth({ status: "ok", applied_epoch: 1 }));
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 1 })));
     expect(await screen.findByText("The engine is applying it.")).toBeDefined();
     expect(screen.getByText("r-saved")).toBeDefined();
     // What the save changed is the saved revision against the one it was
@@ -174,7 +175,7 @@ describe("in the builder", () => {
     expect(screen.getByRole("link", { name: "View changes" }).getAttribute("href")).toBe(
       "#/settings/config?lens=diff&revision=r-saved&against=r1",
     );
-    act(() => store.applyHealth({ status: "ok", applied_epoch: 2 }));
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 2 })));
     expect(await screen.findByText("Applied.")).toBeDefined();
   });
 
@@ -219,7 +220,7 @@ describe("the org chart", () => {
     location.hash = "#/agents";
     const store = new Store();
     // The health push, which is where this node's applied epoch comes from.
-    store.applyHealth({ status: "ok", applied_epoch: appliedEpoch });
+    store.applyHealth(healthFrame({ applied_epoch: appliedEpoch }));
     store.applyOrg({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] });
     const socket = new LiveSocket(store);
     (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>

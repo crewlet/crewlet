@@ -24,6 +24,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -104,7 +105,7 @@ function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = OPERATO
   location.hash = "#/spend/budgets";
   budgetAsks = 0;
   const store = new Store();
-  store.applyHealth({ status: "healthy", applied_epoch: 4 });
+  store.applyHealth(healthFrame({ applied_epoch: 4 }));
   store.setConnected(true);
   store.applyOrg({ timezone: "UTC", roles: [{ name: "PM", handle: "pm" }] });
   const socket = new LiveSocket(store);

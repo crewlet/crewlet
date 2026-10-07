@@ -21,6 +21,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest, setZone } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -196,7 +197,7 @@ function mount({
   page?: ReactNode;
 } = {}) {
   const store = new Store();
-  store.applyHealth({ status: "healthy", nodes: 3 } as never);
+  store.applyHealth(healthFrame({ nodes: 3 }));
   store.applyOrg(ORG as never);
   store.applyAgents(agents as never);
   if (budget) store.applyBudget(budget as never);

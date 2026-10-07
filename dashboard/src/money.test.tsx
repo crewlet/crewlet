@@ -37,6 +37,7 @@ import { Home } from "~/routes/home/Home.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { healthFrame } from "~/test/health.ts";
 
 // ---------------------------------------------------------------------------
 // 1. The source
@@ -470,7 +471,7 @@ afterEach(() => {
 function mount(hash: string, view: ReactElement, answers: Record<string, unknown> = {}) {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
   store.applyTokens(rollup());
   const socket = new LiveSocket(store);

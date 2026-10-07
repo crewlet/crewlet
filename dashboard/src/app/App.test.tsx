@@ -20,6 +20,7 @@ import { PAGE_ACTIONS_SLOT } from "./frame/PageActions.tsx";
 import { buildHash } from "./router.tsx";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -46,7 +47,7 @@ function mount() {
 /** The frame, over a socket that answers the viewer and refuses the rest. */
 function mountAs(viewer: Promise<unknown>) {
   const store = new Store();
-  store.applyHealth({ status: "ok", nodes: 1, applied_epoch: 2 });
+  store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     return what === "viewer" ? viewer : Promise.reject(new QueryError("unauthorized"));
@@ -747,7 +748,7 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
 test("the page bar's More holds the star, the link and what the screen folded", async () => {
   location.hash = "#/work/ENG";
   const store = new Store();
-  store.applyHealth({ status: "ok", nodes: 1, applied_epoch: 2 });
+  store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   const project = {
     key: "ENG",

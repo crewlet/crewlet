@@ -28,6 +28,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -51,7 +52,7 @@ afterEach(() => {
 
 function mount(org?: OrgProjection, agents?: unknown[]) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   if (org) store.applyOrg(org);
   if (agents) store.applyAgents(agents);
   const socket = new LiveSocket(store);

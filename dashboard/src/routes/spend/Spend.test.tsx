@@ -31,6 +31,7 @@ import type {
   WorkItemsAnswer,
   WorkSummary,
 } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -140,7 +141,7 @@ function mount(
   location.hash = hash;
   asks = [];
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg({
     timezone: "UTC",
     roles: [

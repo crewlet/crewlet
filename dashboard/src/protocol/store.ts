@@ -88,11 +88,10 @@ export interface StoreState {
   tools: ToolRow[];
   /**
    * The engine's own health: the `health` push, `api.Health` WHOLE, replaced
-   * by the snapshot and by every five-second tick. `{status: "unknown"}` while
-   * the socket is down — the one value here that is not a push, and asserts
-   * nothing beyond that it is not known.
+   * by the snapshot and by every five-second tick. `null` while it is not
+   * known — the socket is down, or no frame has arrived yet.
    */
-  health: EngineHealth;
+  health: EngineHealth | null;
   tokens: Rollup | null;
   /**
    * The company's live token meter as the last `budget` push stated it, and
@@ -139,7 +138,7 @@ function emptyState(): StoreState {
     sandboxes: [],
     org: null,
     tools: [],
-    health: { status: "unknown" },
+    health: null,
     tokens: null,
     budget: null,
     schedules: null,
@@ -311,8 +310,8 @@ export class Store {
   }
 
   applyHealth(health: EngineHealth | null | undefined): void {
-    this.state.health = health ?? { status: "unknown" };
-    this.state.connected = !!health && health.status !== "unknown";
+    this.state.health = health ?? null;
+    this.state.connected = !!health;
     this.emit("health");
   }
 
@@ -320,7 +319,7 @@ export class Store {
     this.state.connected = value;
     // A dropped socket CLEARS the health slice rather than freezing it. A stale
     // "healthy" is a lie with a timestamp nobody can see.
-    if (!value) this.state.health = { status: "unknown" };
+    if (!value) this.state.health = null;
     this.emit("health");
   }
 

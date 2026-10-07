@@ -36,6 +36,7 @@ import type {
   WorkProjectDetail,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -205,7 +206,7 @@ function mount(
   } = {},
 ) {
   const store = new Store();
-  store.applyHealth({ status: "healthy", nodes: 1 } as never);
+  store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(ORG as never);
   store.applyAgents(agents as never);
   const socket = new LiveSocket(store);

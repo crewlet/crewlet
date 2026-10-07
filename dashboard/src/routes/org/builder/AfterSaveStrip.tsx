@@ -147,7 +147,7 @@ export function applyState(
       showFleet: false,
     };
   }
-  if (health && (health.applied_epoch ?? 0) >= epoch) {
+  if (health && health.applied_epoch >= epoch) {
     return { tone: "positive", message: "Applied.", resolved: true, showFleet: false };
   }
   return { tone: "info", message: "The engine is applying it.", resolved: false, showFleet: false };

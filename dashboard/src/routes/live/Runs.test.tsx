@@ -27,6 +27,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { overflowing } from "~/testing.tsx";
 import { BridgeLog, RunScreen } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 afterEach(() => {
   cleanup();
@@ -271,7 +272,7 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
     }),
   );
   const store = new Store();
-  store.applyHealth({ status: "healthy" } as never);
+  store.applyHealth(healthFrame());
   store.applyOrg(ORG as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {

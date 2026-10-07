@@ -14,6 +14,7 @@ import { ListPosition } from "./ListPosition.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 afterEach(() => {
   cleanup();
@@ -23,7 +24,7 @@ afterEach(() => {
 function mount(hash: string, around: unknown) {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth({ status: "healthy", nodes: 1 } as never);
+  store.applyHealth(healthFrame({ nodes: 1 }));
   const socket = new LiveSocket(store);
   const asked: Record<string, unknown>[] = [];
   socket.query = ((what: string, params?: Record<string, unknown>) => {

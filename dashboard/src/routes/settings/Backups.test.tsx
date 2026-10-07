@@ -22,6 +22,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { clearToken, storeToken } from "~/protocol/authToken.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BackupsAnswer } from "~/contract/backups.ts";
+import { healthFrame } from "~/test/health.ts";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
@@ -108,11 +109,11 @@ function mount(
 ) {
   const store = new Store();
   store.applyOrg(org as never);
-  store.applyHealth({
-    status: "ok",
-    node: "node-a",
-    event_history_seconds: historySeconds ?? undefined,
-  } as never);
+  // A NULL FLOOR IS NO HEALTH READ YET: the socket is open and no frame has
+  // arrived, so how far back the log goes is not known.
+  if (historySeconds !== null) {
+    store.applyHealth(healthFrame({ node: "node-a", event_history_seconds: historySeconds }));
+  }
   store.setConnected(true);
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {

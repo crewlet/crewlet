@@ -15,6 +15,8 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { LiveSocket, Store, type AgentRow, type OrgProjection } from "~/protocol/index.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -91,16 +93,16 @@ async function mount(
     projection = org(),
     agents = [SWE],
     handle = "swe",
-    health = { status: "healthy" },
+    health = healthFrame(),
   }: {
     projection?: OrgProjection;
     agents?: AgentRow[];
     handle?: string;
-    health?: Record<string, unknown>;
+    health?: EngineHealth;
   } = {},
 ) {
   const store = new Store();
-  store.applyHealth(health as never);
+  store.applyHealth(health);
   store.applyOrg(projection);
   store.applyAgents(agents);
   const socket = new LiveSocket(store);
@@ -157,7 +159,7 @@ const OPERATOR = {
 // The peek said "Shown to operators" over the same fact.
 test("an anonymous reader sees what the health push says of the node, and sends no guarded read", async () => {
   const { asked } = await mount(ANONYMOUS, {
-    health: { status: "healthy", node: "node-1", seats: ["swe"] },
+    health: healthFrame({ node: "node-1", seats: ["swe"] }),
   });
   // IN WORDS ON THE ROW, where a sighted reader reads them.
   const running = screen.getByText("Running on").nextElementSibling;
@@ -170,7 +172,7 @@ test("an anonymous reader sees what the health push says of the node, and sends 
 
 // NEVER WHICH PEER: that is the fleet read's, and the push does not say it.
 test("an anonymous reader is told a seat another node holds is another node's", async () => {
-  await mount(ANONYMOUS, { health: { status: "healthy", node: "node-1", seats: ["cto"] } });
+  await mount(ANONYMOUS, { health: healthFrame({ node: "node-1", seats: ["cto"] }) });
   expect(screen.getByText("Running on").nextElementSibling?.textContent).toBe("another node");
 });
 

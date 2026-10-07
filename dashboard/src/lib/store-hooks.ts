@@ -162,7 +162,7 @@ export function useConnection() {
  * five-second tick carry the whole body now, and there is no query to ask.
  */
 export function useEngineHealth(): EngineHealth | null {
-  return useSlice(["health"], (s) => (s.health.status === "unknown" ? null : s.health));
+  return useSlice(["health"], (s) => s.health);
 }
 
 export type { QueryMap, QueryName };

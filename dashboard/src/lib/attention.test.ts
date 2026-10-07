@@ -22,6 +22,7 @@ import {
   type Subject,
   type Where,
 } from "./attention.ts";
+import { healthFrame } from "~/test/health.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
@@ -30,7 +31,7 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     agents: [],
     runs: [],
     budget: null,
-    engine: { status: "ok", configured: true },
+    engine: healthFrame({ configured: true }),
     connected: true,
     authRejected: false,
     now,
@@ -66,7 +67,7 @@ describe("what it surfaces", () => {
   test("an engine with NO ACTIVE CONFIG is critical, not quiet", () => {
     // It looks exactly like a healthy idle one and drops every inbound
     // webhook. This is the whole reason the engine carries the flag.
-    const items = attentionQueue(input({ engine: { status: "ok", configured: false } }));
+    const items = attentionQueue(input({ engine: healthFrame({ configured: false }) }));
     expect(items[0]?.id).toBe("unconfigured");
     expect(items[0]?.severity).toBe("critical");
     expect(items[0]?.detail).toContain("webhook");
@@ -326,7 +327,7 @@ describe("what it surfaces", () => {
   test("every subject the quiet band draws is one a condition can raise", () => {
     const items = attentionQueue(
       input({
-        engine: { status: "ok", configured: false },
+        engine: healthFrame({ configured: false }),
         budget: meter(win({ state: "refusing", used: 100 })),
         runs: [parked("awaiting_clarification")],
         agents: [
@@ -403,7 +404,7 @@ describe("where a condition is shown", () => {
   test("a stalled round is Live's, and a person decides only the seat's", () => {
     const items = attentionQueue(
       input({
-        engine: { status: "ok", configured: false },
+        engine: healthFrame({ configured: false }),
         agents: [
           {
             id: "b",
@@ -480,7 +481,7 @@ describe("ordering", () => {
     const items = attentionQueue(
       input({
         connected: false,
-        engine: { status: "ok", configured: false },
+        engine: healthFrame({ configured: false }),
         agents: [
           { id: "a", role: "A", activity: "stopped", stopped_reason: "provider" },
           { id: "b", role: "B", activity: "stopped", stopped_reason: "provider" },
@@ -492,7 +493,7 @@ describe("ordering", () => {
 
   test("every item says what it costs to leave it", () => {
     const items = attentionQueue(
-      input({ connected: false, engine: { status: "ok", configured: false } }),
+      input({ connected: false, engine: healthFrame({ configured: false }) }),
     );
     for (const item of items) {
       expect(item.title.length, item.id).toBeGreaterThan(8);

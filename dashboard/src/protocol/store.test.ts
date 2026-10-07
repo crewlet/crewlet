@@ -14,6 +14,7 @@ import { MAX_PHASES, Store } from "./store.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { nodeCountLabel } from "../lib/format.ts";
 import type { EventEnvelope, FeedRow } from "./types.ts";
+import { healthFrame } from "~/test/health.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -216,27 +217,25 @@ describe("the engine's health", () => {
   // slice rather than asking a query for them.
   test("a health frame is kept whole", () => {
     const store = new Store();
-    const frame = {
-      status: "ok",
+    const frame = healthFrame({
       node: "node-a",
       applied_epoch: 41,
-      posture: "serve",
       nodes: 3,
       alarms: { count: 1, worst: "backup_age" },
-    };
+    });
     store.applyHealth(frame);
     expect(store.state.health).toEqual(frame);
-    expect(nodeCountLabel(store.state.health.nodes)).toBe("3 nodes");
+    expect(nodeCountLabel(store.state.health?.nodes)).toBe("3 nodes");
   });
 
-  // AN OLDER NODE'S FRAME, or one whose presence read failed, carries no
-  // `nodes` at all. The count is then unknown and said so — never 0, which the
-  // node answering could not be, and never a guessed 1.
+  // A FRAME WHOSE PRESENCE READ FAILED carries no `nodes` at all. The count is
+  // then unknown and said so — never 0, which the node answering could not
+  // be, and never a guessed 1.
   test("a frame without a node count renders the count as unavailable", () => {
     const store = new Store();
-    store.applyHealth({ status: "ok", applied_epoch: 7, posture: "serve" });
-    expect(store.state.health.nodes).toBeUndefined();
-    expect(nodeCountLabel(store.state.health.nodes)).toBe("node count unavailable");
+    store.applyHealth(healthFrame({ applied_epoch: 7, posture: "serve" }));
+    expect(store.state.health?.nodes).toBeUndefined();
+    expect(nodeCountLabel(store.state.health?.nodes)).toBe("node count unavailable");
   });
 });
 
@@ -246,17 +245,17 @@ describe("connection state", () => {
     // down. Deriving `connected` from a payload's contents announced a live
     // connection that did not exist.
     const store = new Store();
-    store.applySnapshot({ health: { status: "ok" }, agents: [] });
+    store.applySnapshot({ health: healthFrame(), agents: [] });
     expect(store.state.connected).toBe(false);
   });
 
   test("a dropped socket CLEARS health rather than freezing it", () => {
     // A stale "healthy" is a lie with a timestamp nobody can see.
     const store = new Store();
-    store.applyHealth({ status: "ok" });
+    store.applyHealth(healthFrame());
     expect(store.state.connected).toBe(true);
     store.setConnected(false);
-    expect(store.state.health.status).toBe("unknown");
+    expect(store.state.health).toBeNull();
   });
 
   test("refused and unreachable are different facts", () => {
@@ -375,26 +374,6 @@ describe("a peer this build was not built against", () => {
     socket.onMessage(JSON.stringify({ kind: "error", id: 99, error: "not_found" }));
     expect(store.unknownPushes.size).toBe(0);
   });
-
-  // EVERY FIELD THIS PR ADDED IS OPTIONAL, because an older node's snapshot
-  // does not carry it. Applying one must neither throw nor invent a value: a
-  // seat with no `activity`, a budget nobody reported and a health frame with
-  // no alarm count stay absent, which is what each screen's "unknown" branch
-  // reads.
-  test("an older node's snapshot applies with this build's fields absent", () => {
-    const store = new Store();
-    store.applySnapshot({
-      agents: [{ id: "pm", role: "PM", handle: "pm" }],
-      health: { status: "ok" },
-    });
-    const [pm] = store.state.agents;
-    expect(pm?.activity).toBeUndefined();
-    expect(pm?.turn).toBeUndefined();
-    expect(pm?.paused).toBeUndefined();
-    expect(store.state.budget).toBeNull();
-    expect(store.state.health.alarms).toBeUndefined();
-    expect(nodeCountLabel(store.state.health.nodes)).toBe("node count unavailable");
-  });
 });
 
 describe("a refused query", () => {
@@ -454,7 +433,7 @@ describe("a refused query", () => {
   test("the budget is null until a report carries it, and an uncapped report is kept", () => {
     const store = new Store();
     expect(store.state.budget).toBeNull();
-    store.applySnapshot({ budget: null, health: { status: "ok" } });
+    store.applySnapshot({ budget: null, health: healthFrame() });
     expect(store.state.budget).toBeNull();
     const uncapped = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] } };
     store.applyBudget(uncapped);

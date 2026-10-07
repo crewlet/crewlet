@@ -29,6 +29,7 @@ import {
 } from "~/routes/org/builder/viewTestkit.tsx";
 import { installWindow } from "~/testing.tsx";
 import { LiveSocket, Store, type AgentRow } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -72,7 +73,7 @@ afterEach(() => {
 
 async function mount(viewer: Record<string, unknown> = { operator_id: "", acts: [] }) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg(CHART_ORG);
   store.applyAgents(AGENTS);
   const socket = new LiveSocket(store);

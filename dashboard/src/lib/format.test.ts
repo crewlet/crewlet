@@ -341,8 +341,8 @@ describe("how many nodes", () => {
     expect(nodeCountLabel(3)).toBe("3 nodes");
   });
 
-  // NEVER 0, and never a guessed 1: an absent count is a read that did not
-  // happen, or an older node that predates the field.
+  // NEVER 0, and never a guessed 1: an absent count is a presence read that
+  // did not happen.
   test("an absent count says it is unavailable", () => {
     for (const absent of [undefined, null, 0, Number.NaN]) {
       expect(nodeCountLabel(absent)).toBe("node count unavailable");
@@ -362,12 +362,11 @@ describe("how far back the log goes", () => {
   });
 
   // AN OPERATOR TOLD THE WRONG FLOOR STOPS PAGING EARLY, so the honest answer
-  // to "I do not know" is that sentence, never a number this client picked.
-  test("an engine that did not report it says so rather than guessing", () => {
+  // to "I do not know yet" — no health read, the socket down — is that
+  // sentence, never a number this client picked.
+  test("a floor not known yet is said so rather than guessed", () => {
     for (const absent of [undefined, null, 0, -1, Number.NaN]) {
-      expect(eventHistoryLabel(absent)).toBe(
-        "this engine did not report how far back the log goes",
-      );
+      expect(eventHistoryLabel(absent)).toBe("how far back the log goes is not known yet");
     }
   });
 });

@@ -1217,7 +1217,7 @@ export function heldBy(
   health: EngineHealth | null,
 ): string {
   if (agent?.stopped_reason === "unplaced") return "no node — not placed";
-  if (!health?.seats) return "not reported by this node";
+  if (!health) return "not reported by this node";
   if (health.seats.includes(handle))
     return health.node ? `this node · ${health.node}` : "this node";
   return "another node";

@@ -13,6 +13,7 @@ import { describe, expect, test } from "vitest";
 import { settingsFigures } from "./settingsFigures.tsx";
 import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { FleetAnswer, FleetNode, RetentionReport } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 const NONE = { health: null, fleet: null, retention: null, integrations: null };
 
@@ -74,7 +75,7 @@ describe("settingsFigures", () => {
   });
 
   test("Nodes is the health push's count, and names the nodes behind the activated epoch", () => {
-    const health = { status: "ok", nodes: 3 };
+    const health = healthFrame({ nodes: 3 });
     expect(settingsFigures({ ...NONE, health }).nodes?.count).toMatchObject({
       value: 3,
       label: "nodes live",
@@ -98,7 +99,7 @@ describe("settingsFigures", () => {
   // THE FIGURE IS READ INTO THE ROW'S NAME, so one node is "Nodes, 1 node
   // live" — "1 nodes live" was the row every single-node install heard.
   test("one node reads as one node", () => {
-    const health = { status: "ok", nodes: 1 };
+    const health = healthFrame({ nodes: 1 });
     expect(settingsFigures({ ...NONE, health }).nodes?.count?.label).toBe("node live");
     const behind = settingsFigures({
       ...NONE,
@@ -109,7 +110,7 @@ describe("settingsFigures", () => {
   });
 
   test("Configuration names the epoch this node applied in words", () => {
-    const f = settingsFigures({ ...NONE, health: { status: "ok", applied_epoch: 2 } });
+    const f = settingsFigures({ ...NONE, health: healthFrame({ applied_epoch: 2 }) });
     expect(f.config?.count?.value).toBe("epoch 2");
     expect(f.nodes).toBeUndefined();
   });

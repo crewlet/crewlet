@@ -732,9 +732,8 @@ export function configValueKind(
  * How many nodes the fleet has, as the health push counted them — or that the
  * count is not known.
  *
- * `nodes` is ABSENT when the engine could not read the fleet's presence, and
- * on an older node that predates the field; it is never 0, because the node
- * answering is itself one. So an absence is said as an absence rather than
+ * `nodes` is ABSENT when the engine could not read the fleet's presence; it
+ * is never 0, because the node answering is itself one. So an absence is said as an absence rather than
  * guessed at: "0 nodes" beside a page this node is serving is false, and "1
  * node" is a guess that hides a coordination plane nobody can reach.
  */
@@ -750,21 +749,22 @@ export function nodeCountLabel(nodes: number | null | undefined): string {
  * NOT A LITERAL. Three screens said "the store keeps 30 days" in their own
  * copy while `store.EventHistory` was the only thing that decided it, so a
  * change to the retention would have left all three lying with nothing to
- * catch it. An engine that did not report the floor says so rather than
- * having a number guessed for it: an operator told the wrong floor stops
- * paging early.
+ * catch it. Until the engine's health has been read — the socket is down, or
+ * no frame has arrived — the floor is not known, and the sentence says so
+ * rather than having a number guessed for it: an operator told the wrong
+ * floor stops paging early.
  */
 export function eventHistoryLabel(seconds: number | null | undefined): string {
   const span = historySpan(seconds);
-  return span ? `the store keeps ${span}` : "this engine did not report how far back the log goes";
+  return span ? `the store keeps ${span}` : "how far back the log goes is not known yet";
 }
 
 /**
  * The span a read of the event log covers, as the tail of a sentence ("the last
  * 30 days"), from the floor the engine REPORTED — for a count or an empty state
  * that is bounded by that floor and must say by how much. The same rounding as
- * {@link eventHistoryLabel}, so the two can never name different spans; an
- * engine that did not report one gets the window's name, not a guessed number.
+ * {@link eventHistoryLabel}, so the two can never name different spans; a
+ * floor not known yet gets the window's name, not a guessed number.
  */
 export function eventHistorySpan(seconds: number | null | undefined): string {
   const span = historySpan(seconds);

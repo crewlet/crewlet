@@ -21,6 +21,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
 
 /** A socket that never connects: these cases render, they do not fetch. */
 class InertWebSocket {
@@ -106,7 +107,7 @@ test("a leaf unit says one number, not the same number twice", () => {
 /** Teams over `org`, with the tracker filing Backend's work under BE. */
 async function teams(org: OrgProjection) {
   const store = new Store();
-  store.applyHealth({ status: "healthy" });
+  store.applyHealth(healthFrame());
   store.applyOrg(org);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>

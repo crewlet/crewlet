@@ -21,6 +21,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventEnvelope } from "~/protocol/index.ts";
 import { LiveNow, stripOf } from "./LiveNow.tsx";
 import { PHASE_PAGE } from "./RecentPhases.tsx";
+import { healthFrame } from "~/test/health.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -105,7 +106,7 @@ function mount({
 } = {}) {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth({ status: "healthy" } as never);
+  store.applyHealth(healthFrame());
   store.applyOrg(ORG as never);
   store.applyAgents(agents as never);
   const socket = new LiveSocket(store);
