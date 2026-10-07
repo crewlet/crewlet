@@ -39,8 +39,10 @@ import (
 // request carries only what the model's request total admits, but the same
 // sources, the same minutes and the same bill — billed once for the whole
 // fleet; and those numbers do NOT move with the configured width, because the
-// provider bills per input TOKEN and `dimensions` is a truncation parameter it
-// already receives. The write rate IS a function of the width: a record is
+// provider bills per input TOKEN whether or not the width is requested —
+// `dimensions` is a truncation parameter, sent wherever the endpoint takes one
+// and left out where it does not (config.EmbeddingProvider.SendsDimensions,
+// embed-v4.0 among them). The write rate IS a function of the width: a record is
 // JSON carrying the vector as base64, ≈ 16.9 KB at 3 072 dimensions, so 1 024
 // of them a minute is ≈ 290 KB/s, a factor of five under the pace the walk
 // paths are held to.
