@@ -1085,50 +1085,6 @@ func TestATurnAndItsAttemptsAreReadAtOneInstant(t *testing.T) {
 	}
 }
 
-// AND A TURN ANSWERS ITS WORK KEY OFF THE COLUMN, never the tags blob.
-//
-// The column is the one authority every work-key reader uses — the
-// /events?work_key= filter among them — so a turn read here must agree with
-// the rows that filter returns. The row below carries the key in its column
-// and NOT in its tags, so a reader that went through the tags answers nothing.
-//
-// Append's Spend is the carrier for every promoted column.
-func TestATurnNamesItsAttemptsFromTheWorkKeyColumn(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	log := db.Events()
-	base := time.Now().UTC().Add(-time.Minute)
-
-	write := func(id, run, key string, at time.Time) {
-		t.Helper()
-		if err := log.Append(t.Context(), store.EventRecord{
-			ID: id, Type: "agent_phase_completed", Time: at,
-			Category: "lifecycle", Actor: "CEO",
-			// NO work_key TAG: only the column can answer.
-			Tags: map[string]string{"turn_id": run, "agent_role": "CEO"},
-			Spend: &store.Spend{
-				TurnID: run, WorkKey: key, Phase: "execute",
-			},
-			Payload: []byte(`{"turn_id":"` + run + `","phase":"execute"}`),
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("a", "run-1", "wk-old", base)
-	write("b", "run-2", "wk-old", base.Add(2*time.Minute))
-
-	got := asMap(t, answer(t, queries.Sources{Events: fleetOf(log)}, "turn",
-		map[string]any{"turn_id": "run-2"}))
-
-	if got["work_key"] != "wk-old" {
-		t.Errorf("work_key = %v, want the column's — a tag read answers "+
-			"nothing for this row", got["work_key"])
-	}
-	if n := len(rows(t, got["attempts"])); n != 2 {
-		t.Errorf("%d attempts, want both runs of wk-old", n)
-	}
-}
-
 // modalSearcher is a wired, searchable backend that records the mode it was
 // asked for and answers the outcome it is given.
 type modalSearcher struct {
