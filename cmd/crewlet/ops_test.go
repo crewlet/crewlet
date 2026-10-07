@@ -246,7 +246,7 @@ func TestBudgetsShowNamesAWindowThatIsRefusing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("budgets show: %v", err)
 	}
-	if !strings.Contains(out, "REFUSING SINCE") || !strings.Contains(out, "STATE") {
+	if !strings.Contains(out, "LAST REFUSED") || !strings.Contains(out, "STATE") {
 		t.Fatalf("the table has no state or refusal column: %q", out)
 	}
 	for _, row := range rowsFor(out, "swe") {
@@ -298,7 +298,7 @@ func TestBudgetsShowPrintsNoRefusalUnderARaisedCeiling(t *testing.T) {
 	}
 	for _, row := range rows {
 		if got := row[len(row)-1]; got != want[row[1]] {
-			t.Errorf("eng %s (state %s) ends %q under REFUSING SINCE, want %q", row[1], row[5], got, want[row[1]])
+			t.Errorf("eng %s (state %s) ends %q under LAST REFUSED, want %q", row[1], row[5], got, want[row[1]])
 		}
 	}
 }

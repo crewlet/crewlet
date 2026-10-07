@@ -12,7 +12,7 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `REFUSING SINCE` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
+| `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `LAST REFUSED` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
@@ -556,7 +556,7 @@ per window**: the company's day, week and month, then each seat's.
 ```
 Windows on the company clock: Europe/Berlin
 
-SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             REFUSING SINCE
+SCOPE  PERIOD  WINDOW      USED     LIMIT      STATE     RESETS AT             LAST REFUSED
 org    day     2026-09-23  2710450  3000000    near      2026-09-23T22:00:00Z  -
 org    week    2026-W39    9120045  unlimited  ok        2026-09-27T22:00:00Z  -
 org    month   2026-09     31004188 unlimited  ok        2026-09-30T22:00:00Z  -
@@ -568,7 +568,7 @@ A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
 `STATE` is the engine's own judgement, the one every surface shows: `refusing`
 when no charge fits — which every window that refused a round reaches, since
 the refused round is counted — `near`
-at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
+at nine tenths of the ceiling, `ok` otherwise. `LAST REFUSED` is when that
 window last turned a call away — a round whose charge it refused, or work turned
 away unsent because the window was already full (a turn's next call, a parked
 delivery, a person's question, a reflection pass), which is recorded as the

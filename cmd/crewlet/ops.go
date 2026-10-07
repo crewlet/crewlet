@@ -262,17 +262,17 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 	// another zone would otherwise read "2026-09-23" as their own day.
 	fmt.Fprintf(stdout, "Windows on the company clock: %s\n\n", dashIfEmpty(answer.Timezone))
 	// STATE is the engine's own judgement (ok, near, refusing), and
-	// REFUSING SINCE is the gate's record of when it said no, under a window
-	// that is still refusing — see [refusingSince]. USED carries the round
+	// LAST REFUSED is the gate's record of when it last said no, under a
+	// window that is still refusing — see [lastRefused]. USED carries the round
 	// the gate refused, which the vendor billed, so a refusing window reads
 	// past its LIMIT.
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SCOPE\tPERIOD\tWINDOW\tUSED\tLIMIT\tSTATE\tRESETS AT\tREFUSING SINCE")
+	fmt.Fprintln(w, "SCOPE\tPERIOD\tWINDOW\tUSED\tLIMIT\tSTATE\tRESETS AT\tLAST REFUSED")
 	rows := func(scope string, windows []budgetWindow) {
 		for _, win := range windows {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
 				scope, win.Period, win.Window, win.Used, limitOrUnlimited(win.Limit),
-				win.State, dashIfEmpty(win.ResetsAt), refusingSince(win))
+				win.State, dashIfEmpty(win.ResetsAt), lastRefused(win))
 		}
 	}
 	rows("org", answer.Org.Windows)
@@ -289,8 +289,16 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 	return w.Flush()
 }
 
-// refusingSince is a window's REFUSING SINCE cell: when the gate said no, while
-// the window is still refusing, and a dash otherwise.
+// lastRefused is a window's LAST REFUSED cell: when the gate last said no,
+// while the window is still refusing, and a dash otherwise.
+//
+// LAST, NOT SINCE: the counter moves the stamp to every refusal it records
+// ([coord.WindowUsage.RefusedAt]) — a refused charge, a call a turn held, a
+// parked delivery — so the instant is the latest one, and a column that said
+// "since" claimed the window had been refusing for less time than it had. It
+// keeps the latest on purpose: an admitted charge clears only the stamps it
+// read, so a refusal that lands between its write and its clear survives only
+// because it carries a newer instant.
 //
 // THE STATE DECIDES, NEVER THE STAMP, the rule every dashboard surface takes. A
 // stamp is cleared only by an admitted charge or by the window turning over,
@@ -298,7 +306,7 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 // near and still carries refused_at. Printed regardless, the row said the
 // window was refusing beside a state saying it was not, and an operator who
 // believed the column went to raise a ceiling that had already been raised.
-func refusingSince(win budgetWindow) string {
+func lastRefused(win budgetWindow) string {
 	if win.State != string(types.BudgetRefusing) {
 		return "-"
 	}
