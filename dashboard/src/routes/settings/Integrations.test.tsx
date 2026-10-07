@@ -1846,10 +1846,10 @@ test("an advisory finding leaves the agent badged ready", () => {
 });
 
 // AND A FINDING WHOSE VERDICT THIS BUILD CANNOT READ IS A FAULT, not an
-// advisory. A node older than the phase field sends none, and a kind a newer
-// peer wrote is one this build has never heard of — read as advisory, either
-// would hide a broken agent behind a green badge.
-test("a finding with no verdict still un-readies the agent", () => {
+// advisory. A newer peer can write a kind this build has never heard of, under
+// a phase it has never heard of either — read as advisory, that would hide a
+// broken agent behind a green badge. Only `ready` is advisory.
+test("a finding of a kind and phase this build does not know still un-readies the agent", () => {
   render(
     <EntryRow
       entry={atlassian}
@@ -1861,7 +1861,15 @@ test("a finding with no verdict still un-readies the agent", () => {
           reconcile: {
             phase: "degraded",
             actor: "admin",
-            findings: [{ kind: "something_newer", subject: "sre-lead", detail: "unknown" }],
+            findings: [
+              {
+                kind: "something_newer",
+                phase: "something_newer",
+                actor: "admin",
+                subject: "sre-lead",
+                detail: "unknown",
+              },
+            ],
           },
         },
       )}
