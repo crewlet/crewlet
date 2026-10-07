@@ -23,6 +23,12 @@
 //     tokens and cache_read_input_tokens". The contract requires InputTokens
 //     to be the full prompt count, so all three are added. Getting this wrong
 //     under-bills every cached round, which is most of them.
+//
+// And one that is the SDK's rather than the vendor's: ITS API ERROR IS NEVER
+// SHOWN. Its Error() is the request method and URL — userinfo included, so a
+// gateway's password in base_url — and the raw response body, which can echo
+// the key it rejected. A classified failure says what the engine composes
+// instead (httpapi.FromStatus) and what the endpoint said, redacted ([detail]).
 package anthropic
 
 import (
@@ -334,6 +340,11 @@ func (p *Provider) streamOnce(
 
 // classify turns an SDK failure into the contract's error. The errors.As on
 // the SDK's own type is the only part a backend can own; see httpapi.
+//
+// WITH WHAT THE ENDPOINT SAID ([detail]) and nothing else of the SDK's: its
+// error prints the request URL — a `base_url` password with it — and pastes
+// the raw body, so [httpapi.FromStatus] shows a status line of its own and the
+// endpoint's reason travels on the classified error, redacted.
 func (p *Provider) classify(err error) *llm.Error {
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
@@ -341,9 +352,43 @@ func (p *Provider) classify(err error) *llm.Error {
 		if apiErr.Response != nil {
 			header = apiErr.Response.Header
 		}
-		return httpapi.FromStatus(err, providerName, p.model, apiErr.StatusCode, header)
+		classified := httpapi.FromStatus(err, providerName, p.model, apiErr.StatusCode, header)
+		classified.Detail = detail(apiErr)
+		return classified
 	}
 	return httpapi.FromTransport(err, providerName, p.model)
+}
+
+// detail is what the Anthropic endpoint SAID about failing a request — its own
+// message and the type it filed the failure under — as one redacted, bounded
+// line, or "" where it said nothing.
+//
+// Read from the body the SDK keeps whole on its error ([sdk.Error.RawJSON]),
+// never from the error's text: that text is the request method and URL and the
+// body pasted raw, which the classified error must not carry (see
+// [httpapi.FromStatus]). Anthropic's envelope is `{"type":"error","error":
+// {"type":…,"message":…}}`; an endpoint that answers outside it — a gateway, a
+// proxy, a server of somebody else's that speaks the Messages API — is read
+// for what its body can honestly yield ([httpapi.SaidBody]).
+func detail(apiErr *sdk.Error) string {
+	raw := apiErr.RawJSON()
+	var envelope struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(raw), &envelope) == nil {
+		if said := httpapi.Said(envelope.Error.Message,
+			httpapi.Filed{Name: "type", Value: envelope.Error.Type}); said != "" {
+			return said
+		}
+	}
+	var contentType string
+	if apiErr.Response != nil {
+		contentType = apiErr.Response.Header.Get("Content-Type")
+	}
+	return httpapi.SaidBody(contentType, []byte(raw))
 }
 
 // params renders the neutral request into Anthropic's wire shape.

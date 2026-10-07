@@ -411,7 +411,18 @@ func TestAClassifiedFailureSaysWhatTheEndpointSaid(t *testing.T) {
 			t.Parallel()
 			e := newEchoAPI(t, 4)
 			e.then(echoAnswer{status: tc.status, body: tc.body})
-			_, err := e.provider(t, small).Embed(t.Context(), "a")
+			// A gateway's credentials in the base URL, which the request
+			// URL carries. The cause this error prints is the SDK's own,
+			// whose summary names the status alone by the SDK's contract;
+			// this pins that contract, since a release that broke it would
+			// put the password in every embeddings failure.
+			gateway := strings.Replace(e.url, "http://", "http://gateway:s3cretpass@", 1)
+			p, err := embeddings.New(embeddings.Config{Model: "bounded-model", Dimensions: e.width,
+				APIKey: "sk-test", BaseURL: gateway, Limits: small})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = p.Embed(t.Context(), "a")
 			var classified *embeddings.Error
 			if !errors.As(err, &classified) || classified.Status != tc.status {
 				t.Fatalf("Embed = %v, want a classified HTTP %d", err, tc.status)
@@ -424,8 +435,10 @@ func TestAClassifiedFailureSaysWhatTheEndpointSaid(t *testing.T) {
 			if strings.Contains(err.Error(), key) {
 				t.Errorf("the error carries the key the endpoint echoed: %v", err)
 			}
-			if strings.Contains(err.Error(), e.url) {
-				t.Errorf("the error carries the request URL: %v", err)
+			for _, leaked := range []string{"s3cretpass", strings.TrimPrefix(e.url, "http://")} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Errorf("the error carries the request URL (%q): %v", leaked, err)
+				}
 			}
 		})
 	}

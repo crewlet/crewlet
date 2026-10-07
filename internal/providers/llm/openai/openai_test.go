@@ -414,7 +414,7 @@ func TestStatusClassification(t *testing.T) {
 // secrets — so a context length, a model the gateway does not serve and a
 // parameter the model does not take all read as one 400. The kind is the
 // status's; the reason is the endpoint's, read off the error's fields, redacted
-// and bounded, and never the URL.
+// and bounded, and never the URL — a gateway's password in it included.
 func TestAClassifiedFailureSaysWhatTheEndpointSaid(t *testing.T) {
 	t.Parallel()
 	key := "sk-proj-" + strings.Repeat("Zq7", 12)
@@ -440,19 +440,28 @@ func TestAClassifiedFailureSaysWhatTheEndpointSaid(t *testing.T) {
 			_, url := serve(t, func(w http.ResponseWriter, _ int) {
 				writeJSON(w, tc.status, tc.body)
 			})
-			_, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+			// A gateway's credentials in the base URL, which the request
+			// URL carries and the error must not.
+			gateway := strings.Replace(url, "http://", "http://gateway:s3cretpass@", 1)
+			_, err := newProvider(t, gateway, nil).Complete(context.Background(), userTurn("hi"))
 			var classified *llm.Error
 			if !errors.As(err, &classified) || classified.Status != tc.status ||
 				classified.Kind != llm.KindFatal {
 				t.Fatalf("Complete = %v, want a fatal HTTP %d", err, tc.status)
 			}
-			for _, want := range tc.want {
+			for _, want := range append(tc.want, fmt.Sprintf("HTTP %d", tc.status)) {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the error does not say %q: %v", want, err)
 				}
 			}
-			if strings.Contains(err.Error(), key) || strings.Contains(err.Error(), url) {
-				t.Errorf("the error carries the echoed key or the request URL: %v", err)
+			for _, leaked := range []string{key, "s3cretpass", strings.TrimPrefix(url, "http://")} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Errorf("the error carries %q: %v", leaked, err)
+				}
+			}
+			var apiErr *sdk.Error
+			if !errors.As(err, &apiErr) {
+				t.Errorf("errors.As no longer reaches the SDK's error behind %v", err)
 			}
 		})
 	}

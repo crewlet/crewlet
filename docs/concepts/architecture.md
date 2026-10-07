@@ -237,7 +237,13 @@ visible on the turn that paid for it rather than only in aggregate. Exhausting
 the chain publishes `llm_unavailable` and fails the turn. That is why the same
 429 produces three different behaviours at three different altitudes, and why
 cooldowns are fleet state rather than per-process: a limit belongs to the key at
-the vendor, so four nodes should not each pay their own 429 to learn it.
+the vendor, so four nodes should not each pay their own 429 to learn it. What a
+classified failure *says* — in a log line, `llm_unavailable`, a turn's error —
+is the backend's own line: the status, the provider's id for the request and
+what the provider said about it, redacted, which is also what an exhausted pool
+reports its last key was told. It is never the vendor SDK's own error text,
+which for Anthropic is the request URL (a password in `base_url` with it) and
+the raw response body.
 
 **The observability edge is two routes, not one, and the split is deliberate.**
 A published event forks. It is written to this node's `crewlet_events` **inline,

@@ -82,13 +82,28 @@ func NewHTTPClient() *http.Client {
 // cannot drift into disagreeing about what a 402 means — and the headers are
 // read for a server-supplied cooldown, which the credential pool prefers over
 // its configured TTL.
+//
+// # The SDK's error is kept, and never shown
+//
+// What the classified error SAYS is composed here, from the status and the
+// request id the provider stamped on its response ([statusError]); the SDK's
+// error is kept behind it, for errors.Is and errors.As. An [llm.Error]'s text
+// is shown wherever a failure is — a log line, `llm_unavailable`'s last error,
+// a phase's and a turn's error, an exhausted pool's sentence — and what an
+// SDK's own error says is that SDK's choice. Anthropic's prints the request
+// method and the URL, userinfo included, so a gateway's password in
+// `base_url` is in every one, and then the raw response body, which can echo
+// the key it rejected; OpenAI's printed both too until a release made it a
+// status summary. So no reader depends on what a vendor's next release puts
+// in its error: the provider's own reason travels as [llm.Error.Detail],
+// redacted ([Said]), and nothing else of the SDK's text reaches anybody.
 func FromStatus(err error, provider, model string, status int, h http.Header) *llm.Error {
 	e := &llm.Error{
 		Kind:     llm.KindForStatus(status),
 		Provider: provider,
 		Model:    model,
 		Status:   status,
-		Err:      err,
+		Err:      &statusError{status: status, requestID: requestID(h), err: err},
 	}
 	// Only a benching kind has anywhere to put the hint. Reading it for a
 	// 500 would be harmless but misleading: nothing consumes it, and a
@@ -100,6 +115,59 @@ func FromStatus(err error, provider, model string, status int, h http.Header) *l
 		}
 	}
 	return e
+}
+
+// statusError is an API failure as this engine shows it: the status, and the
+// provider's id for the request, which is what its support asks for. The
+// SDK's error is behind it, reachable by errors.Is and errors.As and never
+// printed — see [FromStatus].
+type statusError struct {
+	status    int
+	requestID string
+	err       error
+}
+
+func (e *statusError) Error() string {
+	said := fmt.Sprintf("HTTP %d", e.status)
+	if text := http.StatusText(e.status); text != "" {
+		said += " " + text
+	}
+	if e.requestID != "" {
+		said += " (request " + e.requestID + ")"
+	}
+	return said
+}
+
+func (e *statusError) Unwrap() error { return e.err }
+
+// requestIDHeaders are where a provider names the request it answered:
+// Anthropic's own header, then the one OpenAI and most gateways send.
+var requestIDHeaders = []string{"request-id", "x-request-id"}
+
+// maxRequestID is the longest value read as a request id. Anthropic's run to
+// about thirty characters and OpenAI's to thirty-six; a header four times the
+// longest is not an id, and an error line is no place for whatever it is.
+const maxRequestID = 128
+
+// requestID is the provider's id for the request it answered, or "".
+//
+// Shown only where it reads as an id — printable, no space, within
+// [maxRequestID] — because it is the server's text placed in an error line,
+// and a header that does not look like an identifier is not one.
+func requestID(h http.Header) string {
+	for _, name := range requestIDHeaders {
+		id := strings.TrimSpace(h.Get(name))
+		if id == "" {
+			continue
+		}
+		if len(id) > maxRequestID || strings.IndexFunc(id, func(r rune) bool {
+			return r <= ' ' || r > '~'
+		}) >= 0 {
+			return ""
+		}
+		return id
+	}
+	return ""
 }
 
 // FromTransport classifies a failure that never reached a status: a dial

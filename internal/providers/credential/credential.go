@@ -631,6 +631,12 @@ func Rotate[T any](
 		// cannot tell them apart. The pool's own sentence used to be all
 		// that reached the caller, and a seat whose one key was revoked read
 		// exactly like one being briefly throttled.
+		//
+		// Its cause's TEXT is put in this one, which is the classifier's
+		// line rather than the SDK's: a classified error's text is shown
+		// wherever the failure goes, so a backend keeps an SDK error that
+		// prints its URL or pastes its body behind a line of its own
+		// ([llm.Error]). The SDK's error is still reachable through it.
 		exhausted.Err = fmt.Errorf("all %d credentials cooling after %s: %w; the last was refused: %w",
 			p.Size(), last, ErrExhausted, refused.Err)
 		exhausted.Detail = refused.Detail

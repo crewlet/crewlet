@@ -359,6 +359,15 @@ func (k ErrorKind) ExhaustsCredential() bool {
 //
 // RetryAfter is carried rather than applied because the layer that knows how
 // long to wait is not the layer that decides whether to wait at all.
+//
+// ITS TEXT IS SHOWN, wherever the failure goes — a log line, an event's last
+// error, a phase's and a turn's error, an exhausted pool's sentence about its
+// last refusal — so a backend puts nothing in Err it would not show. An SDK
+// error that prints the request URL or pastes the raw body is kept BEHIND a
+// line of the backend's own
+// ([github.com/crewlet/crewlet/internal/providers/llm/httpapi.FromStatus]),
+// reachable by errors.As and never printed, and what the provider said
+// travels as Detail, redacted.
 type Error struct {
 	Kind       ErrorKind
 	Provider   string

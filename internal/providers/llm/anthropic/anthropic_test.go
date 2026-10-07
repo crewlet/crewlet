@@ -542,6 +542,106 @@ func TestEveryKeyBenchedReportsAnExhaustedPool(t *testing.T) {
 	}
 }
 
+// A CLASSIFIED FAILURE SAYS WHAT THE ENDPOINT SAID, AND NOTHING THE SDK DOES.
+//
+// The SDK's own error prints the request method and URL — the userinfo of a
+// gateway's `base_url` with it — and pastes the raw body, which can echo the
+// key the endpoint rejected; every classified error carried that text, and an
+// exhausted pool's sentence carries the last refusal's. What the error says
+// now is a status line of the engine's and the endpoint's own words, redacted,
+// on a single classified failure and on an exhausted pool alike, unary and
+// streamed alike — and the SDK's error is still behind it for errors.As.
+//
+// Mutation: hand FromStatus's caller the SDK's error unwrapped, and the
+// password, the key and the URL are back in the text.
+func TestAClassifiedFailureShowsNoneOfTheSDKsText(t *testing.T) {
+	t.Parallel()
+	const password = "s3cretpass"
+	key := "sk-ant-api03-" + strings.Repeat("Kv4", 12)
+	body := `{"type":"error","error":{"type":"authentication_error","message":"invalid key ` +
+		key + `"},"request_id":"req_011CSHoEeqs5C35K2UUqR7Fy"}`
+	for _, tc := range []struct {
+		name   string
+		status int
+		kind   llm.ErrorKind
+		keys   []string
+		stream bool
+	}{
+		{"a single classified failure", 400, llm.KindFatal, []string{"k1"}, false},
+		{"an exhausted pool", 401, llm.KindAuth, []string{"k1", "k2"}, false},
+		{"an exhausted pool, streamed", 401, llm.KindAuth, []string{"k1"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("request-id", "req_011CSHoEeqs5C35K2UUqR7Fy")
+				writeJSON(w, tc.status, body)
+			})
+			gateway := strings.Replace(url, "http://", "http://gateway:"+password+"@", 1)
+			p := newProvider(t, gateway, func(c *Config) { c.APIKeys = tc.keys })
+			req := userTurn("hi")
+			if tc.stream {
+				req.OnDelta = func(llm.Delta) {}
+			}
+			_, err := p.Complete(context.Background(), req)
+			if err == nil || llm.KindOf(err) != tc.kind {
+				t.Fatalf("Complete = %v, want a %s failure", err, tc.kind)
+			}
+			if tc.kind.ExhaustsCredential() && !errors.Is(err, credential.ErrExhausted) {
+				t.Fatalf("err = %v, want the pool exhausted", err)
+			}
+			text := err.Error()
+			for _, leaked := range []string{password, key, strings.TrimPrefix(url, "http://"), "/v1/messages", "POST"} {
+				if strings.Contains(text, leaked) {
+					t.Errorf("the error carries %q: %s", leaked, text)
+				}
+			}
+			for _, want := range []string{
+				fmt.Sprintf("HTTP %d %s", tc.status, http.StatusText(tc.status)),
+				"(request req_011CSHoEeqs5C35K2UUqR7Fy)",
+				"invalid key [REDACTED:api-key] (type authentication_error)",
+			} {
+				if !strings.Contains(text, want) {
+					t.Errorf("the error does not say %q: %s", want, text)
+				}
+			}
+			var apiErr *sdk.Error
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != tc.status {
+				t.Errorf("errors.As no longer reaches the SDK's error behind %s", text)
+			}
+		})
+	}
+}
+
+// AN ENDPOINT OUTSIDE ANTHROPIC'S ENVELOPE — a gateway's own shape, a proxy's
+// page — is read for what its body can honestly say.
+func TestAFailureOutsideTheEnvelopeSaysWhatItsBodySays(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, contentType, body, want string
+	}{
+		{"a gateway's JSON", "application/json", `{"detail": "claude-test is not served here"}`,
+			`{"detail":"claude-test is not served here"}`},
+		{"a proxy's page", "text/html",
+			"<html><head><title>502 Bad Gateway</title></head><body>…</body></html>", "502 Bad Gateway"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", tc.contentType)
+				w.WriteHeader(404)
+				_, _ = io.WriteString(w, tc.body)
+			})
+			_, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+			var classified *llm.Error
+			if !errors.As(err, &classified) || classified.Status != 404 || classified.Detail != tc.want {
+				t.Fatalf("Complete = %v (detail %q), want a 404 whose detail is %q",
+					err, classified.Detail, tc.want)
+			}
+		})
+	}
+}
+
 func TestServerRetryHintShortensTheBench(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

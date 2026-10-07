@@ -20,11 +20,12 @@ type Filed struct {
 //
 // It is how a backend's classified error ([llm.Error.Detail], and the
 // embeddings backend's) carries the provider's reason, which the SDK's own
-// error does not: OpenAI's names the status alone, deliberately, because its
-// URL and the provider's fields "may contain secrets". The reason is what an
-// operator acts on — a context length, a model a gateway does not serve and a
-// key it rejects all arrive as one 400 or 401 — and only the error's own
-// fields still carry it.
+// error does not, or must not: OpenAI's names the status alone, deliberately,
+// because its URL and the provider's fields "may contain secrets", and
+// Anthropic's prints the URL and pastes the raw body, so it is never shown
+// (see [FromStatus]). The reason is what an operator acts on — a context
+// length, a model a gateway does not serve and a key it rejects all arrive as
+// one 400 or 401 — and only the error's own fields still carry it.
 //
 // The fields are shown only where they say something, and the message first:
 // "This model's maximum context length is 8192 tokens (type
@@ -53,9 +54,9 @@ func Said(message string, filed ...Filed) string {
 // shape — read for what it can honestly yield ([httpx.Refusal]: compact JSON,
 // an HTML page's title, plain text), redacted and bounded like [Said].
 //
-// body is the WHOLE body, which every caller already holds: the SDK reads a
-// refused response whole to build its error, and puts a copy back on the
-// response.
+// body is the WHOLE body, which every caller already holds: both SDKs read a
+// refused response whole to build their error and keep it — OpenAI's puts a
+// copy back on the response, Anthropic's keeps it as the error's raw JSON.
 func SaidBody(contentType string, body []byte) string {
 	return shown(contentType, string(body))
 }
