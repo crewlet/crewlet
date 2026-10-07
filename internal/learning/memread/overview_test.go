@@ -78,7 +78,7 @@ func TestTheOverviewCountsEverySeatAtItsHolder(t *testing.T) {
 
 // A HOLDER THAT DID NOT ANSWER IS NAMED, and its seats say so rather than zero.
 //
-// @swe is held by node-c, whose build answers and which serves nothing. The
+// @swe is held by node-c, which serves nothing. The
 // overview comes back — the asker's own seat counted — with @swe unavailable,
 // node-c missing from the coverage with the budget it did not answer inside,
 // and the answer not complete. A row of zeros there would read as a seat that

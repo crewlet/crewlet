@@ -3680,7 +3680,7 @@ own in one reply, inside the same 2 s budget. So a row is one of three things:
 |---|---|
 | `held_by` a node, `unavailable` empty | counted by that node — the totals are the ones `agent_memory` carries |
 | `held_by: "none"` | no node holds the seat; nothing is counted, because no copy anywhere is current |
-| `held_by` a node, `unavailable` set | that node did not answer, runs a build that cannot, or is still taking the seat — the reason is here and the zeros beside it are not a count |
+| `held_by` a node, `unavailable` set | that node did not answer (or its answer could not be read), or is still taking the seat — the reason is here and the zeros beside it are not a count |
 
 `coverage` is the shape every fleet answer carries: this node and every holder
 that was asked, each `answered` or with its `error`, and `complete` only when

@@ -197,9 +197,10 @@ func TestASeatNobodyHoldsIsAnsweredEmptyAndSaysSo(t *testing.T) {
 
 // A HOLDER THAT DOES NOT ANSWER IS AN UNKNOWN, never an empty memory.
 //
-// The lease names an incarnation that serves nothing — gone, or on a build
-// that cannot answer. The read fails as unavailable, which a screen retries;
-// answering "this seat remembers nothing" would be a claim nobody made.
+// The lease names an incarnation that serves nothing — gone since, draining,
+// or its heartbeat lapsed — and it is asked like any other. The read fails as
+// unavailable, which a screen retries; answering "this seat remembers nothing"
+// would be a claim nobody made.
 func TestASilentHolderIsUnavailableNotEmpty(t *testing.T) {
 	t.Parallel()
 	f := newFleet()
