@@ -501,7 +501,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// Spent on the run it answered: the answer is recorded on
 			// the run, the coordinator owns its resume from here, and no
 			// turn runs on it here.
-			d.recordAnswered(ctx, handle, surviving)
+			d.SpendAnswer(ctx, handle, surviving)
 			return queue.Ack()
 		case sandbox.AnswerDeferred:
 			// STILL OWED TO A RUN, and not recorded against it — the
@@ -1221,6 +1221,22 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 // the broker's own budget; see [sandbox.Coordinator.AnswerByTurn] for why
 // nothing shorter bounds it.
 //
+// # Spent once, and said once
+//
+// A delivery spent here is recorded as worked in the completion ledger
+// ([Dispatcher.SpendAnswer]), and so is one its run spent — taken by a resumed
+// turn, let go of, reaped ([sandbox.CoordinatorOptions.Spent]); and the ledger
+// is read BEFORE the coordinator is asked. The original comes round when the
+// node that took it stopped before acknowledging it — mid-turn, with the turn's
+// reply perhaps already sent — and by then its run has been resumed, relaunched,
+// revived and resumed by the next holder, or reaped. Asked again, the
+// coordinator found nothing on the run that recognised it, and announced the
+// answer `gone` or `not_awaiting` after it had resumed the run — or as the only
+// word on it, where the node stopped before announcing `resumed`. The ledger
+// does not depend on the run still holding the answer. A copy a let-go hands
+// back goes under an id of its own, so it is announced once, as `declined` or
+// `gone`, before it is recorded in turn.
+//
 // ONE ANSWER PER DELIVERY IN PRACTICE — the event names no conversation, so it
 // partitions on its own id — but the rule holds for any mix: the answers are
 // settled first, a hand-back returns the delivery before anything else in it
@@ -1248,6 +1264,14 @@ func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Co
 	}
 	for _, ev := range answers {
 		given, _ := events.DataAs[*types.SandboxAnswerGiven](ev)
+		if d.answerSpent(ctx, handle, ev) {
+			log.InfoContext(ctx, "sandbox_answer_by_turn_already_spent",
+				"agent_handle", handle, "turn_id", given.TurnID, "event_id", ev.ID.String(),
+				"detail", "this answer by turn was spent before — taken by a resumed turn, let go "+
+					"of, or settled — so its redelivery is acknowledged without reaching its run "+
+					"or being announced again")
+			continue
+		}
 		if d.AnswerByTurn == nil {
 			// THE SAME HAND-BACK a node with no runtime gives: nil is a
 			// dispatcher assembled without the engine (a test's), since
@@ -1274,8 +1298,24 @@ func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Co
 				"agent_handle", handle, "turn_id", given.TurnID,
 				"disposition", disposition.String(), "error", err)
 		}
+		// SPENT, whatever it became: a redelivery whose acknowledgement was
+		// lost has already been announced, and is acknowledged above.
+		d.SpendAnswer(ctx, handle, []*events.Event{ev})
 	}
 	return rest, queue.Result{}, false
+}
+
+// answerSpent reports whether an answer by turn's delivery is recorded as
+// worked in the completion ledger — spent by this route, or by the run it
+// answered ([Dispatcher.SpendAnswer]). FAILS OPEN, as every ledger read does:
+// unreadable, the delivery reaches the coordinator, which finds what the run
+// says about it.
+func (d *Dispatcher) answerSpent(ctx context.Context, handle string, ev *events.Event) bool {
+	if d.Completions == nil {
+		return false
+	}
+	key := workkey.Derive([]string{ev.ID.String()})
+	return d.Completions.Worked(ctx, handle, []string{key})[key]
 }
 
 // handBackAnswer returns an answer BY TURN that the parked coding run it names
@@ -1324,25 +1364,37 @@ func answerOwedReason(handle string, cause error) string {
 	return fmt.Sprintf("%s is still owed this answer: %s", handle, cause)
 }
 
-// recordAnswered records a delivery that became a parked run's answer as
-// worked, in the completion ledger the ordinary route reads.
+// SpendAnswer records the deliveries a parked run's answer arrived in as
+// worked, in the completion ledger: a chat reply once it is recorded on its
+// run, an answer by turn once its route has settled it, and either once its run
+// spends it — taken by a resumed turn, let go of, reaped
+// ([sandbox.CoordinatorOptions.Spent], which the engine wires here).
 //
-// THE ANSWER IS SPENT, and a copy of it must not become a turn: a redelivery
+// THE ANSWER IS SPENT, and a copy of it must become nothing: a redelivery
 // whose acknowledgement was lost, or a park's republished copy, would
 // otherwise reach a seat whose question is no longer waiting — the recorded
 // answer is matched only while its run still holds it — and be run as an
-// ordinary message the run has already been resumed with. The ledger is the
-// fleet's, so the copy is dropped on whichever node it reaches.
+// ordinary message the run has already been resumed with, or, for an answer
+// by turn, reach a run that has moved on and be announced a second time. The
+// ledger is the fleet's, so the copy is dropped on whichever node it reaches.
+//
+// EVERY DELIVERY, WHATEVER ITS TYPE. The ledgered set ([inbox.Ledgered]) is
+// the types that run a turn, and an answer by turn never runs one, so a filter
+// on that set recorded nothing for it at all — which every document claiming
+// its delivery is spent at the take was wrong about. What this records is that
+// the delivery was spent as an answer, and both routes read it: the ordinary
+// route through its ledger check, the answer-by-turn route before it asks the
+// coordinator ([Dispatcher.routeAnswers]).
 //
 // FAILS OPEN, like every completion write: the answer is recorded on the run
 // either way, and while the run holds it a copy is recognised there.
-func (d *Dispatcher) recordAnswered(ctx context.Context, handle string, evs []*events.Event) {
+func (d *Dispatcher) SpendAnswer(ctx context.Context, handle string, evs []*events.Event) {
 	if d.Completions == nil {
 		return
 	}
 	now := d.now()
 	for _, ev := range evs {
-		if ev == nil || !d.ledgered(ev.Type) {
+		if ev == nil {
 			continue
 		}
 		key := workkey.Derive([]string{ev.ID.String()})

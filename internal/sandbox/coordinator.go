@@ -350,7 +350,12 @@ type CoordinatorOptions struct {
 
 	// Spent records a recorded answer's deliveries as WORKED, in the fleet's
 	// completion ledger, so a copy of the original delivery that reaches the
-	// seat afterwards is dropped rather than run as an ordinary message.
+	// seat afterwards is dropped: a chat reply's rather than run as an
+	// ordinary message, and an answer by turn's rather than reaching a run that
+	// has moved on and being announced a second time (`gone`, `not_awaiting`)
+	// for an answer that resumed it. WHATEVER THE DELIVERY'S TYPE: an answer by
+	// turn runs no turn, so it is outside the set the ledger keeps for turns,
+	// and an implementation that filtered on that set recorded nothing for it.
 	//
 	// CALLED THE MOMENT THE ANSWER LEAVES THE RUN, whichever way it leaves:
 	// when a turn TAKES it ([ResumeRequest.Begin]), on the inline attempt

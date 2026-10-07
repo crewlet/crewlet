@@ -1510,15 +1510,16 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 // as worked, for the coordinator ([sandbox.CoordinatorOptions.Spent]).
 //
 // THE DISPATCHER'S OWN RECORD OF A CONSUMED ANSWER, written to the same fleet
-// completion ledger under the same keys ([Dispatcher.recordAnswered]), so a
+// completion ledger under the same keys ([Dispatcher.SpendAnswer]), so a
 // copy of the delivery reaching the seat afterwards is dropped by the ledger
-// check every delivery passes — the one check that does not depend on the run
-// still being there to recognise it.
+// check its route makes — the ordinary route's for a chat reply, and the
+// answer-by-turn route's before it asks the coordinator — the one check that
+// does not depend on the run still being there to recognise it.
 func (e *Engine) spendAnswer(ctx context.Context, handle string, evs []*events.Event) {
 	if e.dispatch == nil {
 		return
 	}
-	e.dispatch.recordAnswered(ctx, handle, evs)
+	e.dispatch.SpendAnswer(ctx, handle, evs)
 }
 
 // startSandboxWaiter starts the completion poll, once the node exists and a
