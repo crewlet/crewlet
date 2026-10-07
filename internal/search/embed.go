@@ -1156,12 +1156,22 @@ func (e *Embedder) publishAll(ctx context.Context, q *corpusQueue, dim int, grou
 			// the refusal is about one vector, and dropping the other
 			// 127 would make one poisoned component cost a hundred
 			// provider calls' worth of work. It is not silent — the
-			// log names the document — and it is not lost, because
-			// the selection is over the rows and picks it up again.
+			// log names the document — and it is HELD BACK as an input
+			// refused alone is ([Refusals]): a provider that answers
+			// this text so answers it so again, and picked up by the
+			// next selection, as it was, it was the oldest stale source
+			// of every tick, sent and refused once a minute for ever.
+			// Its retry is due after [EmbedRefusalRetry], alone, like a
+			// refusal's.
 			if errors.Is(err, errUnusableVector) {
+				e.deps.Refusals.refuse(source, p, e.deps.Now())
 				e.deps.Logger.WarnContext(ctx, "search_embed_vector_refused",
-					"source", string(source), "id", p.doc.ID,
-					"error", err.Error())
+					"source", string(source), "id", p.doc.ID, "model", e.deps.Model,
+					"bytes", len(p.text), "retry_in", EmbedRefusalRetry.String(),
+					"error", err.Error(),
+					"detail", "the provider answered this source's text with a vector "+
+						"this duty will not publish; it is not embedded, is passed over "+
+						"until the retry is due, and is then offered again alone")
 				continue
 			}
 			return published, err
@@ -1455,7 +1465,8 @@ func opIDFor(rec VectorRecord) string {
 }
 
 // errUnusableVector marks a vector this duty will not publish, which its
-// caller treats as costing that document and not the request it arrived in.
+// caller treats as costing that document and not the request it arrived in —
+// and holds the document back for [EmbedRefusalRetry], as a refusal alone.
 var errUnusableVector = errors.New("the provider's vector cannot be published")
 
 // pack renders a vector in the layout the column holds.
@@ -1466,12 +1477,19 @@ var errUnusableVector = errors.New("the provider's vector cannot be published")
 // record every applier fails on for ever — a poison message on a stream with
 // no dead-letter path. A vector_distance_cos of NaN answers 0, a PERFECT
 // match, so one poisoned row outranks every genuine hit in every search.
+//
+// AND A VECTOR OF ZEROS is refused beside it: finite, so nothing downstream
+// would stop it, and with no direction, so vector_distance_cos answers it 1
+// against every query (measured). Published, it is a source the coverage gauge
+// counts embedded that no semantic search ever finds, and that no tick selects
+// again, since its vector is current.
 func pack(v []float32, dim int) ([]byte, error) {
 	if len(v) != dim {
 		return nil, fmt.Errorf("the provider returned a %d-wide vector and the "+
 			"corpus is embedded at %d", len(v), dim)
 	}
 	out := make([]byte, 4*len(v))
+	direction := false
 	for i, f := range v {
 		f64 := float64(f)
 		if math.IsNaN(f64) || math.IsInf(f64, 0) {
@@ -1479,7 +1497,13 @@ func pack(v []float32, dim int) ([]byte, error) {
 				"component scores as a perfect match against everything",
 				i, len(v), f)
 		}
+		direction = direction || f != 0
 		binary.LittleEndian.PutUint32(out[4*i:], math.Float32bits(f))
+	}
+	if !direction {
+		return nil, fmt.Errorf("every one of its %d components is zero — a "+
+			"vector with no direction, which vector_distance_cos answers 1 "+
+			"against every query, so no search could find the source by it", len(v))
 	}
 	return out, nil
 }

@@ -436,7 +436,14 @@ memory follows the provider's **configuration** — the model, the width, the
 limits and the endpoint — so changing any of those (a lowered
 `max_input_tokens`, another gateway) forgets every refusal and the fix is tried
 at once, while an apply that changes something else, or rotates the key, keeps
-it; a duty that moves to another node isolates each one again once. Any other failure — a rate limit, a timeout, a server down, a
+it; a duty that moves to another node isolates each one again once. A source
+the provider **accepts** but answers with a vector the duty will not publish —
+a component that is not finite, which every search would score a perfect
+match, or every component zero, which no search would ever find — costs only
+itself too: its neighbours are embedded, `search_embed_vector_refused` names
+it with its bytes, and it is held back for the hour and offered again alone
+exactly as a refused one is, where it was left to the next selection and so
+sent, and discarded, on every tick. Any other failure — a rate limit, a timeout, a server down, a
 credential refused — is about the provider rather than an input, so it ends the
 tick's requests and the next tick asks again; nothing is lost, because the
 selection is derived from the rows. When the provider has accepted **no**

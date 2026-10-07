@@ -1361,6 +1361,66 @@ func TestAPoisonedVectorIsRefusedBeforeItIsPublished(t *testing.T) {
 	}
 }
 
+// A SOURCE WHOSE VECTOR CANNOT BE PUBLISHED IS HELD BACK, NOT SENT EVERY TICK.
+//
+// The provider accepted the request and answered one text with a vector the
+// duty will not publish — a non-finite component, which every search would
+// score a perfect match, or every component zero, which no search would ever
+// find. Left to the next selection, the source was the oldest stale one of every
+// tick after, sent and discarded once a minute for as long as the provider
+// answered it so. Held back as a refusal alone is, it costs nothing inside the
+// hour, and is offered again alone once its retry is due.
+func TestASourceWhoseVectorCannotBePublishedIsHeldBack(t *testing.T) {
+	t.Parallel()
+	for name, poison := range map[string]func(*scriptedEmbedder){
+		"a non-finite component": func(s *scriptedEmbedder) { s.poisonID = 0 },
+		"every component zero":   func(s *scriptedEmbedder) { s.AnswerZero("hollow") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newEmbedHarness(t)
+			// In id order, so the hollow task is the oldest and the
+			// first of the request a position-poison spoils.
+			h.seedTasks(map[string]string{"t-a": "a hollow body", "t-b": "a sound body"})
+			poison(h.embedder)
+
+			if published, err := h.duty.Tick(t.Context()); err != nil || published != 1 {
+				t.Fatalf("the first tick published %d (%v), want the sound task alone", published, err)
+			}
+			h.drain()
+			if got := h.vectors(); got != 1 || h.refusals.Len() != 1 ||
+				h.logs.count("search_embed_vector_refused") != 1 {
+				t.Fatalf("after the first tick %d vectors are written, %d sources held and "+
+					"%d refusals logged, want one of each", got, h.refusals.Len(),
+					h.logs.count("search_embed_vector_refused"))
+			}
+
+			before := len(h.embedder.sent())
+			for minute := 1; minute <= 3; minute++ {
+				h.advance(time.Minute)
+				if _, err := h.duty.Tick(t.Context()); err != nil {
+					t.Fatalf("tick: %v", err)
+				}
+			}
+			if sent := h.embedder.sent()[before:]; len(sent) != 0 {
+				t.Fatalf("inside its retry the held source was sent again: %q", sent)
+			}
+
+			h.advance(search.EmbedRefusalRetry)
+			if _, err := h.duty.Tick(t.Context()); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			due := h.embedder.sent()[before:]
+			if len(due) != 1 || len(due[0]) != 1 || !strings.Contains(due[0][0], "hollow") {
+				t.Fatalf("the due retry went as %q, want the held source alone", due)
+			}
+			if h.logs.count("search_embed_vector_refused") != 2 {
+				t.Fatal("the retry answered the same way again was not logged")
+			}
+		})
+	}
+}
+
 // THE OPERATION ID IS DERIVED FROM THE RECORD, not minted per attempt.
 //
 // It is the only dedupe this domain has — there is no operation ledger — so a

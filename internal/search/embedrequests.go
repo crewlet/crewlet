@@ -81,6 +81,14 @@ import (
 // starts with no memory, because a refusal is a fact about the provider as it
 // was configured; one built again for the same configuration — an apply that
 // changed something else, a rotated key — keeps it.
+//
+// A SOURCE WHOSE VECTOR CANNOT BE PUBLISHED is remembered the same way. The
+// provider accepted the request and answered this one text with a vector the
+// duty refuses ([pack]): a component that is not finite, or every component
+// zero. Its neighbours publish; it is held back as if refused alone, and
+// offered again alone once its retry is due. Left to the next selection, which
+// it was, it was the oldest stale source of every tick, sent and discarded once
+// a minute for as long as the provider answered it so.
 
 // pending is one source as a tick holds it: the document, the exact text that
 // would be sent for it — its prepared opening ([Document.text]) — and that
@@ -90,8 +98,9 @@ type pending struct {
 	text string
 	sha  string
 
-	// alone says the provider refused this exact text alone before, and
-	// its retry is due: it is offered in a request of its own.
+	// alone says the provider refused this exact text alone before, or
+	// answered it with a vector the duty would not publish, and its retry
+	// is due: it is offered in a request of its own.
 	alone bool
 }
 
@@ -290,9 +299,11 @@ func halves(group []pending) ([]pending, []pending) {
 	return group[:mid], group[mid:]
 }
 
-// Refusals is what a provider has refused ALONE, held across the ticks of the
-// duty that met it — see the section above [pending] for what it buys — and
-// the isolation each corpus's last tick did not finish ([Refusals.suspend]).
+// Refusals is what a provider has refused ALONE — or answered with a vector
+// the duty will not publish, which it remembers the same way — held across the
+// ticks of the duty that met it (see the section above [pending] for what it
+// buys), and the isolation each corpus's last tick did not finish
+// ([Refusals.suspend]).
 //
 // ONE ENTRY A SOURCE, for the text it was refused as: a source has one text at
 // a time, so an entry for what it used to say is replaced, never kept beside
@@ -337,10 +348,11 @@ type refusalID struct {
 	id     string
 }
 
-// refusal is one input refused alone: the digest of the exact text refused,
-// the source's version and title when it was last seen with that text — which
-// is what lets a selection recognise it before reading its body ([Held]) — and
-// when the provider last refused it.
+// refusal is one input refused alone, or answered with a vector the duty would
+// not publish: the digest of the exact text refused, the source's version and
+// title when it was last seen with that text — which is what lets a selection
+// recognise it before reading its body ([Held]) — and when the provider last
+// refused it.
 type refusal struct {
 	sha     string
 	version uint64
@@ -460,7 +472,8 @@ func (r *Refusals) plan(source Source, now time.Time) refusalPlan {
 	return out
 }
 
-// refuse remembers p's text as refused alone at now.
+// refuse remembers p's text as refused alone at now — or as answered with a
+// vector the duty would not publish, which is held back the same way.
 func (r *Refusals) refuse(source Source, p pending, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
