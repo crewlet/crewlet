@@ -32,8 +32,6 @@ import (
 func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 	never := 0.0
 	held := 600.0
-	legacy := -1.0
-	longhand := -30.0
 
 	cases := []struct {
 		name string
@@ -43,11 +41,6 @@ func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 		{"unset inherits", config.RoleSandbox{}, nil},
 		{"an explicit zero never pauses", config.RoleSandbox{PauseTTLSeconds: &never}, dur(0)},
 		{"a set value is used", config.RoleSandbox{PauseTTLSeconds: &held}, dur(600 * time.Second)},
-		// -1 is the field's earlier spelling of "inherit"; any negative
-		// value reads the same way, because none of them can mean a
-		// duration and "no expiry" is the leak the knob exists to prevent.
-		{"the legacy -1 inherits", config.RoleSandbox{PauseTTLSeconds: &legacy}, nil},
-		{"any negative inherits", config.RoleSandbox{PauseTTLSeconds: &longhand}, nil},
 	}
 	for _, c := range cases {
 		got := pauseTTL(&c.gate)

@@ -265,13 +265,10 @@ type RoleSandbox struct {
 	// every seat that said nothing would silently lose its checkout the
 	// moment a coding agent asked a question.
 	//
-	// A NEGATIVE VALUE ALSO MEANS INHERIT, and is accepted rather than
-	// refused: -1 is how the field's earlier form spelled it, and a
-	// company document that says so is asking for exactly what leaving it
-	// out now asks for. Refusing it would fail a config over a spelling.
-	// It is never "no expiry" — an unbounded pause is the leak this knob
-	// exists to prevent.
-	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" desc:"Paused-box TTL. Unset (or negative) = provider default; 0 = never pause."`
+	// A NEGATIVE VALUE IS REFUSED. It is never "no expiry" — an unbounded
+	// pause is the leak this knob exists to prevent — and inherit is said by
+	// leaving the field out.
+	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL. Unset = provider default; 0 = never pause."`
 
 	// MaxTurns caps how many agentic rounds this seat's coding runs may
 	// take. UNSET inherits providers.sandbox.default_max_turns; an explicit
@@ -322,6 +319,13 @@ func (s *RoleSandbox) validate(path Path) error {
 	if s.CodingAgent != "" && !slices.Contains(CodingAgents, s.CodingAgent) {
 		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.CodingAgent, names(CodingAgents))
+	}
+	if s.PauseTTLSeconds != nil && *s.PauseTTLSeconds < 0 {
+		p.add(at(path, "pause_ttl_seconds"), ErrOutOfRange,
+			"%g (a paused box cannot be kept a negative time, and an unbounded "+
+				"pause is the snapshot leak this knob exists to prevent; omit the "+
+				"field to inherit providers.sandbox.default_pause_ttl_seconds, or "+
+				"set 0 to never pause)", *s.PauseTTLSeconds)
 	}
 	if s.MaxTurns != nil && *s.MaxTurns < 0 {
 		p.add(at(path, "max_turns"), ErrOutOfRange,

@@ -2626,7 +2626,8 @@
           "$ref": "#/$defs/RoleSandboxMCP"
         },
         "pause_ttl_seconds": {
-          "description": "Paused-box TTL. Unset (or negative) = provider default; 0 = never pause.",
+          "description": "Paused-box TTL. Unset = provider default; 0 = never pause.",
+          "minimum": 0,
           "type": [
             "number",
             "null"

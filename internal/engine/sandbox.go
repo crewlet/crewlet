@@ -1244,8 +1244,8 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.R
 //
 // UNSET MEANS INHERIT and an explicit zero means never pause — two genuinely
 // different instructions, which is why both the config field and the manager's
-// input carry a pointer rather than a sentinel number. A negative value is the
-// field's earlier spelling of "inherit" and is read as one.
+// input carry a pointer rather than a sentinel number. A negative value never
+// reaches here: role validation refuses it.
 //
 // NIL-SAFE, like [maxTurnsFor] and for the same seat: an agent-mode executor
 // is placed by its own providers.llm entry and runs in a box whether or not
@@ -1253,7 +1253,7 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.R
 // does not exist panicked that seat's first launch — after the bridge session
 // was opened and before anything would have closed it.
 func pauseTTL(gate *config.RoleSandbox) *time.Duration {
-	if gate == nil || gate.PauseTTLSeconds == nil || *gate.PauseTTLSeconds < 0 {
+	if gate == nil || gate.PauseTTLSeconds == nil {
 		return nil
 	}
 	d := seconds(*gate.PauseTTLSeconds)
