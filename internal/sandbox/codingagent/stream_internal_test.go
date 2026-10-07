@@ -9,6 +9,40 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+// A FAILURE IS HELD TO ITS BOUND EXACTLY, as it leaves — redacted whole. Two
+// things grew a failure composed to the bound past it: the mark KeepEnd puts on
+// a single line it keeps only the end of, which is outside the bytes it
+// counts, and a credential's name closing one piece meeting the next across
+// the `:\n` between them, one match neither piece held when each was redacted
+// and measured alone. The slack between the unread note's widest form and the
+// one it gets usually hid both; an unread start whose note is as wide as the
+// widest takes the slack away.
+//
+// Mutation: return the first composition without measuring it redacted, and
+// the key-name case is ten bytes past the bound; leave the mark out of the
+// room as well, and the single-line case is three past it.
+func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
+	t.Parallel()
+	// Thirteen digits of MiB, the width of the widest note.
+	const unread = int64(2e18)
+	oneLine := strings.Repeat("e", 3<<20)
+	for name, sentences := range map[string][]string{
+		"a single line kept by its end":     {"the coding agent exited with status 1"},
+		"a key name meeting the next piece": {"the coding agent exited with status 1", "the CLI could not read pwd"},
+	} {
+		got := failureDetail(sentences, oneLine, unread)
+		if len(got) > sandbox.MaxFailureBytes {
+			t.Errorf("%s: the failure is %d bytes, %d past its bound", name, len(got), len(got)-sandbox.MaxFailureBytes)
+		}
+		if redact.Secrets(got) != got {
+			t.Errorf("%s: the failure was not redacted whole, so redacting it again would grow it", name)
+		}
+		if !strings.HasPrefix(got, "the coding agent exited with status 1") || !strings.HasSuffix(got, "eee") {
+			t.Errorf("%s: the failure lost its opening or the stream's end", name)
+		}
+	}
+}
+
 // A KEY THAT BEGAN BEFORE THE WINDOW IS STILL REDACTED. A private key is the
 // one credential shape that spans lines, and a window opening inside its block
 // shows a base64 body with no BEGIN line for the rule to anchor on — so the

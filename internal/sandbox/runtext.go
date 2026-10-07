@@ -209,11 +209,18 @@ const MaxCondenseBytes = 2 << 20
 // failureReserve is what the coordinator may itself put in front of a
 // runner's failure detail before condensing it, held back from what a runner
 // may compose: the sentence saying a question nobody could be asked
-// ([questionRefusal]) and its separator, and what redaction can add where the
-// pieces of a failure join — a `password` closing one piece and a value
-// opening the next is one match across the `:\n` between them, and its marker
-// can be longer than what it replaced. A KiB is several times all of that;
-// a test holds the refusal at its longest inside it.
+// ([questionRefusal]) and its separator. A KiB is several times that — a
+// test holds the refusal at its longest to half of it — and out of two MiB it
+// costs the error stream's share nothing a reader would miss, while leaving
+// the sentence room to be reworded.
+//
+// NOTHING OF A RUNNER'S OWN IS ABSORBED HERE. A runner holds its failure to
+// [MaxFailureBytes] exactly, as it leaves — redacted whole, so a credential's
+// name closing one of its pieces and a value opening the next, one match
+// across the `:\n` between them, is measured with the marker it became, and
+// with room for the mark [KeepEnd] puts on a single line it keeps only the end
+// of. The coordinator's sentence ends on no credential's name, so its own join
+// adds nothing a redaction could grow.
 const failureReserve = 1 << 10
 
 // MaxFailureBytes is the most a runner's failure detail ([Result.Error]) may
@@ -489,8 +496,13 @@ func KeepEnd(text string, keep int) (string, int) {
 	for start < len(text) && !utf8.RuneStart(text[start]) {
 		start++
 	}
-	return "…" + text[start:], start
+	return KeepEndMark + text[start:], start
 }
+
+// KeepEndMark is what [KeepEnd] puts in front of a single line it keeps only
+// the end of — outside the keep bytes it counts, so a caller holding its
+// answer to a bound leaves room for it.
+const KeepEndMark = "…"
 
 // kib is a size as a reader says it, in KiB rounded up.
 func kib(n int) string { return fmt.Sprintf("%d KiB", (n+1023)/1024) }

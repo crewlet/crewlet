@@ -545,41 +545,59 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 // [sandbox.MaxFailureBytes] after them, with what was not shown of it said by
 // size. unread is how much of the stream's start the read itself left.
 //
-// HELD TO THE BOUND AS A WHOLE, because the whole failure is what the
-// coordinator condenses, and the compactor refuses one past what it reads
+// HELD TO THE BOUND AS A WHOLE, AND EXACTLY, because the whole failure is what
+// the coordinator condenses, and the compactor refuses one past what it reads
 // before any model is asked. The sentences are taken as they are — they are
 // what nobody can find anywhere else — and only the error stream gives way.
-// Each piece is redacted before it is measured: a marker can be longer than
-// the credential it replaces, and a piece measured unredacted would grow past
-// its share afterwards.
+//
+// MEASURED AS IT LEAVES, REDACTED. A marker can be longer than the credential
+// it replaces, and a credential's name closing one piece and its value opening
+// the next — across the `:\n` between them — is one match neither piece
+// holds; measured piece by piece, the failure grew past its bound when the
+// whole was redacted. So the composition is redacted whole and measured, and
+// what is over comes off the stream's share. The room the stream is given
+// also holds the mark [sandbox.KeepEnd] puts on a single line too long to keep
+// whole, which is not part of what it counts.
 func failureDetail(sentences []string, errStream string, unread int64) string {
 	var parts []string
 	for _, s := range sentences {
-		if s = strings.TrimSpace(redact.Secrets(s)); s != "" {
+		if s = strings.TrimSpace(s); s != "" {
 			parts = append(parts, s)
 		}
 	}
+	head := redact.Secrets(strings.Join(parts, ":\n"))
 	if errStream == "" {
-		return strings.Join(parts, ":\n")
+		return head
 	}
-	used := len(strings.Join(parts, ":\n"))
-	if len(parts) > 0 {
-		used += len(":\n")
+	sep := ""
+	if head != "" {
+		sep = ":\n"
 	}
 	// The note's widest form, so the one it gets always fits the room.
-	room := sandbox.MaxFailureBytes - used - (len(unreadNote(math.MaxInt64, false)) + len("\n"))
-	kept, at := "", len(errStream)
-	if room > 0 {
-		kept, at = sandbox.KeepEnd(errStream, room)
-	}
-	if left := unread + int64(at); left > 0 {
-		if kept == "" {
-			kept = unreadNote(left, true)
-		} else {
-			kept = unreadNote(left, false) + "\n" + kept
+	room := sandbox.MaxFailureBytes - len(head) - len(sep) -
+		(len(unreadNote(math.MaxInt64, false)) + len("\n")) - len(sandbox.KeepEndMark)
+	for {
+		kept, at := "", len(errStream)
+		if room > 0 {
+			kept, at = sandbox.KeepEnd(errStream, room)
 		}
+		if left := unread + int64(at); left > 0 {
+			if kept == "" {
+				kept = unreadNote(left, true)
+			} else {
+				kept = unreadNote(left, false) + "\n" + kept
+			}
+		}
+		out := redact.Secrets(head + sep + kept)
+		// Over only by what redaction added at a join, which the stream's
+		// share gives back. The room shrinks on every pass, so this ends —
+		// at the latest where the stream is given none, and what is left is
+		// the engine's own account, which is never cut here.
+		if len(out) <= sandbox.MaxFailureBytes || room <= 0 {
+			return out
+		}
+		room -= len(out) - sandbox.MaxFailureBytes
 	}
-	return strings.Join(append(parts, kept), ":\n")
 }
 
 // unreadNote is the line standing where the start of the error stream was
