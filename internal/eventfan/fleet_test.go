@@ -1219,16 +1219,6 @@ func TestACustodyRowTwoDataNodesHoldIsCountedOnce(t *testing.T) {
 	check("node-b kept it, node-a let it go")
 }
 
-// turnOn writes one node's half of a turn, failed or not — see [halfOn].
-func turnOn(t *testing.T, n node, turn string, at time.Time, failed bool) {
-	t.Helper()
-	tags := map[string]string{}
-	if failed {
-		tags["failed"] = "true"
-	}
-	halfOn(t, n, turn, at, tags)
-}
-
 // walkTurns walks every page a query of turns answers, by the page's own
 // cursors, and says how often each turn was on a page and how it last read.
 func walkTurns(t *testing.T, fan *eventfan.Fleet, q store.TurnQuery) (map[string]int, map[string]store.Turn) {
