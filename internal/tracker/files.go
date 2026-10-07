@@ -21,13 +21,13 @@ import (
 // A file is a ROW — its project, its path, its content type, its size, the
 // hash of its content and the ordered list of chunks that content is cut
 // into. The bytes themselves are in the object store (internal/objstore,
-// ADR-0026) — ONE store the whole fleet shares, the broker's replicated
-// bucket or an S3 bucket, rather than a copy in every data node's database —
-// and nothing in this package ever reads one. What this package owns is the fact
-// that the file exists and which chunks it is: the manifest on the record IS
-// the reference that keeps those chunks alive, so a file written here is a
-// file whose bytes the collector will never delete, and a file removed here is
-// one whose bytes it may.
+// ADR-0026) — one store the whole fleet shares, the broker's own bucket or an
+// S3 bucket, rather than a copy in every data node's database — and nothing in
+// this package ever reads one. What this package owns is the fact that the
+// file exists and which chunks it is: the manifest on the record IS the
+// reference that keeps those chunks alive, so a file written here is a file
+// whose bytes the collector will never delete, and a file removed here is one
+// whose bytes it may.
 //
 // # The bytes go first
 //

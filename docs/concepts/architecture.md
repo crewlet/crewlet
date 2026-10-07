@@ -501,9 +501,9 @@ reviewer. A turn holds the company it started under until it ends.
 Four estates, and which one a fact belongs to is decided by a single
 question: **who has to agree on it?** — with the fourth answering a second
 question the first three cannot: *and does everybody have to reach the same
-answer by the same route?* Beside them sits the one fact that is **split in
-two** — a company's files, which a replicated row names and one store the
-whole fleet shares keeps the bytes of (below).
+answer by the same route?* Beside them sits the one thing that is **named**
+rather than held by everybody — the bytes of a company's files, which a
+replicated row names and one store the whole fleet shares keeps (below).
 
 ```mermaid
 flowchart LR
