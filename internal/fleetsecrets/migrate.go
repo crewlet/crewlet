@@ -24,8 +24,8 @@ type LocalStore interface {
 //
 // Distinct from "cli" and "provision" so a listing says where a value came
 // from: an operator looking at a row written by this pass is looking at
-// something they set on one node before the fleet store existed, and the
-// original provenance is genuinely gone — the local row's own UpdatedBy is
+// something they set with `crewlet secrets set` while this node's engine was
+// stopped, and the original provenance is genuinely gone — the local row's own UpdatedBy is
 // preserved, but the write that put it on the KV was this one.
 const MigrateSource = "migrated"
 
@@ -44,12 +44,20 @@ const MigrateSource = "migrated"
 // fleet would be silently undone by the stale copy resurfacing, forever. The
 // migration has to terminate, and deleting the source is what terminates it.
 //
-// # The fleet's copy wins, and a name already there is left alone
+// # The LATER write wins
 //
-// A local row is by definition the older write: the fleet is where every
-// rotation since has landed. So a name that already exists on the KV is
-// skipped and its local copy removed — copying it would resurrect a value an
-// operator rotated away from on another node.
+// A local row is an operator's write made while this node's engine was
+// stopped, and it is a ROTATION as often as a first value: `crewlet secrets
+// set GL new` on a stopped node told its operator the value would reach the
+// fleet at the next start. So a name the fleet already holds is replaced when
+// the local row was written AFTER the fleet's — and left alone, its local copy
+// removed, when the fleet's is the later one: a rotation made through a
+// running node after this one stopped must not be undone by a value the
+// operator had already moved on from. Both instants are wall clocks of the
+// nodes that wrote them, so two writes closer together than those clocks
+// agree are ordered by the skew, which is the price of honouring an offline
+// write at all. Either outcome is logged by name, because both are a value an
+// operator set that the fleet does or does not now hold.
 //
 // # It is not best effort
 //
@@ -79,14 +87,16 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 	if err != nil {
 		return nil, fmt.Errorf("fleetsecrets: read the fleet's secrets: %w", err)
 	}
-	known := make(map[string]struct{}, len(onFleet))
+	fleetAt := make(map[string]time.Time, len(onFleet))
 	for _, row := range onFleet {
-		known[row.Name] = struct{}{}
+		fleetAt[row.Name] = row.UpdatedAt
 	}
 
-	var moved []string
+	var moved, replaced, superseded []string
 	for _, row := range local {
-		if _, ok := known[row.Name]; !ok {
+		at, held := fleetAt[row.Name]
+		later := !held || row.UpdatedAt.After(at)
+		if later {
 			value, err := from.Get(ctx, row.Name)
 			if err != nil {
 				return moved, fmt.Errorf(
@@ -101,6 +111,11 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 				return moved, fmt.Errorf("fleetsecrets: migrate %s: %w", row.Name, err)
 			}
 			moved = append(moved, row.Name)
+			if held {
+				replaced = append(replaced, row.Name)
+			}
+		} else {
+			superseded = append(superseded, row.Name)
 		}
 		if _, err := from.Unset(ctx, row.Name); err != nil {
 			return moved, fmt.Errorf(
@@ -113,7 +128,18 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 		// operator reading the boot log needs to see that a value they
 		// set locally is now the fleet's.
 		log.InfoContext(ctx, "secrets_migrated_onto_the_fleet", "names", moved,
-			"detail", "these were this node's own rows; every node reads them now")
+			"replaced", replaced,
+			"detail", "these were this node's own rows; every node reads them now, "+
+				"and the replaced ones were written here after the fleet's value")
+	}
+	if len(superseded) > 0 {
+		// A WARNING, because an operator set these and the fleet does not
+		// hold what they set: somebody rotated them through a running node
+		// after this one stopped, and that later value is kept.
+		log.WarnContext(ctx, "secrets_offline_writes_superseded", "names", superseded,
+			"detail", "these were set on this node while its engine was stopped, and the fleet "+
+				"holds a value written after them, which is kept; set them again through a "+
+				"running node if this node's value is the one meant")
 	}
 	return moved, nil
 }

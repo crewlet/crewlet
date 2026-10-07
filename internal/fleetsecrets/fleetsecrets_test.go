@@ -264,11 +264,44 @@ func TestMigrationMovesTheRowsAndEmptiesTheLocalTable(t *testing.T) {
 	}
 }
 
-// A NAME ALREADY ON THE FLEET IS NOT OVERWRITTEN. The local row is by
-// definition the older write — the fleet is where every rotation since has
-// landed — so copying it would resurrect a value an operator rotated away
-// from on another node.
-func TestMigrationNeverOverwritesTheFleetsValue(t *testing.T) {
+// AN OFFLINE ROTATION REACHES THE FLEET. `crewlet secrets set` on a stopped
+// node writes this node's own row and tells the operator the engine migrates
+// it at its next start — and for a name the fleet already holds that write is
+// a rotation. Skipping it because the name exists kept the old credential on
+// every node, silently, while the operator believed they had rotated it.
+func TestMigrationCarriesAnOfflineRotationOntoTheFleet(t *testing.T) {
+	t.Parallel()
+	cipher := ring(t, "k1")
+	local := localStore(t, cipher)
+	fleet, _ := fleetStore(t, cipher)
+	mustSet(t, fleet, "GL", "the-old-token")
+	if err := local.Set(t.Context(), "GL", "the-rotated-token", "sam", "cli",
+		clock.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet, clock.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if strings.Join(moved, ",") != "GL" {
+		t.Errorf("moved = %v, want the rotated row", moved)
+	}
+	values, _ := fleet.All(t.Context())
+	if values["GL"] != "the-rotated-token" {
+		t.Fatalf("GL = %q, want the rotation written on this node after the fleet's value",
+			values["GL"])
+	}
+	if rows, _ := local.List(t.Context()); len(rows) != 0 {
+		t.Fatalf("the migrated local row survived: %+v", rows)
+	}
+}
+
+// A ROTATION THE FLEET TOOK AFTER THE OFFLINE WRITE IS KEPT. The local row is
+// then the older write — somebody rotated the name through a running node
+// after this one stopped — so copying it would resurrect a value an operator
+// had already moved on from.
+func TestMigrationKeepsAFleetValueWrittenAfterTheOfflineOne(t *testing.T) {
 	t.Parallel()
 	cipher := ring(t, "k1")
 	local := localStore(t, cipher)
@@ -276,23 +309,25 @@ func TestMigrationNeverOverwritesTheFleetsValue(t *testing.T) {
 	if err := local.Set(t.Context(), "GL", "the-old-token", "sam", "cli", clock); err != nil {
 		t.Fatal(err)
 	}
-	mustSet(t, fleet, "GL", "the-rotated-token")
+	if err := fleet.Set(t.Context(), "GL", "the-rotated-token", "dana", "cli",
+		clock.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 
-	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet, clock)
+	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet, clock.Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
 	if len(moved) != 0 {
-		t.Errorf("moved = %v, want nothing: the fleet already had it", moved)
+		t.Errorf("moved = %v, want nothing: the fleet's value is the later write", moved)
 	}
 	values, _ := fleet.All(t.Context())
 	if values["GL"] != "the-rotated-token" {
-		t.Fatalf("GL = %q, want the fleet's newer value untouched", values["GL"])
+		t.Fatalf("GL = %q, want the fleet's later value untouched", values["GL"])
 	}
 	// AND THE STALE LOCAL COPY IS STILL REMOVED, or it would shadow the
 	// fleet's row at every boot from now on.
-	rows, _ := local.List(t.Context())
-	if len(rows) != 0 {
+	if rows, _ := local.List(t.Context()); len(rows) != 0 {
 		t.Fatalf("the shadowing local row survived: %+v", rows)
 	}
 }
