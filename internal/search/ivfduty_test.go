@@ -99,16 +99,11 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 			measured.Head, measured.Head.MeasuredAt, state.Head.Generation, now)
 	}
 
-	// AND EVERY RECORD THE DUTY PUBLISHED IS AT THE VERSION ITS KINDS WERE
-	// INTRODUCED AT: a document's at 1, and the index's at the version this
-	// build reads ([search.RecordVersion]).
+	// AND EVERY RECORD THE DUTY PUBLISHED IS AT THE BASE VERSION: every kind
+	// it writes, the index's included, is in the base format.
 	for version, kinds := range publishedVersions(t, h) {
 		for kind := range kinds {
-			want := 1
-			if kind == search.IndexSource {
-				want = search.RecordVersion
-			}
-			if version != want {
+			if want := 1; version != want {
 				t.Fatalf("the duty published %s records at version %d, want %d",
 					kind, version, want)
 			}

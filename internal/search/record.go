@@ -45,16 +45,15 @@ import (
 //
 // # What each version added
 //
-//   - 1: the documents' own records — an embed and a forget of a page or a
-//     task.
-//   - 2: the semantic index's records ([IndexSource]: [OpCentroids],
-//     [OpReassign], [OpMeasure]), ADR-0028.
+//   - 1: an embed and a forget of a page or a task, and the semantic index's
+//     records ([IndexSource]: [OpCentroids], [OpReassign], [OpMeasure]),
+//     ADR-0028.
 //
 // A record is WRITTEN at the lowest version that expresses it, never simply at
 // this constant — see [versionedFields] — and it is the highest version that
 // table names, which the framework's conformance suite holds it to, so a kind
 // added at a higher version cannot be written at one no build yet reads.
-const RecordVersion = 2
+const RecordVersion = 1
 
 // Source is where an embedded document came from.
 //
@@ -137,8 +136,8 @@ func (o Op) Valid() bool { return slices.Contains(Ops, o) }
 // A record carries an operation AND a subject kind, and either can be new, so
 // each has a row that names its VALUE ([statelog.VersionedField.Equals]): a
 // row naming only the key would stamp every record the domain writes. The base
-// format's own — an embed and a forget of a page or a task — need none, and a
-// test holds the table to every member of [Ops], [Sources] and [IndexSource]
+// format's own — today every member of [Ops], [Sources] and [IndexSource] —
+// need none, and a test holds the table to every member outside that base set
 // so a kind added without its row is a failure rather than a record written at
 // a version the builds before it read, refused by each as a writer fault and
 // retried on every redelivery, where the rolling upgrade's contract is that
@@ -146,23 +145,12 @@ func (o Op) Valid() bool { return slices.Contains(Ops, o) }
 //
 // # Why the LOWEST version that expresses it, never [RecordVersion]
 //
-// A document's embed is the same shape it always was, and stamping it 2 would
-// make every version-1 peer of a rolling upgrade defer every vector this build
-// computes — a whole corpus unsearchable by meaning on the old nodes for the
-// length of the upgrade, for a shape they read perfectly well.
-var versionedFields = statelog.RecordFields{
-	// THE SEMANTIC INDEX'S RECORDS, at version 2 (ADR-0028): three
-	// operations on one subject kind, each named by value. A build reading 1
-	// has no applier for any of them and retains them until it upgrades.
-	{Name: "Op=centroids", Since: 2, Op: string(OpCentroids),
-		Path: []string{"op"}, Equals: string(OpCentroids)},
-	{Name: "Op=reassign", Since: 2, Op: string(OpReassign),
-		Path: []string{"op"}, Equals: string(OpReassign)},
-	{Name: "Op=measure", Since: 2, Op: string(OpMeasure),
-		Path: []string{"op"}, Equals: string(OpMeasure)},
-	{Name: "Subject.Source=index", Since: 2,
-		Path: []string{"subject", "source"}, Equals: string(IndexSource)},
-}
+// A record of an existing shape stays readable by every build that reads that
+// shape. Stamping every record at this constant the day a new kind raised it
+// would make every peer still on the version before defer every vector this
+// build computes — a whole corpus unsearchable by meaning on those nodes for
+// the length of the upgrade, for a shape they read perfectly well.
+var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }

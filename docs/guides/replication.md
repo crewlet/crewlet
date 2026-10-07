@@ -534,9 +534,9 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
-In the tracker and the knowledge base today, no record carries a field past
-the base format, so every record either writes is at version 1; the first
-field a later build adds raises exactly the records that carry it.
+Today no record in any domain carries a field past the base format, so every
+record is written at version 1; the first field a later build adds raises
+exactly the records that carry it.
 
 ### Values the engine computes are recomputed once
 

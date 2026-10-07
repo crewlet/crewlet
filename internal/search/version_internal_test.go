@@ -16,15 +16,19 @@ import (
 // where the rolling upgrade's contract is that they defer it. So every member
 // outside the base format names a row by its value, and a member of the base
 // format names none: a row for an embed would hold every vector this build
-// computes back from every older peer.
+// computes back from every peer still on the version before it.
+//
+// The base format is every operation and kind this build writes, so the table
+// is empty today; the first one a later build adds joins neither list and
+// fails here until it has its row.
 func TestEveryKindAboveTheBaseFormatHasItsRow(t *testing.T) {
 	t.Parallel()
 	base := struct {
 		ops     []Op
 		sources []Source
 	}{
-		ops:     []Op{OpEmbed, OpForget},
-		sources: []Source{SourcePage, SourceTask},
+		ops:     []Op{OpEmbed, OpForget, OpCentroids, OpReassign, OpMeasure},
+		sources: []Source{SourcePage, SourceTask, IndexSource},
 	}
 	rows := map[string]bool{}
 	for _, field := range versionedFields {
@@ -46,8 +50,7 @@ func TestEveryKindAboveTheBaseFormatHasItsRow(t *testing.T) {
 		}
 	}
 
-	// AND A RECORD IS STAMPED BY IT: the base format's at one, the index's at
-	// the version this build reads.
+	// AND A RECORD IS STAMPED BY IT: the base format's at one.
 	for _, tc := range []struct {
 		op     Op
 		source Source
@@ -55,9 +58,9 @@ func TestEveryKindAboveTheBaseFormatHasItsRow(t *testing.T) {
 	}{
 		{OpEmbed, SourcePage, 1},
 		{OpForget, SourceTask, 1},
-		{OpCentroids, IndexSource, RecordVersion},
-		{OpReassign, IndexSource, RecordVersion},
-		{OpMeasure, IndexSource, RecordVersion},
+		{OpCentroids, IndexSource, 1},
+		{OpReassign, IndexSource, 1},
+		{OpMeasure, IndexSource, 1},
 	} {
 		got, err := VectorRecord{RecordEnvelope: RecordEnvelope{
 			Op: tc.op, Subject: Subject{Source: tc.source},
