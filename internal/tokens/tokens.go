@@ -206,8 +206,8 @@ type ModelRow struct {
 // we pay for" and "which model answered" are two questions, and only this row
 // answers the first.
 type ProviderRow struct {
-	// ProviderKey is the configured entry, "unknown" on a call that named
-	// none (a record from before node/0032 promoted the column).
+	// ProviderKey is the configured entry, "unknown" on a call whose event
+	// named no provider entry.
 	ProviderKey string `json:"provider_key"`
 
 	// Models are every model this entry answered with in the window,

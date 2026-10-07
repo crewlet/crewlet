@@ -1033,9 +1033,9 @@ func meta(revision store.Revision) map[string]any {
 		"revision_id": revision.ID,
 		"created_at":  revision.CreatedAt.Format(time.RFC3339Nano),
 		"created_by":  revision.CreatedBy,
-		// WHAT created_by names, which the label alone cannot say. Empty
-		// only on a revision adopted from a pointer that did not record
-		// it — the reader shows "not recorded" rather than a guess.
+		// WHAT created_by names, which the label alone cannot say: every
+		// writer of a revision records whether it was a person or the
+		// engine.
 		"created_by_kind": string(revision.CreatedByKind),
 		"source":          revision.Source,
 		"summary":         revision.Summary,

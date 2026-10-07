@@ -420,8 +420,7 @@ type Unavailable struct {
 	//
 	// EMPTY WHEN THE REFUSAL IS ABOUT THE NODE THAT MADE IT — its own
 	// record, a copy it wrote itself on an earlier attempt, or no record at
-	// all — which is every refusal but that one, and what a refusal from a
-	// build before this field reads as. And EMPTY for another node's copy
+	// all — which is every refusal but that one. And EMPTY for another node's copy
 	// under a gate that blames no writer, which is `deleted`: the marker
 	// holds every writer's record on the object for ever, this node's own
 	// included, so the refusal is as true of this node as of the copy, and a

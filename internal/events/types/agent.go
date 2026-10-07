@@ -107,8 +107,7 @@ type PromptMessage struct {
 // UTF-8 carries no map at all, since JSON delivers such text with each bad
 // byte rewritten to three. A reader that finds a map breaking
 // any of that must fall back to the prompt's own headings rather than slice by
-// it — the map is an older or a broken producer's, and the text is still the
-// text.
+// it — the map is a broken producer's, and the text is still the text.
 type PromptSection struct {
 	Key    string `json:"key"`
 	Title  string `json:"title"`
@@ -597,8 +596,8 @@ type AgentPhaseCompleted struct {
 	// the host ran before it asked for more. HostIteration names the turn
 	// iteration, which a phase of forty rounds spans whole, so it could
 	// place a worker under its phase but not under the call that made it.
-	// Absent on every other phase, and on a nested phase an older peer
-	// published.
+	// Absent on every other phase, and on a worker spawned outside a tool
+	// loop.
 	HostRound int `json:"host_round,omitempty"`
 	// Worker names the worker behind this call: the learning worker on a
 	// PhaseAuxiliary event, the delegate template on a PhaseSubagent one.
@@ -631,7 +630,7 @@ type AgentPhaseCompleted struct {
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
 	// Rounds is one entry per provider call the phase made, keyed on the
 	// round number the two lists above share — see [PhaseRound]. Absent on
-	// a phase that ran no loop in this process, and on an older peer's.
+	// a phase that ran no loop in this process.
 	Rounds []PhaseRound `json:"rounds,omitempty"`
 	// Steers is every person's note this phase read, with the round that
 	// first read it — see [PhaseSteer]. Absent on a phase nobody steered.
@@ -653,7 +652,7 @@ type AgentPhaseCompleted struct {
 	// it could ever have been granted. RoundsUsed against MaxRounds is
 	// "how far into its allowance", and MaxRounds against RoundCeiling is
 	// "how much more it could have asked for". Zero on a phase that runs
-	// no loop of its own (a judge) and on an older peer's.
+	// no loop of its own (a judge).
 	MaxRounds    int `json:"max_rounds,omitempty"`
 	RoundCeiling int `json:"round_ceiling,omitempty"`
 	// StartedAt is when THIS SEGMENT of the phase began, on the publishing
@@ -662,7 +661,8 @@ type AgentPhaseCompleted struct {
 	// "published minus duration": that instant is when the first segment
 	// began, possibly days earlier and on another node, and the gap
 	// between the two segments was a coding run rather than this phase.
-	// Absent on an older peer's record.
+	// Absent on a record that measured no start (a coding run whose launch
+	// instant its row does not hold).
 	StartedAt time.Time `json:"started_at,omitzero"`
 	// WorkItem is the item the turn is charged to, as the turn knew it
 	// when this record was published — see [AgentTurnStarted.WorkItem].
@@ -967,8 +967,8 @@ type SubagentBatched struct {
 	// `tool_executions[].round` scale. Together with each worker record's
 	// `host_round` they place a fan-out under the call that spawned it,
 	// which the turn iteration alone cannot: one Execute phase spans every
-	// round of the iteration. Absent on an older peer's event, and Round
-	// on a call made outside a tool loop.
+	// round of the iteration. Round is absent on a call made outside a
+	// tool loop.
 	StartedAt time.Time `json:"started_at,omitzero"`
 	Round     int       `json:"round,omitempty"`
 

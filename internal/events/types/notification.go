@@ -87,10 +87,9 @@ type ExternalNotification struct {
 	// as the source's own [notify.Prompt] reads its routing.
 	//
 	// The turn engine derives the turn's delivery obligation from it: an
-	// addressed turn may not end in silence. ABSENT MEANS UNADDRESSED, and
-	// that is the safe half in both directions — an older build's events
-	// decode as unaddressed, which is the freedom to stay silent rather
-	// than an obligation to post.
+	// addressed turn may not end in silence. ABSENT MEANS UNADDRESSED, the
+	// safe default: the freedom to stay silent rather than an obligation
+	// to post.
 	Addressed bool `json:"addressed,omitempty"`
 
 	// Owes is the CHAT SURFACE this turn must post on before it is done,

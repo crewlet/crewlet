@@ -286,8 +286,7 @@ type PrefetchSummary struct {
 	// between a turn announcing itself and its first phase opening — it
 	// reads a diary, a thread and a knowledge base, and calls an auxiliary
 	// model for two of them — and without its own measurement a turn's
-	// timeline had a gap there nothing on the record could explain. Absent
-	// on an older peer's summary.
+	// timeline had a gap there nothing on the record could explain.
 	StartedAt              time.Time `json:"started_at,omitzero"`
 	DurationMS             int       `json:"duration_ms"`
 	CounterpartyHit        bool      `json:"counterparty_hit"`

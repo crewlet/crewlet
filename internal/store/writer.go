@@ -123,9 +123,8 @@ var tagKeys = map[string]string{
 	// payload read for the same reason as `failed` below: a listing
 	// deliberately never selects the payload column, so the Integrations
 	// room aggregating "how many of this third-party app's deliveries were
-	// dropped by the routing gate" has no other way to read it. Rows written
-	// before this tag existed read back without it — a real discontinuity
-	// at that point in the timeline, not a bug to paper over.
+	// dropped by the routing gate" has no other way to read it. A row whose
+	// event names no app carries none.
 	"notification_source": "notification_source",
 	// WHICH NODE PUBLISHED THE EVENT — the envelope's own `node`, which the
 	// queue stamps on the way out and which is therefore the node whose

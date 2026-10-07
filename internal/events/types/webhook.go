@@ -63,8 +63,7 @@ type RawWebhook struct {
 	//
 	// A TOKEN RATHER THAN A POSITION, because this package is below the
 	// state log's and a position's three fields travel as one value.
-	// Additive: an older build drops it, and its turn reads exactly as it
-	// did before.
+	// Absent on a vendor's delivery, which has no floor to observe.
 	Trigger string `json:"trigger,omitempty"`
 }
 

@@ -105,9 +105,8 @@ var (
 //
 // THE APP IS THE `notification_source` TAG, not the event's source: the source
 // of an engine-published event names the engine, and what a count has to line
-// up with is one app's deliveries. A row written before that tag existed
-// carries none and is not counted — a real discontinuity at that point in the
-// timeline (see the tag's entry in [tagKeys]), never a guess at which app it
+// up with is one app's deliveries. A row whose event names no app — an empty or
+// blank tag — carries none and is not counted, never a guess at which app it
 // concerned. The tag is TRIMMED here rather than in SQL, by the one rule every
 // reader of it applies ([strings.TrimSpace]; SQL's TRIM strips spaces alone),
 // and tags that trim to one app are counted as that app.
