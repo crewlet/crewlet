@@ -321,6 +321,21 @@ func (r PendingRun) answerOwed() bool {
 	return !r.Answer.Taken() || (r.Ending != nil && r.Ending.Unused)
 }
 
+// Revival is how the seat's next holder gives a dead claim's recorded answer
+// back to the run it answers ([PendingStore.ReviveAnswer]): which job, which
+// answer, and the lease the holder took the seat under.
+type Revival struct {
+	// Launch is the job the claim took, matched exactly.
+	Launch string
+
+	// Answer is the deliveries the answer was made of
+	// ([RecordedAnswer.EventIDs]); the run must hold exactly that answer.
+	Answer []string
+
+	// Fence is the holder's lease, stamped on the row by the revival.
+	Fence Fence
+}
+
 // Holding are the statuses in which a run holds its seat, so the seat takes no
 // new turn while it is in one.
 //
@@ -1221,6 +1236,24 @@ type PendingStore interface {
 	// written again.
 	TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
 
+	// ReviveAnswer gives a claim whose node stopped before its turn took the
+	// recorded answer back to that answer: the run returns to
+	// [StatusAnswered], owed the resume the answer drives, and the seat's
+	// next holder drives it. In the same write the row is FENCED to the
+	// holder's lease and the loss COUNTED on the answer
+	// ([RecordedAnswer.LostClaims], [RecordedAnswer.FirstLostAt]). Returns the
+	// row as written IFF THIS CALL DID.
+	//
+	// Only while the run is still that claim — [StatusResumed] on that
+	// launch, holding exactly that answer, its ending not decided — and no
+	// newer lease outranks the fence. FALSE IS NOT AN ERROR.
+	//
+	// EXCLUSIVE WITH THE TAKE, as an ending's let-go is: an answer a turn
+	// already took has been used, and is refused with [ErrAnswerTaken] and the
+	// row as it stands — the caller reaps the claim as spent — while a take
+	// after the revival finds no claim to take it under.
+	ReviveAnswer(ctx context.Context, turnID string, revival Revival) (PendingRun, bool, error)
+
 	// OweHandBack LETS GO of the recorded answer a run whose ending is
 	// decided still holds: in one write, the answer leaves the row and the
 	// copies of its deliveries are recorded as owed to the seat's inbox
@@ -1550,12 +1583,14 @@ type RecordedAnswer struct {
 	// and a turn that ran with the answer and died mid-round. The first
 	// still owes the person's reply to the seat — its delivery was spent
 	// when the answer was recorded, so nothing else will ever bring it back
-	// — and the second has used it. The seat's next holder reaps both rows
-	// as abandoned tails ([Coordinator.RecoverSeat]), and this is what tells
-	// them apart: the store will not delete the first while it holds the
-	// reply ([ErrAnswerOwed]), so the reap hands it back, and will not let
-	// the second's go ([ErrAnswerTaken]), so the reap spends it. Without
-	// it, every such reply was read as spent and lost.
+	// — and the second has used it. The seat's next holder finds both rows
+	// as tails nobody drives ([Coordinator.RecoverSeat]), and this is what
+	// tells them apart: the first it REVIVES, the answer given back to the
+	// run ([PendingStore.ReviveAnswer]) — or, past the revival's bounds,
+	// reaps, and the store will not delete it while it holds the reply
+	// ([ErrAnswerOwed]), so the reap hands it back — while the second's the
+	// store will neither revive nor let go ([ErrAnswerTaken]), so the reap
+	// spends it. Without it, every such reply was read as spent and lost.
 	//
 	// WRITTEN AT THE LAST MOMENT BEFORE THE TURN, never at the claim: every
 	// step between the claim and the turn can fail or stop the process, and
@@ -1564,6 +1599,16 @@ type RecordedAnswer struct {
 	// ([CoordinatorOptions.Spent]), because from here a copy of it reaching
 	// the seat is the reply a turn already has.
 	TakenAt time.Time `json:"taken_at,omitzero"`
+
+	// LostClaims counts the claims of this answer whose node stopped before
+	// their turn took it, each revived by the seat's next holder so that the
+	// answer reaches the run it answered ([PendingStore.ReviveAnswer]), and
+	// FirstLostAt is when the first of them was revived. ON THE ROW, because
+	// what they bound is a series no one node sees: a claim that dies is a
+	// node that stopped, and the count a node keeps of its own attempts
+	// resets with exactly that ([MaxAnswerAttempts]). See [MaxAnswerRevivals].
+	LostClaims  int       `json:"lost_claims,omitempty"`
+	FirstLostAt time.Time `json:"first_lost_at,omitzero"`
 }
 
 // Taken reports whether a resumed turn took this answer — see

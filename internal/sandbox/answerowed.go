@@ -87,9 +87,10 @@ import (
 // write, and hands them back before it deletes the row ([Coordinator.letGoAnswer],
 // [Coordinator.endRecord]). That covers a retry or an inline attempt whose run
 // turns out to be over, a resume that broke before its turn began, and the seat's
-// next holder reaping a claim whose node stopped before its turn TOOK the answer
-// ([RecordedAnswer.TakenAt], [Coordinator.reapTail]) — the one fact that tells a
-// reply nobody acted on from one a turn has used.
+// next holder reaping a claim whose node stopped before its turn TOOK the answer,
+// once the answer's revivals are spent ([RecordedAnswer.TakenAt],
+// [Coordinator.reapTail]) — the one fact that tells a reply nobody acted on from
+// one a turn has used.
 //
 // # Spent when it leaves
 //
@@ -409,6 +410,13 @@ type answerRetry struct {
 	// See [Coordinator.oweEnding].
 	ending *ending
 
+	// revive is the lease a dead claim's revival is retried under: the lease
+	// the seat was recovered under, where the revival did not land
+	// ([Coordinator.oweRevival]), or this node's own, where the series' own
+	// claim reported a failure and may have landed unheld
+	// ([Coordinator.suspectClaim]). Nil for every other series.
+	revive *Fence
+
 	// stop cancels the pending attempt, reporting whether it had not yet
 	// started.
 	stop func() bool
@@ -501,10 +509,15 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID),
 		c.leaseOf(run.AgentHandle))
 	if err != nil {
-		// THE CLAIM MAY HAVE LANDED. A retry finds out: a row it can no
-		// longer claim has moved on, and the seat's next recovery pass
-		// reaps a claim nobody is resuming — handing its answer back,
-		// since no turn took it ([Coordinator.RecoverSeat]).
+		// THE CLAIM MAY HAVE LANDED, and one that did is a claim nothing on
+		// this node drives: no resume holds it, and no recovery pass comes
+		// until the seat moves. So the series' next attempt checks before
+		// anything else, and revives it under this node's lease if it did
+		// ([Coordinator.suspectClaim]), as the seat's next holder revives a
+		// claim whose node stopped. It used to be left for that next
+		// holder: the run held in a claim, the seat busy behind it and the
+		// person's answer unanswered, until the seat happened to move.
+		c.suspectClaim(run)
 		c.owedFailed(ctx, run, fmt.Errorf("sandbox: claiming %s for its recorded answer: %w",
 			run.TurnID, err))
 		return
@@ -615,11 +628,12 @@ func (c *Coordinator) retryOwed(turnID string) {
 	var handle, launch string
 	var spent bool
 	var kept *ending
+	var revive *Fence
 	if r != nil {
 		r.stop, r.waiting = nil, ""
 		handle, launch = r.handle, r.launch
 		spent = r.spent(c.now())
-		kept = r.ending
+		kept, revive = r.ending, r.revive
 	}
 	c.mu.Unlock()
 	if r == nil {
@@ -627,9 +641,10 @@ func (c *Coordinator) retryOwed(turnID string) {
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
 	if err != nil {
-		if kept != nil {
-			// A READ IS NOT A RESUME, and an ending owes no attempt: the
-			// row is read again on the hand-back's own spacing.
+		if kept != nil || revive != nil {
+			// A READ IS NOT A RESUME, and neither an ending nor a revival
+			// owes an attempt: the row is read again on the hand-back's
+			// own spacing.
 			c.scheduleOwed(turnID, answerRetryCeiling)
 			return
 		}
@@ -675,6 +690,12 @@ func (c *Coordinator) retryOwed(turnID string) {
 			"turn_id", turnID, "agent", handle,
 			"detail", "the run's claim had been handed back after all, so it is resumed with "+
 				"its answer rather than ended")
+	}
+	if revive != nil && kept == nil {
+		var owed bool
+		if run, owed = c.retryRevival(ctx, run, *revive); !owed {
+			return
+		}
 	}
 	// WHAT A DECLINE ALREADY DECIDED goes out before anything else is
 	// decided about the run: the write that let the answer go is on the row,
@@ -757,6 +778,113 @@ func (c *Coordinator) oweEnding(ctx context.Context, run PendingRun, e ending) {
 	c.mu.Unlock()
 	c.owe(ctx, run.AgentHandle, run.TurnID)
 	c.scheduleOwed(run.TurnID, answerRetryCeiling)
+}
+
+// oweRevival keeps a dead claim's revival that did not land
+// ([Coordinator.reapTail]) for this node's retry, under the lease the seat was
+// recovered under. The seat's inbox is held behind it, as it is behind any
+// answer the seat owes a run, and a retry on the hand-back's spacing reaps the
+// claim afresh ([Coordinator.retryRevival]); if the seat moves first, its next
+// holder's recovery pass does.
+//
+// NOT A REASON TO END THE RUN. The store did not confirm the revival — the
+// write failed, or the claim moved under it and could not be read again — and
+// that says nothing about whether the run can still be resumed with its answer.
+// It used to fall straight through to the reap: the run ended and the answer
+// handed to the seat as an ordinary message, over a store blip.
+func (c *Coordinator) oweRevival(ctx context.Context, run PendingRun, fence Fence, cause error) {
+	log.WarnContext(ctx, "sandbox_answer_revive_owed",
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "error", cause.Error(),
+		"detail", "the dead claim's answer could not be given back to its run yet; the claim "+
+			"stays fenced to this node, which tries again on the hand-back's spacing, and the "+
+			"seat's mail waits behind it")
+	if run.AgentHandle == "" {
+		return
+	}
+	c.mu.Lock()
+	r := c.retries[run.TurnID]
+	if r == nil {
+		r = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID, first: c.now(),
+			window: answerWindow(run)}
+		c.retries[run.TurnID] = r
+	}
+	r.revive = &fence
+	c.mu.Unlock()
+	c.owe(ctx, run.AgentHandle, run.TurnID)
+	c.scheduleOwed(run.TurnID, answerRetryCeiling)
+}
+
+// suspectClaim marks an owed answer's series whose claim reported a failure:
+// the claim may have landed, unheld by any resume, so the series' next attempt
+// revives it under this node's lease if it did ([Coordinator.retryRevival]) and
+// goes on as the answered run it then is — and goes on as it would have if it
+// did not.
+//
+// A CLAIM ONLY THE SERIES' OWN FAILURE MARKS, never any claim the retry happens
+// to find: the row reads [StatusResumed] for the length of every resume, and a
+// retry that revived whatever claim it found would revive one an inline attempt
+// on this node is driving that very moment. The store would keep the person
+// answered once — the revival and the take are exclusive — but the resume
+// in flight would fail for nothing.
+func (c *Coordinator) suspectClaim(run PendingRun) {
+	fence := c.leaseOf(run.AgentHandle)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := c.retries[run.TurnID]
+	if r == nil {
+		r = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID, first: c.now(),
+			window: answerWindow(run)}
+		c.retries[run.TurnID] = r
+	}
+	r.revive = &fence
+}
+
+// retryRevival is a scheduled attempt at a revival [Coordinator.oweRevival]
+// kept, or one [Coordinator.suspectClaim] suspects is owed, against the row as
+// the store holds it now: still the dead claim, it is reaped afresh under the
+// lease the series holds ([Coordinator.reapTail]) — revived, or ended where the
+// run can no longer be resumed — and anything else is what the run has become
+// since. Reports the row to go on with as an owed
+// answer, or false where the series has nothing more to do here: settled, or
+// kept again by the reap.
+func (c *Coordinator) retryRevival(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool) {
+	handle := run.AgentHandle
+	c.mu.Lock()
+	if r := c.retries[run.TurnID]; r != nil {
+		r.revive = nil
+	}
+	c.mu.Unlock()
+	if run.Ending == nil && run.Status == StatusResumed {
+		moved, did := c.reapTail(ctx, run, fence.Owner, fence.Epoch)
+		// RECOUNTED: the claim was nothing this node counted, and what it
+		// became — an answered run, or no run — is the store's answer.
+		c.syncSeat(ctx, handle)
+		switch did {
+		case reapOwed:
+			return PendingRun{}, false
+		case reapRevived, reapMoved:
+			run = *moved
+		case reapLeft, reapEnded:
+			c.settleOwed(ctx, handle, run.TurnID)
+			return PendingRun{}, false
+		}
+	}
+	if run.Ending != nil {
+		// AN ENDING DECIDED while the revival waited — by the run's own
+		// series, or a node that lost the seat — is this holder's to
+		// finish, on the terms recorded, as a recovery pass finishes one.
+		if _, err := c.endRecord(ctx, run, ending{fence: fence, whileIn: Active,
+			launch: EveryLaunch}); err != nil {
+			log.WarnContext(ctx, "sandbox_ending_kept", "turn_id", run.TurnID, "error", err.Error(),
+				"detail", "an ending decided while the run's revival waited could not be finished "+
+					"yet; this node finishes it, and the seat's mail waits behind it")
+		}
+		c.syncSeat(ctx, handle)
+		c.settleOwed(ctx, handle, run.TurnID)
+		return PendingRun{}, false
+	}
+	// Given back, revived, or moved on: what it is now decides what is owed.
+	return run, true
 }
 
 // endingDone forgets an owed ending, for a series about to settle it.

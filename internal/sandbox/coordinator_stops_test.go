@@ -817,6 +817,14 @@ func (s *refusingStore) OweHandBack(ctx context.Context, turnID string, letGo Le
 	return s.inner.OweHandBack(ctx, turnID, letGo)
 }
 
+func (s *refusingStore) ReviveAnswer(ctx context.Context, turnID string, revival Revival,
+) (PendingRun, bool, error) {
+	if s.called("ReviveAnswer") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.ReviveAnswer(ctx, turnID, revival)
+}
+
 func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
 	if s.called("TakeAnswer") {
 		return false, errRefusedCall

@@ -419,6 +419,45 @@ func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo
 	return written, won, nil
 }
 
+// ReviveAnswer gives a dead claim back to its recorded answer, fenced to the
+// seat's holder and counted. See the contract on [PendingStore].
+func (s *CoordStore) ReviveAnswer(ctx context.Context, turnID string, revival Revival) (PendingRun, bool, error) {
+	if len(revival.Answer) == 0 {
+		return PendingRun{}, false, fmt.Errorf("sandbox: reviving an answer to run %s that names no "+
+			"delivery", turnID)
+	}
+	var taken PendingRun
+	wasTaken := false
+	written, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.LaunchID != revival.Launch || run.Answer == nil ||
+			!slices.Equal(run.Answer.EventIDs, revival.Answer) || outranked(*run, revival.Fence) {
+			return false
+		}
+		if wasTaken = run.Answer.Taken(); wasTaken {
+			taken = *run
+			return false
+		}
+		answer := *run.Answer
+		answer.LostClaims++
+		if answer.FirstLostAt.IsZero() {
+			answer.FirstLostAt = s.clock()
+		}
+		run.Answer = &answer
+		run.Status = StatusAnswered
+		if revival.Fence.Fenced() {
+			run.Owner, run.OwnerEpoch = revival.Fence.Owner, revival.Fence.Epoch
+		}
+		return true
+	})
+	switch {
+	case err != nil:
+		return PendingRun{}, false, err
+	case wasTaken:
+		return taken, false, fmt.Errorf("sandbox: reviving run %s's answer: %w", turnID, ErrAnswerTaken)
+	}
+	return written, won, nil
+}
+
 // DecideEnding records a run's ending, or hands back the one already decided.
 // See the contract on [PendingStore].
 func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision) (PendingRun, bool, error) {

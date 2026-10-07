@@ -576,7 +576,9 @@ func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 // the turn leaves the answer on the row for the seat's next holder — never a
 // claim that is reaped as an abandoned tail with nothing on it, which is how
 // the answer was lost: it was held only by the claim, and its delivery, coming
-// round to the new holder, found the run gone.
+// round to the new holder, found the run gone. The next holder gives it back to
+// the run and resumes the run with it, attributed to the person who gave it, as
+// it does a chat reply's ([Coordinator.reapTail]).
 func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
@@ -599,11 +601,13 @@ func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 	}
 
 	next := reaper(t.Context(), t, rig, rig.pending, 2, nil)
+	revivedUnder(t, rig, 2, 1)
+	if got := rig.get("t1").Answer; got.Via != types.AnswerViaOperator || got.BySeat != given.AnsweredBySeat {
+		t.Fatalf("revived answer %+v, want the answer by turn with the person it names", got)
+	}
 	next.fireRetries()
-	resumed := next.resumer.calls()
-	handed := rig.handedBack()
-	if len(resumed)+len(handed) != 1 {
-		t.Fatalf("the seat's next holder resumed %d times and handed back %v: want the answer to "+
-			"reach the seat exactly once, not be lost with the claim", len(resumed), handed)
+	resumedOnceWith(t, rig, next, given.Answer)
+	if calls := next.resumer.calls(); !strings.Contains(calls[0].Answer, given.AnsweredBySeat) {
+		t.Fatalf("resumed with %q, want the answer attributed to %q", calls[0].Answer, given.AnsweredBySeat)
 	}
 }

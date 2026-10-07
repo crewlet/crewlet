@@ -114,6 +114,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AnEndingLicensedForAJobLeavesAnother", testAnEndingLicensedForAJobLeavesAnother},
 		{"AClaimIsTakenUnderTheClaimantsLease", testAClaimIsTakenUnderTheClaimantsLease},
 		{"ATurnTakesTheAnswerItsClaimDrives", testATurnTakesTheAnswerItsClaimDrives},
+		{"ADeadClaimsAnswerIsRevivedOnceFencedAndCounted", testADeadClaimsAnswerIsRevivedOnceFencedAndCounted},
+		{"ARevivalIsRefusedAnAnswerATurnTook", testARevivalIsRefusedAnAnswerATurnTook},
 		{"ANewQuestionForgetsTheLastOnesAnswer", testANewQuestionForgetsTheLastOnesAnswer},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -3028,6 +3030,117 @@ func testATurnTakesTheAnswerItsClaimDrives(t *testing.T, s sandbox.PendingStore)
 	}
 	if ok, err := s.TakeAnswer(ctx, "gone", launch, sandbox.Fence{}); err != nil || ok {
 		t.Errorf("TakeAnswer on a run that does not exist = %v, %v", ok, err)
+	}
+}
+
+// A DEAD CLAIM'S ANSWER IS REVIVED ONCE, FENCED AND COUNTED. The seat's next
+// holder gives a claim whose node stopped before its turn took the answer back
+// to that answer: the run answered again, owed its resume, stamped with the
+// holder's lease and the loss counted on the answer — all in one write, because
+// a revival without its fence is one the stalled claimant could still take, and
+// one without its count is a resume that kills its node revived for ever. Only
+// the claim it names is revived — that job, that answer, no newer lease — and
+// only once: a revived run is no longer the claim, so a take under the dead
+// claim's lease finds nothing to take.
+func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := claimedAnswerOn(t, s, "t1", answerOf("r1", "use main"), false)
+	next := sandbox.Fence{Owner: "next", Epoch: 2}
+	for name, revival := range map[string]sandbox.Revival{
+		"another launch": {Launch: "another-launch", Answer: []string{"r1"}, Fence: next},
+		"another answer": {Launch: launch, Answer: []string{"r2"}, Fence: next},
+	} {
+		if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
+			t.Fatalf("a revival naming %s = %v, %v, want refused", name, ok, err)
+		}
+	}
+	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next}); err == nil || ok {
+		t.Fatalf("a revival naming no answer = %v, %v, want an error", ok, err)
+	}
+	revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next}
+	revived, ok, err := s.ReviveAnswer(ctx, "t1", revival)
+	if err != nil || !ok {
+		t.Fatalf("ReviveAnswer = %v, %v", ok, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusAnswered || got.Owner != "next" || got.OwnerEpoch != 2 {
+		t.Fatalf("run %q owned by %q at %d, want it answered again under the reviving lease",
+			got.Status, got.Owner, got.OwnerEpoch)
+	}
+	if a := got.Answer; a == nil || a.Text != "use main" || a.Taken() || a.LostClaims != 1 ||
+		a.FirstLostAt.IsZero() {
+		t.Fatalf("answer %+v, want the same answer, untaken, its lost claim counted", a)
+	}
+	if revived.Status != got.Status || revived.OwnerEpoch != got.OwnerEpoch ||
+		revived.Answer == nil || revived.Answer.LostClaims != 1 {
+		t.Fatalf("ReviveAnswer reported %q at %d with %+v, want the row as written",
+			revived.Status, revived.OwnerEpoch, revived.Answer)
+	}
+	if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
+		t.Fatalf("a second revival of the same claim = %v, %v, want refused: it is no longer a claim", ok, err)
+	}
+	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
+		t.Fatalf("a take under the dead claim = %v, %v, want refused: the answer is the run's again", ok, err)
+	}
+
+	// THE NEXT CLAIM DYING TOO is counted on the same answer, from the same
+	// first instant: what the count bounds is a series no one node sees.
+	first := got.Answer.FirstLostAt
+	later := sandbox.Fence{Owner: "later", Epoch: 3}
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), next); err != nil || !ok {
+		t.Fatalf("the revived run's claim = %v, %v", ok, err)
+	}
+	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
+		Fence: later}); err != nil || !ok {
+		t.Fatalf("the second revival = %v, %v", ok, err)
+	}
+	if a := mustGet(t, s, "t1").Answer; a.LostClaims != 2 || !a.FirstLostAt.Equal(first) {
+		t.Fatalf("answer lost %d claims since %v, want 2 since %v", a.LostClaims, a.FirstLostAt, first)
+	}
+
+	// NOT UNDER AN OUTRANKED LEASE: a holder that lost the seat revives
+	// nothing its successor holds.
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), later); err != nil || !ok {
+		t.Fatalf("the third claim = %v, %v", ok, err)
+	}
+	if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
+		t.Fatalf("a revival under an outranked lease = %v, %v, want refused", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed || got.Answer.LostClaims != 2 {
+		t.Fatalf("run %q with %d lost claims, want the claim left as it was", got.Status, got.Answer.LostClaims)
+	}
+}
+
+// A REVIVAL IS REFUSED AN ANSWER A TURN TOOK, with the row — the take and the
+// revival are exclusive, as the take and an ending's let-go are, so whichever
+// lands first decides and the person is answered once: by the turn, or by the
+// revived run's resume. Nor does it revive a run whose ending is decided —
+// that ending owns what becomes of the answer — or one that is gone.
+func testARevivalIsRefusedAnAnswerATurnTook(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	next := sandbox.Fence{Owner: "next", Epoch: 2}
+	launch := claimedAnswerOn(t, s, "t1", answerOf("r1", "use main"), true)
+	row, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next})
+	if !errors.Is(err, sandbox.ErrAnswerTaken) || ok || row.Answer == nil || !row.Answer.Taken() {
+		t.Fatalf("a revival of a taken answer = %v, %+v, %v, want refused as taken with the row",
+			ok, row.Answer, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed || got.Answer.LostClaims != 0 {
+		t.Fatalf("run %q with %d lost claims, want the turn's claim left alone", got.Status, got.Answer.LostClaims)
+	}
+
+	launch = claimedAnswerOn(t, s, "t2", answerOf("r2", "use dev"), false)
+	decide(t, s, "t2", everyJob(sandbox.Fence{}, sandbox.Active))
+	if _, ok, err := s.ReviveAnswer(ctx, "t2", sandbox.Revival{Launch: launch, Answer: []string{"r2"},
+		Fence: next}); err != nil || ok {
+		t.Fatalf("a revival of a run whose ending is decided = %v, %v, want refused", ok, err)
+	}
+	if got := mustGet(t, s, "t2"); got.Status != sandbox.StatusResumed {
+		t.Fatalf("run %q, want the decided run left as its ending found it", got.Status)
+	}
+	if _, ok, err := s.ReviveAnswer(ctx, "gone", sandbox.Revival{Launch: launch, Answer: []string{"r2"},
+		Fence: next}); err != nil || ok {
+		t.Fatalf("a revival of a run that does not exist = %v, %v", ok, err)
 	}
 }
 

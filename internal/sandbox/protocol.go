@@ -33,12 +33,17 @@
 // LET GO back to the seat's inbox through an outbox on the row
 // ([PendingRun.HandBack]): after its attempts are spent, by an ending no turn
 // reached, or by the seat's next holder reaping a claim whose node stopped
-// before its turn took it ([Coordinator.RecoverSeat]). The two are exclusive
-// in the store's own compare-and-set: an ending is DECIDED on the row before
-// any of it is done ([RecordedEnding]), no turn takes an answer from a row
-// whose ending is decided ([ErrRunEnding]), and a take that landed first is
-// seen by the decision and the reply goes with the run as used — whichever
-// lands first wins, whatever any lease says. And no ending deletes a row still
+// before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
+// answer have died too often or for too long. Short of that, such a claim is
+// REVIVED — the answer given back to the run and the run resumed with it
+// ([PendingStore.ReviveAnswer], [Coordinator.revivable]) — because a claim that
+// never reached its turn used nothing. The take is exclusive with both, in the
+// store's own compare-and-set: an ending is DECIDED on the row before any of
+// it is done ([RecordedEnding]), no turn takes an answer from a row whose
+// ending is decided ([ErrRunEnding]) or from a revived run, which holds no
+// claim, and a take that landed first is seen by the decision or the revival
+// and the reply goes with the run as used — whichever lands first wins,
+// whatever any lease says. And no ending deletes a row still
 // holding a reply it owes the seat ([ErrAnswerOwed]). The reply's delivery is
 // recorded as worked when the reply leaves the run, either way
 // ([CoordinatorOptions.Spent]).
@@ -47,7 +52,8 @@
 // is deleted, under the identity its decided ending recorded, so whichever node
 // finishes the ending publishes the same event ([Coordinator.announceEnding]).
 //
-// The reap fences the row to its lease before it lets anything go, and a take
+// The reap fences the row to its lease before it revives or lets go of
+// anything — and the revival stamps that lease on the row itself — and a take
 // under an older lease — or under none — is refused, which holds because every
 // claim stamps the CLAIMANT's lease on the row ([PendingStore.ClaimForResume])
 // and every launch the lease that launched it ([CoordinatorOptions.Lease]).

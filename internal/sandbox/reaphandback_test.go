@@ -12,18 +12,24 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A CLAIM THAT DIED BEFORE ITS TURN TOOK THE ANSWER HANDS THE REPLY BACK, ONCE.
+// A CLAIM THAT DIED BEFORE ITS TURN TOOK THE ANSWER IS REVIVED — OR, PAST ITS
+// BOUNDS, HANDS THE REPLY BACK — ONCE.
 //
 // A person's reply is recorded on the run and its delivery spent; a resume then
 // claims the row — and the process stops before the resumed turn takes the
-// answer. The seat's next holder finds a claim nobody will ever finish and
-// reaps it as an abandoned tail. It used to read the reply as spent with it,
-// so the person's answer was silently lost. The row now says whether a turn
-// took the answer ([RecordedAnswer.TakenAt]): one nobody took goes back to the
-// seat as the ordinary message it is, through the same outbox a decline uses,
-// and one a turn took is spent. Each case below stops a node at one step of
-// claim → resume → hand-back, by leaving the row where that node left it or by
-// refusing the step, and hands the seat to a successor over the same store.
+// answer. The seat's next holder finds a claim nobody will ever finish. It used
+// to reap it as an abandoned tail and read the reply as spent with it, so the
+// person's answer was silently lost; then to reap it and hand the reply to the
+// seat as an ordinary message, so the answer reached the seat but never the run
+// it answered. The row says whether a turn took the answer
+// ([RecordedAnswer.TakenAt]): one nobody took is given back to the run
+// ([PendingStore.ReviveAnswer]) and the run resumed with it, unless the run can
+// no longer be resumed with it ([Coordinator.revivable]) — then it goes back to
+// the seat as the ordinary message it is, through the same outbox a decline
+// uses — and one a turn took is spent. Each case below stops a node at one step
+// of claim → resume → revival or hand-back, by leaving the row where that node
+// left it or by refusing the step, and hands the seat to a successor over the
+// same store. The revival's own series is in revive_test.go.
 
 // answeredAndClaimed records R1 on t1 — its inline resume failing, so the
 // answer is owed — and then claims the row for the retry's resume, as the node
@@ -51,6 +57,61 @@ func answeredAndClaimed(t *testing.T, rig *coordRig, took bool) *events.Event {
 	// in memory survives.
 	rig.coordinator.Stop()
 	return r1
+}
+
+// pastRevival marks t1's recorded answer as having lost every claim
+// [MaxAnswerRevivals] allows — what that many holders dying between a claim and
+// its turn leave on the row — so the next claim of it that dies is reaped and
+// the reply handed back rather than revived.
+func pastRevival(t *testing.T, rig *coordRig) {
+	t.Helper()
+	if _, ok, err := rig.pending.mutate(t.Context(), "t1", func(run *PendingRun) bool {
+		if run.Answer == nil {
+			return false
+		}
+		answer := *run.Answer
+		answer.LostClaims, answer.FirstLostAt = MaxAnswerRevivals, rig.now
+		run.Answer = &answer
+		return true
+	}); err != nil || !ok {
+		t.Fatalf("marking the answer past its revivals = %v, %v", ok, err)
+	}
+}
+
+// claimedPastRevival is [answeredAndClaimed] for a claim whose answer has lost
+// every claim it may: reaped, its reply goes back to the seat.
+func claimedPastRevival(t *testing.T, rig *coordRig, took bool) *events.Event {
+	t.Helper()
+	r1 := answeredAndClaimed(t, rig, took)
+	pastRevival(t, rig)
+	return r1
+}
+
+// resumedOnceWith asserts the seat's next holder resumed the run exactly once,
+// with the person's answer, and handed nothing back and announced no loss.
+func resumedOnceWith(t *testing.T, rig, next *coordRig, answer string) {
+	t.Helper()
+	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, answer) {
+		t.Fatalf("the next holder resumed %+v, want the run resumed once with %q", calls, answer)
+	}
+	if got := rig.handedBack(); len(got) != 0 {
+		t.Fatalf("handed back %v for an answer its run was resumed with", got)
+	}
+	if got := rig.failures(); len(got) != 0 {
+		t.Fatalf("announced %+v for a run that was resumed", got)
+	}
+}
+
+// revivedUnder asserts t1 is answered again under the lease epoch, its reply
+// untaken and lost claims counted.
+func revivedUnder(t *testing.T, rig *coordRig, epoch int64, lost int) {
+	t.Helper()
+	got := rig.get("t1")
+	if got.Status != StatusAnswered || got.OwnerEpoch != epoch || got.Answer == nil ||
+		got.Answer.Taken() || got.Answer.LostClaims != lost {
+		t.Fatalf("run %q at epoch %d answer %+v, want it answered again under epoch %d, the "+
+			"reply untaken and %d lost claims counted", got.Status, got.OwnerEpoch, got.Answer, epoch, lost)
+	}
 }
 
 // reaper is the seat's next holder under lease epoch, over store: a fresh
@@ -87,12 +148,46 @@ func abandonedOnce(t *testing.T, rig *coordRig, handedBack bool) {
 	}
 }
 
-// STOPPED BETWEEN THE CLAIM AND THE TURN: the next holder hands the reply back,
-// once — spent first, so the original delivery coming round after it is not a
-// second message — ends the run and announces it.
-func TestAClaimThatDiedBeforeItsTurnHandsTheReplyBackOnce(t *testing.T) {
+// STOPPED BETWEEN THE CLAIM AND THE TURN: the next holder gives the answer back
+// to the run — fenced to its lease, the lost claim counted — holds the seat's
+// mail behind it and resumes the run with it, once. Nothing goes back to the
+// seat and nothing is announced lost: the run the person answered is resumed
+// with their answer, which is what the dead claim was doing.
+func TestAClaimThatDiedBeforeItsTurnIsRevivedWithItsAnswer(t *testing.T) {
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, false)
+	var holds *holdSpy
+	next := reaper(t.Context(), t, rig, rig.pending, 2, func(next *coordRig) { holds = next.withHold() })
+
+	revivedUnder(t, rig, 2, 1)
+	if first := rig.get("t1").Answer.FirstLostAt; !first.Equal(rig.now) {
+		t.Fatalf("the first lost claim is dated %v, want the revival's instant %v", first, rig.now)
+	}
+	if !holds.holding("swe") {
+		t.Fatal("the seat's inbox is open while the revived run is still owed its resume")
+	}
+	if spent := next.spentDeliveries(); len(spent) != 0 {
+		t.Fatalf("spent %+v before any turn took the reply", spent)
+	}
+	if calls := next.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("resumed %+v during the seat's preparation, before its mailbox opened", calls)
+	}
+	next.fireRetries()
+	resumedOnceWith(t, rig, next, "use main")
+	if spent := next.spentDeliveries(); len(spent) != 1 || spent[0].id != r1.ID.String() {
+		t.Fatalf("spent %+v, want R1's delivery spent once, at the take", spent)
+	}
+	if holds.holding("swe") {
+		t.Fatalf("the seat's inbox is held after the revived run was resumed: %v", holds.log)
+	}
+}
+
+// PAST ITS REVIVALS, the next holder hands the reply back, once — spent first,
+// so the original delivery coming round after it is not a second message —
+// ends the run and announces it, saying why it was not resumed again.
+func TestAClaimPastItsRevivalsHandsTheReplyBackOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	r1 := claimedPastRevival(t, rig, false)
 	var holds *holdSpy
 	var witness *spentAtWrite
 	next := reaper(t.Context(), t, rig, rig.pending, 2, func(next *coordRig) {
@@ -108,6 +203,9 @@ func TestAClaimThatDiedBeforeItsTurnHandsTheReplyBackOnce(t *testing.T) {
 	}
 	rig.finished("t1")
 	abandonedOnce(t, rig, true)
+	if detail := rig.failures()[0].Detail; !strings.Contains(detail, "claims of this answer have now died") {
+		t.Errorf("the announcement says %q; it should say why the run was not resumed again", detail)
+	}
 	spent := next.spentDeliveries()
 	if len(spent) != 1 || spent[0].id != r1.ID.String() || spent[0].publishedBefore != 0 {
 		t.Fatalf("spent %+v, want R1's own delivery recorded as worked BEFORE its copy was "+
@@ -148,12 +246,14 @@ func TestAClaimWhoseTurnTookTheAnswerHandsNothingBack(t *testing.T) {
 	}
 }
 
+// THE HAND-BACK'S OWN STEPS, each stopped in turn, on a claim past its revivals.
+//
 // STOPPED AFTER THE FENCE, BEFORE THE LET-GO LANDED: the reaping holder keeps
 // the row — the answer still on it — and announces nothing yet; the holder
 // after it hands the reply back once and announces the loss once.
 func TestAReapStoppedBeforeItsLetGoIsFinishedByTheNextHolder(t *testing.T) {
 	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
+	r1 := claimedPastRevival(t, rig, false)
 	first := reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"OweHandBack"}}, 2, nil)
 	if got := rig.handedBack(); len(got) != 0 {
 		t.Fatalf("handed back %v before the reply was recorded as owed", got)
@@ -188,7 +288,7 @@ func TestAReapStoppedBeforeItsLetGoIsFinishedByTheNextHolder(t *testing.T) {
 // of nothing a second time.
 func TestAReapStoppedBeforeItsPublishIsFinishedByTheNextHolder(t *testing.T) {
 	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
+	r1 := claimedPastRevival(t, rig, false)
 	rig.failPublishes(errors.New("the broker is unreachable"))
 	var holds *holdSpy
 	first := reaper(t.Context(), t, rig, rig.pending, 2, func(next *coordRig) { holds = next.withHold() })
@@ -217,7 +317,7 @@ func TestAReapStoppedBeforeItsPublishIsFinishedByTheNextHolder(t *testing.T) {
 // announcement it held back.
 func TestAReapWhosePublishFailedFinishesOnItsRetry(t *testing.T) {
 	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
+	r1 := claimedPastRevival(t, rig, false)
 	rig.failPublishes(errors.New("the broker is unreachable"))
 	first := reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	rig.failPublishes(nil)
@@ -236,7 +336,7 @@ func TestAReapWhosePublishFailedFinishesOnItsRetry(t *testing.T) {
 // completion ledger — and the loss is announced once.
 func TestAReapStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
 	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
+	r1 := claimedPastRevival(t, rig, false)
 	first := reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"ClearHandBack"}}, 2, nil)
 	copyID := declinedCopyID(r1.ID).String()
 	if got := rig.handedBack(); !slices.Equal(got, []string{copyID}) {
@@ -256,7 +356,7 @@ func TestAReapStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
 // no answer, so the next holder ends it without handing anything back again.
 func TestAReapStoppedBeforeItsDeleteHandsNothingBackTwice(t *testing.T) {
 	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
+	r1 := claimedPastRevival(t, rig, false)
 	// THE FIRST FINISH IS THE DELETE: the reap lets the reply go and
 	// publishes and clears its copy before it asks for one.
 	reaper(t.Context(), t, rig, &finishUntil{refusingStore: &refusingStore{inner: rig.pending}},
@@ -274,25 +374,77 @@ func TestAReapStoppedBeforeItsDeleteHandsNothingBackTwice(t *testing.T) {
 	rig.finished("t1")
 }
 
-// A ROW THE REAP CANNOT FENCE IS STILL REAPED AS OWING ITS REPLY: whether a
-// turn took the answer is then unknowable, and a reply handed back twice is a
-// duplicate where one read as spent is lost.
-func TestAReapThatCannotFenceTheClaimStillHandsTheReplyBack(t *testing.T) {
-	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
-	reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"ClaimOwnership"}}, 2, nil)
-	if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(r1.ID).String()}) {
-		t.Fatalf("handed back %v, want R1's copy once", got)
-	}
-	rig.finished("t1")
+// A ROW THE REAP CANNOT FENCE IS STILL REVIVED — the revival is a
+// compare-and-set that stamps the holder's lease itself, so it needs no fence
+// before it — AND, PAST ITS REVIVALS, STILL REAPED AS OWING ITS REPLY: whether a
+// turn took the answer is then unknowable to the reap, and a reply handed back
+// twice is a duplicate where one read as spent is lost.
+func TestAReapThatCannotFenceTheClaimStillRevivesOrHandsBack(t *testing.T) {
+	t.Run("revived", func(t *testing.T) {
+		rig := newCoordRig(t)
+		answeredAndClaimed(t, rig, false)
+		next := reaper(t.Context(), t, rig,
+			&refusingStore{inner: rig.pending, refuse: []string{"ClaimOwnership"}}, 2, nil)
+		revivedUnder(t, rig, 2, 1)
+		next.fireRetries()
+		resumedOnceWith(t, rig, next, "use main")
+	})
+	t.Run("past its revivals", func(t *testing.T) {
+		rig := newCoordRig(t)
+		r1 := claimedPastRevival(t, rig, false)
+		reaper(t.Context(), t, rig,
+			&refusingStore{inner: rig.pending, refuse: []string{"ClaimOwnership"}}, 2, nil)
+		if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(r1.ID).String()}) {
+			t.Fatalf("handed back %v, want R1's copy once", got)
+		}
+		rig.finished("t1")
+	})
 }
 
-// A NODE THAT LOST THE SEAT CANNOT TAKE THE ANSWER THE NEXT HOLDER IS RETURNING.
-// The old holder's retry has claimed the row and stalls on the way to its turn;
-// the next holder fences the row and decides to hand the reply back. When the
-// old holder's turn finally tries to begin, the take is refused — its turn
-// never runs — so the person gets the reply once, as the ordinary message, and
-// not also as the answer of a turn on a node that no longer holds the seat.
+// A NODE THAT LOST THE SEAT CANNOT TAKE THE ANSWER ITS SUCCESSOR REVIVED. The
+// old holder's retry has claimed the row and stalls on the way to its turn; the
+// next holder fences the row and gives the answer back to the run. When the old
+// holder's turn finally tries to begin, the take is refused — there is no claim
+// left to take it under, and the row is the successor's — so its turn never
+// runs, and the person is answered once: by the successor's resume of the run
+// they answered.
+func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorRevived(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
+	rig.resumer.failWith(errors.New("transient"))
+	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
+		t.Fatalf("R1 = %q, want it recorded", d)
+	}
+	var next *coordRig
+	rig.resumer.failWith(nil)
+	rig.resumer.beforeBegin = func(ctx context.Context) {
+		next = reaper(ctx, t, rig, rig.pending, 2, nil)
+	}
+	rig.fireRetries()
+	if next == nil {
+		t.Fatal("the stalled retry never reached its turn")
+	}
+	if n := rig.resumer.turnsBegun(); n != 0 {
+		t.Fatalf("the node that lost the seat began %d turns with an answer its successor had "+
+			"revived: the person is answered by that turn and by the successor's resume", n)
+	}
+	revivedUnder(t, rig, 2, 1)
+	rig.coordinator.Stop()
+
+	next.fireRetries()
+	resumedOnceWith(t, rig, next, "use main")
+	if spent := next.spentDeliveries(); len(spent) != 1 || spent[0].id != r1.ID.String() {
+		t.Fatalf("spent %+v, want R1's delivery spent once, at the successor's take", spent)
+	}
+}
+
+// AND ONE THE NEXT HOLDER IS RETURNING. Past the answer's revivals the next
+// holder fences the row and decides to hand the reply back; the old holder's
+// take is refused as it was above, so the person gets the reply once, as the
+// ordinary message, and not also as the answer of a turn on a node that no
+// longer holds the seat.
 func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorReturns(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
@@ -302,6 +454,7 @@ func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorReturns(t *testing.T
 		chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
 		t.Fatalf("R1 = %q, want it recorded", d)
 	}
+	pastRevival(t, rig)
 	// THE SUCCESSOR'S LET-GO IS REFUSED, so the row keeps the answer and
 	// only the fence stands between it and the stalled node's take.
 	successorStore := &refusingStore{inner: rig.pending, refuse: []string{"OweHandBack"}}
@@ -488,10 +641,10 @@ func TestATurnThatTookARetriedAnswerSpendsItsDelivery(t *testing.T) {
 // A REAP WAITS ON AN EARLIER COPY IT CANNOT CLEAR, RATHER THAN REPUBLISHING IT.
 // R1 was let go of and its copy published, but clearing it from the row keeps
 // failing; R2 is recorded and claimed by a node that stops before its turn
-// takes it. The reap hands R1's copy out once more on its way to letting R2
-// go — and when the clear still fails, it waits for the retry instead of going
-// round publishing the same copy until it gives up. The holder after it finds
-// the store answering and hands R2 back.
+// takes it, past its revivals. The reap hands R1's copy out once more on its
+// way to letting R2 go — and when the clear still fails, it waits for the retry
+// instead of going round publishing the same copy until it gives up. The holder
+// after it finds the store answering and hands R2 back.
 func TestAReapWaitsOnAnEarlierCopyItCannotClear(t *testing.T) {
 	rig := newCoordRig(t)
 	store := &refusingStore{inner: rig.pending}
@@ -505,6 +658,7 @@ func TestAReapWaitsOnAnEarlierCopyItCannotClear(t *testing.T) {
 		chatReply(answerOnTheDM, "use dev", r2)); d != AnswerConsumed {
 		t.Fatalf("R2 = %q, want it recorded", d)
 	}
+	pastRevival(t, rig)
 	launch := rig.get("t1").LaunchID
 	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), Fence{}); err != nil || !won {
 		t.Fatalf("the dying node's claim = %v, %v", won, err)
@@ -549,10 +703,11 @@ func count(ids []string, id string) int {
 // of from a claim, read the refusal as "nothing to let go of", and delete the
 // answered run with the reply on it. Now the store will not delete a row still
 // holding a reply no turn took, and the ending lets it go from whatever status
-// it finds: one copy, the run ended, the loss announced once.
+// it finds: one copy, the run ended, the loss announced once — past the
+// answer's revivals, that is; within them the run is resumed, as below.
 func TestAnUnfencedReapThatRacesTheOldHoldersReleaseHandsTheReplyBackOnce(t *testing.T) {
 	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
+	r1 := claimedPastRevival(t, rig, false)
 	run := rig.get("t1")
 	store := &fencedByNobody{PendingStore: rig.pending, before: func(ctx context.Context) {
 		if ok, err := rig.pending.ReleaseClaim(ctx, "t1", Release{
@@ -578,6 +733,30 @@ func TestAnUnfencedReapThatRacesTheOldHoldersReleaseHandsTheReplyBackOnce(t *tes
 	}
 }
 
+// WITHIN ITS REVIVALS, THE SAME RACE RESUMES THE RUN ONCE. The release lands as
+// the fence fails, so the revival the reap then asks for is refused — the row is
+// no longer the claim — and the reap reads it again and takes it over as what it
+// is: an answered run owed its resume, which it resumes with the reply.
+func TestAnUnfencedReapThatRacesTheOldHoldersReleaseResumesTheRunOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	answeredAndClaimed(t, rig, false)
+	run := rig.get("t1")
+	store := &fencedByNobody{PendingStore: rig.pending, before: func(ctx context.Context) {
+		if ok, err := rig.pending.ReleaseClaim(ctx, "t1", Release{
+			Launch: run.LaunchID, To: StatusAnswered, Fence: fenceOf(run),
+		}); err != nil || !ok {
+			t.Errorf("the old holder's release = %v, %v", ok, err)
+		}
+	}}
+	next := reaper(t.Context(), t, rig, store, 2, nil)
+	if got := rig.get("t1"); got.Status != StatusAnswered || got.Answer == nil || got.Answer.LostClaims != 0 {
+		t.Fatalf("run %q answer %+v, want it answered with no lost claim counted: its holder gave "+
+			"the claim back", got.Status, got.Answer)
+	}
+	next.fireRetries()
+	resumedOnceWith(t, rig, next, "use main")
+}
+
 // fencedByNobody runs the old holder's write at the instant the reap fences the
 // row, and then fails the fence.
 type fencedByNobody struct {
@@ -593,20 +772,32 @@ func (s *fencedByNobody) ClaimOwnership(ctx context.Context, _, _ string, _ int6
 	return false, errRefusedCall
 }
 
-// A REAP THAT CANNOT READ THE CLAIM IT FENCED STILL HANDS THE REPLY BACK. Whether
-// a turn took the answer is then unknown to the reap, and it does not have to
-// know it: the ending asks the store, which will not delete a row holding a
-// reply no turn took, so the reply is let go of rather than stranded on a fenced
+// A REAP THAT CANNOT READ THE CLAIM IT FENCED STILL REVIVES IT, OR HANDS THE
+// REPLY BACK. Whether a turn took the answer is then unknown to the reap, and it
+// does not have to know it: the revival and the ending both ask the store, which
+// revives only an answer no turn took and will not delete a row holding one, so
+// the reply reaches the run, or the seat, rather than being stranded on a fenced
 // claim nothing would reap again.
-func TestAReapThatCannotReadTheFencedClaimStillHandsTheReplyBack(t *testing.T) {
-	rig := newCoordRig(t)
-	r1 := answeredAndClaimed(t, rig, false)
-	reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"Get"}}, 2, nil)
-	if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(r1.ID).String()}) {
-		t.Fatalf("handed back %v, want R1's copy exactly once", got)
-	}
-	rig.finished("t1")
-	abandonedOnce(t, rig, true)
+func TestAReapThatCannotReadTheFencedClaimStillRevivesOrHandsBack(t *testing.T) {
+	t.Run("revived", func(t *testing.T) {
+		rig := newCoordRig(t)
+		answeredAndClaimed(t, rig, false)
+		next := reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"Get"}}, 2, nil)
+		revivedUnder(t, rig, 2, 1)
+		next.coordinator.pending = rig.pending
+		next.fireRetries()
+		resumedOnceWith(t, rig, next, "use main")
+	})
+	t.Run("past its revivals", func(t *testing.T) {
+		rig := newCoordRig(t)
+		r1 := claimedPastRevival(t, rig, false)
+		reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"Get"}}, 2, nil)
+		if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(r1.ID).String()}) {
+			t.Fatalf("handed back %v, want R1's copy exactly once", got)
+		}
+		rig.finished("t1")
+		abandonedOnce(t, rig, true)
+	})
 }
 
 // parkUnfenced parks t1 on a question exactly as [parkOnAQuestion] does, but on
@@ -626,25 +817,37 @@ func parkUnfenced(t *testing.T, rig *coordRig) {
 	}
 }
 
-// takeBeforeEnding runs a stalled node's take at the instant the reap decides
-// its ending — the last window the old holder can wake in, since a decided
-// ending takes no take — and can fail the reap's fence.
-type takeBeforeEnding struct {
+// takeBeforeReap runs a stalled node's take at the instant the reap decides
+// what becomes of the claim — its revival, or its ending — which is the last
+// window the old holder can wake in: a revived run has no claim to take the
+// answer under, and a decided ending takes no take. It can fail the reap's
+// fence too.
+type takeBeforeReap struct {
 	PendingStore
 	take        func(ctx context.Context)
 	refuseFence bool
 }
 
-func (s *takeBeforeEnding) DecideEnding(ctx context.Context, turnID string, d Decision,
-) (PendingRun, bool, error) {
+func (s *takeBeforeReap) wake(ctx context.Context) {
 	if s.take != nil {
 		s.take(ctx)
 		s.take = nil
 	}
+}
+
+func (s *takeBeforeReap) ReviveAnswer(ctx context.Context, turnID string, revival Revival,
+) (PendingRun, bool, error) {
+	s.wake(ctx)
+	return s.PendingStore.ReviveAnswer(ctx, turnID, revival)
+}
+
+func (s *takeBeforeReap) DecideEnding(ctx context.Context, turnID string, d Decision,
+) (PendingRun, bool, error) {
+	s.wake(ctx)
 	return s.PendingStore.DecideEnding(ctx, turnID, d)
 }
 
-func (s *takeBeforeEnding) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
+func (s *takeBeforeReap) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
 	if s.refuseFence {
 		return false, errRefusedCall
 	}
@@ -654,75 +857,102 @@ func (s *takeBeforeEnding) ClaimOwnership(ctx context.Context, turnID, owner str
 // A STALLED NODE THAT HELD NO LEASE CANNOT TAKE THE ANSWER ITS SUCCESSOR FENCED.
 // The run sits at the zero epoch, and the node claimed it for the answer's
 // resume under no lease and stalled. The successor fences the row and is about
-// to decide its ending — and the stalled node wakes and tries to take the answer
-// for its turn. A zero fence constrains nothing for any other write, and here it
-// used to land: the stalled turn ran with the reply AND the successor handed it
-// back. A take must now hold the row's lease or a newer one, so it is refused,
-// and the person gets the reply once, as the copy.
+// to decide what becomes of the claim — and the stalled node wakes and tries to
+// take the answer for its turn. A zero fence constrains nothing for any other
+// write, and here it used to land: the stalled turn ran with the reply AND the
+// successor handed it back. A take must now hold the row's lease or a newer one,
+// so it is refused, and the person is answered once — by the run's resume on
+// the successor, or, past the answer's revivals, by the copy.
 func TestAStalledTakeUnderNoLeaseLosesToTheReapThatFencedTheRow(t *testing.T) {
-	rig := newCoordRig(t)
-	parkUnfenced(t, rig)
-	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
-	rig.resumer.failWith(errors.New("transient"))
-	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
-		chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
-		t.Fatalf("R1 = %q, want it recorded", d)
-	}
-	launch := rig.get("t1").LaunchID
-	claimed, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), Fence{})
-	if err != nil || !won {
-		t.Fatalf("the stalled node's claim = %v, %v", won, err)
-	}
-	rig.coordinator.Stop()
+	for _, past := range []bool{false, true} {
+		t.Run(map[bool]string{false: "revived", true: "past its revivals"}[past], func(t *testing.T) {
+			rig := newCoordRig(t)
+			parkUnfenced(t, rig)
+			r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
+			rig.resumer.failWith(errors.New("transient"))
+			if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+				chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
+				t.Fatalf("R1 = %q, want it recorded", d)
+			}
+			if past {
+				pastRevival(t, rig)
+			}
+			launch := rig.get("t1").LaunchID
+			claimed, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), Fence{})
+			if err != nil || !won {
+				t.Fatalf("the stalled node's claim = %v, %v", won, err)
+			}
+			rig.coordinator.Stop()
 
-	took := false
-	store := &takeBeforeEnding{PendingStore: rig.pending, take: func(ctx context.Context) {
-		ok, err := rig.pending.TakeAnswer(ctx, "t1", launch, fenceOf(claimed))
-		if err != nil {
-			t.Errorf("the stalled node's take: %v", err)
-		}
-		took = ok
-	}}
-	reaper(t.Context(), t, rig, store, 2, nil)
-
-	handed := rig.handedBack()
-	if took || !slices.Equal(handed, []string{declinedCopyID(r1.ID).String()}) {
-		t.Fatalf("the stalled turn took the answer: %v, handed back %v — want the take refused "+
-			"and R1's copy handed back once, so the person is answered once", took, handed)
+			took := false
+			store := &takeBeforeReap{PendingStore: rig.pending, take: func(ctx context.Context) {
+				ok, err := rig.pending.TakeAnswer(ctx, "t1", launch, fenceOf(claimed))
+				if err != nil {
+					t.Errorf("the stalled node's take: %v", err)
+				}
+				took = ok
+			}}
+			next := reaper(t.Context(), t, rig, store, 2, nil)
+			if took {
+				t.Fatal("the stalled turn took the answer on a row its successor had fenced")
+			}
+			if !past {
+				revivedUnder(t, rig, 2, 1)
+				next.fireRetries()
+				resumedOnceWith(t, rig, next, "use main")
+				return
+			}
+			if handed := rig.handedBack(); !slices.Equal(handed, []string{declinedCopyID(r1.ID).String()}) {
+				t.Fatalf("handed back %v, want R1's copy once, so the person is answered once", handed)
+			}
+			rig.finished("t1")
+			abandonedOnce(t, rig, true)
+		})
 	}
-	rig.finished("t1")
-	abandonedOnce(t, rig, true)
 }
 
 // A REAP WHOSE FENCE DID NOT LAND, RACED BY A TAKE THAT DID, ANSWERS THE PERSON
 // ONCE — by the turn. Nothing outranks the stalled node's lease, so its take
-// lands just before the reap decides its ending; the decision sees the answer
-// taken, so the reap ends the run as spent, with nothing handed back and an
+// lands just before the reap decides what becomes of the claim; the revival, or
+// past the answer's revivals the ending, sees the answer taken, so the reap ends
+// the run as spent, with nothing handed back, nothing resumed again and an
 // announcement that does not say the reply went back. A take that came a moment
-// later would be refused by the decision instead, and the copy handed back. It
-// used to hand the copy back as well, and call the duplicate the cost of a case
-// that was genuinely unclear; the store's own writes decide it.
+// later would be refused instead: by the revived run, which has no claim to take
+// it under, or by the decided ending. It used to hand the copy back as well,
+// and call the duplicate the cost of a case that was genuinely unclear; the
+// store's own writes decide it.
 func TestAReapWhoseFenceFailedLosesToATakeThatLanded(t *testing.T) {
-	rig := newCoordRig(t)
-	answeredAndClaimed(t, rig, false)
-	launch := rig.get("t1").LaunchID
-	took := false
-	store := &takeBeforeEnding{PendingStore: rig.pending, refuseFence: true, take: func(ctx context.Context) {
-		ok, err := rig.pending.TakeAnswer(ctx, "t1", launch, rigLease)
-		if err != nil {
-			t.Errorf("the stalled node's take: %v", err)
-		}
-		took = ok
-	}}
-	reaper(t.Context(), t, rig, store, 2, nil)
+	for _, past := range []bool{false, true} {
+		t.Run(map[bool]string{false: "within its revivals", true: "past its revivals"}[past], func(t *testing.T) {
+			rig := newCoordRig(t)
+			answeredAndClaimed(t, rig, false)
+			if past {
+				pastRevival(t, rig)
+			}
+			launch := rig.get("t1").LaunchID
+			took := false
+			store := &takeBeforeReap{PendingStore: rig.pending, refuseFence: true, take: func(ctx context.Context) {
+				ok, err := rig.pending.TakeAnswer(ctx, "t1", launch, rigLease)
+				if err != nil {
+					t.Errorf("the stalled node's take: %v", err)
+				}
+				took = ok
+			}}
+			next := reaper(t.Context(), t, rig, store, 2, nil)
+			next.fireRetries()
 
-	handed := rig.handedBack()
-	if !took || len(handed) != 0 {
-		t.Fatalf("took %v, handed back %v: want exactly one of the two — the take landed, so "+
-			"the reply is the turn's, and a copy would answer the person twice", took, handed)
+			handed := rig.handedBack()
+			if !took || len(handed) != 0 {
+				t.Fatalf("took %v, handed back %v: want exactly one of the two — the take landed, so "+
+					"the reply is the turn's, and a copy would answer the person twice", took, handed)
+			}
+			if calls := next.resumer.calls(); len(calls) != 0 {
+				t.Fatalf("the next holder resumed %+v with a reply a turn had taken", calls)
+			}
+			rig.finished("t1")
+			abandonedOnce(t, rig, false)
+		})
 	}
-	rig.finished("t1")
-	abandonedOnce(t, rig, false)
 }
 
 // A REPLY A TURN TOOK INLINE IS SPENT AT THE TAKE, BEFORE THE TURN RUNS.

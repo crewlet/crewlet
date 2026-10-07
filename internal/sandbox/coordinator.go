@@ -2747,9 +2747,11 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 // sits paused. A LAUNCHING row is the same fact one step earlier: that engine
 // died between starting the job and writing the conversation a resume would
 // re-enter, so there is nothing to resume into and never will be. Both are
-// unresumable tails holding a box, and both are reaped ([Coordinator.reapTail]),
-// handing a person's reply back to the seat where the claim died before any
-// turn took it.
+// tails nobody drives, and both are reaped ([Coordinator.reapTail]) — except a
+// claim of a person's answer that no turn took yet, which is not unresumable at
+// all: it is REVIVED, the answer given back to the run and the run resumed with
+// it, and reaped, its reply handed back to the seat, only past the revival's
+// bounds ([Coordinator.revivable]).
 //
 // Reaping is safe HERE and only here: taking the seat's lease is what proves
 // no live process holds the row — and for a launching row that proof is the
@@ -2772,13 +2774,34 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", tally.running,
 		"parked", tally.parked, "abandoned", tally.abandoned, "finished", tally.finished,
-		"active", len(active))
+		"revived", tally.revived, "active", len(active))
 	return nil
 }
 
 // recovery counts what a seat's recovery pass found, for its one log line:
-// finished is the endings the last holder decided and this one finished.
-type recovery struct{ running, parked, abandoned, finished int }
+// finished is the endings the last holder decided and this one finished, and
+// revived the dead claims whose answer it gave back to the run it answers.
+type recovery struct{ running, parked, abandoned, finished, revived int }
+
+// reaped is what [Coordinator.reapTail] did with a tail the seat's last holder
+// left.
+type reaped int
+
+const (
+	// reapLeft: nothing — a newer lease owns the row, or it is gone.
+	reapLeft reaped = iota
+	// reapMoved: the tail was not abandoned after all — given back before
+	// this node's fence landed — and is the row reported, as it stands.
+	reapMoved
+	// reapRevived: a dead claim's answer was given back to its run, which is
+	// the answered row reported, owed its resume.
+	reapRevived
+	// reapEnded: the tail was ended, its ending this call's.
+	reapEnded
+	// reapOwed: a revival that did not land, kept for this node's retry with
+	// the seat's mail held behind it ([Coordinator.oweRevival]).
+	reapOwed
+)
 
 // recoverRun takes over one run of a seat this node has just acquired.
 //
@@ -2809,12 +2832,23 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 	}
 	switch run.Status {
 	case StatusLaunching, StatusResumed:
-		moved, reaped := c.reapTail(ctx, run, owner, epoch)
-		switch {
-		case moved != nil && again:
+		moved, did := c.reapTail(ctx, run, owner, epoch)
+		switch did {
+		case reapRevived:
+			// THE ANSWER IS THE RUN'S AGAIN, owed its resume: taken over
+			// as the answered run it now is, exactly as an answer the last
+			// holder recorded and never resumed with.
+			tally.revived++
 			c.recoverRun(ctx, *moved, owner, epoch, tally, false)
-		case reaped:
+		case reapMoved:
+			if again {
+				c.recoverRun(ctx, *moved, owner, epoch, tally, false)
+			}
+		case reapEnded:
 			tally.abandoned++
+		case reapLeft, reapOwed:
+			// Another lease's to reap, gone, or a revival this node
+			// retries with the seat's mail held behind it.
 		}
 		return
 	case StatusRunning:
@@ -2876,35 +2910,59 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 }
 
 // reapTail ends a tail the seat's last holder abandoned — a launching row, or a
-// claim — and announces it, reporting whether it ended it. moved is the row as
-// it now stands where the claim turned out not to be abandoned after all: given
-// back before this node's fence landed, and to be taken over as what it is.
+// claim — and announces it; or, for a claim whose node stopped before its turn
+// took the person's answer it was claimed for, REVIVES it — gives the answer
+// back to the run — and reports the row as it now stands, to be taken over as
+// the answered run it is. It reports what it did ([reaped]) and, where the
+// claim was revived or turned out not to be abandoned after all — given back
+// before this node's fence landed — the row as it now stands.
 //
-// # A person's reply the claim died holding
+// # A person's answer the claim died holding: revived, not handed back
 //
-// A claim taken for a RECORDED ANSWER carries the person's reply on its row,
-// and the delivery that brought it was spent when it was recorded: nothing but
-// this row will ever bring it to the seat again. Whether it still owes the
-// seat that reply is the one thing the row has to say, and it says it
-// ([RecordedAnswer.TakenAt]): a claim whose process stopped before its turn
-// took the reply never used it, and the store will not delete the row while it
-// holds it ([ErrAnswerOwed]) — so the reap's ending lets it go, its copies
-// recorded on the row as owed, handed back, and only then the record deleted
-// ([Coordinator.letGoAnswer]), and the seat gets the reply as the ordinary
-// message it is. A turn that took it and died mid-round has used it, and a
-// copy handed back now would answer the person twice: it is spent — recorded
-// as worked here too, for a node that stopped between its take and the spend
-// that goes with it ([CoordinatorOptions.Spent]). It used to be spent either
-// way, so a reply a node stopped holding between its claim and its turn was
-// silently lost.
+// A claim taken for a RECORDED ANSWER — a chat reply or an answer by turn —
+// carries the answer on its row, and the delivery that brought it was spent
+// when it was recorded: nothing but this row will ever bring it to the run it
+// answered. Whether a turn took it is the one thing the row has to say, and it
+// says it ([RecordedAnswer.TakenAt]). A claim whose process stopped before its
+// turn took the answer never used it, and the answer is still the run's: the
+// run has its suspended conversation and the answer on its row, and resuming
+// it with that answer is exactly what the dead claim was doing. So the claim is
+// given back to the answer ([PendingStore.ReviveAnswer]) — the run answered
+// again, fenced to this node's lease in the same write — and this node drives
+// its resume as it drives any answer its last holder recorded and never resumed
+// with ([Coordinator.recoverOwed]). The box needs nothing of its own: the claim
+// never reached the turn, so it never touched the box, which is held exactly as
+// an answered run's is — reclaimed by the pause reaper past its pause TTL, and
+// the run then re-seeded from its branch, as it would have been had the claim
+// never been taken. It used to be reaped, the run ended and the answer handed to
+// the seat as an ordinary message: the person's answer reached the seat, but
+// never the run it answered, which was lost.
 //
-// THE TAKE AND THE LET-GO ARE EXCLUSIVE IN THE STORE, and that — not this
-// reap's reading of the row — is what decides between them. A take refuses an
-// answer an ending let go of; a let-go refuses one a turn took
-// ([ErrAnswerTaken]), and the reap then ends the run as spent. So whichever
-// lands first wins, and a node still on its way to its turn when the reap
-// lets the reply go cannot also answer the person with it — a fenced row or
-// not. The announcement says the reply went back only when one did.
+// ONLY WHILE THE RUN CAN STILL BE RESUMED WITH IT — see [Coordinator.revivable]
+// for the two bounds — and handed back past them: the run is reaped, its
+// answer let go back to the seat as the ordinary message it is, and the
+// announcement says why. A turn that took the answer and died mid-round has
+// used it, and a copy handed back now would answer the person twice: the run is
+// reaped as spent, and the answer's delivery recorded as worked here too, for a
+// node that stopped between its take and the spend that goes with it
+// ([CoordinatorOptions.Spent]).
+//
+// THE TAKE AND THE REVIVAL ARE EXCLUSIVE IN THE STORE, as the take and an
+// ending's let-go are, and that — not this reap's reading of the row — is what
+// decides between them: a revival refuses an answer a turn took
+// ([ErrAnswerTaken]), and the reap then ends the run as spent; a take after the
+// revival finds no claim to take it under. So a node still on its way to its
+// turn when the reap revives the answer cannot also answer the person with it.
+//
+// A REVIVAL THE STORE DOES NOT CONFIRM IS RETRIED, never read as a reason to
+// end the run: a write that failed, or a claim that moved under it and could
+// not be read again, says nothing about whether the run can be resumed. The
+// claim stays on the row, fenced to this node where the fence landed, and this
+// node tries the revival again on the hand-back's spacing with the seat's mail
+// held behind it
+// ([Coordinator.oweRevival]) — finding it landed after all, or the claim given
+// back, it goes on as the answered run it is — and if the seat moves first its
+// next holder reaps the claim afresh.
 //
 // FENCED FIRST, and READ AGAIN. The process that took the claim lost the seat,
 // but may not have noticed: it can still give the claim back, or reach its
@@ -2915,20 +2973,50 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 // is taken over as what it is rather than reaped. That holds for every claim,
 // a completion's included, because a released claim is a live run whatever
 // signal it was taken for. A row this node can neither fence nor read again is
-// reaped as listed: the store decides from what it holds when the ending asks,
-// so a reply on it no turn took still goes back to the seat, and a run handed
-// back under the reap is ended with its reply handed back rather than lost.
+// reaped as listed — and revived as listed, the revival being a compare-and-set
+// that stamps this node's lease itself: the store decides from what it holds,
+// so an answer on it no turn took still reaches the run, or the seat.
 func (c *Coordinator) reapTail(ctx context.Context, run PendingRun, owner string, epoch int64,
-) (moved *PendingRun, reaped bool) {
+) (*PendingRun, reaped) {
+	fence := Fence{Owner: owner, Epoch: epoch}
 	if run.Status == StatusResumed {
 		fenced, still, decided := c.fenceClaim(ctx, run, owner, epoch)
 		if !decided {
-			return nil, false
+			return nil, reapLeft
 		}
 		if still == nil {
-			return &fenced, false
+			return &fenced, reapMoved
 		}
 		run = *still
+	}
+	detail := "the node that owned this seat stopped mid-run, so its turn cannot be continued by the " +
+		"seat's new owner"
+	if run.Status == StatusResumed && run.Answer != nil && !run.Answer.Taken() {
+		why := c.revivable(run)
+		if why == "" {
+			answered, took, err := c.reviveAnswer(ctx, run, fence)
+			switch {
+			case err == nil && answered != nil:
+				return answered, reapRevived
+			case err == nil:
+				// THE CLAIM MOVED between the read and the revival — given
+				// back, or ended — and is taken over as what it is now.
+				return c.rereadClaim(ctx, run, fence)
+			case took != nil:
+				// A TURN TOOK THE ANSWER FIRST: the reply has been used, and
+				// the run is reaped as spent.
+				run = *took
+			default:
+				c.oweRevival(ctx, run, fence, err)
+				return nil, reapOwed
+			}
+		} else {
+			log.WarnContext(ctx, "sandbox_answer_not_revived",
+				"turn_id", run.TurnID, "agent", run.AgentHandle, "reason", why,
+				"lost_claims", run.Answer.LostClaims)
+			detail = "the node holding this seat stopped while resuming the run with a person's " +
+				"answer, and " + why + ", so the run is not resumed again"
+		}
 	}
 	taken := run.Answer != nil && run.Answer.Taken()
 	if taken {
@@ -2947,12 +3035,113 @@ func (c *Coordinator) reapTail(ctx context.Context, run PendingRun, owner string
 	// the seat's new owner is about to open its mailbox, and a turn that died
 	// with the previous owner has to be visible rather than inferred from a
 	// record that quietly left the board.
-	return nil, c.finish(ctx, run, ending{
-		fence: Fence{Owner: owner, Epoch: epoch},
-		note: &failureNote{reason: types.SandboxFailureAbandoned,
-			detail: "the node that owned this seat stopped mid-run, so its turn cannot be " +
-				"continued by the seat's new owner"},
+	if !c.finish(ctx, run, ending{
+		fence: fence,
+		note:  &failureNote{reason: types.SandboxFailureAbandoned, detail: detail},
+	}) {
+		return nil, reapLeft
+	}
+	return nil, reapEnded
+}
+
+// MaxAnswerRevivals is how many claims of one recorded answer may die before
+// their turn took it and still be given back to the run it answers
+// ([Coordinator.reapTail]); the next is reaped, and the answer handed back to
+// the seat.
+//
+// A CLAIM THAT DIES IS A NODE THAT STOPPED between a claim and the turn it
+// drives — a deploy, a crash, a lease that moved — and that window is the
+// fraction of a second a resume takes to reach its turn, so one such loss is
+// bad luck and a second in a row is rare. Three in a row is not luck: it is a
+// resume that takes its node down before its turn begins — a defect the
+// panic guard cannot catch, an allocation that kills the process — and each
+// revival hands it to the next holder to fall over the same way, holding the
+// seat's mail behind it while it does. Three bounds that loop to three seat
+// handoffs, a few minutes at the seat lease's 45 s TTL, while leaving a run
+// that merely met two deploys in a row resumed rather than abandoned. It is
+// counted on the row ([RecordedAnswer.LostClaims]) because the count each node
+// keeps of its own attempts ([MaxAnswerAttempts]) resets with the very event
+// this counts.
+const MaxAnswerRevivals = 3
+
+// revivable reports why a dead claim's recorded answer is NOT given back to the
+// run it answers, or "" where it is.
+//
+// TWO BOUNDS, the same two every series of attempts at a recorded answer's
+// resume is held to, kept on the row because a node that stops resets every
+// count it kept: how many claims of the answer have died
+// ([MaxAnswerRevivals]), and how long since the first of them did, against the
+// run's own awaiting window ([answerWindow], `pause_ttl_seconds`) — the
+// tolerance the run itself declared for a reply, past which a resume that keeps
+// dying with its node is not a transient worth waiting out.
+//
+// NOT THE BOX. The claim never reached its turn, so it never touched the box,
+// and a run whose box is gone — reaped past its pause TTL, or never held, under
+// a zero one — re-seeds from its pushed branch when it resumes, as any answered
+// run does; reviving a run with no box, or no branch, resumes the same turn
+// with the same answer the person gave, which is what the person asked for. NOR
+// THE CONVERSATION: a claim is only ever taken on a run that has one, and the
+// resume's own refusal of one that does not ([types.SandboxFailureNoConversation])
+// hands the answer back through the run's ending in any case.
+func (c *Coordinator) revivable(run PendingRun) string {
+	answer := run.Answer
+	if answer.LostClaims >= MaxAnswerRevivals {
+		return fmt.Sprintf("%d claims of this answer have now died before their turn took it",
+			answer.LostClaims+1)
+	}
+	if window := answerWindow(run); window > 0 && !answer.FirstLostAt.IsZero() &&
+		c.now().Sub(answer.FirstLostAt) >= window {
+		return fmt.Sprintf("the answer has been owed its resume for %s since the first claim of it "+
+			"died, past the run's pause_ttl_seconds", c.now().Sub(answer.FirstLostAt).Round(time.Second))
+	}
+	return ""
+}
+
+// reviveAnswer gives a dead claim back to its recorded answer under this node's
+// lease ([PendingStore.ReviveAnswer]). It reports the run as revived; or, where a
+// turn took the answer first, the row as it stands, to be reaped as spent; or
+// neither, for a claim that moved under it; or the store's failure.
+func (c *Coordinator) reviveAnswer(ctx context.Context, run PendingRun, fence Fence,
+) (revived, took *PendingRun, err error) {
+	written, won, err := c.pending.ReviveAnswer(ctx, run.TurnID, Revival{
+		Launch: run.LaunchID, Answer: run.Answer.EventIDs, Fence: fence,
 	})
+	switch {
+	case errors.Is(err, ErrAnswerTaken):
+		return nil, &written, err
+	case err != nil:
+		return nil, nil, err
+	case !won:
+		return nil, nil, nil
+	}
+	log.InfoContext(ctx, "sandbox_answer_revived",
+		"turn_id", written.TurnID, "agent", written.AgentHandle,
+		"lost_claims", written.Answer.LostClaims, "first_lost_at", written.Answer.FirstLostAt,
+		"detail", "the node holding this seat stopped before the resumed turn took the person's "+
+			"answer; the answer is given back to the run, and this node resumes it")
+	return &written, nil, nil
+}
+
+// rereadClaim is a dead claim's row read again after its revival was refused —
+// it moved under the reap — and reported as what it is now: given back, or
+// ended, to be taken over as that; still the claim, or unreadable, for the
+// revival to be tried again ([Coordinator.oweRevival]); or nothing, where a
+// newer lease owns it or it is gone.
+func (c *Coordinator) rereadClaim(ctx context.Context, run PendingRun, fence Fence) (*PendingRun, reaped) {
+	latest, found, err := c.pending.Get(ctx, run.TurnID)
+	switch {
+	case err != nil:
+		c.oweRevival(ctx, run, fence, fmt.Errorf("sandbox: reading run %s again after its "+
+			"revival was refused: %w", run.TurnID, err))
+		return nil, reapOwed
+	case !found, outranked(latest, fence):
+		return nil, reapLeft
+	case latest.Status == StatusResumed && latest.Ending == nil:
+		c.oweRevival(ctx, latest, fence, fmt.Errorf("sandbox: run %s's claim changed under its "+
+			"revival", run.TurnID))
+		return nil, reapOwed
+	}
+	return &latest, reapMoved
 }
 
 // fenceClaim moves a claimed row to this node's lease and reads it again, for

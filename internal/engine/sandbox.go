@@ -1092,8 +1092,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 // it carries — see [sandbox.CoordinatorOptions.Lease]. The seat's next holder
 // fences the row to its own, newer lease, and from then on this node's writes
 // are refused rather than landing under it: a release that revives a claim the
-// holder has already reaped, or a resumed turn taking an answer it is handing
-// back.
+// holder has already reaped, or a resumed turn taking an answer the holder has
+// given back to the run or is handing back to the seat.
 //
 // The lease's OWN owner, the incarnation [seat.Host.Owner] names, which is the
 // owner the seat's acquisition recovers its runs under — so a node fencing
