@@ -1121,6 +1121,21 @@ func decodeTally(raw []byte) (coord.Tally, error) {
 // no reader ever sees one without the other. Nothing either write recorded is
 // ever taken back: a seat write that fails after the company's landed leaves
 // the round on the company, and says so.
+//
+// ONCE THE COMPANY'S WRITE HAS LANDED, THE REST OF THE CHARGE RUNS ON A
+// CONTEXT THAT OUTLIVES THE CALLER'S. The round was spent before it was
+// charged, so from that write on the charge is half recorded, and a caller
+// hanging up between the two writes — a turn cancelled, a node draining — is
+// ordinary. Left on the caller's context the seat's write failed with it, and
+// the seat's counter was short of a round only because somebody stopped
+// listening; on this one, only a write that itself fails leaves the partial
+// ([coord.SeatUncountedError]). It cannot hang in the caller's place: the
+// client bounds every request made on a context with no deadline by its own
+// API timeout, and only a lost race is retried, a bounded number of times.
+// The company's own write keeps the caller's context, because before it
+// nothing is recorded: a caller that hung up first is told so with nothing
+// half done, and one that must record a round however it ends passes a
+// context of this kind itself, as the engine's meter does.
 func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		// Not an error and not a charge. A phase whose provider reported
@@ -1136,6 +1151,9 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 	if err != nil {
 		return coord.Spend{}, err
 	}
+	// The company's write has landed. See the doc for why everything after
+	// it is written on this context rather than the caller's.
+	landed := context.WithoutCancel(ctx)
 	if len(refusing) > 0 {
 		// THE COMPANY REFUSED, and the round is the seat's all the same:
 		// it is counted there with no verdict of its own, so the seat's
@@ -1146,13 +1164,8 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 		// and turning it into an error would report an outage for a company
 		// that is simply out of budget; the company's record of the round
 		// is true, so taking it back would only make the counter wrong in a
-		// second place. On a context that outlives the caller's: the round
-		// is spent whatever the caller does next, and a write that
-		// inherited a caller who hung up between the two would fail with
-		// it. It cannot hang in the caller's place: the client bounds every
-		// request made on a context with no deadline by its own API
-		// timeout.
-		if _, _, seatErr := f.count(context.WithoutCancel(ctx), req.Seat, req.Tokens, req.Windows, nil, false); seatErr != nil {
+		// second place.
+		if _, _, seatErr := f.count(landed, req.Seat, req.Tokens, req.Windows, nil, false); seatErr != nil {
 			log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", req.Seat,
 				"tokens", req.Tokens, "error", seatErr,
 				"detail", "the company refused this round and counted it; the seat's own "+
@@ -1161,7 +1174,7 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 		return org.Refusal("org", refusing, req.OrgCaps, req.Windows), nil
 	}
 
-	seat, refusing, err := f.count(ctx, req.Seat, req.Tokens, req.Windows, req.SeatCaps, true)
+	seat, refusing, err := f.count(landed, req.Seat, req.Tokens, req.Windows, req.SeatCaps, true)
 	if err != nil {
 		// THE COMPANY KEEPS THE ROUND. The seat's verdict is unknown, so
 		// the charge is an error and the round stops — but the round was
@@ -1204,8 +1217,10 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 //
 // The same two writes as [FleetStore.Charge], org first, with no ceiling to
 // judge and no refusal stamp touched: nothing here decided the scope had room.
-// And the same partial when the seat's write fails after the company's: the
-// company keeps what it counted, and the error names what the seat is missing.
+// The seat's is written on a context that outlives the caller's, for Charge's
+// reason. And the same partial when the seat's write itself fails after the
+// company's: the company keeps what it counted, and the error names what the
+// seat is missing.
 func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error) {
 	if tokens <= 0 {
 		return coord.Spend{OK: true}, nil
@@ -1220,7 +1235,7 @@ func (f *FleetStore) PostCharge(ctx context.Context, seat string, tokens int, wi
 	if err != nil {
 		return coord.Spend{}, err
 	}
-	agent, _, err := f.count(ctx, seat, tokens, windows, nil, false)
+	agent, _, err := f.count(context.WithoutCancel(ctx), seat, tokens, windows, nil, false)
 	if err != nil {
 		// THE COMPANY KEEPS IT, for Charge's reason: the spend happened,
 		// and the company's record of it is true. The compensation this
@@ -1288,9 +1303,10 @@ func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coor
 // A failure is logged rather than returned: the charge already happened, and
 // the stamp is what a dashboard reads, not what the gate decides with.
 //
-// On a context that OUTLIVES the caller's: this runs AFTER both counters have
-// been written, so the charge is a fact whatever happens next, and the caller's context dying between the two
-// writes and this one is ordinary — a turn cancelled, a node draining. Left on
+// On a context that OUTLIVES the caller's, as the seat's write before it is
+// ([FleetStore.Charge]): this runs after both counters have been written, so
+// the charge is a fact whatever happens next, and the caller's context dying
+// before this write is ordinary — a turn cancelled, a node draining. Left on
 // that context the clear failed with it, and the scope kept telling every
 // dashboard it was refusing charges while it had just admitted one. It cannot
 // hang in the caller's place: the client bounds a request made on a context

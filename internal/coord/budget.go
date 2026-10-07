@@ -428,13 +428,16 @@ type Budgets interface {
 	// is true, and taking it back would make the counter wrong in a second
 	// place — no caller charges a round twice, so a company that gave its
 	// half back was short of a round it had paid for. A process that dies
-	// between the two writes leaves the same partial with nobody told. Either
-	// way the SEAT is under-stated by one round in the windows it was cut
-	// for, which lets that one seat's cap trip a round LATE — the fail-open
-	// direction for the seat, bounded by how often a write fails right after
-	// the one before it landed and by the windows turning over, and logged
-	// where it happens. The company, which every seat is judged against,
-	// stays exact.
+	// between the two writes leaves the same partial with nobody told. A
+	// caller that HANGS UP between them leaves none: once the org's write has
+	// landed a backend finishes the seat's on a context that outlives the
+	// caller's, since the round is spent whatever the caller does next. Where
+	// the partial is left, the SEAT is under-stated by one round in the
+	// windows it was cut for, which lets that one seat's cap trip a round
+	// LATE — the fail-open direction for the seat, bounded by how often a
+	// write fails right after the one before it landed and by the windows
+	// turning over, and logged where it happens. The company, which every
+	// seat is judged against, stays exact.
 	//
 	// FAILS CLOSED: an error stops the round. It is NOT a refusal, and a
 	// caller must not report it as one — "the company is out of tokens"
@@ -475,13 +478,14 @@ type Budgets interface {
 	// refused by the next Charge, which stamps it then.
 	//
 	// Two writes, the company's first, and NEITHER IS TAKEN BACK, exactly
-	// as Charge's are not: the spend happened. An error that is a
-	// [SeatUncountedError] says the company's write landed and the seat's
-	// did not, so a caller that offers the spend again records the seat's
-	// share alone ([Budgets.PostChargeSeat]) rather than counting the
-	// company twice. Any other error is the company's own write failing,
-	// which may or may not have landed: offering it again can only
-	// over-state the company, which trips a cap early rather than late.
+	// as Charge's are not: the spend happened. The seat's outlives a caller
+	// that hangs up after the company's has landed, as Charge's does. An
+	// error that is a [SeatUncountedError] says the company's write landed
+	// and the seat's then failed, so a caller that offers the spend again
+	// records the seat's share alone ([Budgets.PostChargeSeat]) rather than
+	// counting the company twice. Any other error is the company's own
+	// write failing, which may or may not have landed: offering it again can
+	// only over-state the company, which trips a cap early rather than late.
 	PostCharge(ctx context.Context, seat string, tokens int, windows Windows) (Spend, error)
 
 	// PostChargeSeat adds spend that has ALREADY HAPPENED to one SEAT's
