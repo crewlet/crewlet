@@ -47,11 +47,15 @@ type BudgetExhausted struct {
 	// spend and ceiling, the spend as the refused charge LEFT it: the
 	// refused round is counted (coord.Budgets.Charge), so UsedTokens reads
 	// past MaxTokens by it, and it is the figure every reader of the
-	// counter is shown afterwards. A build that counted nothing on a
-	// refusal sent the spend before the round, short of the ceiling; both
-	// are the window's spend as that build's counter held it. Where several
-	// windows refused it is the one that ends last, which is when the scope
-	// next has room without a ceiling being raised.
+	// counter is shown afterwards. A call the turn's meter held before it
+	// was made — the window already full, so no charge was sent — refused
+	// no round of its own, and UsedTokens is the window's spend as the
+	// counter answered when that refusal was recorded, at MaxTokens or past
+	// it. A build that counted nothing on a refusal sent the spend before
+	// the round, short of the ceiling; each is the window's spend as that
+	// build's counter held it. Where several windows refused it is the one
+	// that ends last, which is when the scope next has room without a
+	// ceiling being raised.
 	//
 	// ADDITIVE, and omitted rather than empty: a record from a build that
 	// counted one lifetime figure has no window, and a consumer must read
@@ -132,17 +136,18 @@ type BudgetWindow struct {
 	// Limit is the window's ceiling, and ABSENT where nothing caps it —
 	// never 0, which would state a range of nothing that is already full.
 	Limit *int `json:"limit,omitempty"`
-	// RefusedAt is when the window last turned a charge away, RFC 3339 in
+	// RefusedAt is when the window last turned a call away, RFC 3339 in
 	// UTC, and absent while it has not: the gate's own record of saying
-	// no, and when. The round it turned away is in Used like any other —
-	// a refused round has been billed, so the counter counts it — which
-	// is why a window that refused reads past its Limit. The shared
-	// counter's stamp (coord.WindowUsage.RefusedAt), cleared by the
-	// scope's next admitted charge and by the window turning over, so
-	// every node reports the same one. Carried only for a capped window: a
-	// stamp left on a window whose ceiling has since been removed is a
-	// refusal by a ceiling that no longer exists, and the next charge
-	// clears it.
+	// no, and when — a charge it refused, or a call a turn's meter held
+	// before making it because the window was already full. A round it
+	// turned away is in Used like any other — a refused round has been
+	// billed, so the counter counts it — which is why a window that
+	// refused a round reads past its Limit. The shared counter's stamp
+	// (coord.WindowUsage.RefusedAt), cleared by the scope's next admitted
+	// charge and by the window turning over, so every node reports the
+	// same one. Carried only for a capped window: a stamp left on a window
+	// whose ceiling has since been removed is a refusal by a ceiling that
+	// no longer exists, and the next charge clears it.
 	RefusedAt string `json:"refused_at,omitempty"`
 	// State is the engine's judgement of the window; see [BudgetState].
 	State BudgetState `json:"state"`
