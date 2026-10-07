@@ -430,10 +430,12 @@ export interface BudgetWindow {
   /** The ceiling, ABSENT where nothing caps the window — never 0. The live
    *  push lists capped windows only, so there it is always present. */
   limit?: number;
-  /** When the window last turned a charge away, in UTC; absent while it has
-   *  not. The gate's own record, kept in the shared counter beside the spend,
-   *  so every node reports the same one; it clears on the scope's next
-   *  admitted charge or when the window turns over. */
+  /** When the window last turned a call away, in UTC; absent while it has
+   *  not: a charge it refused, or work turned away unsent because the window
+   *  was already full (a turn's next call, a parked delivery, a person's
+   *  question, a reflection pass). The gate's own record, kept in the shared
+   *  counter beside the spend, so every node reports the same one; it clears
+   *  on the scope's next admitted charge or when the window turns over. */
   refused_at?: string;
   /** The engine's judgement of the window. The client computes none. */
   state: BudgetState;
