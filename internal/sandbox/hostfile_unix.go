@@ -4,7 +4,6 @@ package sandbox
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"syscall"
@@ -23,16 +22,19 @@ import (
 // keeps) streamed for as long as the reader would read. So the open is made
 // NON-BLOCKING, which returns at once whatever the path is, and the
 // descriptor is checked before a byte is read: anything but a regular file is
-// an error naming the path and what it is, which a poll reports and a
-// collection retries within its bound — never an empty file, which is the
-// reading of a run that has not written it yet. The flag is cleared again for
-// the read, so a regular file reads as it always did.
+// a [NotRegularFileError] naming the path and what it is, which a poll
+// reports and a collection describes as that piece's refusal — never an empty
+// file, which is the reading of a run that has not written it yet. The flag
+// is cleared again for the read, so a regular file reads as it always did.
 //
-// NOT THROUGH A LINK, EITHER. The path arrives already resolved — the escape
-// check followed every link in it to see where it leads — so a link at its
-// last element when it is opened is one put there since, by the side of the
-// mount that does not have to stay inside it. O_NOFOLLOW refuses that one
-// rather than following it out of the box.
+// NOT THROUGH A LINK, EITHER. The path arrives resolved by the escape check,
+// which follows every link in it that leads somewhere, so a link still at its
+// last element when it is opened is one of two things: a link that leads
+// nowhere (the check resolves a missing last element to itself), or one put
+// there since by the side of the mount that does not have to stay inside it.
+// O_NOFOLLOW refuses both rather than following either out of the box, and
+// both are refused as what they are — a link — rather than read as a file
+// not written yet, which a dangling link had been while the open followed it.
 //
 // A path that is not there answers [fs.ErrNotExist] through the error, which
 // is what the callers read as "not written yet".
@@ -48,9 +50,10 @@ func openHostRegular(target string) (*os.File, error) {
 		}
 	}
 	switch {
-	case errors.Is(err, syscall.ELOOP):
-		return nil, fmt.Errorf("%s is a symbolic link put there after its path was checked, and a "+
-			"file a box wrote is read only where it lies: %w", target, err)
+	case errors.Is(err, syscall.ELOOP) && isLink(target):
+		// ELOOP is also a loop among the links above the last element; only
+		// a link AT it is the refusal O_NOFOLLOW makes, so that is asked.
+		return nil, &NotRegularFileError{Path: target, Kind: kindSymlink}
 	case err != nil:
 		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
 	}
@@ -61,15 +64,19 @@ func openHostRegular(target string) (*os.File, error) {
 	}
 	if what := fileKind(st); what != "" {
 		_ = syscall.Close(fd)
-		return nil, fmt.Errorf("%s is %s, not a regular file, so it was not read: a box's "+
-			"markers, reports and streams are files its runner writes, and reading anything else "+
-			"from the engine host could block it or never end", target, what)
+		return nil, &NotRegularFileError{Path: target, Kind: what}
 	}
 	if err := syscall.SetNonblock(fd, false); err != nil {
 		_ = syscall.Close(fd)
 		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
 	}
 	return os.NewFile(uintptr(fd), target), nil
+}
+
+// isLink reports whether target itself is a symbolic link.
+func isLink(target string) bool {
+	info, err := os.Lstat(target)
+	return err == nil && info.Mode()&fs.ModeSymlink != 0
 }
 
 // fileKind names what st describes, as a reader says it, or "" for a regular
@@ -90,7 +97,7 @@ func fileKind(st syscall.Stat_t) string {
 	case syscall.S_IFDIR:
 		return "a directory"
 	case syscall.S_IFLNK:
-		return "a symbolic link"
+		return kindSymlink
 	}
 	return "something other than a file"
 }

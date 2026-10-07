@@ -83,6 +83,50 @@ const MaxFileBytes = 32 << 20
 // [MaxFileBytes].
 var ErrFileTooLarge = errors.New("sandbox: the file is larger than the engine reads back from a box")
 
+// ErrNotRegularFile is a read a box refused because its path names something
+// other than a regular file where it lies — a named pipe, a device, a socket,
+// a directory or a symbolic link. A backend that reads a box's files from the
+// engine host refuses one, because opening it there could block the reader or
+// never end ([NotRegularFileError] says which it was).
+//
+// A REFUSAL OF THAT PIECE, NOT A BOX THAT COULD NOT BE READ. What the path
+// names is fixed by what the box holds, so a collection that retried it would
+// be refused again on every attempt until the run was settled as lost — its
+// spend uncharged and its record unpublished, which is what a coding agent
+// that made a pipe at its own report path would buy. A collection describes
+// the piece, as it does one past [MaxFileBytes], and collects the rest.
+var ErrNotRegularFile = errors.New("sandbox: the path is not a regular file")
+
+// NotRegularFileError is [ErrNotRegularFile] with what the path was found to
+// be, which is the sentence a refused piece is described by.
+type NotRegularFileError struct {
+	// Path is where the file was looked for.
+	Path string
+	// Kind is what it is, as a reader says it: "a named pipe", "a
+	// directory", "a symbolic link".
+	Kind string
+}
+
+// Reason is why the path was not read, as the rest of a sentence about it.
+func (e *NotRegularFileError) Reason() string {
+	if e.Kind == kindSymlink {
+		return "is a symbolic link, and a box's files are read only where they lie, so it was not read"
+	}
+	return "is " + e.Kind + ", not a regular file, so it was not read"
+}
+
+func (e *NotRegularFileError) Error() string {
+	return e.Path + " " + e.Reason() + ": a box's markers, reports and streams are files " +
+		"its runner writes, and reading anything else from the engine host could block it, " +
+		"never end, or read past the box"
+}
+
+// Is makes the error [ErrNotRegularFile] under errors.Is.
+func (e *NotRegularFileError) Is(target error) bool { return target == ErrNotRegularFile }
+
+// kindSymlink is the [NotRegularFileError.Kind] of a symbolic link.
+const kindSymlink = "a symbolic link"
+
 // readCapped reads a file's content out of r, REFUSING one past
 // [MaxFileBytes] rather than returning its first part — the one rule every
 // backend's [Sandbox.ReadFile] follows.

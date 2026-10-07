@@ -329,6 +329,10 @@ type Sandbox interface {
 	// grow with the run and have no size a whole read could honestly refuse
 	// at — the engine keeps a bounded share of them in the end — so they
 	// are read with [Sandbox.OpenFile] or [Sandbox.ReadTail] instead.
+	//
+	// A path that names something other than a regular file is refused with
+	// [ErrNotRegularFile] by a backend that reads the box from the engine
+	// host, for all three reads, because opening one there could block.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded

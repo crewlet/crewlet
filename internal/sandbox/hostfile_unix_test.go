@@ -3,6 +3,7 @@
 package sandbox_test
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,6 +47,13 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 				t.Fatalf("mkdir: %v", err)
 			}
 		},
+		// A link that leads nowhere passes the escape check as itself, and
+		// is a link, not a marker not written yet.
+		"symbolic link": func(t *testing.T, host string) {
+			if err := os.Symlink(host+".nowhere", host); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		},
 	}
 	for boxName, fresh := range boxes {
 		for kind, create := range kinds {
@@ -75,8 +83,11 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 					go func() { answered <- fn() }()
 					select {
 					case err := <-answered:
-						if err == nil || !strings.Contains(err.Error(), kind) {
-							t.Errorf("%s of a %s = %v; want an error saying what it is", read, kind, err)
+						// ErrNotRegularFile, so a collection can tell it
+						// from a box it could not read and degrade only
+						// the piece.
+						if !errors.Is(err, sandbox.ErrNotRegularFile) || !strings.Contains(err.Error(), kind) {
+							t.Errorf("%s of a %s = %v; want ErrNotRegularFile saying what it is", read, kind, err)
 						}
 					case <-time.After(10 * time.Second):
 						// A blocked open is never released, so the test

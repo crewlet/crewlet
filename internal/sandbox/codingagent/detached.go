@@ -356,10 +356,13 @@ const stderrKeep = sandbox.MaxFailureBytes
 // the run reads as not succeeded with that as the reason, and the run's
 // tokens, refs and transcript are still collected, charged and published. A
 // refusal used to fail the whole collection, which settled the run as
-// unreachable and took its charge and its record with it.
+// unreachable and took its charge and its record with it. So does ANY piece,
+// a stream included, whose path the box refuses as not a regular file
+// ([sandbox.ErrNotRegularFile]): what a path names is the box's own doing, and
+// retrying the collection would only read it again.
 //
 // A READ THAT FAILS is an error, as it always was: that is a box that could
-// not be read back, not a piece that was too large.
+// not be read back, not a piece that was too large or was not a file.
 //
 // EVERYTHING IS REDACTED WHOLE before anything is bounded: every file here
 // came out of a box whose environment holds the seat's credentials, and a
@@ -381,34 +384,44 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		last   streamLast
 	)
 	if out.Events {
-		streamed, end, err := r.decodeStream(ctx, box, out.Stdout)
+		streamed, end, refusal, err := r.decodeStream(ctx, box, out.Stdout)
 		if err != nil {
 			return sandbox.Result{}, err
+		}
+		if refusal != "" {
+			refused = append(refused, refusal)
 		}
 		result, last = streamed, end
 	}
 	if out.Result != "" {
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its CLI printed")
-		if err == nil && refusal == "" && out.Events && out.Result != out.Stdout && last.said() &&
-			strings.TrimSpace(raw) == "" {
-			// THE WRAPPER NEVER COPIED IT. The result file is the stream's
-			// last line, written by the wrapper once the CLI has exited, so
-			// a run whose process group died — an OOM kill, a host restart
-			// — has none, and Parse("") called a run that streamed a whole
-			// session "a run that produced no output". The stream's last
-			// line is what the copy would have held: a result message the
-			// CLI did print, or whatever it was saying when it stopped,
-			// which Parse names for what it is.
+		if err == nil && out.Events && out.Result != out.Stdout && last.said() &&
+			(refusal != "" || strings.TrimSpace(raw) == "") {
+			// THE STREAM'S LAST LINE IS WHAT THE RESULT FILE HOLDS: the
+			// wrapper copies it there once the CLI has exited. So where the
+			// file has nothing to give — a run whose process group died (an
+			// OOM kill, a host restart) left it empty, and Parse("") called
+			// a run that streamed a whole session "a run that produced no
+			// output"; or the box refused it, and the run's spend went
+			// uncharged — the line is read in its place: a result message
+			// the CLI did print, or whatever it was saying when it stopped,
+			// which Parse names for what it is. A refused file is still said:
+			// the run did not report as it was asked to.
 			//
 			// ONLY WHERE THE STREAM SAID SOMETHING: the wrapper writes the
 			// file whatever the CLI did, so a CLI that exited at once leaves
 			// it empty beside an empty stream, and there is nothing to read
 			// in its place — nor anything to say about it beside the run's
 			// real failure.
+			why := "was empty"
+			if refusal != "" {
+				refused = append(refused, refusal)
+				why = "was refused"
+			}
 			raw, refusal = last.resultLine(out.Stdout)
 			log.WarnContext(ctx, "coding_agent_result_from_stream", "agent", r.cli.Name(),
-				"detail", "the result file was empty, so the event stream's last line, which "+
-					"the wrapper copies into it, was read in its place")
+				"detail", "the result file "+why+", so the event stream's last line, which the "+
+					"wrapper copies into it, was read in its place")
 		}
 		switch {
 		case err != nil:
@@ -429,6 +442,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// events; otherwise the error stream is it. Read once, reused below for
 	// the failure detail.
 	errTail, err := box.ReadTail(ctx, paths.Err(), stderrKeep+redactContext)
+	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
+		refused = append(refused, refusal)
+		errTail, err = sandbox.FileTail{}, nil
+	}
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("codingagent: reading the error stream: %w", err)
 	}
@@ -578,18 +595,22 @@ func unreadNote(unread int64, none bool) string {
 }
 
 // decodeStream reads one event stream through a fresh decoder, and keeps its
-// last line.
-func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (sandbox.Result, streamLast, error) {
+// last line — or answers a refusal where the box would not open the stream
+// because it is not a regular file ([notRegularPiece]).
+func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (sandbox.Result, streamLast, string, error) {
 	stream, err := box.OpenFile(ctx, path)
+	if refusal := notRegularPiece(err, path, "the event stream"); refusal != "" {
+		return sandbox.Result{}, streamLast{}, refusal, nil
+	}
 	if err != nil {
-		return sandbox.Result{}, streamLast{}, fmt.Errorf("codingagent: opening the event stream: %w", err)
+		return sandbox.Result{}, streamLast{}, "", fmt.Errorf("codingagent: opening the event stream: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
 	dec := &keepingLast{Decoder: r.cli.Events()}
 	if err := eachLine(stream, dec); err != nil {
-		return sandbox.Result{}, streamLast{}, fmt.Errorf("codingagent: reading the event stream: %w", err)
+		return sandbox.Result{}, streamLast{}, "", fmt.Errorf("codingagent: reading the event stream: %w", err)
 	}
-	return dec.Result(), dec.last, nil
+	return dec.Result(), dec.last, "", nil
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it
@@ -637,11 +658,14 @@ func (k *keepingLast) Skipped(n int64) {
 }
 
 // readWhole reads a file meant to be read whole, answering a file past
-// [sandbox.MaxFileBytes] with a REFUSAL — a sentence saying what it was and
-// how large — rather than an error, so the piece degrades and the collection
-// does not.
+// [sandbox.MaxFileBytes], or a path that is not a regular file, with a
+// REFUSAL — a sentence saying what it was — rather than an error, so the piece
+// degrades and the collection does not.
 func readWhole(ctx context.Context, box sandbox.Sandbox, path, what string) (string, string, error) {
 	raw, err := box.ReadFile(ctx, path)
+	if refusal := notRegularPiece(err, path, what); refusal != "" {
+		return "", refusal, nil
+	}
 	switch {
 	case errors.Is(err, sandbox.ErrFileTooLarge):
 		return "", refusedPiece(ctx, box, path, what), nil
@@ -649,6 +673,22 @@ func readWhole(ctx context.Context, box sandbox.Sandbox, path, what string) (str
 		return "", "", err
 	}
 	return string(raw), "", nil
+}
+
+// notRegularPiece describes a piece whose path the box refused because it is
+// not a regular file ([sandbox.ErrNotRegularFile]), or "" for any other
+// answer.
+//
+// A REFUSAL RATHER THAN AN ERROR, because what the path names is the box's
+// own doing and a retry reads it again: an error would have the collection
+// retried until the run was settled as lost, uncharged and unrecorded — for a
+// pipe the agent made where its report goes.
+func notRegularPiece(err error, path, what string) string {
+	var notRegular *sandbox.NotRegularFileError
+	if !errors.As(err, &notRegular) {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s) %s", what, path, notRegular.Reason())
 }
 
 // refusedPiece describes a file the engine would not read whole, by its size.
