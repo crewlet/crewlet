@@ -777,11 +777,10 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	}
 	// AND THE RANK, from the column every board orders by — see the doc.
 	task.Rank = Rank(rank)
-	// AND THE SPEND, because a turn adds to the
-	// task's COLUMNS in the transaction that inserts its turn row
-	// ([Applier.applyTurn]) and never touches the document, so the
-	// document's copy is whatever the create wrote — zero. Read from the
-	// document, every task page said no agent had ever worked on it, beside
+	// AND THE SPEND, because a turn adds to the task's COLUMNS in the
+	// transaction that inserts its turn row ([Applier.applyTurn]) and
+	// never touches the document, so the document's copy is whatever the
+	// create wrote — zero. Read from the document, every task page said no agent had ever worked on it, beside
 	// a turn list and a board card counting the turns the columns hold.
 	task.Spend = spend
 	return task, nil

@@ -675,8 +675,8 @@ type MutationRecord struct {
 	// ActorSeat is the chart seat the writing credential is BOUND to
 	// with `contact.crewlet_operator_id`, and it has two readers: the
 	// wake's own actor exclusion, and — through the history row's
-	// `actor_seat` — the screen that draws who made a change. Empty for a token nobody bound and for every writer that
-	// already IS a seat.
+	// `actor_seat` — the screen that draws who made a change. Empty for a
+	// token nobody bound and for every writer that already IS a seat.
 	//
 	// IT IS NOT AN AUTHOR. [MutationRecord.Actor] stays the token and
 	// [MutationRecord.ActorKind] stays `operator`, because a tracker whose
@@ -692,6 +692,8 @@ type MutationRecord struct {
 	// `jane-founder`, and a founder was woken by every item their own
 	// assistant filed and every comment it left.
 	//
+	// ADDITIVE, like every field beside it: a build with no field for it
+	// keeps it in [MutationRecord.Extra] and re-encodes it unchanged.
 	ActorSeat string `json:"actor_seat,omitempty"`
 
 	TurnID  string   `json:"turn_id,omitempty"`
@@ -1457,8 +1459,8 @@ func (n *Notify) checkSnapshot() error {
 // collected coding run's tokens on the segment that resumed from it. Workers
 // and SentBack are COUNTS beside those tokens, not more tokens — how many
 // delegated tasks ran and how many reviews sent the work back — and both are
-// version-2 fields (see [versionedFields]), OMITTED AT ZERO so a turn that
-// delegated nothing and passed its first review stays readable by every build.
+// OMITTED AT ZERO, like every counter here, so a turn that delegated nothing
+// and passed its first review says nothing it has no value for.
 type TurnSpend struct {
 	Turns      int `json:"turns,omitempty"`
 	Rounds     int `json:"rounds,omitempty"`

@@ -1684,8 +1684,8 @@ token, which is the audit trail. What a notice or a feed row *draws* is the
 seat — `actor_seat` beside `actor` — so a founder's own change reads as the
 founder rather than as a credential's id. It is stored on the history row
 whenever the change carries one — every change written through an operator's
-token — and where a change carries none (an agent's, a person's own or the
-system's) a screen falls back to the author.
+token that a seat claims — and where a change carries none (an agent's, an
+unbound token's or the system's) a screen falls back to the author.
 
 The single exception is **`unblocked`**, and it is the exception because it is
 about a *different* task: closing a blocker is exactly the moment to be told

@@ -1196,8 +1196,7 @@ type Project struct {
 	// ends in. LEAD-OWNED rather than chart-owned — it is how the team
 	// plans, not a fact the founder wrote in the config — so it is set
 	// through [Writer.WriteProject] and a chart apply carries it through
-	// untouched. A version-7 field ([versionedFields]): a build reading 6
-	// has no column for it and retains a record carrying one.
+	// untouched.
 	TargetDate string `json:"target_date,omitempty"`
 
 	// PolicyVersion moves on a fields edit — NOT on tags.

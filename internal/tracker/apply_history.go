@@ -91,7 +91,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	}
 
 	// THE SEAT BEHIND THE TOKEN, stored whenever the record carries one —
-	// every change written through an operator's token.
+	// every change written through an operator's token that a seat claims.
 	actorSeat := c.record.ActorSeat
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_history

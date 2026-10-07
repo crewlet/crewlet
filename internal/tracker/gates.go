@@ -322,8 +322,8 @@ func markedTask(subj statelog.Subject) (string, bool) {
 // record is written at a RECORD version above every build that predates the
 // change — a row in [versionedFields] carrying [statelog.VersionedField.Gate]
 // — and the framework halts that build at it, while every record written
-// before it keeps the rule it was applied by. The halt needs the older build to know the record for a gate, and it
-// does, because [Domain.InstallsGate] is answered from the envelope: an
+// before it keeps the rule it was applied by. The halt needs the older build
+// to know the record for a gate, and it does, because [Domain.InstallsGate] is answered from the envelope: an
 // eviction by its kind and a purge by its op. That is also why a changed gate
 // is NOT given a new kind or a new op: one an older build does not know is not
 // a gate to it, so at a raised version it would be deferred — the licence
