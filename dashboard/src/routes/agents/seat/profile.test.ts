@@ -163,6 +163,8 @@ describe("the current turn's calls", () => {
           name: `tool.${i}`,
           round: i,
           arguments: { i: String(i) },
+          result: "",
+          success: true,
           started_at: "2026-09-21T09:48:02Z",
           duration_ms: 300,
         })),
@@ -190,6 +192,22 @@ describe("the current turn's calls", () => {
   test("reads each call's time and duration off the engine's own record", () => {
     const [first] = feedRows(row(1, false));
     expect(first).toMatchObject({ at: "2026-09-21T09:48:02Z", tookMs: 300, words: "i 0" });
+  });
+
+  // A FAILED CALL THAT SAID NOTHING IS STILL A FAILURE: the engine writes
+  // `success: false` on every one, and `error` only repeats its words.
+  test("reads a failure off success, whether or not the call said anything", () => {
+    const failing = (result: string): AgentRow => {
+      const r = row(1, false);
+      const ex = r.live_call!.tool_executions![0]!;
+      r.live_call!.tool_executions = [
+        { ...ex, result, success: false, ...(result ? { error: result } : {}) },
+      ];
+      return r;
+    };
+    expect(feedRows(failing(""))[0]?.failed).toBe(true);
+    expect(feedRows(failing("exit status 1"))[0]?.failed).toBe(true);
+    expect(feedRows(row(1, false))[0]?.failed).toBe(false);
   });
 
   test("counts the turn's tokens as its recorded phases and the one running", () => {

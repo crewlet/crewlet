@@ -393,24 +393,20 @@ function num(v: unknown): number {
 /** Normalise the loose `tool_executions` map into something typed. */
 export function toolCalls(raw: unknown): ToolCall[] {
   if (!Array.isArray(raw)) return [];
-  return (raw as ToolExecution[]).map((ex, i) => {
-    const rec = ex as Record<string, unknown>;
+  return (raw as ToolExecution[]).map((ex) => {
+    const rec = ex as Partial<Record<keyof ToolExecution, unknown>>;
     return {
-      name: String(rec.name ?? rec.tool ?? "tool"),
-      // A producer that never set `round` still gets a stable ledger: the
-      // array's own order is the sequence, and it only appends. ONE-BASED,
-      // because the engine's own `round` is (it is `roundsUsed`), and a
-      // fallback numbering from 0 would put two producers' rounds on
-      // different scales in the same list.
-      round: typeof rec.round === "number" ? rec.round : i + 1,
-      args: str(rec.arguments ?? rec.args),
-      result: str(rec.result ?? rec.output ?? rec.error),
-      failed: rec.success === false || rec.failed === true || Boolean(rec.error),
+      name: String(rec.name ?? "tool"),
+      // ONE-BASED, because the engine's own `round` is (it is `roundsUsed`).
+      round: num(rec.round),
+      args: str(rec.arguments),
+      result: str(rec.result),
+      failed: rec.success === false || Boolean(rec.error),
       // How long the call took, and who answered it: the tool loop times
       // every call and the surface names the origin that served it. Absent
-      // on a row nothing timed (an older engine's, an agent-mode run's
-      // bridged call), which reads as 0 / "" — "not recorded", never
-      // "instant" or "the engine's own".
+      // on a row nothing timed (an agent-mode run's bridged call, whose
+      // rounds ran inside somebody else's loop), which reads as 0 / "" —
+      // "not recorded", never "instant" or "the engine's own".
       durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
       origin: typeof rec.origin === "string" ? rec.origin : "",
       server: typeof rec.server === "string" ? rec.server : "",

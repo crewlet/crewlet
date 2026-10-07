@@ -185,16 +185,16 @@ export interface ErrorInfo {
 
 /** One tool the model called, as the phase event records it. */
 export interface ToolExecution {
-  name?: string;
-  tool?: string;
-  /** The round this call belongs to. THE ordering key — see `roundsOf`. */
-  round?: number;
-  arguments?: unknown;
-  args?: unknown;
-  result?: unknown;
-  output?: unknown;
+  name: string;
+  /** The round this call belongs to. THE ordering key — see `rounds()`. */
+  round: number;
+  arguments: unknown;
+  /** What the tool returned — or, on a failed call, what it failed with. */
+  result: string;
+  /** False on a call that failed. */
+  success: boolean;
+  /** Present only on a failed call, repeating its `result`. */
   error?: string;
-  failed?: boolean;
   /** When the call was handed to the tool (RFC 3339, UTC), and how long it
    *  took. Both absent on a row nothing timed. */
   started_at?: string;

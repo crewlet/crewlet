@@ -1232,6 +1232,8 @@ function oneRoundIn() {
           name: "knowledge.search",
           round: 1,
           arguments: { q: "retry backoff" },
+          result: "",
+          success: true,
           started_at: "2026-09-13T10:01:10Z",
           duration_ms: 300,
         },

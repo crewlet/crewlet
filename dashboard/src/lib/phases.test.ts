@@ -370,19 +370,13 @@ describe("the round ledger", () => {
     expect(after.slice(0, 2)).toEqual(before);
   });
 
-  test("a producer that never set a round still gets a stable ledger", () => {
-    // The array's own order is the sequence, and it only appends. ONE-BASED,
-    // matching the engine's own `round` (which is `roundsUsed`) — numbering a
-    // fallback from 0 would put two producers on different scales in one list.
-    const ledger = rounds(toolCalls([{ name: "a" }, { name: "b" }]));
-    expect(ledger.map((r) => r.round)).toEqual([1, 2]);
-  });
-
-  test("a failure is read from any of the three ways the engine spells it", () => {
-    expect(toolCalls([{ name: "a", success: false }])[0]?.failed).toBe(true);
-    expect(toolCalls([{ name: "a", failed: true }])[0]?.failed).toBe(true);
-    expect(toolCalls([{ name: "a", error: "boom" }])[0]?.failed).toBe(true);
-    expect(toolCalls([{ name: "a", success: true }])[0]?.failed).toBe(false);
+  test("a failure is read off `success`", () => {
+    // The engine writes `success: false` on every failed call, beside the
+    // words it failed with in `result` (and again in `error`).
+    const [failed] = toolCalls([{ name: "a", success: false, result: "boom", error: "boom" }]);
+    expect(failed).toMatchObject({ failed: true, result: "boom" });
+    expect(toolCalls([{ name: "a", success: false, result: "" }])[0]?.failed).toBe(true);
+    expect(toolCalls([{ name: "a", success: true, result: "ok" }])[0]?.failed).toBe(false);
   });
 
   test("a call the engine timed and attributed is read as it was written", () => {

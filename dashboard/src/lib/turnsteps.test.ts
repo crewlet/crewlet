@@ -82,7 +82,15 @@ test("a call is read by its arguments' values, the one running first", () => {
   expect(
     lastCallLine(
       row({
-        tool_executions: [{ name: "gitlab.get_file", arguments: { path: "a.go" } }],
+        tool_executions: [
+          {
+            name: "gitlab.get_file",
+            round: 1,
+            arguments: { path: "a.go" },
+            result: "",
+            success: true,
+          },
+        ],
         running_call: {
           round: 2,
           name: "sandbox.run",

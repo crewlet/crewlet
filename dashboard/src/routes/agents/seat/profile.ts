@@ -301,12 +301,14 @@ export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
   const running = call.running_call;
   const room = Math.max(0, limit - (running ? 1 : 0));
   const done: FeedRow[] = (call.tool_executions ?? []).map((ex, i) => ({
-    key: `done-${ex.round ?? 0}-${i}`,
+    key: `done-${ex.round}-${i}`,
     at: ex.started_at ?? "",
-    name: ex.name ?? ex.tool ?? "tool",
-    words: callWords(ex.arguments ?? ex.args),
+    name: ex.name,
+    words: callWords(ex.arguments),
     ...(typeof ex.duration_ms === "number" ? { tookMs: ex.duration_ms } : {}),
-    failed: ex.failed === true || Boolean(ex.error),
+    // The rule `toolCalls` reads a failure by: a failed call always carries
+    // `success: false`, and `error` only when it said something.
+    failed: ex.success === false || Boolean(ex.error),
     running: false,
   }));
   const shown = room > 0 ? done.slice(-room) : [];
