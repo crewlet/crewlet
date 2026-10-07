@@ -177,9 +177,10 @@ func TestARefusedNoteIsIsolatedOnceAndNotSentAgainOnTheNextTick(t *testing.T) {
 	if first.filled["diary"] != 2 {
 		t.Fatalf("filled %d notes, want the two the provider takes", first.filled["diary"])
 	}
-	if first.pass.Requests > 5 {
-		t.Errorf("isolating one note among three took %d requests, want at most 1 + 2·⌈log₂3⌉ = 5",
-			first.pass.Requests)
+	if isolating := first.pass.Requests - first.pass.Canaries; isolating > 5 || first.pass.Canaries != 1 {
+		t.Errorf("isolating one note among three took %d requests and %d canaries, want at "+
+			"most 1 + 2·⌈log₂3⌉ = 5 and the one canary its first refusal is judged by",
+			isolating, first.pass.Canaries)
 	}
 	left, err := diary.Unfilled(context.Background(), "id-a", fake.Model(), time.Now().UTC(),
 		learning.FillCursor{}, 10)
@@ -238,10 +239,12 @@ func TestAProviderFailureEndsTheTickForEverySeat(t *testing.T) {
 	}
 }
 
-// A PROVIDER THAT REFUSES EVERYTHING IS HELD TO THE REQUEST BOUND ACROSS SEATS,
-// concluded the configuration's refusal, and then sent nothing for the pause —
-// where retrying each note alone was one request and one warning per note per
-// seat per minute.
+// A PROVIDER THAT REFUSES ITS CONFIGURATION — every request, whatever it carries
+// — is concluded refused by the tick that meets it, in the refused call and the
+// canary that judges it, and then sent nothing for the pause: where retrying
+// each note alone was one request and one warning per note per seat per minute,
+// and isolating every note before concluding was a hundred and twenty-seven
+// silent refused requests a seat.
 func TestAProviderRefusingEveryNoteIsBoundedThenLeftAlone(t *testing.T) {
 	t.Parallel()
 	db, _ := diaryFixture(t, map[string][]string{
@@ -249,7 +252,7 @@ func TestAProviderRefusingEveryNoteIsBoundedThenLeftAlone(t *testing.T) {
 		"id-c": facts(embeddings.PassBatch, "c"),
 	})
 	fake := embeddings.NewFake(64)
-	fake.Refuse("durable")
+	fake.Refuse("") // every request carries the empty marker: a refused setting
 	seats := allEstablished("a", "b", "c")
 	ids := func(h string) string { return "id-" + h }
 	memory := embeddings.NewRefusals()
@@ -270,11 +273,16 @@ func TestAProviderRefusingEveryNoteIsBoundedThenLeftAlone(t *testing.T) {
 		}
 		if report.pass.Concluded {
 			concluded = minute
+			if report.pass.Requests != 2 {
+				t.Errorf("concluding took %d requests, want the refused call and its canary",
+					report.pass.Requests)
+			}
 			break
 		}
 	}
-	if concluded < 0 {
-		t.Fatal("ten ticks of nothing but refusals never concluded the configuration is refused")
+	if concluded != 0 {
+		t.Fatalf("a refused configuration was concluded at tick %d, want the first tick that met it",
+			concluded)
 	}
 	before := len(fake.Requests())
 	paused := tick(t, db, seats, ids, fake, memory, fillAt.Add(time.Duration(concluded+1)*time.Minute),

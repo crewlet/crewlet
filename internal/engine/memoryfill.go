@@ -84,13 +84,14 @@ const (
 	// memoryFillRequestsPerTick bounds the provider requests one node's
 	// tick sends.
 	//
-	// SIXTEEN: enough to isolate one refused input among a full call inside
-	// the tick that meets it (1 + 2·log₂128 = 15) with one to spare, and what
-	// bounds the tick's wall clock and the refused requests a provider
-	// refusing everything costs a node before the pass concludes the refusal
-	// is the configuration's. Per node rather than shared: a provider limits
-	// these models by the token rather than by the request, and sixteen a
-	// minute is far inside any request rate a vendor publishes.
+	// SIXTEEN: exactly what isolating one refused input among a full call
+	// costs inside the tick that meets it — 1 + 2·log₂128 = 15, and the one
+	// canary that judges the refusal when it is the tick's first answer
+	// (embeddings.Pass) — and what bounds the tick's wall clock. A provider
+	// refusing its configuration costs two of them (the refused call and the
+	// canary) before the tick concludes so. Per node rather than shared: a
+	// provider limits these models by the token rather than by the request,
+	// and sixteen a minute is far inside any request rate a vendor publishes.
 	memoryFillRequestsPerTick = 16
 
 	// memoryFillBytesPerTick bounds what the COMPANY's holders send in one
@@ -426,11 +427,11 @@ func (r fillReport) log(ctx context.Context, provider embeddings.BatchEmbedder) 
 		log.WarnContext(ctx, "memory_fill_configuration_refused", "model", model,
 			"requests", pass.Requests, "pause", embeddings.RefusalRetry.String(),
 			"error", err,
-			"detail", "the provider refused every request, rows sent alone included, "+
-				"and has accepted none under this configuration — the refusal is "+
+			"detail", "the provider refused this tick's first request and then one "+
+				"plain word sent alone to judge it — the refusal is "+
 				"providers.embeddings', not any row's; the fill sends nothing for "+
-				"the pause, and an apply of the company configuration starts it "+
-				"again at once")
+				"the pause and judges the next refusal again after it, and an "+
+				"apply of the company configuration starts it again at once")
 	case pass.Paused:
 		log.DebugContext(ctx, "memory_fill_paused", "model", model)
 	case err != nil:

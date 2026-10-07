@@ -44,9 +44,10 @@ func (k *kept) store(inputs []embeddings.PassInput, vectors [][]float32) error {
 var passAt = time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 
 // A REFUSED INPUT IS SPLIT OUT, NOT RETRIED ONE BY ONE: one poison among a full
-// call costs at most 1 + 2·log₂128 = 15 requests, every neighbour is embedded,
-// and the poison is named once, alone — where retrying each input alone was
-// 1 + 128 requests a pass.
+// call costs at most 1 + 2·log₂128 = 15 requests, plus the one canary that
+// judges a refusal met before anything was accepted, every neighbour is
+// embedded, and the poison is named once, alone — where retrying each input
+// alone was 1 + 128 requests a pass.
 func TestAPassIsolatesARefusedInputInFifteenRequestsAndKeepsItsNeighbours(t *testing.T) {
 	t.Parallel()
 	fake := embeddings.NewFake(16)
@@ -60,8 +61,10 @@ func TestAPassIsolatesARefusedInputInFifteenRequestsAndKeepsItsNeighbours(t *tes
 	if pass.Err() != nil {
 		t.Fatalf("a refused input ended the pass: %v", pass.Err())
 	}
-	if pass.Requests > 15 {
-		t.Errorf("isolating one input took %d requests, past 1 + 2·log₂128 = 15", pass.Requests)
+	if pass.Canaries != 1 || pass.Requests-pass.Canaries > 15 {
+		t.Errorf("isolating one input took %d requests and %d canaries, past "+
+			"1 + 2·log₂128 = 15 and the one canary its first refusal is judged by",
+			pass.Requests-pass.Canaries, pass.Canaries)
 	}
 	if len(k.ids) != embeddings.PassBatch-1 || pass.Accepted != embeddings.PassBatch-1 {
 		t.Errorf("embedded %d inputs (%d accepted), want every neighbour of the poison", len(k.ids), pass.Accepted)
@@ -207,38 +210,40 @@ func TestAPassEndsAtAFailureThatIsNotAboutAnInput(t *testing.T) {
 	}
 }
 
-// A REFUSED CONFIGURATION is concluded from two inputs refused alone with none
-// accepted, ends the pass, and holds every pass back for the retry — while a
-// single refused input on a provider that has embedded anything never is.
-func TestARefusedConfigurationIsConcludedOnlyFromWhatSupportsIt(t *testing.T) {
+// A REFUSED CONFIGURATION IS CONCLUDED BY THE CANARY, at once: the first
+// refusal a pass meets before anything was accepted is judged by one plain word
+// sent alone, and a provider refusing that too is refusing its configuration —
+// two requests, nothing held against the inputs whose refusal was not theirs,
+// every pass held back for the hour, and judged again after it: still refused
+// it costs two requests more, fixed it embeds everything with no canary at all.
+func TestARefusedConfigurationIsConcludedByTheCanary(t *testing.T) {
 	t.Parallel()
 	fake := embeddings.NewFake(16)
 	fake.Refuse("") // every input carries the empty marker: a refused setting
 	memory := embeddings.NewRefusals()
 	var k kept
-	passes, requests := 0, 0
-	for ; passes < 10; passes++ {
-		pass := embeddings.NewPass(memory, passAt.Add(time.Duration(passes)*time.Minute), 16, 1<<20)
-		if err := pass.Embed(t.Context(), fake, passInputs(embeddings.PassBatch, -1), k.store); err != nil {
-			t.Fatal(err)
-		}
-		requests += pass.Requests
-		if pass.Requests > 16 {
-			t.Fatalf("pass %d sent %d requests against a ceiling of 16", passes, pass.Requests)
-		}
-		if pass.Concluded {
-			if !errors.Is(pass.Err(), embeddings.ErrRefusedWhole) {
-				t.Fatalf("a concluding pass ended with %v", pass.Err())
-			}
-			break
-		}
+	pass := embeddings.NewPass(memory, passAt, 16, 1<<20)
+	if err := pass.Embed(t.Context(), fake, passInputs(embeddings.PassBatch, -1), k.store); err != nil {
+		t.Fatal(err)
 	}
-	if passes == 10 {
-		t.Fatalf("ten passes of nothing but refusals (%d requests) never concluded "+
-			"the configuration is refused", requests)
+	if !pass.Concluded || !errors.Is(pass.Err(), embeddings.ErrRefusedWhole) {
+		t.Fatalf("a provider refusing the canary too was not concluded refused: "+
+			"concluded %v, %v", pass.Concluded, pass.Err())
 	}
-	held := embeddings.NewPass(memory, passAt.Add(time.Duration(passes+1)*time.Minute), 16, 1<<20)
+	if pass.Requests != 2 || pass.Canaries != 1 {
+		t.Fatalf("concluding took %d requests (%d canaries), want the refused call and its canary",
+			pass.Requests, pass.Canaries)
+	}
+	if canary := fake.Requests()[1]; len(canary) != 1 || strings.Contains(canary[0], "durable") {
+		t.Fatalf("the judging request was %q, want one plain word and none of the inputs", canary)
+	}
+	if memory.Len() != 0 || len(pass.RefusedAlone) != 0 {
+		t.Fatalf("a refusal that was the configuration's was held against the inputs: "+
+			"%d remembered, %d refused alone", memory.Len(), len(pass.RefusedAlone))
+	}
+
 	before := len(fake.Requests())
+	held := embeddings.NewPass(memory, passAt.Add(time.Minute), 16, 1<<20)
 	if err := held.Embed(t.Context(), fake, passInputs(embeddings.PassBatch, -1), k.store); err != nil {
 		t.Fatal(err)
 	}
@@ -247,44 +252,142 @@ func TestARefusedConfigurationIsConcludedOnlyFromWhatSupportsIt(t *testing.T) {
 			held.Paused, len(fake.Requests())-before)
 	}
 
-	// One poison, and the only input a fresh memory is offered: never the
-	// configuration, not at its first refusal and not at any hourly retry —
-	// though nothing was ever accepted, one input is one input's refusal.
-	single := embeddings.NewFake(16)
-	single.Refuse("poison")
-	alone := embeddings.NewRefusals()
-	for i := range 3 {
-		at := passAt.Add(time.Duration(i) * embeddings.RefusalRetry)
-		pass := embeddings.NewPass(alone, at, 16, 1<<20)
-		if err := pass.Embed(t.Context(), single, passInputs(1, 0), k.store); err != nil {
-			t.Fatal(err)
-		}
-		if len(pass.RefusedAlone) != 1 {
-			t.Fatalf("pass %d refused %d inputs alone, want the poison", i, len(pass.RefusedAlone))
-		}
-		if pass.Concluded || pass.Err() != nil {
-			t.Fatalf("pass %d took one refused input for the configuration's: %v", i, pass.Err())
-		}
-	}
-	t.Logf("a refused configuration was concluded after %d passes and %d requests", passes+1, requests)
-
-	// Two poisons side by side at the head of a fresh memory's first call:
-	// both halves of the split go before either half's own, so the half
-	// they are not in is accepted before either is reached alone — sent
-	// depth first, the pass met two refusals alone with nothing accepted
-	// yet and paused a working provider for the hour.
-	pair := embeddings.NewFake(16)
-	pair.Refuse("poison")
-	inputs := passInputs(4, 0)
-	inputs[1].Text = "a poison note too"
-	pass := embeddings.NewPass(embeddings.NewRefusals(), passAt, 16, 1<<20)
-	if err := pass.Embed(t.Context(), pair, inputs, k.store); err != nil {
+	again := embeddings.NewPass(memory, passAt.Add(embeddings.RefusalRetry), 16, 1<<20)
+	if err := again.Embed(t.Context(), fake, passInputs(embeddings.PassBatch, -1), k.store); err != nil {
 		t.Fatal(err)
 	}
-	if pass.Concluded || len(pass.RefusedAlone) != 2 || pass.Accepted != 2 {
-		t.Fatalf("two refused inputs among four: concluded %v, %d refused alone, %d "+
-			"accepted — want the two isolated and their neighbours embedded",
-			pass.Concluded, len(pass.RefusedAlone), pass.Accepted)
+	if again.Paused || !again.Concluded || again.Requests != 2 {
+		t.Fatalf("the pass after the pause: paused %v, concluded %v, %d requests — want "+
+			"it judged again, in two", again.Paused, again.Concluded, again.Requests)
+	}
+
+	fixed := embeddings.NewFake(16)
+	healed := embeddings.NewPass(memory, passAt.Add(2*embeddings.RefusalRetry), 16, 1<<20)
+	if err := healed.Embed(t.Context(), fixed, passInputs(embeddings.PassBatch, -1), k.store); err != nil {
+		t.Fatal(err)
+	}
+	if healed.Err() != nil || healed.Accepted != embeddings.PassBatch || healed.Canaries != 0 {
+		t.Fatalf("a fixed configuration after the pause: %v, %d accepted, %d canaries",
+			healed.Err(), healed.Accepted, healed.Canaries)
+	}
+}
+
+// POISON INPUTS ARE NEVER THE CONFIGURATION, however few and however alone:
+// the rows a fill meets in steady state are the ones whose embed failed when
+// they were written, so a fresh memory — after any boot or apply — meeting
+// nothing but two poisons is the ordinary case, and the rule that concluded
+// from two inputs refused alone with nothing accepted blamed the provider
+// configuration for them and stopped the node's whole fill for an hour.
+func TestPoisonInputsAloneAreNeverTakenForARefusedConfiguration(t *testing.T) {
+	t.Parallel()
+	fake := embeddings.NewFake(16)
+	fake.Refuse("poison")
+	memory := embeddings.NewRefusals()
+	poisons := []embeddings.PassInput{
+		{Scope: "diary/a", ID: "p1", Text: "a poison note one"},
+		{Scope: "episodes/b", ID: "p2", Text: "a poison note two"},
+	}
+	var k kept
+	for i, at := range []time.Time{passAt, passAt.Add(embeddings.RefusalRetry),
+		passAt.Add(2 * embeddings.RefusalRetry)} {
+		pass := embeddings.NewPass(memory, at, 16, 1<<20)
+		inputs := poisons
+		if i == 2 {
+			// A NEW poison after the retries: fresh, and still an input's.
+			inputs = append(inputs, embeddings.PassInput{Scope: "diary/c", ID: "p3",
+				Text: "a poison note three"})
+		}
+		if err := pass.Embed(t.Context(), fake, inputs, k.store); err != nil {
+			t.Fatal(err)
+		}
+		if pass.Concluded || pass.Paused || pass.Err() != nil {
+			t.Fatalf("pass %d took poison inputs for the configuration's refusal: "+
+				"concluded %v, paused %v, %v", i, pass.Concluded, pass.Paused, pass.Err())
+		}
+		if len(pass.RefusedAlone) != len(inputs) || pass.Canaries != 1 {
+			t.Fatalf("pass %d refused %d inputs alone with %d canaries, want each "+
+				"poison isolated and the first refusal judged once", i,
+				len(pass.RefusedAlone), pass.Canaries)
+		}
+	}
+	if len(k.ids) != 0 {
+		t.Fatalf("stored %v from inputs the provider refused", k.ids)
+	}
+}
+
+// A PASS THAT HAS HAD ANYTHING ACCEPTED SPENDS NO CANARY: the acceptance is the
+// evidence, so a working provider costs no request beyond the isolation.
+func TestAPassWithAnAcceptanceSendsNoCanary(t *testing.T) {
+	t.Parallel()
+	fake := embeddings.NewFake(16)
+	fake.Refuse("poison")
+	pass := embeddings.NewPass(embeddings.NewRefusals(), passAt, 16, 1<<20)
+	var k kept
+	if err := pass.Embed(t.Context(), fake, passInputs(4, -1), k.store); err != nil {
+		t.Fatal(err)
+	}
+	if err := pass.Embed(t.Context(), fake, passInputs(1, 0), k.store); err != nil {
+		t.Fatal(err)
+	}
+	if pass.Canaries != 0 || pass.Requests != 2 || len(pass.RefusedAlone) != 1 {
+		t.Fatalf("after an acceptance a refusal cost %d canaries over %d requests "+
+			"(%d refused alone), want none beyond the two calls", pass.Canaries,
+			pass.Requests, len(pass.RefusedAlone))
+	}
+}
+
+// AN ACCEPTANCE PROVES ONE PASS, NOT THE MEMORY: a setting the endpoint stops
+// honouring after the memory's provider worked is concluded at the first pass
+// that meets it, where an acceptance remembered for the memory's life held
+// every input back one by one instead, each a request of its own an hour.
+func TestAConfigurationRefusedAfterItWorkedIsConcludedAtOnce(t *testing.T) {
+	t.Parallel()
+	memory := embeddings.NewRefusals()
+	var k kept
+	working := embeddings.NewFake(16)
+	first := embeddings.NewPass(memory, passAt, 16, 1<<20)
+	if err := first.Embed(t.Context(), working, passInputs(4, -1), k.store); err != nil {
+		t.Fatal(err)
+	}
+	refusing := embeddings.NewFake(16)
+	refusing.Refuse("")
+	later := embeddings.NewPass(memory, passAt.Add(time.Minute), 16, 1<<20)
+	if err := later.Embed(t.Context(), refusing, passInputs(embeddings.PassBatch, -1), k.store); err != nil {
+		t.Fatal(err)
+	}
+	if !later.Concluded || later.Requests != 2 {
+		t.Fatalf("a configuration refused after it worked: concluded %v after %d requests",
+			later.Concluded, later.Requests)
+	}
+}
+
+// A CANARY THAT CANNOT ANSWER JUDGES NOTHING AND ENDS THE PASS: its failure is
+// a fact about the provider like any other, the refusal it was sent to judge is
+// taken as the inputs' — which costs least whichever it was — and the next
+// pass judges its own first refusal again.
+func TestACanaryThatCannotAnswerEndsThePassAndConcludesNothing(t *testing.T) {
+	t.Parallel()
+	fake := embeddings.NewFake(16)
+	fake.Refuse("poison")
+	fake.FailTransiently("note", 1) // refused first, so only the canary meets it
+	memory := embeddings.NewRefusals()
+	var k kept
+	pass := embeddings.NewPass(memory, passAt, 16, 1<<20)
+	if err := pass.Embed(t.Context(), fake, passInputs(2, 0), k.store); err != nil {
+		t.Fatal(err)
+	}
+	if pass.Concluded || !errors.Is(pass.Err(), embeddings.ErrTransient) || pass.Requests != 2 {
+		t.Fatalf("a canary that failed: concluded %v, %v, after %d requests — want the "+
+			"pass ended by its failure and nothing concluded", pass.Concluded, pass.Err(), pass.Requests)
+	}
+	next := embeddings.NewPass(memory, passAt.Add(time.Minute), 16, 1<<20)
+	if err := next.Embed(t.Context(), fake, passInputs(2, 0), k.store); err != nil {
+		t.Fatal(err)
+	}
+	if next.Err() != nil || next.Concluded || next.Canaries != 1 || len(next.RefusedAlone) != 1 {
+		t.Fatalf("the next pass: %v, concluded %v, %d canaries, %d refused alone — want the "+
+			"refusal judged again and the poison isolated", next.Err(), next.Concluded,
+			next.Canaries, len(next.RefusedAlone))
 	}
 }
 

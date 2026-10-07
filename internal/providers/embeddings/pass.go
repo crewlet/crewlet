@@ -32,14 +32,15 @@ import (
 //   - A REFUSAL ([ErrRefused]) IS SPLIT until the input it refuses is alone: a
 //     refused call's inputs may be sent again only in calls of at most half its
 //     size, so one input among n costs at most 1 + 2·⌈log₂n⌉ requests, fifteen
-//     for a full call of [PassBatch]. The halves are sent in the order they
-//     were made — both halves of a split before either half's own — so the
-//     inputs a refusal did not concern are accepted before the pass reaches
-//     any input alone. And the bound each input may be sent in is REMEMBERED
-//     ([Refusals]) rather than held by this pass: a pass that runs out of
-//     requests half way through an isolation leaves the next pass to resume
-//     it, rather than to start again at the full size and spend its own
-//     requests on the same halves.
+//     for a full call of [PassBatch] — and one more, the canary below, when
+//     the refusal is the first answer the pass has had. The halves are sent
+//     in the order they were made — both halves of a split before either
+//     half's own — so the inputs a refusal did not concern are accepted
+//     before the pass reaches any input alone. And the bound each input may
+//     be sent in is REMEMBERED ([Refusals]) rather than held by this pass: a
+//     pass that runs out of requests half way through an isolation leaves
+//     the next pass to resume it, rather than to start again at the full
+//     size and spend its own requests on the same halves.
 //   - AN INPUT REFUSED ALONE IS HELD BACK for [RefusalRetry], costing no
 //     request, and then offered again alone. A changed text is a new input
 //     (it is remembered by the digest of what was sent) and is offered at
@@ -61,14 +62,32 @@ import (
 // a model the endpoint does not serve at that width — refuses every request
 // whatever its inputs, and answers it as a refusal. Isolating "the input" would
 // then hold every input back one by one, each a request of its own once an hour,
-// for ever. So a [Refusals] that has seen two distinct inputs refused alone,
-// fresh rather than retried, while nothing at all was accepted under it, takes
-// the refusal for the configuration's: the pass ends with [ErrRefusedWhole]
-// and every pass under that memory is held back for [RefusalRetry]. Both
-// conditions are what make it evidence rather than a guess: a provider that has
-// embedded anything under its current configuration is not refusing the
-// configuration, and one refused input — a single poison note, or the hourly
-// retry of one — is an input's refusal however few requests the pass sent.
+// for ever. So the first refusal a pass meets before it has had anything
+// accepted is JUDGED, by the one request that tells the two apart: a CANARY
+// ([canary]), one plain word sent alone, which a provider refusing an input for
+// what it says has no reason to refuse and a provider refusing its
+// configuration refuses like everything else. Accepted, the pass is PROVEN —
+// what it meets is refused for being what it is, and is isolated as above.
+// Refused, the configuration is: the pass ends with [ErrRefusedWhole], records
+// nothing against the inputs whose refusal was not theirs, and every pass under
+// that memory is held back for [RefusalRetry]; the first refusal after the
+// pause is judged again, so a configuration that is still refused costs two
+// requests an hour and one that was fixed is embedding again within the hour.
+//
+// THE CANARY, NEVER THE INPUTS, because the inputs a fill meets are not a
+// sample of anything: in steady state the only rows left without a vector are
+// the ones whose embed failed when they were written, which is exactly where a
+// poison input is. A rule concluding from what the inputs did — "two inputs
+// refused alone while nothing was accepted" — took two poison notes met first
+// by a fresh memory, after any boot or apply, for a refused configuration,
+// blamed providers.embeddings and stopped the node's whole fill for an hour,
+// and again after it. And PER PASS, never once per memory: what proves a
+// configuration accepted is an acceptance NOW, a minute's worth of evidence
+// rather than whatever the provider took when the process started, so a
+// setting the endpoint stops honouring mid-life is concluded at the first
+// pass that meets it rather than isolated input by input. A pass that has had
+// anything accepted needs no canary, so a provider that works costs none: the
+// canary is spent only on a pass whose first answer was a refusal.
 
 // PassBatch is the most inputs one call of a pass carries.
 //
@@ -89,12 +108,22 @@ const PassBatch = 128
 // fixed, a rule relaxed) has it embedded within the hour with no restart.
 const RefusalRetry = time.Hour
 
-// ErrRefusedWhole ends a pass whose provider refused two distinct inputs sent
-// alone and has accepted nothing under its current configuration — the shape
+// ErrRefusedWhole ends a pass whose provider refused the [canary] — one plain
+// word sent alone — as it had refused what the pass sent before it: the shape
 // of a refused SETTING rather than of a refused input (see [Pass]).
 var ErrRefusedWhole = errors.New("embeddings: the provider refuses every request " +
-	"under this configuration, inputs sent alone included, and has accepted none — " +
-	"the refusal is the configuration's (providers.embeddings), not any input's")
+	"under this configuration, one plain word sent alone included — the refusal " +
+	"is the configuration's (providers.embeddings), not any input's")
+
+// canary is what judges a refusal: the input a pass sends alone when the first
+// answer it has had is a refusal (see [Pass]).
+//
+// ONE PLAIN WORD OF FOUR BYTES. Plain, so a provider that refuses an input for
+// what it says — a content rule, a byte it cannot tokenize — has nothing to
+// refuse in it, and none of anybody's data leaves the node in it. Four bytes,
+// because the smallest input bound [Limits.Validate] admits is utf8.UTFMax, so
+// it is inside every model's bound and fits one request of any valid limits.
+const canary = "note"
 
 // PassInput is one text a pass embeds whole, and what it is called.
 type PassInput struct {
@@ -136,12 +165,18 @@ type Pass struct {
 	spent bool
 	err   error
 
-	// Requests and Bytes are what the pass sent; Accepted the inputs it
-	// embedded; Unusable the inputs of an accepted request whose answer had
-	// no direction to pool; Refused the requests refused; Held the inputs it
-	// passed over because they were refused alone inside the last
-	// [RefusalRetry].
-	Requests, Bytes, Accepted, Unusable, Refused, Held int
+	// proven says a request of this pass was accepted — the [canary]'s
+	// included — so a refusal it meets is the inputs', not the
+	// configuration's.
+	proven bool
+
+	// Requests and Bytes are what the pass sent, the canary included;
+	// Accepted the inputs it embedded; Unusable the inputs of an accepted
+	// request whose answer had no direction to pool; Refused the requests
+	// of inputs refused; Canaries the canaries it sent to judge one; Held
+	// the inputs it passed over because they were refused alone inside the
+	// last [RefusalRetry].
+	Requests, Bytes, Accepted, Unusable, Refused, Canaries, Held int
 
 	// RefusedAlone are the inputs refused sent alone, in the order they were.
 	RefusedAlone []PassRefusal
@@ -251,6 +286,7 @@ func (p *Pass) Embed(ctx context.Context, e BatchEmbedder, inputs []PassInput,
 
 		switch {
 		case err == nil:
+			p.proven = true
 			p.refusals.accept(call)
 			// ONE INPUT'S DEGENERATE ANSWER COSTS THAT INPUT: a text whose
 			// pieces' vectors cannot be pooled keeps no vector, and its
@@ -269,32 +305,92 @@ func (p *Pass) Embed(ctx context.Context, e BatchEmbedder, inputs []PassInput,
 				p.err = stored
 				return stored
 			}
-		case errors.Is(err, ErrRefused) && len(call) > 1:
-			// SPLIT, AND QUEUED BEHIND THE SUSPECTS ALREADY WAITING, so
-			// both halves of a split go before either half's own: the
-			// half the refusal did not concern is accepted before the
-			// pass reaches any input alone.
-			p.Refused++
-			half := (len(call) + 1) / 2
-			p.refusals.split(call, half, p.now)
-			for i := range call {
-				call[i].limit = half
-			}
-			suspects = append(suspects, call...)
 		case errors.Is(err, ErrRefused):
 			p.Refused++
-			q := call[0]
-			p.RefusedAlone = append(p.RefusedAlone, PassRefusal{
-				Input: q.in, Bytes: q.bytes, Retry: q.retry, Err: err,
-			})
-			if p.refusals.refuseAlone(q.key, p.now) {
+			if !p.proven && p.judge(ctx, e) == configurationRefused {
+				// NOTHING IS RECORDED AGAINST THESE INPUTS: the refusal
+				// was not theirs, and held back or halved they would
+				// cost requests the pass after the pause need not spend.
+				p.refusals.conclude(p.now)
 				p.err, p.Concluded = ErrRefusedWhole, true
+				break
 			}
+			// The inputs' refusal — proven, or not judged because the
+			// canary could not be sent or met a failure of its own,
+			// which ends the pass ([Pass.judge]). Taken as the inputs'
+			// either way, because that is what costs least whichever it
+			// was: the next pass judges its own first refusal.
+			p.refuse(call, err, &suspects)
 		default:
 			p.err = err
 		}
 	}
 	return nil
+}
+
+// refuse records a refusal of call's inputs: a call of several is SPLIT, and
+// queued behind the suspects already waiting so both halves of a split go
+// before either half's own — the half the refusal did not concern is accepted
+// before the pass reaches any input alone; an input alone is named, and held
+// back for [RefusalRetry].
+func (p *Pass) refuse(call []queued, err error, suspects *[]queued) {
+	if len(call) > 1 {
+		half := (len(call) + 1) / 2
+		p.refusals.split(call, half, p.now)
+		for i := range call {
+			call[i].limit = half
+		}
+		*suspects = append(*suspects, call...)
+		return
+	}
+	q := call[0]
+	p.RefusedAlone = append(p.RefusedAlone, PassRefusal{
+		Input: q.in, Bytes: q.bytes, Retry: q.retry, Err: err,
+	})
+	p.refusals.refuseAlone(q.key, p.now)
+}
+
+// judgement is what the [canary] said about a refusal.
+type judgement int
+
+const (
+	// unjudged: the canary was not sent — the pass had no request left for
+	// it — or met a failure that is not a refusal, which ends the pass.
+	unjudged judgement = iota
+
+	// inputsRefused: the canary was accepted, so the configuration is, and
+	// the refusal was of the inputs sent.
+	inputsRefused
+
+	// configurationRefused: the canary was refused as well.
+	configurationRefused
+)
+
+// judge sends the [canary] alone, charged to the pass like any request, and
+// answers what it says about the refusal the pass just met.
+func (p *Pass) judge(ctx context.Context, e BatchEmbedder) judgement {
+	if p.requests < 1 {
+		return unjudged
+	}
+	raw, err := e.EmbedBatch(ctx, []string{canary})
+	if err == nil && len(raw) != 1 {
+		err = fmt.Errorf("embeddings: %s answered %d vectors for 1 piece", e.Model(), len(raw))
+	}
+	p.requests--
+	p.bytes -= len(canary)
+	p.Requests++
+	p.Bytes += len(canary)
+	p.Canaries++
+	p.sent = true
+	switch {
+	case err == nil:
+		p.proven = true
+		return inputsRefused
+	case errors.Is(err, ErrRefused):
+		return configurationRefused
+	}
+	p.err = err
+	return unjudged
 }
 
 // queue sorts inputs into the two queues a pass sends from — the suspects of
@@ -410,8 +506,8 @@ func keyOfInput(in PassInput) refusalKey {
 
 // Refusals is what ONE provider configuration refused, held across the passes
 // sent to it: the size each input of an unfinished isolation may be sent in,
-// when an input was refused alone, and whether the provider has accepted
-// anything at all — see [Pass].
+// when an input was refused alone, and until when a configuration the [canary]
+// found refused is left alone — see [Pass].
 //
 // THIS NODE'S ALONE, and in memory: a cache of what one provider told one
 // caller, whose loss costs one more isolation of each input it held. Nothing
@@ -424,16 +520,8 @@ type Refusals struct {
 	mu sync.Mutex
 	at map[refusalKey]*refusal
 
-	// accepted says a request under this memory was embedded, which proves
-	// the configuration is not what is refused.
-	accepted bool
-
-	// fresh counts the distinct inputs refused alone for the first time
-	// while nothing had been accepted.
-	fresh int
-
-	// pausedUntil is when a pass may send again after the memory concluded
-	// the configuration is refused whole.
+	// pausedUntil is when a pass may send again after a canary found the
+	// configuration refused whole.
 	pausedUntil time.Time
 }
 
@@ -521,18 +609,9 @@ func (r *Refusals) split(call []queued, limit int, now time.Time) {
 	}
 }
 
-// refuseAlone records k refused sent alone at now, and reports whether the
-// memory now concludes the configuration is refused whole — in which case
-// every pass is held back for [RefusalRetry].
-//
-// ONLY A FRESH REFUSAL CONCLUDES IT, never a due retry: the inputs that
-// concluded it once come due as the pause ends, and were they the only
-// evidence, a configuration fixed during the pause — or two inputs that were
-// genuinely each refused for what they say — would be paused again by its own
-// first request, and every pass after it, for ever. The pass after a pause has
-// to meet a NEW input refused alone before it concludes again, and an input it
-// does not refuse proves the configuration fine for the life of the memory.
-func (r *Refusals) refuseAlone(k refusalKey, now time.Time) bool {
+// refuseAlone records k refused sent alone at now: it is held back for
+// [RefusalRetry] and then offered again alone.
+func (r *Refusals) refuseAlone(k refusalKey, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.at[k]
@@ -540,24 +619,22 @@ func (r *Refusals) refuseAlone(k refusalKey, now time.Time) bool {
 		entry = &refusal{}
 		r.at[k] = entry
 	}
-	fresh := entry.alone.IsZero()
-	if fresh && !r.accepted {
-		r.fresh++
-	}
 	entry.limit, entry.alone, entry.seen = 1, now, now
-	if fresh && !r.accepted && r.fresh >= 2 {
-		r.pausedUntil = now.Add(RefusalRetry)
-		return true
-	}
-	return false
+}
+
+// conclude records that a canary found the configuration refused at now:
+// every pass is held back for [RefusalRetry].
+func (r *Refusals) conclude(now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pausedUntil = now.Add(RefusalRetry)
 }
 
 // accept forgets what the memory held about a call's inputs — the provider
-// embedded them after all — and records that it accepts this configuration.
+// embedded them after all.
 func (r *Refusals) accept(call []queued) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.accepted = true
 	for _, q := range call {
 		delete(r.at, q.key)
 	}
