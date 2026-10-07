@@ -290,7 +290,12 @@ func (e SandboxRunFailed) SummaryFor(actor string) string {
 // holder, and only the holder, consumes. So an answer accepted on one node is
 // carried out on another, it survives a restart in between, and it WAITS
 // BEHIND A PAUSE exactly as a person's chat reply would: a paused seat takes
-// nothing off its inbox, this included.
+// nothing off its inbox, this included — and behind another of the seat's
+// coding runs, which the seat finishes or parks before it takes the answer.
+//
+// AND IT NAMES THE QUESTION, not only the run, because any of those waits can
+// outlast the question: see [SandboxAnswerGiven.LaunchID]. It resumes the run
+// only while the run still waits on the question it was given against.
 //
 // NEVER A TURN. The dispatcher routes it to the coding run it names before
 // the inbox screening runs, and whatever that answers — resumed, not
@@ -320,6 +325,22 @@ type SandboxAnswerGiven struct {
 	// did, a person reads who answered.
 	AnsweredBy     string `json:"answered_by"`
 	AnsweredBySeat string `json:"answered_by_seat,omitempty"`
+
+	// LaunchID is the QUESTION this answers: the job the run held when it
+	// asked, off the row the answer was accepted against. Every new question
+	// comes with a new job — nothing but a launch opens one — so the job
+	// identifies it. An answer reaches the seat some time after it was given —
+	// behind a pause, behind another of the seat's coding runs, after a
+	// NAK's backoff, as a retried copy — and by then the run can have been
+	// resumed by somebody else's answer and parked on a NEW question. Named
+	// only by its turn, the late answer then resumed the run a second time,
+	// as the answer to a question its giver never saw. Carrying the
+	// question, it resumes the run only while the run still waits on that
+	// one, and is spent as `not_awaiting` otherwise.
+	//
+	// ADDITIVE: an answer given through a node that predates it carries
+	// none, and keeps the positional match that node would have made.
+	LaunchID string `json:"launch_id,omitempty"`
 }
 
 // EventType is the "sandbox_answer_given" wire type.

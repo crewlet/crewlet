@@ -188,7 +188,14 @@ var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-
 // which is what opens the run to the completion poll.
 func (r *waiterRig) suspend(turnID string) {
 	r.t.Helper()
-	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, Suspension{State: json.RawMessage(
+	r.suspendIn(r.t.Context(), turnID)
+}
+
+// suspendIn is suspend from inside a call the coordinator made — a resumed
+// turn's own work — under that call's context.
+func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
+	r.t.Helper()
+	suspended, err := r.pending.MarkSuspended(ctx, turnID, Suspension{State: json.RawMessage(
 		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"run_sandbox"}`),
 		Iteration: rigIteration})
 	if err != nil {

@@ -1198,6 +1198,18 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 // it under the hold, and it is offered first when the run stops holding the
 // seat — as the chat route's reply is.
 //
+// # A wait never pairs it with a later question
+//
+// Every one of those waits — a pause, a busy seat, a NAK's backoff, a retried
+// copy — can outlast the question the answer was given against: the run is
+// answered another way meanwhile, resumes, calls run_sandbox again and parks
+// on a new question, and the held answer is the first thing offered when the
+// seat frees. The answer names the question it answers
+// ([types.SandboxAnswerGiven.LaunchID]), so the coordinator resumes the run
+// with it only while the run still waits on that one, and spends it as
+// `not_awaiting` otherwise — rather than resuming the run a second time with
+// the first question's answer presented as the second's.
+//
 // # Never a turn
 //
 // Every disposition but one spends the delivery: the answer resumed the run,

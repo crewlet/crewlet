@@ -347,7 +347,7 @@ var wireTags = map[string][]string{
 	"seat_resumed":                    {"agent_handle", "agent_id", "paused_at", "paused_by", "resumed_by", "resumed_by_seat", "role"},
 	"agent_turn_stopped":              {"agent_handle", "agent_id", "reason", "role", "stopped_by", "stopped_by_seat", "turn_id", "work_key"},
 	"agent_turn_steered":              {"agent_handle", "agent_id", "iteration", "note", "note_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_seat", "turn_id", "work_key"},
-	"sandbox_answer_given":            {"agent_handle", "answer", "answered_by", "answered_by_seat", "turn_id"},
+	"sandbox_answer_given":            {"agent_handle", "answer", "answered_by", "answered_by_seat", "launch_id", "turn_id"},
 	"sandbox_run_answered":            {"agent_handle", "agent_id", "answered_by", "answered_by_seat", "outcome", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
 	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_chars", "phase", "role", "system_chars", "tool_chars", "tool_count", "turn_id", "user_chars", "work_key"},

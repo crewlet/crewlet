@@ -1316,16 +1316,38 @@ func (c *Coordinator) owes(turnID string) bool {
 // than by replying on the conversation it was asked in.
 //
 // The run's own row replaces the chat route's lookup, and it is resumed with
-// DIRECTLY rather than recorded first: the delivery names its run, so where it
-// comes back relative to the seat's other mail decides nothing, and handing it
-// back is safe in a way handing back a chat reply is not (see
-// [Coordinator.TryResumeFromAnswer]). The claim is [PendingStore.ClaimForResume]
-// under [AnswerTail] — out of a question still OPEN — so an answer by turn
-// loses to a chat reply already recorded against the question
-// ([StatusAnswered]) and the two resume it exactly once between them; the
-// resume and settle are the same ([Coordinator.resumeAndSettle]). What it does
-// not share is the chat route's bound, because it has no ordinary route to
-// fall back to — see below.
+// DIRECTLY rather than recorded first: the delivery names its run AND the
+// question it answers, so where it comes back relative to the seat's other
+// mail decides nothing, and handing it back is safe in a way handing back a
+// chat reply is not (see [Coordinator.TryResumeFromAnswer]). The claim is
+// [PendingStore.ClaimForResume] under [AnswerTail] — out of a question still
+// OPEN — so an answer by turn loses to a chat reply already recorded against
+// the question ([StatusAnswered]) and the two resume it exactly once between
+// them; the resume and settle are the same ([Coordinator.resumeAndSettle]).
+// What it does not share is the chat route's bound, because it has no
+// ordinary route to fall back to — see below.
+//
+// # The question it answers, and no other
+//
+// An answer is given against the question the person READ, and it reaches
+// the seat's inbox some time later: behind a pause, behind a seat busy on
+// another of its coding runs, after a NAK's backoff, or as a second copy of a
+// retried `answer_run`. By then the run may have been answered by somebody
+// else, resumed, called `run_sandbox` again, and parked on a NEW question —
+// and an answer that claimed whatever the run is waiting on now resumed it a
+// second time with the first question's answer presented as the second's.
+// So the delivery carries the question it was given against
+// ([types.SandboxAnswerGiven.LaunchID], stamped off the row the answer was
+// accepted against), and is resumed with only while the run is still waiting
+// on THAT question: the launch identifies it, because every new question
+// comes with a new launch ([PendingStore.BeginLaunch] mints one) and nothing
+// but a launch opens a question — a completion parks only a running job, and
+// a job that has parked never runs again. The claim itself names the launch,
+// so a launch that moves between the read and the claim loses it. An
+// answer whose question is gone is spent as `not_awaiting`, exactly like one
+// that reached a run nobody was waiting on. An answer carrying no question —
+// given through a node that predates the field, across a rolling upgrade —
+// keeps the positional match that was all there was.
 //
 // # What the caller does with each answer
 //
@@ -1334,9 +1356,10 @@ func (c *Coordinator) owes(turnID string) bool {
 // dispatcher — spend it — and only one hands it back:
 //
 //   - [AnswerConsumed] — the answer resumed the run.
-//   - [AnswerNotMine] — the run is not waiting for an answer (another claimed
-//     it, or it is running a job) or it is gone. Spent: announced as such,
-//     and there is nothing else for the delivery to become.
+//   - [AnswerNotMine] — the run is not waiting for this answer (another
+//     claimed it, it is running a job, or it has moved on to a question of
+//     its own) or it is gone. Spent: announced as such, and there is nothing
+//     else for the delivery to become.
 //   - [AnswerDeferred] — the run IS waiting and could not be handed this
 //     answer: the row could not be read, the claim could not be confirmed,
 //     or the resume failed and the claim went back. Handed back with a NAK,
@@ -1389,10 +1412,16 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 				"names; it is dropped rather than resumed under the wrong seat")
 		return AnswerNotMine, nil
 	}
-	if !slices.Contains(Awaiting, run.Status) {
+	if !slices.Contains(Awaiting, run.Status) || !answersQuestion(given, run) {
+		// NOT WAITING, OR NOT WAITING ON THE QUESTION THIS ANSWERS: the run
+		// was resumed and has moved on to a question of its own since the
+		// answer was given. See "The question it answers" above.
 		answered(run, types.AnswerNotAwaiting)
 		return AnswerNotMine, nil
 	}
+	// THE CLAIM NAMES THE QUESTION'S LAUNCH — the one the answer was given
+	// against, which the check above has just found on the row — so a run
+	// that moves on between that read and this write loses the claim.
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, AnswerTail(run.LaunchID))
 	if err != nil {
 		// THE CLAIM MAY HAVE LANDED — the chat route's ambiguous case,
@@ -1404,7 +1433,8 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	}
 	if !won {
 		// Another answer took it first — by turn or on the conversation —
-		// and it is resuming the run with that one.
+		// and it is resuming the run with that one; or the run moved on to
+		// another question between the read and the claim.
 		answered(run, types.AnswerNotAwaiting)
 		return AnswerNotMine, nil
 	}
@@ -1427,6 +1457,18 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		return AnswerConsumed, err
 	}
 	return AnswerNotMine, err
+}
+
+// answersQuestion reports whether an answer by turn was given against the
+// question the run is waiting on now — see "The question it answers" at
+// [Coordinator.AnswerByTurn]. One that names no question was given through a
+// node that predates the field, and keeps the positional match it would have
+// made.
+func answersQuestion(given types.SandboxAnswerGiven, run PendingRun) bool {
+	if given.LaunchID == "" {
+		return true
+	}
+	return given.LaunchID == run.LaunchID
 }
 
 // answeredAs is what a settled answer became, from what the resume left the

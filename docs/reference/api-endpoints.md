@@ -2764,11 +2764,19 @@ answers any parked run by naming it:
 It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`:
 the answer is on the inbox of the seat holding the run, and **that** node
 resumes the run with it — so an answer given while the seat is paused waits
-for the resume, exactly as a chat reply would. What it became is announced on
-the event stream as `sandbox_run_answered` (`resumed`, `not_awaiting` or
-`gone`), naming the credential and the person. An `unknown` outcome is a
-delivery the broker never confirmed; answering again is harmless, because
-whichever copy arrives second finds the run no longer waiting.
+for the resume, and one given while the seat is
+[busy with another coding run](../concepts/code-sandbox.md#how-a-coding-task-runs)
+waits until that run settles or parks and is then the first thing the seat
+takes — exactly as a chat reply would. The answer is to the **question** the
+run was waiting on when you gave it, and it resumes the run only while the run
+still waits on that one: if somebody else's answer resumed the run meanwhile
+and it has asked something new since, yours is announced `not_awaiting` rather
+than taken as the answer to a question you never saw. What it became is
+announced on the event stream as `sandbox_run_answered` (`resumed`,
+`not_awaiting` or `gone`), naming the credential and the person. An `unknown`
+outcome is a delivery the broker never confirmed; answering again is
+harmless, because whichever copy arrives second finds that question no longer
+waiting.
 
 It refuses `not_running` for a run that is not waiting for an answer, or has no
 record at all (a run that ended has none), and `peer_upgrading` while the node

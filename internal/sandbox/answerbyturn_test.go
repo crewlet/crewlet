@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -56,13 +57,41 @@ func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 	}
 }
 
-// givenFor is an operator's answer to one run.
+// givenFor is an operator's answer to one run, as a node that predates the
+// question it answers would give it: naming the run alone.
 func givenFor(turnID string) (types.SandboxAnswerGiven, *events.Event) {
 	given := types.SandboxAnswerGiven{
 		TurnID: turnID, AgentHandle: "swe", Answer: "use the release branch",
 		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
 	}
 	return given, events.New(given, events.TraceContext{})
+}
+
+// givenAgainst is an operator's answer to the question the run is waiting on
+// now, as answer_run gives it: the run and its question, off the row.
+func givenAgainst(t *testing.T, rig *coordRig, turnID string) (types.SandboxAnswerGiven, *events.Event) {
+	t.Helper()
+	run := rig.get(turnID)
+	given, _ := givenFor(turnID)
+	given.LaunchID = run.LaunchID
+	return given, events.New(given, events.TraceContext{})
+}
+
+// asksAgain is a resumed turn that calls run_sandbox again, and the new job
+// parks on a question of its own: the run waits on a NEW question, under a new
+// launch, asked an hour after the first.
+func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
+	return func(ctx context.Context, run PendingRun) {
+		if err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+		rig.suspendIn(ctx, run.TurnID)
+		if err := rig.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
+			Question: "which test suite?", AskedAt: rig.now.Add(time.Hour),
+		}); err != nil {
+			t.Errorf("the second question: %v", err)
+		}
+	}
 }
 
 // answeredRecords is every sandbox_run_answered the coordinator published.
@@ -187,34 +216,100 @@ func (s staleRead) Get(context.Context, string) (PendingRun, bool, error) {
 	return s.snapshot, true, nil
 }
 
-// TWO ANSWERS AT ONCE RESUME THE RUN ONCE. Two people answering the same
-// question — or one person's retry racing their own first try — contend for
-// one claim, and the loser is spent rather than resumed or handed back.
+// TWO ANSWERS TO ONE QUESTION RESUME THE RUN ONCE. Two people answering the same
+// question — or one person's retry racing their own first try — contend for one
+// claim, and the loser is spent rather than resumed or handed back. And when
+// the two are SEPARATED BY A RELAUNCH — the first resumed the run, its turn
+// called run_sandbox again and the new job parked on a question of its own
+// before the second arrived — the second is still an answer to the FIRST
+// question, and spent as `not_awaiting`: it used to claim whatever the run
+// waited on by then, resuming it a second time with the first question's answer
+// presented as the second's.
 func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
+	t.Run("at once", func(t *testing.T) {
+		rig := newCoordRig(t)
+		launchScheduled(t, rig, "t1")
+		parksOnAQuestion(t, rig, "t1")
+		given, ev := givenAgainst(t, rig, "t1")
+
+		var wg sync.WaitGroup
+		dispositions := make([]AnswerDisposition, 2)
+		for i := range dispositions {
+			wg.Go(func() {
+				d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
+				if err != nil {
+					t.Errorf("AnswerByTurn: %v", err)
+				}
+				dispositions[i] = d
+			})
+		}
+		wg.Wait()
+
+		if n := len(rig.resumer.calls()); n != 1 {
+			t.Fatalf("two answers resumed the run %d times, want exactly once", n)
+		}
+		slices.Sort(dispositions)
+		if !slices.Equal(dispositions, []AnswerDisposition{AnswerConsumed, AnswerNotMine}) {
+			t.Fatalf("dispositions = %v, want one consumed and one not_mine", dispositions)
+		}
+	})
+	t.Run("separated by a relaunch", func(t *testing.T) {
+		rig := newCoordRig(t)
+		launchScheduled(t, rig, "t1")
+		parksOnAQuestion(t, rig, "t1")
+		first, firstEv := givenAgainst(t, rig, "t1")
+		late, lateEv := givenAgainst(t, rig, "t1")
+
+		rig.resumer.during = asksAgain(t, rig)
+		if d, err := rig.coordinator.AnswerByTurn(t.Context(), first, firstEv); err != nil || d != AnswerConsumed {
+			t.Fatalf("the first answer = %q, %v, want it to resume the run", d, err)
+		}
+		rig.resumer.during = nil
+		second := rig.get("t1")
+		if second.Status != StatusAwaiting || second.LaunchID == first.LaunchID {
+			t.Fatalf("run = %q under %q, want it parked on a NEW question", second.Status, second.LaunchID)
+		}
+
+		if d, err := rig.coordinator.AnswerByTurn(t.Context(), late, lateEv); err != nil || d != AnswerNotMine {
+			t.Fatalf("the late answer to the first question = %q, %v, want not_mine", d, err)
+		}
+		if n := len(rig.resumer.calls()); n != 1 {
+			t.Fatalf("the run was resumed %d times, want once: the late answer was given against a "+
+				"question the run is no longer waiting on", n)
+		}
+		if got := rig.get("t1"); got.Status != StatusAwaiting || got.LaunchID != second.LaunchID {
+			t.Fatalf("run = %q under %q, want the second question still waiting", got.Status, got.LaunchID)
+		}
+		var outcomes []types.AnswerOutcome
+		for _, r := range rig.answeredRecords() {
+			outcomes = append(outcomes, r.Outcome)
+		}
+		if !slices.Equal(outcomes, []types.AnswerOutcome{types.AnswerResumed, types.AnswerNotAwaiting}) {
+			t.Fatalf("outcomes = %v, want resumed then not_awaiting", outcomes)
+		}
+	})
+}
+
+// AN ANSWER THAT NAMES NO QUESTION KEEPS THE POSITIONAL MATCH. It was given
+// through a node that predates the field, across a rolling upgrade, and
+// refusing it would strand the answer: it answers whatever the run waits on.
+func TestAnAnswerByTurnNamingNoQuestionAnswersTheOneOpen(t *testing.T) {
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
-
-	var wg sync.WaitGroup
-	dispositions := make([]AnswerDisposition, 2)
-	for i := range dispositions {
-		wg.Go(func() {
-			given, ev := givenFor("t1")
-			d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
-			if err != nil {
-				t.Errorf("AnswerByTurn: %v", err)
-			}
-			dispositions[i] = d
-		})
+	rig.resumer.during = asksAgain(t, rig)
+	first, firstEv := givenAgainst(t, rig, "t1")
+	if d, _ := rig.coordinator.AnswerByTurn(t.Context(), first, firstEv); d != AnswerConsumed {
+		t.Fatalf("the first answer = %q, want it to resume the run", d)
 	}
-	wg.Wait()
+	rig.resumer.during = nil
 
-	if n := len(rig.resumer.calls()); n != 1 {
-		t.Fatalf("two answers resumed the run %d times, want exactly once", n)
+	legacy, legacyEv := givenFor("t1")
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), legacy, legacyEv); err != nil || d != AnswerConsumed {
+		t.Fatalf("an answer naming no question = %q, %v, want it to answer the open one", d, err)
 	}
-	slices.Sort(dispositions)
-	if !slices.Equal(dispositions, []AnswerDisposition{AnswerConsumed, AnswerNotMine}) {
-		t.Fatalf("dispositions = %v, want one consumed and one not_mine", dispositions)
+	if n := len(rig.resumer.calls()); n != 2 {
+		t.Fatalf("resumed %d times, want twice", n)
 	}
 }
 
