@@ -1321,7 +1321,7 @@ worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
 turn's `work_item`, and `steers[]` — `{round, note_id}` for each person's note
 the phase read. The live frame carries the same so far plus
 `round_started_at` and the `running_call` in flight. Each is **absent** on a
-record an older engine wrote, and on a figure nothing measured — a tool call
+figure nothing measured — a tool call
 nobody timed has no `duration_ms`, never a zero — so a reader treats absent as
 *not recorded*. The whole field list, and why each is measured where it is, is
 in [what a turn records about its time](../concepts/turn-engine.md#what-a-turn-records-about-its-time).

@@ -125,7 +125,7 @@ export interface Narration {
    * `round_narration[].declined`, set by the engine when a phase that finishes
    * only by its submission (`submit_work`, `submit_review`, `mark_onboarded`,
    * a worker's `submit_result`) got words and no call. False on every other
-   * round, and on a record an engine that did not flag it wrote.
+   * round: the field is absent there, since the engine writes only `true`.
    */
   declined: boolean;
 }
@@ -174,7 +174,7 @@ export interface PhaseRecord {
       unique per execution. See `adr/0017`. */
   turnId: string;
   /** The unit of work behind that run: what groups a redelivered trigger's
-      attempts. Empty on a record an engine from before the split wrote. */
+      attempts. Empty for a trigger with no ledgerable id. */
   workKey: string;
   phase: string;
   iteration: number;
@@ -305,7 +305,7 @@ export interface PhaseRecord {
   } | null;
   /**
    * Each round's model call as the loop timed it, oldest first; empty on a
-   * phase an engine that did not time rounds recorded, and on a coding run.
+   * phase that ran no loop in this process, and on a coding run.
    */
   timedRounds: TimedRound[];
   /**
@@ -677,9 +677,8 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     key: phaseKey(turnId, phase, iteration, taskId, launchId),
     turnId,
     // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
-    // carries. The stored column is backfilled across the split
-    // (migration 0029) and the payload is not, so a payload-only read
-    // reports no unit of work for every turn older than the split.
+    // carries: the column is the authority for a stored record, and a frame
+    // pushed on the socket has not been stored yet, so it has no column.
     workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
@@ -937,9 +936,8 @@ export function mergePhases(stored: PhaseRecord[], live: PhaseRecord[]): PhaseRe
 export interface TurnGroup {
   turnId: string;
   /** The unit of work this run was an attempt at. Empty when its phases carry
-      none — a trigger with no ledgerable id, or records an engine from before
-      the split wrote. Two groups sharing one of these are two attempts at the
-      same trigger; see `adr/0017`. */
+      none — a trigger with no ledgerable id. Two groups sharing one of these
+      are two attempts at the same trigger; see `adr/0017`. */
   workKey: string;
   role: string;
   /** The turn's OWN phases, in the order they ran. A nested call is not

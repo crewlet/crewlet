@@ -18,8 +18,9 @@
  *   handle and therefore a different key, so an operation recorded against
  *   the original never lands on it.
  * - The authored path is the key only where the engine's identity cannot
- *   name one node: a base stored before unit names had to be unique that holds
- *   two units of one name, a unit with no name, and a seat whose handle the
+ *   name one node: a base holding two units of one name (unique unit names are
+ *   an admission rule an apply does not refuse, so a revision a newer node
+ *   activated can carry two), a unit with no name, and a seat whose handle the
  *   engine has not reported. Such a key is honest for that one base and names
  *   nothing after a rebase, which then reports the operation's target as gone
  *   rather than guessing.

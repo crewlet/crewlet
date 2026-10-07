@@ -187,10 +187,9 @@ test("the findings the phase was not derived from are still reachable", () => {
 //
 // This dropped element zero and rendered the tail, so whenever Classify's
 // winner sat anywhere else a real finding was hidden and the headline was
-// re-printed as "1 more finding". The engine promotes the winner now, but a
-// row written by a peer on an older build carries the vendor's own order and
-// a rolling upgrade puts exactly those rows on this screen.
-test("a finding list in the vendor's own order still renders correctly", () => {
+// re-printed as "1 more finding". The engine promotes the winner to the front,
+// but identity, not position, is what the screen relies on.
+test("the headline finding is matched by identity, not by position", () => {
   render(
     <Reconcile
       status={{

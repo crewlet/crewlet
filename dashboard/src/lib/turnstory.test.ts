@@ -608,10 +608,10 @@ describe("what each phase's prompt weighed", () => {
     expect(w.resumed).toBe(true);
   });
 
-  test("an older engine's row reads as zero rather than NaN", () => {
-    // A rolling upgrade puts a node that never measured the tool array on the
-    // same stream. Its rows must render — `NaN B` in a column is worse than a
-    // zero, because it reads as a broken screen rather than a quiet term.
+  test("a payload missing a term reads as zero rather than NaN", () => {
+    // The parse defaults a missing key to zero — `NaN B` in a column is worse
+    // than a zero, because it reads as a broken screen rather than a quiet
+    // term.
     const [w] = promptWeights([
       event("prompt.size", {
         payload: { phase: "review", iteration: 1, approximate_tokens: 900, system_chars: 3_600 },
@@ -621,10 +621,9 @@ describe("what each phase's prompt weighed", () => {
     expect(w.toolCount).toBe(0);
     expect(w.messageBytes).toBe(0);
     expect(Number.isNaN(w.toolBytes)).toBe(false);
-    // And it reads as an OPENING, which is the safe direction: an absent
-    // message term is a build that measured none, so there is no re-entry to
-    // claim — and claiming one would label a row "resumed" on the strength of
-    // a key the writer never wrote.
+    // And it reads as an OPENING, which is the safe direction: no message
+    // term, no re-entry claimed — claiming one would label a row "resumed" on
+    // the strength of a key the writer never wrote.
     expect(w.resumed).toBe(false);
   });
 });

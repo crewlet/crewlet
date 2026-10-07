@@ -211,9 +211,8 @@ describe("identity", () => {
     const done = fromPhaseEvent(phaseEvent({ work_key: "wk-7" }))!;
     expect(done.turnId).toBe("t1");
     expect(done.workKey).toBe("wk-7");
-    // Absent on a record an engine from before the split wrote, and EMPTY
-    // rather than undefined so nothing downstream has to test for two
-    // absences.
+    // Absent for a trigger with no ledgerable id, and EMPTY rather than
+    // undefined so nothing downstream has to test for two absences.
     expect(fromPhaseEvent(phaseEvent())!.workKey).toBe("");
   });
 });
@@ -534,7 +533,7 @@ describe("a round that answered in prose where a call was owed", () => {
     expect(ledger.map((r) => r.declined)).toEqual([false, true]);
   });
 
-  test("an engine that does not flag it, or flags it oddly, has said nothing", () => {
+  test("a round the engine did not flag, or one flagged oddly, declined nothing", () => {
     const [plain, odd] = narrations([
       { round: 1, content: "words" },
       { round: 2, content: "words", declined: "yes" },
@@ -910,14 +909,10 @@ describe("a decision carries its own tone", () => {
   });
 });
 
-describe("a pre-split phase record's unit of work", () => {
-  // schema/0029 backfilled the `work_key` COLUMN from `turn_id` — which is
-  // where the work key lived before ADR-0017 split the two — and deliberately
-  // left the stored payloads alone: they record what that build published, and
-  // it published no such field. So a parser reading `payload.work_key` alone
-  // reports no unit of work for every turn older than the split, while the
-  // server answers the same question off the column for all of them. One
-  // authority, and it is the row's own field.
+describe("the row's column is the authority for a stored record, the payload for a live frame", () => {
+  // The server answers "which unit of work" off the stored row's `work_key`
+  // column, so the client reads the same field first: one authority for a
+  // stored record, and it is the row's own.
   test("comes off the row's column, which the payload does not carry", () => {
     const rec: EventRecord = { ...phaseEvent(), work_key: "wk-backfilled" };
     const done = fromPhaseEvent(rec)!;
