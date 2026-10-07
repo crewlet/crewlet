@@ -54,33 +54,19 @@ func (a *Applier) Committed(context.Context) {}
 
 // Gated reports a record that must produce no rows at all.
 //
-// THREE GATES. The first is answered from the ENVELOPE ALONE; the other two
-// are READ FROM THIS SAME TRANSACTION, because their answer has to come from
-// the state the record would have applied against rather than from a cache
-// that may be a heartbeat old:
+// TWO GATES, both READ FROM THIS SAME TRANSACTION, because their answer has
+// to come from the state the record would have applied against rather than
+// from a cache that may be a heartbeat old:
 //
-//  1. THE RETIREMENT GATE. A record naming a kind this build once published
-//     and no longer applies is read past rather than faulted on — see
-//     [RetiredKinds] for why removing a kind is not the same as never having
-//     had one. It is FIRST and it touches no table: a node draining a log
-//     full of a retired kind should not also issue two queries per record it
-//     is certain to drop.
-//  2. THE EVICTION GATE. A record written by a node the fleet evicted before
+//  1. THE EVICTION GATE. A record written by a node the fleet evicted before
 //     the record's own position is dropped everywhere. It depends on nothing
 //     but the log's own order, which is what makes it the fence that holds
 //     when coordination cannot be reached at all.
-//  3. THE DELETION GATE. A record about a task a purge destroyed applies
+//  2. THE DELETION GATE. A record about a task a purge destroyed applies
 //     nowhere, for ever — otherwise a redelivery months later would resurrect
 //     rows an operator deliberately removed. A TURN charged to that task is
 //     about it too, and is read past on the same marker.
 func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
-	// THE ENVELOPE'S OWN KIND, not the payload's: a retired record is one
-	// this build may no longer be able to decode the body of, and the
-	// whole point is to read past it without trying.
-	if ObjectKind(rec.Subject.Kind).Retired() {
-		return statelog.ReasonRetired, true, nil
-	}
-
 	if rec.Writer != "" {
 		var from, readmitted sql.NullInt64
 		err := tx.QueryRowContext(ctx, `

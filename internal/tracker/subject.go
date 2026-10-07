@@ -223,6 +223,13 @@ const (
 
 // ObjectKinds are every kind this build writes, in the order they are
 // documented.
+//
+// A KIND IS NEVER DROPPED FROM THIS LIST OUTRIGHT by the build that stops
+// writing it. This build's records of it stay in the log through the
+// successor's rolling upgrade, at a version the successor reads, so the
+// successor's applier meets them with no case to dispatch them to and faults
+// ([Applier.apply]); a successor that removes a kind reads its records past
+// under an apply gate of its own instead.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
@@ -230,58 +237,8 @@ var ObjectKinds = []ObjectKind{
 	KindFile,
 }
 
-// KindSprint and KindGoal are RETIRED, and they are constants for the reason
-// every other wire value here is one: a literal this build must still
-// recognise is no less a wire value for having stopped being writable.
-//
-// They are deliberately NOT in [ObjectKinds], so [ObjectKind.Valid] is false
-// for them, nothing mints a subject for either, the domain classifies no table
-// for them and they arbitrate nothing. What that buys is [RetiredKinds] below.
-const (
-	KindSprint ObjectKind = "sprint"
-	KindGoal   ObjectKind = "goal"
-)
-
-// RetiredKinds are the kinds this build once published and no longer applies.
-//
-// THE TWO DIRECTIONS OF A ROLLING UPGRADE ARE NOT SYMMETRICAL, and this list
-// exists because only one of them was ever handled. A NEWER peer's record
-// carries a record version this build cannot read, so `statelog` retains it,
-// files it under its own subject and reprocesses it after an upgrade — which
-// is the case [ObjectKind]'s own doc describes. An OLDER peer's record is the
-// mirror image and nothing caught it: the version is one this build reads
-// perfectly and it is the KIND that is gone, so it passes the version gate at
-// `statelog/apply.go`, reaches [Applier.apply]'s switch, matches no case and
-// faults. There is no retry past it — the applier returns an error, the batch
-// rolls back, the checkpoint stops, and the node wedges at that position for
-// as long as the record is in the log, which is `stream.tracker_retention`
-// (seven days by default) and unbounded wherever the trim cannot advance.
-//
-// So a removal is a RETIREMENT rather than a deletion: the kind stops being
-// publishable and goes on being CONSUMABLE, producing no rows, exactly as a
-// gate-dropped record does. `internal/tracker/fallbackkind_test.go` states the
-// premise this rests on — a rolling upgrade makes an older build's records
-// "ordinary traffic for as long as one takes".
-//
-// A KIND THAT WAS NEVER PUBLISHED DOES NOT BELONG HERE. The list is the log's
-// own history rather than a wish list, and a kind nothing ever wrote needs no
-// drain.
-var RetiredKinds = []ObjectKind{
-	// Sprints left the tracker in replicated migration 0013. Every
-	// sprint record written before that is one an upgraded node reads
-	// past.
-	KindSprint,
-	// Goals left it in 0015, and the same sentence covers them.
-	KindGoal,
-}
-
 // Valid reports whether a kind off the wire is one this build knows.
 func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
-
-// Retired reports whether a kind off the wire is one this build has retired —
-// a record the log may still carry and this build must read past rather than
-// fault on. See [RetiredKinds].
-func (k ObjectKind) Retired() bool { return slices.Contains(RetiredKinds, k) }
 
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
