@@ -34,8 +34,9 @@ import (
 //     mailboxes exist, but it has nowhere to keep when a seat was first seen
 //     missing or that a retirement is in flight.
 //   - THE BROKER IS THE BACKSTOP. A mailbox can exist with no record: a node
-//     whose registration failed creates the mailbox anyway. Once such a seat is gone its handle is gone from the org, so nothing but
-//     the broker still knows the subscription is there. So every sweep also
+//     whose registration failed creates the mailbox anyway. Once such a seat
+//     is gone its handle is gone from the org, so nothing but the broker
+//     still knows the subscription is there. So every sweep also
 //     LISTS the seat mailboxes the broker holds ([queue.EventQueue]'s
 //     ListSubscriptions) and registers each one of a seat outside the roster
 //     that has no record, stamping its absence at once. From then on it is an
@@ -465,8 +466,8 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 	}
 	// A SEAT IN THE ROSTER WITH NO RECORD is a mailbox a node created before
 	// it could register it: a coordination store that refused the write, or
-	// a registration that lost every compare-and-set. Registered here, so that if the
-	// seat is ever removed its mailbox is remembered.
+	// a registration that lost every compare-and-set. Registered here, so
+	// that if the seat is ever removed its mailbox is remembered.
 	for _, handle := range roster {
 		if registered[handle] {
 			continue
