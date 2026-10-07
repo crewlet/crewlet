@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -270,9 +271,10 @@ func TestTheGatesThatKeepEpisodesHonest(t *testing.T) {
 			mutate: func(tn *learning.Turn) { tn.Event.ReviewOutcome = "self_iterate" },
 		},
 		{
-			// The executor recognised the trigger was for somebody else.
-			name: "an explicit skip", want: "no_engagement",
-			mutate: func(tn *learning.Turn) { tn.Event.PlanDecision = types.PlanDecisionSkip },
+			// The executor recognised the trigger was for somebody else:
+			// a skip never settles, so there is no episode to file.
+			name: "an explicit skip", want: "non_terminal",
+			mutate: func(tn *learning.Turn) { tn.Event.ReviewOutcome = string(phase.Skipped) },
 		},
 		{
 			// Finished done having called nothing: it did not touch the

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -137,8 +138,8 @@ func (t Turn) SelfPersisted() bool {
 // Two routes to "it did not", and both produce phantom-directive learning if
 // they are not blocked:
 //
-//   - the turn opted out (plan_decision skip) — nobody was asking this seat
-//     to do anything, and the engine ended it silently;
+//   - the turn was skipped (review_outcome `skipped`) — nobody was asking
+//     this seat to do anything, and the engine ended it silently;
 //   - the turn engaged with nothing: it finished `done` having called no
 //     tool at all, which is what a seat that read the trigger, recognised it
 //     as somebody else's and then said so only to itself looks like.
@@ -154,7 +155,7 @@ func (t Turn) SelfPersisted() bool {
 // reflecting on; only a turn that finished done having called nothing claims
 // to have engaged with a trigger it did not touch.
 func (t Turn) Engaged() bool {
-	if t.Event.PlanDecision == types.PlanDecisionSkip {
+	if t.Event.ReviewOutcome == string(phase.Skipped) {
 		return false
 	}
 	return len(t.Event.ToolSequence) > 0 || t.Event.ReviewOutcome != "done"
@@ -519,7 +520,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 
 	if !turn.Engaged() {
 		log.InfoContext(ctx, "reflection_skipped_no_engagement", "turn_id", tc.TurnID,
-			"agent_handle", tc.AgentHandle, "plan_decision", string(tc.PlanDecision),
+			"agent_handle", tc.AgentHandle,
 			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome)
 		// The sentinel still fires. A turn the dispatcher DECIDED not to
 		// learn from and a turn reflection never reached look identical

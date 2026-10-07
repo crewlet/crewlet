@@ -479,14 +479,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// OPEN-LOOKING: an absent tool sequence reads
 		// as "the agent engaged with nothing", which silently skips every
 		// worker on exactly the successful turns worth learning from.
-		ToolSequence: spend.ExecuteTools,
-		AllToolNames: spend.AllTools,
-		Outcome:      spend.Outcome,
-		// SKIP OR NOTHING. The field's only surviving reader gates on
-		// PlanDecisionSkip, and a turn that skipped is exactly the one
-		// the loop reports as phase.Skipped — so it is derived from the
-		// turn's own decision rather than from anything a model wrote.
-		PlanDecision:    skipDecision(decision),
+		ToolSequence:    spend.ExecuteTools,
+		AllToolNames:    spend.AllTools,
+		Outcome:         spend.Outcome,
 		SkillsUsed:      t.skills,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
@@ -761,20 +756,6 @@ func seatIdentity(company *Company, handle string) (role, agentID string) {
 		agentID = id.String()
 	}
 	return seat.Name, agentID
-}
-
-// skipDecision maps the turn's decision onto the one plan_decision value
-// anything still reads.
-//
-// A turn that decided nobody was asking is [types.PlanDecisionSkip]; every
-// other turn writes the empty string, which is what the field already meant
-// for a turn that produced no artifact. The learning gate reads exactly
-// one value, so writing a richer vocabulary here would be inventing consumers.
-func skipDecision(decision string) types.PlanDecision {
-	if decision == string(phase.Skipped) {
-		return types.PlanDecisionSkip
-	}
-	return ""
 }
 
 // requesterOf is the seat whose wake started a turn, or "" when no seat's did.

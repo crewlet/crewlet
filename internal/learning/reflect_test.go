@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -449,7 +450,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 	}{
 		// The turn recognised the trigger was for somebody else.
 		{"the turn opted out", func(x *types.TurnCompleted) {
-			x.PlanDecision = types.PlanDecisionSkip
+			x.ReviewOutcome = string(phase.Skipped)
 		}, false},
 		// It MEANT to opt out and never said so, so the turn finished
 		// `done` having touched nothing outside the engine.
@@ -457,7 +458,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 			x.ToolSequence = nil
 		}, false},
 		{"it opted out having called tools anyway", func(x *types.TurnCompleted) {
-			x.PlanDecision = types.PlanDecisionSkip
+			x.ReviewOutcome = string(phase.Skipped)
 			x.ToolSequence = []string{"slack_post"}
 		}, false},
 		// A failed turn that called nothing failed AT something, and that
@@ -466,9 +467,7 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 			x.ToolSequence = nil
 			x.ReviewOutcome = "failed"
 		}, true},
-		{"no plan artifact at all, but it acted", func(x *types.TurnCompleted) {
-			x.PlanDecision = ""
-		}, true},
+		{"it acted and finished done", func(*types.TurnCompleted) {}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
