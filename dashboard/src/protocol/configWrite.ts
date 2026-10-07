@@ -159,9 +159,8 @@ export async function dryRunPatch(
   etag: string,
   signal: AbortSignal,
 ): Promise<ConfigWriteOutcome> {
-  // NO SUMMARY ON A CHECK, deliberately: a node that predates dry runs
-  // ignores the parameter and refuses every write without a summary, so a
-  // check carrying one would be stored by that node during a rolling upgrade.
+  // A check carries no summary: a dry run stores nothing, so there is nothing
+  // to attribute, and the engine does not ask for one.
   return outcomeOf(
     await configTransport.send(
       {
