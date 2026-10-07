@@ -503,17 +503,10 @@ type TurnCompleted struct {
 	// fired in round 1 is a fact about the turn, and the reflect engine
 	// reads this to skip the post-turn persist decision when the agent
 	// already self-persisted in flight.
-	AllToolNames []string `json:"all_tool_names,omitempty"`
-	// PlanToolSequence is NO LONGER WRITTEN — it was the Plan phase's own
-	// calls, and there is no Plan phase. AllToolNames replaces it. It stays
-	// on the type, and the reflect engine keeps reading it, because the
-	// event store holds rows an earlier build wrote and a mixed fleet is
-	// still writing them: dropping it would make a turn that self-persisted
-	// look like one that did not, and run the persist decision twice.
-	PlanToolSequence []string `json:"plan_tool_sequence,omitempty"`
-	SkillsUsed       []string `json:"skills_used,omitempty"`
-	ReviewOutcome    string   `json:"review_outcome"`
-	Iterations       int      `json:"iterations"`
+	AllToolNames  []string `json:"all_tool_names,omitempty"`
+	SkillsUsed    []string `json:"skills_used,omitempty"`
+	ReviewOutcome string   `json:"review_outcome"`
+	Iterations    int      `json:"iterations"`
 	// Outcome is the executor's own last word on the turn — `delivered`,
 	// `no_action`, `blocked`, or the engine-written `incomplete`. Empty on
 	// a turn that never reached an executor at all.

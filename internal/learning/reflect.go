@@ -19,11 +19,10 @@ import (
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
 //
 // The dispatcher reads it as "the LLM already handled persistence this turn".
-// It is an executor builtin, so a call lands in the executor-scoped
-// [types.TurnCompleted.ToolSequence]. [Turn.SelfPersisted] reads
-// [types.TurnCompleted.PlanToolSequence] too, which this build never writes: an
-// older build recorded its planning phase's calls there, and a turn one of its
-// nodes completed during a rolling upgrade must not be persisted twice.
+// It is an executor builtin, so a call lands in the whole-turn
+// [types.TurnCompleted.AllToolNames], which [Turn.SelfPersisted] reads — never
+// the final-iteration [types.TurnCompleted.ToolSequence], which forgets a call
+// an earlier self_iterate attempt made.
 const ReflectTool = "reflect_and_persist"
 
 // ReflectSeen bounds the dispatcher's memory of turns it has already handled.
@@ -138,9 +137,14 @@ func Settled(outcome string) bool {
 func (t Turn) Settled() bool { return Settled(t.Event.ReviewOutcome) }
 
 // SelfPersisted reports whether the turn already wrote its own memory.
+//
+// It reads EVERY executor iteration's calls. A call in an iteration the
+// reviewer sent back with self_iterate still wrote the memory, and a later
+// iteration that did not call it again does not undo that — read off the
+// final iteration alone, such a turn ran the persist decision a second time
+// over a fact the agent had already written.
 func (t Turn) SelfPersisted() bool {
-	return slices.Contains(t.Event.PlanToolSequence, ReflectTool) ||
-		slices.Contains(t.Event.ToolSequence, ReflectTool)
+	return slices.Contains(t.Event.AllToolNames, ReflectTool)
 }
 
 // Engaged reports whether the agent actually acted on the trigger.

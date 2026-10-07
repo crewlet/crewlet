@@ -263,7 +263,7 @@ func TestAFailedTurnIsStillRecorded(t *testing.T) {
 func TestASelfPersistedTurnIsStillRecorded(t *testing.T) {
 	t.Parallel()
 	turn := epTurn()
-	turn.Event.PlanToolSequence = []string{learning.ReflectTool}
+	turn.Event.AllToolNames = []string{learning.ReflectTool}
 	if reason := episodist(t, episodes(t)).Skip(turn); reason != "" {
 		t.Fatalf("skipped a self-persisted turn: %s", reason)
 	}
