@@ -46,7 +46,9 @@ phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
 fold written out by phase, and `internal/api/queries` holds it against the
 engine's in both directions.
 
-The one exception is a **third-party app's own mark** on the Integrations
+There are two exceptions, and each is held to exactly what makes it one.
+
+The first is a **third-party app's own mark** on the Integrations
 screen (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
 Atlassian's blue, GitLab's orange,
 Datadog's violet, drawn as the third-party app draws them. A mark is identity by
@@ -55,6 +57,15 @@ to exactly that: a mark is drawn only beside the third-party app's name,
 nothing reads state from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
 else. A tool the company has not set up keeps its mark, dimmed.
+
+The second is a **QR code** (`ui/QrCode.tsx`), which is not colour at all but
+a symbol a camera reads: black modules on its own white plate, the quiet zone
+included, in the dark theme as in the light one and under forced colours too.
+A code is specified dark on light, and reading one inverted is something some
+scanners do and others do not, so a code inverted to suit the dark theme is
+one some authenticator apps will not read. Its two inks are literals in that one
+component, because no token is a fixed black and a fixed white; nothing reads
+state from them and nothing else is painted with them.
 
 A seat's chrome takes one of three **rings**, or none, from what it is DOING —
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -1894,10 +1905,19 @@ on a **Sign in** button rather than in the product: a second factor the person
 holds is asked for there, which a session handed out by the link would skip.
 
 **A required second factor is enrolled before anything else opens.** `#/enrol`
-asks `POST /auth/totp` for a seed — shown as the key, grouped for typing, and
-the `otpauth://` address, with no QR code: a QR library is a dependency for
-what an authenticator app's "enter a key" field already does — confirms a code
-from the app, and shows the first recovery codes once. The
+asks `POST /auth/totp` for a seed — drawn as a **QR code** of the seed's
+`otpauth://` URI, exactly as the engine answered it, with the key, grouped in
+fours for typing, and a link that opens the same URI in an app on this device
+beside it for whoever cannot scan — confirms a code from the app, and shows
+the first recovery codes once. The code comes first because an authenticator
+app usually lives on a phone, and a phone scans: shown only the key, a person
+types thirty-two characters of base32 into it by hand, and one slip is a first
+code that does not match and the whole key typed again. It is drawn as inline
+SVG from the encoder's module matrix (`uqr`, MIT, with no dependencies of its
+own) — no image URL, no markup string, nothing fetched, so the page's
+Content-Security-Policy is unchanged and the URI, which carries the seed, goes
+nowhere but the drawing and the link: no log, no URL, no storage. It is shown
+while the seed is, and gone with it. The
 [Account](#account-the-readers-own-page) page offers the same two steps, and a
 new set of recovery codes, to a person who wants to add or replace one later.
 
@@ -5613,7 +5633,8 @@ into swapping for somebody else's.
   it itself, and a refusal naming no field after a code was sent reads as the
   step-up dialog reads it ("That password or code was not accepted"), the
   code cleared. **Two-step verification** sets up or
-  replaces the authenticator app — a first one issuing a first set of recovery
+  replaces the authenticator app — the seed drawn as `#/enrol` draws it, a QR
+  code with the key and the link beside it — a first one issuing a first set of recovery
   codes, shown once, as `#/enrol` does, and a replacement keeping the set held
   — and **New recovery codes** issues a set —
   offered only beside an app, because recovery codes held alone are a second
@@ -6969,8 +6990,10 @@ to.
 
 1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
    per-category chip colour. If you need to tell two things apart, use their
-   names. The third-party app marks in `@crewlethq/icons` are the one, bounded
-   exception (see "The one rule" above); nothing else is.
+   names. The third-party app marks in `@crewlethq/icons` and a QR code's
+   black on white (`ui/QrCode.tsx`, whose two inks are the one colour
+   literal a component of ours holds) are the two bounded exceptions (see
+   "The one rule" above); nothing else is.
    **A seat's identity badge is `Avatar`, everywhere, through `SeatAvatar`**
    (`ui/SeatAvatar.tsx`; `seatBadge` for a kit component that draws the badge
    itself, such as the chart's `OrgLabel`), drawn from its name or handle so
@@ -7022,7 +7045,8 @@ to.
    submitted, and a sentinel that has to be recognised on the way out is one
    an edit can defeat. The one exception is a secret the engine has just
    MINTED for the person looking at it, which exists to be written down: a
-   second factor's key at enrolment (with Copy) and a set of recovery codes
+   second factor's key at enrolment (with Copy, and drawn as a QR code of its
+   `otpauth://` URI beside the link that opens it) and a set of recovery codes
    (with Copy and Download), each shown once, never stored by the page and
    never read back — no route returns either again, and the screen says so. A
    token the reader types on the sign-in screen is the other direction: it is

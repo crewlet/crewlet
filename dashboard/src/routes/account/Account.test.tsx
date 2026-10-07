@@ -585,10 +585,16 @@ describe("a first authenticator", () => {
     mount();
     fireEvent.click(await screen.findByRole("button", { name: press }));
     const dialog = await screen.findByRole("dialog", { name: "Two-step verification" });
-    fireEvent.change(await within(dialog).findByLabelText(/code/i), {
+    // THE SIX-DIGIT FIELD BY ITS OWN LABEL: the setup also draws the seed as a
+    // QR code, an image whose name says "code" too.
+    fireEvent.change(await within(dialog).findByLabelText(/six-digit code/i), {
       target: { value: "123456" },
     });
-    fireEvent.submit(within(dialog).getByLabelText(/code/i).closest("form")!);
+    fireEvent.submit(
+      within(dialog)
+        .getByLabelText(/six-digit code/i)
+        .closest("form")!,
+    );
     if (issued) {
       expect(await within(dialog).findByText("aaaa-bbbb")).toBeDefined();
       expect(within(dialog).queryByText(/recovery codes are unchanged/)).toBeNull();

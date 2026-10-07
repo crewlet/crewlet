@@ -196,9 +196,10 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 
 	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,
-	// the design system's three packages, the Geist faces and the Lucide
-	// drawings, all under licenses that require their text alongside, and the
-	// release archives and image copy this file from here. Written by the build
+	// the design system's three packages, the QR encoder the authenticator
+	// setup draws with, the Geist faces and the Lucide drawings, all under
+	// licenses that require their text alongside, and the release archives
+	// and image copy this file from here. Written by the build
 	// (vite.config.ts), so a build that lost `build.license` or the step
 	// appending the fonts and the glyphs leaves a tree that serves perfectly
 	// and owes notices it no longer carries.
@@ -218,6 +219,7 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		"## @crewlethq/ui",              // the design system's components
 		"## @crewlethq/tokens",          // its palette, type and faces
 		"## @crewlethq/icons",           // its glyphs and marks
+		"## uqr - ",                     // the QR encoder (MIT, Project Nayuki's code)
 		"SIL OPEN FONT LICENSE",         // the font license, appended by sourceNotices
 		"The Geist Project Authors",     // naming the faces
 		"ISC License",                   // the Lucide drawings, appended too

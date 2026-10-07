@@ -4300,7 +4300,7 @@ export interface PasswordSet {
 export interface SecondFactorSeed {
   /** The seed in base32, for an app that is typed into. */
   secret: string;
-  /** The `otpauth://` form an authenticator app opens. */
+  /** The `otpauth://` form an authenticator app opens, and scans as the setup's QR code. */
   uri: string;
 }
 

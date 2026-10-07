@@ -21,6 +21,7 @@ import {
   needSession,
   sessionRestored,
 } from "~/protocol/index.ts";
+import { scan } from "~/test/qr.ts";
 import { groupedKey } from "./SecondFactor.tsx";
 
 class InertWebSocket {
@@ -141,7 +142,7 @@ afterEach(() => {
 });
 
 describe("enrolling", () => {
-  test("the key is shown to type and the link to open, and the code goes back with it", async () => {
+  test("the seed is drawn to scan, with the key to type and the link to open, and the code goes back with it", async () => {
     const sent = engine({
       "POST /auth/totp": [SEED, ENROLLED],
       "POST /auth/totp/recovery": {
@@ -153,6 +154,10 @@ describe("enrolling", () => {
 
     expect(await screen.findByText(groupedKey("JBSWY3DPEHPK3PXPJBSWY3DP"))).toBeDefined();
     expect(screen.getByRole("link", { name: "open it in the app" }).getAttribute("href")).toBe(
+      (SEED.body as { uri: string }).uri,
+    );
+    // THE SAME URI, drawn to scan and read back by a decoder.
+    expect(scan(screen.getByRole("img", { name: "QR code for your authenticator app" }))).toBe(
       (SEED.body as { uri: string }).uri,
     );
     // THE FIRST LEG STORES NOTHING and sends nothing but the ask.

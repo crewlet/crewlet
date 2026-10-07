@@ -8,7 +8,9 @@
  * them, because identity is exactly what a mark is for and a recoloured
  * Slack mark is not Slack's. Nothing reads state from a mark, no mark is
  * used anywhere but beside the third-party app's name, and no hue here is
- * reused as a token, so the rule holds everywhere else.
+ * reused as a token, so the rule holds everywhere else — but for the one
+ * other exception, a QR code's black on white (`ui/QrCode.tsx`), which is
+ * nobody's colours: it is a symbol a camera reads.
  *
  * The Slack, Atlassian, GitHub and GitLab marks are the same drawings the
  * console uses. The Mattermost and Datadog marks are Simple Icons' renderings

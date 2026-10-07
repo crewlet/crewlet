@@ -23,16 +23,25 @@
  * each exactly once, in the response that minted it, and no route returns it
  * again. A reload mints a fresh seed and never re-reads the old one.
  *
- * NO QR CODE. Drawing one needs an encoder this product does not carry, and
- * the two things it would carry are here already: the `otpauth://` link,
- * which an authenticator on the same device opens, and the key itself, typed
- * into one that is not.
+ * # A QR code first, and the key and the link beside it
+ *
+ * An authenticator app usually lives on a phone, and a phone SCANS: shown only
+ * the key, a person types thirty-two characters of base32 into it by hand,
+ * and one slip is a first code that does not match and the whole key typed
+ * again. So the seed's `otpauth://` URI — the value the engine answered,
+ * exactly, and the same one the link opens — is drawn as a QR code
+ * ([QrCode], inline SVG, nothing fetched), and the key and the link stay
+ * beside it for whoever cannot scan: an app on this same device opens the
+ * link, and one that only takes typing gets the key, grouped in fours. The
+ * code is drawn only while the seed is on screen, like the key, and the URI
+ * goes nowhere else — no log, no URL, no storage.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Callout, FormField, Input, Modal, Skeleton, Text } from "@crewlethq/ui";
 import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { CopyButton, DownloadButton } from "~/ui/primitives.tsx";
+import { QrCode } from "~/ui/QrCode.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useWaiting } from "~/lib/waiting.ts";
@@ -123,16 +132,22 @@ export function SecondFactorSetup({
     >
       <ol className="signin-steps">
         <li>
-          <Text as="p" variant="body">
-            Add an account to your authenticator app: on this device,{" "}
-            <a className="prose-link" href={seed.uri}>
-              open it in the app
-            </a>
-            ; on another, type this key into it.
-          </Text>
-          <div className="signin-row">
-            <code className="inline">{groupedKey(seed.secret)}</code>
-            <CopyButton text={seed.secret} label="Copy key" variant="ghost" />
+          <div className="signin-step">
+            <Text as="p" variant="body">
+              Scan this code with your authenticator app.
+            </Text>
+            <QrCode value={seed.uri} label="QR code for your authenticator app" />
+            <Text as="p" variant="body">
+              Cannot scan it? On this device,{" "}
+              <a className="prose-link" href={seed.uri}>
+                open it in the app
+              </a>
+              ; on another, type this key into it.
+            </Text>
+            <div className="signin-row">
+              <code className="inline">{groupedKey(seed.secret)}</code>
+              <CopyButton text={seed.secret} label="Copy key" variant="ghost" />
+            </div>
           </div>
         </li>
         <li>

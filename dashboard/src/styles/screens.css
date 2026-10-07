@@ -9825,6 +9825,17 @@ a.live-row:focus-visible {
   padding-inline-start: var(--spacing-5);
 }
 
+/* One step that holds more than a sentence — the QR code, the way round it
+   and the key — as a column of its own. INSIDE the list item rather than on
+   it: a flex item is no longer a list item, and the step would lose its
+   number. */
+.signin-step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+}
+
 .signin-codes {
   display: flex;
   flex-direction: column;

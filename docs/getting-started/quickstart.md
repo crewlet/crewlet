@@ -462,9 +462,10 @@ This walkthrough's `crewlet.yaml` says `totp: optional`, so a password alone
 signs you in here. **Leave that line out on a deployment reached off
 loopback** — unset, a second factor is required, and the session a redemption
 or a password sign-in opens for somebody holding none may only enrol one: the
-dashboard shows a key to type into an authenticator app (and the
-`otpauth://` address for one that takes it), takes the first code the app
-shows, and shows the **recovery codes once**. See [A required second factor
+dashboard shows a QR code to scan with an authenticator app on your phone
+(with the key to type, and the `otpauth://` link for an app on the same
+device, beside it), takes the first code the app shows, and shows the
+**recovery codes once**. See [A required second factor
 is enrolled before anything
 else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else).
 

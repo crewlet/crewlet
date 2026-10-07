@@ -279,6 +279,23 @@
   flex: none;
 }
 
+/* A QR code (`ui/QrCode.tsx`): a square a phone's camera holds comfortably
+   in frame from a hand's length off a laptop screen. 208px puts a
+   second-factor URI — measured, a version 7 to 10 symbol for a login and a
+   host of ordinary length, 45 to 57 modules plus the eight of the quiet
+   zone — at more than three CSS pixels a module, and it still fits a
+   phone-width dialog beside its padding. NEVER RECOLOURED BY FORCED
+   COLOURS: its two inks are what a scanner reads, and a palette swapped for
+   the system's would draw a code that no longer scans. */
+.qr-code {
+  display: block;
+  flex: none;
+  width: 208px;
+  height: 208px;
+  border-radius: var(--radius-sm);
+  forced-color-adjust: none;
+}
+
 /* A link that IS a row takes the page's text colour, not the link colour.
    Otherwise every seat name in every list renders in the accent — which is
    identity-colouring by accident, and the accent is reserved for saying where
