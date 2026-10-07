@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -87,6 +88,52 @@ func TestAPageIsSelectedExactlyWhenWhatItsVectorWasComputedFromMoved(t *testing.
 					"two must be one predicate", have, total, tc.selected)
 			}
 		})
+	}
+}
+
+// A HELD PAGE TAKES NONE OF THE SELECTION'S PLACES.
+//
+// A page the provider refused alone is never embedded, so it keeps its place at
+// the front of every oldest-first selection after it. Read only to the limit,
+// the selection filled with held pages and passed them over, so a wiki with as
+// many refused pages as the limit — one tick's sources — embedded no page
+// written or edited afterwards, ever. The task corpus is held to the same rule
+// through the duty; this holds the page corpus's own statement to it.
+func TestHeldPagesNeverTakeThePageSelectionsPlaces(t *testing.T) {
+	t.Parallel()
+	db := pagesStore(t)
+	corpus := search.PageCorpus{DB: db.Replicated().Reader()}
+	const limit = 4
+	var held []search.Document
+	at := int64(1)
+	for i := range limit + 1 {
+		row := pageRow{id: fmt.Sprintf("held-%d", i), container: "eng",
+			title: fmt.Sprintf("Refused %d", i), body: "a page the provider refuses",
+			status: "published", edit: 2, version: at}
+		writePage(t, db, row)
+		held = append(held, search.Document{ID: row.id, Version: uint64(row.edit), Title: row.title})
+		at++
+	}
+	for i := range 2 * limit {
+		writePage(t, db, pageRow{id: fmt.Sprintf("fresh-%d", i), container: "eng",
+			title: fmt.Sprintf("Written afterwards %d", i), body: "a page to embed",
+			status: "published", edit: 1, version: at})
+		at++
+	}
+
+	stale, _, err := corpus.Stale(t.Context(), "m", 8, limit, search.HeldOf(held...))
+	if err != nil {
+		t.Fatalf("Stale: %v", err)
+	}
+	if len(stale) != limit {
+		t.Fatalf("with %d pages held the selection returned %d page(s), want the %d "+
+			"written afterwards that fit the limit", len(held), len(stale), limit)
+	}
+	for i, doc := range stale {
+		if want := fmt.Sprintf("fresh-%d", i); doc.ID != want || doc.Body == "" {
+			t.Fatalf("the selection's page %d is %q with body %q, want %s, oldest "+
+				"first and read", i, doc.ID, doc.Body, want)
+		}
 	}
 }
 
