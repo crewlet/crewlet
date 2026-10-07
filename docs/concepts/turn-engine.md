@@ -927,11 +927,7 @@ is written twice — the cheaper failure by far against every write lost. The
 ordinary turn pays nothing for any of this: the coordination store is read only
 by an attempt whose start is past the line, since no earlier attempt can have
 rebased before it. An attempt that needs the store and cannot read it does not
-run; its delivery is handed back and retried. During a rolling upgrade a build
-from before the rebase mints every attempt at the start, so a retry that
-crosses between the two builds in the retention's last day writes the earlier
-attempt's writes a second time, and past the retention the older build's writes
-are lost as they always were on that build.
+run; its delivery is handed back and retried.
 
 **A re-run is recognised call for call, and only when its calls are the same.**
 Everything a derived id is made of — the work, the verb, the item, the

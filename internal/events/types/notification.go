@@ -101,9 +101,8 @@ type ExternalNotification struct {
 	// by the tracker is held open until a chat tool has run rather than
 	// being closed out by a comment on the item.
 	//
-	// ADDITIVE AND ABSENT-SAFE, like Addressed: an older build's events
-	// decode with no surface owed, which is the obligation that event's
-	// writer recorded.
+	// Empty, and omitted, on every notification that owes no other
+	// surface: absent decodes as nothing owed, like Addressed.
 	Owes string `json:"owes,omitempty"`
 
 	// Messages are the constituents when this event is a COALESCED trigger.

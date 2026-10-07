@@ -35,10 +35,9 @@ func TestAnAttemptRebasesOnlyPastTheHorizon(t *testing.T) {
 		{"an attempt a minute short of the retention", began, statelog.OpsRetention - time.Minute, true},
 		{"an attempt just past the retention", began, statelog.OpsRetention + time.Millisecond, true},
 		{"an attempt forty days on", began, 40 * 24 * time.Hour, true},
-		// THE START IS NOT KNOWN: a seed an older build minted with no
-		// instant in it. The zero instant is behind every loss the ledger
-		// ever recorded, so keeping it answers every write `unknown` on a
-		// node whose ledger has swept once.
+		// THE START IS NOT KNOWN: the zero instant is behind every loss
+		// the ledger ever recorded, so keeping it answers every write
+		// `unknown` on a node whose ledger has swept once.
 		{"an attempt whose inherited instant is unknown", time.Time{}, time.Hour, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

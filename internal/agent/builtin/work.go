@@ -503,10 +503,12 @@ func (a Actor) OperationSeed() string {
 // its call's clock is one a re-run after a loss decides a second time. See
 // [statelog.OpMintedAt].
 //
-// The zero instant where neither is known — a run parked by a build whose run
-// ids carried none — which reads as older than every loss: a node whose ledger
-// ever lost a row answers such a write `unknown`, unless it holds its row,
-// rather than risking it twice.
+// The zero instant where neither is known — a keyed turn whose trigger carried
+// no timestamp, or a turn whose id carries no instant, which the engine never
+// mints (every run id is time-ordered), so only a hand-built turn such as a
+// test's — which reads as older than every loss: a node whose ledger ever lost
+// a row answers such a write `unknown`, unless it holds its row, rather than
+// risking it twice.
 //
 // UNLESS THE TURN WAS REBASED ([Actor.RebasedTo]), which outranks both: a turn
 // whose identity started before what the ledger may have swept mints at the
@@ -2211,7 +2213,7 @@ func handles(all ...string) []string {
 // re-run that makes the same calls in the same order reproduces every count.
 //
 // A COUNT OF ZERO ADDS NOTHING to the identity, so a run's first call of each
-// kind — every call, before this existed — derives the id it always did.
+// kind derives the id of the call alone.
 //
 // tool is the calling tool's own name, which is what the count is kept by.
 //
