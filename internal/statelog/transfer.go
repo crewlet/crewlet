@@ -31,15 +31,13 @@ const (
 
 	// HeaderFetchArtifact names, on a fetch, the artefact the joiner chose
 	// from the offer — so the donor streams that copy or refuses, rather
-	// than whatever it holds by the time the fetch arrives.
+	// than whatever it holds by the time the fetch arrives. A fetch naming
+	// none is refused: streaming the newest instead is exactly the race the
+	// name exists to close.
 	//
-	// A HEADER, NOT THE BODY, because the body has always been the deliver
-	// subject alone, and a build from before it — a peer on the same fleet
-	// through a rolling upgrade — reads it as exactly that: a body of
-	// another shape was a subject no joiner listens on to that build's
-	// donor, and a fetch this build's donor could not read at all. A fetch
-	// naming none is that build's, and is streamed the newest artefact,
-	// which is what that build has always been streamed.
+	// A HEADER rather than a field of the body, so the body stays the
+	// deliver subject and nothing else, which the donor reads without
+	// decoding anything.
 	HeaderFetchArtifact = "Crewlet-Snapshot-Artifact"
 )
 
@@ -308,8 +306,8 @@ func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 // THE ARTEFACT THE JOINER CHOSE, OR NONE: the joiner accepted an offer from its
 // manifest, so a copy taken since is refused with 410 rather than streamed and
 // refused only after the transfer, by a checksum it could never match. A fetch
-// naming no artefact is a build from before the header ([HeaderFetchArtifact])
-// and is streamed the newest, as that build always has been.
+// naming no artefact ([HeaderFetchArtifact]) is refused with 400: it chose
+// nothing, and the newest artefact is not what it was offered.
 func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 	deliver := string(msg.Data)
 	if deliver == "" {
@@ -319,12 +317,16 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 	if msg.Header != nil {
 		artifact = msg.Header.Get(HeaderFetchArtifact)
 	}
+	if artifact == "" {
+		d.terminate(nc, deliver, 400, "the fetch names no artefact; ask for offers again")
+		return
+	}
 	m, ok := d.deps.Newest()
 	switch {
 	case !ok:
 		d.terminate(nc, deliver, 404, "this node holds no snapshot")
 		return
-	case artifact != "" && m.Artifact != artifact:
+	case m.Artifact != artifact:
 		d.terminate(nc, deliver, 410, fmt.Sprintf("the artefact %s was replaced by "+
 			"%s since it was offered; ask for offers again", artifact, m.Artifact))
 		return
@@ -559,8 +561,8 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 		return 0, fmt.Errorf("statelog: size the transfer buffer: %w", err)
 	}
 
-	// THE BODY IS THE DELIVER SUBJECT, as every build reads it, and the
-	// artefact chosen rides in a header ([HeaderFetchArtifact]).
+	// THE BODY IS THE DELIVER SUBJECT, and the artefact chosen rides in a
+	// header ([HeaderFetchArtifact]).
 	fetch := nats.NewMsg(offer.Fetch)
 	fetch.Reply = nats.NewInbox()
 	fetch.Data = []byte(deliver)
