@@ -1000,9 +1000,8 @@ func (p *Provider) completion(msg *sdk.Message, bound string) *llm.Completion {
 		case "thinking":
 			reasoning.WriteString(block.Thinking)
 			out.ThinkingBlocks = append(out.ThinkingBlocks, llm.ThinkingBlock{
-				Type:      "thinking",
-				Thinking:  block.Thinking,
-				Signature: block.Signature,
+				Type:     "thinking",
+				Thinking: block.Thinking,
 			})
 		case "redacted_thinking":
 			// Carried opaquely and handed back verbatim; there is nothing

@@ -181,7 +181,6 @@ func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) 
 		toolResult    = "the box says it compiles now"
 		thinkingText  = "the build is red because the module is untidy"
 		redactedData  = "0pAqUeBlOb"
-		signature     = "sig-the-provider-minted-not-the-model"
 		arguments     = `{"task":"go mod tidy"}`
 	)
 	seed := []llm.Message{
@@ -191,7 +190,7 @@ func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) 
 			Role:    llm.RoleAssistant,
 			Content: assistantText,
 			ThinkingBlocks: []llm.ThinkingBlock{
-				{Type: "thinking", Thinking: thinkingText, Signature: signature},
+				{Type: "thinking", Thinking: thinkingText},
 				{Type: "redacted_thinking", Data: redactedData},
 			},
 			// What the Anthropic backend sets BESIDE the blocks: the same
@@ -224,10 +223,6 @@ func TestAParkedConversationCountsItsReasoningOnceAndItsArguments(t *testing.T) 
 	if m.messages == want-len(thinkingText)-len(redactedData) {
 		t.Error("the thinking was dropped: Anthropic hands every block back into the " +
 			"request and is billed for it")
-	}
-	if m.messages == want+len(signature) {
-		t.Error("the block's signature was counted: it is a fixed-size opaque token the " +
-			"provider mints, so counting it moves this figure with a vendor's token format")
 	}
 }
 

@@ -673,11 +673,9 @@ func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) 
 // blocks win wherever there are blocks; the prose stands in where there are
 // none.
 //
-// Signature is deliberately out of the sum: it is a fixed-size opaque token
-// the provider mints per block rather than anything a model wrote, so counting
-// it would make this figure move with a vendor's token format instead of with
-// the prompt. A tool call's id and name are out for the same reason — bounded
-// identifiers beside arguments that run to kilobytes.
+// A tool call's id and name are out of the sum: bounded identifiers beside
+// arguments that run to kilobytes, which would make this figure move with a
+// vendor's id format instead of with the prompt.
 func seedBytes(seed []llm.Message) (int, error) {
 	total := 0
 	for _, msg := range seed {
@@ -1420,8 +1418,8 @@ func utcOrZero(t time.Time) time.Time {
 // NIL FOR A MAP THAT DOES NOT TILE ITS TEXT: the wire contract is that every
 // map a reader receives can be sliced by, and a reader that finds none falls
 // back to the prompt's own headings. Publishing a broken one would hand every
-// reader the obligation to check it — they must anyway, for an older peer's —
-// and would publish a map this node already knows is wrong.
+// reader the obligation to check it, and would publish a map this node already
+// knows is wrong.
 //
 // AND SAID SO, at warn. No builder in this tree produces a map that fails to
 // tile; the one way a valid build fails the check is text that is not UTF-8
@@ -1455,9 +1453,8 @@ func promptSections(ctx context.Context, ph phase.Phase, p prompts.Prompt) []typ
 // the whole contract — it is what lets a reader interleave the two lists into
 // one chronological ledger without a second ordering rule.
 //
-// `declined` is written only when true, so every round that is not one reads
-// exactly as it did before the key existed — the same "absent means no" every
-// reader of an older peer's record already has to apply.
+// `declined` is written only when true, so absent means no — the reading every
+// reader gives an omitted flag.
 func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 	if len(narr) == 0 {
 		return nil

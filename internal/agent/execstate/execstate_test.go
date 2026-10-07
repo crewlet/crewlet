@@ -115,15 +115,14 @@ func withVersion(t *testing.T, blob json.RawMessage, version int) json.RawMessag
 // snowflake — and the resumed loop replays that call to the provider and
 // reads it back into its own ledger. Read as a float64 the snowflake below
 // becomes ...800, which is an argument the model never wrote, a replayed turn
-// the provider sees edited, and an id that names something else. The
-// signature rides along because it is the other value that must come back
-// byte for byte: a provider refuses a thinking block whose signature moved.
-func TestNumbersAndSignaturesSurviveASuspensionExactly(t *testing.T) {
+// the provider sees edited, and an id that names something else. The thinking
+// rides along beside it, and comes back as it went in.
+func TestNumbersSurviveASuspensionExactly(t *testing.T) {
 	t.Parallel()
 	const snowflake = "1234567890123456789"
 	state := suspended()
 	state.Messages[2].ThinkingBlocks = []llm.ThinkingBlock{{
-		Type: "thinking", Thinking: "find the row <first> & then fix it", Signature: "EqQBCgIYAhIM+/=",
+		Type: "thinking", Thinking: "find the row <first> & then fix it",
 	}}
 	state.Messages[2].ToolCalls[0].Arguments = map[string]any{
 		"brief": "fix it",
@@ -172,9 +171,9 @@ func TestNumbersAndSignaturesSurviveASuspensionExactly(t *testing.T) {
 // Held to the TOKENS: the row's encoder drops the whitespace between them and
 // escapes <, > and & inside strings, exactly as the request encoder does on
 // the way out, and neither changes a key, its order, a number's digits or a
-// string. The tags are held too — they are a wire format another build reads
-// — and so is the turn's binding, which says which tools its reasoning was
-// written under.
+// string. The tags are held too — they are a wire format the node that
+// resumes the run reads — and so is the turn's binding, which says which tools
+// its reasoning was written under.
 func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
 	t.Parallel()
 	written := []string{
@@ -197,7 +196,7 @@ func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
 		`"Origin":{"Provider":"anthropic","Model":"claude-opus-5-5"}`, `"Raw":[`, `"Binding":"9f2c"`,
 	} {
 		if !strings.Contains(string(blob), tag) {
-			t.Errorf("the row does not carry %s — a renamed tag is a turn an older build cannot read:\n%s", tag, blob)
+			t.Errorf("the row does not carry %s — a renamed tag is a parked turn the resume cannot read:\n%s", tag, blob)
 		}
 	}
 	// A turn with no origin writes none: every message but the assistant's

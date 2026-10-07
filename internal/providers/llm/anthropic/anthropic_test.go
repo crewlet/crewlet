@@ -939,7 +939,7 @@ func TestConversationTranslation(t *testing.T) {
 		{
 			Role:           llm.RoleAssistant,
 			Content:        "working",
-			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "hmm", Signature: "sig"}},
+			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "hmm"}},
 			ToolCalls:      []llm.ToolCall{{ID: "call_1", Name: "run", Arguments: map[string]any{"a": 1}}},
 			Origin:         llm.Origin{Provider: "openai", Model: "gpt-test"},
 		},
@@ -1766,8 +1766,11 @@ func TestResponseTranslation(t *testing.T) {
 	if len(out.ThinkingBlocks) != 2 {
 		t.Fatalf("ThinkingBlocks = %v, want the redacted one carried too", out.ThinkingBlocks)
 	}
-	if out.ThinkingBlocks[0].Signature != "sig1" || out.ThinkingBlocks[1].Data != "opaque" {
+	if out.ThinkingBlocks[0].Thinking != "first thought" || out.ThinkingBlocks[1].Data != "opaque" {
 		t.Fatalf("ThinkingBlocks = %+v", out.ThinkingBlocks)
+	}
+	if len(out.Raw) == 0 || !strings.Contains(string(out.Raw[0]), `"sig1"`) {
+		t.Fatalf("Raw = %s, want the thinking block's signature kept for the next round", out.Raw)
 	}
 	if len(out.ToolCalls) != 1 || out.ToolCalls[0].ID != "call_1" ||
 		out.ToolCalls[0].Arguments["path"] != "/tmp" {
@@ -2248,8 +2251,9 @@ func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
 	if out.Content != "Hello" || out.ReasoningContent != "Weighing it." {
 		t.Fatalf("content %q / reasoning %q, want the assembled message", out.Content, out.ReasoningContent)
 	}
-	if len(out.ThinkingBlocks) != 1 || out.ThinkingBlocks[0].Signature != "sig-1" {
-		t.Fatalf("thinking blocks = %+v, want the streamed signature kept for the next round", out.ThinkingBlocks)
+	if len(out.ThinkingBlocks) != 1 || len(out.Raw) == 0 || !strings.Contains(string(out.Raw[0]), `"sig-1"`) {
+		t.Fatalf("thinking blocks = %+v, raw %s — want the streamed signature kept for the next round",
+			out.ThinkingBlocks, out.Raw)
 	}
 	if len(out.ToolCalls) != 1 || out.ToolCalls[0].Arguments["q"] != "x" {
 		t.Fatalf("tool calls = %+v, want the argument assembled from its fragments", out.ToolCalls)

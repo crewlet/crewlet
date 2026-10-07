@@ -141,16 +141,14 @@ type Origin struct {
 }
 
 // ThinkingBlock is a provider's structured reasoning block, in the neutral
-// view. A backend that replays thinking does so from [Message.Raw], which
-// holds the same block in its own place among the turn's others; this copy is
-// what the engine measures, and what a build that predates Raw replays from a
-// conversation a newer one parked (a rolling upgrade resumes runs across the
-// two), which is why its fields — Signature included — stay.
+// view: what the engine measures. A backend that replays thinking does so from
+// [Message.Raw], which holds the same block — its signature included — in its
+// own place among the turn's others, so the neutral copy carries only what a
+// reader counts: the readable thinking, or a redacted block's opaque payload.
 type ThinkingBlock struct {
-	Type      string `json:"Type,omitempty"`
-	Thinking  string `json:"Thinking,omitempty"`
-	Signature string `json:"Signature,omitempty"`
-	Data      string `json:"Data,omitempty"`
+	Type     string `json:"Type,omitempty"`
+	Thinking string `json:"Thinking,omitempty"`
+	Data     string `json:"Data,omitempty"`
 }
 
 // ToolDef is a tool offered to the model. Parameters is a JSON Schema object.

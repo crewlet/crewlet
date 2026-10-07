@@ -352,7 +352,7 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 		}
 		state.Messages[i].ReasoningContent = thought
 		state.Messages[i].ThinkingBlocks = []llm.ThinkingBlock{
-			{Type: "thinking", Thinking: thought, Signature: "provider-minted"},
+			{Type: "thinking", Thinking: thought},
 		}
 	}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{

@@ -67,19 +67,13 @@ type State struct {
 	// backend that wrote them ([llm.Message.Raw], [llm.Message.Origin]),
 	// which the resumed loop replays unchanged: a model that preserves its
 	// thinking refuses a conversation whose earlier turns come back
-	// different. Additive within v2: a row written before they existed
-	// decodes to none, and the backend rebuilds those turns from the
-	// neutral view without their thinking — the blocks such a row lacks all
-	// sit before any the resumed rounds write, and dropping a run from the
-	// front is the one removal the vendor accepts.
+	// different. A turn with none — one another backend wrote — is rebuilt
+	// from the neutral view without its thinking.
 	//
 	// Each such turn also carries what its request's thinking was bound to
 	// ([llm.Message.Binding]), because a resume renders the tools again
 	// from the registry it wakes up against and the backend sheds the
-	// reasoning written under any other set. Additive within v2 for the
-	// same reason: a row written before it decodes to none, and the turns
-	// that lack it — all of them ahead of every turn the resumed rounds
-	// write — have their thinking shed, a run from the front again.
+	// reasoning written under any other set.
 	Messages []llm.Message `json:"messages"`
 
 	// PendingCallID and PendingCallName identify the dangling call the

@@ -664,7 +664,7 @@ That matters because Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 **bind each think
 
 **Each assistant turn goes back as the model wrote it.** The Anthropic backend keeps every response's content blocks verbatim (`llm.Message.Raw`, beside the neutral `Content` / `ToolCalls` / `ThinkingBlocks` the engine itself reads) and replays them unchanged on every later round: interleaved `[thinking, text, thinking, tool_use]` keeps its order, a tool call's `input` keeps the digits the model wrote, and a field or block type the engine does not model is kept rather than dropped. The rebuild this replaced put every thinking block first, joined the texts and re-encoded each call's input — an edit on every round. Two exceptions, both ones the vendor's check ignores by rule: the request encoder drops whitespace *between* JSON tokens, and a text block of nothing but whitespace (which the API refuses on input) is left out.
 
-**Which model reads which block is the vendor's call.** A turn one Claude model wrote is replayed whole to whichever Claude model serves the next round — a chain's fallback member, or a resumed run after the entry's model changed. The API drops a block the serving model cannot read, unbilled, without failing the call; stripping it client-side would remove blocks from the *middle* of the conversation's sequence, which invalidates every later block when the conversation returns to the model that wrote them. A turn **another backend** wrote (an OpenAI or `cli-agent` member of the chain) is rebuilt from the neutral view as text and `tool_use` with no thinking, which the vendor accepts anywhere; so is a turn parked by a build that predates `Raw`, whose blocks therefore drop as a run from the front.
+**Which model reads which block is the vendor's call.** A turn one Claude model wrote is replayed whole to whichever Claude model serves the next round — a chain's fallback member, or a resumed run after the entry's model changed. The API drops a block the serving model cannot read, unbilled, without failing the call; stripping it client-side would remove blocks from the *middle* of the conversation's sequence, which invalidates every later block when the conversation returns to the model that wrote them. A turn **another backend** wrote (an OpenAI or `cli-agent` member of the chain) is rebuilt from the neutral view as text and `tool_use` with no thinking, which the vendor accepts anywhere.
 
 The blocks travel with the conversation through a suspension: [`execute_state`](conversation-sessions.md#what-it-is-not) carries them, with the backend and model that wrote each turn (`llm.Message.Origin`), so the resumed loop replays them as the suspended one would have.
 
@@ -1182,10 +1182,8 @@ prompt the executor wrote and a trigger's body are other people's
 markdown, and "## Goal" or "# Fix the login bug" as their first line is
 the content's heading, nested under the part's title — not the part's
 own. A reader that took it for the part's own drew the builder's title
-in its place and lost the heading's words. A map from an older peer
-carries no `headed` at all; a reader then treats a part as headed only
-when its first heading's text *is* its `title`, which the rule above
-makes exact for every headed part.
+in its place and lost the heading's words, so a reader takes a part as
+headed only when the map says so.
 
 | Prompt | Section keys, in the order they can appear |
 |---|---|
@@ -1212,8 +1210,7 @@ invalid byte rewritten to U+FFFD, three bytes for one, so a map measured
 over what the builder joined no longer tiles what a reader receives. A separator between two parts
 belongs to the section before it, so a headed section starts with its own
 heading line. A prompt with no map — a resumed executor's, which re-entered
-a conversation rather than opening one, or an older peer's — omits the
-field, and a reader derives the outline from the prompt's own headings; a
+a conversation rather than opening one — omits the field, and a reader derives the outline from the prompt's own headings; a
 reader that finds a map breaking any of the rules above must do the same
 rather than slice by it. The engine never publishes one: a map that fails
 the check is withheld, and the node logs `prompt_outline_withheld` at
