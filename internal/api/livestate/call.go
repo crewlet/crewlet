@@ -152,7 +152,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 			if len(cur.PromptMessages) == 0 {
 				cur.PromptMessages = list(payload, "prompt_messages")
 			}
-			cur.Versions = restamp(&was, cur)
+			cur.Versions = s.restamp(&was, cur)
 			return role
 		}
 		// A stale earlier round of the SAME call is ignored.
@@ -277,13 +277,13 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		UpdatedAt:        env.Timestamp,
 	}
 	// The versions this round's fields are at: the held call's where a
-	// field is what it held, one on where it moved — and from nothing for a
-	// call of its own.
+	// field is what it held, the projection's next where it moved — and
+	// every field at the next for a call of its own.
 	var held *LiveCall
 	if cur.sameCall(turnID, phase, iteration) {
 		held = cur
 	}
-	agent.liveCall.Versions = restamp(held, agent.liveCall)
+	agent.liveCall.Versions = s.restamp(held, agent.liveCall)
 	return role
 }
 
@@ -314,7 +314,7 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 		return
 	}
 	was := *call
-	defer func() { call.Versions = restamp(&was, call) }()
+	defer func() { call.Versions = s.restamp(&was, call) }()
 	call.InProgress = false
 	call.Failed = true
 	call.Error = failure

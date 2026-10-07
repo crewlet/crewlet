@@ -25,17 +25,32 @@ import "reflect"
 // carried only what changed, dropped, would leave the tab wrong with nothing
 // to say so. A VERSION survives the drop. Every push names, for each heavy
 // field, the version of the copy it describes, and carries the field itself
-// only when that version moved since the last push for the same call. A tab
+// only when that version moved since the last push for the same call. A
+// version is never handed out twice ([CallVersions]), so "moved" and "newer"
+// are the same question for any two copies a tab can compare. A tab
 // whose copy is at the version the push names keeps it; one whose copy is
 // older — the push that moved it was dropped — knows it is behind from the
 // very next push, and asks for the call whole (`live_call`). Snapshots, the
 // `agent` and `live_call` answers and `GET /agents` carry every field always.
 
-// CallVersions numbers the copy a live call holds of each of its heavy fields,
-// for the call the projection holds now: 0 while a field has never been
-// written, and one more every time a frame changes it. A version is a fact
-// about ONE call — a different call starts again — and about this node's
-// projection, which is the only one a tab's socket reads.
+// CallVersions numbers the copy a live call holds of each of its heavy fields:
+// a number this projection NEVER HANDS OUT TWICE, taken from its own sequence
+// whenever the field is written — every field of a call of its own when it
+// begins, and after that each field a frame changes. So a version only grows,
+// for every call under every key, for as long as the projection runs; and it
+// is a fact about this node's projection, which is the only one a tab's socket
+// reads — a tab that reconnects, to this node or another, is sent a snapshot,
+// which replaces every copy it holds.
+//
+// NEVER TWICE, rather than counted per call, because a call is cleared and
+// built again under the SAME key: a suspended Execute phase publishes a
+// completion checkpoint, which clears its call, and streams its resumed rounds
+// under the same turn, phase and iteration. Counted per call, the rebuilt call
+// numbered its fields from one again, and a tab still holding the copy from
+// before the suspension — one that missed the push clearing it and the first
+// push after — took every lower version for a push overtaken by what it held:
+// it kept the old response, narration and tool calls, and asked for nothing,
+// until the new count passed the old one, which it might never do.
 type CallVersions struct {
 	// Prompt numbers `prompt` and `prompt_messages`, which move together:
 	// once, when the phase's opening frame lands.
@@ -63,28 +78,33 @@ var CallDetail = map[string][]string{
 }
 
 // restamp is the versions next holds, given the call it replaces: the same
-// where a field did not change, one more where it did. prev is nil when next
-// is a call of its own, whose versions start from nothing.
-func restamp(prev, next *LiveCall) CallVersions {
-	var was CallVersions
-	if prev != nil {
-		was = prev.Versions
-	} else {
-		prev = &LiveCall{}
+// where a field did not change, and the projection's next version where it
+// did. prev is nil when next is a call of its own, which writes every field —
+// an empty one included, since a tab may hold a copy under the same key from
+// the call before, and only a newer version tells it that copy is gone.
+//
+// Called under the projection's lock.
+func (s *LiveState) restamp(prev, next *LiveCall) CallVersions {
+	s.versions++
+	version := s.versions
+	if prev == nil {
+		return CallVersions{Prompt: version, Response: version, Narration: version,
+			Executions: version, Rounds: version}
 	}
-	bump := func(version int, same bool) int {
+	was := prev.Versions
+	moved := func(held int, same bool) int {
 		if same {
-			return version
+			return held
 		}
-		return version + 1
+		return version
 	}
 	return CallVersions{
-		Prompt: bump(was.Prompt, prev.Prompt == next.Prompt &&
+		Prompt: moved(was.Prompt, prev.Prompt == next.Prompt &&
 			sameList(prev.PromptMessages, next.PromptMessages)),
-		Response:   bump(was.Response, prev.Response == next.Response),
-		Narration:  bump(was.Narration, sameList(prev.RoundNarration, next.RoundNarration)),
-		Executions: bump(was.Executions, sameList(prev.ToolExecutions, next.ToolExecutions)),
-		Rounds:     bump(was.Rounds, sameList(prev.Rounds, next.Rounds)),
+		Response:   moved(was.Response, prev.Response == next.Response),
+		Narration:  moved(was.Narration, sameList(prev.RoundNarration, next.RoundNarration)),
+		Executions: moved(was.Executions, sameList(prev.ToolExecutions, next.ToolExecutions)),
+		Rounds:     moved(was.Rounds, sameList(prev.Rounds, next.Rounds)),
 	}
 }
 

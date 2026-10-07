@@ -152,7 +152,10 @@ func TestARunningPhasePushesWhatMovedAndTheTabHoldsTheWholeCall(t *testing.T) {
 				streaming++
 				largestStreaming = max(largestStreaming, len(raw))
 			}
-			held = mergeLikeTheDashboard(held, call)
+			var behind bool
+			if held, behind = mergeLikeTheDashboard(held, call); behind {
+				t.Fatalf("frame %d: a tab that saw every push was told it is behind", i)
+			}
 		}
 		want := wholeCall(t, s)
 		if !reflect.DeepEqual(held, want) {
@@ -203,24 +206,129 @@ func carriesDetail(call map[string]any) bool {
 	return false
 }
 
-// mergeLikeTheDashboard is the dashboard's `mergeLiveCall` for a tab that saw
-// every push: a heavy field the push carries is taken, one it leaves out is
-// the copy held, for the same call.
-func mergeLikeTheDashboard(held, next map[string]any) map[string]any {
+// mergeLikeTheDashboard is the dashboard's `mergeLiveCall`
+// (dashboard/src/protocol/store.ts), rule for rule: a heavy field the push
+// carries is taken unless its version is older than the one held for the same
+// call; one it leaves out is the copy held, for the same call, and nothing for
+// a call of its own; and a push that leaves out a field at a version newer
+// than the one held says the tab is behind.
+func mergeLikeTheDashboard(held, next map[string]any) (map[string]any, bool) {
 	if next == nil {
-		return nil
+		return nil, false
 	}
 	same := held != nil && held["turn_id"] == next["turn_id"] && held["phase"] == next["phase"] &&
 		held["iteration"] == next["iteration"]
+	version := func(call map[string]any, detail string) float64 {
+		v, _ := call["versions"].(map[string]any)[detail].(float64)
+		return v
+	}
 	out := maps.Clone(next)
-	for _, fields := range livestate.CallDetail {
+	versions := map[string]any{}
+	behind := false
+	for detail, fields := range livestate.CallDetail {
+		pushed, have := version(next, detail), 0.0
+		if same {
+			have = version(held, detail)
+		}
+		carried := true
 		for _, f := range fields {
-			if _, carried := next[f]; !carried && same {
-				out[f] = held[f]
+			if _, ok := next[f]; !ok {
+				carried = false
 			}
 		}
+		if carried && pushed >= have {
+			versions[detail] = pushed
+			continue
+		}
+		for _, f := range fields {
+			if same {
+				out[f] = held[f]
+			} else {
+				delete(out, f)
+			}
+		}
+		versions[detail] = have
+		if !carried && pushed > have {
+			behind = true
+		}
 	}
-	return out
+	out["versions"] = versions
+	return out, behind
+}
+
+// A TAB THAT MISSED A CALL'S CLEARING AND THE FIRST PUSH AFTER IT IS TOLD IT
+// IS BEHIND when the call is built again under the same key. A suspended
+// Execute phase does exactly that: its completion checkpoint clears the call,
+// and its resumed rounds stream under the same turn, phase and iteration. The
+// hub drops a slow tab's oldest envelopes, so the tab can lose both pushes —
+// and with versions counted per call, the rebuilt call's were below the ones
+// the tab held, so it kept the call from before the suspension as current and
+// asked for nothing.
+//
+// Mutation: number a call of its own from one again, and the tab keeps the
+// suspended call's response, narration and tool calls.
+func TestATabThatMissedACallsClearingIsToldItIsBehind(t *testing.T) {
+	t.Parallel()
+	frames := longPhase(t)
+	s, c := newService(t, stream.Options{})
+	var held map[string]any
+	apply := func() bool {
+		t.Helper()
+		behind := false
+		for _, out := range drain(c) {
+			if out.Kind != stream.KindAgents {
+				continue
+			}
+			var stale bool
+			held, stale = mergeLikeTheDashboard(held, pushedCall(t, mustEncode(t, out)))
+			behind = behind || stale
+		}
+		return behind
+	}
+	// The phase runs until it suspends, and the tab sees all of it.
+	suspendAt := len(frames) / 3
+	for _, env := range frames[:suspendAt] {
+		s.Ingest(env)
+		apply()
+	}
+	if held == nil || held["response"] == nil {
+		t.Fatal("the tab holds no call before the suspension; this case needs one")
+	}
+	// The checkpoint, and the resumed loop's first round: both pushes are
+	// the ones the hub drops.
+	checkpoint, err := time.Parse(time.RFC3339Nano, frames[suspendAt-1].Timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Ingest(livestate.Envelope{
+		ID: "checkpoint", Type: "agent_phase_completed", Timestamp: checkpoint.Add(time.Second).Format(time.RFC3339Nano),
+		Category: "task", Payload: map[string]any{"role": "Lead", "turn_id": "turn-1", "phase": "execute", "iteration": float64(0)},
+	})
+	resumed := frames[2*len(frames)/3:]
+	s.Ingest(resumed[0])
+	drain(c)
+	// The next push reaches the tab, and a tab told it is behind asks for
+	// the call whole (`live_call`), which it merges like a push carrying
+	// everything.
+	s.Ingest(resumed[1])
+	if apply() {
+		var stale bool
+		if held, stale = mergeLikeTheDashboard(held, wholeCall(t, s)); stale {
+			t.Fatal("the whole call still left the tab behind")
+		}
+	}
+	if want := wholeCall(t, s); !reflect.DeepEqual(held, want) {
+		for _, fields := range livestate.CallDetail {
+			for _, f := range fields {
+				if !reflect.DeepEqual(held[f], want[f]) {
+					t.Errorf("the tab holds %s from before the suspension", f)
+				}
+			}
+		}
+		if !t.Failed() {
+			t.Errorf("the tab holds\n%v\nwant\n%v", held, want)
+		}
+	}
 }
 
 // wholeCall is the projection's call, as a snapshot carries it.

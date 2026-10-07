@@ -331,6 +331,11 @@ type LiveState struct {
 	// ran. See [LiveState.SeededFrom].
 	seededFrom *eventfan.Coverage
 
+	// versions is the last version a live call's heavy field was stamped
+	// with ([CallVersions]): one sequence for the projection, so no version
+	// is ever handed out twice.
+	versions int
+
 	// now is injectable so a test can pin the clock the spend window and
 	// the sandbox reconcile read. Nil takes the wall clock.
 	now func() time.Time
@@ -730,6 +735,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		if !agent.liveCall.sameCall(str(payload, "turn_id"),
 			str(payload, "phase"), num(payload, "iteration")) {
 			agent.liveCall = beginCall(env, payload)
+			agent.liveCall.Versions = s.restamp(nil, agent.liveCall)
 		}
 
 	case env.Type == "agent_phase_completed":

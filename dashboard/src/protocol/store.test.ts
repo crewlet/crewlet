@@ -416,6 +416,50 @@ describe("a live call's heavy fields", () => {
     expect(stale).toEqual(["PM"]);
   });
 
+  // A CALL BUILT AGAIN UNDER ITS OWN KEY IS NEWER IN EVERY FIELD. A suspended
+  // Execute phase's checkpoint clears its call, and its resumed rounds stream
+  // under the same turn, phase and iteration; a tab that missed the push
+  // clearing it and the first push after holds the call from before the
+  // suspension. The engine never hands a version out twice, so the next push
+  // names versions past every one the tab holds: a field it carries is taken,
+  // and one it leaves out says the tab is behind, and is fetched whole. Counted
+  // per call, the resumed versions were below the held ones, and the tab kept
+  // the old call and asked for nothing — the engine's half of that is
+  // livestate's TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore.
+  //
+  // Mutation: stop reporting a field left out at a newer version, and the
+  // prompt from before the suspension stays on screen.
+  test("takes a call built again under its key, after missing its clearing", () => {
+    const store = new Store();
+    store.applyAgents([
+      pushed(
+        { prompt: 5, response: 5, narration: 5 },
+        { ...prompt, ...narration(3), response: "old" },
+      ),
+    ]);
+    // The clearing push and the resumed call's first push were dropped.
+    const stale = store.applyAgents([
+      pushed({ prompt: 9, response: 11, narration: 11 }, { ...narration(1), response: "new" }),
+    ]);
+    let call = store.state.agents[0]?.live_call;
+    expect(call?.response).toBe("new");
+    expect(call?.round_narration).toHaveLength(1);
+    expect(stale).toEqual(["PM"]);
+
+    const resumed = { prompt: "resume it", prompt_messages: [{ role: "system", content: "lead" }] };
+    store.applyLiveCall({
+      role: "PM",
+      live_call:
+        pushed(
+          { prompt: 9, response: 11, narration: 11 },
+          { ...resumed, ...narration(1), response: "new" },
+        ).live_call ?? null,
+    });
+    call = store.state.agents[0]?.live_call;
+    expect(call?.prompt).toBe("resume it");
+    expect(call?.versions).toMatchObject({ prompt: 9, response: 11, narration: 11 });
+  });
+
   // THE SOCKET ASKS FOR THE CALL WHOLE, once a seat while an ask is out, and the
   // answer lands on the row.
   test("the socket fetches a call it holds behind, once", async () => {

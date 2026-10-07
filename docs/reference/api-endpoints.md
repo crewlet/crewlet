@@ -1964,7 +1964,7 @@ way. The fields are these:
 - `running_call` is `{round, name, arguments, started_at}`, the tool call running right now. It is absent between calls, and it is never carried forward from an earlier frame. A frame that stops naming a call means the call returned.
 - `steers` is every person's note the phase has read so far, `{round, note_id}` — the round whose provider call first saw it. What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
-- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — `0` while a field has never been written and one more each time a frame changes it. A version belongs to one call (`turn_id`, `phase`, `iteration`) on the node a tab's socket reads, and the next call starts again. Every surface that carries a call carries it.
+- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call built again under its own key (`turn_id`, `phase`, `iteration`), as a suspended Execute phase is when its resumed rounds stream after the checkpoint cleared it, is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
 
 Beside `live_call`, each seat carries `turn`, `last_turn` and `paused`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, the newest turn it ended, and who paused the seat, when and why (`null` while nobody has). See [Agent States](../concepts/agent-runtime.md#agent-states).  A call whose phase failed keeps `in_progress: false`
 plus `failed: true` and an `error` object, so the dashboard renders the failure
@@ -2004,6 +2004,13 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   than the one a tab holds — a push overtaken by a snapshot or an answer — is
   not taken. The handshake snapshot, `GET /agents`, the `agent` answer and the
   `live_call` answer always carry every field.
+- **A version is never handed out twice**, so "moved" and "newer" are one
+  question. Counted per call, a call cleared and built again under the same
+  key — a suspended Execute phase, whose completion checkpoint clears its call
+  and whose resumed rounds stream under the same turn, phase and iteration —
+  numbered its fields from one again, and a tab that had missed the clearing
+  push and the first one after it read every later push as older than the
+  copy it held from before the suspension, and kept that copy.
 
 ### `WS /ws/stream`
 
