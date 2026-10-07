@@ -945,8 +945,12 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// `refused_at` — the field that was once dropped on its way from the
 	// counter to the push, which left every "refusing charges" row the
 	// dashboard draws unreachable. The refusal is the engine's own, made by
-	// the gate a real turn charges through; the seat is its own scope, so
-	// the company's turn beside it is charged against nothing it spent.
+	// the gate a real turn's calls pass — a charge it refuses, or the call
+	// the turn's meter holds once the turn's own context assembly has
+	// filled the day, which the meter records as the refusal a charge would
+	// have (coord.Budgets.Refuse) — so what is waited on is the counter's
+	// stamp, which both write. The seat is its own scope, so the company's
+	// turn beside it is charged against nothing it spent.
 	//
 	// AND A PERSON WHO CAN WRITE: the founder's seat binds a bearer token, so
 	// the capture can end with a real `/operator/act` answer — the one the
@@ -985,7 +989,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	budgets := n.engine.Backends().Fleet
 	company := n.engine.Company()
 	cfoID, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("cfo"))
-	waitFor(t, "the seat's own ceiling to refuse a charge", func() bool {
+	waitFor(t, "the seat's own ceiling to refuse a call", func() bool {
 		got, err := budgets.Used(t.Context(), coord.AgentScope(cfoID.String()),
 			coord.WindowsAt(time.Now(), time.UTC))
 		return err == nil && !got.In(period.Day).RefusedAt.IsZero()
