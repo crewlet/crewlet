@@ -104,11 +104,6 @@ the seed, and 2 000 copies of one code in 22 000 sources left a list of ≈ 2 02
 against a mean of 85 after every training — a retrain, a new generation and a
 full rollout every two ticks.
 
-**Publishing on the deferral contract** — a later kind at a higher version, as
-every other new kind is — stops, rather than defers, every build whose
-envelope validates the subject's kind, which every build before the index
-does.
-
 **Relaxing "no head miss"** would buy far more than any list count. At five
 hundred thousand topical sources the aggregate floor is met at 8 of 2 048
 lists and the no-head-miss rule holds the probe count at half. The rule is

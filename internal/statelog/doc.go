@@ -185,8 +185,9 @@
 // the highest record version its build reads ([NodePosition].RecordVersion),
 // and [Readers] reads it across the trim's own counted set: a writer about to
 // publish such a kind waits until every node that applies the log reads it —
-// a node that says nothing being one that predates the question. The vector
-// log's index records are the first such kind (internal/search, ADR-0028).
+// a node that says nothing being one that predates the question. No record
+// this build writes is such a kind: the advertisement is what a successor's
+// writer of one reads.
 //
 // # A record is stamped with the lowest version that reads it
 //
