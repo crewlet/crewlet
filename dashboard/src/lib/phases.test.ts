@@ -914,9 +914,9 @@ describe("the row's column is the authority for a stored record, the payload for
   // column, so the client reads the same field first: one authority for a
   // stored record, and it is the row's own.
   test("comes off the row's column, which the payload does not carry", () => {
-    const rec: EventRecord = { ...phaseEvent(), work_key: "wk-backfilled" };
+    const rec: EventRecord = { ...phaseEvent(), work_key: "wk-column" };
     const done = fromPhaseEvent(rec)!;
-    expect(done.workKey).toBe("wk-backfilled");
+    expect(done.workKey).toBe("wk-column");
   });
 
   // AND A LIVE FRAME STILL WORKS: a phase event pushed on the socket carries
