@@ -1122,6 +1122,77 @@ func TestTheEpisodeSummaryReadsTheAccountsWholeAndPaysNoRewrite(t *testing.T) {
 	}
 }
 
+// timedAux records the deadline every auxiliary call is handed, and answers
+// it — or fails it, after a pause, with err.
+type timedAux struct {
+	mu        sync.Mutex
+	pause     time.Duration
+	err       error
+	answer    string
+	deadlines []time.Time
+}
+
+func (a *timedAux) Model() string { return "aux-model" }
+
+func (a *timedAux) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	deadline, _ := ctx.Deadline()
+	a.mu.Lock()
+	a.deadlines = append(a.deadlines, deadline)
+	a.mu.Unlock()
+	select {
+	case <-time.After(a.pause):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if a.err != nil {
+		return nil, a.err
+	}
+	return &llm.Completion{Content: a.answer}, nil
+}
+
+func (a *timedAux) seen() []time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.deadlines)
+}
+
+// THE EPISODE BLOCK WAITS ONE AUXILIARY DEADLINE FOR EVERYTHING IT ASKS A MODEL
+// — its summary and the rewrites of the bullets a failed summary falls back to
+// share it — so it is never the block every turn's start waits on. The bullets
+// after a summary that did not answer were handed thirty seconds of their own,
+// from the same seat's auxiliary chain that had just not answered, which put
+// the block at a minute past the summary's thirty seconds.
+func TestTheEpisodeBlockHoldsItsSummaryAndItsRewritesToOneDeadline(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("the deploy log said ", 200)
+	hits := make([]learning.Hit, 3)
+	for i := range hits {
+		hits[i] = learning.Hit{Episode: learning.Episode{TaskSummary: "Message from Ana",
+			Ask: strconv.Itoa(i) + " asked " + long, PlanSummary: strconv.Itoa(i) + " did " + long}}
+	}
+	summary := &timedAux{pause: 80 * time.Millisecond, err: errors.New("503")}
+	rewrites := &timedAux{answer: "condensed"}
+	got := fetch(t, prefetch.Sources{Episodes: episodes{hits: hits}, Embed: embeds,
+		SummarizeEpisodes: true, Models: models{provider: summary},
+		Compact: compact.New(models{provider: rewrites}, compact.NewCache()),
+	}, request(t)).EpisodeRecall
+	if !strings.Contains(got, "What it did: condensed") {
+		t.Fatalf("after a failed summary, recall = %q, want the condensed bullets", got)
+	}
+	asked, rewritten := summary.seen(), rewrites.seen()
+	if len(asked) != 1 || len(rewritten) != 2*len(hits) {
+		t.Fatalf("%d summary calls and %d rewrites, want one and %d", len(asked),
+			len(rewritten), 2*len(hits))
+	}
+	for i, deadline := range rewritten {
+		if deadline.IsZero() || deadline.After(asked[0].Add(time.Millisecond)) {
+			t.Fatalf("rewrite %d was handed a deadline %v past the summary's: the bullets "+
+				"waited a deadline of their own after the summary had spent one",
+				i, deadline.Sub(asked[0]))
+		}
+	}
+}
+
 // EVERY TURN-START CALL IS THE TURN'S OWN, under its own purpose: the seam
 // files each call's spend under the attribution it is handed, so a call
 // handed the turn's identity without its purpose — or one handed none — is

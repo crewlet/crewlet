@@ -132,3 +132,68 @@ func TestPastTurnsCarriesAShortAskAndAccountWhole(t *testing.T) {
 		t.Fatalf("%d rewrites of texts that fit", len(model.purposes))
 	}
 }
+
+// deadlineModel answers every rewrite after a pause, recording the deadline
+// each call was handed.
+type deadlineModel struct {
+	mu        sync.Mutex
+	pause     time.Duration
+	deadlines []time.Time
+}
+
+func (m *deadlineModel) Model() string { return "aux-small" }
+
+func (m *deadlineModel) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	deadline, _ := ctx.Deadline()
+	m.mu.Lock()
+	m.deadlines = append(m.deadlines, deadline)
+	m.mu.Unlock()
+	select {
+	case <-time.After(m.pause):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &llm.Completion{Model: "aux-small", Content: "condensed"}, nil
+}
+
+func (m *deadlineModel) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
+	return chain.Member{Key: "aux", Provider: m}, nil
+}
+
+// A RENDER HOLDS EVERY REWRITE TO ONE DEADLINE, never one each: rewrites run
+// compact.Parallel at a time, so a deadline per rewrite was a deadline per
+// WAVE, and the three turns the turn-start block recalls — six texts — waited
+// two waves of thirty seconds where the block had been one auxiliary call.
+// Every rewrite of a render, the ones queued behind the bound included, is
+// handed the same instant, at most EpisodeRewriteTimeout from the start.
+func TestARenderHoldsEveryRewriteToOneDeadline(t *testing.T) {
+	t.Parallel()
+	model := &deadlineModel{pause: 40 * time.Millisecond}
+	fit := compact.New(model, compact.NewCache()).For(nil, auxspend.Use{Stage: types.AuxStageTurn})
+	long := strings.Repeat("the staging deploy keeps failing on the cache key ", 40)
+	episodes := make([]Episode, 6)
+	for i := range episodes {
+		episodes[i] = Episode{Kind: KindRaw, TaskSummary: "Message from Ana: Slack message",
+			Ask: strconv.Itoa(i) + " ask " + long, PlanSummary: strconv.Itoa(i) + " did " + long}
+	}
+	start := time.Now()
+	PastTurns(context.Background(), episodes, fit, EpisodeAccountBytes)
+
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.deadlines) != 2*len(episodes) {
+		t.Fatalf("%d rewrites for %d asks and accounts", len(model.deadlines), 2*len(episodes))
+	}
+	first := model.deadlines[0]
+	for i, deadline := range model.deadlines {
+		if !deadline.Equal(first) {
+			t.Fatalf("rewrite %d was handed %v, rewrite 0 %v: a deadline per rewrite, "+
+				"so a wave queued behind compact.Parallel waits a deadline of its own",
+				i, deadline.Sub(start), first.Sub(start))
+		}
+	}
+	if first.IsZero() || first.Sub(start) > EpisodeRewriteTimeout+time.Millisecond {
+		t.Fatalf("the render's deadline is %v after its start, want at most %v",
+			first.Sub(start), EpisodeRewriteTimeout)
+	}
+}

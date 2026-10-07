@@ -204,8 +204,8 @@ type queryEpisodes struct {
 	// what a company with no embeddings has.
 	recall Recaller
 
-	// compact condenses a recalled turn's long account of what it did; nil
-	// names such an account by its size (see [learning.EpisodeAccount]).
+	// compact condenses a recalled turn's long ask and account of what it
+	// did; nil names such a text by its size (see [learning.PastTurns]).
 	compact *compact.Compactor
 
 	// limit is the company's configured default hit count. Bounded by
@@ -388,10 +388,11 @@ func unsearchedNote(n int) string {
 
 // render renders each recalled turn, its long asks and accounts condensed
 // through [learning.PastTurns] — the turn-start block's own rendering — so at
-// most [compact.Parallel] rewrites run at once and each is held to
-// [learning.EpisodeRewriteTimeout]: one that misses it names its text by size,
-// and the answer waits at most ⌈2·turns / Parallel⌉ of those, where it used to
-// wait out the compactor's minute, and its retry, per account.
+// most [compact.Parallel] rewrites run at once and ALL of them are held to one
+// [learning.EpisodeRewriteTimeout]: a text no rewrite reached by then is named
+// by its size, and the answer waits at most that long however many turns it
+// carries — where it once waited out the compactor's minute, and its retry,
+// per account, and then thirty seconds for every four rewrites.
 func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
 	// Each rewrite is the turn's own cost, filed under its run.
 	turns := learning.PastTurns(ctx, found, t.compact.For(turn.Seat, turn.Aux()),

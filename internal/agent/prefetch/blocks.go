@@ -98,6 +98,19 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		return ""
 	}
 
+	// ONE DEADLINE FOR EVERY MODEL CALL THE BLOCK MAKES — its rewrites and
+	// its summary alike — so the block waits at most one auxiliary call's
+	// [AuxTimeout] past the recall, as it did when the summary was all it
+	// called, and is never the block every turn's start waits for. Each
+	// render already holds its own rewrites to one deadline
+	// ([learning.PastTurns]); this one is shared across the summary and
+	// the bullets it falls back to, so a summary that did not answer in
+	// time is not followed by another thirty seconds of rewrites from the
+	// same seat's auxiliary chain: whatever is left of the deadline is
+	// theirs, and a text no rewrite reached by then is named by its size.
+	ctx, cancel := context.WithTimeout(ctx, AuxTimeout)
+	defer cancel()
+
 	// WHICH PATH PAYS WHICH CALL. With the summary on, its model reads the
 	// recalled asks and accounts WHOLE — up to [summaryTextBytes] each,
 	// which almost every one is under — and its one briefing replaces them,
@@ -153,8 +166,9 @@ func (f *Fetcher) summaryTokens() int {
 
 // renderEpisodes renders the recalled turns, each one's ask and account
 // condensed where it is past textBytes — through [learning.PastTurns], the
-// one rendering the query_episodes tool shares, so every rewrite is held to
-// [learning.EpisodeRewriteTimeout] and at most [compact.Parallel] run at once.
+// one rendering the query_episodes tool shares, so at most [compact.Parallel]
+// rewrites run at once and all of them are held to one deadline: the render's
+// own [learning.EpisodeRewriteTimeout], or ctx's when sooner.
 func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning.Hit,
 	textBytes int,
 ) []string {
@@ -177,8 +191,8 @@ func (f *Fetcher) renderEpisodes(ctx context.Context, r Request, hits []learning
 // this showed, and a label names the kind of event and nothing of the work —
 // every chat turn's is "Message from <someone>: <surface> message" — so it is
 // said as what WOKE the turn, the worker prompts' own word for it, and what
-// the turn was asked ([learning.EpisodeAsk]) and what it did
-// ([learning.EpisodeAccount]) ride beside it. The tool sequence rides along
+// the turn was asked and what it did ([learning.PastTurn]) ride beside it. The
+// tool sequence rides along
 // because it is the cheapest possible answer to "how did I do this last time".
 func renderEpisode(ep learning.Episode, turn learning.PastTurn) string {
 	label := collapse(ep.TaskSummary)
