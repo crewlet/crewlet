@@ -105,11 +105,11 @@ func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	if got := ReplyFor([]*events.Event{&back}); got.Kind != turn.ReplyTool {
 		t.Errorf("an addressed notification off the wire = %s, want tool", got)
 	}
-	// ABSENT DECODES AS UNADDRESSED, which is the safe half: an event
-	// written by a build that predates the field is a freedom to stay
-	// silent rather than an obligation nobody recorded.
-	older := &events.Event{Type: types.ExternalNotification{}.EventType()}
-	if got := ReplyFor([]*events.Event{older}); got.Kind != turn.ReplyNone {
+	// ABSENT DECODES AS UNADDRESSED, which is how an unaddressed
+	// notification is written: an omission is a freedom to stay silent
+	// rather than an obligation nobody recorded.
+	unflagged := &events.Event{Type: types.ExternalNotification{}.EventType()}
+	if got := ReplyFor([]*events.Event{unflagged}); got.Kind != turn.ReplyNone {
 		t.Errorf("an event with no flag = %s, want none", got)
 	}
 }

@@ -530,8 +530,9 @@ type PendingRun struct {
 	//
 	// It has to be persisted rather than re-derived: the resumed turn does
 	// not see the trigger, so without this a turn somebody was waiting on
-	// would come back from its coding run free to end in silence. An empty
-	// value decodes as "nobody is waiting", which is the safe half — see
+	// would come back from its coding run free to end in silence. Every
+	// launch writes a kind — `none` when nobody is waiting — so a resume
+	// refuses a row that names none rather than guessing; see
 	// [turn.Reply].
 	Reply string `json:"reply,omitempty"`
 

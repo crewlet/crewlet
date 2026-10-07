@@ -52,13 +52,7 @@ import (
 // WHAT IT COSTS, stated rather than hidden. An attempt judged just short of
 // the horizon and a retry judged just past it mint under two instants, so a
 // write the first made and the second repeats is written twice — the cheaper
-// failure by far, against every write the retry makes being lost. And during a
-// rolling upgrade a build from before this rule mints every attempt at the
-// start, reading no record: a retry that crosses between the two builds inside
-// the retention's last day writes the earlier attempt's writes a second time,
-// whichever build ran first, and past the retention the older build's writes
-// are lost exactly as they always were on that build. No gate can make an
-// older build read a record it does not know exists.
+// failure by far, against every write the retry makes being lost.
 
 // rebaseStore is what [rebaseFor] needs of the coordination store — see
 // [coord.Rebases], which the fleet store implements.

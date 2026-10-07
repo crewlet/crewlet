@@ -2312,8 +2312,9 @@ func (e *Engine) observe(ctx context.Context, ev *events.Event) {
 // copy included. A floor a turn raises is one every seat on the node then reads
 // past, which is conservative rather than wrong — never a read from before it.
 //
-// A token this build cannot read is logged and skipped: the turn still runs,
-// and reads exactly as one woken by an older build's wake, which carries none.
+// A token this build cannot read (a newer build's) is logged and skipped: the
+// turn still runs, and reads exactly as one woken by a wake no change feed
+// derived, which carries none.
 func (e *Engine) observeTriggers(ctx context.Context, evs []*events.Event) {
 	if e.router == nil {
 		return

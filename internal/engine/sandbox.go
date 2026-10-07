@@ -476,11 +476,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// resume does not continue a span — it RECONSTRUCTS the suspended one as
 	// a remote parent from the ids on the run's own row, and opens a new
 	// span beneath it. That is the honest shape: two spans in one trace,
-	// with the wait between them visible as the gap it actually is.
-	//
-	// A run written by a build before those ids were stored carries none,
-	// and WithRemote turns that into a fresh root rather than refusing to
-	// resume — a rolling upgrade guarantees some of those exist.
+	// with the wait between them visible as the gap it actually is. Every
+	// run carries ids: the launch takes them from the active span, minting
+	// a fresh trace when there is none.
 	ctx = tracing.WithRemote(ctx, events.TraceContext{
 		TraceID: in.Run.TraceID, SpanID: in.Run.SpanID,
 	})
@@ -840,22 +838,14 @@ func resumeInputFor(in resumeInput, reply turn.Reply) turn.Input {
 // completion here is the run FINISHING rather than the ask, so [ReplyFor] over
 // it would answer "nobody is waiting" for every turn somebody is waiting on.
 //
-// AN ABSENT VALUE IS [turn.NoReply], which is the reading [sandbox.PendingRun]
-// states for it: the column is `reply,omitempty`, nothing ever rewrites a
-// parked row, and a run launched before the field existed therefore carries
-// none. Read as [turn.ReplyUnset] instead, those rows were refused by
-// [Company.RunnerFor] and could never be resumed at all, so a box that had
-// already done the work was collected and its answer dropped.
-//
-// A value that is PRESENT and unrecognised is refused rather than defaulted: it
+// A value this build does not recognise is refused rather than defaulted: it
 // was written by a build that knows a kind this one does not, and guessing at
 // who is waiting is the half of the delivery question this engine exists to get
 // right. The refusal is a ROUTING failure, like a state this build cannot
-// decode, so the completion goes back for a peer that can read it.
+// decode, so the completion goes back for a peer that can read it. An absent
+// value is no kind at all — every launch writes one, `none` included — and is
+// refused the same way.
 func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
-	if run.Reply == "" {
-		return turn.NoReply(), nil
-	}
 	reply := turn.ParseReply(run.Reply)
 	if !reply.Valid() {
 		return turn.Reply{}, fmt.Errorf(

@@ -945,8 +945,7 @@ func nudgeRevision(ev *events.Event) string {
 	if payload, ok := ev.Data.(*types.ConfigRevisionActivated); ok {
 		return payload.RevisionID
 	}
-	id, _ := ev.Payload["revision_id"].(string)
-	return id
+	return ""
 }
 
 // peerHealth counts the PEERS that reported success at an epoch, and how many
