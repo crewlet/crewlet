@@ -77,8 +77,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		// one document, below the index's minimum, so the step decides
 		// nothing whatever it reads.
 		Standing: func(context.Context) (search.LogStanding, error) {
-			return search.LogStanding{Current: true,
-				Readers: map[string]int{"suite-node": search.RecordVersion}}, nil
+			return search.LogStanding{Current: true}, nil
 		},
 		Embedder: embeddings.NewFake(8), Model: "suite-embed",
 		Corpora: []search.Corpus{oneStaleDocument{}},

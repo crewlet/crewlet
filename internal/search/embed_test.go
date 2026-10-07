@@ -156,7 +156,7 @@ func TestEveryWithdrawalShowsTheTicksBoundItsProgress(t *testing.T) {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(),
 		Log:      search.Domain{}.Stream().Name,
-		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Standing: h.standing(),
 		Embedder: h.embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
 		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
@@ -199,7 +199,7 @@ func TestEveryEmbeddedVectorShowsTheTicksBoundItsProgress(t *testing.T) {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(),
 		Log:      search.Domain{}.Stream().Name,
-		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Standing: h.standing(),
 		Embedder: h.embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
 		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
@@ -395,7 +395,7 @@ func TestTheDutyRefusesAWiringWithNoBudget(t *testing.T) {
 	h := newEmbedHarness(t)
 	_, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
-		Standing: h.standing(nil), Embedder: h.embedder, Model: embedModel,
+		Standing: h.standing(), Embedder: h.embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "EmbedDeps.Budget") {
@@ -418,7 +418,7 @@ func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 	}
 	_, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
-		Standing: h.standing(nil),
+		Standing: h.standing(),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 		// EVERY OTHER FIELD WIRED, so the refusal is the corpora's.
 		Budget: unbounded{},
@@ -584,7 +584,7 @@ func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 	h.t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
-		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Standing: h.standing(),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 		Now:    func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 		Budget: unbounded{},
@@ -596,15 +596,14 @@ func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 }
 
 // standing is the log's standing as this harness's one node holds it: current
-// when [embedHarness.drain] has applied every record the log holds, and the
-// fleet the readers a test dictates.
-func (h *embedHarness) standing(readers map[string]int) func(context.Context) (search.LogStanding, error) {
+// when [embedHarness.drain] has applied every record the log holds.
+func (h *embedHarness) standing() func(context.Context) (search.LogStanding, error) {
 	return func(ctx context.Context) (search.LogStanding, error) {
 		last, err := h.log.End(ctx)
 		if err != nil {
 			return search.LogStanding{}, err
 		}
-		return search.LogStanding{Current: h.consumed >= last, Readers: readers}, nil
+		return search.LogStanding{Current: h.consumed >= last}, nil
 	}
 }
 

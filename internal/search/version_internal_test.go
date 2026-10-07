@@ -67,8 +67,4 @@ func TestEveryKindAboveTheBaseFormatHasItsRow(t *testing.T) {
 				tc.op, tc.source, got, err, tc.want)
 		}
 	}
-	if got := IndexRecordVersion(); got != RecordVersion {
-		t.Errorf("the index's records need version %d to be read, and this "+
-			"build reads %d", got, RecordVersion)
-	}
 }

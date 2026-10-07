@@ -250,12 +250,11 @@ type EmbedDeps struct {
 
 	// Standing reads what the index step must know about the vector log
 	// before it may publish onto it: whether this node has applied all of
-	// it, and which build every node applying it reads ([LogStanding]).
+	// it ([LogStanding]).
 	//
-	// REQUIRED, never defaulted: a duty that could not ask would either
-	// publish the index's records onto a log a node cannot read — stopping
-	// that node's applier — or decide from rows a moment behind the log,
-	// and there is no safe answer to assume in its place.
+	// REQUIRED, never defaulted: a duty that could not ask would decide from
+	// rows a moment behind the log, and there is no safe answer to assume in
+	// its place.
 	Standing func(ctx context.Context) (LogStanding, error)
 
 	// Embedder is the provider. A batch embedder is required rather than

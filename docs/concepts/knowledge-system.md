@@ -165,14 +165,10 @@ flowchart LR
   fixed, published on the duty's next tick; until the last batch has applied,
   a search reads the rows not yet re-filed in full beside the lists it
   probes.
-- **It waits for the whole fleet.** A node on a build older than the index
-  cannot read its records — its vector applier would stop at the first one —
-  so nothing about the index is published while any node applying the vector
-  log advertises an older build, including one that is offline but has not
-  been evicted — checked when a tick decides what to do, and again beside every
-  record it publishes, so a node that starts counting while a training runs
-  still holds it. A rolling upgrade searches with the full scan until its last
-  node is upgraded, and a held step is logged as `search_index_held`.
+- **It is decided only from a node that has applied the whole log.** A node
+  still catching up would see the index the log has already replaced, or
+  none, and train over a healthy one, so the duty takes no step there and logs
+  `search_index_behind`.
 - **It costs a second copy of the narrow table** — a covering index, ≈ 450
   bytes a source, about 3 % of what the vectors themselves hold — which is
   what makes a list one sequential read.

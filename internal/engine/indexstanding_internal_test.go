@@ -3,113 +3,29 @@ package engine
 import (
 	"context"
 	"errors"
-	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE SEMANTIC INDEX'S DUTY ASKS EVERY NODE THE VECTOR LOG COUNTS which
-// records it reads.
-//
-// A record kind a build's envelope refuses stops that build's applier rather
-// than being deferred — which every build before the vector envelope stopped
-// validating kinds does with the index's records. So the duty publishes
-// nothing about the index until every node applying the log advertises a
-// build that reads it: a row from a build that predates the advertisement
-// (no version at all), or an offline node's old row, holds it back, exactly as
-// either would pin the log's trim — and an operator's eviction releases it.
-func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
+// THE SEMANTIC INDEX'S DUTY READS THIS NODE AS CURRENT ON THE VECTOR LOG once
+// it has applied everything the log holds: the step decides nothing from a
+// node behind it, so a node with nothing left to apply read as behind would
+// never take one.
+func TestTheIndexDutyReadsANodeThatAppliedTheLogAsCurrent(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.native.Load().log
-	s.publishPositions(t.Context())
-
-	vectors := s.Domain(search.Domain{}.Name())
-	duty := &embedDuty{engine: e, log: vectors, register: e.backends.Fleet.Positions,
-		holders:  presenceHolders{leases: e.backends.Coord},
-		identity: s.identityDomains(), db: e.backends.Store}
+	duty := &embedDuty{engine: e, log: s.Domain(search.Domain{}.Name())}
 	standing, err := duty.standing(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := standing.Readers[e.id]; got != search.RecordVersion {
-		t.Fatalf("the duty reads this node as reading version %d, want %d",
-			got, search.RecordVersion)
-	}
 	if !standing.Current {
 		t.Fatal("a node with nothing on its vector log to apply is read as behind it")
-	}
-
-	// A PEER ON A BUILD THAT PREDATES THE ADVERTISEMENT: its row names the
-	// vector log and says nothing about what it reads.
-	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
-		NodeID: "node-old", At: time.Now().UTC(),
-		Domains: map[string]coord.DomainPosition{
-			search.Domain{}.Name(): {Seq: 1, Generation: vectors.runner.Committed().Generation},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if standing, err = duty.standing(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got, counted := standing.Readers["node-old"]; !counted || got != 0 {
-		t.Fatalf("a peer that advertises nothing reads as %d (counted %v) — it "+
-			"is a build that cannot read the index's records", got, counted)
-	}
-
-	// AND AN OPERATOR'S EVICTION RELEASES IT. The vector log carries no
-	// eviction of its own, so the fleet's — every identity log's — is what
-	// says the old machine is not coming back; once its fence window has
-	// passed, the node leaves the set the index waits for.
-	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
-		Node: "node-old", OpID: "op-evict-old", By: "operator"})
-	if err != nil || !res.Complete() {
-		t.Fatalf("evict node-old: %v (%+v)", err, res)
-	}
-	for _, running := range s.identityDomains() {
-		waitApplied(t, running)
-	}
-	tombs, err := evictedOn(t.Context(), duty.identity, duty.db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tombs) != 1 || tombs[0].NodeID != "node-old" {
-		t.Fatalf("the fleet's evictions read as %+v, want node-old's eviction", tombs)
-	}
-	// AN EVICTION STILL GOING ROUND THE LOGS is not yet the fleet's word: one
-	// identity log that has not applied it keeps the node counted. And a log
-	// whose evictions cannot be read is an error, never "evicted nowhere".
-	lagging := &embedDuty{engine: e, db: e.backends.Store, identity: append(
-		slices.Clone(duty.identity),
-		&runningLog{domain: noEvictions{s.identityDomains()[0].domain}})}
-	if partial, err := evictedOn(t.Context(), lagging.identity, lagging.db); err != nil || len(partial) != 0 {
-		t.Fatalf("an eviction one identity log has not applied read as %+v (%v), "+
-			"want none yet", partial, err)
-	}
-	unreadable := &embedDuty{engine: e, db: e.backends.Store, identity: append(
-		slices.Clone(duty.identity), &runningLog{domain: search.Domain{}})}
-	if _, err := evictedOn(t.Context(), unreadable.identity, unreadable.db); err == nil {
-		t.Fatal("a log that lists no evictions read as one that holds none")
-	}
-	rows, err := e.backends.Fleet.Positions(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	past := tombs[0].At.Add(statelog.EvictionFenceWindow + time.Second)
-	readers := statelog.Readers(statelog.CountedSet(past,
-		reportedPositions(rows, search.Domain{}.Name()), nil, tombs))
-	if _, counted := readers["node-old"]; counted {
-		t.Fatalf("an evicted node still holds the index back: %v", readers)
-	}
-	if readers[e.id] != search.RecordVersion {
-		t.Fatalf("the eviction took this node out of the readers too: %v", readers)
 	}
 }
 
@@ -162,17 +78,4 @@ func TestATickStopsWhenItsLeaseCannotBeRenewed(t *testing.T) {
 			}
 		})
 	}
-}
-
-// noEvictions is an identity log that has not applied any eviction yet.
-type noEvictions struct{ statelog.Domain }
-
-// HELD TO THE INTERFACE AT COMPILE TIME: a fake whose method stops matching
-// the lister's does not list nothing, it lists NO EVICTIONS AT ALL, and the
-// duty reads that as an unreadable log — which is how this one passed its
-// case for the wrong reason once the lister's parameter moved.
-var _ evictionLister = noEvictions{}
-
-func (noEvictions) Evictions(context.Context, store.ReplicatedReader) ([]statelog.EvictionRow, error) {
-	return nil, nil
 }

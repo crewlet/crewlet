@@ -1592,18 +1592,6 @@ func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *state
 			"rows with a peer's")
 }
 
-// identityDomains is every running log whose domain claims identity, in the
-// register's order.
-func (s *stateLog) identityDomains() []*runningLog {
-	var out []*runningLog
-	for _, running := range s.running() {
-		if running.domain.ClaimsIdentity() {
-			out = append(out, running)
-		}
-	}
-	return out
-}
-
 // Established reports whether every domain whose health gates seat admission
 // has one.
 //

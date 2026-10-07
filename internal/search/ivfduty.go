@@ -24,7 +24,7 @@ import (
 // applies, rather than N nodes training N slightly different indexes from N
 // slightly different moments of the log.
 //
-// # Two things must be true before it touches the index
+// # What must be true before it touches the index
 //
 // THIS NODE HAS APPLIED THE LOG. Every decision below reads the duty's own
 // node's rows, and the duty moves between nodes on a lease: a node still
@@ -34,21 +34,6 @@ import (
 // applier has reached the end the log had when the tick began
 // ([LogStanding.Current]), and it runs FIRST in the tick, before this tick's
 // own embeds put the node behind again.
-//
-// EVERY NODE APPLYING THE LOG CAN READ WHAT IT WOULD PUBLISH. The index's
-// records are a kind builds before them do not know, and a build that cannot
-// read a record's ENVELOPE stops its applier rather than deferring it — which
-// every build before the envelope stopped validating kinds does
-// (`fix(search): decode a vector envelope whose kind a newer build added`).
-// Deferral is the rolling upgrade's contract for a record a peer cannot
-// apply; a stop is the opposite of it. So nothing about the index is published
-// while any node the log counts advertises reading below [IndexRecordVersion]
-// — a node that advertises nothing being one that cannot — and the fleet
-// searches with the full scan until the upgrade has reached every one of them
-// ([LogStanding.Readers]). The readers are read at the tick's start, which
-// decides the step, and AGAIN beside every record the step publishes
-// ([Embedder.stillReadable]), since a training can run for minutes and a node
-// that begins counting in them is one the first reading never saw.
 //
 // # What a tick does, and why the steps are separate ticks
 //
@@ -117,28 +102,6 @@ import (
 // before an operator would look.
 const IVFMeasureInterval = 24 * time.Hour
 
-// IndexRecordVersion is the record version every node applying the vector log
-// must read before any record about the index is published on it: the highest
-// version a record of the index's operations on its subject kind is stamped at
-// ([versionedFields]).
-func IndexRecordVersion() int {
-	version := 1
-	for _, op := range []Op{OpCentroids, OpReassign, OpMeasure} {
-		v, err := VectorRecord{RecordEnvelope: RecordEnvelope{
-			Op: op, Subject: Subject{Source: IndexSource},
-		}}.minimumVersion()
-		if err != nil {
-			// A RECORD OF THIS PACKAGE'S OWN TYPES ALWAYS ENCODES; one
-			// that did not would be a build that could not stamp what it
-			// is about to publish, and the safe answer is above
-			// everything it reads, so nothing about the index goes out.
-			return RecordVersion + 1
-		}
-		version = max(version, v)
-	}
-	return version
-}
-
 // IndexAction is the one step a tick takes on the corpus's index.
 type IndexAction string
 
@@ -172,13 +135,6 @@ type LogStanding struct {
 	// when the standing was read, deferring none — so its rows are the log's
 	// state rather than a moment behind it.
 	Current bool
-
-	// Readers is every node the log counts — each that has reported a
-	// position on it, and each live data node that has not yet — with the
-	// highest record version its build advertises reading, ZERO for one that
-	// advertises none: a build older than the advertisement, which is a
-	// build that cannot read the index's records.
-	Readers map[string]int
 }
 
 // IndexState is what a tick reads before it decides.
@@ -196,10 +152,8 @@ type IndexState struct {
 	Filed, Largest int
 
 	// Behind reports that this node has not applied the log it would decide
-	// from, and Held names the nodes applying the log that cannot read the
-	// index's records — either one stops every step.
+	// from, which stops every step.
 	Behind bool
-	Held   []string
 
 	// Now is the tick's instant, which the measurement's age is read at.
 	Now time.Time
@@ -211,8 +165,7 @@ func (s IndexState) Stale() int { return s.Sources - s.Filed }
 // DecideIndex is the step a tick takes: a pure function of what it read.
 //
 // IN THIS ORDER, and each case is why the next one can assume what it does: a
-// node behind the log, or a fleet with a node that cannot read the index's
-// records, takes no step at all; an index in another embedding space is no
+// node behind the log takes no step at all; an index in another embedding space is no
 // index; a verdict that the corpus was too small is revisited the moment it
 // is not; a corpus that moved by [IVFRetrainFactor] is re-derived whatever else
 // is true, because the probe count was measured at another size; a live index
@@ -220,7 +173,7 @@ func (s IndexState) Stale() int { return s.Sources - s.Filed }
 // a fully filed index has list sizes worth judging; and only a balanced one is
 // worth re-measuring.
 func DecideIndex(s IndexState, model string, dim int) IndexAction {
-	if s.Behind || len(s.Held) > 0 {
+	if s.Behind {
 		return IndexKeep
 	}
 	return decideIndex(s, model, dim)
@@ -278,18 +231,6 @@ func lopsided(s IndexState) bool {
 	return aboveMean && grown
 }
 
-// heldBy is every reader below the index's record version, sorted.
-func heldBy(readers map[string]int) []string {
-	var out []string
-	for node, reads := range readers {
-		if reads < IndexRecordVersion() {
-			out = append(out, node)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // maintainIndex takes this tick's step on the corpus's index, and reports
 // how many records it published.
 func (e *Embedder) maintainIndex(ctx context.Context, dim int) (int, error) {
@@ -301,29 +242,14 @@ func (e *Embedder) maintainIndex(ctx context.Context, dim int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	state.Behind, state.Held, state.Now = !standing.Current, heldBy(standing.Readers), e.deps.Now()
+	state.Behind, state.Now = !standing.Current, e.deps.Now()
 
 	action := DecideIndex(state, e.deps.Model, dim)
 	if wanted := decideIndex(state, e.deps.Model, dim); action == IndexKeep && wanted != IndexKeep {
-		switch {
-		case len(state.Held) > 0:
-			// WARN, because it can outlast an upgrade: a counted node
-			// that is offline on an old build holds the index back until
-			// it returns upgraded or an operator forgets its position,
-			// exactly as it pins the log's trim.
-			e.deps.Logger.WarnContext(ctx, "search_index_held",
-				"wanted", string(wanted), "nodes", state.Held,
-				"reads_below", IndexRecordVersion(),
-				"detail", "a node applying the vector log advertises no "+
-					"build that reads the index's records, and one that "+
-					"cannot read them stops its applier on the first; the "+
-					"full scan answers until every counted node is upgraded")
-		default:
-			e.deps.Logger.InfoContext(ctx, "search_index_behind",
-				"wanted", string(wanted),
-				"detail", "this node has not applied the whole vector log, "+
-					"so it does not decide the index from its rows this tick")
-		}
+		e.deps.Logger.InfoContext(ctx, "search_index_behind",
+			"wanted", string(wanted),
+			"detail", "this node has not applied the whole vector log, "+
+				"so it does not decide the index from its rows this tick")
 	}
 	switch action {
 	case IndexTrain:
@@ -510,9 +436,6 @@ func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, e
 		return e.trainFrom(ctx, dim, set, head.Generation)
 	}
 	subject := MeasureSubject(head.Generation)
-	if readable, err := e.stillReadable(ctx); err != nil || !readable {
-		return 0, err
-	}
 	if err := e.append(ctx, subject, VectorRecord{
 		RecordEnvelope: RecordEnvelope{
 			Subject:   subject,
@@ -526,44 +449,6 @@ func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, e
 		return 0, err
 	}
 	return 1, nil
-}
-
-// stillReadable reads the vector log's readers again IMMEDIATELY BEFORE a
-// record about the index is published, and reports whether every node the
-// log counts still reads it — logging `search_index_held` where one does not.
-//
-// # Why the tick's own reading is not enough
-//
-// [Embedder.maintainIndex] decides the step from the standing it reads at the
-// tick's start, and a training or a measurement then runs for minutes before it
-// publishes — on a slow node many, since its arithmetic is exempt from the
-// tick's bound and its reading only has to keep advancing ([Budget]). A node
-// that begins counting on the log in that window — an old binary booted as a
-// new data node, a node rolled back mid-upgrade — is one whose applier STOPS
-// on the first index record rather than deferring it, which is exactly what
-// the gate exists to rule out. Nothing below this check enforces it: the
-// framework publishes whatever it is given, and [statelog.Readers] is only
-// this caller's input. So the readers are read again beside every append, and
-// the window left is one publish long rather than one training long; the step
-// held is taken again from the start on a later tick, once every reader is
-// upgraded.
-func (e *Embedder) stillReadable(ctx context.Context) (bool, error) {
-	standing, err := e.deps.Standing(ctx)
-	if err != nil {
-		return false, fmt.Errorf("search: read the vector log's standing before "+
-			"publishing about the index: %w", err)
-	}
-	held := heldBy(standing.Readers)
-	if len(held) == 0 {
-		return true, nil
-	}
-	e.deps.Logger.WarnContext(ctx, "search_index_held", "nodes", held,
-		"reads_below", IndexRecordVersion(),
-		"detail", "a node that cannot read the index's records began counting on "+
-			"the vector log while this step ran, and one that cannot read them "+
-			"stops its applier on the first; nothing is published, and the step "+
-			"is taken again once every counted node is upgraded")
-	return false, nil
 }
 
 // arithmetic runs the index's CPU-bound steps EXEMPT from the tick's bound
@@ -690,9 +575,6 @@ func sourcesIn(ids map[Source][]string) []Source {
 
 // publishIndex writes one centroids record and reports how many it published.
 func (e *Embedder) publishIndex(ctx context.Context, dim int, index IndexRecord) (int, error) {
-	if readable, err := e.stillReadable(ctx); err != nil || !readable {
-		return 0, err
-	}
 	if err := e.append(ctx, IndexCentroids, VectorRecord{
 		RecordEnvelope: RecordEnvelope{
 			Subject:   IndexCentroids,
@@ -753,9 +635,6 @@ func (e *Embedder) rollout(ctx context.Context, head IndexHead) (int, error) {
 	slices.Sort(batches)
 	published := 0
 	for _, n := range batches {
-		if readable, err := e.stillReadable(ctx); err != nil || !readable {
-			return published, err
-		}
 		subject := ReassignSubject(head.Generation, n)
 		if err := e.append(ctx, subject, VectorRecord{
 			RecordEnvelope: RecordEnvelope{
