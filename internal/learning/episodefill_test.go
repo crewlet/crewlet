@@ -59,7 +59,10 @@ func TestAnEpisodesFillTextIsTheTextItWasEmbeddedFrom(t *testing.T) {
 // THE FILL READS WHAT RECALL CANNOT REACH, AND ONLY THAT: raw episodes with no
 // vector of the model at this width, newest first, a page at a time past the
 // cursor — never a compacted row, which recall never searches, never another
-// seat's, never one with nothing to embed. Unsearchable counts the same rows.
+// seat's, never one with nothing to embed. Unsearchable counts the SAME rows:
+// a row with no text is not a turn the search could not reach but one nothing
+// will ever embed, and counting it told the seat for ever that it was being
+// embedded again.
 func TestAnEpisodeFillReadsWhatRecallCannotReach(t *testing.T) {
 	t.Parallel()
 	db := learningStore(t)
@@ -86,6 +89,9 @@ func TestAnEpisodeFillReadsWhatRecallCannotReach(t *testing.T) {
 	})
 	add("theirs", "cto", 5, nil)
 	add("blank", "ceo", 6, func(x *learning.Episode) { x.TaskSummary = " \n " })
+	// Blank to the embedder too, which drops every space unicode.IsSpace
+	// names — a no-break space and an ideographic one among them.
+	add("wide-blank", "ceo", 8, func(x *learning.Episode) { x.TaskSummary = "\u00a0\u3000\u2028" })
 	add("legacy", "ceo", 7, func(x *learning.Episode) {
 		x.Embedding, x.EmbeddingModel = []float32{1, 0, 0, 0}, testModel
 	})
@@ -108,8 +114,9 @@ func TestAnEpisodeFillReadsWhatRecallCannotReach(t *testing.T) {
 	}
 
 	n, err := e.Unsearchable(context.Background(), "ceo", testModel)
-	if err != nil || n != 4 {
-		t.Fatalf("Unsearchable = %d, %v; want the three unfilled rows and the blank one", n, err)
+	if err != nil || n != 3 {
+		t.Fatalf("Unsearchable = %d, %v; want the three rows the fill reads, and neither blank one",
+			n, err)
 	}
 
 	filled, err := e.FillEmbeddings(context.Background(), []learning.VectorFill{
@@ -119,8 +126,8 @@ func TestAnEpisodeFillReadsWhatRecallCannotReach(t *testing.T) {
 	if err != nil || filled != 1 {
 		t.Fatalf("FillEmbeddings = %d, %v; want the raw row filled and the compacted one not", filled, err)
 	}
-	if n, _ := e.Unsearchable(context.Background(), "ceo", testModel); n != 3 {
-		t.Errorf("after the fill %d rows are unsearchable, want 3", n)
+	if n, _ := e.Unsearchable(context.Background(), "ceo", testModel); n != 2 {
+		t.Errorf("after the fill %d rows are unsearchable, want 2", n)
 	}
 	hits, err := e.Recall(context.Background(), learning.RecallQuery{
 		Handle: "ceo", Embedding: []float32{0, 1, 0, 0}, Model: testModel,

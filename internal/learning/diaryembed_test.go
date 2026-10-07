@@ -141,6 +141,9 @@ func TestUnfilledIsWhatRecallCannotReach(t *testing.T) {
 	})
 	write(longEntry("theirs", "b", "another seat's note", at(7)))
 	write(longEntry("blank", "a", " \n\t ", at(8)))
+	// Blank to the embedder as well, which drops every space unicode.IsSpace
+	// names: selected, it was read on every tick and never sent.
+	write(longEntry("wide-blank", "a", " 　 \v", at(9)))
 
 	got, err := d.Unfilled(context.Background(), "a", testModel, at(10), learning.FillCursor{}, 10)
 	if err != nil {

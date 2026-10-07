@@ -34,16 +34,12 @@ func (e *Episodes) Unfilled(ctx context.Context, handle, model string, after Fil
 	if limit <= 0 {
 		limit = defaultEpisodeListing
 	}
-	args := []any{handle, string(KindRaw), model, e.vectorBytes(), e.vectorBytes()}
+	args := e.unfilledArgs(handle, model)
 	args = append(args, cursorArgs(after)...)
 	args = append(args, limit)
 	rows, err := e.db.SQL().QueryContext(ctx,
 		`SELECT `+episodeColumns+` FROM episodes
-		 WHERE agent_handle = ? AND kind = ?
-		   AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?
-		        OR (? > 0 AND length(embedding) <> ?))
-		   AND trim(task_summary || ask || plan_summary,
-		            ' ' || char(9) || char(10) || char(13)) <> ''
+		 WHERE `+unfilledEpisode+`
 		   AND (? = 0 OR ended_at < ? OR (ended_at = ? AND id < ?))
 		 ORDER BY ended_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
@@ -66,16 +62,17 @@ func (e *Episodes) Unfilled(ctx context.Context, handle, model string, after Fil
 // that found nothing can say what it did not search rather than that the seat
 // has never done the work.
 //
-// The same predicate as [Episodes.Unfilled], counted: a row it names is one the
-// holder's fill will reach.
+// [Episodes.Unfilled]'s own predicate ([unfilledEpisode]), counted: a row it
+// names is one the holder's fill will reach, which is what the answer tells the
+// seat. A row with no text is not one — nothing could ever embed it, and a
+// search by meaning has nothing in it to match — so it is not counted as a turn
+// the search could not reach, where counting it told the seat for ever that the
+// turn was being embedded again.
 func (e *Episodes) Unsearchable(ctx context.Context, handle, model string) (int, error) {
 	var n int
 	err := e.db.SQL().QueryRowContext(ctx,
-		`SELECT count(*) FROM episodes
-		 WHERE agent_handle = ? AND kind = ?
-		   AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?
-		        OR (? > 0 AND length(embedding) <> ?))`,
-		handle, string(KindRaw), model, e.vectorBytes(), e.vectorBytes()).Scan(&n)
+		`SELECT count(*) FROM episodes WHERE `+unfilledEpisode,
+		e.unfilledArgs(handle, model)...).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("learning: count unsearchable episodes for %s: %w", handle, err)
 	}
@@ -88,6 +85,21 @@ func (e *Episodes) Unsearchable(ctx context.Context, handle, model string) (int,
 // the memory changelog carries it to the seat's next holder.
 func (e *Episodes) FillEmbeddings(ctx context.Context, fills []VectorFill) (int, error) {
 	return fillVectors(ctx, e.db, episodeFillSQL, "episodes", "episode_fill_discarded", fills)
+}
+
+// unfilledEpisode is the predicate [Episodes.Unfilled] selects by and
+// [Episodes.Unsearchable] counts by — ONE STATEMENT OF IT, so the count names
+// exactly the rows the fill reaches: a seat's raw row with no vector of the
+// model at this store's width, and with text to make one of ([hasTextSQL]).
+// Its binds are [Episodes.unfilledArgs].
+var unfilledEpisode = `agent_handle = ? AND kind = ?
+	AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?
+	     OR (? > 0 AND length(embedding) <> ?))
+	AND ` + hasTextSQL("task_summary || ask || plan_summary")
+
+// unfilledArgs are [unfilledEpisode]'s binds, in order.
+func (e *Episodes) unfilledArgs(handle, model string) []any {
+	return []any{handle, string(KindRaw), model, e.vectorBytes(), e.vectorBytes()}
 }
 
 // vectorBytes is how many bytes a vector at this store's width packs to, or 0

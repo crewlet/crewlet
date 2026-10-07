@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -54,6 +57,53 @@ type VectorFill struct {
 	ID     string
 	Vector Vector
 }
+
+// hasTextSQL is the predicate "expr leaves something to embed": what is left of
+// it once every character [embeddings.Prepare] drops is trimmed away is not
+// empty.
+//
+// EXACTLY THE EMBEDDER'S RULE, because a row the store selects and the pass
+// then finds empty is neither filled nor refused: it is read again on every
+// tick for ever, and counted as a turn a search could not reach that no fill
+// will ever reach. Prepare splits on unicode.IsSpace (strings.Fields), so the
+// trim set is that set rune for rune ([preparedSpace]) — where the four ASCII
+// characters it trimmed before admitted a text of no-break spaces, which
+// Prepare reads as nothing.
+func hasTextSQL(expr string) string {
+	return "trim(" + expr + ", " + preparedSpaceSQL + ") <> ''"
+}
+
+// preparedSpace is every rune unicode.IsSpace reports — the characters
+// [embeddings.Prepare] drops — in order: the Unicode White_Space property,
+// which is where IsSpace reads the ones above Latin-1, filtered by IsSpace
+// itself.
+var preparedSpace = func() []rune {
+	var out []rune
+	for _, r16 := range unicode.White_Space.R16 {
+		for r := rune(r16.Lo); r <= rune(r16.Hi); r += rune(r16.Stride) {
+			if unicode.IsSpace(r) {
+				out = append(out, r)
+			}
+		}
+	}
+	for _, r32 := range unicode.White_Space.R32 {
+		for r := rune(r32.Lo); r <= rune(r32.Hi); r += rune(r32.Stride) {
+			if unicode.IsSpace(r) {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}()
+
+// preparedSpaceSQL is [preparedSpace] as one SQL string, `char(9, 10, …)`.
+var preparedSpaceSQL = func() string {
+	points := make([]string, len(preparedSpace))
+	for i, r := range preparedSpace {
+		points[i] = strconv.Itoa(int(r))
+	}
+	return "char(" + strings.Join(points, ", ") + ")"
+}()
 
 // cursorArgs are the bind values for a page's "strictly after this cursor"
 // predicate: `(? = 0 OR col < ? OR (col = ? AND id < ?))`.

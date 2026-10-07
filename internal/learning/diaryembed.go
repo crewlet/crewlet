@@ -106,7 +106,7 @@ func (d *Diary) Unfilled(ctx context.Context, agentID, model string, now time.Ti
 		   AND (ttl_until IS NULL OR ttl_until > ?)
 		   AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?
 		        OR (? > 0 AND length(embedding) <> ?))
-		   AND trim(content, ' ' || char(9) || char(10) || char(13)) <> ''
+		   AND `+hasTextSQL("content")+`
 		   AND (? = 0 OR created_at < ? OR (created_at = ? AND id < ?))
 		 ORDER BY created_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
