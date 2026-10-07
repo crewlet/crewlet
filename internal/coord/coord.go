@@ -169,8 +169,8 @@ import (
 // something merely gains a field. The history: v2 = holding a seat means
 // consulting the completion ledger; v3 = claiming a seat means this node
 // satisfies the role's placement; v4 = running a seat means charging its
-// rounds to the WINDOWED token counters. Every
-// one was silent corruption in a mixed fleet, which is the bar: a v3 node and
+// rounds to the WINDOWED token counters. Every one was silent corruption in a
+// mixed fleet, which is the bar: a v3 node and
 // a v4 node running seats side by side would each charge a different counter,
 // so each would see only its own share of the company's spend and every cap
 // would bind late — by as much as the other build had spent.

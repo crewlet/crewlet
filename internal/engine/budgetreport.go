@@ -140,9 +140,9 @@ func (r *budgetReporter) publish(ctx context.Context) {
 //
 // THE WHOLE DECISION, split from the publish so it is testable without a
 // broker or a node: whether anything is capped, and whether the counters
-// could be read. Everything [budgetReporter.publish]
-// adds — the incarnation, the sequence, the envelope — is stamped on a frame
-// this already decided to send.
+// could be read. Everything [budgetReporter.publish] adds — the incarnation,
+// the sequence, the envelope — is stamped on a frame this already decided to
+// send.
 //
 // A FAILED READ PUBLISHES NOTHING, rather than a frame of zeroes: the
 // consumer REPLACES what it holds on every report, so a zeroed one would
@@ -151,8 +151,8 @@ func (r *budgetReporter) publish(ctx context.Context) {
 //
 // A COMPANY THAT CAPS NOTHING IS A FRAME, and one that needs no read: its
 // windows are empty whatever the counter holds, so the counter has nothing to
-// say about it. It used to publish nothing, which left a consumer unable to tell
-// "no ceiling" from "no report yet" — and the dashboard, holding an empty
+// say about it. It used to publish nothing, which left a consumer unable to
+// tell "no ceiling" from "no report yet" — and the dashboard, holding an empty
 // meter for both, told an operator whose company WAS capped that it was not
 // for the first interval after every start.
 func (r *budgetReporter) frame(ctx context.Context) (types.BudgetMeters, bool) {

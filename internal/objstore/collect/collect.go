@@ -53,8 +53,9 @@
 //
 // NO LOCK, NO SECOND LOOK. A key is minted for one upload and named only by
 // the write that uploaded it, so there is no writer re-using an object the
-// collector could be deleting, and so nothing for a lock to guard. Two collectors at once are safe too: deleting an
-// object that is gone is not an error.
+// collector could be deleting, and so nothing for a lock to guard. Two
+// collectors at once are safe too: deleting an object that is gone is not an
+// error.
 //
 // # The sweep: what no listing shows
 //
@@ -66,9 +67,8 @@
 // Pending) and abandons the ones begun more than [PendingGrace] ago — every
 // upload still in flight is pending too, and none takes that long — that are
 // named by no name or by a key also minted past the grace; never one under
-// somebody else's name. It needs no
-// estate: an upload that never finished is named by no row. A sweep the
-// backend refuses — an S3 identity without the right to list or abort
+// somebody else's name. It needs no estate: an upload that never finished is
+// named by no row. A sweep the backend refuses — an S3 identity without the right to list or abort
 // uploads — is reported beside the collection rather than failing it.
 //
 // # Audit: what the store has lost
@@ -339,8 +339,8 @@ func (c *Collector) Restore(s Status) {
 }
 
 // Collect deletes the objects nothing refers to past their grace and abandons
-// the uploads that never finished. See the package doc for why each of its rules
-// is needed, and why none is a lock.
+// the uploads that never finished. See the package doc for why each of its
+// rules is needed, and why none is a lock.
 func (c *Collector) Collect(ctx context.Context) (CollectionReport, error) {
 	var r CollectionReport
 	cutoff := c.opts.Now().Add(-PendingGrace)

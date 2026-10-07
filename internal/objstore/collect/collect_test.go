@@ -487,7 +487,8 @@ func TestACollectorWithNoReferencesIsRefused(t *testing.T) {
 
 // AN UPLOAD THAT NEVER FINISHED IS ABANDONED ONCE IT BEGAN MORE THAN THE GRACE
 // AGO — when nothing names it, or a key also minted past the grace does — and
-// never when somebody else's name does. Every upload in flight is pending too, which is what the grace is for.
+// never when somebody else's name does. Every upload in flight is pending
+// too, which is what the grace is for.
 func TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

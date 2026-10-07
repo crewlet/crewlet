@@ -109,8 +109,8 @@ func TestOnlyLowercaseHexIsAHash(t *testing.T) {
 // object unnamed, and the columns saying whose a reference is.
 //
 // AND NEITHER STATEMENT CAN ANSWER A NULL KEY: a removed file names no
-// object, and a walk handing its NULL
-// to the key parser would stop every audit and every backup for good.
+// object, and a walk handing its NULL to the key parser would stop every
+// audit and every backup for good.
 func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 	t.Parallel()
 	good := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",

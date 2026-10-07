@@ -12,9 +12,9 @@ import (
 )
 
 // meteringReporter is a meter loop over a company capped at 1 000 tokens a
-// day that has spent 250 today, and the fleet store it reads — everything a frame reads, and nothing a
-// publish adds — on an engine whose clock reads now, the instant the 250 were
-// charged at.
+// day that has spent 250 today, and the fleet store it reads — everything a
+// frame reads, and nothing a publish adds — on an engine whose clock reads
+// now, the instant the 250 were charged at.
 func meteringReporter(t *testing.T, now time.Time) (*budgetReporter, *coordmem.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
