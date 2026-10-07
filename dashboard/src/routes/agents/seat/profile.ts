@@ -31,8 +31,8 @@ import type {
  * Turns, Memory and Schedules are properties of a RUNTIME, and a human seat
  * has none — it is addressable and never spawned — so a person's profile is
  * Overview, Work and Settings. A `tab=` naming a tab this kind does not have
- * (or one an earlier build had: `threads`, `cost`, `access`, `model`) lands on
- * Overview through `useTab`'s own fallback rather than on a blank strip.
+ * lands on Overview through `useTab`'s own fallback rather than on a blank
+ * strip.
  *
  * WORK IS ON BOTH: a person has tasks assigned to them and questions put to
  * them, which is the whole of what this product asks a person to do.

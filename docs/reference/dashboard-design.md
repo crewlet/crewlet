@@ -3210,14 +3210,13 @@ rules fix it, and each one names a specific mechanism:
    The text already changes at that moment; the shape changing with it is the
    same fact, not a second one.
 
-   The engine stopped writing the other half of the unreadability at the same
-   time. `json.Marshal` escapes `<`, `>` and `&` for embedding in HTML, so
-   every URL argument recorded before that read `?a=1\u0026b=2` and every
-   markdown body `\u003ch1\u003e` — on a screen that renders into a `pre` and
-   needs none of it. `tools.RecordArgs` is the one encoder both the phase
-   event and the bridged-run row use now, and it writes the characters the
-   model actually sent. Records taken by an older build still carry the
-   escapes, and are shown as what that build published.
+   The engine does not write the other half of the unreadability.
+   `json.Marshal` escapes `<`, `>` and `&` for embedding in HTML, which would
+   make every URL argument read `?a=1\u0026b=2` and every markdown body
+   `\u003ch1\u003e` — on a screen that renders into a `pre` and needs none of
+   it. `tools.RecordArgs` is the one encoder both the phase event and the
+   bridged-run row use, and it writes the characters the model actually
+   sent.
 4. **Grouping is structural; colour is semantic.** A round is BRACKETED by a
    rail running from its numbered node down its own content, and adjacent
    rounds are told apart by a two-step alternating tint — not by a hue
@@ -3788,8 +3787,8 @@ than they looked:
   elsewhere, the browser's Back button, a pasted URL) retires whatever the
   arrows were pointing at and takes the stop back, and so does an option
   leaving `options`. It survives a value the options do not carry, too: `value`
-  comes off the query string at most of these call sites, so an older build's
-  link, a typo or a renamed option arrives as a value no option matches, and a
+  comes off the query string at most of these call sites, so a typo or a
+  hand-edited link arrives as a value no option matches, and a
   stop that fell back only when the *held* option left the set gave every
   option `tabIndex="-1"` on `?lens=bogus` and dropped the whole control out of
   the page's tab order, unreachable by keyboard and strictly worse than the
@@ -6258,10 +6257,10 @@ brings that carries a design-system rule.
   not dispatch is dropped rather than thrown on or applied by a guess, and the
   store counts it (`unknownPushes`), because the same fall-through is what a
   kind this build's engine sends and its client forgot looks like; the e2e
-  replay fails on any. Every field the engine gained after a screen was built
-  against it is optional in `protocol/types.ts`, so an older node's answer
-  without it takes the screen's "unknown" branch rather than reading
-  `undefined` as a value.
+  replay fails on any. A field a later build adds is declared optional in that
+  build's `protocol/types.ts`, so an answer from a node still on the build
+  before it, without the field, takes the screen's "unknown" branch rather
+  than reading `undefined` as a value.
 - **Nothing outside `src/protocol/` reaches the network.** A screen that called
   `fetch` itself would work on the happy path and be the one request in the
   product with no operator token, no deadline and no refusal it could branch

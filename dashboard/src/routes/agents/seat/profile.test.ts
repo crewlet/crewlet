@@ -47,10 +47,6 @@ describe("the tabs", () => {
   test("a person has no runtime tab, and every tab of theirs is an agent's too", () => {
     expect(HUMAN_TABS).toEqual(["overview", "work", "settings"]);
     for (const tab of HUMAN_TABS) expect(AGENT_TABS).toContain(tab);
-    // THE TABS AN EARLIER BUILD HAD are gone, so a link naming one is stale.
-    for (const gone of ["model", "cost", "access", "threads"]) {
-      expect(AGENT_TABS as readonly string[]).not.toContain(gone);
-    }
   });
 });
 

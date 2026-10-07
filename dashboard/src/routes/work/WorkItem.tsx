@@ -408,8 +408,8 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
               </div>
             </ItemEditsProvider>
           ) : (
-            // AN ANSWER CARRYING NO TASK is what a build older or newer than
-            // this one can send; the honest reply names the address.
+            // AN ANSWER CARRYING NO TASK is what a newer build can send (this
+            // one answers not_found); the honest reply names the address.
             <EmptyState
               size="compact"
               icon={<PackageGlyph size="xl" />}

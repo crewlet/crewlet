@@ -29,10 +29,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * The work item a turn was on, as a row names it — and, for its `title`, the
  * whole identity.
  *
- * THE KEY WHEN THE TURN RECORDED ONE, which is every turn now: a create's wake
- * carries the key the write minted. A turn that recorded none — written by a
- * build from before that, or woken by a trigger that named the item by its
- * identity alone — is still ABOUT an item, so it is named by the item's kind
+ * THE KEY WHEN THE TURN RECORDED ONE, which is nearly every turn: a create's
+ * wake carries the key the write minted. A turn that recorded none — woken by
+ * a trigger that named the item by its identity alone — is still ABOUT an
+ * item, so it is named by the item's kind
  * and the head of its id rather than dropped; the full `<backend>:<id>` a
  * search or the event log's `work_item=` takes is on the title, never in the
  * row, where 43 unbreakable characters took the whole cell on a phone and

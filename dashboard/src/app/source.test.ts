@@ -274,20 +274,20 @@ test("every link names a segment a workspace owns, and a whole literal path reso
 });
 
 /**
- * THE HEADS THE REBUILD RENAMED ARE DEAD, AND THE RULE SAYS SO.
+ * A LINK TO A HEAD NO ROUTE OWNS IS DEAD, AND THE RULE SAYS SO.
  *
- * Every workspace moved once: the event log from `#/activity` to
- * `#/live/events`, spend from `#/cost` to `#/spend`, the fleet, the runs, the
- * configuration and the seats under Settings, Live and Agents, and pages from
- * `#/pages` to `#/knowledge/pages`. A link still written against one of those
- * resolves to nothing, and the rule above is only as good as its reading of
- * that — so each retired head is fed through it here, beside the address it
- * became, which has to come back clean. A rule that stopped reporting the old
- * head, or started reporting the new one, fails here rather than letting a
- * whole family of dead links through.
+ * Every workspace lives under one head: the event log under `#/live/events`,
+ * spend under `#/spend`, the fleet, the runs, the configuration and the seats
+ * under Settings, Live and Agents, and pages under `#/knowledge/pages`. A link
+ * written against a plausible head beside one of those — `#/activity`,
+ * `#/cost`, `#/pages` — resolves to nothing, and the rule above is only as good
+ * as its reading of that — so each such head is fed through it here, beside the
+ * live address, which has to come back clean. A rule that stopped reporting
+ * the dead head, or started reporting the live one, fails here rather than
+ * letting a whole family of dead links through.
  */
-test("a link to a head the rebuild renamed is reported, and its new address is not", () => {
-  const moves: [retired: string, current: string][] = [
+test("a link to a head no route owns is reported, and the live address is not", () => {
+  const moves: [dead: string, current: string][] = [
     ['href(["activity"])', 'href(["live", "events"])'],
     ['href(["cost"])', 'href(["spend"])'],
     ['nav.to(["fleet"])', 'nav.to(["settings", "nodes"])'],
@@ -298,8 +298,8 @@ test("a link to a head the rebuild renamed is reported, and its new address is n
     ['href(["company"])', 'href(["home"])'],
     ['href(["admin"])', 'href(["settings"])'],
   ];
-  for (const [retired, current] of moves) {
-    expect(deadLinks(retired), retired).toHaveLength(1);
+  for (const [dead, current] of moves) {
+    expect(deadLinks(dead), dead).toHaveLength(1);
     expect(deadLinks(current), current).toEqual([]);
   }
 });

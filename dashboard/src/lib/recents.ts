@@ -124,8 +124,9 @@ function valid(row: unknown): row is Recent {
     r.path.length > 0 &&
     r.path.every((p) => typeof p === "string") &&
     typeof r.label === "string" &&
-    // A ROW WITH NO WORKSPACE is a shape an older build wrote, and one the
-    // palette has no hint for — see [Recent.workspace].
+    // A ROW WITH NO WORKSPACE is not one this build writes (`remember()`
+    // refuses it): a hand-edited or corrupt value, which the palette has no
+    // hint for — see [Recent.workspace]. Dropped.
     typeof r.workspace === "string" &&
     r.workspace !== "" &&
     // A PATH THE ROUTE TABLE NO LONGER HAS IS DROPPED ON READ. Storage

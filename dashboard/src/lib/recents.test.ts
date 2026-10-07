@@ -99,15 +99,16 @@ describe("what the reader opened", () => {
 });
 
 describe("a store that will not cooperate", () => {
-  it("drops a row a previous build wrote in a shape this one cannot use", () => {
-    // The value survives upgrades, so a row in an old shape is an ordinary
-    // thing to find — and rendering a recent with no path is not an option.
+  it("drops a row in a shape this build cannot use", () => {
+    // Storage is the reader's to edit and can come back corrupt, so a row in a
+    // shape this build never writes is an ordinary thing to find — and
+    // rendering a recent with no path is not an option.
     localStorage.setItem(
       "crewlet_recents",
       JSON.stringify([
         { label: "no path" },
-        // A ROW WITH NO WORKSPACE is a shape an older build wrote, and one
-        // the palette has no hint for.
+        // A ROW WITH NO WORKSPACE is not one this build writes, and one the
+        // palette has no hint for.
         { path: ["work", "ENG-0"], label: "ENG-0" },
         // A ROUTE THIS BUILD DOES NOT HAVE, which a row outlives: drawn, it
         // would lead to Not Found for ever.
