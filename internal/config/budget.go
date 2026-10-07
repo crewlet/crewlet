@@ -34,9 +34,9 @@ import (
 //
 // The pointers are what tell the two apart, and the rule they serve is the
 // engine's for every setting whose zero is a real value: zero must mean one
-// thing or be refused. A ceiling of 0 read as "unlimited" is what the single
-// number used to mean, and read as "nothing may be spent" is what the word
-// ceiling says — two readers, two opposite companies. So there is exactly one
+// thing or be refused. A ceiling of 0 reads as "unlimited" to some people and
+// as "nothing may be spent" to others, which is what the word ceiling says —
+// two readers, two opposite companies. So there is exactly one
 // way to leave a window uncapped, which is to leave its key out, and a 0 or a
 // negative is refused naming the key to remove. Stopping a seat on purpose is
 // not a budget's job at all.

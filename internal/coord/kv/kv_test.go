@@ -1001,101 +1001,12 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 	}
 }
 
-// THE LIFETIME COUNTERS ARE RETIRED, ONCE, AND THEN NOTHING IS.
-//
-// A build before the windowed counters kept one figure per scope in
-// `<prefix>_budgets`, a bucket with no age. Nothing in this build reads it, so
-// left alone it holds a dead company's spend for the life of the deployment;
-// deleting it is the maintenance duty's decision, and this is the delete. The
-// windowed counters beside it must survive, and a second retirement must be a
-// quiet no-op rather than an error the duty logs every tick for ever.
-func TestTheLifetimeCountersAreRetiredAndTheWindowsKept(t *testing.T) {
-	nc := embeddedNATS(t)
-	store := openFleet(t, nc)
-	ctx := t.Context()
-	js, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatalf("jetstream: %v", err)
-	}
-	legacy := store.bucketPrefix + lifetimeBudgetSuffix
-	old, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: legacy})
-	if err != nil {
-		t.Fatalf("plant the lifetime bucket: %v", err)
-	}
-	if _, err := old.Put(ctx, encodeKey(coord.OrgScope), []byte(`{"used":900}`)); err != nil {
-		t.Fatalf("plant a lifetime counter: %v", err)
-	}
-	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {
-		t.Fatalf("PostCharge: %v", err)
-	}
-
-	retired, err := store.RetireLifetimeCounters(ctx)
-	if err != nil || !retired {
-		t.Fatalf("RetireLifetimeCounters = (%v, %v), want (true, nil)", retired, err)
-	}
-	if _, err := js.KeyValue(ctx, legacy); !errors.Is(err, jetstream.ErrBucketNotFound) {
-		t.Fatalf("the lifetime bucket is still there after its retirement: %v", err)
-	}
-	if got := orgSpent(t, store); got != [3]int{10, 10, 10} {
-		t.Fatalf("the windowed counters read %v after the retirement, want the 10 "+
-			"charged: the retirement deleted the wrong bucket", got)
-	}
-	retired, err = store.RetireLifetimeCounters(ctx)
-	if err != nil || retired {
-		t.Fatalf("a second RetireLifetimeCounters = (%v, %v), want (false, nil)", retired, err)
-	}
-}
-
-// THE CHUNK LOCKS ARE RETIRED, ONCE, AND THEN NOTHING IS.
-//
-// A build that kept files in content-addressed chunks locked each chunk in
-// `<prefix>_chunk_locks`. Nothing in this build opens it; deleting it is the
-// maintenance duty's decision once no node of that build is left, and this is
-// the delete. The object store's own records beside it must survive, and a
-// second retirement must be a quiet no-op.
-func TestTheChunkLocksAreRetiredAndTheObjectRecordsKept(t *testing.T) {
-	nc := embeddedNATS(t)
-	store := openFleet(t, nc)
-	ctx := t.Context()
-	js, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatalf("jetstream: %v", err)
-	}
-	legacy := store.bucketPrefix + chunkLocksSuffix
-	old, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: legacy, TTL: time.Minute})
-	if err != nil {
-		t.Fatalf("plant the chunk locks' bucket: %v", err)
-	}
-	if _, err := old.Put(ctx, "a-chunk", []byte(`{"owner":"data-a"}`)); err != nil {
-		t.Fatalf("plant a chunk lock: %v", err)
-	}
-	if _, err := store.AgreeObjectBackend(ctx, "nats"); err != nil {
-		t.Fatalf("AgreeObjectBackend: %v", err)
-	}
-
-	retired, err := store.RetireChunkLocks(ctx)
-	if err != nil || !retired {
-		t.Fatalf("RetireChunkLocks = (%v, %v), want (true, nil)", retired, err)
-	}
-	if _, err := js.KeyValue(ctx, legacy); !errors.Is(err, jetstream.ErrBucketNotFound) {
-		t.Fatalf("the chunk locks' bucket is still there after its retirement: %v", err)
-	}
-	if got, err := store.AgreeObjectBackend(ctx, "s3:elsewhere"); err != nil || got != "nats" {
-		t.Fatalf("the recorded object backend reads %q, %v after the retirement, want nats: "+
-			"the retirement deleted the wrong bucket", got, err)
-	}
-	retired, err = store.RetireChunkLocks(ctx)
-	if err != nil || retired {
-		t.Fatalf("a second RetireChunkLocks = (%v, %v), want (false, nil)", retired, err)
-	}
-}
-
 // THE WINDOWED COUNTERS AGE, AND THE AGE IS THE CONFIGURED ONE.
 //
-// The lifetime bucket had no age, so every seat that ever ran kept a record
-// for the life of the deployment. The windowed one reaps a record nobody has
-// charged for longer than the longest window — here a bucket built with a
-// short retention, so the case can watch it happen.
+// A windowed counter nobody has charged for longer than the bucket's retention
+// ages out, so a seat that stopped running does not keep a record for the
+// life of the deployment — here a bucket built with a short retention, so the
+// case can watch it happen.
 func TestAnUnchargedCounterAgesOut(t *testing.T) {
 	nc := embeddedNATS(t)
 	store := openFleetWithTTL(t, nc, 500*time.Millisecond)

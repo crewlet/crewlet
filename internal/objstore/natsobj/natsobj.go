@@ -169,12 +169,12 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Backend, er
 			// draw on, for bytes no log is waiting for.
 			made, err := js.CreateOrUpdateObjectStore(ctx, jetstream.ObjectStoreConfig{
 				Bucket: Bucket,
-				// THE DESCRIPTION A BUILD THAT KEPT CHUNKS GAVE IT,
-				// unchanged: every boot of either build writes its own
-				// text through this create-or-update, so two texts would
+				// FIXED ONCE A RELEASE SHIPS IT: every boot of every
+				// build writes its own text through this
+				// create-or-update, so a successor that changed it would
 				// flip the stream's replicated config back and forth for
 				// the whole of a rolling upgrade. It is read by nothing.
-				Description: "Crewlet file chunks, named by their SHA-256",
+				Description: "Crewlet files, one object per upload",
 				Storage:     jetstream.FileStorage,
 				Replicas:    replicas,
 			})
@@ -251,7 +251,8 @@ func metaSubject(name string) string {
 func pieceSubject(nuid string) string { return "$O." + Bucket + ".C." + nuid }
 
 // meta reads name's metadata from the stream's leader: the object, a delete
-// marker an earlier build's delete left (Deleted set), or
+// marker the library's own delete left — `nats object rm`, or any other client
+// of the bucket's documented format — (Deleted set), or
 // [objstore.ErrNotFound] when the leader holds no message for the name. Its
 // ModTime is the instant the leader stored the message — the object became
 // whole then — rather than whatever the library wrote into it.
@@ -537,7 +538,8 @@ func digestOf(digest string) objstore.Hash {
 // Delete implements [objstore.Backend]: a purge of the name's metadata, then
 // of the object's pieces, and never a marker — see the package doc.
 //
-// A delete marker an earlier build's delete left is purged the same way, so a
+// A delete marker the library's own delete left — `nats object rm`, or any
+// other client of the bucket's documented format — is purged the same way, so a
 // name the listing visits for it ([Backend.List]) is cleared by the ordinary
 // delete the collector makes of it; and so is metadata that cannot be read,
 // whose pieces — if it names any — nothing can find any more.
@@ -590,7 +592,8 @@ const listResets = 5
 // Every name is visited as it is — what one means is not this backend's to
 // judge — except one whose metadata cannot be read, which is no object
 // anything could get and is logged rather than visited. A name holding only
-// the delete marker an earlier build's delete left is visited too, as an
+// the delete marker the library's own delete left — `nats object rm`, or any
+// other client of the bucket's documented format — is visited too, as an
 // object of no bytes written when the marker was: the marker is a message the
 // stream keeps for ever until something purges it, and the collector clears
 // it with the same delete it makes of any name ([Backend.Delete]).
@@ -601,8 +604,8 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 }
 
 // eachMeta hands visit the newest metadata on every name's subject, its
-// ModTime the instant the broker stored it — a delete marker an earlier
-// build left included — and logs and steps over metadata it cannot decode.
+// ModTime the instant the broker stored it — a delete marker the library's
+// own delete left included — and logs and steps over metadata it cannot decode.
 // See [Backend.List] for why it is a consumer of its own.
 func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo) error) error {
 	cons, err := b.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{

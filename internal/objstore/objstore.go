@@ -72,9 +72,7 @@ import (
 // of a file, as its row records it and every read is checked against.
 //
 // NOT A NAME. An object is stored under its [Key]; a digest says what the
-// bytes are, never where they are. Its grammar is also the one that tells a
-// name stored by a build that kept files in content-addressed chunks
-// ([Hash.Valid]) apart from everything else in the store.
+// bytes are, never where they are.
 type Hash string
 
 // ErrBadHash is a string that is not a SHA-256 digest.
@@ -117,10 +115,7 @@ func (h Hash) Valid() bool {
 // carrying its own minting instant ([Key.Minted]), so the write that names a
 // key can be refused once the key is too old to be named safely
 // ([RecordWithin]) with no field beside it, and a keyset page of a table's
-// keys walks them in roughly the order they were written. And its canonical
-// spelling — thirty-six characters with four dashes — is disjoint from the
-// sixty-four hex digits a chunk-era name was, so the two are told apart by
-// their spelling alone.
+// keys walks them in roughly the order they were written.
 //
 // ONE SPELLING: [ParseKey] accepts the canonical lowercase form of a version
 // 7, RFC 4122 UUID and nothing else — an upper-case spelling, a `urn:uuid:`
@@ -363,8 +358,8 @@ func (t ReferenceTable) ObjectsAmong(n int) (string, error) {
 //
 // A KEYSET PAGE ON THE KEY COLUMN'S INDEX, so a walk of every reference — the
 // audit's and the backup's — holds a page in memory and seeks to each next
-// one, and NULL is excluded by name: a row naming no object (a removed file,
-// one kept by an earlier build) is no reference.
+// one, and NULL is excluded by name: a row naming no object (a removed file)
+// is no reference.
 func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("objstore: a page of %d references", n)

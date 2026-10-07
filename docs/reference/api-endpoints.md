@@ -1943,13 +1943,9 @@ after that, and the projection folds each one in as it arrives. Until the first
 one lands, `budget` is **`null`** — nobody has read the counter — which is a
 different fact from a report whose `org.windows` is `[]`, "nothing is capped". A
 company with no ceiling anywhere publishes exactly that: an empty list and no
-seats, without reading the counter. A node publishes nothing for a CAPPED
-company while any node of a build before the windowed counters is still live —
-see [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows) —
-so a dashboard served through that rollout holds `null` rather than a reading
-of the wrong counter.
-That older build's `budget_reported` frame is ignored: it read the lifetime
-counters, which are not the ones the gate charges.
+seats, without reading the counter. A node whose read of the counter fails
+publishes nothing that interval, so the meter keeps the last reading it had
+rather than drawing zeroes.
 
 - `meter_id` identifies the node incarnation whose report is held. Every node
   reads the same counter, so reports under different ids describe the same
@@ -3969,7 +3965,6 @@ start and **omits** the field rather than rendering one.
       "aged": 1702,
       "deleted": 12,
       "referenced": 1690,
-      "retired": 3,
       "abandoned": 1
     },
     "audit": {
@@ -4007,7 +4002,7 @@ writes.
 |---|---|
 | `backend` | The store every node agreed on at boot: `nats` (the data nodes' replicated bucket) or `s3:<endpoint>/<bucket>/<prefix>` |
 | `node` | The data node holding the collector's duty when it ran the passes below |
-| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row still did), `retired` (objects an earlier build stored as content-addressed chunks, deleted once no node of that build is left) and `abandoned` (uploads begun more than a day ago and never finished, which no listing shows). `skipped` says why it stopped judging — an estate this node could not fully read — and the counts are what it did before it stopped; `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
+| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row still did) and `abandoned` (uploads begun more than a day ago and never finished, which no listing shows). `skipped` says why it stopped judging — an estate this node could not fully read — and the counts are what it did before it stopped; `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
 | `audit` | The last **audit attempt**, which asks the store about every object a row names: when it ended (`at`), `referenced`, `missing` (objects the store does not hold), `damaged` (objects it holds at another size, or under another digest where it keeps one), `completed` — false over an estate that was not complete, when the counts are floors — and `error`, what stopped it. Absent before the first one ends |
 | `audit.found` | What the last audit to **run to its end** found — the attempt above, or the one before it when that one failed, so a failed attempt never hides what was found: `at`, `completed`, `referenced`, `missing`, `damaged` and `missing_files`, the first hundred files that cannot be read, each `{"object", "named_by", "damaged"}` — the object's key, the file as `PROJECT/path`, and `true` where the store holds it wrong rather than not at all (absent when none). A non-zero `missing` plus `damaged` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
 

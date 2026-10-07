@@ -121,7 +121,7 @@ type collectionReport struct {
 // startObjectCollector starts the collector's duty against the estate's
 // references. A no-op on a node with no object store, and once the collector
 // has been stopped.
-func (e *Engine) startObjectCollector(ctx context.Context, refs collect.References, era collect.ChunkEra) error {
+func (e *Engine) startObjectCollector(ctx context.Context, refs collect.References) error {
 	o := e.objects
 	if o == nil {
 		return nil
@@ -131,7 +131,7 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	if o.collectorStopped || o.collector != nil {
 		return nil
 	}
-	c, err := collect.New(collect.Options{Store: o.store, References: refs, ChunkEra: era})
+	c, err := collect.New(collect.Options{Store: o.store, References: refs})
 	if err != nil {
 		return fmt.Errorf("engine: the object collector: %w", err)
 	}

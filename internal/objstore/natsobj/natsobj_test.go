@@ -303,8 +303,8 @@ func TestPiecesNoMetadataNamesArePending(t *testing.T) {
 	}
 	// AND A MARKER WHOSE PIECES SURVIVED: the metadata says deleted, and the
 	// pieces are still there.
-	marker := string(objstore.HashOf([]byte("a chunk")))
-	if err := b.Put(t.Context(), marker, bytes.NewReader([]byte("chunk")), objstore.PutMeta{}); err != nil {
+	marker := objstore.KeyAt(time.Now()).Name()
+	if err := b.Put(t.Context(), marker, bytes.NewReader([]byte("marked")), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	survived := nuidOf(marker)
@@ -380,17 +380,18 @@ func TestAbandonRefusesAnIDThatIsNotOneToken(t *testing.T) {
 	}
 }
 
-// A DELETE MARKER AN EARLIER BUILD LEFT IS LISTED, AND CLEARED BY AN ORDINARY
-// DELETE. The library's own delete — what every earlier build made — keeps
-// the marker for ever; the collector can only remove what a listing shows
-// it, so the listing shows the name, as an object of no bytes, and the delete
-// it makes purges the marker like any other metadata.
-func TestAMarkerAnEarlierBuildLeftIsListedAndCleared(t *testing.T) {
+// A DELETE MARKER THE LIBRARY'S OWN DELETE LEFT IS LISTED, AND CLEARED BY AN
+// ORDINARY DELETE. `nats object rm`, or any other client of the bucket's
+// documented format, deletes through the library, which keeps the marker for
+// ever; the collector can only remove what a listing shows it, so the listing
+// shows the name, as an object of no bytes, and the delete it makes purges the
+// marker like any other metadata.
+func TestAMarkerTheLibrarysDeleteLeftIsListedAndCleared(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
 	b := open(t, client)
-	name := string(objstore.HashOf([]byte("a chunk an earlier build stored")))
-	if err := b.Put(t.Context(), name, bytes.NewReader([]byte("chunk")), objstore.PutMeta{}); err != nil {
+	name := objstore.KeyAt(time.Now()).Name()
+	if err := b.Put(t.Context(), name, bytes.NewReader([]byte("marked")), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	library, err := client.ObjectStore(t.Context(), natsobj.Bucket)

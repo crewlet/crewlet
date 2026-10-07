@@ -417,12 +417,7 @@ shared records — the object store's backend record and its collector's report
 among them — and, on the default `nats` object store, the `crewlet_files`
 object store bucket (its stream is `OBJ_crewlet_files`). A credential
 scoped to publishing and consuming fails at boot, on the first stream it
-tries to create. The maintenance duty also **deletes** two buckets an earlier
-build kept once no node of that build is left (`crewlet_budgets`, see
-[Coordination](../concepts/coordination.md#token-budgets-are-windows), and
-`crewlet_chunk_locks`, see
-[Coordination](../concepts/coordination.md#a-bucket-an-earlier-build-kept)),
-which takes the stream-delete API on those two.
+tries to create.
 
 **A coordination read costs one ordered pass certified against the stream's
 key index, and an account needs the consumer, stream-info, message-get and

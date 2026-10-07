@@ -84,7 +84,6 @@ type ObjectCollect struct {
 	Aged       int       `json:"aged"`
 	Deleted    int       `json:"deleted"`
 	Referenced int       `json:"referenced"`
-	Retired    int       `json:"retired"`
 	Abandoned  int       `json:"abandoned"`
 	Skipped    string    `json:"skipped,omitempty"`
 	SweepError string    `json:"sweep_error,omitempty"`
@@ -126,8 +125,8 @@ func RenderObjects(r engine.CollectionReport) FleetObjects {
 	if c := r.Status.Collect; !c.At.IsZero() {
 		out.Collect = &ObjectCollect{
 			At: c.At, Completed: c.Completed, Listed: c.Listed, Aged: c.Aged,
-			Deleted: c.Deleted, Referenced: c.Referenced, Retired: c.Retired,
-			Abandoned: c.Abandoned, Skipped: c.Skipped, SweepError: c.SweepError,
+			Deleted: c.Deleted, Referenced: c.Referenced, Abandoned: c.Abandoned,
+			Skipped: c.Skipped, SweepError: c.SweepError,
 			Error: c.Error,
 		}
 	}

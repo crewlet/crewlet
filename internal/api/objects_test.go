@@ -45,7 +45,7 @@ func renderObjectsScenarios(t *testing.T) []byte {
 		Node: "data-a", Backend: "s3:https://s3.example.com/files/acme/",
 		Status: collect.Status{
 			Collect: collect.CollectionReport{Completed: true, Listed: 1840, Aged: 1702,
-				Deleted: 12, Referenced: 1690, Retired: 3, Abandoned: 1, At: objectsAt},
+				Deleted: 12, Referenced: 1690, Abandoned: 1, At: objectsAt},
 			Audit: collect.AuditReport{Completed: true, Referenced: 1828, At: audited,
 				Found: &collect.AuditFindings{At: audited, Completed: true, Referenced: 1828}},
 		},

@@ -304,7 +304,8 @@ func TestATurnRefusedMidFlightParksTheSeat(t *testing.T) {
 	r.turnFn = func() (turn.Result, error) {
 		// The round that did not fit: the counter stamps the window.
 		r.spend(t, 100)
-		return turn.Result{}, &toolloop.BudgetError{Scope: "agent", Used: 100, Limit: 100}
+		return turn.Result{}, &toolloop.BudgetError{Scope: "agent", Used: 100, Limit: 100,
+			Period: period.Day, Window: "2026-09-23", ResetsAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}
 	}
 	r.mu.Unlock()
 	r.deliver(t)

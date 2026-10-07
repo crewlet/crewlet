@@ -120,29 +120,6 @@ func TestAReportsWindowsReplaceTheHeldOnes(t *testing.T) {
 	}
 }
 
-// THE RETIRED FRAME CHANGES NOTHING. An older build's `budget_reported` read the
-// lifetime counters, which are not the ones this build's gate charges, so a
-// rolling upgrade must not draw it over the windows.
-func TestTheRetiredBudgetFrameChangesNothing(t *testing.T) {
-	t.Parallel()
-	s := livestate.New()
-	s.Apply(env("budget_meters", meterReport("m-1", 1, seatMeter("Lead", 100, 400)), streamOnly))
-	change := s.Apply(env("budget_reported", map[string]any{
-		"meter_id": "old-1", "seq": 9, "org_used_tokens": 7, "org_max_tokens": 9,
-		"agents": []any{map[string]any{"role": "Lead", "agent_id": "a-1", "used_tokens": 5, "max_tokens": 9}},
-	}, streamOnly))
-
-	if change.Moved() {
-		t.Errorf("a budget_reported frame moved the projection: %+v", change)
-	}
-	if got := s.Budget(); got.MeterID != "m-1" || got.Org.Windows[0].Used != 500 {
-		t.Errorf("org meter = %+v, want the windowed report still held", got)
-	}
-	if got := usedOf(t, overlayOf(t, s, "Lead").Budget); got != 100 {
-		t.Errorf("Lead used = %d, want the windowed 100", got)
-	}
-}
-
 func TestTheMeterNeverEntersTheActivityFeed(t *testing.T) {
 	t.Parallel()
 	// Stream-only: a report is a snapshot of a counter that moves every

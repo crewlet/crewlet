@@ -36,12 +36,7 @@ of the epoch it is pinned to; a detached coding run in the windows it is
 collected in.
 
 The counters live in `<prefix>_token_windows`, a bucket aged at
-`coord.BudgetRetention` (32 days). The lifetime counters' bucket,
-`<prefix>_budgets`, is read by nothing and deleted by the maintenance duty once
-no live lease is held below `coord.WindowedCountersProtocol` — the seat-host
-protocol moved to 4 for this, because a v3 node and a v4 node running seats
-side by side would each charge a different counter and every cap would bind
-late by what the other build spent.
+`coord.BudgetRetention` (32 days).
 
 ## Why the obvious alternative is wrong
 

@@ -50,7 +50,7 @@ func reported(missing ...objstore.Key) *queries.FleetObjects {
 		Node: "data-a", Backend: "s3:https://s3.example.com/files/acme/",
 		Status: collect.Status{
 			Collect: collect.CollectionReport{Completed: true, Listed: 1840, Deleted: 12,
-				Retired: 3, Abandoned: 1, At: objectsAt},
+				Abandoned: 1, At: objectsAt},
 			Audit: collect.AuditReport{Completed: true, Referenced: 1828,
 				Missing: len(missing), At: objectsAt, Found: found},
 		},
@@ -67,8 +67,7 @@ func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"an S3 bucket (https://s3.example.com/files/acme/)", "data-a",
-		"1840 objects listed, 12 deleted, 3 chunk(s) of an earlier build retired, " +
-			"1 unfinished upload(s) abandoned", "1828 files named, 0 missing, 0 damaged"} {
+		"1840 objects listed, 12 deleted, 1 unfinished upload(s) abandoned", "1828 files named, 0 missing, 0 damaged"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status does not say %q:\n%s", want, out)
 		}

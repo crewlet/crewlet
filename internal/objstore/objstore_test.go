@@ -88,9 +88,7 @@ func TestAFillEndsOnlyAtIoEOFItself(t *testing.T) {
 }
 
 // ONLY SIXTY-FOUR LOWERCASE HEX DIGITS ARE A DIGEST: an uppercase spelling
-// would compare unequal to the one a read computes, and it is also the
-// spelling that tells a chunk an earlier build stored apart from everything
-// else in the store.
+// would compare unequal to the one a read computes.
 func TestOnlyLowercaseHexIsAHash(t *testing.T) {
 	t.Parallel()
 	good := string(HashOf([]byte("a")))
@@ -110,8 +108,8 @@ func TestOnlyLowercaseHexIsAHash(t *testing.T) {
 // the table, which is what a pass must be current on before it may call an
 // object unnamed, and the columns saying whose a reference is.
 //
-// AND NEITHER STATEMENT CAN ANSWER A NULL KEY: a removed file, or one an
-// earlier build kept in chunks, names no object, and a walk handing its NULL
+// AND NEITHER STATEMENT CAN ANSWER A NULL KEY: a removed file names no
+// object, and a walk handing its NULL
 // to the key parser would stop every audit and every backup for good.
 func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 	t.Parallel()
@@ -162,8 +160,7 @@ func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 // ONLY THE CANONICAL SPELLING OF A VERSION 7 UUID IS A KEY. Every other
 // spelling the UUID library would take is a second name for one object — a
 // second object in the store, or one the collector judges as somebody
-// else's — and a digest, the name a chunk was stored under, is not a key at
-// all.
+// else's — and a digest is not a key at all.
 func TestOnlyTheCanonicalSpellingIsAKey(t *testing.T) {
 	t.Parallel()
 	k := KeyAt(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
@@ -179,7 +176,7 @@ func TestOnlyTheCanonicalSpellingIsAKey(t *testing.T) {
 		"braced":        "{" + good + "}",
 		"bare hex":      strings.ReplaceAll(good, "-", ""),
 		"a version 4":   v4,
-		"a digest":      string(HashOf([]byte("a chunk"))),
+		"a digest":      string(HashOf([]byte("a digest"))),
 		"with a prefix": "files/" + good,
 		"the nil uuid":  uuid.Nil.String(),
 	} {

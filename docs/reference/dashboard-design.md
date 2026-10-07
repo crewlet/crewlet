@@ -5862,8 +5862,8 @@ Below the lease tables, **File storage** is the object store: which store the
 company's files are in — the fleet's own NATS bucket, or the S3 bucket it names
 — in the header, then one row for each of the collector's passes (the hourly
 collection and the daily audit) with when it ran and what it found: the
-objects a collection deleted because no file names them, the chunks of an
-earlier build it retired and the unfinished uploads it abandoned; the files an
+objects a collection deleted because no file names them and the unfinished
+uploads it abandoned; the files an
 audit asked about and how many were missing or damaged. It reads
 the fleet's record rather than this node, so it says the same thing whichever
 node served the screen. **Files that cannot be read** are the one reading an

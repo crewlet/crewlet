@@ -97,9 +97,7 @@ const fileVersion = 12
 
 // FileObjectVersion is the version a file record naming its OBJECT is written
 // at — every put this build writes; a removal names none and stays at
-// [fileVersion]. A node reading below it is one that still keeps files in
-// content-addressed chunks, which is what the object store's chunk era is
-// counted by (internal/engine's chunk era).
+// [fileVersion].
 //
 // A FIELD AN OLDER BUILD WOULD DROP, and the row that drops it is a row
 // naming no object: a build reading 13 decodes a new put around `object`,

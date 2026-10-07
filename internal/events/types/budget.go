@@ -46,11 +46,8 @@ type BudgetExhausted struct {
 	// over, as RFC 3339 in UTC. UsedTokens and MaxTokens are that window's
 	// spend and ceiling. Where several windows refused it is the one that
 	// ends last, which is when the scope next has room without a ceiling
-	// being raised.
-	//
-	// ADDITIVE, and omitted rather than empty: a record from a build that
-	// counted one lifetime figure has no window, and a consumer must read
-	// that absence as "not stated" rather than as a window with no name.
+	// being raised. Every refusal states its window: the gate refuses only
+	// inside a calendar window (ADR-0019).
 	Period   string `json:"period,omitempty"`
 	Window   string `json:"window,omitempty"`
 	ResetsAt string `json:"resets_at,omitempty"`
@@ -176,11 +173,10 @@ type BudgetSeatMeter struct {
 // written for, so they cannot substitute. The `budgets` query answers the
 // same counters on demand, for a screen that is read rather than watched.
 //
-// EVERY CAPPED WINDOW, not one figure per scope. Its predecessor
-// (`budget_reported`, deleted with this type's arrival — no release carried
-// it) sent each scope's single binding window, so a seat capped by the day
-// and by the month showed one bar that jumped between them, and the live
-// projection dropped the refusal stamp on the floor on its way to the push.
+// EVERY CAPPED WINDOW, not one figure per scope. One figure — each scope's
+// single binding window — would draw a seat capped by the day and by the
+// month as one bar that jumped between them, and would leave no place for
+// each window's refusal stamp on its way to the push.
 //
 // Deliberately NOT persisted. It is a snapshot of a counter that moves every
 // round, published every few seconds by every node, so a durable row per

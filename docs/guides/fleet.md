@@ -545,18 +545,6 @@ The consequences worth stating plainly:
   say so once with `coord_kv_duties_wait_for_older_build` (and
   `coord_kv_duties_resumed` when it ends). See
   [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
-- **Upgrading to the windowed token budgets (protocol 4) splits the
-  counters until the last old node leaves.** The old nodes run every seat
-  and charge the old lifetime counter; the new ones charge the windowed
-  counters once they hold seats, which is exactly when the old ones have
-  gone. Until then only the old nodes publish a live budget meter — the old
-  `budget_reported` frame, which a dashboard served by a new node does not
-  read, so it draws no meter for the rollout rather than a wrong one — and a
-  new node's `GET /budgets` reads windowed counters that start empty. The
-  old counters are not carried over: each window starts from zero at the
-  upgrade, and the retention sweep deletes the old bucket once no old node
-  is live. See
-  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
 - **A node that leaves takes its turn-level history with it.** Every node's
   event store holds the events it published, and the dashboard's turns,
   traces and event log are read from every live node at query time. A node
@@ -569,25 +557,6 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
-- **Mid-rollout across the upgrade that stores each file as one object,
-  files are served by nodes of their own build.** A file's read and write
-  are operations the router sends to a data node, and the two builds name
-  them differently, so each node's file reads and writes go to a data node of
-  its own build — and are refused `unavailable` (`503` on the API) while
-  there is none, which a retry clears once there is. A file a new node
-  writes is held back, not applied, on an old data node until it is
-  upgraded, and that node declines to take a snapshot meanwhile. A file an
-  old node wrote during the rollout, or any file written before it, kept its
-  content in chunks this build no longer reads: it stays listed, its
-  download answers `410 content_retired`, and the remedy is to upload it
-  again (or remove it). The chunks themselves are left in the store until
-  every node the tracker log counts runs the new build — the *chunk era* is
-  then over — and the object store's collector deletes them a day after they
-  were written (counted as `retired` in `crewlet objects status`), while the
-  maintenance duty deletes the bucket of chunk locks the old build kept
-  (`retired_chunk_locks`). Evicting a node that will not come back ends the
-  era without it. A downgrade across this upgrade is not supported: the older
-  build cannot read the replicated schema it migrated.
 
 ## Watching a fleet
 

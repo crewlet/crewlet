@@ -303,21 +303,6 @@ Putting two of those in one bucket gives one of them the other's retention, and 
 
 This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` and `mailboxes` are the maintenance duty's own decision, the one closing an idle ask and the other retiring a removed seat's inbox; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` wait for an operator's unset; the `objects` backend record is removed only by an operator moving the company to another store, and the collector's report beside it is replaced by each pass; a node's own `positions` row is never removed at all — an audited eviction stops the trim counting it, and the row is kept because a readmission is judged by it; and `sandbox runs` end at their own pause reaper or a terminal delete.
 
-### A bucket an earlier build kept
-
-A build before one object per upload kept a company's files as
-content-addressed chunks, and a bucket of locks beside them
-(`<prefix>_chunk_locks`, aged one minute) that its writers and its collector
-took around a chunk. No build since opens it. It is deleted by the
-[maintenance duty](seat-ownership.md#singleton-duties) as the job
-`retired_chunk_locks` — not at boot, because a node of the earlier build still
-takes those locks on its uploads — once **the chunk era is over**: every node
-the tracker's log counts reads files as one object each, and at least one is
-counted. A node of the earlier build that comes back recreates the bucket at
-its boot, and the next tick after it leaves deletes it again; otherwise every
-tick finds nothing to retire. See
-[Object Store § What an earlier build left](object-store.md#what-an-earlier-build-left).
-
 ### Removal markers are swept
 
 Removing a record does not remove it from the bucket's stream: a delete or a purge appends a **marker** that says the key was removed, and on these buckets — one revision per key — the marker replaces the value. An aged bucket takes its markers with everything else. An ageless one keeps each for the life of the deployment, and every [listing](#the-three-valued-answer) whose pass meets one reads it again from the stream leader, so without a sweep a listing's cost would grow with every record the company had ever removed.
@@ -363,12 +348,6 @@ A token budget is a set of ceilings per **calendar window** — the day, the ISO
 - **A slot never rolls back.** A node whose clock trails a peer's across a boundary finds the slot already on the next window and counts there, rather than handing the new window its allowance back. A **read** behind such a slot answers the same way: it states the later window, its spend and its refusal, never the earlier window unspent — every read of the counter (a turn's headroom, the learning gate, `GET /budgets`, the live meter) sees exactly what the next charge would be judged against. That lasts a few seconds behind a peer's clock, and up to a day after the company's `timezone` moves west.
 - **The calendar is the caller's.** Every charge and every read carries the windows it is about; the store holds labels and never reads a clock. A turn charges each round in the windows current when the round is charged, on the clock of the epoch the turn is pinned to; a detached coding run is counted in the windows it is collected in.
 - **A contended counter waits before it retries.** The company's record is written by every round of every seat, so a charge that loses the compare-and-swap waits a jittered 1 ms, doubling to 32 ms, before trying again — about a third of a second across its sixteen attempts before the round fails closed. Retried at once, 32 concurrent charges on one record ran out of attempts in four runs of ten.
-
-### The rolling upgrade across the token windows
-
-A build before the windowed counters charges one lifetime figure per scope, in a bucket with no age (`<prefix>_budgets`). A node of that build and a newer node running seats side by side would each charge a different counter, and every cap would bind late by what the other build had spent. So the seat-host protocol moved to **4** for this, and the [protocol gate](../guides/fleet.md#draining-and-rolling-upgrades) does the rest: a newer node claims no seat while any older node holds a live lease, presence included.
-
-While both builds are live, only the older nodes charge anything, so only their meter is true: a newer node publishes no live budget meter for a capped company until the last older lease has gone, a dashboard it serves ignores the older build's `budget_reported` frame and so holds the meter as *not reported yet* for the rollout rather than one read off the retiring counters (a company that caps nothing is published at once — its frame reads no counter), and its `GET /budgets` answers from the windowed counters, which start empty. The lifetime counters are **not migrated** — a lifetime total has no window to be counted in — and once no live lease is held below protocol 4, the [maintenance duty](seat-ownership.md#singleton-duties) deletes their bucket (`retired_budget_bucket`). Every later tick finds nothing to retire. A downgrade across this change needs the whole fleet stopped first, like any other protocol bump.
 
 ## What a node says about itself
 

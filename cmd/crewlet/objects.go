@@ -54,7 +54,6 @@ type objectsCollectView struct {
 	Completed  bool      `json:"completed"`
 	Listed     int       `json:"listed"`
 	Deleted    int       `json:"deleted"`
-	Retired    int       `json:"retired"`
 	Abandoned  int       `json:"abandoned"`
 	Skipped    string    `json:"skipped"`
 	SweepError string    `json:"sweep_error"`
@@ -131,8 +130,8 @@ func renderObjects(w io.Writer, v objectsView) error {
 	fmt.Fprintf(&b, "Collector:         %s\n", v.Node)
 	if c := v.Collect; c != nil {
 		fmt.Fprintf(&b, "Last collection:   %s — %d objects listed, %d deleted, "+
-			"%d chunk(s) of an earlier build retired, %d unfinished upload(s) abandoned%s\n",
-			c.At.Format(time.RFC3339), c.Listed, c.Deleted, c.Retired, c.Abandoned,
+			"%d unfinished upload(s) abandoned%s\n",
+			c.At.Format(time.RFC3339), c.Listed, c.Deleted, c.Abandoned,
 			passNote(c.Completed, c.Skipped, c.Error))
 		if c.SweepError != "" {
 			fmt.Fprintf(&b, "                   unfinished uploads could not be swept: %s\n", c.SweepError)

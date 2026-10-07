@@ -290,10 +290,9 @@ var budgetCases = []fleetCase{{
 }, {
 	name: "a ceiling below one token is an error, never a refusal or an admission",
 	fn: func(h *fleetHarness) {
-		// 0 meant "unlimited" to the lifetime counter and means "nothing may
-		// be spent" to anyone reading the word ceiling. A backend that read
-		// it either way would decide, on its own, which company the caller
-		// meant.
+		// 0 reads as "unlimited" to some people and as "nothing may be
+		// spent" to others. A backend that read it either way would decide,
+		// on its own, which company the caller meant.
 		for _, caps := range []coord.Caps{{period.Day: 0}, {period.Week: -5}, {"fortnight": 10}} {
 			got, err := h.f.Charge(h.ctx, coord.ChargeRequest{
 				Seat: testSeat, Tokens: 10, Windows: h.windows(), SeatCaps: caps,
@@ -954,21 +953,6 @@ var budgetCases = []fleetCase{{
 		if row, _ := h.usage(coord.OrgScope); !row.In(period.Day).RefusedAt.Equal(stamped) ||
 			row.In(period.Day).Used != 120 {
 			h.t.Fatalf("org = %+v, want 120 used and the refusal stamped at %v kept", row, stamped)
-		}
-	},
-}, {
-	name: "retiring lifetime counters that are not there is not an error",
-	fn: func(h *fleetHarness) {
-		// The maintenance duty asks on every tick once the fleet is past
-		// the protocol that windowed the counters; after the first tick
-		// there is nothing left, and every later one must be a no-op
-		// rather than a failure logged every fifteen minutes for ever.
-		for range 2 {
-			retired, err := h.f.RetireLifetimeCounters(h.ctx)
-			if err != nil || retired {
-				h.t.Fatalf("RetireLifetimeCounters = (%v, %v) on a store with none, "+
-					"want (false, nil)", retired, err)
-			}
 		}
 	},
 }}

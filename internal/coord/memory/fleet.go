@@ -504,12 +504,6 @@ func (f *Fleet) Usage(_ context.Context, windows coord.Windows) ([]coord.Usage, 
 	return out, nil
 }
 
-// RetireLifetimeCounters has nothing to retire: the twin lives and dies with
-// its process, so no earlier build's counters can exist in it.
-func (f *Fleet) RetireLifetimeCounters(context.Context) (bool, error) {
-	return false, nil
-}
-
 // ---- the agent-to-agent channels --------------------------------------- //
 
 // OpenChannel records a new channel, ignoring an id that already exists.

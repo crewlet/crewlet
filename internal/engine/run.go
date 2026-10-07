@@ -1431,12 +1431,12 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
 	// which nothing published — so every header carried zeroes. AFTER the
-	// host is running, because its first frame is published at once and
-	// asks the fleet's protocol floor, which reads the presence lease
-	// node.Start has just claimed: armed before it, that first frame was
-	// declined and every dashboard waited out a whole interval knowing
-	// nothing about the company's budget. Detached, like everything else
-	// here — see [Engine.startBudgetReports].
+	// host is running, because its first frame is published at once onto
+	// the queue node.Start starts, and a backend that requires Start
+	// refuses a publish before it: that first frame would be lost and every
+	// dashboard would wait out a whole interval knowing nothing about the
+	// company's budget. Detached, like everything else here — see
+	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
 	// AFTER the host is running, and detached from the caller's context
 	// like the host itself. Before it, every watched duty reads as not

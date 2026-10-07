@@ -1480,9 +1480,6 @@ export interface ObjectCollect {
   aged: number;
   deleted: number;
   referenced: number;
-  /** Objects an earlier build stored as content-addressed chunks, deleted once
-   *  no node of that build is left. */
-  retired: number;
   /** Uploads begun more than a day ago and never finished, abandoned. */
   abandoned: number;
   /** Why the pass stopped judging; absent when it ran in full. Its counts stand either way. */
