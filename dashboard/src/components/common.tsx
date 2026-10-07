@@ -121,8 +121,8 @@ export function SeatCard({
   // this card and the sentence in that row are the same reading of one field.
   const round = call ? roundLabel(call) : null;
   return (
-    // `seatPath`, not a handle spelled out again: a seat the engine reported no
-    // handle for is addressed by NAME, and `#/agents/seats/` opens nothing.
+    // `seatPath`, not a path spelled out again: a seat's address is one rule,
+    // kept in one place.
     <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
         {/* THE RING IS THE STATE, as on the chart's cards: one hue per seat,
@@ -136,9 +136,7 @@ export function SeatCard({
         />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
           <strong className="truncate t-body">{seat.name}</strong>
-          {seat.handle && (
-            <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
-          )}
+          <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
         </div>
         {seat.kind === "human" ? (
           // THE CIRCLE SAYS IT. A tag reading "human" beside a person's

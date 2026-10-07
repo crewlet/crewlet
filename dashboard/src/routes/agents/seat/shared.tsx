@@ -19,8 +19,9 @@ import type { CompanyDocument } from "~/protocol/index.ts";
  * banner with its Set token button. The three states after it are this
  * screen's own: no configuration is active, the document has no seat by this
  * name (the projection and the document can disagree for a moment either side
- * of an apply), and a name held by two seats in a revision stored before names
- * had to be unique.
+ * of an apply), and a name held by two seats — unique names are an admission
+ * rule an apply does not refuse, so a revision a newer node activated can hold
+ * two.
  *
  * NONE OF THEM IS AN EMPTY VALUE. "Not set" over a field nobody was allowed to
  * read is a statement about the company, and it is the wrong one.

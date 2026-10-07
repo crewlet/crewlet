@@ -761,7 +761,7 @@ function Setup({
       <Card.Header
         divided={false}
         actions={
-          <a className="t-link" href={href(["agents", "edit"], { seat: seat.handle || seat.name })}>
+          <a className="t-link" href={href(["agents", "edit"], { seat: seat.handle })}>
             Edit
           </a>
         }

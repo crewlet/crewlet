@@ -265,7 +265,7 @@ function newSeat(raw: OrgSeat, handle: string, key: string): Seat {
   };
 }
 
-/** Link the units into a tree. Shared by both halves below. */
+/** Link the units into a tree, in the depth-first order [walk] visited them. */
 function link(authored: Authored): Unit[] {
   const units = authored.units.map(({ raw }, i) => newUnit(raw, i));
   units.forEach((unit, i) => {
@@ -322,7 +322,8 @@ function overlay(authored: Authored, derived: Derived): OrgIndex {
   const claim = (name: string, handle: string): OrgSeat => {
     const entries = unclaimed.get(name) ?? [];
     // The entry declaring this handle, else the first declaring none — an
-    // entry declaring ANOTHER handle belongs to the seat carrying that one.
+    // entry declaring ANOTHER handle belongs to the seat carrying that one,
+    // and is taken only when nothing else of the name is left.
     const declared = entries.findIndex((raw) => raw.handle === handle);
     const at =
       declared >= 0
@@ -1365,10 +1366,10 @@ export function doingWords(row: AgentRow): string {
 }
 
 /**
- * A handle as a reader sees it: `@pm`, and NOTHING for a seat the engine
- * reported no handle for. A bare `@` printed beside a name read as a handle
- * that is empty, which is a claim about the seat rather than about what this
- * client was told.
+ * A handle as a reader sees it: `@pm`, and NOTHING where there is none — a
+ * builder seat the engine has not derived one for yet, or a row that names no
+ * seat. A bare `@` printed beside a name read as a handle that is empty, which
+ * is a claim about the seat rather than about what this client was told.
  */
 export function handleLabel(handle: string | null | undefined): string {
   const h = (handle ?? "").trim();

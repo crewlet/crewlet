@@ -80,11 +80,12 @@ gate.
 | `danger` | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
 | **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
 
-A handle is written `@pm`, and a seat the engine reported no handle for gets
-nothing rather than a bare `@` — which is why no markup prints `@{handle}`
-itself: every handle goes through `handleLabel` in `lib/seats.ts`, and
-`app/source.test.ts` refuses JSX text ending in `@` before an expression and a
-template inside markup that does the same. A live round that has not moved in two minutes
+A handle is written `@pm`, and a seat with none — a builder seat the engine
+has not derived one for yet — gets nothing rather than a bare `@`, which is
+why no markup prints `@{handle}` itself: every handle goes through
+`handleLabel` in `lib/seats.ts`, and `app/source.test.ts` refuses JSX text
+ending in `@` before an expression and a template inside markup that does the
+same. A live round that has not moved in two minutes
 is called stale, in ten stalled — except while the turn is **parked** on a
 detached coding run, which is silent by design for as long as the run takes:
 the executor's phase card then reads "parked on its coding run", because the

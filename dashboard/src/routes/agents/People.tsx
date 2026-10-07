@@ -339,7 +339,7 @@ export function People() {
         view === "seats"
           ? groups.flatMap((g) =>
               g.rows.flatMap(({ seat }) =>
-                seat ? [{ kind: "seat" as const, id: seat.handle || seat.name }] : [],
+                seat ? [{ kind: "seat" as const, id: seat.handle }] : [],
               ),
             )
           : [],
@@ -362,10 +362,9 @@ export function People() {
       <div
         key={key}
         style={{ display: "contents" }}
-        // BY HANDLE, OR BY NAME WHERE THE ENGINE REPORTED NONE. The seat screen
-        // resolves both, which is what keeps a seat this engine derived no
-        // handle for reachable at all; `seatPath` is the same rule for a link.
-        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle || seat.name }))}
+        // BY THE HANDLE THE ENGINE DERIVED, which `seatPath` addresses a link
+        // by too.
+        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
       >
         <SeatCard seat={seat} agent={agent} nameOf={nameOf} />
       </div>

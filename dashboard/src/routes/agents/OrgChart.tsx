@@ -147,7 +147,7 @@ export function OrgChart() {
     return out;
   }, [chart]);
   usePeekNeighbours(
-    useMemo(() => order.map((s) => ({ kind: "seat" as const, id: s.handle || s.name })), [order]),
+    useMemo(() => order.map((s) => ({ kind: "seat" as const, id: s.handle })), [order]),
   );
   const step = usePeekStep();
 
@@ -168,7 +168,7 @@ export function OrgChart() {
   }, [peekId]);
   const peekSeat = useCallback(
     (seat: Seat) => {
-      const id = seat.handle || seat.name;
+      const id = seat.handle;
       if (asked.current === id) return;
       asked.current = id;
       const ref = { kind: "seat" as const, id };
@@ -414,7 +414,7 @@ function SeatRowCell({
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
   const ring = human ? undefined : ringOf(state);
-  const ref = { kind: "seat" as const, id: seat.handle || seat.name };
+  const ref = { kind: "seat" as const, id: seat.handle };
   return (
     <span className="oc-row" data-state={state}>
       <SeatAvatar
@@ -440,7 +440,7 @@ function SeatRowCell({
         </span>
         <span className="oc-place">
           {placeLine(seat)}
-          {seat.handle && <span className="sr-only"> {handleLabel(seat.handle)}</span>}
+          <span className="sr-only"> {handleLabel(seat.handle)}</span>
         </span>
         <span className="oc-state">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
@@ -705,7 +705,7 @@ function SeatCardNode({
           </Tag>
         </span>
         <span className="oc-place-text">{placeLine(seat)}</span>
-        {seat.handle && <span className="sr-only"> {handleLabel(seat.handle)}</span>}
+        <span className="sr-only"> {handleLabel(seat.handle)}</span>
       </span>
       <span className="oc-state">
         <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />

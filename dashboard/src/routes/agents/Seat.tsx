@@ -160,7 +160,7 @@ export function SeatScreen({ handle }: { handle: string }) {
     { enabled: !!seat?.handle, pollMs: 30_000 },
   );
   // THE GUARDED HALF, read once for every tab that draws it.
-  const setup = useSeatSetup(seat ? seat.handle || seat.name : "");
+  const setup = useSeatSetup(seat?.handle ?? "");
   const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
   const nameOf = useMemo(() => nameOfIn(index), [index]);
 
@@ -235,7 +235,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             key: "edit",
             label: "Edit in org",
             icon: <PencilGlyph size="sm" />,
-            onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle || seat.name }),
+            onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
           },
         ]
       : [],
@@ -323,7 +323,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 label: "Edit in org",
                 description: "Change this seat in the org editor",
                 icon: <PencilGlyph size="sm" />,
-                onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle || seat.name }),
+                onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
               },
             ]}
           />
