@@ -172,14 +172,8 @@ func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer)
 // from the store would imply it may be kept there — which is how the most
 // powerful credential in the deployment ends up in the shared table beside
 // the seat tokens it exists to mint.
-func operatorCredential(names ...string) string {
-	env := config.EnvOnly()
-	for _, name := range names {
-		if v := strings.TrimSpace(env.Lookup(name)); v != "" {
-			return v
-		}
-	}
-	return ""
+func operatorCredential(name string) string {
+	return strings.TrimSpace(config.EnvOnly().Lookup(name))
 }
 
 // runGitLabProvision is `crewlet gitlab provision`.
@@ -191,7 +185,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	adminToken := fs.String("admin-token", "",
 		"a GitLab token permitted to create service accounts; empty reads "+
-			"GITLAB_ADMIN_TOKEN, then GITLAB_PROVISION_TOKEN")
+			"GITLAB_ADMIN_TOKEN")
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
 			"defaults to integrations.public_base_url")
@@ -313,15 +307,13 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("GITLAB_ADMIN_TOKEN", "GITLAB_PROVISION_TOKEN")
+		token = operatorCredential("GITLAB_ADMIN_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
 			"no administrator token: pass -admin-token or export " +
-				"GITLAB_ADMIN_TOKEN (GITLAB_PROVISION_TOKEN is also read, for " +
-				"configs written against the previous engine). The seats' own " +
-				"tokens are what this run MINTS, so it cannot bootstrap itself " +
-				"from them")
+				"GITLAB_ADMIN_TOKEN. The seats' own tokens are what this run " +
+				"MINTS, so it cannot bootstrap itself from them")
 	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
 		URL: env.Value(cfg.URL), Token: token,
