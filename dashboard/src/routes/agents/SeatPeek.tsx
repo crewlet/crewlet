@@ -326,7 +326,7 @@ function SeatPeekBody({
                 <span className="seat-peek-node">
                   <StatusDot tone="success" />
                   {lease.node}
-                  {lease.acquired_at && ` · since ${sinceWords(lease.acquired_at, now)}`}
+                  {` · since ${sinceWords(lease.acquired_at, now)}`}
                 </span>
               ) : fleet.data ? (
                 "No node holds it"

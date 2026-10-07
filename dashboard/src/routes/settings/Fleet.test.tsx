@@ -166,11 +166,9 @@ describe("the fleet, refused before any reading", () => {
   });
 });
 
-// SINCE IS THE TENURE'S START, and unknown is said as unknown. The lease's
-// `acquired_at` is stamped when the epoch is minted and carried through every
-// renewal, so it is the answer to "when did this seat last move". A lease an
-// older build wrote carries none — and the grid's own date cell says "Never"
-// for an absent date, which would claim a seat was never acquired.
+// SINCE IS THE TENURE'S START. The lease's `acquired_at` is stamped when the
+// epoch is minted and carried through every renewal, so it is the answer to
+// "when did this seat last move" — and never the lease's end.
 describe("the seat's held-since column", () => {
   afterEach(cleanup);
   const now = Date.parse("2031-05-01T10:02:00Z");
@@ -191,12 +189,6 @@ describe("the seat's held-since column", () => {
     expect(cell.getAttribute("title")).not.toBe(
       fmtDateTime(new Date(now + 3600_000).toISOString()),
     );
-  });
-
-  test("an unstamped lease is not recorded, never 'Never'", () => {
-    const view = render(<HeldSince lease={{ handle: "swe", node: "n1" }} now={now} />);
-    expect(view.container.textContent).not.toContain("Never");
-    expect(screen.getByText(/Not recorded/)).toBeDefined();
   });
 });
 

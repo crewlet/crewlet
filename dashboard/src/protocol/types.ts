@@ -1840,11 +1840,9 @@ export interface FleetSeatLease {
   expires_in?: number;
   /**
    * Since when `node` has held it: the tenure's start (RFC 3339, UTC, the
-   * coordination store's clock), which a renewal does not move. Absent for a
-   * lease written by a build older than the stamp — its start was never
-   * recorded, and absent is not "now".
+   * coordination store's clock), which a renewal does not move.
    */
-  acquired_at?: string;
+  acquired_at: string;
 }
 
 export interface FleetDutyLease {

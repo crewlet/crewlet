@@ -276,11 +276,9 @@ type Lease struct {
 	// reading a tenure, and a stamp that followed the heartbeat would say
 	// "since a few seconds ago" about a seat that has not moved all day.
 	//
-	// ZERO MEANS UNKNOWN, never "the epoch of time": a record written by a
-	// build that predates the field carries none, and its tenure began at a
-	// moment nobody wrote down. A reader renders zero as absent. A renewal
-	// does not invent one either, since the moment it would stamp is the
-	// renewal's and not the claim's.
+	// Every lease a backend returns carries one — the contract suite
+	// asserts it on every read path — and a renewal never restamps it,
+	// since the moment it would stamp is the renewal's and not the claim's.
 	//
 	// Nothing decides ownership by it. It is a fact for a person to read,
 	// and the fencing token is still Epoch alone.

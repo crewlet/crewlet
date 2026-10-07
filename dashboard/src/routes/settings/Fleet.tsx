@@ -479,7 +479,7 @@ function FleetScreen() {
                     shrink: true,
                     // OLDEST FIRST WHEN ASCENDING, and an unrecorded tenure
                     // sorts as unknown rather than as the epoch of time.
-                    sortValue: (s) => s.acquired_at ?? null,
+                    sortValue: (s) => s.acquired_at,
                     cell: (s) => <HeldSince lease={s} now={now} />,
                   },
                   {
@@ -631,18 +631,11 @@ export function HeldBy({ node }: { node: string }) {
 /**
  * Since when a seat's holder has held it — the tenure's start, which a renewal
  * does not move, so "since 08:02" means the seat has not changed node since
- * 08:02 (`coord.Lease.AcquiredAt`, on the coordination store's clock).
- *
- * NOT `DateCell`: its empty value reads "Never", and an absent stamp is not a
- * lease that never began — it is one written by a build older than the stamp,
- * whose start nobody recorded. Unknown is said as unknown.
+ * 08:02 (`coord.Lease.AcquiredAt`, on the coordination store's clock). Every
+ * lease carries one, and it is the START the cell reads, never the lease's
+ * end.
  */
 export function HeldSince({ lease, now }: { lease: FleetSeatLease; now: number }) {
-  if (!lease.acquired_at) {
-    return (
-      <EmptyValue label="Not recorded: this lease was written by a build older than the stamp" />
-    );
-  }
   return <DateCell at={lease.acquired_at} now={now} />;
 }
 
@@ -1046,7 +1039,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               header: "Since",
               align: "right",
               shrink: true,
-              sortValue: (s) => s.acquired_at ?? null,
+              sortValue: (s) => s.acquired_at,
               cell: (s) => <HeldSince lease={s} now={now} />,
             },
             {

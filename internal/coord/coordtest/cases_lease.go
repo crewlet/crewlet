@@ -451,11 +451,10 @@ var leaseCases = []testCase{
 	// --- acquired at ---------------------------------------------------
 
 	{"acquired_at_is_the_tenures_utc_start_on_the_stores_clock", func(h *harness) {
-		// What an operator reads as "node-2 · since 08:02". Zero would
-		// render as absent — the reading reserved for a record from a
-		// build that predates the field — so a backend that forgot it
-		// passes every ownership case and tells Settings › Nodes that no
-		// seat's tenure is known.
+		// What an operator reads as "node-2 · since 08:02". Every lease a
+		// backend returns carries one, so a backend that forgot it would
+		// pass every ownership case and hand Settings › Nodes a zero
+		// instant for every seat's tenure.
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		if lease.AcquiredAt.IsZero() {
 			h.t.Fatal("a fresh claim carries no AcquiredAt")

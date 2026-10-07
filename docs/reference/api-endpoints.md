@@ -3933,8 +3933,6 @@ as an RFC 3339 UTC time on the coordination store's clock. It is the
 tenure's start, stamped when the lease's `epoch` was minted and carried
 unchanged through every renewal, so it moves exactly when `epoch` does: on
 a takeover, and on the same node re-claiming after its own lease lapsed.
-A seat held by a node of a build older than the stamp has no recorded
-start and **omits** the field rather than rendering one.
 
 ```json
 {

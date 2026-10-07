@@ -5845,8 +5845,7 @@ build older than the field. Then
 **Seat placement** — each seat, the node holding it, its lease and **Since**:
 the tenure's start (`acquired_at`), stamped when the epoch is minted and
 carried through every renewal, so "since 2h ago" means the seat has not moved
-node in two hours. A lease an older build wrote carries no stamp and reads
-**Not recorded**, never "Never". A node's own page draws the same column for
+node in two hours. A node's own page draws the same column for
 the seats it holds. The seat (and, beside it, the duty) is each lease table's
 one flexible column and **Held by**, **Since** and **Lease** size to their
 content, so the name the row exists to show is the value that keeps its width;
