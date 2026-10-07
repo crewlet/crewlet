@@ -100,6 +100,30 @@ func TestTheWriterAndApplierShareOneTurnShape(t *testing.T) {
 	}
 }
 
+// A TURN NAMING NO RUN IS REFUSED AT THE WRITE.
+//
+// A task's turn list groups segments by their run, so a segment that names
+// none belongs to no turn: two of them would fold into one turn nobody ran.
+// Refused where the fact is known, every row the applier stores names one,
+// and the reader groups by it with nothing to fall back to.
+func TestATurnNamingNoRunIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	turn := sampleTurn("t-1")
+	turn.TurnID = ""
+	_, err := r.writer.RecordTurn(t.Context(), "turn/none/dispatch", turn)
+	if !errors.Is(err, tracker.ErrInvalid) || !strings.Contains(err.Error(), "names no run") {
+		t.Fatalf("a turn naming no run was answered %v, want it refused as invalid", err)
+	}
+	if got := r.taskSpend("t-1"); got["spend_turns"] != 0 {
+		t.Fatalf("a refused turn charged its task: %v", got)
+	}
+}
+
 // A REDELIVERED TURN COUNTS ONCE.
 //
 // The op id is the turn row's own id, so a segment recorded twice — a retried

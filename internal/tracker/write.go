@@ -1309,7 +1309,8 @@ type TurnRecord struct {
 	// Seat is the handle of the seat whose turn it was.
 	Seat string `json:"seat"`
 	// TurnID is the run the segment belongs to (ADR-0017), which a task's
-	// turn list groups segments by.
+	// turn list groups segments by. REQUIRED: [Writer.RecordTurn] refuses a
+	// segment that names none, since it would belong to no turn.
 	TurnID string `json:"turn_id"`
 	// Trigger is what woke the turn — the trigger type a reader filters by.
 	Trigger string `json:"trigger"`
@@ -1444,6 +1445,9 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 			"makes a segment recorded twice count once", turn.Task)
 	case turn.Task == "":
 		return WriteResult{}, invalid("a turn names no task")
+	case turn.TurnID == "":
+		return WriteResult{}, invalid("a turn on task %s names no run — the "+
+			"run is what its task's turn list groups segments by", turn.Task)
 	case len(turn.Summary) > MaxTurnSummary, len(turn.Review) > MaxTurnSummary:
 		// REFUSED, NOT CUT: the caller is the engine, which cuts its own
 		// prose to the bound before it writes, so an overlong one here is
