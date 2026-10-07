@@ -445,8 +445,8 @@ export function narrations(raw: unknown): Narration[] {
       round: typeof rec.round === "number" ? rec.round : i + 1,
       reasoning: typeof rec.reasoning === "string" ? rec.reasoning : "",
       content: typeof rec.content === "string" ? rec.content : "",
-      // `=== true`, never truthiness: an older engine omits the key, and a
-      // producer that wrote anything else has said nothing this build reads.
+      // `=== true`, never truthiness: the engine omits the key on every
+      // round that is not one, and anything else says nothing this build reads.
       declined: rec.declined === true,
     }))
     .filter((n) => n.reasoning.trim() !== "" || n.content.trim() !== "");

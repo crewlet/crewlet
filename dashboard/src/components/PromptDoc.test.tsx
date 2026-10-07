@@ -246,8 +246,8 @@ describe("a prompt whose builder sent a section map", () => {
   const TEXT = LEAD + TURN + TAIL;
   const MAP: PromptSection[] = [
     { key: "identity", title: "Identity", bytes: bytes(LEAD) },
-    { key: "turn", title: "Your turn", bytes: bytes(TURN) },
-    { key: "contract", title: "Contract", bytes: bytes(TAIL) },
+    { key: "turn", title: "Your turn", bytes: bytes(TURN), headed: true },
+    { key: "contract", title: "Contract", bytes: bytes(TAIL), headed: true },
   ];
 
   it("outlines by the map, with the quoted headings nested inside their span", () => {

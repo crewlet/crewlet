@@ -98,7 +98,7 @@ type PromptMessage struct {
 	Content string `json:"content"`
 	// Sections is Content's outline, as the builder that wrote it recorded
 	// it — see [PromptSection]. Absent on a message no builder outlined (a
-	// resumed phase's, an older peer's).
+	// resumed phase's).
 	Sections []PromptSection `json:"sections,omitempty"`
 }
 
@@ -108,15 +108,13 @@ type PromptMessage struct {
 // part with no heading), its length in `bytes` of UTF-8, and `headed: true`
 // when the part begins with its own heading line, whose text is `title`.
 //
-// `headed` is absent, never `false`, on a part with no heading of its own —
-// and on every part of an older peer's map, which predates it. A part that is
-// not headed may still BEGIN with a heading: a worker's persona, a task prompt
-// the executor wrote and a trigger's body are somebody else's markdown, and
-// often open with one ("## Goal"). That heading is the content's, nested under
-// the part's title, not the part's own — a reader that took it for the part's
-// own drew the builder's title in its place and lost the heading's words. A
-// reader handed no `headed` falls back to comparing the part's first heading
-// with its `title`, which the contract above makes exact for a headed part.
+// `headed` is absent, never `false`, on a part with no heading of its own,
+// and absent means exactly that. A part that is not headed may still BEGIN
+// with a heading: a worker's persona, a task prompt the executor wrote and a
+// trigger's body are somebody else's markdown, and often open with one ("##
+// Goal"). That heading is the content's, nested under the part's title, not
+// the part's own — a reader that took it for the part's own drew the
+// builder's title in its place and lost the heading's words.
 //
 // It exists because the only outline a reader can otherwise derive is the
 // prompt's own `##` lines, and a heading INSIDE embedded content — a chat
@@ -220,8 +218,8 @@ type PhaseRound struct {
 	// `end`, `tool_use`, `max_tokens` (cut off at the output cap),
 	// `refusal`, `context_exceeded` (the context window filled) or
 	// `paused`. The last four end the phase. Absent where the backend
-	// reported none and on an older peer's record — absent is "not
-	// reported", never "ended normally" as a fact.
+	// reported none — absent is "not reported", never "ended normally" as a
+	// fact.
 	StopReason string `json:"stop_reason,omitempty"`
 }
 
@@ -666,7 +664,7 @@ type AgentPhaseCompleted struct {
 	// SystemSections and UserSections are the outlines of SystemPrompt and
 	// UserPrompt — see [PromptSection]. Absent where the phase opened no
 	// conversation of its own (a resumed executor re-enters one, and its
-	// prompts are empty) and on an older peer's record.
+	// prompts are empty).
 	SystemSections []PromptSection `json:"system_sections,omitempty"`
 	UserSections   []PromptSection `json:"user_sections,omitempty"`
 	Response       string          `json:"response"`
@@ -821,7 +819,7 @@ type AgentPhaseCompleted struct {
 	// reviewer does not send the turn round again, because re-running a
 	// refused request is asking the model to reconsider a decision, and the
 	// turn's trigger is recorded rather than redelivered. Absent on every
-	// other phase and on an older peer's record.
+	// other phase.
 	Refusal *PhaseRefusal `json:"refusal,omitempty"`
 	// ConversationKey is which conversation this phase's turn served.
 	//

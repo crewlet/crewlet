@@ -3426,13 +3426,13 @@ rules fix it, and each one names a specific mechanism:
    "## Goal", that heading nests under the builder's "Task" like any other
    quoted one. It was taken for the span's own heading, so its title gave way
    to the builder's and "Goal" was drawn nowhere in the reading view while
-   the Source view still had it. A map from an engine that predates `headed`
-   is read by the contract instead — a headed part's title IS its heading's
-   text, so a first heading carrying the part's own title is its own and any
-   other is quoted. Spans are decoded without stripping a leading byte order
+   the Source view still had it. A part the map does not call headed is
+   headless, whatever its first line: the engine writes `headed` on every part
+   that opens with its own heading and leaves it off the rest. Spans are
+   decoded without stripping a leading byte order
    mark, so a part that opens with a pasted document's U+FEFF is still a
    slice of the prompt. A record without
-   a map — an older engine's, a resumed phase's — is outlined by its headings
+   a map — a resumed phase's — is outlined by its headings
    as before, and so is one whose map does not tile its prompt (the bytes do
    not add up, a boundary falls inside a character, a span is empty, a key
    repeats): a map that would mis-slice is not trusted at all

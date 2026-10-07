@@ -117,7 +117,7 @@ const HALF: Record<Half, { name: string; of: string; whole: string }> = {
  * blank, because a row with no words is a row nobody can choose by ear.
  *
  * WHICH WORDS DEPEND ON THE HALF. Before a heading, it is the run "before the
- * first heading". In a half with no heading at all — an older engine's
+ * first heading". In a half with no heading at all — a resumed phase's
  * record, an onboarding message, a worker's task prose — it is the whole half,
  * and "before the first heading" claimed a heading the prompt does not have.
  * A map always names its spans, so neither label appears on a mapped prompt.

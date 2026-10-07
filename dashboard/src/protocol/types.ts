@@ -225,7 +225,7 @@ export interface PromptSection {
    * the builder's `Heading` writes. False or absent for a part that opens
    * with no heading of its own (a `Lead`: a persona, a task, a trigger's
    * text), whose first line may still be a heading somebody else wrote and
-   * the span QUOTES. Absent from an engine that predates it.
+   * the span QUOTES. The engine writes it only when true.
    */
   headed?: boolean;
 }
@@ -280,8 +280,7 @@ export interface PhaseRound {
   tool_calls: number;
   /**
    * Why the model stopped writing this round's response. Absent where its
-   * backend reported none and on an older engine's record — "not reported",
-   * never "ended normally". `max_tokens`, `refusal`, `context_exceeded` and
+   * backend reported none — "not reported", never "ended normally". `max_tokens`, `refusal`, `context_exceeded` and
    * `paused` each END the phase; see `contract/stops.ts`.
    */
   stop_reason?: StopReason;

@@ -14,9 +14,8 @@
  * outline IS the map. A heading inside a span still structures the span — it
  * nests under it — but it can no longer leave it.
  *
- * AND WHY THE HEADINGS STILL. A record an older engine wrote carries no map,
- * and neither does a resumed phase; and a map that does not tile its prompt is
- * not one this reader may trust, because slicing by it would cut a section in
+ * AND WHY THE HEADINGS STILL. A resumed phase's record carries no map, and a
+ * map that does not tile its prompt is not one this reader may trust, because slicing by it would cut a section in
  * the wrong place or through a character. Both fall back to the outline the
  * prompt's own headings give, which is right for every prompt whose quoted
  * content holds none.
@@ -222,18 +221,15 @@ function span(key: string, title: string, source: string, headed: boolean): Span
  * reading view, while the Source view still had it. So it nests under the
  * span like every other quoted heading.
  *
- * A MAP THAT DOES NOT SAY (an engine that predates `headed`) is read by the
- * contract instead: a headed span's title IS its heading text, so a first
- * heading carrying the span's own title is its own, and any other is quoted.
- * Not "the first line is a heading", which is exactly the reading that lost
- * the words — and where a quoted heading happens to carry the builder's title,
- * taking it as the span's own draws those very words, so nothing is lost.
+ * A MAP THAT DOES NOT SAY is a span with no heading of its own: the engine
+ * writes `headed` on every span that opens with its own heading and leaves it
+ * off the rest, so absent is headless — whatever the span's first line looks
+ * like, which is exactly the reading that lost the words.
  */
 function section(half: Half, s: Span): OutlineSection {
   const inner = splitSections(s.source);
   const first = inner[0];
-  const opensWithOwnHeading =
-    s.headed ?? (first !== undefined && first.level > 0 && first.title === s.title);
+  const opensWithOwnHeading = s.headed === true;
   // The span's own section: its heading when it opens with one, or the run a
   // headless span opens with before any heading. A headless span opening
   // straight into a quoted heading has none.

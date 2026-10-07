@@ -26,9 +26,18 @@ import {
 
 const bytes = (s: string) => new TextEncoder().encode(s).length;
 
-/** A map for `parts`, cut exactly where they meet. */
+/**
+ * A map for `parts`, cut exactly where they meet, as the engine's builder
+ * writes it: `headed` on a part that opens with its own heading — whose text
+ * is the part's title — and left off every other.
+ */
 function mapOf(parts: [key: string, title: string, text: string][]) {
-  return parts.map(([key, title, text]) => ({ key, title, bytes: bytes(text) }));
+  return parts.map(([key, title, text]) => {
+    const heading = /^#{1,6} (.*?)\r?\n/.exec(text)?.[1];
+    return heading === title
+      ? { key, title, bytes: bytes(text), headed: true }
+      : { key, title, bytes: bytes(text) };
+  });
 }
 
 describe("a section map off the wire", () => {
@@ -210,9 +219,8 @@ describe("a headless span that opens with a quoted heading", () => {
 
   test.each([
     ["the map says it is headless", [false, true] as [boolean, boolean]],
-    // An engine that predates `headed`: the first heading's title is not the
-    // span's, so it is quoted rather than the span's own.
-    ["the map does not say", [undefined, undefined] as [undefined, undefined]],
+    // As the engine writes it: `headed` only on the span that is.
+    ["the map leaves it off", [undefined, true] as [undefined, boolean]],
   ])("nests the quoted heading under the builder's title when %s", (_why, headed) => {
     const [task, rules] = outlineHalf("system", TEXT, map(headed)).sections;
     expect(task).toMatchObject({ title: "Task", body: "", headed: false });
@@ -228,6 +236,17 @@ describe("a headless span that opens with a quoted heading", () => {
     const [task] = outlineHalf("user", text, mapOf([["task", "Task", text]])).sections;
     expect(task).toMatchObject({ body: "Context first.", headed: false });
     expect(task!.children.map((c) => c.title)).toEqual(["Goal"]);
+  });
+
+  test("reads a span the map does not call headed as headless, whatever it opens with", () => {
+    // Even a first heading carrying the span's own title: only the map says
+    // whose heading it is, and it said nothing.
+    const text = "## Worker rules\nstay a leaf";
+    const [rules] = outlineHalf("user", text, [
+      { key: "worker_rules", title: "Worker rules", bytes: bytes(text) },
+    ]).sections;
+    expect(rules).toMatchObject({ title: "Worker rules", body: "", headed: false });
+    expect(rules!.children.map((c) => c.title)).toEqual(["Worker rules"]);
   });
 
   test("trusts a map that says a span is headed", () => {
