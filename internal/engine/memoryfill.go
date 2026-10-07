@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -387,12 +388,34 @@ func fillSeat(ctx context.Context, source fillSource, seat, model string,
 	return filled, nil
 }
 
-// log reports a tick: what it filled, every input the provider refused alone,
-// and why it stopped where it did.
+// fillLine is one line a tick reports.
+type fillLine struct {
+	level slog.Level
+	msg   string
+	args  []any
+}
+
+// log reports a tick ([fillReport.lines]).
 func (r fillReport) log(ctx context.Context, provider embeddings.BatchEmbedder) {
+	for _, line := range r.lines(provider) {
+		log.Log(ctx, line.level, line.msg, line.args...)
+	}
+}
+
+// lines is what a tick reports: what it filled, every input the provider
+// refused alone, the requests it had refused while it was still narrowing them
+// down, and why it stopped where it did.
+//
+// A VALUE, so what a tick says is a fact a test reads rather than a side
+// effect on the process's logger.
+func (r fillReport) lines(provider embeddings.BatchEmbedder) []fillLine {
 	model, pass := provider.Model(), r.pass
+	var out []fillLine
+	add := func(level slog.Level, msg string, args ...any) {
+		out = append(out, fillLine{level: level, msg: msg, args: args})
+	}
 	for _, refused := range pass.RefusedAlone {
-		log.WarnContext(ctx, "memory_fill_input_refused", "scope", refused.Input.Scope,
+		add(slog.LevelWarn, "memory_fill_input_refused", "scope", refused.Input.Scope,
 			"id", refused.Input.ID, "model", model, "bytes", refused.Bytes,
 			"input_limit_bytes", provider.Limits().InputBytes, "retry", refused.Retry,
 			"retry_in", embeddings.RefusalRetry.String(), "error", refused.Err,
@@ -404,7 +427,7 @@ func (r fillReport) log(ctx context.Context, provider embeddings.BatchEmbedder) 
 				"refuses this text for what it says")
 	}
 	if pass.Unusable > 0 {
-		log.WarnContext(ctx, "memory_fill_vector_unusable", "model", model,
+		add(slog.LevelWarn, "memory_fill_vector_unusable", "model", model,
 			"rows", pass.Unusable,
 			"detail", "the provider answered these rows' requests with vectors that "+
 				"have no direction to keep; each stays unfilled and is sent again "+
@@ -415,16 +438,31 @@ func (r fillReport) log(ctx context.Context, provider embeddings.BatchEmbedder) 
 		total += n
 	}
 	if total > 0 {
-		log.InfoContext(ctx, "memory_filled", "model", model, "notes", r.filled["diary"],
-			"episodes", r.filled["episodes"], "requests", pass.Requests, "bytes", pass.Bytes)
+		add(slog.LevelInfo, "memory_filled", "model", model, "notes", r.filled["diary"],
+			"episodes", r.filled["episodes"], "requests", pass.Requests, "bytes", pass.Bytes,
+			"refused", pass.Refused)
+	}
+	if isolating := pass.Refused - len(pass.RefusedAlone); isolating > 0 && total == 0 &&
+		!pass.Concluded {
+		// A TICK THAT FILLED NOTHING AND NAMED NO ROW, and still had
+		// requests refused, is narrowing down rows a refusal concerned —
+		// several to a call, more than one tick's requests can isolate.
+		// Silent, it read as a tick that sent nothing at all.
+		add(slog.LevelInfo, "memory_fill_refusals_isolating", "model", model,
+			"requests", pass.Requests, "refused", pass.Refused,
+			"refused_alone", len(pass.RefusedAlone),
+			"detail", "the provider refused requests of several rows each and this "+
+				"tick filled none; the next tick halves them again where this one "+
+				"stopped, and each row the provider refuses is named once it is "+
+				"refused alone")
 	}
 	switch err := pass.Err(); {
 	case r.storeErr != nil:
-		log.WarnContext(ctx, "memory_fill_store_failed", "model", model, "error", r.storeErr,
+		add(slog.LevelWarn, "memory_fill_store_failed", "model", model, "error", r.storeErr,
 			"detail", "this tick stores nothing more; the rows it could not store are "+
 				"selected again by the next")
 	case pass.Concluded:
-		log.WarnContext(ctx, "memory_fill_configuration_refused", "model", model,
+		add(slog.LevelWarn, "memory_fill_configuration_refused", "model", model,
 			"requests", pass.Requests, "pause", embeddings.RefusalRetry.String(),
 			"error", err,
 			"detail", "the provider refused this tick's first request and then one "+
@@ -433,12 +471,13 @@ func (r fillReport) log(ctx context.Context, provider embeddings.BatchEmbedder) 
 				"the pause and judges the next refusal again after it, and an "+
 				"apply of the company configuration starts it again at once")
 	case pass.Paused:
-		log.DebugContext(ctx, "memory_fill_paused", "model", model)
+		add(slog.LevelDebug, "memory_fill_paused", "model", model)
 	case err != nil:
-		log.WarnContext(ctx, "memory_fill_stopped", "model", model, "error", err,
+		add(slog.LevelWarn, "memory_fill_stopped", "model", model, "error", err,
 			"detail", "this tick sends no more requests, for any seat; the next "+
 				"tick asks again, and nothing is lost — the rows are selected again")
 	}
+	return out
 }
 
 // batchOf is the embedder in slot as a caller embedding many texts needs it,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -289,6 +291,51 @@ func TestAProviderRefusingEveryNoteIsBoundedThenLeftAlone(t *testing.T) {
 		memoryFillRequestsPerTick, memoryFillBytesPerTick, resume)
 	if sent := len(fake.Requests()) - before; sent != 0 || !paused.pass.Paused {
 		t.Fatalf("the tick after the conclusion sent %d requests (paused %v)", sent, paused.pass.Paused)
+	}
+}
+
+// A TICK WHOSE REQUESTS WERE REFUSED SAYS SO, even when it filled nothing and
+// named no row: a page in which every row is refused for what it says takes
+// more than one tick to narrow down, and each of those ticks — sixteen refused
+// requests apiece — used to log nothing at all, which read as a fill with
+// nothing to do.
+func TestATickOfRefusedRequestsThatNamedNoRowSaysSo(t *testing.T) {
+	t.Parallel()
+	db, _ := diaryFixture(t, map[string][]string{"id-a": facts(embeddings.PassBatch, "a")})
+	fake := embeddings.NewFake(64)
+	fake.Refuse("durable") // every note, and not the canary: the configuration is fine
+	report := tick(t, db, allEstablished("a"), func(string) string { return "id-a" }, fake,
+		embeddings.NewRefusals(), fillAt, memoryFillRequestsPerTick, memoryFillBytesPerTick, "")
+	if report.pass.Concluded || len(report.pass.RefusedAlone) != 0 || report.filled["diary"] != 0 {
+		t.Fatalf("the fixture did not make a silent tick: concluded %v, %d refused alone, %d filled",
+			report.pass.Concluded, len(report.pass.RefusedAlone), report.filled["diary"])
+	}
+	var isolating *fillLine
+	lines := report.lines(fake)
+	for i := range lines {
+		if lines[i].msg == "memory_fill_refusals_isolating" {
+			isolating = &lines[i]
+		}
+	}
+	if isolating == nil {
+		t.Fatalf("a tick of %d refused requests reported %v, want it named", report.pass.Refused, lines)
+	}
+	if isolating.level != slog.LevelInfo || !slices.Contains(isolating.args, any(report.pass.Refused)) {
+		t.Errorf("the line is %v at %v, want INFO carrying the %d refused requests",
+			isolating.args, isolating.level, report.pass.Refused)
+	}
+
+	// A tick that filled rows reports its refused requests on the fill's
+	// own line, and needs no second one.
+	db2, _ := diaryFixture(t, map[string][]string{"id-a": {"a poison durable fact", "pat wants digests"}})
+	poison := embeddings.NewFake(64)
+	poison.Refuse("poison")
+	filled := tick(t, db2, allEstablished("a"), func(string) string { return "id-a" }, poison,
+		embeddings.NewRefusals(), fillAt, memoryFillRequestsPerTick, memoryFillBytesPerTick, "")
+	for _, line := range filled.lines(poison) {
+		if line.msg == "memory_fill_refusals_isolating" {
+			t.Errorf("a tick that filled %d rows also reported an isolation line", filled.filled["diary"])
+		}
 	}
 }
 
