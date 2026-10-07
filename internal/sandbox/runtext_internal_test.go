@@ -166,31 +166,41 @@ func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 
 	// End to end: the longest failure a runner composes, a question
 	// nobody can be asked (no model condenses it), and the failure the
-	// condenser is then handed.
-	condenser := &fakeCondenser{answer: func(part RunPart, _ string, _ int) (string, error) {
+	// condenser is then handed — WHOLE: the refusal in front of the
+	// runner's failure, every byte of both. The pre-trim that brings an
+	// oversized failure inside what a condensation reads would keep the
+	// handed text inside the bound however small the reserve, so what
+	// shows the reserve holding the prefix is that nothing was trimmed.
+	//
+	// Mutation: set failureReserve to zero, and the failure reaches the
+	// condenser with its middle taken out.
+	var shown string
+	condenser := &fakeCondenser{answer: func(part RunPart, text string, _ int) (string, error) {
 		if part == PartQuestion {
 			return "", errors.New("no rewrite of the question could be had")
 		}
+		shown = text
 		return "(condensed)", nil
 	}}
 	c := &Coordinator{condense: condenser}
 	failure := lines("stderr", MaxFailureBytes/48)
 	failure += strings.Repeat("e", MaxFailureBytes-len(failure))
+	question := strings.Repeat("q", MaxQuestionBytes+1)
 	got := c.fitResult(t.Context(), PendingRun{}, Result{
-		Error: failure, NeedsInput: true, Question: strings.Repeat("q", MaxQuestionBytes+1),
+		Error: failure, NeedsInput: true, Question: question,
 	})
 	if got.NeedsInput {
 		t.Fatal("a question no line of which fits, with no model to condense it, was asked")
 	}
-	var handed int
-	for _, call := range condenser.calls {
-		if call.part == PartFailure {
-			handed = call.bytes
-		}
+	if want := questionRefusal(len(question)) + ":\n" + failure; shown != want {
+		t.Errorf("the condenser was handed %d bytes; want the refusal and the runner's failure "+
+			"whole, %d bytes", len(shown), len(want))
 	}
-	if handed == 0 || handed > MaxCondenseBytes {
-		t.Errorf("the condenser was handed a %d-byte failure; want one inside the %d it reads",
-			handed, MaxCondenseBytes)
+	if strings.Contains(shown, "one condensation reads") {
+		t.Error("the failure was trimmed to fit what a condensation reads, so the reserve did not hold its prefix")
+	}
+	if len(shown) > MaxCondenseBytes {
+		t.Errorf("the condenser was handed %d bytes, past the %d it reads", len(shown), MaxCondenseBytes)
 	}
 }
 
