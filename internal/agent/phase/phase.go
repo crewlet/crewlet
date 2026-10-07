@@ -16,11 +16,9 @@ type Phase string
 // with its own provider chain so an operator can point cheap work at a cheap
 // model.
 //
-// `execute` keeps its wire string although the phase it names now decides as
-// well as acts. The value is written into the event store, backfilled into
-// two columns by an applied migration, and read by every dashboard and
-// rollup; renaming it would buy a better word at the cost of a value
-// migration and a mixed fleet reporting two names for one thing.
+// `execute` names the phase although it now decides as well as acts:
+// deciding is part of the seat doing its own work, which is what every
+// dashboard and rollup that reads the value means by it.
 const (
 	Execute   Phase = "execute"
 	Review    Phase = "review"
