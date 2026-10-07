@@ -218,3 +218,88 @@ func TestAnEndingDecidedOnAParkedRunIsFinishedByTheNextHolder(t *testing.T) {
 		t.Fatal("the next holder counted a run whose ending is decided as a question waiting on a person")
 	}
 }
+
+// A RESUME THAT BROKE BEFORE ITS TURN BEGAN IS ANNOUNCED, ONCE, like every other
+// run lost without its turn. Nothing of the turn ran, so no completion of its own
+// says what became of it, and the run is ended rather than retried — it used to
+// leave a guard breach and nothing else, so the turn parked on the run read as
+// parked for good. On every route: a completion's resume, a recorded answer's
+// inline attempt and its retry — the last two saying the person's reply went
+// back to the seat.
+func TestAResumeBrokenBeforeItsTurnIsAnnouncedOnce(t *testing.T) {
+	brokenBeforeTurn := func(rig *coordRig) {
+		rig.resumer.failWith(ErrResumeAbandoned)
+		rig.resumer.beforeTurn = true
+	}
+	t.Run("a completion", func(t *testing.T) {
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.runner.Finish(Result{Success: true, Text: "done"})
+		brokenBeforeTurn(rig)
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		rig.finished("t1")
+		got := announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+		if got[0].failed.Detail != resumeBrokenDetail {
+			t.Errorf("detail %q, want nothing said of a reply: none drove this resume", got[0].failed.Detail)
+		}
+	})
+	t.Run("a completion whose record could not be read again", func(t *testing.T) {
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.runner.Finish(Result{Success: true, Text: "done"})
+		brokenBeforeTurn(rig)
+		rig.coordinator.pending = &refusingStore{inner: rig.pending, refuse: []string{"Get"}}
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		rig.finished("t1")
+		announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+	})
+	t.Run("a recorded answer's inline attempt", func(t *testing.T) {
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		brokenBeforeTurn(rig)
+		r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
+		if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+			chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
+			t.Fatalf("R1 = %q, want it recorded", d)
+		}
+		rig.finished("t1")
+		got := announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+		if got[0].failed.Detail != resumeBrokenDetail+replyReturnedDetail {
+			t.Errorf("detail %q, want it saying the reply went back to the seat", got[0].failed.Detail)
+		}
+	})
+	t.Run("a recorded answer's retry", func(t *testing.T) {
+		rig := newCoordRig(t)
+		parkOnAQuestion(t, rig)
+		rig.resumer.failWith(errors.New("transient"))
+		r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
+		if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+			chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
+			t.Fatalf("R1 = %q, want it recorded", d)
+		}
+		brokenBeforeTurn(rig)
+		rig.fireRetries()
+		rig.finished("t1")
+		announcedOnce(t, rig, types.SandboxFailureResumeBroken)
+	})
+	t.Run("but not one whose turn ran", func(t *testing.T) {
+		rig := newCoordRig(t)
+		rig.launch("t1")
+		rig.runner.Finish(Result{Success: true, Text: "done"})
+		rig.resumer.failWith(ErrResumeAbandoned)
+		payload, ev := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+		rig.finished("t1")
+		if got := rig.announcements(); len(got) != 0 {
+			t.Fatalf("announced %+v for a resume whose turn ran and published its own completion", got)
+		}
+	})
+}

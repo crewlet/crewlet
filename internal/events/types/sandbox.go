@@ -249,6 +249,16 @@ const (
 	// ended when the seat's mailbox is retired, because no resume, answer or
 	// completion can reach a seat that is gone.
 	SandboxFailureSeatRemoved = "seat_removed"
+
+	// SandboxFailureResumeBroken is a run whose resume broke BEFORE the turn
+	// it would continue began — a panic re-entering the suspended
+	// conversation. It is not retried, because the conversation is the same
+	// bytes on every attempt and a retry reaches the same defect; nothing of
+	// the turn ran, so no completion of its own says what became of it, and
+	// a person's reply that drove the resume goes back to the seat. A resume
+	// that broke after its turn began is not announced under this or any
+	// reason: that turn published its own failed completion.
+	SandboxFailureResumeBroken = "resume_broken"
 )
 
 // EventType is the "sandbox_run_failed" wire type.

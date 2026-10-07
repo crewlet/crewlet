@@ -1678,14 +1678,21 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			// conversation, say. It is not retried, for the reason every
 			// abandoned resume is not: the same bytes reach the same
 			// defect. But nothing ran, so nothing a person sent was used:
-			// a recorded reply goes back to the seat through the row, and
-			// an answer by turn is reported as reaching a run that is gone.
+			// a recorded reply goes back to the seat through the row.
+			//
+			// AND IT IS ANNOUNCED, like every other run lost without its
+			// turn: no turn ran to publish a completion of its own, so the
+			// run's ending is the only account of what became of it. It
+			// used to leave a guard breach and nothing else, so the turn
+			// parked on this run read as parked for good.
 			log.ErrorContext(ctx, "sandbox_resume_abandoned_before_turn",
 				"turn_id", run.TurnID, "error", err.Error(),
 				"detail", "the resume broke before the turn it would continue began; the run "+
-					"is settled rather than retried, and anything that drove the resume "+
-					"is handed on rather than spent")
-			c.settleAbandoned(ctx, run)
+					"is ended and announced rather than retried, and a person's reply that "+
+					"drove the resume goes back to the seat rather than being spent")
+			c.settleAbandoned(ctx, run, &failureNote{
+				reason: types.SandboxFailureResumeBroken, detail: resumeBrokenDetail,
+			})
 			return AnswerNotMine, nil
 		}
 		if errors.Is(err, ErrResumeAbandoned) {
@@ -1714,7 +1721,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				"turn_id", run.TurnID, "error", err.Error(),
 				"detail", "the run is settled rather than un-claimed, so the completion is "+
 					"not redelivered into a conversation a retry must not re-enter")
-			c.settleAbandoned(ctx, run)
+			c.settleAbandoned(ctx, run, nil)
 			// THE TURN RAN AND WROTE OUTSIDE THE ENGINE, so whatever drove
 			// it is SPENT: this is the one branch that deliberately keeps
 			// the claim, and handing the delivery back to the ordinary
@@ -1752,7 +1759,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// picked up by nothing. The store decides whether this run is
 		// still the one that was claimed — see
 		// [Coordinator.settleClaimed].
-		c.settleClaimed(ctx, run, err)
+		c.settleClaimed(ctx, run, err, nil)
 		c.syncSeat(ctx, run.AgentHandle)
 		// THE TURN RAN: the resume returned, and only the settle that
 		// follows it could not be decided. Whatever drove it is spent.
@@ -1805,12 +1812,16 @@ func claimedAnswer(run PendingRun) bool {
 // AND SETTLED EVEN WHEN THE RECORD CANNOT BE READ. A read failure here used to
 // settle nothing, which left the row in the claim an abandoned resume exists
 // to keep — the one state nothing recovers from.
-func (c *Coordinator) settleAbandoned(ctx context.Context, run PendingRun) {
+//
+// note is what the ending announces: nil for a resume whose turn ran, which
+// published its own failed completion, and the loss for one whose turn never
+// began — see [resumeBrokenDetail].
+func (c *Coordinator) settleAbandoned(ctx context.Context, run PendingRun, note *failureNote) {
 	settle, readErr := c.current(ctx, run)
 	if readErr != nil {
-		c.settleClaimed(ctx, run, readErr)
+		c.settleClaimed(ctx, run, readErr, note)
 	} else {
-		c.finish(ctx, settle, ending{fence: fenceOf(run)})
+		c.finish(ctx, settle, ending{fence: fenceOf(run), note: note})
 	}
 	c.syncSeat(ctx, run.AgentHandle)
 }
@@ -1906,8 +1917,11 @@ func (c *Coordinator) endClaim(ctx context.Context, run PendingRun, e ending) (b
 // accept. The only hazard the read ever guarded was killing a job the resumed
 // turn RELAUNCHED — a relaunch reuses this very box — and the claim's own
 // license declines that.
-func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause error) {
-	ended, err := c.endClaim(ctx, run, ending{})
+//
+// note is what the ending announces, nil for one whose turn ran and announced
+// itself.
+func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause error, note *failureNote) {
+	ended, err := c.endClaim(ctx, run, ending{note: note})
 	switch {
 	case err != nil:
 		log.ErrorContext(ctx, "sandbox_claimed_settle_kept",
@@ -2137,6 +2151,14 @@ const (
 		"store for another attempt, so the turn cannot be continued; the work it pushed, " +
 		"if any, is on its branch"
 )
+
+// resumeBrokenDetail is the sentence a run whose resume broke before its turn
+// began reaches an operator's board with: nothing of the turn ran, and trying
+// again would re-enter the same suspended conversation and reach the same
+// defect, so the run is ended rather than retried.
+const resumeBrokenDetail = "the turn this coding run belongs to could not be re-entered — " +
+	"resuming it broke before the turn began, and another attempt would reach the same " +
+	"defect — so the turn cannot be continued; the work it pushed, if any, is on its branch"
 
 // reportStopped tells the engine one suspended turn has stopped.
 //
