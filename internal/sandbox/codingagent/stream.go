@@ -183,8 +183,18 @@ const redactContext = redact.MaxKeyBlockBytes
 // REDACTED BEFORE IT IS BOUNDED, for the reason [redactContext] exists, and
 // on WHOLE LINES by the one rule every stream's end is shown by
 // ([sandbox.KeepEnd]).
+//
+// A READ THAT OPENED INSIDE A LINE RUNNING TO THE END has no line break to
+// start a whole line at, and dropping the line it opened inside dropped
+// everything the process said last — a failure built on it said nothing of
+// the stream at all, not even that it was there. That is the one case whole
+// lines cannot meet, and KeepEnd keeps such a line's end on a character,
+// marked, so it is handed the read whole.
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 	data, partial := tail.Lines()
+	if len(data) == 0 && partial > 0 {
+		data, partial = tail.Data, 0
+	}
 	text := redact.Secrets(string(data))
 	kept, at := sandbox.KeepEnd(text, keep)
 	return kept, tail.Before() + int64(partial) + int64(at)

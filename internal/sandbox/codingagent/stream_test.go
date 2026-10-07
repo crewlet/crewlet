@@ -215,52 +215,62 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 // read the uncondensed fallback although a model was configured.
 //
 // Every sentence a failure can open with, at once, in front of the longest
-// error stream: the failure fits ([sandbox.MaxFailureBytes], which leaves the
-// coordinator its own prefix), keeps every sentence and the stream's last
-// line, and says what it left out of the stream.
+// error stream — in lines, and as one line with no break in it, which is kept
+// by its end on a character and marked: the failure fits
+// ([sandbox.MaxFailureBytes], which leaves the coordinator its own prefix),
+// keeps every sentence and the stream's last line, and says what it left out
+// of the stream.
 //
 // Mutation: carry the error stream as it was read, and the failure is past
 // the bound.
 func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	cliError := strings.Repeat("the provider answered 529: overloaded, retrying\n", 400)
-	result, err := json.Marshal(map[string]any{"type": "result", "subtype": "error_during_execution",
-		"is_error": true, "errors": []string{cliError}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	b.Put(p.Result(), string(result))
-	b.Put(p.Ask(), strings.Repeat("q", sandbox.MaxFileBytes+1)) // a piece that cannot be read
-	b.Put(p.Err(), strings.Repeat(strings.Repeat("e", 99)+"\n", 3<<20/100)+"FATAL: the last line")
-	b.Put(p.ExitCode(), "1")
-
-	res, err := runner.Collect(t.Context(), b, launched(runner))
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if len(res.Error) > sandbox.MaxFailureBytes {
-		t.Fatalf("the failure is %d bytes, %d past the %d one condensation takes beside the "+
-			"coordinator's own prefix", len(res.Error), len(res.Error)-sandbox.MaxFailureBytes,
-			sandbox.MaxFailureBytes)
-	}
-	for _, want := range []string{
-		"the question the coding agent recorded", // the refused piece, first
-		"the coding agent exited with status 1",
-		"error_during_execution: the provider answered 529",
-		"were not read: a run's failure is read from its end",
+	for name, stderr := range map[string]string{
+		"in lines": strings.Repeat(strings.Repeat("e", 99)+"\n", 3<<20/100) + "FATAL: the last line",
+		"one line": strings.Repeat("e", 3<<20) + "FATAL: the last line",
 	} {
-		if !strings.Contains(res.Error, want) {
-			t.Errorf("the failure lost %q: %.400q", want, res.Error)
-		}
-	}
-	if !strings.HasPrefix(res.Error, "the question the coding agent recorded") {
-		t.Errorf("the failure opens %.120q; want the piece that could not be read first", res.Error)
-	}
-	if !strings.HasSuffix(res.Error, "FATAL: the last line") {
-		t.Errorf("the failure lost the error stream's last line: …%q", tailOf(res.Error, 80))
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := codingagent.NewClaudeCode()
+			b := box(t, runner)
+			p := paths(b)
+			cliError := strings.Repeat("the provider answered 529: overloaded, retrying\n", 400)
+			result, err := json.Marshal(map[string]any{"type": "result", "subtype": "error_during_execution",
+				"is_error": true, "errors": []string{cliError}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			b.Put(p.Result(), string(result))
+			b.Put(p.Ask(), strings.Repeat("q", sandbox.MaxFileBytes+1)) // a piece that cannot be read
+			b.Put(p.Err(), stderr)
+			b.Put(p.ExitCode(), "1")
+
+			res, err := runner.Collect(t.Context(), b, launched(runner))
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if len(res.Error) > sandbox.MaxFailureBytes {
+				t.Fatalf("the failure is %d bytes, %d past the %d one condensation takes beside the "+
+					"coordinator's own prefix", len(res.Error), len(res.Error)-sandbox.MaxFailureBytes,
+					sandbox.MaxFailureBytes)
+			}
+			for _, want := range []string{
+				"the question the coding agent recorded", // the refused piece, first
+				"the coding agent exited with status 1",
+				"error_during_execution: the provider answered 529",
+				"were not read: a run's failure is read from its end",
+			} {
+				if !strings.Contains(res.Error, want) {
+					t.Errorf("the failure lost %q: %.400q", want, res.Error)
+				}
+			}
+			if !strings.HasPrefix(res.Error, "the question the coding agent recorded") {
+				t.Errorf("the failure opens %.120q; want the piece that could not be read first", res.Error)
+			}
+			if !strings.HasSuffix(res.Error, "FATAL: the last line") {
+				t.Errorf("the failure lost the error stream's last line: …%q", tailOf(res.Error, 80))
+			}
+		})
 	}
 }
 
