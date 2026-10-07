@@ -297,8 +297,8 @@ export interface EntryState {
    * grid now, and a tile with no pill under its name is a hole in a row of
    * them that a reader has to explain to themself; the engine's "Not in use"
    * is drawn in the neutral outline, which is the one register on this
-   * screen that reports nothing wrong. EMPTY only when the answer carries no
-   * roll-up for an unconfigured tool, which is a node too old to send one.
+   * screen that reports nothing wrong. EMPTY only while no roll-up for an
+   * unconfigured tool is in hand — before the integrations answer arrives.
    */
   tag: string;
   tone: Tone;
