@@ -64,8 +64,8 @@ func (m Mode) Valid() bool {
 // Resolved is the mode a search runs in: the zero value is hybrid.
 //
 // A METHOD rather than a constructor default, so every search that names no
-// mode — the prefetch, a seat's tools, a caller written before modes existed
-// — gets the same answer from the one place that decides it.
+// mode — the prefetch, a seat's tools — gets the same answer from the one
+// place that decides it.
 func (m Mode) Resolved() Mode {
 	if m == "" {
 		return ModeHybrid
