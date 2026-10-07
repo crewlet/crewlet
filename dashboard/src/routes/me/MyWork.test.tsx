@@ -38,6 +38,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { withDerived } from "~/test/org.ts";
 
 // THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
 // published rather than only that something was drawn: the state bar renders
@@ -115,18 +116,7 @@ function serving(answers: Partial<Record<QueryName, Answer>>, org: unknown = fla
   return query;
 }
 
-/** Two seats and a derived block that does not describe them: every
- *  reporting line is UNKNOWN. */
-const flatOrg = {
-  name: "Acme",
-  roles: [
-    { name: "Ada Okonkwo", handle: "ada", kind: "human", contact: { slack_user_id: "U0A" } },
-    { name: "Rui Santos", handle: "rui", kind: "human", contact: { slack_user_id: "U0R" } },
-  ],
-  derived: { seats: [], units: [] },
-};
-
-/** The same company with the ENGINE's own hierarchy: Ada leads Rui, not Bo. */
+/** One seat of the engine's derived block. */
 const derivedSeat = (
   handle: string,
   name: string,
@@ -143,6 +133,21 @@ const derivedSeat = (
   auto_reports: null,
   onboarding_chain: null,
 });
+
+/** Two seats, and nobody reports to anybody. */
+const flatOrg = {
+  name: "Acme",
+  roles: [
+    { name: "Ada Okonkwo", handle: "ada", kind: "human", contact: { slack_user_id: "U0A" } },
+    { name: "Rui Santos", handle: "rui", kind: "human", contact: { slack_user_id: "U0R" } },
+  ],
+  derived: {
+    units: [],
+    seats: [derivedSeat("ada", "Ada Okonkwo"), derivedSeat("rui", "Rui Santos")],
+  },
+};
+
+/** The same company with the ENGINE's own hierarchy: Ada leads Rui, not Bo. */
 const ledOrg = {
   name: "Acme",
   roles: [
@@ -507,10 +512,12 @@ test("the queue claims no count until the tracker answers", async () => {
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Acme",
-    roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "human" }],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Acme",
+      roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "human" }],
+    }) as never,
+  );
   mount();
   // ABSENT, not an empty string the header has to know to skip: the other
   // sections answered, and the queue is simply not among them.
@@ -1054,11 +1061,9 @@ test("an incomplete workload answer claims no desk is empty", async () => {
   }
 });
 
-// WITHOUT THE ENGINE'S OWN HIERARCHY THERE IS NO LINE TO DRAW. A derived block
-// that does not describe the org leaves who reports to whom UNKNOWN rather
-// than empty, and a "Your line" heading over nothing would be a claim this
-// client cannot make.
-test("an undescribed hierarchy draws no line, rather than an empty one", async () => {
+// A READER WHO LEADS NOBODY HAS NO LINE TO DRAW, and a "Your line" heading
+// over nothing would be a group that holds no row.
+test("a reader with no reports is offered no line, rather than an empty one", async () => {
   serving({
     viewer: ada,
     work_my_work: emptyDay,
@@ -1391,14 +1396,6 @@ describe("somebody else's day", () => {
     fireEvent.keyDown(rowOf("ENG-5"), { key: "ArrowDown", altKey: true });
     await new Promise((r) => setTimeout(r, 20));
     expect(posted).toEqual([]);
-  });
-
-  test("where the chart does not say who leads whom, it says that rather than no", async () => {
-    location.hash = "#/me?order=priorities&handle=rui";
-    serving(day("rui"));
-    mount();
-    await waitFor(() => expect(screen.getByText(/does not say who reports to whom/)).toBeTruthy());
-    expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
   });
 });
 

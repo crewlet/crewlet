@@ -15,7 +15,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { LEAD_NOT_REPORTED, Teams, UnitBlock } from "./Company.tsx";
+import { Teams, UnitBlock } from "./Company.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -130,19 +130,9 @@ async function teams(org: OrgProjection) {
   });
 }
 
-// UNKNOWN IS NOT NOBODY, AND NOT A COUNT OF ZERO. Where the engine's derived
-// block does not describe the org an inherited lead is unknowable here, so a
-// unit declaring none says its lead is unknown — never a blank that reads as a
-// team nobody leads — while the headcounts, which the document does state,
-// stay.
-test("an undescribed hierarchy is not a count of zero or a unit without a lead", async () => {
-  await teams({ ...ORG, derived: { seats: [], units: [] } } as OrgProjection);
-  expect(screen.getAllByText(LEAD_NOT_REPORTED).length).toBe(2);
-  expect(screen.getByText("3 seats, 1 directly")).toBeTruthy();
-  expect(screen.getByText("2 seats")).toBeTruthy();
-});
-
-test("with the derived block a unit's lead is the engine's, and nothing says unknown", async () => {
+// A LEAD IS THE ENGINE'S, and an inherited one says so: hiding the difference
+// is how somebody concludes a team is unmanaged.
+test("a unit's lead is the engine's, and an inherited one is marked", async () => {
   await teams({
     ...ORG,
     derived: {
@@ -159,8 +149,8 @@ test("with the derived block a unit's lead is the engine's, and nothing says unk
       ],
     },
   } as unknown as OrgProjection);
-  expect(screen.queryByText(LEAD_NOT_REPORTED)).toBeNull();
   expect(screen.getAllByText("VP Engineering").length).toBeGreaterThan(0);
+  expect(screen.getByText("(inherited)")).toBeTruthy();
 });
 
 // A TEAM CARRIES WHERE ITS WORK IS FILED, and the goals it was given.

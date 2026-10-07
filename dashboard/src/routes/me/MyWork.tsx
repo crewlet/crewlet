@@ -203,7 +203,7 @@ export function MyWork({ section }: { section: MeSection }) {
   const holds = dayHolds({
     ownDay,
     name: whoseName,
-    lead: ownDay ? null : leadsInLine(index, viewer.handle, whose),
+    lead: !ownDay && leadsInLine(index, viewer.handle, whose),
   });
 
   // WHO IS CARRYING HOW MUCH, for the picker. One read over every handle at
@@ -560,10 +560,7 @@ export function MyWork({ section }: { section: MeSection }) {
  * put to them are theirs to answer, which the engine enforces, and their work
  * is changed from the work screens — except the reorder a lead may make. A lead
  * is anybody above them in the chart (`leadsInLine`), which is the tracker's
- * own reading of "somebody in their line"; where the engine's hierarchy does
- * not describe the org (`OrgIndex.hierarchy`) that is unknown, and the
- * sentence says so rather than telling a reader who may well lead the person
- * that they do not.
+ * own reading of "somebody in their line".
  */
 export function dayHolds({
   ownDay,
@@ -572,19 +569,13 @@ export function dayHolds({
 }: {
   ownDay: boolean;
   name: string;
-  /** Whether the reader leads the person in the chart, or null for unknown. */
-  lead: boolean | null;
+  /** Whether the reader leads the person in the chart. */
+  lead: boolean;
 }): { all: string | null; reorder: string | null } {
   if (ownDay) return { all: null, reorder: null };
   const all = `This is ${name}’s day — what is asked of them is theirs to answer, and their work is changed from the work screens.`;
-  if (lead === true) return { all, reorder: null };
-  return {
-    all,
-    reorder:
-      lead === null
-        ? `Only somebody in ${name}’s line reorders their queue, and the engine’s hierarchy does not say who reports to whom.`
-        : `Only ${name}, or somebody they report to, reorders their queue.`,
-  };
+  if (lead) return { all, reorder: null };
+  return { all, reorder: `Only ${name}, or somebody they report to, reorders their queue.` };
 }
 
 /**
@@ -688,13 +679,6 @@ function WhoseDay({
  * where the answer is COMPLETE and did not stop at its handle cap. Short of
  * that the row says nothing at all rather than claiming an empty desk.
  *
- * # The line is UNKNOWN without the engine's own hierarchy
- *
- * `OrgIndex.hierarchy` false means every reporting line is unknown rather than
- * absent — the engine's `derived` block does not describe the org — so the
- * group is not drawn at all there. An empty "Your line" would say this reader leads nobody,
- * which is a claim this client cannot make.
- *
  * # And the empty row is only for a reader with no day of their own
  *
  * `setHandle("")` writes the parameter's own fallback, which the router
@@ -719,12 +703,6 @@ export function whoseDayOptions(
     return `${handle} · ${held === 0 ? "nothing open" : plural(held, "open item")}`;
   };
 
-  // A SEAT WITH NO HANDLE CANNOT BE PICKED. The engine reports one for every
-  // seat it runs; a hierarchy that does not describe the org reports none for
-  // a seat that declares no handle, and such a row used to be offered with an
-  // empty value — which is the SAME value as the empty row below, so picking
-  // a colleague landed on "nobody chosen".
-  const named = index.seats.filter((s) => s.handle);
   const byName = (a: Seat, b: Seat) => a.name.localeCompare(b.name);
   const row = (seat: Seat, group: string): SelectOption => ({
     value: seat.handle,
@@ -737,10 +715,7 @@ export function whoseDayOptions(
   });
 
   const mine = viewerHandle ? index.byHandle.get(viewerHandle) : undefined;
-  const line =
-    index.hierarchy && mine
-      ? mine.reports.filter((s) => s.handle && s.handle !== mine.handle).sort(byName)
-      : [];
+  const line = mine ? mine.reports.filter((s) => s.handle !== mine.handle).sort(byName) : [];
   const inLine = new Set(line.map((s) => s.handle));
 
   const out: SelectOption[] = [];
@@ -748,7 +723,7 @@ export function whoseDayOptions(
   if (!mine) out.push({ value: "", label: "Pick somebody" });
   if (mine) out.push(row(mine, "Yours"));
   for (const seat of line) out.push(row(seat, "Your line"));
-  for (const seat of named.sort(byName)) {
+  for (const seat of [...index.seats].sort(byName)) {
     if (seat.handle === mine?.handle || inLine.has(seat.handle)) continue;
     out.push(row(seat, "Anybody"));
   }

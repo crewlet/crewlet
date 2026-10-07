@@ -16,6 +16,7 @@ import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
 import { toastText } from "~/testing.tsx";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -221,7 +222,9 @@ describe("the org chart", () => {
     const store = new Store();
     // The health push, which is where this node's applied epoch comes from.
     store.applyHealth(healthFrame({ applied_epoch: appliedEpoch }));
-    store.applyOrg({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] });
+    store.applyOrg(
+      withDerived({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] }),
+    );
     const socket = new LiveSocket(store);
     (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
       Promise.resolve(null);

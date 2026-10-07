@@ -23,6 +23,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -115,7 +116,7 @@ afterEach(() => {
 function client(viewer: Record<string, unknown>, agents: Record<string, unknown>[] = []) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
-  store.applyOrg(ORG as never);
+  store.applyOrg(withDerived(ORG) as never);
   store.applyAgents(agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];

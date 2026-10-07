@@ -16,6 +16,7 @@ import { targetLabel } from "~/lib/work.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { pick } from "~/testing.tsx";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -44,13 +45,15 @@ beforeEach(() => {
   sent = [];
   vi.mocked(useViewer).mockReturnValue(JANE);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Nimbus",
-    roles: [
-      { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
-      { name: "Jane Founder", handle: "jane", kind: "human" },
-    ],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Nimbus",
+      roles: [
+        { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
+        { name: "Jane Founder", handle: "jane", kind: "human" },
+      ],
+    }) as never,
+  );
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {

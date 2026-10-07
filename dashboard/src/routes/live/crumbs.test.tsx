@@ -35,6 +35,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, OrgProjection } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -81,7 +82,7 @@ function mount(
 ) {
   location.hash = hash;
   const store = new Store();
-  if (org) store.applyOrg(org);
+  if (org) store.applyOrg(withDerived(org));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(answers[what] ?? {});

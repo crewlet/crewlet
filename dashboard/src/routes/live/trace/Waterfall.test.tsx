@@ -18,6 +18,7 @@ import { buildWaterfall } from "~/lib/waterfall.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
 import { SANDBOX_TAIL_POLL_MS, Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -79,7 +80,7 @@ function mount(
   }: { selected?: string; now?: number; org?: Record<string, unknown> } = {},
 ) {
   const store = new Store();
-  if (org) store.applyOrg(org as never);
+  if (org) store.applyOrg(withDerived(org) as never);
   const socket = new LiveSocket(store);
   const asked: Record<string, unknown>[] = [];
   (socket as unknown as { query: (what: string, p: unknown) => Promise<unknown> }).query = (

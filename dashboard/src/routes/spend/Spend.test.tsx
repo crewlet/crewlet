@@ -32,6 +32,7 @@ import type {
   WorkSummary,
 } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -142,13 +143,15 @@ function mount(
   asks = [];
   const store = new Store();
   store.applyHealth(healthFrame());
-  store.applyOrg({
-    timezone: "UTC",
-    roles: [
-      { name: "CEO", handle: "ceo" },
-      { name: "SWE", handle: "swe" },
-    ],
-  });
+  store.applyOrg(
+    withDerived({
+      timezone: "UTC",
+      roles: [
+        { name: "CEO", handle: "ceo" },
+        { name: "SWE", handle: "swe" },
+      ],
+    }),
+  );
   setup(store);
   const socket = new LiveSocket(store);
   (
@@ -249,10 +252,12 @@ test("the custom window opens on the company days a named range covers", async (
       </LayerHost>,
       { tokens: rollup(1), viewer: VIEWER },
       (store) =>
-        store.applyOrg({
-          timezone: "Europe/Berlin",
-          roles: [{ name: "SWE", handle: "swe" }],
-        }),
+        store.applyOrg(
+          withDerived({
+            timezone: "Europe/Berlin",
+            roles: [{ name: "SWE", handle: "swe" }],
+          }),
+        ),
     );
     await settle();
     fireEvent.click(screen.getByTitle("Name two company days of your own"));

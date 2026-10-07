@@ -27,6 +27,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import type { WorkProjectDetail, WorkProjectRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -135,7 +136,7 @@ function mount(
 ) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
-  if (org) store.applyOrg(ORG as never);
+  if (org) store.applyOrg(withDerived(ORG) as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string) => {
     const answers: Record<string, unknown> = {
@@ -547,7 +548,7 @@ test("a preset holder reads as their name once the chart arrives", async () => {
   const field = screen.getByPlaceholderText("Type a name or a handle") as HTMLInputElement;
   expect(field.value).toBe("swe");
   await act(async () => {
-    store.applyOrg(ORG as never);
+    store.applyOrg(withDerived(ORG) as never);
   });
   await settle();
   expect(field.value).toBe("Agent SWE");

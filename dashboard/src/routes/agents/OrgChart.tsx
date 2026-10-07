@@ -44,7 +44,6 @@ import {
   type RefObject,
 } from "react";
 import {
-  Callout,
   EmptyState,
   StatusDot,
   Tag,
@@ -258,16 +257,6 @@ export function OrgChart() {
       {/* A SAVE IS NOT AN APPLY: until this node applies the revision the
           builder saved, the projection the chart draws is the previous one. */}
       <PreviousRevisionNote />
-      {/* A HIERARCHY THAT DOES NOT DESCRIBE THE TREE IS NOT A HIERARCHY. Where
-          the engine's `derived` block does not pair with the seats it came
-          with, nobody reports to anybody as far as this client can say, so
-          every seat is a root and no unit has a lead to box it under. */}
-      {!index.hierarchy && (
-        <Callout variant="info">
-          The engine’s derived hierarchy does not match this org, so the chart cannot say who
-          reports to whom: every seat is drawn on its own, and no unit is boxed under its lead.
-        </Callout>
-      )}
       {phone ? (
         <OrgOutline
           chart={chart}

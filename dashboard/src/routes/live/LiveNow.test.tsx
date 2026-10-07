@@ -22,6 +22,7 @@ import type { EventEnvelope } from "~/protocol/index.ts";
 import { LiveNow, stripOf } from "./LiveNow.tsx";
 import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -107,7 +108,7 @@ function mount({
   location.hash = hash;
   const store = new Store();
   store.applyHealth(healthFrame());
-  store.applyOrg(ORG as never);
+  store.applyOrg(withDerived(ORG) as never);
   store.applyAgents(agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];

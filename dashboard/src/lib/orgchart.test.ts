@@ -50,17 +50,6 @@ test("the seats of a unit its lead leads from outside are boxed, with the unit's
   ]);
 });
 
-// A DERIVED BLOCK THAT DOES NOT DESCRIBE THE ORG leaves nobody reporting to
-// anybody: every seat is a root, and no unit has a lead to box it under. The
-// chart draws that rather than a hierarchy this client made up.
-test("with an undescribed hierarchy every seat is a root and nothing is boxed", () => {
-  const flat = { ...CHART_ORG, derived: { seats: [], units: [] } } as OrgProjection;
-  const chart = buildOrgChart(indexOrg(flat), PROJECTS);
-  expect(chart.nodes.every((n) => !n.children)).toBe(true);
-  expect(chart.nodes).toHaveLength(7);
-  expect(chart.groups).toEqual([]);
-});
-
 // THE LEGEND IS THE ENGINE'S WORD, COUNTED — and a seat with no row yet is
 // counted nowhere, because "no state yet" is not idle. A human is never
 // counted: the engine runs no human seat.

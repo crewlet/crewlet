@@ -155,24 +155,17 @@ export function SeatPeek({ handle }: { handle: string }) {
     );
   }
   return (
-    <SeatPeekBody
-      seat={seat}
-      agent={liveRow(agents, handle, seat)}
-      hierarchy={index.hierarchy}
-      nameOf={nameOfIn(index)}
-    />
+    <SeatPeekBody seat={seat} agent={liveRow(agents, handle, seat)} nameOf={nameOfIn(index)} />
   );
 }
 
 function SeatPeekBody({
   seat,
   agent,
-  hierarchy,
   nameOf,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
-  hierarchy: boolean;
   nameOf: (key: string) => string;
 }) {
   const now = useNow();
@@ -278,10 +271,8 @@ function SeatPeekBody({
               />
               {seat.manager.name}
             </a>
-          ) : hierarchy ? (
-            "Nobody — the top of the chart"
           ) : (
-            <EmptyValue label="Unknown — the engine’s hierarchy does not match this org" />
+            "Nobody — the top of the chart"
           )}
         </dd>
 

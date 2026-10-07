@@ -1176,10 +1176,9 @@ export interface OrgUnit {
  * ENGINE derived from that document.
  *
  * `derived` is absent only on `{}`, a node running no company, and comes from
- * the same document as the tree beside it. A screen never reconstructs what
- * it says from the authored tree: where the two do not pair, `lib/seats.ts`
- * reports the hierarchy as unknown (`OrgIndex.hierarchy`) rather than
- * concluding anything itself.
+ * the same document as the tree beside it in the same call, so the two pair
+ * by construction. A screen never reconstructs what it says from the
+ * authored tree: `lib/seats.ts` lays it over the tree as the authority.
  */
 export interface OrgProjection {
   name?: string;

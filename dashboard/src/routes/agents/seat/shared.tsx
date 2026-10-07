@@ -70,7 +70,7 @@ export function SettingsState({
         size="compact"
         icon={<KeyGlyph size={32} />}
         title={`More than one seat is named ${seat.name}`}
-        description="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
+        description="The active revision holds two seats with this name, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
       />
     );
   }

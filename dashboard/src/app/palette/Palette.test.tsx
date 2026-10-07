@@ -22,6 +22,7 @@ import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { remember } from "~/lib/recents.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -153,7 +154,7 @@ function mount({
   vi.mocked(useViewer).mockReturnValue(viewer);
   const store = new Store();
   store.setConnected(true);
-  store.applyOrg(ORG as never);
+  store.applyOrg(withDerived(ORG) as never);
   store.applyAgents(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((kind: string, params?: Record<string, unknown>) => {

@@ -2035,8 +2035,7 @@ rows, because the questions put to them are theirs to answer and their work is
 changed from the work screens. The one change released there is a LEAD's
 reorder — anybody above them in the chart, as the tracker defines a lead — and
 the page says before the press that the reorder is stamped with the reader's
-name and tells them what is now first. Where the engine sent no hierarchy,
-whether the reader leads them is unknown and the sentence says so.
+name and tells them what is now first.
 
 ### A task's page is one reading
 
@@ -2136,9 +2135,8 @@ and the CTO who share Executives are peers on a line, not a team. The chart is
 built by `lib/orgchart.ts` from the projection this node has APPLIED, never the
 builder's draft — a test holds that it imports none of the builder's model —
 so between a save and this node applying it the chart has not moved, and the
-"still applying revision …" note says so. A derived hierarchy that does not
-describe the tree it arrived with leaves every seat a root and says why,
-rather than drawing a hierarchy the client made up. **The field runs to the sheet's edges**, dotted,
+"still applying revision …" note says so. Every reporting line is the
+engine's derived one; the client draws no hierarchy of its own. **The field runs to the sheet's edges**, dotted,
 under the tabs, as the artboard draws it — the screen's padding and the
 canvas's own frame are taken back for this one screen, because every pixel of
 them was a pixel of every card. **The chart opens fitted and centred**, and so
@@ -2234,9 +2232,7 @@ handle or unit) — one field, where every Agents section has it, rather than a
 second box in the roster's own toolbar. **Teams** (`#/agents/teams`) is the
 units nested as the document nests them — the seats above every unit first —
 each with its project key, kind, effective lead ("(inherited)" where it is),
-headcount, purpose, goals and seats; where the engine's derived block does not
-describe the tree a unit declaring no lead reads "Lead unknown" rather than a
-blank.
+headcount, purpose, goals and seats.
 A unit's own page is `#/agents/teams/{unit}`.
 
 ### A seat's profile
@@ -6193,12 +6189,12 @@ brings that carries a design-system rule.
   indexes that block over the authored tree and implements none of the rules:
   its earlier TypeScript copy derived a different handle than Go for a name
   like "İlker Demir", and a handle keys a seat's memory. The engine derives
-  both halves from one document in one call, so they always pair; a block
-  that does not describe the tree it arrived with — which only an engine fault
-  sends — is not laid over it: the tree is indexed as the document wrote it,
-  and every screen reports reporting lines and inherited leads as unknown
-  rather than computing them. `{}`, a node running no company, is an empty
-  hierarchy rather than an unknown one.
+  both halves from one document in one call, so they always pair, and the
+  block is laid over the tree as the authority rather than checked against
+  it — there is no "hierarchy not reported" state for a screen to draw. Seats
+  pair by name, and where a revision a newer node activated holds one name
+  twice each derived seat claims its own entry. `{}`, a node running no
+  company, is an empty company.
 - **What a redacted document holds is shown as what it is.** A credential
   field arrives as one whole `${VAR}` reference, shown as the name it is, or
   as the engine's mask, shown as "A literal value is set (hidden)". The mask is

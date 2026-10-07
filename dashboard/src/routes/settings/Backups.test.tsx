@@ -23,6 +23,7 @@ import { clearToken, storeToken } from "~/protocol/authToken.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BackupsAnswer } from "~/contract/backups.ts";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
@@ -108,7 +109,7 @@ function mount(
   { strict = false, historySeconds = (30 * 86_400) as number | null } = {},
 ) {
   const store = new Store();
-  store.applyOrg(org as never);
+  store.applyOrg(withDerived(org) as never);
   // A NULL FLOOR IS NO HEALTH READ YET: the socket is open and no frame has
   // arrived, so how far back the log goes is not known.
   if (historySeconds !== null) {

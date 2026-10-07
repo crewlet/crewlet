@@ -14,6 +14,7 @@ import { DRAFT_STORAGE_KEY, type DraftStorage, type KeptDraft } from "./model/pe
 import { templateIntent } from "./model/templates.ts";
 import { countingKeys, fixtureDerived } from "./model/testkit.ts";
 import { company, Engine, json, mountBuilder } from "./testkit.tsx";
+import { withDerived } from "~/test/org.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -108,7 +109,7 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
   engine.document = next;
   engine.revision = "r2";
   const reads = engine.sent("GET").length;
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
   expect(await screen.findByText("The configuration changed")).toBeDefined();
   // The base under the offer is not read again: a Keep pressed while a newer
   // base waited for its first check would be refused, and the kept draft

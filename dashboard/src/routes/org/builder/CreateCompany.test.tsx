@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { clearSavedRevision } from "./savedRevision.ts";
 import { company, Engine, mountBuilder, type SentRequest } from "./testkit.tsx";
+import { withDerived } from "~/test/org.ts";
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -153,7 +154,7 @@ test("a company another node creates is reported by the org push, with no edit",
   await screen.findByText("No problems");
   engine.document = company();
   engine.revision = "r1";
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
   expect(
     await screen.findByRole("dialog", { name: "A company already exists on this engine" }),
   ).toBeDefined();

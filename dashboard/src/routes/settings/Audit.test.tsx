@@ -26,6 +26,7 @@ import { Audit, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -81,13 +82,15 @@ function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
   const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Acme",
-    roles: [
-      { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
-      { name: "Jane Founder", handle: "jane", kind: "human" },
-    ],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Acme",
+      roles: [
+        { name: "Ada Okonkwo", handle: "ada", kind: "agent" },
+        { name: "Jane Founder", handle: "jane", kind: "human" },
+      ],
+    }) as never,
+  );
   return query;
 }
 

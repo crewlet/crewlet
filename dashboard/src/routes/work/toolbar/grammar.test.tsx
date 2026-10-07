@@ -39,6 +39,7 @@ import { pick } from "~/testing.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { filterChips, NO_FILTERS, URL_HOMES, type TrackerFilters } from "~/lib/work.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -187,10 +188,12 @@ function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
   const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
-  vi.mocked(useOrg).mockReturnValue({
-    name: "Acme",
-    roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
-  } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Acme",
+      roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
+    }) as never,
+  );
   return query;
 }
 

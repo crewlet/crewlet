@@ -1937,9 +1937,7 @@ theirs to answer — the engine refuses anybody else — and their work is chang
 from the work screens. The one exception is the authority the tracker grants
 across people: somebody **above them in the chart** may reorder their queue,
 and the page says before the press that the reorder is stamped with the
-reader's name and tells them what is now first. Where the engine did not
-report its hierarchy, who leads whom is unknown and the page says that rather
-than refusing a lead.
+reader's name and tells them what is now first.
 
 **The Queue is the work list, narrowed to one person.** It is the same
 screen `#/work` is — the five shapes, the Filter and Display menus, the

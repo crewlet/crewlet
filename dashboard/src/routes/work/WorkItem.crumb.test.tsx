@@ -20,6 +20,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -52,7 +53,7 @@ async function settle() {
 function mount(answers: Record<string, unknown>) {
   location.hash = "#/work/ENG-1";
   const store = new Store();
-  store.applyOrg({ name: "Acme", roles: [], units: [] });
+  store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(answers[what] ?? {});

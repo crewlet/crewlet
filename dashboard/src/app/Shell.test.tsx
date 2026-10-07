@@ -27,6 +27,7 @@ import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
 import { Project } from "~/routes/work/Project.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -1081,7 +1082,7 @@ test("the lockup is the company's name beside the product's mark, and goes home"
     document.querySelector<HTMLAnchorElement>(".crewlet-app-shell a[href='#/home']");
   // Before the company is known the product stands in.
   expect(home()?.textContent).toContain("Crewlet");
-  act(() => store.applyOrg({ name: "Nimbus", roles: [], units: [] }));
+  act(() => store.applyOrg(withDerived({ name: "Nimbus", roles: [], units: [] })));
   expect(home()?.textContent).toContain("Nimbus");
   expect(home()?.textContent).not.toContain("Crewlet");
   expect(home()?.querySelector("img")?.getAttribute("src")).toBe(

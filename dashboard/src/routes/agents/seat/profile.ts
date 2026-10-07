@@ -60,8 +60,8 @@ export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
  *
  * Three lookups rather than one, because a handle reaches this screen spelled
  * three ways: a link built from the roster carries the handle, a link built
- * from a config field carries the ROLE NAME (`seatPath` addresses a seat the
- * engine reported no handle for by name), and a pasted URL carries whatever
+ * from a config field carries the ROLE NAME (`seatPath` addresses a document
+ * entry that declares no handle by name), and a pasted URL carries whatever
  * somebody typed.
  */
 export function findSeat(index: OrgIndex, handle: string): Seat | null {

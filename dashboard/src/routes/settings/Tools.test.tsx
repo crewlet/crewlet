@@ -30,6 +30,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
+import { withDerived } from "~/test/org.ts";
 
 // What the registry advertises for a tool whose server sent no hints: four
 // `unknown`s, which is what the engine writes rather than leaving the object
@@ -238,7 +239,7 @@ function mount(
 ) {
   const store = new Store();
   store.applyTools(tools);
-  store.applyOrg(roster as never);
+  store.applyOrg(withDerived(roster) as never);
   store.setConnected(true);
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {

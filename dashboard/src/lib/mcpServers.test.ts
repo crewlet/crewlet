@@ -6,8 +6,9 @@
 import { expect, test } from "vitest";
 import { NAME_EXAMPLES, nameExample, reachOf, serversUpLine } from "./mcpServers.ts";
 import { indexOrg } from "./seats.ts";
+import { withDerived } from "~/test/org.ts";
 
-const seatsOf = (roles: unknown[]) => indexOrg({ name: "Acme", roles } as never).seats;
+const seatsOf = (roles: unknown[]) => indexOrg(withDerived({ name: "Acme", roles }) as never).seats;
 
 // AN EXAMPLE IS SOMETHING A READER COPIES, so it is never a name the company
 // already has — copying one walked straight into "already exists".

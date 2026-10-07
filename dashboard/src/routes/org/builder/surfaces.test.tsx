@@ -21,6 +21,7 @@ import { company, Engine, mountBuilder } from "./testkit.tsx";
 import { LayoutObserver } from "./viewTestkit.tsx";
 import { focusables } from "@crewlethq/ui";
 import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testing.tsx";
+import { withDerived } from "~/test/org.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -358,7 +359,7 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
   next.roles![1]!.goal = "Design things";
   engine.document = next;
   engine.revision = "r2";
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  act(() => store.applyOrg(withDerived({ name: "Acme", roles: [], units: [] })));
 
   // Stood on the newer revision, and checked there.
   await waitFor(() =>

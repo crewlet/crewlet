@@ -21,6 +21,7 @@ import { buildHash } from "./router.tsx";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -451,10 +452,12 @@ describe("live state reaches the screen", () => {
     // synchronously renders the screen the reader was on before.
     location.hash = "#/agents/roster";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     store.applyAgents([{ role: "CEO", activity: "working" }]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -473,10 +476,12 @@ describe("live state reaches the screen", () => {
     resetStarsForTest();
     location.hash = "#/agents/seats/ceo";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -501,10 +506,12 @@ describe("live state reaches the screen", () => {
   test("a seat whose handle is a reserved word opens its own page", () => {
     location.hash = "#/agents/seats/roster";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "Rota Keeper", handle: "roster", goal: "Keep the rota" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "Rota Keeper", handle: "roster", goal: "Keep the rota" }],
+      }),
+    );
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -533,10 +540,12 @@ describe("live state reaches the screen", () => {
     // match no branch: the header and the strip, and then nothing.
     location.hash = "#/agents/seats/ceo?tab=zzz";
     const { store, view } = mount();
-    store.applyOrg({
-      name: "Acme",
-      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
-    });
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+      }),
+    );
     store.applyAgents([{ role: "CEO", activity: "working" }]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -601,7 +610,7 @@ describe("a turn watched to its end", () => {
   function seatView() {
     location.hash = "#/agents/seats/ceo?tab=turns";
     const { store, view } = mount();
-    store.applyOrg(seat);
+    store.applyOrg(withDerived(seat));
     const redraw = () =>
       view.rerender(
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>

@@ -121,8 +121,8 @@ export function SeatScreen({ handle }: { handle: string }) {
   const seat = findSeat(index, handle);
   const human = seat?.kind === "human";
   // THE TRAIL NAMES THE SEAT, not the slug the URL addresses it by — keyed on
-  // the RAW SEGMENT, which is what `crumbsFor` looks up (a seat the engine
-  // reported no handle for is addressed by name). And where it sits: its
+  // the RAW SEGMENT, which is what `crumbsFor` looks up (a link built from a
+  // document entry declaring no handle addresses the seat by name). And where it sits: its
   // unit, as a way back to the team, and its kind, which the crumb's badge
   // draws as the outline every other seat badge wears. Nothing for a seat
   // with no name, which would title the tab " · Crewlet".

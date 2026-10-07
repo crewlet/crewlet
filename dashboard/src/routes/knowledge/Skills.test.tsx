@@ -14,6 +14,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -61,7 +62,7 @@ afterEach(() => {
 function mount(answers: Record<string, unknown>) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
-  store.applyOrg(ORG as never);
+  store.applyOrg(withDerived(ORG) as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   socket.query = ((what: string, params?: Record<string, unknown>) => {
