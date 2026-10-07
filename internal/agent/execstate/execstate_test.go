@@ -382,15 +382,22 @@ func TestAnAnsweredStateHasNoDanglingCallLeft(t *testing.T) {
 // its own fields would find the ones that moved empty and resume believing
 // every round before the suspend had called nothing — so it would re-fire
 // whatever they delivered.
+//
+// The retired number is one of them: 1 named an earlier shape, and a blob
+// carrying it is refused like any other version this build does not read
+// rather than decoded as this one.
 func TestAVersionThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	t.Parallel()
-	blob, err := execstate.Encode(suspended())
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	blob = withVersion(t, blob, execstate.Version+1)
-	got, ok, err := execstate.Decode(blob)
-	if !errors.Is(err, execstate.ErrUnknownVersion) {
-		t.Fatalf("Decode = %+v, %v, %v; want ErrUnknownVersion", got, ok, err)
+	for _, version := range []int{execstate.Version + 1, 1} {
+		blob, err := execstate.Encode(suspended())
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		blob = withVersion(t, blob, version)
+		got, ok, err := execstate.Decode(blob)
+		if !errors.Is(err, execstate.ErrUnknownVersion) {
+			t.Fatalf("Decode(version %d) = %+v, %v, %v; want ErrUnknownVersion",
+				version, got, ok, err)
+		}
 	}
 }

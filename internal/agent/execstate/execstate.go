@@ -45,6 +45,10 @@ import (
 // Bumped only for a change a previous build could MISREAD. An added field a
 // reader can default is not a bump; a changed meaning for an existing field
 // is.
+//
+// It is 2 rather than 1 because 1 named an earlier shape and a number is never
+// reused: a blob carrying 1 is refused as a version this build does not read,
+// never decoded as this one.
 const Version = 2
 
 // State is a suspended Execute loop, whole.
