@@ -84,9 +84,7 @@ const (
 	// settle, and a turn may or may not have run in between. For a claimed
 	// ANSWER the row says which ([RecordedAnswer.TakenAt]), because that is
 	// what decides whether the reply is still owed to the seat when the
-	// claim dies with its process. An ending that lets an answered run's
-	// reply go takes the run into this status as it does
-	// ([PendingStore.OweHandBack]): the row is that ending's from then on.
+	// claim dies with its process.
 	StatusResumed = "resumed"
 
 	// StatusReseed — a paused box was reaped past its pause TTL. The run is
@@ -185,16 +183,15 @@ type Release struct {
 	Fence Fence
 }
 
-// License is what an ending may delete a run's record under
-// ([PendingStore.Finish]): the lease, the statuses and the job it was decided
-// on.
+// License is what an ending may be DECIDED under ([PendingStore.DecideEnding]):
+// the lease, the statuses and the job it was decided on.
 //
 // A LICENSE, NOT A FILTER. It is what this ending is entitled to end, and a run
 // that has moved off it — to a newer lease, another status, another job — is
 // somebody else's to end. An ending that has already reclaimed the run's box
 // takes the widest one there is, because whatever the row says now the run is
-// over; the narrow one belongs to the ending whose delete IS the decision — a
-// claim's own, made without having read the row ([Coordinator.endClaim]).
+// over; the narrow one belongs to the ending whose decision is made without
+// having read the row — a claim's own ([Coordinator.endClaim]).
 type License struct {
 	// Fence is the lease the ending is made under; a newer one owns the
 	// run.
@@ -219,9 +216,10 @@ type License struct {
 	// Unused says the run's recorded answer went unused even where a turn
 	// took it: the claim's own ending, after its turn gave the claim back as
 	// a retry — which says nothing it did reached anybody — and the release
-	// could not land ([LetGo.Taken]). The run is then not deleted while it
-	// holds a recorded answer at all ([ErrAnswerOwed]); every other ending
-	// deletes one a turn took with the run, because it has been used.
+	// could not land. Recorded on the ending ([RecordedEnding.Unused]): the
+	// run is then not deleted while it holds a recorded answer at all
+	// ([ErrAnswerOwed]), and every other ending deletes one a turn took with
+	// the run, because it has been used.
 	Unused bool
 }
 
@@ -229,12 +227,18 @@ type License struct {
 // [License.Launch]. Never a launch id: the store mints those as UUIDs.
 const EveryLaunch = "*"
 
-// LetGo is how an ending lets go of a recorded answer ([PendingStore.OweHandBack]):
-// which answer, the copies it owes the seat for it, and under what.
+// LetGo is how a decided ending lets go of the recorded answer its run still
+// holds ([PendingStore.OweHandBack]): which ending, which answer, and the copies
+// it owes the seat for it.
+//
+// NO LEASE AND NO STATUSES, which the let-go used to carry so that it did not do
+// what the delete after it would refuse. It is a step of an ending that is
+// already DECIDED ([PendingRun.Ending]): the license was the decision's, and
+// the row takes no other write from then on, so nothing can have moved it off
+// that license since.
 type LetGo struct {
-	// Launch is the job the run held when the answer was recorded, matched
-	// exactly.
-	Launch string
+	// Ending is the [RecordedEnding.ID] the let-go is a step of.
+	Ending string
 
 	// Answer is the deliveries the answer was made of
 	// ([RecordedAnswer.EventIDs]); the run must hold exactly that answer.
@@ -242,29 +246,85 @@ type LetGo struct {
 
 	// HandBack is the copies the seat is owed for them ([handBackOf]).
 	HandBack []HandedBack
+}
 
-	// Fence is the lease the ending is made under.
-	Fence Fence
+// Decision is an ending, as [PendingStore.DecideEnding] records it: the license
+// it is decided under, what it announces, and whether the box is reclaimed by
+// whichever attempt finishes it.
+type Decision struct {
+	License License
 
-	// WhileIn is the statuses the ending is licensed for ([License.WhileIn]),
-	// and the let-go is made only from one of them that holds an answer —
-	// [StatusResumed] or [StatusAnswered]. THE ENDING'S OWN LICENSE, because
-	// a let-go is the first write of an ending and must not do what the
-	// delete after it would refuse: a claim's own ending is licensed for the
-	// claim alone, and a release that landed although it reported a failure
-	// has put its run back to [StatusAnswered], owed its retry — a let-go
-	// licensed wider would have taken the reply off that run and ended a run
-	// that was fine.
-	WhileIn []string
+	// Reason and Detail are what the ending announces
+	// ([types.SandboxRunFailed]); an empty Reason announces nothing.
+	Reason, Detail string
 
-	// Taken is whether an answer a turn already took may be let go of: only
-	// by the claim's own ending, when its turn gave the claim back as a
-	// retry — which says nothing it did reached anybody — and the release
-	// could not land, so no retry will take the answer again. False is
-	// every other ending, and a taken answer is then refused with
-	// [ErrAnswerTaken]: it has been used, and a copy would answer the
-	// person twice.
-	Taken bool
+	// Reclaim is whether the box the row names is reclaimed by the attempt
+	// that finishes the ending, before the row is deleted — the ending whose
+	// decision is made without having read the row ([Coordinator.endClaim])
+	// has not touched the box when it is decided.
+	Reclaim bool
+}
+
+// RecordedEnding is an ending DECIDED on a run and not yet finished: what it
+// announces and under which identity, what it hands back, and what it reclaims.
+//
+// THE DECISION IS THE COMMITMENT, and it is recorded because an ending is
+// several effects in several systems — a reply handed back to an inbox, a box
+// reclaimed, an announcement published, a record deleted — and a process can
+// stop between any two. Decided only in the moment of the delete, as an ending
+// was, its announcement could be made only after it, and a node that stopped
+// between the two — or a delete that landed and reported a failure — left a
+// run lost with no account of it; a seat's next holder, finding the row the
+// delete had not taken, announced a reason of its own. Recorded first, every
+// step after it is the SAME ending's, finished by whoever reads the row next —
+// this node's retry, or the seat's next holder — and the announcement goes out
+// BEFORE the delete under the identity recorded here ([RecordedEnding.ID],
+// [RecordedEnding.At]), so a repeat after a crash is the same event to every
+// store that keeps it ((event_time, event_id) is the event store's key, and the
+// fleet's reads merge on it), never a second one.
+//
+// AND IT FREEZES THE RUN: from the decision on, the store refuses every write
+// but the ending's own steps ([ErrRunEnding]) — no claim, no take of the
+// answer, no release, no relaunch, no record of a new answer. That is what
+// makes publishing the announcement before the delete safe: nothing can move
+// the run off the ending once it is announced, so a run is never announced as
+// lost and then resumed.
+type RecordedEnding struct {
+	// ID names the ending, and with the run's turn it derives the id its
+	// announcement is published under ([endingEventID]).
+	ID string `json:"id"`
+
+	// At is when the ending was decided, on the store's clock, and the
+	// instant its announcement carries.
+	At time.Time `json:"at"`
+
+	// Reason and Detail are what it announces; an empty Reason announces
+	// nothing (an ordinary ending, whose turn came back).
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
+
+	// Returned is whether the ending hands a person's answer back to the
+	// seat — one the run held no turn took (or that went [Unused]), or copies
+	// it already owed — decided with the ending, so the announcement says so
+	// whichever attempt makes it.
+	Returned bool `json:"returned,omitempty"`
+
+	// Unused is the license's ([License.Unused]): the recorded answer goes
+	// back to the seat even though a turn took it.
+	Unused bool `json:"unused,omitempty"`
+
+	// Reclaim is the decision's ([Decision.Reclaim]).
+	Reclaim bool `json:"reclaim,omitempty"`
+}
+
+// answerOwed reports whether a run whose ending is decided still holds a
+// person's answer that has to go back to the seat before its record is deleted:
+// one no turn took, or one the ending says went unused.
+func (r PendingRun) answerOwed() bool {
+	if r.Answer == nil {
+		return false
+	}
+	return !r.Answer.Taken() || (r.Ending != nil && r.Ending.Unused)
 }
 
 // Holding are the statuses in which a run holds its seat, so the seat takes no
@@ -668,6 +728,12 @@ type PendingRun struct {
 	// ([Coordinator.retryOwed]).
 	HandBack []HandedBack `json:"hand_back,omitempty"`
 
+	// Ending is the run's ending once one is DECIDED, nil while the run is
+	// live. From the decision on, the row takes no write but the ending's
+	// own steps, and whoever reads it next finishes that ending on the terms
+	// recorded here — see [RecordedEnding].
+	Ending *RecordedEnding `json:"ending,omitempty"`
+
 	// WorkItem is the one work item the launching turn was charged to, nil
 	// when it was on nothing.
 	//
@@ -980,43 +1046,48 @@ type PendingStore interface {
 	ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error)
 
 	// SetStatus moves a run between the live states, fenced on the epoch.
-	// Ending a run is not a status; see Finish.
+	// Ending a run is not a status; see DecideEnding.
 	SetStatus(ctx context.Context, turnID, status string, fence Fence) error
 
-	// Finish ends a run by deleting its record — while the license holds:
-	// see [License] — and hands back the record it deleted, so a caller
-	// acts on what the store held rather than on a snapshot taken before
-	// the tail ran.
+	// DecideEnding records that a run is ENDING, on the terms of d — while
+	// its license holds, see [License] — and hands back the row as it now
+	// stands, its [PendingRun.Ending] the one this call recorded or the one
+	// already there. See [RecordedEnding] for why an ending is decided before
+	// any of it is done.
 	//
-	// The caller reclaims the box FIRST. A record naming a box that is
-	// already gone is harmless (recovery reaps it and a kill of a gone box
-	// is a no-op), while a live box whose record was deleted is named by
-	// nothing and billed until its provider's TTL. The one ending that
-	// inverts that is the one whose LICENSE is the decision — a claim's
-	// own, see [Coordinator.endClaim].
+	// ONE DECISION PER RUN: a run whose ending is already decided keeps it,
+	// and a second decider is handed that one to finish rather than deciding
+	// its own — the first decider's reason, detail and identity are the ones
+	// every attempt announces. And from the decision on, the row refuses every
+	// write but the ending's own steps ([ErrRunEnding]).
 	//
-	// Conditional on the version it read and re-decided on a lost race, so
-	// a delete racing a write sees that write before it deletes. FALSE IS
-	// NOT AN ERROR: the run is already gone, which is the ordinary shape of
-	// two parties reaching the end of one run, or a newer lease owns it, or
-	// it is not what this ending was licensed to end.
+	// FALSE IS NOT AN ERROR: the run is gone, a newer lease than the
+	// license's owns it, or it is not what the license entitles this ending
+	// to end. An error is a decision that may or may not have landed; the
+	// caller decides again, and finds it recorded if it did.
+	DecideEnding(ctx context.Context, turnID string, d Decision) (PendingRun, bool, error)
+
+	// Finish deletes the record of a run whose ending is decided — the
+	// ending named, and only once it owes the seat nothing — and hands back
+	// the record it deleted.
+	//
+	// The ending's other steps come FIRST ([Coordinator.finishEnding]): its
+	// box reclaimed where it says so, the reply it lets go of handed back, and
+	// its announcement published, because nothing reads a deleted row again
+	// and a step left for after the delete is lost to a crash between the
+	// two. FALSE IS NOT AN ERROR: the run is already gone — two parties
+	// finishing one ending — or it is not that ending's.
 	//
 	// A ROW THAT STILL OWES THE SEAT COPIES IS NOT DELETED ([ErrHandBackOwed],
-	// with the row as it stands): the copies are the seat's, nothing reads a
-	// deleted row again, and a delete before their publish loses them to a
-	// crash between the two. The caller publishes them, clears them and
-	// ends the run again ([Coordinator.endRecord]).
-	//
-	// NOR IS A ROW THAT STILL HOLDS A PERSON'S REPLY NO TURN TOOK
-	// ([ErrAnswerOwed], with the row as it stands). The reply's delivery was
-	// spent when it was recorded, so the row is the only thing that still
-	// carries it, and an ending that deleted it lost the reply for good —
-	// which every ending that read its row as something else did: a claim
-	// given back under it, a reap whose fence did not land. The caller lets
-	// the reply go back to the seat ([PendingStore.OweHandBack]) and ends
-	// the run again. A reply a turn took has been used, and goes with the
-	// run.
-	Finish(ctx context.Context, turnID string, license License) (PendingRun, bool, error)
+	// with the row as it stands): the copies are the seat's, and a delete
+	// before their publish loses them. NOR IS A ROW THAT STILL HOLDS A
+	// PERSON'S REPLY NO TURN TOOK ([ErrAnswerOwed], with the row as it
+	// stands) — or, for an ending whose reply went unused, any reply at all:
+	// the reply's delivery was spent when it was recorded, so the row is the
+	// only thing still carrying it. The caller lets it go
+	// ([PendingStore.OweHandBack]), hands it back and finishes again. A reply
+	// a turn took has been used, and goes with the run.
+	Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
 	// clears its box record, reporting whether THIS call won.
@@ -1138,8 +1209,9 @@ type PendingStore interface {
 	// handed back to the seat a second time.
 	//
 	// Only while the run is [StatusResumed] on that launch, still carrying
-	// the answer — not yet let go of by an ending ([PendingStore.OweHandBack])
-	// — and the fence is the row's own lease or a newer one: a seat's next
+	// the answer, its ending not yet decided ([PendingStore.DecideEnding],
+	// which is what makes an ending's let-go of the answer certain) — and
+	// the fence is the row's own lease or a newer one: a seat's next
 	// holder fences the row to its own lease ([PendingStore.ClaimOwnership])
 	// before an ending lets the reply go, so a process that lost the seat
 	// can never take an answer the holder is about to return. That holds
@@ -1155,50 +1227,35 @@ type PendingStore interface {
 	// written again.
 	TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
 
-	// OweHandBack LETS GO of the recorded answer a run is ending without: in
-	// one write, the answer leaves the row and the copies of its deliveries
-	// are recorded as owed to the seat's inbox ([PendingRun.HandBack]), for
-	// the ending to publish before it deletes the row ([PendingStore.Finish]).
-	// Returns the row as written IFF THIS CALL DID.
+	// OweHandBack LETS GO of the recorded answer a run whose ending is
+	// decided still holds: in one write, the answer leaves the row and the
+	// copies of its deliveries are recorded as owed to the seat's inbox
+	// ([PendingRun.HandBack]), for the ending to publish before it deletes the
+	// row ([PendingStore.Finish]). Returns the row as written IFF THIS CALL
+	// DID.
 	//
 	// It is the decline's outbox for the other ways a recorded answer is
 	// let go of: a run that ends before any turn took the reply — no
 	// conversation to re-enter, a claim that could not be given back, a
-	// resume that broke before its turn began, a claim the seat's next
-	// holder reaps after the process that took it stopped, a seat that left
-	// the company. Every one of them has nowhere to send the reply but the
-	// seat's inbox, because the delivery that brought it was spent when the
-	// answer was recorded.
+	// resume that broke before its turn began, a claim the seat's next holder
+	// reaps because the run cannot be resumed with it, a seat that left the
+	// company. Every one of them has nowhere to send the reply but the seat's
+	// inbox, because the delivery that brought it was spent when the answer
+	// was recorded.
 	//
-	// FROM A CLAIM OR FROM AN ANSWERED RUN, because an ending can find
-	// either: the claim it decided on, or a run that went back to
-	// [StatusAnswered] under it — a release that landed and reported a
-	// failure, a reap whose fence did not land before the old holder's
-	// release. Refusing the second read as "nothing to let go of", and the
-	// ending then deleted the reply with the row. An answered run's let-go
-	// takes the claim as it lets go ([StatusResumed]): an answered run
-	// carries its answer, and a row whose answer an ending has let go of is
-	// that ending's to finish, which a reader that finds it after a crash
-	// reaps as the claim it now is ([Coordinator.RecoverSeat]).
+	// ONLY A STEP OF THE ENDING NAMED ([LetGo.Ending]), on the answer named,
+	// and FALSE IS NOT AN ERROR otherwise. The ending was licensed when it was
+	// decided, and the row has taken no other write since — in particular no
+	// TAKE of the answer ([PendingStore.TakeAnswer]), which the decision
+	// fences off — so whether the answer goes back is settled by the decision
+	// itself: one no turn took before it does, and one a turn took does not,
+	// unless the ending says it went unused ([RecordedEnding.Unused]). A taken
+	// answer the ending must not let go is refused with [ErrAnswerTaken].
 	//
-	// THE TAKE AND THE LET-GO ARE EXCLUSIVE IN THIS WRITE. The answer leaves
-	// the row in it, so a turn can no longer take it
-	// ([PendingStore.TakeAnswer]); and an answer a turn already took is
-	// refused with [ErrAnswerTaken] and the row as it stands, unless
-	// [LetGo.Taken] says the reply went unused. So whichever of the two
-	// lands first wins, whatever any fence says, and a let-go repeated after
-	// a crash finds nothing left to let go of rather than a second set of
-	// copies.
-	//
-	// Only while the run holds exactly the answer made of the deliveries
-	// named, on that launch, in a status the ending is licensed for
-	// ([LetGo.WhileIn]), and no newer lease outranks the fence; FALSE IS NOT
-	// AN ERROR. A row that already owes copies refuses with
-	// [ErrHandBackOwed] and the row as it stands, for the bound
-	// [PendingRun.HandBack] states. An answer none of whose deliveries could
-	// be carried owes no copy, and is let go of with nothing to hand back —
-	// what its decline does too: refused, the ending could never be
-	// finished, and its seat's inbox was held behind it for good.
+	// A row that already owes copies refuses with [ErrHandBackOwed] and the
+	// row as it stands, for the bound [PendingRun.HandBack] states. An answer
+	// none of whose deliveries could be carried owes no copy, and is let go
+	// of with nothing to hand back — what its decline does too.
 	OweHandBack(ctx context.Context, turnID string, letGo LetGo) (PendingRun, bool, error)
 
 	// ClearHandBack removes the copies a decline owed the seat's inbox that

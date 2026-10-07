@@ -139,10 +139,9 @@ func TestARetryWhoseRunEndsStoppedBeforeTheClearRepublishesTheSameMessage(t *tes
 func TestARetryWhoseRunEndsStoppedBeforeTheDeleteHandsNothingBackTwice(t *testing.T) {
 	rig := newCoordRig(t)
 	r1, store := owedAnAnswerWhoseRunEnds(t, rig)
-	// THE THIRD FINISH IS THE DELETE: the first is refused for the reply the
-	// claim holds, which the ending lets go of; the second for the copy it
-	// then owes, which the ending publishes and clears.
-	rig.coordinator.pending = &finishUntil{refusingStore: store, allowed: 2}
+	// THE FIRST FINISH IS THE DELETE: the ending lets the reply go and
+	// publishes and clears its copy before it asks for one.
+	rig.coordinator.pending = &finishUntil{refusingStore: store}
 	rig.fireRetries()
 	copyID := declinedCopyID(r1.ID).String()
 	if got := rig.handedBack(); !slices.Equal(got, []string{copyID}) {
@@ -202,22 +201,20 @@ func TestARetryWhoseRunEndsKeepsItsEndingUntilTheReplyIsRecorded(t *testing.T) {
 	}
 }
 
-// finishUntil lets the first allowed Finishes through — the ones the store
-// refuses for what the row still owes the seat — and refuses every later one:
-// a process stopped after the clear, before the delete.
+// finishUntil lets the first allowed deletes through and refuses every later
+// one: a process stopped after the clear, before the delete.
 type finishUntil struct {
 	*refusingStore
 	allowed  int
 	finishes int
 }
 
-func (s *finishUntil) Finish(ctx context.Context, turnID string, license License,
-) (PendingRun, bool, error) {
+func (s *finishUntil) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
 	s.finishes++
 	if s.finishes > s.allowed {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.refusingStore.Finish(ctx, turnID, license)
+	return s.refusingStore.Finish(ctx, turnID, ending)
 }
 
 // releaseLandsThenFails gives every claim back and then reports that it could

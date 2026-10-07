@@ -69,16 +69,16 @@ func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
 	}
 }
 
-// finishFences records the fence every ending is asked under.
+// finishFences records the fence every ending is decided under.
 type finishFences struct {
 	PendingStore
 	fences []Fence
 }
 
-func (s *finishFences) Finish(ctx context.Context, turnID string, license License,
+func (s *finishFences) DecideEnding(ctx context.Context, turnID string, d Decision,
 ) (PendingRun, bool, error) {
-	s.fences = append(s.fences, license.Fence)
-	return s.PendingStore.Finish(ctx, turnID, license)
+	s.fences = append(s.fences, d.License.Fence)
+	return s.PendingStore.DecideEnding(ctx, turnID, d)
 }
 
 func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {

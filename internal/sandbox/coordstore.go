@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -121,8 +122,16 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// or a redelivered kick-off. Only the LAUNCH-SCOPED state is reset: the
 	// identity fields stay the existing row's, and so does the box
 	// reference, which the caller is about to reattach to.
-	_, _, err = s.mutate(ctx, run.TurnID, func(existing *PendingRun) bool {
+	//
+	// A RESET THE ROW REFUSES IS AN ERROR, never a launch that went ahead: a
+	// newer lease owns the run, or its ending is decided ([ErrRunEnding]), or
+	// the record went between the create and the reset. It used to answer
+	// nil, and the launch went on to start a job in a box the row did not
+	// record — killed under it by the ending, or billed and named by nothing.
+	outrankedBy := int64(0)
+	_, reset, err := s.mutateLive(ctx, run.TurnID, func(existing *PendingRun) bool {
 		if outranked(*existing, fence) {
+			outrankedBy = existing.OwnerEpoch
 			return false
 		}
 		existing.Status = StatusLaunching
@@ -167,7 +176,16 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Charged = false
 		return true
 	})
-	return err
+	switch {
+	case err != nil:
+		return fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
+	case outrankedBy > 0:
+		return fmt.Errorf("sandbox: relaunch run %s: a newer lease (epoch %d) than the launch's (%d) "+
+			"owns it", run.TurnID, outrankedBy, fence.Epoch)
+	case !reset:
+		return fmt.Errorf("sandbox: relaunch run %s: its record went before it could be reset", run.TurnID)
+	}
+	return nil
 }
 
 // Get returns one run by turn id.
@@ -253,7 +271,7 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 
 // MarkAwaiting parks a run until a person answers.
 func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
-	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		run.Status = StatusAwaiting
 		run.Question = q.Question
 		run.Audience = q.Audience
@@ -336,7 +354,8 @@ func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, a
 //
 // SUPERSEDED, NOT OUTRANKED: the fence must be the row's own lease or a newer
 // one, a zero fence included — the one write here a zero fence does not
-// exempt. See the contract for why.
+// exempt. See the contract for why. And never once the run's ending is decided,
+// which [CoordStore.mutate] refuses before this decides anything.
 func (s *CoordStore) TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
 	taken := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
@@ -355,8 +374,9 @@ func (s *CoordStore) TakeAnswer(ctx context.Context, turnID, launch string, fenc
 	return won || (err == nil && taken), err
 }
 
-// OweHandBack lets go of the recorded answer a run is ending without, owing its
-// copies to the seat in the same write. See the contract on [PendingStore].
+// OweHandBack lets go of the recorded answer a run whose ending is decided still
+// holds, owing its copies to the seat in the same write. See the contract on
+// [PendingStore].
 func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo) (PendingRun, bool, error) {
 	if len(letGo.Answer) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: letting go of an answer to run %s that "+
@@ -364,14 +384,12 @@ func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo
 	}
 	var owing PendingRun
 	taken, owed := false, false
-	written, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if (run.Status != StatusResumed && run.Status != StatusAnswered) ||
-			!slices.Contains(letGo.WhileIn, run.Status) ||
-			run.LaunchID != letGo.Launch || run.Answer == nil ||
-			outranked(*run, letGo.Fence) || !slices.Equal(run.Answer.EventIDs, letGo.Answer) {
+	written, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		if run.Ending == nil || run.Ending.ID != letGo.Ending || run.Answer == nil ||
+			!slices.Equal(run.Answer.EventIDs, letGo.Answer) {
 			return false
 		}
-		if taken = run.Answer.Taken() && !letGo.Taken; taken {
+		if taken = !run.answerOwed(); taken {
 			owing = *run
 			return false
 		}
@@ -379,9 +397,6 @@ func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo
 			owing = *run
 			return false
 		}
-		// THE CLAIM GOES WITH THE LET-GO: an answered run carries its
-		// answer, and this row is the ending's now.
-		run.Status = StatusResumed
 		run.Answer = nil
 		run.HandBack = nil
 		if len(letGo.HandBack) > 0 {
@@ -400,10 +415,47 @@ func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo
 	return written, won, nil
 }
 
+// DecideEnding records a run's ending, or hands back the one already decided.
+// See the contract on [PendingStore].
+func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision) (PendingRun, bool, error) {
+	var decided PendingRun
+	already := false
+	written, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		license := d.License
+		if outranked(*run, license.Fence) || !slices.Contains(license.WhileIn, run.Status) ||
+			(license.Launch != EveryLaunch && run.LaunchID != license.Launch) {
+			return false
+		}
+		if run.Ending != nil {
+			decided, already = *run, true
+			return false
+		}
+		ending := &RecordedEnding{
+			ID: uuid.NewString(), At: s.clock(),
+			Reason: d.Reason, Detail: d.Detail,
+			Unused: license.Unused, Reclaim: d.Reclaim,
+		}
+		run.Ending = ending
+		// WHAT GOES BACK TO THE SEAT, settled with the ending: copies the
+		// row already owes, and the answer it holds if that is owed — with
+		// a copy to hand back.
+		ending.Returned = len(run.HandBack) > 0 ||
+			(run.answerOwed() && len(run.Answer.Events) > 0)
+		return true
+	})
+	switch {
+	case err != nil:
+		return PendingRun{}, false, err
+	case already:
+		return decided, true, nil
+	}
+	return written, won, nil
+}
+
 // ClearHandBack removes published copies from a run's hand-back. See the
 // contract on [PendingStore].
 func (s *CoordStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {
-	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		kept := slices.DeleteFunc(slices.Clone(run.HandBack), func(h HandedBack) bool {
 			return slices.Contains(ids, h.ID)
 		})
@@ -443,7 +495,7 @@ func boundedDeclined(earlier, newest []string) []string {
 
 // ClaimOwnership moves a run to this node, refusing to steal a newer lease.
 func (s *CoordStore) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
-	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		if run.OwnerEpoch > epoch {
 			// A newer lease already owns it; taking the run would put
 			// two engines on one box.
@@ -460,7 +512,7 @@ func (s *CoordStore) SetStatus(ctx context.Context, turnID, status string, fence
 	if !slices.Contains(Active, status) {
 		return fmt.Errorf("sandbox: unknown status %q", status)
 	}
-	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		if outranked(*run, fence) {
 			return false
 		}
@@ -502,9 +554,17 @@ func (s *CoordStore) ExpirePause(ctx context.Context, turnID string) (bool, erro
 }
 
 // AttachSandbox records which box a run is using, fenced on the epoch.
+//
+// A REFUSED ATTACH IS AN ERROR, like a refused relaunch ([CoordStore.BeginLaunch]):
+// the caller is a launch about to start a job in this box, and a row that did
+// not take it — a newer lease owns the run, or its ending is decided — names
+// some other box, so the launch abandons the box it holds rather than running a
+// job nothing will reclaim.
 func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
-	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	outrankedBy := int64(0)
+	_, attached, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		if outranked(*run, fence) {
+			outrankedBy = run.OwnerEpoch
 			return false
 		}
 		run.SandboxID = box.SandboxID
@@ -521,7 +581,16 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		run.PausedAt = time.Time{}
 		return true
 	})
-	return err
+	switch {
+	case err != nil:
+		return fmt.Errorf("sandbox: attach box %s to run %s: %w", box.SandboxID, turnID, err)
+	case outrankedBy > 0:
+		return fmt.Errorf("sandbox: attach box %s to run %s: a newer lease (epoch %d) than the "+
+			"launch's (%d) owns it", box.SandboxID, turnID, outrankedBy, fence.Epoch)
+	case !attached:
+		return fmt.Errorf("sandbox: attach box %s to run %s: the run has no record", box.SandboxID, turnID)
+	}
+	return nil
 }
 
 // MarkBoxPaused stamps the box as snapshotted, with the instant the pause TTL
@@ -566,7 +635,7 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call B
 	if call.At.IsZero() {
 		call.At = s.clock()
 	}
-	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
 			run.BridgeCalls, run.BridgeCallsElided, call)
 		return true
@@ -629,31 +698,24 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 	})
 }
 
-// Finish ends a run by deleting its record. See the contract on
-// [PendingStore].
+// Finish deletes the record of a run whose ending is decided, once it owes the
+// seat nothing. See the contract on [PendingStore].
 //
-// A read-decide-delete under the record's version, like every flip here: the
-// whole license, and what the row still owes the seat, are evaluated against
-// what the store holds, and a lost race re-reads, so a claim that moved the
-// lease — or a relaunch that moved the status or the job, or a release that
-// put an answer back — in between is seen rather than deleted over. That is
-// what lets a caller that could not read the row hand the decision here
-// instead.
-func (s *CoordStore) Finish(ctx context.Context, turnID string, license License,
-) (PendingRun, bool, error) {
+// A read-decide-delete under the record's version, like every flip here, so a
+// write that lands in between — a let-go, a clear — is seen before the delete.
+func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
 	for range casRetries {
 		run, version, found, err := s.read(ctx, turnID)
 		if err != nil {
 			return PendingRun{}, false, err
 		}
-		if !found || outranked(run, license.Fence) || !slices.Contains(license.WhileIn, run.Status) ||
-			(license.Launch != EveryLaunch && run.LaunchID != license.Launch) {
+		if !found || run.Ending == nil || run.Ending.ID != ending {
 			return PendingRun{}, false, nil
 		}
 		if len(run.HandBack) > 0 {
 			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrHandBackOwed)
 		}
-		if run.Answer != nil && (!run.Answer.Taken() || license.Unused) {
+		if run.answerOwed() {
 			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrAnswerOwed)
 		}
 		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
@@ -684,14 +746,47 @@ func (s *CoordStore) read(ctx context.Context, turnID string) (PendingRun, uint6
 	return run, record.Version, true, nil
 }
 
-// mutate is the read-decide-write every conditional flip runs through.
+// mutate is the read-decide-write every conditional flip of a LIVE run runs
+// through: a run whose ending is decided ([PendingRun.Ending]) is refused before
+// decide is asked, so no write but the ending's own steps can move it — see
+// [RecordedEnding] for why that is what makes an ending announceable before its
+// delete.
 //
 // decide returns whether the change should be written. FALSE IS NOT A FAILURE
 // — it is the condition not holding, which is the answer for a claim somebody
-// else won, a fence a moved lease outranks, or a pause the reaper is too late
-// for. A run that does not exist is the same non-answer, matching the SQL
-// store this replaces, where an UPDATE that matched no row was never an error.
+// else won, a fence a moved lease outranks, a pause the reaper is too late for,
+// or a run that is ending. A run that does not exist is the same non-answer,
+// matching the SQL store this replaces, where an UPDATE that matched no row was
+// never an error.
 func (s *CoordStore) mutate(ctx context.Context, turnID string, decide func(*PendingRun) bool) (PendingRun, bool, error) {
+	run, won, err := s.mutateLive(ctx, turnID, decide)
+	if errors.Is(err, ErrRunEnding) {
+		return PendingRun{}, false, nil
+	}
+	return run, won, err
+}
+
+// mutateLive is [CoordStore.mutate] for a write whose caller must hear that the
+// run's ending refused it — a launch, an attach, a park, a status move: each is
+// followed by work that assumes the write landed. The refusal is
+// [ErrRunEnding].
+func (s *CoordStore) mutateLive(ctx context.Context, turnID string, decide func(*PendingRun) bool) (PendingRun, bool, error) {
+	return s.write(ctx, turnID, true, decide)
+}
+
+// mutateAny is [CoordStore.mutate] for the writes a run whose ending is decided
+// still takes: the ending's own steps (its decision, its let-go, the clear of
+// what it handed back), and the facts that are true whoever holds the row (a
+// lease stamped on it, a bridged call it made).
+func (s *CoordStore) mutateAny(ctx context.Context, turnID string, decide func(*PendingRun) bool) (PendingRun, bool, error) {
+	return s.write(ctx, turnID, false, decide)
+}
+
+// write is the read-decide-write itself; live refuses a run whose ending is
+// decided, with [ErrRunEnding].
+func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
+	decide func(*PendingRun) bool,
+) (PendingRun, bool, error) {
 	for range casRetries {
 		run, version, found, err := s.read(ctx, turnID)
 		if err != nil {
@@ -699,6 +794,9 @@ func (s *CoordStore) mutate(ctx context.Context, turnID string, decide func(*Pen
 		}
 		if !found {
 			return PendingRun{}, false, nil
+		}
+		if live && run.Ending != nil {
+			return PendingRun{}, false, fmt.Errorf("sandbox: run %s: %w", turnID, ErrRunEnding)
 		}
 		next := run
 		if !decide(&next) {
@@ -718,8 +816,9 @@ func (s *CoordStore) mutate(ctx context.Context, turnID string, decide func(*Pen
 		}
 		// Lost the version. RE-READ AND RE-DECIDE rather than re-writing
 		// what we computed: the other writer may have taken the claim,
-		// moved the lease or unparked the run, and every condition above
-		// is evaluated against fields it could have changed.
+		// moved the lease, unparked the run or decided its ending, and
+		// every condition above is evaluated against fields it could have
+		// changed.
 	}
 	return PendingRun{}, false, fmt.Errorf(
 		"sandbox: update run %s: the record kept changing under the write", turnID)

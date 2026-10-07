@@ -105,9 +105,13 @@ func TestASettledRunLeavesTheBoard(t *testing.T) {
 	store := seedRuns(t, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
 	})
-	if _, _, err := store.Finish(t.Context(), "t1", sandbox.License{
-		WhileIn: sandbox.Active, Launch: sandbox.EveryLaunch,
-	}); err != nil {
+	decided, ok, err := store.DecideEnding(t.Context(), "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Active, Launch: sandbox.EveryLaunch},
+	})
+	if err != nil || !ok {
+		t.Fatalf("DecideEnding = %v, %v", ok, err)
+	}
+	if _, _, err := store.Finish(t.Context(), "t1", decided.Ending.ID); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
 	if rows := askRuns(t, store); len(rows) != 0 {

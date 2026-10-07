@@ -252,7 +252,11 @@ agent_spawned, agent_terminated
 #       lifecycle here: work's own record is the tracker's history
 task_assigned              # published to the seat's inbox by the scheduler
 sandbox_run_started, sandbox_clarification_requested
-sandbox_run_completed, sandbox_run_failed
+sandbox_run_completed
+sandbox_run_failed         # a run lost, once: published under an id and an
+                           # instant its ending recorded on the run's row, so
+                           # the node that finishes an ending another decided
+                           # repeats the same event (the store keys on it)
 sandbox_run_answered       # what an answer to a parked run's question became
                            # (resumed | not_awaiting | gone), by which route
                            # (chat | operator) and from whom. The operator

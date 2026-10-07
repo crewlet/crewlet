@@ -257,10 +257,9 @@ func TestAReapStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
 func TestAReapStoppedBeforeItsDeleteHandsNothingBackTwice(t *testing.T) {
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, false)
-	// THE THIRD FINISH IS THE DELETE: the first is refused for the reply the
-	// row holds, which the reap lets go of; the second for the copy it then
-	// owes, which the reap publishes and clears.
-	reaper(t.Context(), t, rig, &finishUntil{refusingStore: &refusingStore{inner: rig.pending}, allowed: 2},
+	// THE FIRST FINISH IS THE DELETE: the reap lets the reply go and
+	// publishes and clears its copy before it asks for one.
+	reaper(t.Context(), t, rig, &finishUntil{refusingStore: &refusingStore{inner: rig.pending}},
 		2, nil)
 	copyID := declinedCopyID(r1.ID).String()
 	if got := rig.get("t1"); got.Answer != nil || len(got.HandBack) != 0 {
@@ -618,24 +617,25 @@ func parkUnfenced(t *testing.T, rig *coordRig) {
 	}
 }
 
-// takeBeforeLetGo runs a stalled node's take at the instant the reap lets the
-// reply go — the window the old holder can wake in — and can fail the reap's
-// fence.
-type takeBeforeLetGo struct {
+// takeBeforeEnding runs a stalled node's take at the instant the reap decides
+// its ending — the last window the old holder can wake in, since a decided
+// ending takes no take — and can fail the reap's fence.
+type takeBeforeEnding struct {
 	PendingStore
 	take        func(ctx context.Context)
 	refuseFence bool
 }
 
-func (s *takeBeforeLetGo) OweHandBack(ctx context.Context, turnID string, letGo LetGo) (PendingRun, bool, error) {
+func (s *takeBeforeEnding) DecideEnding(ctx context.Context, turnID string, d Decision,
+) (PendingRun, bool, error) {
 	if s.take != nil {
 		s.take(ctx)
 		s.take = nil
 	}
-	return s.PendingStore.OweHandBack(ctx, turnID, letGo)
+	return s.PendingStore.DecideEnding(ctx, turnID, d)
 }
 
-func (s *takeBeforeLetGo) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
+func (s *takeBeforeEnding) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
 	if s.refuseFence {
 		return false, errRefusedCall
 	}
@@ -644,8 +644,8 @@ func (s *takeBeforeLetGo) ClaimOwnership(ctx context.Context, turnID, owner stri
 
 // A STALLED NODE THAT HELD NO LEASE CANNOT TAKE THE ANSWER ITS SUCCESSOR FENCED.
 // The run sits at the zero epoch, and the node claimed it for the answer's
-// resume under no lease and stalled. The successor fences the row and starts to
-// let the reply go — and the stalled node wakes and tries to take the answer
+// resume under no lease and stalled. The successor fences the row and is about
+// to decide its ending — and the stalled node wakes and tries to take the answer
 // for its turn. A zero fence constrains nothing for any other write, and here it
 // used to land: the stalled turn ran with the reply AND the successor handed it
 // back. A take must now hold the row's lease or a newer one, so it is refused,
@@ -667,7 +667,7 @@ func TestAStalledTakeUnderNoLeaseLosesToTheReapThatFencedTheRow(t *testing.T) {
 	rig.coordinator.Stop()
 
 	took := false
-	store := &takeBeforeLetGo{PendingStore: rig.pending, take: func(ctx context.Context) {
+	store := &takeBeforeEnding{PendingStore: rig.pending, take: func(ctx context.Context) {
 		ok, err := rig.pending.TakeAnswer(ctx, "t1", launch, fenceOf(claimed))
 		if err != nil {
 			t.Errorf("the stalled node's take: %v", err)
@@ -687,17 +687,18 @@ func TestAStalledTakeUnderNoLeaseLosesToTheReapThatFencedTheRow(t *testing.T) {
 
 // A REAP WHOSE FENCE DID NOT LAND, RACED BY A TAKE THAT DID, ANSWERS THE PERSON
 // ONCE — by the turn. Nothing outranks the stalled node's lease, so its take
-// lands between the reap's decision and its let-go; the let-go then finds the
-// answer taken and the store refuses it, so the reap ends the run as spent, with
-// nothing handed back and an announcement that does not say the reply went back.
-// It used to hand the copy back as well, and call the duplicate the cost of a
-// case that was genuinely unclear; the store's own write decides it.
+// lands just before the reap decides its ending; the decision sees the answer
+// taken, so the reap ends the run as spent, with nothing handed back and an
+// announcement that does not say the reply went back. A take that came a moment
+// later would be refused by the decision instead, and the copy handed back. It
+// used to hand the copy back as well, and call the duplicate the cost of a case
+// that was genuinely unclear; the store's own writes decide it.
 func TestAReapWhoseFenceFailedLosesToATakeThatLanded(t *testing.T) {
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	launch := rig.get("t1").LaunchID
 	took := false
-	store := &takeBeforeLetGo{PendingStore: rig.pending, refuseFence: true, take: func(ctx context.Context) {
+	store := &takeBeforeEnding{PendingStore: rig.pending, refuseFence: true, take: func(ctx context.Context) {
 		ok, err := rig.pending.TakeAnswer(ctx, "t1", launch, rigLease)
 		if err != nil {
 			t.Errorf("the stalled node's take: %v", err)

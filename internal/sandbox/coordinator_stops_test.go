@@ -600,14 +600,19 @@ func (d entryDrive) run(t *testing.T, status, refused string) []string {
 // changes this answer with it rather than leaving a second, older opinion here.
 // [StatusLaunching] counts although nothing claims it: its turn has not
 // suspended yet, so the frame that raised whatever is held up is still on the
-// stack and ends it itself.
+// stack and ends it itself. A run whose ending is decided comes back to nothing
+// whatever its status says: the row takes no write but the ending's own.
 func willComeBack(run PendingRun, found bool) bool {
-	return found && (slices.Contains(Claimable, run.Status) || run.Status == StatusLaunching)
+	return found && run.Ending == nil &&
+		(slices.Contains(Claimable, run.Status) || run.Status == StatusLaunching)
 }
 
 func describeRow(run PendingRun, found bool) string {
-	if !found {
+	switch {
+	case !found:
 		return "no record at all"
+	case run.Ending != nil:
+		return "status " + run.Status + ", its ending decided"
 	}
 	return "status " + run.Status
 }
@@ -715,12 +720,19 @@ func (s *refusingStore) SetStatus(ctx context.Context, turnID, status string, fe
 	return s.inner.SetStatus(ctx, turnID, status, fence)
 }
 
-func (s *refusingStore) Finish(ctx context.Context, turnID string, license License,
+func (s *refusingStore) DecideEnding(ctx context.Context, turnID string, d Decision,
 ) (PendingRun, bool, error) {
+	if s.called("DecideEnding") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.DecideEnding(ctx, turnID, d)
+}
+
+func (s *refusingStore) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
 	if s.called("Finish") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.Finish(ctx, turnID, license)
+	return s.inner.Finish(ctx, turnID, ending)
 }
 
 func (s *refusingStore) ExpirePause(ctx context.Context, turnID string) (bool, error) {

@@ -1576,16 +1576,25 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	}
 }
 
-// endedFirst is a store where another party always ends a run a moment
-// before this caller does.
+// endedFirst is a store where another party always ends a run — decides its
+// ending, finishes it and deletes the record — a moment before this caller
+// decides one.
 type endedFirst struct{ PendingStore }
 
-func (s endedFirst) Finish(ctx context.Context, turnID string, license License,
+func (s endedFirst) DecideEnding(ctx context.Context, turnID string, d Decision,
 ) (PendingRun, bool, error) {
-	if _, _, err := s.PendingStore.Finish(ctx, turnID, license); err != nil {
+	other := d
+	other.Reason, other.Detail = "", ""
+	decided, ok, err := s.PendingStore.DecideEnding(ctx, turnID, other)
+	if err != nil {
 		return PendingRun{}, false, err
 	}
-	return s.PendingStore.Finish(ctx, turnID, license)
+	if ok {
+		if _, _, err := s.PendingStore.Finish(ctx, turnID, decided.Ending.ID); err != nil {
+			return PendingRun{}, false, err
+		}
+	}
+	return s.PendingStore.DecideEnding(ctx, turnID, d)
 }
 
 // ---------------------------------------------------------------------
@@ -3890,11 +3899,10 @@ type finishWitness struct {
 	finished, killedFirst bool
 }
 
-func (w *finishWitness) Finish(ctx context.Context, turnID string, license License,
-) (PendingRun, bool, error) {
+func (w *finishWitness) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
 	w.finished = true
 	w.killedFirst = slices.Contains(w.provider.KilledIDs(), w.box)
-	return w.PendingStore.Finish(ctx, turnID, license)
+	return w.PendingStore.Finish(ctx, turnID, ending)
 }
 
 // EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK, and a run parked before

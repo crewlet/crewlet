@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -65,10 +67,17 @@ var ErrAnswerOwed = errors.New("sandbox: the run still holds a person's reply th
 
 // ErrAnswerTaken is a store's refusal to let go of a recorded answer a resumed
 // turn already took ([PendingStore.OweHandBack]): the reply has been used, and
-// a copy handed back now would answer the person twice. It is what keeps the
-// take and the let-go exclusive in the store's own compare-and-set, whichever
-// lands first.
+// a copy handed back now would answer the person twice.
 var ErrAnswerTaken = errors.New("sandbox: a resumed turn already took the reply")
+
+// ErrRunEnding is a store's refusal of a write to a run whose ending is decided
+// ([PendingRun.Ending]): from the decision on, the row takes nothing but the
+// ending's own steps — no claim, no take, no release, no relaunch, no new
+// answer, no park — which is what lets the ending be announced before its record
+// is deleted (see [RecordedEnding]). It is what keeps the take and the let-go
+// exclusive: a take that lands first is seen by the decision, and one that comes
+// after it is refused.
+var ErrRunEnding = errors.New("sandbox: the run's ending is decided, so it takes no other write")
 
 // Resumer re-enters a suspended Execute loop.
 //
@@ -255,7 +264,7 @@ type CoordinatorOptions struct {
 	//
 	// IT IS REPORTED WHERE THE TRANSITION IS MADE, NOT WHERE A LIST SAYS,
 	// which is what this contract no longer has to enumerate. Every ending
-	// deletes the run's record, and every deletion goes through
+	// is decided on the run's record, and every decision goes through
 	// [Coordinator.endRecord], which reports; the one stop that is not an
 	// ending, [Coordinator.park], reports for itself. So there are two
 	// reporting sites for two kinds of transition, however many callers
@@ -265,14 +274,14 @@ type CoordinatorOptions struct {
 	// the time it was written: a retirement ends runs too, and it reported
 	// separately because it cannot use [Coordinator.finish]. Counting
 	// callers is the same hand-enumeration that missed four endings in a
-	// row; keying the report to the deletion is what ends it.
+	// row; keying the report to the decision is what ends it.
 	//
 	// Both report only where the transition was THIS call's — the same gate
 	// the failure announcement takes, since a run a newer lease owns or one
 	// somebody else ended first is that party's to settle, to explain and to
 	// drop the holds of. Over-reporting is harmless and under-reporting is
-	// the defect, so a path that cannot tell reports: a delete that errored
-	// may have landed, and it reports rather than staying quiet.
+	// the defect, so a path that cannot tell reports: a decision that
+	// errored may have landed, and it reports rather than staying quiet.
 	//
 	// After the durable write and before the announcement, never the other
 	// way round: until the park is on the row the completion can still be
@@ -1855,25 +1864,23 @@ var claimedOnly = []string{StatusResumed}
 // for its retry ([errEndingOwed]).
 //
 // THE CONDITION MOVES TO THE STORE, which is what makes acting without the
-// read safe. A delete licensed for this claim alone declines a run that moved
-// off it: a relaunch the resumed turn made takes the row through
+// read safe. An ending licensed for this claim alone is not decided on a run
+// that moved off it: a relaunch the resumed turn made takes the row through
 // [StatusLaunching] and a new job, and the claim that job's own completion
 // takes is the same status on another job — which a license on the status
-// alone deleted, box and all. A release that LANDED although it reported a
+// alone ended, box and all. A release that LANDED although it reported a
 // failure puts the run back where the claim found it, and an ending licensed
-// for every status then deleted a run that was fine, with the person's reply
-// on it. Declined, either is left to whatever moved it.
+// for every status then ended a run that was fine, with the person's reply on
+// it. Declined, either is left to whatever moved it.
 //
-// DELETED FIRST AND RECLAIMED SECOND, the one inversion of
+// DECIDED FIRST AND RECLAIMED SECOND, the one inversion of
 // [Coordinator.finish]'s order, and for the reason that order exists: here the
-// delete IS the decision, so reclaiming first would destroy the box before
-// anything had established the row was still this call's to end — the box of a
-// relaunch, or of a run handed back for its retry. The window it opens is a
-// crash between the two, which leaves a box named by nothing until its
-// provider's TTL or the local orphan reaper takes it. The reclaim rides the
-// ending ([ending.reclaim]), so an ending kept for its retry reclaims the box
-// when the retry deletes the row, rather than leaving the box billed behind a
-// record that is gone.
+// decision is what establishes the row was still this call's to end, so
+// reclaiming first would destroy the box before it — the box of a relaunch, or
+// of a run handed back for its retry. The reclaim rides the recorded ending
+// ([RecordedEnding.Reclaim]), so whichever attempt finishes the ending — this
+// node's retry, or the seat's next holder — reclaims the box before it deletes
+// the record, rather than leaving the box billed behind a record that is gone.
 func (c *Coordinator) endClaim(ctx context.Context, run PendingRun, e ending) (bool, error) {
 	// DETACHED, like every other teardown: this is reached from a failure
 	// path and from a queue handler a drain cancels, so the context that
@@ -1969,7 +1976,7 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // operator's board. A person's reply the claim holds goes back to the seat as
 // it ends, EVEN ONE ITS TURN TOOK: a turn that gave its claim back has said
 // nothing it did reached anybody, and the retry that would have handed the
-// reply to a turn of its own will never come ([LetGo.Taken]).
+// reply to a turn of its own will never come ([RecordedEnding.Unused]).
 //
 // BUT A RELEASE THAT REPORTED A FAILURE MAY HAVE LANDED, and then the run is
 // not stranded at all: it is back where the claim found it, owed its retry, and
@@ -2086,11 +2093,12 @@ func claimedFrom(run PendingRun) string {
 // never ended. `park` announces a QUESTION; a lost turn cannot be quieter than
 // that.
 //
-// Announced only when this call ended the run, by the ending itself
-// ([Coordinator.endRecord]): one that a newer lease owns, or that somebody else
-// ended first, is that party's to settle and to explain, and a second
+// Announced by the ending itself ([Coordinator.endRecord]), and only for the
+// ending decided on the run: one that a newer lease owns, or that somebody else
+// ended first, is that party's to settle and to explain, and one whose ending
+// somebody else DECIDED first is finished for that party's reason — a second
 // announcement would name a reason the run did not end for. The engine is told
-// on the same gate, by the same deletion — see [CoordinatorOptions.Stopped].
+// on the same gate, by the same decision — see [CoordinatorOptions.Stopped].
 // A recorded reply no turn took goes back to the seat as the run ends, as it
 // does from every ending ([ErrAnswerOwed]).
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
@@ -2179,34 +2187,65 @@ func (c *Coordinator) FailRun(ctx context.Context, turnID, reason, detail string
 	return nil
 }
 
-// announceFailure publishes the lost run, to the board and to its seat.
+// announceEnding publishes a decided ending's announcement — the lost run, to the
+// board and to its seat — under the identity the decision recorded.
 //
 // TWO PUBLISHES, as for a start and a completion: the events copy is what a
-// dashboard and the event store read, and the per-seat control copy reaches
-// the node that was running the turn. Best effort — the run is already
-// settled, and a failed publish must not turn one lost turn into a stuck seat.
-func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reason, detail string) {
+// dashboard and the event store read, and the per-seat control copy reaches the
+// node that was running the turn.
+//
+// THE SAME EVENT ON EVERY ATTEMPT. Its id is derived from the run and the
+// ending ([endingEventID]) and its instant is the decision's, so an
+// announcement made again by the attempt that finishes the ending after a crash
+// — this node's retry, or the seat's next holder — is one event to the event
+// store, whose key is (event_time, event_id), and to the fleet's reads, which
+// merge rows on that same pair. It is made BEFORE the record is deleted, and
+// the announcement an ending used to make after its delete was lost to a crash
+// between the two — or never made, when a delete that landed reported a
+// failure and the attempt that would have announced found no row.
+//
+// The events copy must land, because it is the only account of how the run
+// ended: a publish the broker refused keeps the ending for its retry
+// ([Coordinator.oweEnding]). The control copy is a courtesy to the node running
+// the turn and stays best effort.
+func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error {
+	ending := run.Ending
+	detail := ending.Detail
+	if ending.Returned {
+		detail += replyReturnedDetail
+	}
 	failed := types.SandboxRunFailed{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
 		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), SandboxID: run.SandboxID,
 		CodingAgent: run.CodingAgent,
-		Reason:      reason, Detail: redact.Secrets(detail),
+		Reason:      ending.Reason, Detail: redact.Secrets(detail),
 	}
 	ev := events.New(failed, events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
+	ev.ID, ev.Timestamp = endingEventID(run), ending.At.UTC()
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(failed.EventType()), ev); err != nil {
-		log.WarnContext(ctx, "sandbox_failure_publish_failed",
-			"turn_id", run.TurnID, "reason", reason, "error", err.Error())
+		return fmt.Errorf("sandbox: announcing the end of run %s (%s): %w", run.TurnID, ending.Reason, err)
 	}
 	if control := topics.AgentControl(run.AgentHandle); control != "" {
 		if err := c.queue.Publish(ctx, control, ev); err != nil {
 			log.WarnContext(ctx, "sandbox_failure_control_failed",
-				"turn_id", run.TurnID, "reason", reason, "error", err.Error())
+				"turn_id", run.TurnID, "reason", ending.Reason, "error", err.Error())
 		}
 	}
+	return nil
+}
+
+// endingNamespace derives the ids decided endings are announced under.
+var endingNamespace = uuid.MustParse("3c1f5a52-9d0e-5b8a-8f47-2a6d1e9b7c40")
+
+// endingEventID is the id a decided ending's announcement is published under:
+// derived from the run and the ending rather than minted per publish, so every
+// attempt that finishes the ending publishes the same event.
+func endingEventID(run PendingRun) uuid.UUID {
+	return uuid.NewSHA1(endingNamespace, []byte(run.TurnID+"/"+run.Ending.ID))
 }
 
 // teardown reclaims a run's box and clears the record's reference to it, for
@@ -2223,16 +2262,15 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	}
 }
 
-// ending is one decision to end a run: the license it is taken under, what it
-// does with a person's reply the run still holds, what it reclaims, and what it
-// says once the record is gone.
+// ending is one decision to end a run, as its caller makes it: the license it
+// is taken under, whether a person's reply its turn took went unused, whether
+// the box is reclaimed after the decision, and what it announces.
 //
-// ONE VALUE RATHER THAN SIX ARGUMENTS, because an ending can outlive the call
-// that decided it: a row that still owes the seat a reply, or whose delete the
-// store did not take, is kept until the ending lands, and the retry that
-// finishes it must end it on exactly the terms it was decided on
-// ([Coordinator.oweEnding]) — the same license, the same reply let go of, the
-// same box to reclaim, and the announcement that was not yet made.
+// ONE VALUE RATHER THAN SIX ARGUMENTS, because a decision can outlive the call
+// that made it: one the store could not confirm is kept and made again by this
+// node's retry ([Coordinator.oweEnding]) on exactly these terms. Once the
+// decision is RECORDED on the row ([RecordedEnding]) the terms that count are
+// the recorded ones, whoever finishes it.
 type ending struct {
 	// fence, whileIn and launch are the license: see [License].
 	fence   Fence
@@ -2243,68 +2281,61 @@ type ending struct {
 	// seat even though a turn TOOK it: the claim's own ending, after its turn
 	// gave the claim back as a retry — which says nothing it did reached
 	// anybody — and the release could not land, so no retry will hand the
-	// reply to a turn again ([LetGo.Taken]). Every other ending lets go only
-	// of a reply no turn took, which the store refuses to delete with the row
+	// reply to a turn again. Every other ending lets go only of a reply no
+	// turn took, which the store refuses to delete with the row
 	// ([ErrAnswerOwed]), and spends one a turn took.
 	unused bool
 
-	// reclaim is whether the box is reclaimed AFTER the record is deleted, by
-	// whichever attempt deletes it: an ending whose delete is the decision
-	// ([Coordinator.endClaim]) has not touched the box when it is decided.
-	// On the ending rather than on its caller because the attempt that
-	// deletes can be a retry of it ([Coordinator.retryOwed]), and a kept
-	// ending finished without it deleted the only record of a paused box and
-	// left the box billed, named by nothing, until its provider's TTL.
+	// reclaim is whether the box is reclaimed after the decision, by whichever
+	// attempt finishes the ending: an ending decided without having read the
+	// row ([Coordinator.endClaim]) has not touched the box when it decides.
 	reclaim bool
 
-	// note is what the ending announces once it is this call's, nil for an
-	// ending that announces nothing ([Coordinator.announceFailure]).
+	// note is what the ending announces, nil for an ending that announces
+	// nothing ([Coordinator.announceEnding]).
 	note *failureNote
-
-	// returned is whether the ending has handed a person's reply back to the
-	// seat — a let-go that landed, or copies the row owed that it published —
-	// so that the announcement says the reply went back when, and only when,
-	// one did.
-	returned bool
 }
 
-// license is the ending's license, as the store takes it.
-func (e ending) license() License {
-	return License{Fence: e.fence, WhileIn: e.whileIn, Launch: e.launch, Unused: e.unused}
+// decision is the ending as the store records it.
+func (e ending) decision() Decision {
+	d := Decision{
+		License: License{Fence: e.fence, WhileIn: e.whileIn, Launch: e.launch, Unused: e.unused},
+		Reclaim: e.reclaim,
+	}
+	if e.note != nil {
+		d.Reason, d.Detail = e.note.reason, e.note.detail
+	}
+	return d
 }
 
 // failureNote is a lost run's announcement: its reason and the sentence that
 // reaches an operator's board.
 type failureNote struct{ reason, detail string }
 
-// replyReturnedDetail is what an announcement adds when the ending handed a
-// person's reply back to the seat ([ending.returned]).
-const replyReturnedDetail = "; the reply a person gave it goes back to the seat as an ordinary message"
+// replyReturnedDetail is what an announcement adds when the ending hands a
+// person's answer back to the seat ([RecordedEnding.Returned]).
+const replyReturnedDetail = "; the answer a person gave it goes back to the seat"
 
-// errEndingOwed marks an ending that was decided and KEPT for its retry: the
-// row still owes the seat a reply that could not be handed back yet, or the
-// store did not take the delete, so it was not deleted, and the ending — its
-// announcement and its box included — is finished by the retry
-// ([Coordinator.oweEnding]).
+// errEndingOwed marks an ending that is KEPT for this node's retry
+// ([Coordinator.oweEnding]): its decision could not be confirmed, or a step of
+// it — the reply it hands back, its announcement, the delete — did not land.
 var errEndingOwed = errors.New("sandbox: the run's ending is kept until it can be finished")
 
-// endRecord deletes a run's record — while the ending's license holds, and once
-// it owes the seat nothing ([Coordinator.finishHandingBack]) — and REPORTS THE
-// STOP where the deletion was this call's, RECLAIMS the box where the ending
-// left that until after the delete, and ANNOUNCES the ending's note on the same
-// gate.
+// endRecord ends a run: it DECIDES the ending on the run's row
+// ([PendingStore.DecideEnding]) — or finds one already decided there, which it
+// finishes in place of its own — and FINISHES it ([Coordinator.finishEnding]):
+// the reply it lets go of handed back, its box reclaimed where it says so, its
+// announcement published and the record deleted.
 //
-// THE ONE PLACE A RUN'S RECORD IS DELETED, which is what makes it the one place
-// that can say a suspended turn is over, and why the report is made here rather
-// than by each ending. Three rounds of hand-enumerating those endings each
-// missed one, and the count in [CoordinatorOptions.Stopped] was wrong again the
-// moment a fourth arrived; a report keyed to the deletion cannot be missed by a
-// path that deletes, and needs no count. It fires on exactly the gate the
-// announcement takes, because it IS that gate — the ending being this call's —
-// so a losing racer neither announces a reason the run did not end for nor
-// drops a hold belonging to whoever did end it. And before the announcement,
-// which is a publish that can block: what comes down is a claim on somebody's
-// screen.
+// THE ONE PLACE A RUN IS ENDED, which is what makes it the one place that can
+// say a suspended turn is over, and why the STOP is reported here rather than
+// by each ending. Three rounds of hand-enumerating those endings each missed
+// one, and the count in [CoordinatorOptions.Stopped] was wrong again the moment
+// a fourth arrived; a report keyed to the decision cannot be missed by a path
+// that ends a run, and needs no count. It is reported where the decision is this
+// call's to finish, so a racer whose license the run moved off neither announces
+// a reason the run did not end for nor drops a hold belonging to whoever did end
+// it.
 //
 // It reports for a turn that came back too — a collected run whose resumed
 // executor finished, which every ordinary completion is. That is deliberate:
@@ -2314,219 +2345,192 @@ var errEndingOwed = errors.New("sandbox: the run's ending is kept until it can b
 // store has already answered. Over-reporting costs a map lookup;
 // under-reporting is the defect. See [CoordinatorOptions.Stopped].
 //
-// AN ENDING THAT COULD NOT BE FINISHED IS KEPT, AND REPORTS TOO. Kept, because
-// a record left behind is a live row of its seat — a claim, which holds the
-// seat's inbox, or a reply nobody will hand back — and it used to be left for
-// the seat's next recovery pass, which comes only when the seat moves: until
-// then the seat took no mail at all. The ending is retried by this node
-// instead ([Coordinator.oweEnding]). Reported, for the old asymmetry: a delete
-// that errored may have landed, and nothing a caller leaves behind resumes the
-// turn either way. Not announced yet: the retry that deletes the row makes the
-// announcement then, and made here as well, the run was announced lost twice
-// whenever the seat moved before that retry, because the next holder reaps the
-// kept row and announces it again.
+// EXACTLY ONE ANNOUNCEMENT, whichever node finishes it and however many times:
+// the decision is recorded once, and every attempt announces it under the
+// identity the decision recorded ([Coordinator.announceEnding]).
 //
-// Reports whether the ending was this call's, and the kept ending's error
-// ([errEndingOwed]) — which is what a caller that can RETRY needs and a settle
-// has no use for.
+// AN ENDING THAT COULD NOT BE FINISHED IS KEPT — a decision the store could not
+// confirm, a reply that could not be handed back, an announcement the broker
+// refused, a delete the store did not take — and this node retries it, holding
+// the seat's inbox until it lands ([Coordinator.oweEnding]); the seat's next
+// holder finishes a decided one if the seat moves first. A decision that could
+// not be confirmed reports the stop too, for the old asymmetry: it may have
+// landed, and nothing a caller leaves behind resumes the turn either way.
+//
+// Reports whether the run's ending is decided under this call's license — the
+// run is over — and the kept ending's error ([errEndingOwed]), which is what a
+// caller that can RETRY needs and a settle has no use for.
 func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (bool, error) {
-	settled, ended, err := c.finishHandingBack(ctx, run, &e)
+	decided, ok, err := c.pending.DecideEnding(ctx, run.TurnID, e.decision())
 	if err != nil {
 		c.reportStopped(ctx, run)
 		// FORGOTTEN ON THE SAME GATE THE STOP TAKES, and for the same
-		// asymmetry: the delete may well have landed, and a count kept
-		// for a run nothing will ever offer a delivery to again is a
-		// map entry this process never drops. See [answerBudget].
+		// asymmetry: the decision may well have landed, and a count kept
+		// for a run nothing will ever offer a delivery to again is a map
+		// entry this process never drops. See [answerBudget].
 		c.clearAnswerAttempts(run.AgentHandle, run.TurnID)
-		return false, err
+		return false, c.keepEnding(ctx, run, e, fmt.Errorf("sandbox: deciding the end of run %s: %w",
+			run.TurnID, err))
 	}
-	if !ended {
+	if !ok {
 		return false, nil
 	}
-	c.reportStopped(ctx, settled)
-	c.clearAnswerAttempts(settled.AgentHandle, settled.TurnID)
-	if e.reclaim {
-		// THE BOX THE DELETED RECORD NAMED, under a context of its own:
-		// the record is gone, so this is the last thing that knows the
-		// box exists.
-		killCtx, cancel := detached(ctx)
-		_ = c.reclaimBox(ctx, killCtx, settled)
-		cancel()
+	c.reportStopped(ctx, decided)
+	c.clearAnswerAttempts(decided.AgentHandle, decided.TurnID)
+	if err := c.finishEnding(ctx, decided); err != nil {
+		return true, c.keepEnding(ctx, decided, e, err)
 	}
-	c.announce(ctx, run, e)
 	return true, nil
 }
 
-// announce makes an ending's announcement, if it has one, saying the reply went
-// back where the ending handed one back.
-func (c *Coordinator) announce(ctx context.Context, run PendingRun, e ending) {
-	if e.note == nil {
-		return
-	}
-	detail := e.note.detail
-	if e.returned {
-		detail += replyReturnedDetail
-	}
-	c.announceFailure(ctx, run, e.note.reason, detail)
-}
-
-// finishHandingBack is [PendingStore.Finish] for a row that may still owe the
-// seat a reply: every copy the row owes ([PendingRun.HandBack]) goes out, a
-// person's reply it still holds no turn took is let go of
-// ([Coordinator.letGoAnswer]) and its copy goes out, and the delete happens
-// only once the row owes nothing — each one asked of the store again after the
-// last, because the store is what refuses ([ErrHandBackOwed], [ErrAnswerOwed]).
+// finishEnding does what a decided ending ([PendingRun.Ending]) still has to
+// do, IN THIS ORDER, and deletes the record last:
 //
-// # In that order, across a crash at each step
+//  1. a person's reply the run still holds and owes the seat is LET GO
+//     ([Coordinator.letGoAnswer]), its copies recorded on the row as owed;
+//  2. every copy the row owes ([PendingRun.HandBack]) is published and cleared;
+//  3. the box is reclaimed, where the ending reclaims it after its decision;
+//  4. the announcement is published, under the ending's own identity;
+//  5. the record is deleted ([PendingStore.Finish]).
 //
-// A reply a run owes the seat is recorded nowhere but on its row. It used to
-// be published off the record the delete handed back, AFTER the delete, so a
-// process that stopped between the two lost the reply with the only record of
-// it. The store now refuses to delete a row that owes copies, and this
-// publishes and clears them and asks again: stopped before the publish, the
-// row still owes them and its next reader — this node's retry, or the seat's
-// next holder — publishes them; stopped after the publish, they are published
-// again under the same derived ids, which the inbox's same-id dedupe and the
-// completion ledger collapse; stopped after the clear, the row owes nothing
-// and its next ending deletes it.
+// # Across a crash at each step
 //
-// # A reply the ending did not expect
+// Nothing reads a deleted row again, so everything the ending owes is done
+// before the delete, and every step is one a repeat makes harmless: the let-go
+// finds nothing left to let go of, the copies go out again under the same
+// derived ids (the inbox's same-id dedupe and the completion ledger collapse
+// them), a box already reclaimed is a kill of nothing, and the announcement is
+// the same event again. Stopped anywhere before the delete, the row still
+// carries the ending, and whoever reads it next — this node's retry, or the
+// seat's next holder ([Coordinator.RecoverSeat]) — finishes it from the step it
+// stopped at.
 //
-// The store also refuses to delete a row that holds a person's reply no turn
-// took — or, for an ending whose reply went unused, any reply at all
-// ([License.Unused]) — whatever the ending was decided on, and that is the
-// point: an ending decides on a snapshot, and the row can hold a reply the
-// snapshot did not show. The old holder's release lands under a reap whose
-// fence did not; a release that landed and reported a failure puts the claim
-// back to [StatusAnswered]. Read as "nothing to let go of", every one of those
-// deleted the reply. And the store answers only WITHIN THE ENDING'S LICENSE, so
-// the let-go — and the spend before it — happens only where the ending is
-// entitled to end the run: a claim's own ending finds the run its release did
-// reach no longer the claim, and leaves it, reply and all, to its retry.
+// # A delete the store refuses
 //
-// AN ENDING THAT CANNOT BE FINISHED IS KEPT, not forgotten: a let-go that could
-// not be recorded, a publish that failed, a delete the store did not take. This
-// node retries the ending on its decided terms, holding the seat's inbox until
-// it lands ([Coordinator.oweEnding]), and returns [errEndingOwed], which every
-// caller already reads as "the record may be there".
-func (c *Coordinator) finishHandingBack(ctx context.Context, run PendingRun, e *ending,
-) (PendingRun, bool, error) {
+// The store will not delete a row that still owes the seat copies or holds a
+// reply the ending must hand back ([ErrHandBackOwed], [ErrAnswerOwed]), and
+// hands back the row as it stands; the steps run again against it. A step that
+// does not land is returned, and the caller keeps the ending.
+func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun) error {
 	var handed []string
+	reclaimed, announced := false, false
 	for range casRetries {
-		settled, ended, err := c.pending.Finish(ctx, run.TurnID, e.license())
-		switch {
-		case err == nil:
-			return settled, ended, nil
-		case errors.Is(err, ErrHandBackOwed):
-			owed := handBackIDs(settled.HandBack)
+		if run.answerOwed() {
+			owing, err := c.letGoAnswer(ctx, run)
+			if err != nil {
+				return fmt.Errorf("sandbox: ending run %s, which holds a reply it could not let go "+
+					"of: %w", run.TurnID, err)
+			}
+			run = owing
+		}
+		if len(run.HandBack) > 0 {
+			owed := handBackIDs(run.HandBack)
 			if slices.Equal(owed, handed) {
 				// THE SAME COPIES AGAIN: they are out, and clearing them is
 				// what did not land. Publishing them once more would change
-				// nothing, so the ending waits for the retry rather than going
-				// round here.
-				return c.keepEnding(ctx, run, *e, fmt.Errorf("sandbox: ending run %s: the reply it "+
-					"owed its seat is handed back but could not be cleared from it", run.TurnID))
+				// nothing, so the ending waits for its retry rather than
+				// going round here.
+				return fmt.Errorf("sandbox: ending run %s: the reply it owed its seat is handed "+
+					"back but could not be cleared from it", run.TurnID)
 			}
-			if deliverErr := c.deliverHandBack(ctx, settled); deliverErr != nil {
-				return c.keepEnding(ctx, run, *e, fmt.Errorf("sandbox: ending run %s, which owes its "+
-					"seat a reply it could not hand back: %w", run.TurnID, deliverErr))
+			if err := c.deliverHandBack(ctx, run); err != nil {
+				return fmt.Errorf("sandbox: ending run %s, which owes its seat a reply it could not "+
+					"hand back: %w", run.TurnID, err)
 			}
-			e.returned = true
 			handed = owed
-		case errors.Is(err, ErrAnswerOwed):
-			if letGoErr := c.letGoAnswer(ctx, settled, e); letGoErr != nil {
-				return c.keepEnding(ctx, run, *e, fmt.Errorf("sandbox: ending run %s, which holds a "+
-					"reply it could not let go of: %w", run.TurnID, letGoErr))
+		}
+		if run.Ending.Reclaim && !reclaimed {
+			// THE BOX THE ROW NAMES, under a context of its own: a teardown
+			// is reached from failure paths whose context is often dead.
+			killCtx, cancel := detached(ctx)
+			_ = c.reclaimBox(ctx, killCtx, run)
+			cancel()
+			reclaimed = true
+		}
+		if run.Ending.Reason != "" && !announced {
+			if err := c.announceEnding(ctx, run); err != nil {
+				return err
 			}
+			announced = true
+		}
+		settled, _, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
+		switch {
+		case err == nil:
+			// GONE, by this delete or by whoever finished the same ending
+			// first: either way there is nothing left of it to do.
+			return nil
+		case errors.Is(err, ErrHandBackOwed), errors.Is(err, ErrAnswerOwed):
+			run = settled
 		default:
-			return c.keepEnding(ctx, run, *e, fmt.Errorf("sandbox: ending run %s, whose record "+
-				"could not be deleted: %w", run.TurnID, err))
+			return fmt.Errorf("sandbox: ending run %s, whose record could not be deleted: %w",
+				run.TurnID, err)
 		}
 	}
-	return c.keepEnding(ctx, run, *e, fmt.Errorf("sandbox: ending run %s: it kept owing its seat a "+
-		"reply after handing one back", run.TurnID))
+	return fmt.Errorf("sandbox: ending run %s: it kept owing its seat a reply after handing one back",
+		run.TurnID)
 }
 
 // keepEnding keeps an ending that could not be finished for this node's retry
 // ([Coordinator.oweEnding]) and returns cause as the kept ending's error.
-func (c *Coordinator) keepEnding(ctx context.Context, run PendingRun, e ending, cause error,
-) (PendingRun, bool, error) {
+func (c *Coordinator) keepEnding(ctx context.Context, run PendingRun, e ending, cause error) error {
 	c.oweEnding(ctx, run, e)
-	return PendingRun{}, false, fmt.Errorf("%w: %w", errEndingOwed, cause)
+	return fmt.Errorf("%w: %w", errEndingOwed, cause)
 }
 
-// letGoAnswer lets go of the recorded answer a run is ending without
-// ([PendingStore.OweHandBack]): its copies are recorded on the row as owed to
-// the seat, in the write that takes the answer off it, for the ending to hand
-// back before it deletes the row. An answer a turn took is the run's to keep —
-// it was spent at the take — unless the ending says it went unused.
+// letGoAnswer lets go of the recorded answer a run whose ending is decided still
+// owes the seat ([PendingStore.OweHandBack]): its copies are recorded on the row
+// as owed, in the write that takes the answer off it, for the ending to hand
+// back before it deletes the row. Returns the row as the let-go left it.
 //
-// SPENT BEFORE THE WRITE ([CoordinatorOptions.Spent]), once the ending has
-// decided to let it go: the delivery that carried the reply may still come
-// round — a node that recorded it and stopped before acknowledging it left it
-// unacknowledged — and once a copy is owed it must not be a second message.
-// Spent and not let go, the reply is still on the row, which the store will
-// not delete with it, and the next reader lets it go; let go and not spent,
-// the original and the copy would both reach the seat, and the next holder,
-// finding the answer gone, would have nothing to spend.
+// SPENT BEFORE THE WRITE ([CoordinatorOptions.Spent]): the delivery that carried
+// the reply may still come round — a node that recorded it and stopped before
+// acknowledging it left it unacknowledged — and once a copy is owed it must not
+// be a second message. Spent and not let go, the reply is still on the row,
+// which the store will not delete with it, and the next reader lets it go; let
+// go and not spent, the original and the copy would both reach the seat, and
+// the next holder, finding the answer gone, would have nothing to spend.
 //
-// A ROW THAT ALREADY OWES COPIES — an earlier decline's, still unpublished —
-// has them handed back first, which keeps what a row owes to one decline's
-// worth ([PendingRun.HandBack]) and keeps the replies in the order they were
-// let go of.
+// A ROW THAT ALREADY OWES COPIES — an earlier decline's, still unpublished — has
+// them handed back first, which keeps what a row owes to one decline's worth
+// ([PendingRun.HandBack]) and keeps the replies in the order they were let go
+// of.
 //
-// A LET-GO THE STORE REFUSES IS NEVER READ AS "NOTHING TO LET GO OF", which is
-// how an ending used to delete a run with the reply still on it. It is only ever
-// asked for because the store refused to delete the row for the reply it holds
-// ([ErrAnswerOwed]), and the ending asks for the delete again: the row moved
-// under it — the reply taken or let go of by somebody else, the run handed
-// back or fenced away — and the store now decides from what the row holds, or
-// it still holds the reply, the delete is refused again, and an ending that
-// cannot make progress is kept rather than finished. A turn that took the
-// answer first is the other half of the store's exclusivity ([ErrAnswerTaken]):
-// the reply was used, and it goes with the run.
-//
-// An error is a let-go that may not have landed, and the caller keeps the
-// ending.
-func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun, e *ending) error {
-	answer := run.Answer
-	if answer == nil || (answer.Taken() && !e.unused) {
-		return nil
-	}
-	c.spend(ctx, run.AgentHandle, *answer)
-	letGo := LetGo{
-		Launch: run.LaunchID, Answer: answer.EventIDs, HandBack: handBackOf(*answer),
-		Fence: e.fence, WhileIn: e.whileIn, Taken: e.unused,
-	}
+// THE DECISION SETTLED WHETHER THE REPLY GOES BACK: a turn cannot take the
+// answer once the ending is decided, so one no turn took by then is let go of
+// here, and one a turn took is the run's to keep — spent at the take — unless
+// the ending says it went unused. A let-go the store does not make (another
+// attempt at the same ending made it first) leaves the delete to decide, which
+// refuses for whatever the row still holds.
+func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingRun, error) {
+	answer := *run.Answer
+	c.spend(ctx, run.AgentHandle, answer)
+	letGo := LetGo{Ending: run.Ending.ID, Answer: answer.EventIDs, HandBack: handBackOf(answer)}
 	var handed []string
 	for range casRetries {
 		owing, won, err := c.pending.OweHandBack(ctx, run.TurnID, letGo)
 		switch {
 		case err == nil && won:
-			e.returned = true
-			return nil
+			return owing, nil
 		case err == nil, errors.Is(err, ErrAnswerTaken):
-			// THE STORE DECIDES AGAIN, on the delete — see above.
-			return nil
+			// NOT THIS ATTEMPT'S TO LET GO: the delete reads the row and
+			// refuses for anything it still owes.
+			run.Answer = nil
+			return run, nil
 		case !errors.Is(err, ErrHandBackOwed):
-			return err
+			return PendingRun{}, err
 		}
 		owed := handBackIDs(owing.HandBack)
 		if slices.Equal(owed, handed) {
-			// OUT BUT NOT CLEARED, as in [Coordinator.finishHandingBack]:
-			// publishing them again changes nothing, so the let-go waits
-			// for the retry rather than going round here.
-			return fmt.Errorf("sandbox: letting go of run %s's answer: the reply it already "+
-				"owed its seat is handed back but could not be cleared from it", run.TurnID)
+			return PendingRun{}, fmt.Errorf("sandbox: letting go of run %s's answer: the reply it "+
+				"already owed its seat is handed back but could not be cleared from it", run.TurnID)
 		}
 		if err := c.deliverHandBack(ctx, owing); err != nil {
-			return err
+			return PendingRun{}, err
 		}
-		e.returned = true
 		handed = owed
 	}
-	return fmt.Errorf("sandbox: letting go of run %s's answer: it kept owing its seat an "+
-		"earlier reply", run.TurnID)
+	return PendingRun{}, fmt.Errorf("sandbox: letting go of run %s's answer: it kept owing its seat "+
+		"an earlier reply", run.TurnID)
 }
 
 // handBackIDs are the ids of what a row owes the seat, in order.
@@ -2682,12 +2686,14 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	}
 	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", tally.running,
-		"parked", tally.parked, "abandoned", tally.abandoned, "active", len(active))
+		"parked", tally.parked, "abandoned", tally.abandoned, "finished", tally.finished,
+		"active", len(active))
 	return nil
 }
 
-// recovery counts what a seat's recovery pass found, for its one log line.
-type recovery struct{ running, parked, abandoned int }
+// recovery counts what a seat's recovery pass found, for its one log line:
+// finished is the endings the last holder decided and this one finished.
+type recovery struct{ running, parked, abandoned, finished int }
 
 // recoverRun takes over one run of a seat this node has just acquired.
 //
@@ -2700,6 +2706,22 @@ type recovery struct{ running, parked, abandoned int }
 func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner string, epoch int64,
 	tally *recovery, again bool,
 ) {
+	if run.Ending != nil {
+		// AN ENDING THE LAST HOLDER DECIDED AND DID NOT FINISH: it is this
+		// holder's to finish, on the terms recorded — the reply it hands
+		// back, its box, and the announcement it makes once under its own
+		// identity — never a second ending of this holder's own.
+		if ended, err := c.endRecord(ctx, run, ending{
+			fence: Fence{Owner: owner, Epoch: epoch}, whileIn: Active, launch: EveryLaunch,
+		}); err != nil {
+			log.WarnContext(ctx, "sandbox_ending_kept", "turn_id", run.TurnID, "error", err.Error(),
+				"detail", "the ending the seat's last holder decided could not be finished yet; "+
+					"this node finishes it, and the seat's mail waits behind it")
+		} else if ended {
+			tally.finished++
+		}
+		return
+	}
 	switch run.Status {
 	case StatusLaunching, StatusResumed:
 		moved, reaped := c.reapTail(ctx, run, owner, epoch)

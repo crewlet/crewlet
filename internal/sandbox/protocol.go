@@ -34,13 +34,18 @@
 // ([PendingRun.HandBack]): after its attempts are spent, by an ending no turn
 // reached, or by the seat's next holder reaping a claim whose node stopped
 // before its turn took it ([Coordinator.RecoverSeat]). The two are exclusive
-// in the store's own compare-and-set, IN BOTH DIRECTIONS: the let-go takes the
-// answer off the row, so no turn takes it afterwards, and it refuses an answer
-// a turn already took ([ErrAnswerTaken]) — whichever lands first wins,
-// whatever any lease says. And no ending deletes a row still holding a reply
-// no turn took ([ErrAnswerOwed]), so a run that moved under an ending's
-// snapshot cannot take the reply with it. The reply's delivery is recorded as
-// worked when the reply leaves the run, either way ([CoordinatorOptions.Spent]).
+// in the store's own compare-and-set: an ending is DECIDED on the row before
+// any of it is done ([RecordedEnding]), no turn takes an answer from a row
+// whose ending is decided ([ErrRunEnding]), and a take that landed first is
+// seen by the decision and the reply goes with the run as used — whichever
+// lands first wins, whatever any lease says. And no ending deletes a row still
+// holding a reply it owes the seat ([ErrAnswerOwed]). The reply's delivery is
+// recorded as worked when the reply leaves the run, either way
+// ([CoordinatorOptions.Spent]).
+//
+// AND A LOST RUN IS ANNOUNCED ONCE: the announcement goes out before the record
+// is deleted, under the identity its decided ending recorded, so whichever node
+// finishes the ending publishes the same event ([Coordinator.announceEnding]).
 //
 // The reap fences the row to its lease before it lets anything go, and a take
 // under an older lease — or under none — is refused, which holds because every
