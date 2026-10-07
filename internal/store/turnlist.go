@@ -52,8 +52,8 @@ import (
 // turn's. The NEWEST completion decides what the turn is now — finished, or
 // parked waiting for its run — and the duration is the sum of every segment's
 // own measurement, which is the time the turn spent working rather than the
-// time it spent waiting. A completion that predates the flag names no
-// `suspended` and folds as it always did: an end.
+// time it spent waiting. A completion that did not park names no `suspended`
+// (the flag is omitempty) and folds as an end.
 //
 // # A lost run ends the turn that was waiting for it
 //
@@ -119,8 +119,8 @@ func failedRow(col func(string) string) (string, []any) {
 }
 
 // suspendedExpr is 1 for a completion record that PARKED its turn and 0 for
-// every other row, a completion that predates the flag included — the flag is
-// `omitempty` on the wire, so its absence is the ordinary end.
+// every other row — the flag is `omitempty` on the wire, so its absence is the
+// ordinary end.
 const suspendedExpr = "COALESCE(json_extract(payload, '$.suspended'), 0)"
 
 // segmentState is what a turn is now, from the time of its newest completion
@@ -151,8 +151,7 @@ type Turn struct {
 
 	// WorkKey is the unit of work those runs share — what a reader follows
 	// to find the other attempts at the same trigger. Empty for a turn
-	// with no ledgerable trigger, and for rows written before the two
-	// identities were split (schema/0029 backfills those from turn_id).
+	// with no ledgerable trigger.
 	WorkKey string `json:"work_key,omitempty"`
 
 	AgentID   string `json:"agent_id,omitempty"`

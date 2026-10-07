@@ -130,9 +130,7 @@ type EventRecord struct {
 	// Failed says whether the work this event reports failed. Derived on
 	// read from the event type plus the stored `failed` tag, because a
 	// listing never selects the payload and the tag is all that survives
-	// into history. Events written before the writer stamped that tag read
-	// back as not-failed — a real discontinuity at that point in the
-	// timeline, not a bug to paper over.
+	// into history.
 	Failed bool `json:"failed"`
 
 	// Spend is what one LLM call cost, present only on a phase completion.
@@ -258,8 +256,9 @@ type ListQuery struct {
 
 	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
-	// inside it. Rows written before migration 0014 carry an empty
-	// turn_id and do not answer this filter; see the migration.
+	// inside it. A row whose event carries no turn_id field — a cron fire,
+	// a trigger the dispatcher declined — writes an empty column and does
+	// not answer this filter.
 	TurnID string
 
 	// WorkKey selects EVERY RUN of one unit of work — the attempts at a
@@ -273,10 +272,8 @@ type ListQuery struct {
 	// its key, which a move rewrites. Every turn-level record carries the
 	// item it was charged to, so this is "everything that happened on this
 	// item": each turn's start, its phases, its completion, a coding run it
-	// launched. Backed by the partial index schema/0033 ships, whose
-	// backfill gives the rows already stored their column; their stored
-	// tags blob is not rewritten, so the filter — which reads the column —
-	// is the authority and a `tags.work_item` read is not.
+	// launched. Backed by the partial index schema/0033 ships; the column
+	// is filled from the same payload field as the row's `work_item` tag.
 	WorkItem string
 
 	// RelatedAgent is a broad filter: events whose actor is the agent, or
