@@ -2116,9 +2116,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	//
 	// EXCEPT A BUDGET REFUSAL, which ends the turn here, as the refusal it
 	// is. Its refused round is counted, so the window it named reads past
-	// its ceiling and every later call of the turn is certain to be
-	// refused: entering the loop paid for nothing (the meter stops the
-	// executor's first round before it is made), and it put an executor
+	// its ceiling and every later call of the turn is certain to be refused
+	// on the turn's pinned clock ([toolloop.BudgetMeter.Refused] states the
+	// one edge of that): entering the loop paid for nothing (the meter stops
+	// the executor's first round before it is made), and it put an executor
 	// phase on the record that never ran a round. Ended here, the turn is
 	// published as budget_exhausted naming the onboarding's refusal, and the
 	// dispatch parks the seat until the window turns over, exactly as a

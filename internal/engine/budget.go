@@ -92,7 +92,8 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 // worker the turn delegates to charge it — which is what lets it answer
 // [toolloop.BudgetMeter.Refused] for all of them: a window it has seen full
 // stays full for the rest of the turn, because the ceilings are pinned and
-// nothing takes spend back off a counter, until the window turns over.
+// nothing takes spend back off a counter, until the window turns over on the
+// turn's pinned clock ([meter.Refused] names the one edge of that).
 type meter struct {
 	budgets    budgetCounter
 	agentScope string
@@ -177,9 +178,30 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 // and every other window the same round filled, of either scope, since a
 // refusal answers both counters ([coord.Spend.Org]); and every window an
 // ADMITTED round left at its ceiling exactly. Each is final until that window
-// turns over, because the meter's ceilings are the turn's pinned ones and a
-// counter only grows within a window (coord.SeatUncountedError: nothing is
-// taken back).
+// turns over on the turn's pinned clock, because the meter's ceilings are the
+// turn's pinned ones and a counter only grows within a window
+// (coord.SeatUncountedError: nothing is taken back).
+//
+// THE PINNED CLOCK IS THE ONE EDGE. The counter is shared, and a slot never
+// rolls back (coord's package doc): a peer whose clock leads this node's
+// across a boundary, or one on a newer epoch after the company's timezone
+// moved east, rolls the slot onto the next window before this turn's clock
+// says the held one is over. The turn's next charge would then be counted in
+// that next window, and could be admitted while the meter still holds the
+// refusal — for the skew, which is seconds, or after a timezone moved east
+// for as long as the two calendars' boundaries differ, which is hours.
+//
+// It is left so deliberately. A turn's rounds are counted on the calendar it
+// was pinned to, and on that calendar the window IS full; a round the counter
+// places in a peer's next window is the skew it resolves in the closed
+// direction itself (a round charged early costs the next window a round). A
+// read before every hold would trade the turn's own calendar for whichever
+// peer moved the slot. And the hold fails closed the way a refusal does: the
+// turn ends budget_exhausted, the budget park reads the counter on the current
+// calendar, finds nothing refusing and parks nothing, and the delivery runs
+// again — or, for a turn that had already written outside the engine, is
+// recorded, exactly as after a real refusal. What a false hold costs is the
+// turn's work so far, never a call billed and then refused.
 //
 // NAMED BY THE COUNTER'S OWN RULE over the full windows still current: the
 // company's before the seat's — the company is judged first, so while one of

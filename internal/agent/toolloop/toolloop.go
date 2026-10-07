@@ -454,6 +454,16 @@ type BudgetMeter interface {
 	// spending the company's last room since this one last charged — is
 	// left to the next charge, which is the gate.
 	//
+	// Certain ON THE CALENDAR THE METER JUDGES BY, which is the one edge: a
+	// counter shared with peers can start counting the next window before
+	// this meter's clock says the held one is over — a peer whose clock is
+	// ahead, or one cutting windows on a calendar that ends this one sooner
+	// — and this meter's next charge could then be admitted in that next
+	// window while it still refuses. A meter may hold on through that; the
+	// error is in the closed direction, so the caller stops as on any
+	// refusal and what it loses is the work it stops, never a call billed
+	// and then refused. See the engine's meter for why it holds on.
+	//
 	// The outcome is a refusal the next call is certain to meet, named by
 	// the counter's own rule — the company's before the seat's, the window
 	// that ends last within a scope — over every window the meter knows to

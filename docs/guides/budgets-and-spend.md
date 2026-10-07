@@ -52,7 +52,11 @@ judge, the seat's other workers and an agent-mode coding run are refused without
 being made, rather than each billed and then refused. The refused round itself
 is the one a turn pays for past its ceiling — and a turn running alongside it,
 on the same company, can still pay for one round of its own before the counter
-tells it.
+tells it. "Certain" is on the turn's own clock: a turn that began before the
+company's `timezone` moved east can stop on a day the other nodes have already
+turned over. Its message then runs again, because the park finds nothing
+refusing — unless the turn had already written outside the engine, in which
+case it is recorded, as after any refusal.
 
 A window's allowance comes back when the window turns over, rolled inside the
 first charge after the boundary — nothing has to run at midnight. There is no

@@ -494,6 +494,55 @@ func TestARefusalHoldsEveryWindowItsRoundFilled(t *testing.T) {
 	}
 }
 
+// A HELD REFUSAL LASTS THE TURN'S OWN CALENDAR, NOT A PEER'S.
+//
+// The one edge of a held refusal's certainty, pinned here so it stays a
+// decision rather than drifting into one. A peer whose clock is ahead — or one
+// on a newer epoch after the company's timezone moved east — rolls the shared
+// slot onto the next day while this turn's pinned clock is still on the full
+// one. The counter then counts this turn's next charge in that next day and
+// would admit it; the meter holds on until its own day ends, because on the
+// calendar the turn's rounds are counted by the day is full, and the error is
+// in the closed direction: the turn stops, and nothing is billed for the stop.
+// See meter.Refused.
+func TestAHeldRefusalLastsTheTurnsOwnCalendar(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 23, 59, 50, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if got, err := m.Spend(ctx, 120); err != nil || got.OK {
+		t.Fatalf("Spend(120) = (%+v, %v), want the seat's day refusing", got, err)
+	}
+	// A peer twenty seconds ahead charges the seat in the next day.
+	ahead := coord.WindowsAt(clock.Add(20*time.Second), time.UTC)
+	if _, err := fleet.Charge(ctx, coord.ChargeRequest{
+		Seat: m.agentScope, Tokens: 5, Windows: ahead, SeatCaps: m.basis.seat,
+	}); err != nil {
+		t.Fatalf("the peer's charge: %v", err)
+	}
+	// The counter would now judge this turn's next charge in the next day.
+	next, err := fleet.Charge(ctx, coord.ChargeRequest{
+		Seat: m.agentScope, Tokens: 1, Windows: m.windows(), SeatCaps: m.basis.seat,
+	})
+	if err != nil || !next.OK {
+		t.Fatalf("this turn's next charge = (%+v, %v), want it admitted in the day the "+
+			"peer rolled the slot onto: the edge is not the one meter.Refused documents",
+			next, err)
+	}
+	// The meter holds the refusal its own day still makes.
+	if held, ok := m.Refused(); !ok || held.Scope != "agent" || held.Window != "2026-03-14" {
+		t.Fatalf("Refused = (%+v, %v), want the seat's day on the turn's own calendar", held, ok)
+	}
+	clock = time.Date(2026, time.March, 15, 0, 0, 0, 0, time.UTC)
+	if held, ok := m.Refused(); ok {
+		t.Fatalf("Refused once the turn's own day ended = %+v, want nothing", held)
+	}
+}
+
 // A REFUSAL ANSWERED TO A CALLER THAT HUNG UP IS HELD ALL THE SAME. The window
 // is full whether or not that caller is listening, and the turn's next call is
 // made by somebody else.
