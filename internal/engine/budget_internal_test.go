@@ -424,6 +424,76 @@ func TestAHeldRefusalNamesTheCompanyFirst(t *testing.T) {
 	}
 }
 
+// A SEAT'S REFUSAL THAT FILLS THE COMPANY IS HELD AS THE COMPANY'S.
+//
+// The seat refuses a round that leaves the company's day exactly at its
+// ceiling. The counter judges the company first, so the next charge is the
+// COMPANY's refusal; held from the refusal it was answered alone, the meter
+// named the seat — and the turn's budget_exhausted sent an operator to raise
+// a ceiling that changes nothing while the company's day is spent.
+func TestASeatRefusalThatFillsTheCompanyIsHeldAsTheCompanys(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 50}}
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if got, err := m.Spend(ctx, 40); err != nil || !got.OK {
+		t.Fatalf("Spend(40) = (%+v, %v), want admitted", got, err)
+	}
+	if got, err := m.Spend(ctx, 60); err != nil || got.OK || got.Scope != "agent" {
+		t.Fatalf("Spend(60) = (%+v, %v), want the seat's day refusing", got, err)
+	}
+	held, ok := m.Refused()
+	if !ok || held.Scope != "org" || held.Period != period.Day || held.Used != 100 || held.Limit != 100 {
+		t.Fatalf("Refused = (%+v, %v), want the company's day the refused round filled", held, ok)
+	}
+	// And that is what the counter answers the next charge.
+	if got, err := m.Spend(ctx, 1); err != nil || got.OK || got.Scope != "org" || got.Period != period.Day {
+		t.Fatalf("Spend(1) = (%+v, %v), want the company's day refusing, as the meter held", got, err)
+	}
+}
+
+// A REFUSAL HOLDS EVERY WINDOW ITS ROUND FILLED, OF EITHER SCOPE.
+//
+// The company refuses a round, which is counted on the seat with no verdict
+// of its own — and takes the seat's week past its ceiling. While the
+// company's day lasts, that is the refusal named; once the day turns over the
+// seat's week still refuses every charge, and a meter that kept only the
+// refusal it was answered held nothing there and paid for a call to find out.
+func TestARefusalHoldsEveryWindowItsRoundFilled(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Week: 120}}
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, lead)
+	// A Saturday, so the next day is still in the same ISO week.
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if got, err := m.Spend(ctx, 90); err != nil || !got.OK {
+		t.Fatalf("Spend(90) = (%+v, %v), want admitted", got, err)
+	}
+	if got, err := m.Spend(ctx, 40); err != nil || got.OK || got.Scope != "org" {
+		t.Fatalf("Spend(40) = (%+v, %v), want the company's day refusing", got, err)
+	}
+	if held, ok := m.Refused(); !ok || held.Scope != "org" || held.Period != period.Day {
+		t.Fatalf("Refused = (%+v, %v), want the company's day", held, ok)
+	}
+	clock = time.Date(2026, time.March, 15, 9, 0, 0, 0, time.UTC)
+	held, ok := m.Refused()
+	if !ok || held.Scope != "agent" || held.Period != period.Week || held.Used != 130 || held.Limit != 120 {
+		t.Fatalf("Refused the next day = (%+v, %v), want the seat's week the company's "+
+			"refused round took past its ceiling", held, ok)
+	}
+	if got, err := m.Spend(ctx, 1); err != nil || got.OK || got.Scope != "agent" || got.Period != period.Week {
+		t.Fatalf("Spend(1) the next day = (%+v, %v), want the seat's week refusing, as the "+
+			"meter held", got, err)
+	}
+}
+
 // A REFUSAL ANSWERED TO A CALLER THAT HUNG UP IS HELD ALL THE SAME. The window
 // is full whether or not that caller is listening, and the turn's next call is
 // made by somebody else.

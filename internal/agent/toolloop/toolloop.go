@@ -454,8 +454,10 @@ type BudgetMeter interface {
 	// spending the company's last room since this one last charged — is
 	// left to the next charge, which is the gate.
 	//
-	// The outcome is the refusal as the counter would name it now, and is
-	// what the caller reports ([Refusal]).
+	// The outcome is a refusal the next call is certain to meet, named by
+	// the counter's own rule — the company's before the seat's, the window
+	// that ends last within a scope — over every window the meter knows to
+	// be full, and is what the caller reports ([Refusal]).
 	Refused() (SpendOutcome, bool)
 }
 

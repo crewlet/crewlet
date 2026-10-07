@@ -143,6 +143,13 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 	// anything, a caller that hung up included: the window is full whether
 	// or not this caller is still listening, and the turn's next call is
 	// made by somebody else.
+	//
+	// The refused window AND every other capped window the round left
+	// full, of either scope: a refusal names one window, and the round it
+	// recorded can have filled another — a round the seat refuses that
+	// leaves the company's day at its ceiling, whose next charge the
+	// company refuses, since it is judged first. Kept from the refusal
+	// alone, the turn reported the seat for a refusal the company makes.
 	outcome := toolloop.SpendOutcome{OK: true}
 	if !got.OK {
 		outcome = toolloop.SpendOutcome{
@@ -151,9 +158,8 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 			ResetsAt: got.RefusedWindow.End,
 		}
 		m.keepFull(outcome)
-	} else {
-		m.keepFilled(got)
 	}
+	m.keepFilled(got)
 	if cause := context.Cause(ctx); cause != nil {
 		return toolloop.SpendOutcome{}, fmt.Errorf("engine: budget: the round is "+
 			"recorded and the turn has ended: %w", cause)
@@ -164,18 +170,27 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 // Refused reports the refusal every further charge of this turn is certain to
 // meet, if this meter has seen one. See [toolloop.BudgetMeter.Refused].
 //
-// From two answers the counter already gave, and never a read: a charge it
-// REFUSED, whose refused round is counted, so the window it named reads past
-// its ceiling; and a charge it ADMITTED whose usage left a capped window at its
-// ceiling exactly — the same "no room for a single token" [windowRefuses]
-// parks a seat on. Either is final until that window turns over, because the
-// meter's ceilings are the turn's pinned ones and a counter only grows within
-// a window (coord.SeatUncountedError: nothing is taken back).
+// From answers the counter already gave, and never a read: every capped
+// window a charge's answer showed with no room left for a single token — the
+// same "refusing" [windowRefuses] parks a seat on. That is the window a
+// REFUSAL named, whose refused round is counted so it reads past its ceiling,
+// and every other window the same round filled, of either scope, since a
+// refusal answers both counters ([coord.Spend.Org]); and every window an
+// ADMITTED round left at its ceiling exactly. Each is final until that window
+// turns over, because the meter's ceilings are the turn's pinned ones and a
+// counter only grows within a window (coord.SeatUncountedError: nothing is
+// taken back).
 //
-// NAMED AS THE COUNTER WOULD NAME IT NOW: of the windows still current, the
-// company's before the seat's — the company is judged first — and within a
-// scope the window that ends last ([coord.Outlasts]), which is when the seat
-// can next be admitted without a ceiling being raised.
+// NAMED BY THE COUNTER'S OWN RULE over the full windows still current: the
+// company's before the seat's — the company is judged first, so while one of
+// its windows is full every charge is the company's refusal, whichever scope
+// refused the round that filled it — and within a scope the window that ends
+// last ([coord.Outlasts]), which is when that scope next has room without a
+// ceiling being raised. A window with some room left, but less than the next
+// call would need, refuses that call too, and the counter would name whichever
+// of the two ends last; the meter does not know the call's size, so it names
+// the full one — a refusal the call is certain to meet, if not always the one
+// the counter would have chosen.
 func (m *meter) Refused() (toolloop.SpendOutcome, bool) {
 	now := m.now()
 	m.mu.Lock()
@@ -222,10 +237,13 @@ func (m *meter) keepFull(full toolloop.SpendOutcome) {
 	m.full = append(m.full, full)
 }
 
-// keepFilled records every capped window an admitted charge left at its
-// ceiling. Its round fitted, so nothing refused it — but nothing will fit
-// after it either, and this is the one moment the meter is told so without
-// paying for a call to find out.
+// keepFilled records every capped window a charge left with no room, in the
+// counters its answer carries — an admission's and a refusal's alike
+// ([coord.Spend.Org]). An admitted round fitted, so nothing refused it, and a
+// refused one is refused in one window only — but nothing will fit after
+// either in any window it filled, and this is the one moment the meter is
+// told so without paying for a call to find out. A counter the answer does
+// not carry (the zero Usage) shows nothing full.
 func (m *meter) keepFilled(got coord.Spend) {
 	m.keepFullIn("org", got.Org, m.basis.org)
 	m.keepFullIn("agent", got.Agent, m.basis.seat)
