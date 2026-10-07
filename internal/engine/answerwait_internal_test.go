@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // sandboxWithModelDoc is [sandboxCompanyDoc] with a model, so a seat on it has
@@ -338,6 +339,149 @@ func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) 
 	eventually(t, "the answer to resume on the tick that admits work", func() bool {
 		return resumer.count() == 1
 	})
+}
+
+// AN ANSWER A SEAT INHERITS RESUMES AS THE SEAT IS ESTABLISHED, not a heartbeat
+// later.
+//
+// The seat's preparation recovers a run whose answer a previous holder
+// recorded and never resumed with, and retries it — from inside the
+// acquisition, while the seat is still establishing and admits no turn. The
+// refusal names ownership, and nothing used to say when that lifted: an
+// establishment is not a renew's admission edge, so the retry slept until the
+// clock said a heartbeat had passed (15 s at the default TTL). The seat host
+// now reports the establishment, and the engine passes it on.
+//
+// DETERMINISTIC rather than raced: the coordinator's retries are hand-cranked,
+// and the one owed to the first inherited answer is fired from INSIDE the
+// acquisition — from the store call the recovery makes for the second — so it
+// is refused for establishing every time.
+func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
+	t.Setenv("K", "sk-ant-test")
+	e := sandboxNode(t, nil)
+	applyOK(t, e, sandboxWithModelDoc)
+	waitHeld(t, e, "swe")
+	host := e.node.Host()
+	heartbeat := host.HeartbeatInterval()
+
+	rt := e.sandbox.Load()
+	retries := &capturedRetries{}
+	store := &claimWitness{PendingStore: rt.pending, during: func() { retries.fire() }}
+	resumer := &resumeSpy{}
+	var refusedForOwnership atomic.Int32
+	admit := func(ctx context.Context, handle string) (sandbox.Refusal, bool) {
+		refusal, refused := e.mayResumeAnswer(ctx, handle)
+		if refused && refusal.Condition == waitOwnership {
+			refusedForOwnership.Add(1)
+		}
+		return refusal, refused
+	}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Audience: noAudience{}, Queue: e.backends.Queue, Pending: store,
+		Manager: rt.coordinator.Manager(), Resume: resumer,
+		Hold: seatHold{engine: e}, Admit: admit, After: retries.after,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(coordinator.Stop)
+	e.sandbox.Store(&sandboxRuntime{pending: store, coordinator: coordinator})
+
+	// TWO ANSWERS THE SEAT'S LAST HOLDER RECORDED, and the seat changes hands.
+	answeredRun(t, rt.pending, "t-first")
+	answeredRun(t, rt.pending, "t-second")
+	if !host.Release(t.Context(), "swe", seat.ReasonPlacement) {
+		t.Fatal("the seat was not released")
+	}
+	host.Sweep(t.Context())
+	waitHeld(t, e, "swe")
+	if refusedForOwnership.Load() == 0 {
+		t.Fatal("the premise: no inherited answer was refused while its seat was establishing")
+	}
+
+	deadline := time.Now().Add(heartbeat / 3)
+	for slices.ContainsFunc(retries.delays(), func(d time.Duration) bool { return d > 0 }) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the inherited answers wait %v after their seat was established, want them "+
+				"re-checked at once rather than a %v heartbeat later", retries.delays(), heartbeat)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	retries.fire()
+	if n := resumer.count(); n != 2 {
+		t.Fatalf("%d resumes, want both inherited answers resumed", n)
+	}
+}
+
+// claimWitness is a store that runs during() inside every ownership claim — a
+// call a seat's recovery makes from inside its acquisition.
+type claimWitness struct {
+	sandbox.PendingStore
+	during func()
+}
+
+func (s *claimWitness) ClaimOwnership(ctx context.Context, turnID, owner string, epoch int64) (bool, error) {
+	s.during()
+	return s.PendingStore.ClaimOwnership(ctx, turnID, owner, epoch)
+}
+
+// capturedRetries is a coordinator scheduler a case fires by hand, keeping the
+// delay each call was armed with.
+type capturedRetries struct {
+	mu  sync.Mutex
+	due []*capturedRetry
+}
+
+type capturedRetry struct {
+	delay time.Duration
+	f     func()
+	done  bool
+}
+
+func (c *capturedRetries) after(d time.Duration, f func()) func() bool {
+	call := &capturedRetry{delay: d, f: f}
+	c.mu.Lock()
+	c.due = append(c.due, call)
+	c.mu.Unlock()
+	return func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if call.done {
+			return false
+		}
+		call.done = true
+		return true
+	}
+}
+
+// fire runs every call armed and not cancelled.
+func (c *capturedRetries) fire() {
+	c.mu.Lock()
+	var due []*capturedRetry
+	for _, call := range c.due {
+		if !call.done {
+			call.done = true
+			due = append(due, call)
+		}
+	}
+	c.due = nil
+	c.mu.Unlock()
+	for _, call := range due {
+		call.f()
+	}
+}
+
+// delays are the delays of the calls armed and not yet run or cancelled.
+func (c *capturedRetries) delays() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []time.Duration
+	for _, call := range c.due {
+		if !call.done {
+			out = append(out, call.delay)
+		}
+	}
+	return out
 }
 
 // A NODE THAT STOPS ITS SANDBOX STOPS THE ANSWERS IT WAS RETRYING. The resume

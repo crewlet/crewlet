@@ -1134,6 +1134,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return e.prepareSeat(ctx, handle, lease.Epoch, lease.Owner)
 		},
 		SeatDone: e.releaseSeat,
+		// A seat that starts admitting turns re-checks at once what was
+		// refused for want of one: an answer whose resume the seat's
+		// preparation inherited waits on exactly this, not on the next
+		// renew. See [Engine.mayResumeAnswer].
+		SeatAdmitted: func(_ context.Context, handle string) {
+			e.readmitAnswers(waitOwnership, handle)
+		},
 		// A SEAT A PERSON PAUSED is attached already held, so placement
 		// moving it here does not deliver the mail it is holding: the
 		// release on the node it left dropped that node's hold with the

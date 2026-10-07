@@ -341,6 +341,25 @@ type Hooks interface {
 	// fleet while nothing runs it.
 	OnAcquire(ctx context.Context, handle string, lease coord.Lease) error
 
+	// OnEstablished reports that a seat OnAcquire returned for is
+	// ESTABLISHED: from this call on, [Host.MayStart] admits turns on it.
+	//
+	// It exists because establishment is the one transition into admission
+	// nothing else announces. The acquire hook runs while the seat is still
+	// refusing every turn, so a decision made inside it about whether the
+	// seat may run something — the engine's recovery of a run whose answer
+	// a previous holder recorded and never resumed with, retried from the
+	// hook — is told no, and has nothing to wait on but the clock: the next
+	// renew is a heartbeat away (15 s at the default TTL) and reports
+	// nothing to anyone, because an established seat's first renew is not an
+	// admission EDGE (see OnAdmission). This is that edge.
+	//
+	// Called once per acquisition, after OnAcquire returned nil and the seat
+	// stopped establishing, under the seat's own lock like OnAcquire. It
+	// cannot fail the acquisition — the seat is already serving — so it
+	// returns nothing; anything it does that can fail is its own to retry.
+	OnEstablished(ctx context.Context, handle string, lease coord.Lease)
+
 	// OnRelease tears the seat down. The reason decides whether in-flight
 	// work is finished or abandoned — see [ReleaseReason].
 	//
@@ -380,9 +399,10 @@ type Hooks interface {
 // does nothing, so a caller that only cares about acquire and release writes
 // only those two.
 type HookFuncs struct {
-	Acquire   func(ctx context.Context, handle string, lease coord.Lease) error
-	Release   func(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error
-	Admission func(ctx context.Context, handle string, admitted bool) error
+	Acquire     func(ctx context.Context, handle string, lease coord.Lease) error
+	Established func(ctx context.Context, handle string, lease coord.Lease)
+	Release     func(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error
+	Admission   func(ctx context.Context, handle string, admitted bool) error
 }
 
 // OnAcquire implements [Hooks].
@@ -391,6 +411,14 @@ func (h HookFuncs) OnAcquire(ctx context.Context, handle string, lease coord.Lea
 		return nil
 	}
 	return h.Acquire(ctx, handle, lease)
+}
+
+// OnEstablished implements [Hooks].
+func (h HookFuncs) OnEstablished(ctx context.Context, handle string, lease coord.Lease) {
+	if h.Established == nil {
+		return
+	}
+	h.Established(ctx, handle, lease)
 }
 
 // OnRelease implements [Hooks].

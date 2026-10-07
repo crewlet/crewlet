@@ -135,6 +135,43 @@ func TestARefusalTheClockLiftsIsRecheckedWhenItLifts(t *testing.T) {
 	}
 }
 
+// A SIGNAL THAT LANDS WHILE THE RETRY IS BEING REFUSED IS NOT SLEPT THROUGH.
+//
+// The check and the wait are two steps, and Readmit wakes only an attempt
+// already marked waiting. The seat finishing its establishment while its
+// inherited answer is being refused for establishing is exactly that race:
+// the signal found nothing waiting, and the wait that followed slept to the
+// clock — a heartbeat — or the backstop.
+func TestASignalThatRacesTheRefusalIsNotSleptThrough(t *testing.T) {
+	rig := newCoordRig(t)
+	answeredAndOwed(t, rig)
+	signalled := false
+	rig.coordinator.admit = func(context.Context, string) (Refusal, bool) {
+		if signalled {
+			return Refusal{}, false
+		}
+		// THE SEAT IS ESTABLISHED WHILE THIS CHECK DECIDES: the refusal
+		// below was true when it was read, and is no longer.
+		signalled = true
+		rig.coordinator.Readmit(conditionOwnership, "swe")
+		return Refusal{Condition: conditionOwnership, Reason: "the seat is being established",
+			Until: rig.now.Add(15 * time.Second)}, true
+	}
+	if rig.fireRetries() != 1 {
+		t.Fatal("the failed resume scheduled no retry")
+	}
+	if got := rig.retries.delays(); !slices.Equal(got, []time.Duration{0}) {
+		t.Fatalf("the refused retry waits %v, want it re-checked at once: the signal that "+
+			"lifted the refusal landed while it was being made", got)
+	}
+	rig.fireRetries()
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("%d resumes, want the answer resumed on the re-check", len(calls))
+	}
+}
+
+const conditionOwnership Condition = "ownership"
+
 // A MISSED SIGNAL IS STILL RECOVERED. The condition clears and nothing says
 // so; the backstop re-checks, finds it clear, and the answer is resumed rather
 // than stranded on a seat that could take it.

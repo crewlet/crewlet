@@ -1556,8 +1556,13 @@ func (e *Engine) holdSandboxSeat(ctx context.Context, handle string) {
 // [Engine.readmitAnswers] for where the engine passes it on.
 const (
 	// waitOwnership — the seat's lease is not fresh, or the seat is still
-	// being established. Re-decided by the next renew, so the refusal waits
-	// one heartbeat on the clock.
+	// being established. Signalled when the seat starts admitting turns:
+	// the moment its acquisition is established, which is how an answer
+	// inherited by the seat's own preparation resumes at once rather than
+	// a heartbeat (15 s at the default TTL) later, and the renew that
+	// re-proves a lease after a store blip. A lease merely stale from a
+	// late renew has no such edge, so the refusal also names one heartbeat
+	// on the clock.
 	waitOwnership sandbox.Condition = "ownership"
 
 	// waitPause — a person paused the seat, or this node has not read the
@@ -1593,11 +1598,12 @@ const (
 // owed, and resuming it beside that job is what it was always admitted to do.
 //
 // EACH REFUSAL NAMES WHAT IT WAITS ON, so the retry waits for that rather than
-// re-checking on a timer (see [sandbox.Coordinator.Readmit]). Two of them are
-// clocks: a lease is re-proved by the renew the seat host makes once a
-// heartbeat, so ownership is re-checked one heartbeat later; and a budget
-// window ends at an instant the counters name. The rest are events this node
-// observes and passes on in [Engine.readmitAnswers]'s callers.
+// re-checking on a timer (see [sandbox.Coordinator.Readmit]). Ownership is an
+// event — the seat host reports the seat established, or its admission back
+// after a blip (node.Config.SeatAdmitted) — with one heartbeat on the clock
+// behind it for a renew that was merely late; a budget window ends at an
+// instant the counters name. The rest are events this node observes and
+// passes on in [Engine.readmitAnswers]'s callers.
 func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Refusal, bool) {
 	c := e.conditionsFor(nil)(handle)
 	switch {

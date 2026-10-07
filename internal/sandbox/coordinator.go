@@ -354,6 +354,11 @@ type Coordinator struct {
 	holdDirty map[string]bool
 	holdGen   map[string]uint64
 
+	// signals counts every [Coordinator.Readmit], by condition and seat,
+	// so a retry refused while one landed does not wait through it. Under
+	// mu; see [Coordinator.waitOwed].
+	signals map[signal]uint64
+
 	hold  SeatHold
 	admit Admission
 	after func(time.Duration, func()) func() bool
@@ -441,6 +446,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		holdBusy:  map[string]bool{},
 		holdDirty: map[string]bool{},
 		holdGen:   map[string]uint64{},
+		signals:   map[signal]uint64{},
 		hold:      opts.Hold,
 		admit:     opts.Admit,
 		after:     opts.After,

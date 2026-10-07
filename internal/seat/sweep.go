@@ -430,10 +430,17 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	}
 
 	h.mu.Lock()
-	if entry := h.held[handle]; entry != nil {
+	entry := h.held[handle]
+	if entry != nil {
 		entry.establishing = false
 	}
 	h.mu.Unlock()
+	// THE EDGE INTO ADMISSION, said out loud: nothing else reports it, and
+	// whatever the acquire hook was refused while the seat established is
+	// waiting on exactly this. See [Hooks.OnEstablished].
+	if entry != nil {
+		h.notifyEstablished(ctx, handle, *lease)
+	}
 
 	// Counted as claimed only once the seat is ESTABLISHED. The hook gives
 	// a failed takeover straight back — a bad MCP command, a credential

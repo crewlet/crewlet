@@ -115,6 +115,21 @@ type Config struct {
 	// at all; see [seat.Config.Serviceable].
 	SeatsServiceable func() (bool, string)
 
+	// SeatAdmitted runs when a seat this node holds STARTS ADMITTING TURNS:
+	// once its acquisition is established — the mailbox attached and
+	// [seat.Host.MayStart] saying yes from here — and again whenever a renew
+	// re-proves ownership after a stretch in which it could not (the
+	// admission edge [Node.OnAdmission] resumes the consumer on). Nil does
+	// nothing.
+	//
+	// It is how something this node refused for want of a seat that admits
+	// turns learns the refusal has lifted, at the transition rather than at
+	// a guess about when it might have. The engine's is a recorded answer
+	// whose resume the seat's preparation inherited and could not run while
+	// the seat was still establishing. It never fails anything: the seat is
+	// already serving.
+	SeatAdmitted func(ctx context.Context, handle string)
+
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
@@ -539,6 +554,14 @@ func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) 
 	return nil
 }
 
+// OnEstablished passes on that an acquired seat now admits turns — see
+// [Config.SeatAdmitted].
+func (n *Node) OnEstablished(ctx context.Context, handle string, _ coord.Lease) {
+	if n.cfg.SeatAdmitted != nil {
+		n.cfg.SeatAdmitted(ctx, handle)
+	}
+}
+
 // runTurn gates every turn on still owning the seat.
 //
 // The check is FRESHNESS, not membership: it certifies that a successful
@@ -626,6 +649,11 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 		return fmt.Errorf("node: set admission for %q: %w", handle, err)
 	}
 	n.log.Debug("seat_admission", "handle", handle, "admitted", admitted)
+	// THE SAME EDGE AS AN ESTABLISHMENT, for whatever was refused while
+	// ownership could not be proven — see [Config.SeatAdmitted].
+	if admitted && n.cfg.SeatAdmitted != nil {
+		n.cfg.SeatAdmitted(ctx, handle)
+	}
 	return nil
 }
 

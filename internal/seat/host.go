@@ -928,6 +928,21 @@ func (h *Host) notifyAcquire(ctx context.Context, handle string, lease coord.Lea
 	return callHook("on_acquire", handle, func() error { return h.hooks.OnAcquire(ctx, handle, lease) })
 }
 
+// notifyEstablished reports a seat established. A panic in the hook is logged
+// and contained, like every hook's: the seat is already serving, and the
+// sweep that established it is what keeps every other seat on this node.
+func (h *Host) notifyEstablished(ctx context.Context, handle string, lease coord.Lease) {
+	if h.hooks == nil {
+		return
+	}
+	if err := callHook("on_established", handle, func() error {
+		h.hooks.OnEstablished(ctx, handle, lease)
+		return nil
+	}); err != nil {
+		log.ErrorContext(ctx, "seat_established_hook_failed", "seat", handle, "error", err)
+	}
+}
+
 // notifyRelease runs the teardown hook, letting the caller see what
 // happened.
 //

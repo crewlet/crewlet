@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -159,7 +160,8 @@ type Admission func(ctx context.Context, handle string) (refusal Refusal, refuse
 // A BACKSTOP AND NOT A SCHEDULE. Every condition a refusal can name changes on
 // an event the engine already observes and passes on ([Coordinator.Readmit]) —
 // a person resuming the seat, an apply bringing a model or a ceiling, the
-// posture admitting work again — or on a clock the refusal itself names
+// posture admitting work again, the seat established or its ownership proven
+// again — or on a clock the refusal itself names
 // ([Refusal.Until]). What this bounds is a signal that never came: a path that
 // moves one of those conditions and was never wired to say so. Five minutes is
 // one admission check (this node's own reads and, at most, one read of the
@@ -589,8 +591,14 @@ func (c *Coordinator) retryOwed(turnID string) {
 		return
 	}
 	if c.admit != nil {
+		// What has been signalled so far, read BEFORE the check: a signal
+		// that lands while the check is deciding is one the wait below must
+		// not sleep through. See [Coordinator.waitOwed].
+		c.mu.Lock()
+		seen := maps.Clone(c.signals)
+		c.mu.Unlock()
 		if refusal, refused := c.admit(ctx, handle); refused {
-			c.waitOwed(ctx, turnID, refusal)
+			c.waitOwed(ctx, turnID, refusal, seen)
 			return
 		}
 	}
@@ -623,7 +631,10 @@ func (c *Coordinator) retryOwed(turnID string) {
 // those conditions changes on something DISCRETE, and the engine observes
 // each: the pause watch hears a resume, an apply brings a model, a ceiling or
 // a posture, the budget window ends at an instant the refusal names, and a
-// lease is re-proved by the next renew, which happens once per heartbeat. So
+// seat starts admitting turns when its acquisition is established or a renew
+// proves its lease again after a blip — the seat host says so at either edge
+// — with one heartbeat on the clock behind them for a renew that was merely
+// late. So
 // the refusal names what it waits on ([Refusal]): the clock it waits for is
 // armed, the event it waits for re-checks it through [Coordinator.Readmit] the
 // moment it happens, and nothing runs in between.
@@ -635,7 +646,18 @@ func (c *Coordinator) retryOwed(turnID string) {
 // person's answer stranded on a seat that could have taken it. So no wait is
 // longer than [answerWaitBackstop], and that re-check finds the condition
 // cleared or names it again.
-func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refusal) {
+//
+// # A signal that raced the check is not missed
+//
+// The check and the wait are two steps, and [Coordinator.Readmit] only wakes an
+// attempt already marked waiting. A signal landing between them — the seat
+// established while its inherited answer was being refused for establishing —
+// found nothing waiting, and the wait that followed slept through it, to the
+// clock or the backstop. So the caller reads what had been signalled before it
+// checked (seen), and a wait on a condition signalled since re-checks at once.
+func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refusal,
+	seen map[signal]uint64,
+) {
 	wait := answerWaitBackstop
 	if !refusal.Until.IsZero() {
 		wait = min(wait, max(refusal.Until.Sub(c.now()), 0))
@@ -644,8 +666,12 @@ func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refus
 	r := c.retries[turnID]
 	var handle string
 	if r != nil {
-		r.waiting = refusal.Condition
 		handle = r.handle
+		if c.signalledSinceLocked(refusal.Condition, handle, seen) {
+			wait = 0
+		} else {
+			r.waiting = refusal.Condition
+		}
 		c.scheduleOwedLocked(turnID, wait)
 	}
 	c.mu.Unlock()
@@ -668,6 +694,12 @@ func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refus
 func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(handles) == 0 {
+		c.signals[signal{cond: cond}]++
+	}
+	for _, handle := range handles {
+		c.signals[signal{cond: cond, handle: handle}]++
+	}
 	for turnID, r := range c.retries {
 		if r.waiting == "" || r.waiting != cond ||
 			(len(handles) > 0 && !slices.Contains(handles, r.handle)) {
@@ -676,6 +708,24 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 		r.waiting = ""
 		c.scheduleOwedLocked(turnID, 0)
 	}
+}
+
+// signal is what a [Coordinator.Readmit] was for: a condition, on one seat or —
+// with no handle — on every seat.
+type signal struct {
+	cond   Condition
+	handle string
+}
+
+// signalledSinceLocked reports whether cond has been signalled for handle
+// since seen was read. The caller holds c.mu.
+func (c *Coordinator) signalledSinceLocked(cond Condition, handle string, seen map[signal]uint64) bool {
+	for _, key := range []signal{{cond: cond}, {cond: cond, handle: handle}} {
+		if c.signals[key] != seen[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // declineAnswer gives up on an answer this node could not resume with, once
