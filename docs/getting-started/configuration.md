@@ -407,9 +407,11 @@ providers:
                                         #   and similarity search for the
                                         #   agent-learning subsystem (agent_diary
                                         #   candidate selection AND episode recall).
-                                        #   Omit it and search is keyword only and
-                                        #   both recalls fall back to recency;
-                                        #   nothing else changes.
+                                        #   Omit it and search is keyword only,
+                                        #   the diary's candidates are its recent
+                                        #   notes alone and episode recall renders
+                                        #   nothing (recent turns are not similar
+                                        #   work); nothing else changes.
     type: openai                        # openai | openai-compatible
     model: text-embedding-3-large       # required, and it DECIDES THE WIDTH: this
                                         #   one emits 3072, text-embedding-3-small
@@ -567,14 +569,21 @@ timeout or a network failure — asking again later may succeed) and
 wrong width — nothing will succeed until `providers.embeddings` is fixed).
 
 **One call's ceiling is not another's.** A single embedding is held to 15
-seconds where nothing else bounds it — an episode embedded after its turn, for
-one. What a person or a starting turn waits on is held to a budget of its own,
-two seconds: a search's query vector, a turn's ask, the hint a recall tool
-passes and a note as it is written. Past it they degrade rather than wait — the
-search serves its keyword half and says so, the turn's recall falls back to
-recency, the note is kept without a vector until the next fill — so a slow
-embeddings server shows up as `embedding_failed` searches and recency-only
-recall, not as slow searches and slow turn starts. A batch request carries up to
+seconds where nothing tighter bounds it — an episode embedded after its turn,
+for one. What a person or a turn waits on is held to two seconds instead: a
+search's query vector, whether a person or a seat's `search_knowledge` asked; a
+turn's ask as the turn starts; the hint `query_episodes` or `refresh_memory`
+passes; and a note `reflect_and_persist` keeps, which the seat's model is
+waiting on mid-turn (a note the reflection after the turn keeps is held to the
+same two seconds). Past it each degrades rather than waits. A hybrid search
+serves its keyword half and a semantic one answers nothing, each saying why.
+Personal memory is chosen from the recent half of its candidate pool alone. Similar prior work renders nothing, and
+`query_episodes` says its search could not run — by design, since a recent
+turn is not similar work and the block would offer it as precedent. The note
+is kept without a vector until the node holding the seat fills it. So a slow
+embeddings server shows up as `embedding_failed` searches, personal memory drawn
+from recent notes only and no similar prior work, not as slow searches, slow
+turn starts and stalled tool calls. A batch request carries up to
 the model's request total (300 000 tokens on OpenAI) and is held to 60 seconds,
 a fifth of the five minutes a corpus tick may go without progress. Nothing has
 measured how long a server takes over a full request — OpenAI's or a self-hosted

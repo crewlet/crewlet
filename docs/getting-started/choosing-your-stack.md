@@ -78,8 +78,9 @@ may hold, and the inputs and tokens one request may carry), and so do the
 request limits of `gemini-embedding-001` and `embed-v4.0`, whose compatible
 endpoints document none — see
 [Configuration](configuration.md#providers). Without an embeddings
-provider the engine still runs: search is keyword only, and recall falls back
-to recency.
+provider the engine still runs: search is keyword only, personal memory is
+chosen from a seat's recent notes alone, and similar-prior-work recall renders
+nothing, because a seat's recent turns are not similar work.
 
 ---
 

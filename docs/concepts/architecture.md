@@ -65,7 +65,7 @@ flowchart LR
 
     subgraph supply["What a turn consumes"]
         LLM["<b>LLM API</b><br/>Anthropic · OpenAI · any<br/>OpenAI-compatible endpoint<br/><i>or a coding CLI on your own subscription</i>"]
-        EMB["<b>Embeddings API</b><br/><i>optional — without it, recall<br/>falls back to recency</i>"]
+        EMB["<b>Embeddings API</b><br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
         BOX["<b>Code sandbox</b><br/>an E2B VM, or this host"]
     end

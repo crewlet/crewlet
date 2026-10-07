@@ -405,9 +405,11 @@ type Sources struct {
 	// Embed turns text into a vector for the similarity searches, with
 	// the company's CURRENT embedder — read when it is called, never when
 	// the fetcher was built (see [learning.Embed]). Nil, or an answer of
-	// [learning.ErrNoEmbeddings], falls back to recency alone, which is a
-	// real degradation rather than a failure: recent memories are still
-	// this seat's memories.
+	// [learning.ErrNoEmbeddings], leaves personal memory its recency half
+	// alone, which is a real degradation rather than a failure — recent
+	// memories are still this seat's memories — and episode recall nothing
+	// at all, because recent turns are not similar work
+	// ([Fetcher.episodeRecall]).
 	Embed learning.Embed
 
 	// SummarizeEpisodes is the operator's switch for whether episode hits
