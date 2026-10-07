@@ -193,10 +193,7 @@ func TestAnUnknownContainerWriteIsAnError(t *testing.T) {
 	r := newRoundTrip(t)
 	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
 	// no operation minted before then — which is every one this call mints.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
-		pages.Domain{}, time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("record the ledger's watermark: %v", err)
-	}
+	r.markLedgerLost(time.Now().Add(time.Hour))
 	_, changed, err := r.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", "")
 	if err == nil {

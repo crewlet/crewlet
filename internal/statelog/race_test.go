@@ -451,7 +451,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		}
 	})
 
-	t.Run("an operation minted before an adoption from a scrubbing donor during its own write answers unknown", func(t *testing.T) {
+	t.Run("an operation minted before a sweep during its own write answers unknown", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		first, err := h.write(probeSubject("a"), "op-0", "one")
@@ -463,9 +463,10 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 
 		// The record lands, the acknowledgement is lost, this node
 		// applies past it — and its operation ledger is EMPTY, because
-		// it adopted a snapshot from a donor that scrubbed its ledger
-		// DURING this write, after the operation was minted and after
-		// its decision was checked. And a PEER's write lands above it
+		// its retention sweep ran DURING this write with a cutoff past
+		// the operation's mint instant (an id carrying an old instant: a
+		// turn-derived one, or a caller's retry a month on), after its
+		// decision was checked. And a PEER's write lands above it
 		// before anybody asks the subject what it holds, so the newest
 		// record there is another operation's: nothing on the log says
 		// whether this one landed below it.
@@ -477,7 +478,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		minted := time.Now()
 		h.appends.mu.Lock()
 		h.appends.beforeLastSeq = func() {
-			h.adoptFromAScrubbingDonor(minted.Add(time.Hour))
+			h.sweep(minted.Add(time.Hour))
 			if _, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
 				probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, "peer-op", "peer")); err != nil {
 				t.Errorf("the peer's write: %v", err)
@@ -488,7 +489,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		op := statelog.NewOpID(minted, "write-a")
 		res, err := h.write(probeSubject("a"), op, "two")
 		if err != nil {
-			t.Fatalf("write across an adoption: %v", err)
+			t.Fatalf("write across a sweep: %v", err)
 		}
 		if res.Outcome != statelog.OutcomeUnknown {
 			t.Fatalf("outcome = %q, want unknown — reading the ledger's silence "+
@@ -536,13 +537,13 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.appends.fail(errors.New("no response from stream"), false)
 		minted := time.Now()
 		h.appends.mu.Lock()
-		h.appends.beforeLastSeq = func() { h.adoptFromAScrubbingDonor(minted.Add(time.Hour)) }
+		h.appends.beforeLastSeq = func() { h.sweep(minted.Add(time.Hour)) }
 		h.appends.mu.Unlock()
 
 		op := statelog.NewOpID(minted, "write-a")
 		res, err := h.write(probeSubject("a"), op, "two")
 		if err != nil {
-			t.Fatalf("write across an adoption: %v", err)
+			t.Fatalf("write across a sweep: %v", err)
 		}
 		landed := statelog.Position{Stream: probeStream, Generation: 1,
 			Seq: uint64(h.appends.lastSeq.Load())}
@@ -567,15 +568,14 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h := newHarness(t)
 		// The decision is checked before any loss; the loss is reported
 		// from the SECOND read of the watermark on — the resolution's —
-		// which is an adoption from a donor that scrubbed its ledger
-		// landing between this write's append and the answer to it.
+		// which is this node's sweep landing between this write's
+		// append and the answer to it.
 		h.applier.mu.Lock()
 		h.applier.lost = time.Now().Add(time.Hour)
 		h.applier.lostFrom = 2
 		h.applier.mu.Unlock()
-		// This node's rows are past the record, and its own applier
-		// never wrote a row for it: the adopted artefact did the
-		// applying, which is what an adoption covering the record is.
+		// This node's rows are past the record, and its ledger holds
+		// no row for it: the sweep took the row its applier wrote.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()

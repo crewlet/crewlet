@@ -113,17 +113,15 @@
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.
-// The retention sweep deletes every row applied more than [OpsRetention] ago,
-// and a snapshot adopted from a donor that scrubbed its ledger — every build
-// before the ledger travelled — arrives with none of the donor's. A retry of
-// such an operation — a turn re-run under its derived id, a caller repeating
+// The retention sweep deletes every row applied more than [OpsRetention] ago.
+// A retry of such an operation — a turn re-run under its derived id, a caller repeating
 // an `unknown` — finds no row, decides again on rows that already hold the
 // first application, and publishes a second copy the broker has no reason to
 // refuse: the expectation is current and the duplicate window long past.
 //
 // So the ledger keeps a WATERMARK, beside it in the same file: the instant
 // before which it may have lost rows ([Rows.LostBefore], ledgerloss.go), moved
-// only forward, by whatever loses them and in the same transaction or file.
+// only forward, by the sweep that loses them and in the same transaction.
 // Before a decision is published the publisher asks whether the ledger can
 // VOUCH for the operation (Publisher.vouches): it cannot for one minted before
 // the watermark whose row it does not hold, and such a write is answered
@@ -140,9 +138,9 @@
 // the adopter holds a row for every operation its donor applied, so a retry of
 // one is answered from it, and an operation neither holds never applied — so a
 // turn woken by a trigger from before the join, whose ids carry that trigger's
-// instant, has its first attempts published like anyone's. Scrubbed, the
-// ledger could vouch for nothing minted before the adoption, and a recovering
-// node answered its own backlog `unknown`.
+// instant, has its first attempts published like anyone's. Scrubbed out of
+// the snapshot, the ledger could vouch for nothing minted before the adoption,
+// and a recovering node would answer its own backlog `unknown`.
 //
 // The instant is the operation id's OWN — a UUIDv7 whose leading bits are its
 // mint time, recovered with [OpMintedAt] and minted only by [NewOpID],

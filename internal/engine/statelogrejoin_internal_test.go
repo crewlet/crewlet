@@ -75,17 +75,10 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	// answered is when the donor first answered with its artefact: the
-	// latest instant a donor's snapshotter could have finished the file it
-	// offers, so the latest one the adoption's bound may precede.
-	var answered atomic.Int64
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) {
-			answered.CompareAndSwap(0, time.Now().UnixNano())
-			return manifest, true
-		},
+		Newest: func() (statelog.Manifest, bool) { return manifest, true },
 		Path: func(m statelog.Manifest) string {
 			// THE NAME THE MANIFEST CARRIES, which is what the engine's
 			// own donor does: a name derived here would be a fourth
@@ -126,21 +119,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		t.Fatalf("the newest adoption row names artefact %s, want the donor's %s",
 			recorded, manifest.SHA256)
 	}
-	// AND ITS START FOLLOWS THE DONOR'S ANSWER, which is what makes it the
-	// watermark an artefact from a donor that scrubbed its ledger is
-	// installed with: the artefact may have been finished an instant before
-	// the donor answered, and an operation this node published before THAT
-	// can sit inside it with its ledger row scrubbed. A start stamped when
-	// the join began precedes the ask itself.
-	if began, asked := store.DecodeTime(startedAt),
-		time.Unix(0, answered.Load()).UTC().Truncate(time.Microsecond); began.Before(asked) {
-		t.Fatalf("the adoption row starts at %s, before the donor answered at %s — "+
-			"an operation minted between the two can be inside the artefact with "+
-			"its ledger row scrubbed, and an adoption that stopped before "+
-			"completing would let it be re-decided", began, asked)
-	}
-	// AND THE LEDGER LOST NOTHING: a donor of this build scrubs none, so the
-	// adopter holds its donor's rows and inherits its donor's watermark —
+	// AND THE LEDGER LOST NOTHING: the ledger travels with the snapshot, so
+	// the adopter holds its donor's rows and inherits its donor's watermark —
 	// which says nothing lost, on a donor that never swept. An adopter that
 	// recorded a loss here would answer its own backlog `unknown`.
 	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), tracker.Domain{}.Stream())

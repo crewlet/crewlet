@@ -24,9 +24,9 @@ import (
 // published again. And an operation neither ledger holds never applied, so a
 // write whose id was minted before the join — the FIRST attempt of a turn
 // woken by a trigger from before it, which derives its ids from that trigger's
-// instant — is decided and published like anyone's. With the ledger scrubbed
-// out of the snapshot, both were answered `unknown`: the second is a
-// recovering node refusing its own backlog.
+// instant — is decided and published like anyone's. That is why the ledger
+// travels: scrubbed out of the snapshot, both would be answered `unknown`,
+// and the second is a recovering node refusing its own backlog.
 func TestANodeThatAdoptedJudgesAWriteByTheLedgerThatTravelled(t *testing.T) {
 	t.Parallel()
 	donor := newRoundTrip(t)
@@ -40,7 +40,7 @@ func TestANodeThatAdoptedJudgesAWriteByTheLedgerThatTravelled(t *testing.T) {
 	}
 	donor.drain()
 
-	joiner := adoptFrom(t, donor, tracker.Domain{})
+	joiner := adoptFrom(t, donor)
 	joiner.applyWhileWriting()
 	end := joiner.logEnd(t)
 
@@ -76,74 +76,6 @@ func TestANodeThatAdoptedJudgesAWriteByTheLedgerThatTravelled(t *testing.T) {
 	}
 }
 
-// A NODE THAT ADOPTED FROM A DONOR THAT SCRUBBED ITS LEDGER DOES NOT APPLY A
-// RETRY A SECOND TIME — which is what a rolling upgrade puts in front of it: a
-// peer on a build from before the ledger travelled.
-//
-// Its artefact holds none of the ledger's rows, and its manifest says so. The
-// joiner writes the join's own start into the artefact as the ledger's
-// watermark before installing it, so an operation minted before the join —
-// a retry of one the donor applied, and, unavoidably, a first attempt too — is
-// answered `unknown` rather than decided against rows that may already hold
-// it. An operation minted after the join is judged by its row as ever.
-func TestANodeThatAdoptedFromAScrubbingDonorDoesNotApplyARetryTwice(t *testing.T) {
-	t.Parallel()
-	donor := newRoundTrip(t)
-	donor.applyWhileWriting()
-	created := donor.createTask("who owns the rollback")
-	landed := statelog.NewOpID(time.Now().Add(-time.Hour), "comment-"+created.ID)
-	if first, err := commentOn(donor, created.ID, landed, "cm-1"); err != nil ||
-		first.Outcome != statelog.OutcomeApplied {
-		t.Fatalf("the donor's application = (%+v, %v), want applied", first.Result, err)
-	}
-	donor.drain()
-
-	joiner := adoptFrom(t, donor, scrubbingTracker{})
-	joiner.applyWhileWriting()
-	end := joiner.logEnd(t)
-
-	retry, err := commentOn(joiner, created.ID, landed, "cm-1")
-	if err != nil {
-		t.Fatalf("the retry: %v — an operation this node cannot vouch for is "+
-			"answered, not refused as a broken applier", err)
-	}
-	if retry.Outcome != statelog.OutcomeUnknown {
-		t.Fatalf("the retry answered %q, want unknown — the donor scrubbed the "+
-			"ledger that would say whether the first application landed, and "+
-			"deciding again applies it twice", retry.Outcome)
-	}
-	if got := joiner.logEnd(t); got != end {
-		t.Fatalf("the retry put %d record(s) on the log", got-end)
-	}
-	detail, err := joiner.reader.Task(t.Context(), created.ID,
-		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
-	if err != nil {
-		t.Fatalf("read the thread: %v", err)
-	}
-	if len(detail.Comments) != 1 {
-		t.Fatalf("the thread holds %d comments, want the one", len(detail.Comments))
-	}
-
-	// AND THE CONTROL: minted after the join, judged by its row.
-	after, err := commentOn(joiner, created.ID,
-		statelog.NewOpID(time.Now(), "comment-"+created.ID+"-2"), "cm-2")
-	if err != nil || after.Outcome != statelog.OutcomeApplied {
-		t.Fatalf("an operation minted after the join = (%+v, %v), want applied",
-			after.Result, err)
-	}
-}
-
-// scrubbingTracker is the tracker domain as a build from before the ledger
-// travelled declared it: its operation ledger classed as this node's own, and
-// so scrubbed out of every snapshot it takes.
-type scrubbingTracker struct{ tracker.Domain }
-
-func (scrubbingTracker) Tables() map[string]statelog.TableClass {
-	tables := tracker.Domain{}.Tables()
-	tables[tracker.Domain{}.OpsTable()] = statelog.Local
-	return tables
-}
-
 // commentOn posts one comment on a task under op, as ana.
 func commentOn(r *roundTrip, taskID, op, id string) (tracker.WriteResult, error) {
 	return r.writer.UpdateTask(r.t.Context(), op, taskID, "ENG",
@@ -155,11 +87,10 @@ func commentOn(r *roundTrip, taskID, op, id string) (tracker.WriteResult, error)
 }
 
 // adoptFrom is a second node joining the donor's log by adopting its snapshot:
-// the donor takes one as the domain `declared` declares its tables — this
-// build's, or an older build's that scrubbed the ledger — and serves it; a
-// fresh store adopts it through the real join; and the harness's node is built
-// over what arrived, resuming at the artefact's position.
-func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundTrip {
+// the donor takes one and serves it; a fresh store adopts it through the real
+// join; and the harness's node is built over what arrived, resuming at the
+// artefact's position.
+func adoptFrom(t *testing.T, donor *roundTrip) *roundTrip {
 	t.Helper()
 	stream := tracker.Domain{}.Stream().Name
 	at, _, _, err := statelog.CursorFor(t.Context(), donor.db, stream)
@@ -170,7 +101,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	dir := t.TempDir()
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: declared, Spec: declared.Stream(),
+			Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(),
 			Health: func() statelog.Health {
 				return statelog.Health{Position: at, Drained: true, Lag: &lag}
 			},

@@ -424,14 +424,10 @@ the donor build's own version instead, as every manifest used to.
 **An adoption carries the operation ledger with it.** The ledger — the table
 that says which operations have already been applied — travels inside the
 snapshot, so the adopted node answers a retry of anything its donor applied
-from it, and files work that was queued before the join like any other. The one
-exception is a donor on an **older build**, which scrubbed its ledger out of the
-snapshot: the joining node records the join as the point before which its
-ledger may have lost rows, so a retry of older work there — a turn re-run
-whose work began before the join, an operator repeating an older `-op-id` —
-answers `unknown` (and logs `statelog_write_unvouched`) rather than risk
-applying it twice, until it is retried on a node that did not adopt from the
-older peer. Upgrading the fleet ends it. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
+from it, and files work that was queued before the join like any other. The
+point before which the ledger may have lost rows to its thirty-day sweep travels
+with it, so the joining node answers a retry exactly as its donor would have.
+See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
 
 ### A node a peer re-anchored past
 
@@ -635,8 +631,8 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   has passed, run the gesture again with the same `-op-id` through the same
   node.
 - `unknown` that **this node cannot tell** — its operation ledger may have
-  lost the row the operation needs, because the id was minted before the node
-  adopted a peer's snapshot or before the ledger's sweep reached it. The node
+  lost the row the operation needs, because the id was minted before the
+  ledger's sweep reached it. The node
   published nothing and answers the same gesture the same way every time, so
   it is not offered as a retry: run it, under the same `-op-id`, through a node
   whose ledger reaches back that far (`-url`). The dashboard says the same and
@@ -1148,9 +1144,9 @@ There are two ways out, and only you can choose between them:
 The walk vouches for a record through the operation ledger, which travels
 inside every snapshot — so a record this node holds because the peer it adopted
 from applied it counts as held, exactly as one it applied itself. It cannot
-vouch where the ledger has lost the record's row: to the ledger's thirty-day
-sweep, or with a snapshot from a peer on an older build, which arrived without
-its ledger. The ledger records how far back it may have lost rows, and when the
+vouch where the ledger has lost the record's row to its thirty-day sweep —
+this node's, or the donor's it inherited with an adopted snapshot. The ledger
+records how far back it may have lost rows, and when the
 named record's operation is older than that the refusal says so — the rows may
 hold the record after all. A record a gate dropped writes no row and reads as
 not held too. In each of those cases the verb can refuse when nothing was
@@ -1400,9 +1396,8 @@ may already have destroyed — and when it did, the retry answers `applied`, at
 the first purge's position, rather than finding the task gone and refusing.
 Pass it back exactly as printed: the id carries the
 instant it was minted, which is what a node judges the retry by once its
-operation ledger may have lost the first purge's row — to the ledger's
-thirty-day sweep, or to a snapshot adopted from a peer on an older build —
-and there it answers `unknown` again rather than purging twice. An id of your
+operation ledger may have lost the first purge's row to the ledger's
+thirty-day sweep, and there it answers `unknown` again rather than purging twice. An id of your
 own making is refused (`op_id_invalid`): it carries no instant, so no node
 could tell whether it already ran. So is a printed one altered on the way back
 — trimmed, spaced, or grown past 128 bytes — because the broker carries the id

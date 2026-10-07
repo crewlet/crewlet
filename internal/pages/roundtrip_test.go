@@ -38,6 +38,22 @@ type roundTrip struct {
 	consumed uint64
 }
 
+// markLedgerLost moves the operation ledger's watermark to cutoff and deletes
+// nothing, as the retention sweep records the cutoff it deleted below.
+func (r *roundTrip) markLedgerLost(cutoff time.Time) {
+	r.t.Helper()
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(r.t.Context(), `
+			INSERT INTO statelog_ops_lost (ops_table, lost_before) VALUES (?, ?)
+			ON CONFLICT (ops_table) DO UPDATE SET
+				lost_before = MAX(lost_before, excluded.lost_before)`,
+			pages.Domain{}.OpsTable(), store.EncodeTime(cutoff))
+		return err
+	}); err != nil {
+		r.t.Fatalf("move the operation ledger's watermark: %v", err)
+	}
+}
+
 func newRoundTrip(t *testing.T) *roundTrip {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})

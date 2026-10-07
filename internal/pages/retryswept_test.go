@@ -15,16 +15,15 @@ import (
 //
 // A re-run turn derives the SAME operation for the same comment — that is what
 // its turn key is for — and the row that would say the first run's copy landed
-// is gone: here because this node adopted a snapshot from a donor that
-// scrubbed its ledger, which the join records exactly as staged below (the
-// ledger empty, the join's start as its watermark — see
-// [statelog.RecordLedgerLoss]). Decided again on rows that already hold the
+// is gone: here because this node's retention sweep removed it, which the
+// sweep records exactly as staged below (the ledger empty, its cutoff as the
+// watermark). Decided again on rows that already hold the
 // comment, it is a second record every node applies: a second history entry
 // and a second wake for one remark. What stops it is the instant the
 // operation id carries, which is the one the turn's work BEGAN at and so the
 // same on every re-run — never the re-run's own clock, which is after the loss
 // by construction.
-func TestATurnsCommentRepostedAfterAnAdoptionIsNotPostedTwice(t *testing.T) {
+func TestATurnsCommentRepostedAfterTheLedgerLostItsRowIsNotPostedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
@@ -42,12 +41,9 @@ func TestATurnsCommentRepostedAfterAnAdoptionIsNotPostedTwice(t *testing.T) {
 		_, err := tx.ExecContext(t.Context(), `DELETE FROM pages_ops`)
 		return err
 	}); err != nil {
-		t.Fatalf("scrub the ledger: %v", err)
+		t.Fatalf("sweep the ledger: %v", err)
 	}
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
-		pages.Domain{}, time.Now()); err != nil {
-		t.Fatalf("record the join's watermark: %v", err)
-	}
+	r.markLedgerLost(time.Now())
 	end, err := r.log.End(t.Context())
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)

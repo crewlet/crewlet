@@ -2528,7 +2528,7 @@ func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 // row, which every artefact carries whole.
 func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 	t.Parallel()
-	h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: func(t *testing.T, db store.ReplicatedHandle) {
+	h := newJoinHarnessFrom(t, joinDonor{seed: func(t *testing.T, db store.ReplicatedHandle) {
 		t.Helper()
 		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `

@@ -510,8 +510,8 @@ var allowedReplicatedWriter = []allowance{
 		Why: "THE RUNTIME: it opens the replicated estate — at boot, at its " +
 			"own start, around an adoption and after a join that left it " +
 			"closed — and hands the write handle to the framework's own " +
-			"loops: the appliers, the snapshotter, the adoption and its " +
-			"legacy fold. It writes no row of its own.",
+			"loops: the appliers, the snapshotter and the adoption. It " +
+			"writes no row of its own.",
 	},
 	{
 		Prefix: "internal/engine/reanchor.go", Kind: holder,

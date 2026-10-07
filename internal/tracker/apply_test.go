@@ -236,8 +236,8 @@ func TestATurnsSpendCannotBeCountedTwice(t *testing.T) {
 		t.Fatalf("after one turn the input spend is %d, want 1000", got)
 	}
 	// THE SAME TURN AGAIN, at a higher position — which is what a
-	// redelivery after an adoption scrubbed the operation ledger looks
-	// like.
+	// redelivery the ledger no longer collapses, because its retention
+	// sweep removed the row, looks like.
 	if _, err := h.apply(turn, time.Unix(1_700_000_200, 0).UTC()); err != nil {
 		t.Fatalf("redelivered turn: %v", err)
 	}

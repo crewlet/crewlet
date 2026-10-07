@@ -173,15 +173,6 @@ write that is retried later than that is told `unknown`, and the operation's
 own record, if it landed, is on the log. The watermark travels with the ledger,
 so a node that adopts inherits its donor's.
 
-During a rolling upgrade a node can adopt from a **peer on an older build**,
-whose snapshot arrives without its ledger — older builds scrubbed it. The
-joining node then records the join itself as the watermark, before it installs
-the file: on that node, an operation minted before the join is answered
-`unknown` until it is retried on a node that did not adopt from the older peer,
-and anything minted after it is unaffected. A node upgraded in place after
-adopting under an older build carries that adoption into its watermark once,
-when it first boots.
-
 What decides it is the instant the operation was **minted**, and that instant
 travels inside the operation id itself: every id the engine mints is a
 time-ordered one whose leading bits are its mint time, followed by a name
@@ -203,12 +194,10 @@ from outside, a purge's and a node gate's retry, refuse one the engine did not
 mint.
 
 The instant is compared with the watermark, which another node's clock may
-have set — the sweeping node's, or a joining node's after adopting from an older
-peer — so the fleet's clocks are assumed to agree to within the margin each
-leaves: the sweep's thirty days, and the few seconds between an older donor
-finishing the snapshot it offers and the joining node starting its join. It is
-the same kind of assumption the trim's age term rests on. Keep them
-synchronised.
+have set — the sweeping node's, which a joining node inherits with its donor's
+ledger — so the fleet's clocks are assumed to agree to within the margin the
+sweep leaves, its thirty days. It is the same kind of assumption the trim's
+age term rests on. Keep them synchronised.
 
 `pending` is the outcome an ordinary busy fleet produces most often under load:
 the applier is 16 seconds into a bulk apply and a small write's five-second wait
@@ -704,7 +693,7 @@ replication:
 | `statelog_record_gated` | `WARN` | A durable record this node's applier **dropped**: it applies on no node, and this line is its only witness. Each node's applier writes it once per record, when the transaction that drops it commits. It names the `domain`, the record's `position` and `kind`, the node that published it (`writer`, empty for a record that names none) and the `gate` that dropped it. The domain's own gates: `evicted` — the `writer` was [evicted](retention.md#eviction) below this position and not readmitted; `deleted` — the record is about a task (its turns' records included) or a page a purge destroyed, whose marker holds every writer's record on it for ever. The framework's: `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). A record more than one gate holds is logged under the first the applier asks — the framework's two, then the writer's eviction, then the object's marker — so a write refused over the same record can name another (`statelog_write_gated` names the one that holds it now). Counted by `crewlet.statelog.records_gated` under the same `gate`, which the `records_gated` alarm reads. |
 | `statelog_write_gated` | `WARN` | A write **refused** because what it appended applies nowhere, naming the `domain`, `subject` and `op_id`, the `gate` it was refused under, a `position` and a `writer`. When `writer` names a node other than the one whose log this is, the record at `position` is *that* node's copy of the operation, which this write's append was collapsed onto — not a record this node published — and under every gate but `deleted` the refusal is about that node and names it ([above](#who-a-refusal-names)). When `writer` is this node, the record at `position` is its own, or another operation's — the newest on the subject — at which the gate holds this node, so whatever it appended under the operation applies nowhere. The gate is the one that holds the record now, which can differ from the one the applier logged: once a task or page is purged, a record an eviction dropped on it is refused `deleted`. It is a refusal, counted under `crewlet.statelog.publish.refusals` by its reason, and not a second drop: the drop is the `statelog_record_gated` line each node's applier writes once, which `crewlet.statelog.records_gated` and the `records_gated` alarm count. |
 | `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
-| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build, which arrives without its ledger — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
+| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows to the ledger's thirty-day sweep, and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
 | `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition of ONE domain. Both name the domain (`domain`), the one stream it moved (`stream`), the new generation, the stream's live creation instant (`stream_created_at`), the case (`case`: `recreated`, followed from its first surviving record; `restored`, followed from its end; or `abandoned`, followed from this node's own checkpoint with the records of the generation an evicted peer held void) and the new checkpoint (`cursor`); the start also names the instant the rows were keyed to before (`keyed_to`), this node's checkpoint (`position`) and where the log ends (`last_seq`) and the generation its rows stood at (`from_generation` — every generation strictly between it and the new one is abandoned), and the completion gives the stream's high-water mark before the reanchor (`prev_last_seq_seen`). A restored reanchor the operator ran with `-discard` names, on the start as `discarding` and on the completion as `discarded`, the sequence of the newest record written after the restore that it applied on no node (0 when it discarded none). No other domain's checkpoint moves, and the domain's applier resumes without a restart. |
 
 The snapshotter, the donor and the adopter write under the same component. The

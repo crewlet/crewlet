@@ -229,10 +229,10 @@ func TestARestoredReanchorOverUnheldRecordsRunsOnlyOnTheOperatorsWord(t *testing
 // The operation ledger travels inside every snapshot, instant and all, so the
 // row a donor wrote when it applied a record names that record on the node that
 // adopted it exactly as it did on the donor: a restored reanchor there finds
-// nothing written after the restore and runs. A donor on an older build scrubbed
-// its ledger, and there the walk cannot vouch — but it says why, with the
-// watermark the adoption wrote in place of the scrubbed rows, so the refusal
-// can say the rows may hold the record after all.
+// nothing written after the restore and runs. Where the donor's own sweep had
+// removed the row, the walk cannot vouch — but it says why, with the watermark
+// that travelled beside the ledger, so the refusal can say the rows may hold
+// the record after all.
 func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	t.Parallel()
 	held := otherHistory.Add(-time.Hour).Truncate(time.Microsecond)
@@ -265,7 +265,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 
 	t.Run("from a donor whose ledger travels", func(t *testing.T) {
 		t.Parallel()
-		h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: seed})
+		h := newJoinHarnessFrom(t, joinDonor{seed: seed})
 		if _, err := h.adopter(t).Join(t.Context()); err != nil {
 			t.Fatalf("Join: %v", err)
 		}
@@ -276,22 +276,27 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 		}
 	})
 
-	t.Run("from a donor on an older build, which scrubbed it", func(t *testing.T) {
+	// THE DONOR'S SWEEP HAD REMOVED THE ROW: the ledger arrives without it
+	// and with the donor's watermark beside it.
+	t.Run("from a donor whose sweep had removed it", func(t *testing.T) {
 		t.Parallel()
-		h := newJoinHarnessFrom(t, joinDonor{domain: scrubbingProbe{}, seed: seed})
+		swept := held.Add(time.Hour)
+		h := newJoinHarnessFrom(t, joinDonor{seed: func(t *testing.T, db store.ReplicatedHandle) {
+			t.Helper()
+			markLedgerLost(t, db, swept)
+		}})
 		if _, err := h.adopter(t).Join(t.Context()); err != nil {
 			t.Fatalf("Join: %v", err)
 		}
 		got := walk(t, h)
 		if got == nil || got.Seq != at.Seq {
-			t.Fatalf("the walk over a scrubbed ledger answered %v — it cannot vouch "+
-				"for a record whose row never arrived", got)
+			t.Fatalf("the walk over a swept ledger answered %v — it cannot vouch "+
+				"for a record whose row is gone", got)
 		}
-		bound, lost := h.joinerLostBefore(t)
-		if !lost || !got.LedgerLostBefore.Equal(bound) {
+		if !got.LedgerLostBefore.Equal(swept) {
 			t.Fatalf("the record names the ledger's watermark as %s, want the "+
-				"adoption's %s (lost %v) — the refusal cannot say the rows may "+
-				"hold it after all", got.LedgerLostBefore, bound, lost)
+				"donor's %s — the refusal cannot say the rows may hold it after all",
+				got.LedgerLostBefore, swept)
 		}
 	})
 }
@@ -301,8 +306,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 //
 // The walk names an unheld record with the ledger's watermark exactly when the
 // record's operation was minted before it — the one case in which its row may
-// have been swept, or scrubbed from the snapshot this node adopted, and the
-// rows may hold the record after all. An operation id that carries no instant
+// have been swept, and the rows may hold the record after all. An operation id that carries no instant
 // reads as minted before every loss, as the publisher reads it.
 func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 	t.Parallel()
@@ -325,10 +329,7 @@ func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 			t.Parallel()
 			h := appliedThrough(t, 3)
 			if !c.lost.IsZero() {
-				if err := statelog.RecordLedgerLoss(t.Context(), h.estate,
-					probeDomain{}, c.lost); err != nil {
-					t.Fatalf("record the ledger's loss: %v", err)
-				}
+				markLedgerLost(t, h.estate, c.lost)
 			}
 			h.fetch.offerStored(4, otherHistory, env(4, "edit", "4", c.opID, 1))
 			got := unheld(t, h, 4)

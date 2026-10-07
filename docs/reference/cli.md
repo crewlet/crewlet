@@ -693,8 +693,7 @@ three five-second waits a write can make — so a purge the node never answered,
 which may well have landed, still prints the `-op-id` to run it again with.
 Pass the id exactly as printed: it carries the instant it was minted, and a
 node whose operation ledger may have lost the first purge's row since — to the
-ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older
-build — judges the retry by it, answering `unknown` again rather than purging
+ledger's thirty-day sweep — judges the retry by it, answering `unknown` again rather than purging
 twice. An id the engine did not print is refused (`op_id_invalid`), and so is
 one altered on the way back — trimmed, spaced or over 128 bytes — since the
 broker would carry it as a different id.

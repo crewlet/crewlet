@@ -18,8 +18,7 @@ import (
 // A move re-run finds its root already in the target and asks the ledger
 // whether THIS operation put it there: the root step's row answers it, and a
 // decision that runs at all means somebody else did. But a ledger that lost
-// the row — its retention sweep, or an adoption from a donor that scrubbed its
-// ledger — cannot say that. The refusal was returned before the ledger's
+// the row to its retention sweep cannot say that. The refusal was returned before the ledger's
 // watermark was ever asked, so the retry was told "already in OPS, and no
 // record of this move putting it there" about the project its own first copy
 // moved it into.
