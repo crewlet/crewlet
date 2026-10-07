@@ -191,8 +191,7 @@ type ReanchorInputs struct {
 	// Position is this node's own committed sequence at the OLD
 	// generation, and Highest is the highest any peer published at that
 	// same generation ON THE SAME STREAM — the one this node's rows are
-	// keyed to, or one a peer's row does not name (a build that did not
-	// publish it, weighed conservatively) — among the peers holding history
+	// keyed to — among the peers holding history
 	// the LOG DOES NOT: whose checkpoint record the log does not hold, past
 	// its end or with another record at the sequence, or which name no
 	// record ([coord.DomainPosition.CheckpointStoredAt]). A sequence at
