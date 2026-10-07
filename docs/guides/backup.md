@@ -453,11 +453,7 @@ aws s3 sync objects/ s3://acme-files/crewlet/
 — with the bucket and prefix from `store.objects.s3`, and the provider's own
 tool or `--endpoint-url` for a store that is not Amazon's. An object the
 restored rows name and the store does not hold is reported by the collector's
-next audit (`objects_missing`); `crewlet objects status` lists the files. A
-backup an earlier build took holds `objects/` named by sixty-four hex digits:
-those were chunks, which no row this build restores names, so syncing them is
-harmless and the collector retires them once nothing of that build is left —
-the files they belonged to answer `410 content_retired` either way.
+next audit (`objects_missing`); `crewlet objects status` lists the files.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose. Then:

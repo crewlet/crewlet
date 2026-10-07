@@ -16,8 +16,7 @@ import (
 // count, and gives every row an `object` column. Nothing re-applies the file
 // records behind the rows, so the migration has to leave exactly what a node
 // replaying those records from nothing writes — the row kept, every column it
-// had but the count, and NULL for its object, which is what the applier
-// writes for a put an earlier build made naming chunks. A row lost here is a
+// had but the count, and NULL for its object. A row lost here is a
 // file the company can no longer even list; a row given anything but NULL is
 // one a migrated node and a replaying node disagree about for good. So the
 // case stands a database up at 0037, writes files and their chunk rows in

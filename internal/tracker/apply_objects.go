@@ -262,9 +262,8 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		if file.RemovedAt != nil {
 			removedAt = store.EncodeTime(*file.RemovedAt)
 		}
-		// NULL FOR A ROW NAMING NO OBJECT — a removal, or a put an earlier
-		// build wrote naming chunks — which every statement the object
-		// store builds leaves out by name.
+		// NULL FOR A ROW NAMING NO OBJECT — a removal — which every
+		// statement the object store builds leaves out by name.
 		var object any
 		if !file.Object.IsZero() {
 			object = file.Object.String()

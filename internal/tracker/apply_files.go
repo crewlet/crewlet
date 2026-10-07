@@ -16,9 +16,9 @@ import (
 // size, reading the digest back through [objstore.ParseHash], so a row naming
 // an object beside something that is not a digest would stop every backup for
 // good, on every node. The key needs no check of its own here — it decodes
-// only in its one canonical spelling ([objstore.Key]) — and it is checked
-// ONLY WHEN PRESENT: a removal names no object, and nor does a put an earlier
-// build wrote naming chunks, which still has to apply on every node alike.
+// only in its one canonical spelling ([objstore.Key]). A LIVE FILE MUST NAME
+// ONE, and only a removal names none: a live row naming nothing would be a
+// file listed with content no reader can get.
 //
 // Every refusal here is one the writer makes first ([checkFilePut]), so a
 // record that reaches it was written by something else.
@@ -32,7 +32,12 @@ func fileMatches(c applyContext, id string, file File) error {
 			"payload claims %s/%q — the subject IS the address", c.position, id,
 			file.Project, file.Path)
 	}
-	if o, named := file.Content(); named {
+	o, named := file.Content()
+	switch {
+	case !named && !file.Removed():
+		return fmt.Errorf("tracker: the file record at %s writes %s/%q live and "+
+			"names no object holding its content", c.position, file.Project, file.Path)
+	case named:
 		if err := o.Validate(); err != nil {
 			return fmt.Errorf("tracker: the file record at %s names its object as "+
 				"something no reader could check: %w", c.position, err)

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -199,11 +200,6 @@ func fileRefusal(w http.ResponseWriter, err error) {
 // unreachable answers 503 rather than a 200 with an empty body.
 const downloadHead = 32 << 10
 
-// retiredContent is the sentence a file kept by an earlier build in chunks
-// is answered with: listed, removable, writable again — and its content gone.
-const retiredContent = "was saved by an earlier build that kept files in chunks, " +
-	"and its content cannot be read any more; upload it again"
-
 // serveFileDownload answers GET /work/files/{project}/{path...}: the file's
 // bytes, streamed.
 func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request) {
@@ -221,11 +217,12 @@ func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request) {
 	f := detail.File
 	object, named := f.Content()
 	if !named {
-		// GONE FOR GOOD rather than unavailable: a 503 tells a client to
-		// retry, and no retry will ever read it.
-		writeJSON(w, http.StatusGone, map[string]string{
-			"error": "content_retired", "detail": f.Path + " " + retiredContent,
-		})
+		// A LIVE FILE NAMING NO OBJECT is one the applier refuses to write,
+		// so this is the engine's own fault: no retry reads it, which rules
+		// out a 503, and nothing is gone, which rules out a 404 or a 410.
+		log.Warn("api_file_names_no_object", "project", f.Project, "path", f.Path)
+		writeJSON(w, http.StatusInternalServerError,
+			map[string]string{"error": stream.CodeQueryFailed})
 		return
 	}
 	body, err := a.files.Open(r.Context(), object)

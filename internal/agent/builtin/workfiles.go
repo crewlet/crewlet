@@ -55,16 +55,6 @@ type ObjectStore interface {
 	ReadAt(ctx context.Context, o objstore.Object, off, n int64) ([]byte, error)
 }
 
-// retiredFile is what a read of a file an earlier build kept in chunks is
-// told: the file is listed and can be written again or removed, and its
-// content is gone — which no retry changes, so it is not a failed read.
-func retiredFile(tool string, f tracker.File) tools.Result {
-	return refused(tools.RefusalNotFound, fmt.Sprintf("%s: %s in %s was saved by an "+
-		"earlier build that kept files in chunks, and its content cannot be read "+
-		"any more. Write it again with %s if you have it, or remove it with %s.",
-		tool, f.Path, f.Project, tracker.WriteProjectFileTool, tracker.RemoveProjectFileTool))
-}
-
 // The read page.
 //
 // THIRTY-TWO KIBIBYTES BY DEFAULT AND FORTY-EIGHT AT MOST: the answer carries
@@ -257,7 +247,13 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	object, named := f.Content()
 	if !named {
-		return retiredFile(t.Name(), f), nil
+		// A LIVE FILE NAMING NO OBJECT is one the applier refuses to
+		// write, so reaching it is the engine's own fault — never a file
+		// that is gone, and never a read a retry will fix.
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s in %s exists, and "+
+			"its row names no content the object store could return. Trying again "+
+			"will not help — tell a person the file needs writing again.",
+			t.Name(), f.Path, f.Project)), nil
 	}
 	page, err := t.deps.Objects.ReadAt(ctx, object, offset, int64(limit))
 	switch {
@@ -477,8 +473,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // re-saves a report it did not change would store the whole of it again, and
 // leave the copy it replaced in the store for a day. The tool holds the
 // content in memory, so the comparison is one digest against the row's.
-// Anything this read cannot settle — no reader, a failed read, a file with no
-// content this build can read — is written.
+// Anything this read cannot settle — no reader, a failed read — is written.
 func (t *writeProjectFile) unchanged(ctx context.Context, project, filePath,
 	contentType string, content []byte, ifVersion uint64) (tracker.File, bool) {
 

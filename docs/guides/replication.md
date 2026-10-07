@@ -584,14 +584,11 @@ node cannot apply stops that node's tracker (it stops serving the estate, and
 its seats read it from a node that can) rather than being deferred, so **purge
 nothing while a rolling upgrade across version 13 is in progress**. Version 14
 is a project file written with its content as one object in the store: the
-record names the object's key where a version-12 record named a list of chunks.
+record names the object's key.
 An old node holds a version-14 file write back, with the file it is about, and
 — like every node holding a record it cannot apply — declines to take a
 snapshot until it is upgraded; a removal carries no object and stays at version
-12. The other direction is not held back but read differently: a version-12
-file write an older build made applies on a new node as a file that is listed
-and has no content this build can read, which the API answers `410
-content_retired` (see [Draining and rolling upgrades](fleet.md#draining-and-rolling-upgrades)).
+12.
 
 In the knowledge base, one kind of record does: a container's settings, at
 version 2, because they carry the activation that wrote them — a later

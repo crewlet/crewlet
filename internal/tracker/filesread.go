@@ -196,11 +196,8 @@ type FileDetail struct {
 // A POINT READ, so a record this node could not apply on this file's own
 // address refuses the read rather than answering around it — the object a put
 // this node has not applied replaced is the wrong bytes, not fewer of them.
-//
-// A LIVE FILE NAMING NO OBJECT IS ANSWERED, not refused: it is a file an
-// earlier build kept in chunks, which is listed and can be removed or written
-// again, and a reader of its bytes says so in its own words
-// ([File.Content]).
+// A file it answers always names its object: only a removal names none, and
+// the applier refuses a live file that does not.
 func (r *Reader) File(ctx context.Context, project, path string,
 	fresh statelog.Freshness) (FileDetail, error) {
 

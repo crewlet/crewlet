@@ -415,21 +415,21 @@ func TestADownloadOfADamagedObjectNeverEndsWhole(t *testing.T) {
 	})
 }
 
-// A FILE AN EARLIER BUILD KEPT IN CHUNKS IS GONE, NOT UNAVAILABLE: `410
-// content_retired`, because a 503 tells a client to retry and no retry will
-// ever read it.
-func TestADownloadOfARetiredFileIsGone(t *testing.T) {
+// A LIVE FILE NAMING NO OBJECT IS THE ENGINE'S FAULT: the applier refuses to
+// write one, so a download that meets one is a 500 — never a 503 a client
+// retries for ever, and never a 404 or 410 for a file that is listed.
+func TestADownloadOfALiveFileNamingNoObjectIsAFault(t *testing.T) {
 	t.Parallel()
 	fake := newFakeFiles(t)
 	fake.file = &tracker.File{Version: 1, Project: "ENG", Path: "reports/q3.bin",
-		Hash: objstore.HashOf([]byte("kept in chunks")), Size: 14}
+		Hash: objstore.HashOf([]byte("no object")), Size: 9}
 	a := filesApp(t, fake)
 	rec := httptest.NewRecorder()
 	if aborted := download(t, a, rec); aborted != nil {
 		t.Fatal(aborted)
 	}
-	if rec.Code != http.StatusGone || answerOf(t, rec)["error"] != "content_retired" {
-		t.Fatalf("a retired file answered %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusInternalServerError || answerOf(t, rec)["error"] != "query_failed" {
+		t.Fatalf("a live file naming no object answered %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

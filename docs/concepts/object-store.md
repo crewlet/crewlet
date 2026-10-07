@@ -248,11 +248,6 @@ every 128 KiB message before it — a few dozen bytes each rather than the bytes
 themselves, but still work that grows with the page's offset. A seat reads
 pages near the start of a file far more often than pages a gibibyte in.
 
-**A file saved by an earlier build** that kept files as content-addressed
-chunks has no object: it is still listed and can be written again or removed,
-but its content is gone — a download answers `410 content_retired`, and the
-seat's tool says the same.
-
 ---
 
 ## Collection and audit
