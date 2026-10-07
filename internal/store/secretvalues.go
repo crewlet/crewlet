@@ -39,9 +39,8 @@ import (
 //
 // # No plaintext mode, unlike company_config
 //
-// A keyring is REQUIRED to read or write a row. There is no legacy corpus to
-// stay compatible with, and a dedicated secret store that can hold
-// unencrypted secrets is a footgun with no upside.
+// A keyring is REQUIRED to read or write a row: a dedicated secret store that
+// can hold unencrypted secrets is a footgun with no upside.
 //
 // # Reads fail CLOSED
 //

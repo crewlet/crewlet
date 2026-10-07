@@ -163,7 +163,7 @@ func toolName(tool sdk.ToolUnionParam) string {
 // shedThrough is how many of messages' leading entries have their thinking
 // shed: every one up to and including the last replayed turn that carries
 // thinking written under a binding other than current, and zero when there is
-// none. A turn written before bindings were recorded has none, and is shed —
+// none. A turn whose request recorded no binding has none, and is shed —
 // nothing can show that its blocks match.
 //
 // A turn that carries no thinking never sets the cut, whatever its binding:

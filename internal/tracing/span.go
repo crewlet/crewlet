@@ -110,9 +110,9 @@ func TraceOf(ctx context.Context) events.TraceContext {
 // sampling for a trace already in flight is how half a tree goes missing.
 //
 // An unusable id returns ctx unchanged rather than erroring. This is fed by the
-// wire — an old event written before this existed carries nothing, and a
-// rolling upgrade guarantees some do — and the honest answer for one of those
-// is a new root, not a refusal to run the turn.
+// wire, and some wakes carry no trace — one published outside any span, such
+// as an A2A ask or reply or an answer to a sandbox question — and the honest
+// answer for one of those is a new root, not a refusal to run the turn.
 func WithRemote(ctx context.Context, tc events.TraceContext) context.Context {
 	traceID, err := trace.TraceIDFromHex(tc.TraceID)
 	if err != nil {

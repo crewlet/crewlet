@@ -70,7 +70,7 @@ When a name exists in both with **different** values, boot logs `secret_shadowed
 
 ### A keyring is required
 
-Unlike `company_config` — which supports a plaintext mode so pre-encryption deployments keep working — the secret store has **no plaintext mode**. There is no legacy corpus to stay compatible with, and a store whose whole purpose is holding secrets should not be able to hold them in the clear. A node with no keyring is still a supported deployment; it simply does not use the store, and resolves from the environment.
+Unlike `company_config` — which is stored in the clear when Tier A configures no keyring, and whose document written before a keyring was configured still opens until `crewlet config seal` seals it — the secret store has **no plaintext mode**: a store whose whole purpose is holding secrets should not be able to hold them in the clear. A node with no keyring is still a supported deployment; it simply does not use the store, and resolves from the environment.
 
 Each value is sealed with AES-256-GCM and the record's own `name` bound in as associated data, so a ciphertext moved to another name fails to decrypt rather than silently impersonating a different secret. That is also what makes a **read fail closed**: a snapshot that skipped a record it could not open would let the environment answer for it, which is exactly the stale-`.env` shadowing the store exists to prevent — so an unopenable record refuses the whole snapshot, loudly, and the previous one keeps serving.
 

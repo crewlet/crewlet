@@ -103,8 +103,10 @@ type Message struct {
 	// oldest first, which is the one removal the vendor accepts (see
 	// internal/providers/llm/anthropic).
 	//
-	// Empty on a turn written before it existed, which is a binding nobody
-	// can show matches: such a turn's thinking is shed too.
+	// Empty on a turn written by a request to a model that runs no check
+	// while it was replaying reasoning a checking model would have shed
+	// (see internal/providers/llm/anthropic). That is a binding nobody can
+	// show matches, so such a turn's thinking is shed too.
 	Binding string `json:"Binding,omitempty"`
 
 	// Failed marks a tool message whose call FAILED — the tool refused,
