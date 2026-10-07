@@ -29,33 +29,34 @@ import (
 // never sends it — because no peer that does not know it is ever asked. Adding
 // a question, a filter or a field a merge reads is moving [Protocol].
 
-// Protocol is the scatter version this build speaks, asks in and answers.
+// Protocol is the scatter version this build speaks, asks in and answers. It
+// moves by the rule above: a question, a filter or a field a merge reads.
 //
-//   - v1: the base format.
-//   - v2: `channel_id` and `agent_id` on a listing's filters, and the
-//     `failed` split on every histogram bar and total.
-//   - v3: `suspended` on a listing's filters, `agent_id` on the company's
-//     phases — the question that narrowed by a role name, which two unit
-//     seats share, and now narrows by the seat's own id — and `since` and
-//     `until` on a page of turns, the window as the asker's two instants on
-//     the turn's start rather than whole days back from each peer's clock.
-//   - v4: `failed` on a listing's filters — the event log's "Failures only",
-//     which used to narrow the rows a tab had paged in rather than the rows
-//     it was sent.
-//   - v5: the asker's instant, `at`, on every question's parameters — the
-//     instant every node floors the history at (see [store.EventLog]), so no
-//     node answers as of its own clock; the rows a count NAMES rather than
-//     counts, beside every count — a custody batch the node has written and
-//     not settled (see the package doc) — and the second question that
-//     resolves them, `kept`: which of the named rows each node keeps, so a
-//     row two data nodes hold is counted once; the `notification_outcomes`
-//     question, what became of the notifications each third-party app
-//     delivered over a window the asker names, which the integrations answer
-//     used to take from the newest page of notification events, whose span
-//     was its own; `before_id` on a page of turns, the cursor's second term
-//     beside its start ([store.TurnCursor]); and `listed` on the second
-//     scatter of `turns`, which of the named turns the node's page lists, so
-//     the asker pages each turn where a page lists it ([Fleet.Turns]).
+// What the current format carries, and why each piece is shaped as it is:
+//
+//   - A listing filters on `channel_id`, `agent_id`, `suspended` and
+//     `failed` — the last the event log's "Failures only", narrowing the rows
+//     a tab is sent rather than the rows it had paged in — and every
+//     histogram bar and total carries the `failed` split.
+//   - The company's phases narrow by `agent_id`, the seat's own id, because
+//     two unit seats share a role name.
+//   - A page of turns takes `since` and `until` as the asker's two instants on
+//     the turn's start rather than whole days back from each peer's clock,
+//     and `before_id` as the cursor's second term beside its start
+//     ([store.TurnCursor]); the second scatter of `turns` answers `listed`,
+//     which of the named turns the node's page lists, so the asker pages each
+//     turn where a page lists it ([Fleet.Turns]).
+//   - Every question carries the asker's instant, `at` — the instant every
+//     node floors the history at (see [store.EventLog]), so no node answers
+//     as of its own clock.
+//   - Beside every count are the rows it NAMES rather than counts — a
+//     custody batch the node has written and not settled (see the package
+//     doc) — and `kept` is the second question that resolves them: which of
+//     the named rows each node keeps, so a row two data nodes hold is counted
+//     once.
+//   - `notification_outcomes` asks what became of the notifications each
+//     third-party app delivered over a window the asker names, rather than
+//     over the span of the newest page of notification events.
 const Protocol = 5
 
 // Subject is where a history question is scattered: ONE subject for the whole
@@ -91,14 +92,13 @@ const (
 	// answer's outcome counts: an outcome event is written to the store of
 	// the node that decided it, or of the data node keeping its custody
 	// batch, so one node's count of the rows it keeps is its share of the
-	// fleet's — beside the rows it holds unsettled, named. v5 — see
-	// [Protocol].
+	// fleet's — beside the rows it holds unsettled, named.
 	QuestionNotificationOutcomes Question = "notification_outcomes"
 	// QuestionKept is every count's second question: which of the rows some
 	// node named rather than counted — a custody batch it has written and not
 	// settled — each node KEEPS, so the asker counts each such row once
 	// whichever data nodes hold it ([once]). It asks about a row by its
-	// identity alone, so one question answers for every count. v5.
+	// identity alone, so one question answers for every count.
 	QuestionKept Question = "kept"
 )
 
@@ -325,7 +325,7 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 }
 
 // phasesParams is both phase questions' parameters. The company's phases read
-// only AgentID (v3) and a seat's read both, since a seat's history is matched by
+// only AgentID and a seat's read both, since a seat's history is matched by
 // either identifier its rows were written under.
 type phasesParams struct {
 	AgentID string      `json:"agent_id,omitempty"`
