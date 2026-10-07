@@ -801,8 +801,8 @@ func TestAReapThatCannotReadTheFencedClaimStillRevivesOrHandsBack(t *testing.T) 
 }
 
 // parkUnfenced parks t1 on a question exactly as [parkOnAQuestion] does, but on
-// a row launched under NO lease — an older build's, or a launch by a node that
-// held none — which stays at the zero epoch until something re-stamps it.
+// a row launched under NO lease — a launch by a node that held none — which
+// stays at the zero epoch until something re-stamps it.
 func parkUnfenced(t *testing.T, rig *coordRig) {
 	t.Helper()
 	rig.launchingUnder("t1", Fence{})
@@ -1037,8 +1037,8 @@ func TestAReplyATurnTookIsSpentBeforeItsRelaunchClearsTheRow(t *testing.T) {
 
 // A SEAT'S NEW HOLDER FENCES ITS PARKED RUNS TOO. Nothing is done to a run
 // waiting on a question but counting it — its answer is what moves it — and
-// that left the run at the old holder's lease, or at the zero epoch a run an
-// older build parked carries, across every seat move. The old holder, having
+// that left the run at the old holder's lease, or at the zero epoch a run
+// parked under no lease carries, across every seat move. The old holder, having
 // lost the seat and not noticed, could then still claim the answer that
 // arrives for it. Recovery stamps the new holder's lease on it, and the old
 // holder's claim is refused.
@@ -1061,7 +1061,7 @@ func TestRecoveryFencesAParkedRunToTheSeatsNewHolder(t *testing.T) {
 // one the row was stamped with — a completion's, a recorded answer's and an
 // answer by turn's alike — so the seat's next holder can fence the claimant out
 // whatever the row said before. Carried off the row instead, a claim on a run
-// stamped by an older build, or by nobody, fenced out nobody.
+// stamped by nobody fenced out nobody.
 func TestAClaimCarriesTheClaimantsLease(t *testing.T) {
 	held := Fence{Owner: "node-b:1", Epoch: 7}
 	for name, tc := range map[string]struct {

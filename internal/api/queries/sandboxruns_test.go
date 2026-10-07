@@ -195,6 +195,7 @@ func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
 	// The park lands; the stamp that would have dated it does not.
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -390,6 +391,7 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	} {
 		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
 			Question: "which branch?", Audience: "team", Answerers: answerers,
+			AskedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
 		}

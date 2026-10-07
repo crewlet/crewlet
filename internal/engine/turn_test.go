@@ -2741,6 +2741,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	}
 	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}

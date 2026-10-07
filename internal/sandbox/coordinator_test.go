@@ -955,6 +955,7 @@ func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 	rig.launch("t1")
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -3531,6 +3532,7 @@ func TestClaimingASeatLeavesAParkedRunForItsAnswer(t *testing.T) {
 	rig.launch("t1")
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -3714,7 +3716,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	running := rig.launch("running")
 	launching := rig.launching("launching")
 	parked := rig.launch("parked")
-	if err := rig.pending.MarkAwaiting(t.Context(), "parked", Clarification{Question: "which branch?"}); err != nil {
+	if err := rig.pending.MarkAwaiting(t.Context(), "parked", Clarification{Question: "which branch?", AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if err := rig.pending.MarkBoxPaused(t.Context(), "parked", rig.now); err != nil {
@@ -3726,7 +3728,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.launch("reseed")
-	if err := rig.pending.MarkAwaiting(t.Context(), "reseed", Clarification{Question: "still?"}); err != nil {
+	if err := rig.pending.MarkAwaiting(t.Context(), "reseed", Clarification{Question: "still?", AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if won, err := rig.pending.ExpirePause(t.Context(), "reseed"); err != nil || !won {

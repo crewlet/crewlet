@@ -261,12 +261,13 @@ func (r Reply) ids() []string {
 // between two NTP-disciplined clocks. An allowance would admit only messages
 // written before the question existed.
 //
-// A ROW WITH NO ANCHOR — parked by a build that did not record one — and a
-// delivery with no instant both keep the positional match that was all there
-// was before, because refusing them would strand every question parked across
-// an upgrade.
+// PROVEN, never presumed: a row with no anchor, or a delivery with no instant,
+// cannot show that the reply came after the question, and does not qualify —
+// the delivery goes its ordinary way. Every park records its anchor
+// ([PendingStore.MarkAwaiting] refuses one without), and every event carries
+// its instant.
 func (r Reply) qualifies(run PendingRun) bool {
-	if posted := r.Posted(); !run.AskedAt.IsZero() && !posted.IsZero() && posted.Before(run.AskedAt) {
+	if posted := r.Posted(); run.AskedAt.IsZero() || posted.IsZero() || posted.Before(run.AskedAt) {
 		return false
 	}
 	for _, id := range r.ids() {

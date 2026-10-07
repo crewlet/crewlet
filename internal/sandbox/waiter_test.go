@@ -141,8 +141,8 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 }
 
 // launchingUnder is [waiterRig.launching] under a lease of the case's choosing —
-// the zero one for a run a node that held no lease launched, or an older build
-// did, which a row stays at until something re-stamps it.
+// the zero one for a run a node that held no lease launched, which a row stays
+// at until something re-stamps it.
 func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 	r.t.Helper()
 	ctx := r.t.Context()
@@ -486,6 +486,7 @@ func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
 	box := rig.provider.Box(run.SandboxID)
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -553,6 +554,7 @@ func (r *waiterRig) park(turnID string) {
 	ctx := r.t.Context()
 	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{
 		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
+		AskedAt: r.now,
 	}); err != nil {
 		r.t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -734,6 +736,7 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 	// The park lands; the stamp that would have dated it does not.
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
+		AskedAt: rig.now,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}

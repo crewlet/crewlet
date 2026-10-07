@@ -271,6 +271,9 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 
 // MarkAwaiting parks a run until a person answers.
 func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	if q.AskedAt.IsZero() {
+		return fmt.Errorf("sandbox: parking run %s on a question with no instant it was asked at", turnID)
+	}
 	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		run.Status = StatusAwaiting
 		run.Question = q.Question

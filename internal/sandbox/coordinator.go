@@ -2885,8 +2885,8 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// the seat holds: left at the old holder's, that holder — lost
 		// the seat and not noticed yet — could still claim the answer
 		// that arrives for it under a lease nothing outranked
-		// ([PendingStore.ClaimForResume]), and a run an older build
-		// parked stayed at the zero epoch across every seat move.
+		// ([PendingStore.ClaimForResume]), and a run parked under no
+		// lease stayed at the zero epoch across every seat move.
 		if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
 			log.WarnContext(ctx, "sandbox_ownership_claim_failed",
 				"turn_id", run.TurnID, "error", err.Error())

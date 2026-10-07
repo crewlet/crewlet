@@ -71,11 +71,10 @@ const (
 	//
 	// ITS OWN STATUS rather than a field on an awaiting row, because the
 	// fact it records — this question has its answer — is what every reader
-	// that matches, reaps or lists questions has to see, and a status is
-	// what a build that predates it refuses rather than misreads: an older
-	// node's answer match lists [Awaiting] rows only, so it can never take a
-	// later reply as the answer to a question that already has one, which a
-	// field it does not decode would let it do.
+	// that matches, reaps or lists questions has to see: the answer match
+	// lists [Awaiting] rows only, so it can never take a later reply as the
+	// answer to a question that already has one, without each reader having
+	// to remember a field beside the status.
 	StatusAnswered = "answered"
 
 	// StatusResumed — the tail has been claimed. THE AT-MOST-ONCE GATE.
@@ -202,9 +201,9 @@ type License struct {
 	// [EveryLaunch]. A claim's own ending names its job, because a status
 	// alone does not tell the claim apart from the next one: the resumed
 	// turn can relaunch on the row, and that job's own completion claims
-	// it in the same status. The zero value names a job the row has only
-	// if an older build launched it, which refuses a modern row rather than
-	// ending one the caller did not mean.
+	// it in the same status. The zero value names no job — every launch
+	// mints one — so it ends nothing rather than a run the caller did not
+	// mean.
 	Launch string
 
 	// Unused says the run's recorded answer went unused even where a turn
@@ -675,8 +674,8 @@ type PendingRun struct {
 	// whatever it asked next, and a message sent while the job was still
 	// running was taken as the answer the moment it parked.
 	//
-	// Zero on a row parked by a build that did not record it, which keeps
-	// the positional match that build made: nothing rewrites a parked run.
+	// REQUIRED on every park ([PendingStore.MarkAwaiting]): a question with
+	// no anchor is one no reply could be shown to answer.
 	AskedAt time.Time `json:"asked_at,omitzero"`
 
 	// Answer is the reply recorded as this question's answer, set exactly
@@ -807,9 +806,8 @@ type PendingRun struct {
 	// the state that says so: the launch starts the job, and the turn
 	// writes this when its frame unwinds. Nothing polls or claims a run in
 	// that window, so a claimed run always has one — and a claimed run
-	// WITHOUT one can now only mean the row was written by a build that
-	// predates the launching state, which the coordinator fails rather
-	// than resuming into nothing.
+	// WITHOUT one is a row the launch path did not write, which the
+	// coordinator fails rather than resuming into nothing.
 	//
 	// RAW BYTES, because this package carries the conversation and never
 	// reads it. Held as a decoded map it was decoded twice on every
@@ -817,8 +815,8 @@ type PendingRun struct {
 	// record — and each decode read every number as a float64, so an id
 	// longer than 2^53 a model had passed as a tool argument came back from
 	// the row as a different id. Bytes are carried, not decoded, and a JSON
-	// null (what a launching run, and every older build, writes) is read
-	// back as none at all — see decodeRun.
+	// null (what a launching run writes) is read back as none at all — see
+	// decodeRun.
 	ExecuteState json.RawMessage `json:"execute_state"`
 
 	// BridgeCalls is what a run made through the MCP bridge, in order.
@@ -1015,7 +1013,7 @@ type PendingStore interface {
 	// ending — carries that lease back off the row it returns, so the seat's
 	// next holder fences the CLAIMANT out, whatever lease the row was
 	// stamped with before. Carried off a row stamped by somebody else, the
-	// fence fenced out nobody: a row an older build launched, or one that
+	// fence fenced out nobody: a row launched under no lease, or one that
 	// no recovery re-stamped, sat at the zero epoch, which constrains
 	// nothing. A zero fence claims unfenced and leaves the row's owner as
 	// it stands.
@@ -1047,7 +1045,9 @@ type PendingStore interface {
 	// no claim ever takes a run out of one.
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
-	// MarkAwaiting parks a run on a question, freeing the seat.
+	// MarkAwaiting parks a run on a question, freeing the seat. A
+	// question with no [Clarification.AskedAt] is refused: it is the anchor
+	// every answer is measured against ([PendingRun.AskedAt]).
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error
 
 	// ClaimOwnership takes the run for a node, reporting whether it won.
@@ -1507,7 +1507,7 @@ type Clarification struct {
 	Answerers Audience
 
 	// AskedAt is when the question was put, taken before it was announced
-	// — see [PendingRun.AskedAt].
+	// — see [PendingRun.AskedAt]. Required.
 	AskedAt time.Time
 }
 

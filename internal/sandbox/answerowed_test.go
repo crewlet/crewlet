@@ -233,6 +233,30 @@ func TestAReplyPostedBeforeTheQuestionDoesNotAnswerIt(t *testing.T) {
 	}
 }
 
+// A REPLY THAT CANNOT SHOW IT CAME AFTER THE QUESTION IS NOT ITS ANSWER: a
+// delivery with no instant, or a question with no anchor, proves nothing about
+// which came first, and the delivery goes its ordinary way rather than being
+// spliced into the run as an answer it may never have been. Neither is
+// presumed to qualify, as rows parked before the anchor existed once were.
+func TestAReplyThatCannotShowItCameAfterTheQuestionDoesNotAnswerIt(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	run := rig.get("t1")
+	undated := replyAt("use main", time.Time{})
+	if (Reply{Conv: answerOnTheDM, Events: []*events.Event{undated}}).qualifies(run) {
+		t.Error("a delivery with no instant qualifies as the answer")
+	}
+	dated := replyAt("use main", run.AskedAt.Add(time.Minute))
+	if !(Reply{Conv: answerOnTheDM, Events: []*events.Event{dated}}).qualifies(run) {
+		t.Fatal("the premise: a reply after the question qualifies")
+	}
+	unanchored := run
+	unanchored.AskedAt = time.Time{}
+	if (Reply{Conv: answerOnTheDM, Events: []*events.Event{dated}}).qualifies(unanchored) {
+		t.Error("a reply qualifies as the answer to a question with no anchor")
+	}
+}
+
 // R1 CANNOT ANSWER A LATER QUESTION. The run resumes with R1, calls
 // run_sandbox again and parks on a second question; a copy of R1 arriving
 // after that — a redelivery whose acknowledgement was lost — was written
