@@ -93,16 +93,13 @@ export function modeLabel(mode: SearchMode | ""): string {
  */
 export function servedNote(answer: SearchOutcome | null | undefined): string | null {
   if (!answer) return null;
-  // AN OLDER NODE'S ANSWER CARRIES NONE OF THE OUTCOME, and that is not a
-  // degradation: it ranked the one way it knew and says nothing about it.
-  const degraded = answer.degraded ?? "";
-  const asked = modeLabel(answer.mode ?? "hybrid");
-  const served = answer.served_mode ?? "";
+  const { degraded, served_mode: served } = answer;
+  const asked = modeLabel(answer.mode);
   const why = degradedWhy(degraded);
   if (served === "" && degraded) {
     return `${asked} search could not run here — ${why}. Nothing was ranked by it, so nothing is listed rather than a different ranking passed off as this one.`;
   }
-  if (served && served !== (answer.mode ?? "hybrid")) {
+  if (served && served !== answer.mode) {
     return `Asked for ${asked}, served ${modeLabel(served)}${why ? ` — ${why}` : ""}.`;
   }
   if (degraded) return `${asked} search ran in part — ${why}.`;
