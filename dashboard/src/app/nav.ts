@@ -538,7 +538,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Nodes",
         icon: "server",
         path: ["settings", "nodes"],
-        hint: "Nodes, seat leases, duties, config rollout, the broker and where the company's files are placed",
+        hint: "Nodes, seat leases, duties, config rollout, the broker and where the company's files are kept",
         group: "Engine",
         guarded: true,
       },

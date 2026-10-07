@@ -13,7 +13,7 @@ subcommand below is served by it.
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `REFUSING SINCE` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
-| `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
+| `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
@@ -595,9 +595,10 @@ counter zeroed by hand left no record of who made the room or why.
 crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-token TOKEN] [-wait DURATION]
 ```
 
-Copies a running node's two durable estates — its store file and every
-JetStream stream and coordination bucket — into one directory, and verifies
-the store copy before calling it a backup.
+Copies what a running node holds — its own store file, the replicated
+estate's file on a node with the `data` role, and every JetStream stream and
+coordination bucket — into one directory, and verifies each store copy before
+calling it a backup.
 
 **It writes to the engine's host, not yours.** `-dir` is resolved where the
 node runs; nothing is downloaded. A relative path is refused rather than
@@ -615,8 +616,9 @@ address to give the `nats` CLI. The one process that can reach both is the
 engine, and this asks it to.
 
 The report names what it captured, per estate. Every node holds its own store
-whatever its `node.roles`, and on the embedded topology its own broker too; a
-node that dialled an external NATS cluster copies the store alone and says so,
+whatever its `node.roles`, a data node the replicated estate beside it, and on
+the embedded topology its own broker too; a node that dialled an external NATS
+cluster copies its store files alone and says so,
 naming the cluster as where the stream half is backed up, rather than
 presenting a partial copy as a backup.
 

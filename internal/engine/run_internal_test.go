@@ -377,11 +377,11 @@ func TestEveryDerivableReplyReachesTheLoop(t *testing.T) {
 // in terms of.
 //
 // The seat host was built with a mint of its own, so a single process held its
-// presence, its seats and its fleet duties under one owner and its object-store
-// membership under another — two identities for one process in the
-// coordination store, which is precisely what a second process running under
-// the same node id looks like, and the one thing an operator reading a refused
-// membership is told to look for. Asserted on the leases as the store holds
+// presence, its seats and its fleet duties under one owner and its publish
+// admission and capacity acknowledgements under another — two identities for
+// one process in the coordination store, which is precisely what a second
+// process running under the same node id looks like, and which no peer reading
+// the store can tell apart from one. Asserted on the leases as the store holds
 // them rather than on the values handed to their constructors, because the
 // store is what a peer reads.
 //

@@ -98,6 +98,8 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"the collector takes the chunk's lock under the chunk locks bucket",
 		"a chunk lock held by the writer",
 		"crewlet_chunk_locks",
+		"Crewlet seat, presence and object-store membership leases",
+		"nothing said so until the object store's membership, a lease,",
 	} {
 		if hits := matchWithdrawn(positive); len(hits) == 0 {
 			t.Errorf("control: %q carries a withdrawn name and the matcher did "+
@@ -128,6 +130,10 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"ExecuteState map[string]any",
 		"CREWLET_LOG_LEVEL",
 		"crewlet.log",
+		// The fleet's BROKER membership is live: an operator reads and
+		// changes it through `crewlet fleet`.
+		"serve the fleet's broker membership",
+		"the object store's collector",
 		// The live senses of `chunk`: a snapshot's and a transfer's
 		// pieces, a batched statement, the dashboard's bundle, and the
 		// retirement of what the content-addressed store left behind,
@@ -355,6 +361,17 @@ var withdrawn = map[string]string{
 	`objstore\.ChunkSize`: "as above; an object has no chunk size",
 	`objstore\.Manifest`:  "a row names one objstore.Object, not a list of chunks",
 	`\bchunk lock`:        "a deletion takes no lock; only the old bucket's retirement names one",
+
+	// THE PLACED OBJECT STORE: object bytes on chosen data nodes, a lease
+	// per member saying which nodes kept them, and a repair duty that read
+	// that membership. The store is one the fleet shares now (natsobj or
+	// s3obj) and keeps its own copies, so no node claims a membership of
+	// it and the seat lease bucket holds seats and presence alone. Two
+	// literal spellings rather than one pattern with a class, because the
+	// prefilter reads each pattern's literal core and a bracket in it is a
+	// core no line holds — a guard that silently matches nothing.
+	`\bobject-store membership`:   "no node is a member of the object store; it is one shared store",
+	`\bobject store's membership`: "as above",
 }
 
 // listFile is this file, which cannot be its own violation.
