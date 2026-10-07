@@ -2,12 +2,14 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -399,10 +401,12 @@ func TestAClaimThatMovedUnreadablyUnderItsRevivalIsRetried(t *testing.T) {
 
 // claimLandsThenFails lets the next fails claims of a recorded answer land and
 // then reports that each could not: the write committed, and the store's answer
-// was lost.
+// was lost. slow, where set, runs between the two — a claim whose reply takes
+// that long to be lost.
 type claimLandsThenFails struct {
 	PendingStore
 	fails int
+	slow  func()
 }
 
 func (s *claimLandsThenFails) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
@@ -412,6 +416,9 @@ func (s *claimLandsThenFails) ClaimForResume(ctx context.Context, turnID string,
 		return claimed, won, err
 	}
 	s.fails--
+	if s.slow != nil {
+		s.slow()
+	}
 	return PendingRun{}, false, errRefusedCall
 }
 
@@ -474,4 +481,126 @@ func TestAHealthyNodesUnconfirmedClaimsAreNotLostClaims(t *testing.T) {
 	}
 	resumedOnceWith(t, rig, rig, "use main")
 	rig.finished("t1")
+}
+
+// suspectOnTheLastAttempt records R1 with every resume failing, runs beforeLast
+// — the attempts it spends before the last one — and then makes the next
+// attempt's claim land and report a failure, running slow before the failure is
+// reported: the series' last failure leaves a claim on the row that no resume
+// holds. Returns R1 and the seat's hold.
+func suspectOnTheLastAttempt(t *testing.T, rig *coordRig, beforeLast, slow func()) (*holdSpy, *events.Event) {
+	t.Helper()
+	holds := rig.withHold()
+	parkOnAQuestion(t, rig)
+	rig.coordinator.lease = func(string) Fence { return rigLease }
+	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
+	rig.resumer.failWith(errors.New("the model provider is overloaded"))
+	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
+		t.Fatalf("R1 = %q, want it recorded", d)
+	}
+	beforeLast()
+	rig.coordinator.pending = &claimLandsThenFails{PendingStore: rig.pending, fails: 1, slow: slow}
+	if rig.fireRetries() != 1 {
+		t.Fatal("nothing was scheduled for the answer's last attempt")
+	}
+	if got := rig.get("t1"); got.Status != StatusResumed || got.Answer == nil || got.Answer.Taken() {
+		t.Fatalf("run %q answer %+v, want the premise: the last claim landed, no turn took the answer",
+			got.Status, got.Answer)
+	}
+	if got := rig.handedBack(); len(got) != 0 {
+		t.Fatalf("handed back %v while the answer's last claim still held it", got)
+	}
+	return holds, r1
+}
+
+// declinedOnceAfterTheClaim asserts the claim the last attempt left was given
+// back to its answer and the answer then let go of exactly once: the run waiting
+// on its question again, R1's copy handed back and R1 spent once, the seat's
+// inbox lifted and still lifted after a recount, and nothing left scheduled.
+func declinedOnceAfterTheClaim(t *testing.T, rig *coordRig, holds *holdSpy, r1 *events.Event) {
+	t.Helper()
+	if rig.fireRetries() != 1 {
+		t.Fatal("nothing was scheduled to give the last claim back before the decline")
+	}
+	got := rig.get("t1")
+	if got.Status != StatusAwaiting || got.Answer != nil {
+		t.Fatalf("run %q with answer %+v, want it waiting on its question again, not left in the claim",
+			got.Status, got.Answer)
+	}
+	if handed := rig.handedBack(); !slices.Equal(handed, []string{declinedCopyID(r1.ID).String()}) {
+		t.Fatalf("handed back %v, want R1's copy exactly once", handed)
+	}
+	if spent := rig.spentDeliveries(); len(spent) != 1 || spent[0].id != r1.ID.String() {
+		t.Fatalf("spent %+v, want R1's delivery spent once", spent)
+	}
+	if left := rig.retries.delays(); len(left) != 0 {
+		t.Fatalf("still scheduled %v after the answer was let go", left)
+	}
+	if got := rig.failures(); len(got) != 0 {
+		t.Fatalf("announced %+v: a decline does not end the run", got)
+	}
+	rig.coordinator.syncSeat(t.Context(), "swe")
+	if holds.holding("swe") {
+		t.Fatalf("the seat's inbox is held after the answer was let go: %v", holds.log)
+	}
+	if held, awaiting := rig.coordinator.SeatRuns("swe"); held || !awaiting {
+		t.Fatalf("the seat reads held %v, awaiting %v; want it free with the question open", held, awaiting)
+	}
+}
+
+// A CLAIM THAT LANDED UNSEEN ON THE ANSWER'S LAST ATTEMPT IS GIVEN BACK BEFORE
+// THE DECLINE. The attempt that spends the budget claims the run and the store's
+// reply is lost; the decline that used to follow at once found the run in that
+// claim rather than answered, was refused, and the series settled on the
+// refusal: the run left in a claim nothing drove, the person's answer untaken
+// on it, nothing handed back — and the seat held behind it on its next recount.
+func TestAClaimThatLandedUnseenOnTheLastAttemptIsGivenBackBeforeTheDecline(t *testing.T) {
+	rig := newCoordRig(t)
+	holds, r1 := suspectOnTheLastAttempt(t, rig, func() {
+		for i := range MaxAnswerAttempts - 2 {
+			if rig.fireRetries() != 1 {
+				t.Fatalf("after %d failed resumes nothing was scheduled", i+1)
+			}
+		}
+	}, nil)
+	declinedOnceAfterTheClaim(t, rig, holds, r1)
+}
+
+// AND ON THE RUN'S WINDOW. An attempt whose claim lands unseen as the run's
+// pause_ttl_seconds lapses — a claim slow to fail, an admission that waited
+// behind a pause — is the series' last just the same, and its claim is given
+// back before the decline.
+func TestAClaimThatLandedUnseenAsTheWindowLapsedIsGivenBackBeforeTheDecline(t *testing.T) {
+	rig := newCoordRig(t)
+	holds, r1 := suspectOnTheLastAttempt(t, rig, func() {}, func() {
+		window := answerWindow(rig.get("t1"))
+		if window <= 0 {
+			t.Fatalf("the premise: the rig's run declares an awaiting window, got %v", window)
+		}
+		rig.now = rig.now.Add(window)
+	})
+	declinedOnceAfterTheClaim(t, rig, holds, r1)
+}
+
+// A SUSPECTED CLAIM IS NEVER SETTLED AWAY. Whatever path settles the series of
+// an answer whose claim it suspects — a refusal that says only that the row is
+// not what that path expected — the series stays, with an attempt armed, and the
+// seat's mail stays behind it: nothing but the series ever looks at that claim,
+// and a series dropped on such a refusal left the run in it, undriven.
+func TestASuspectedClaimKeepsItsSeries(t *testing.T) {
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	parkOnAQuestion(t, rig)
+	ctx := t.Context()
+	rig.coordinator.owe(ctx, "swe", "t1")
+	rig.coordinator.suspectClaim(rig.get("t1"))
+	rig.coordinator.settleOwed(ctx, "swe", "t1")
+	if !rig.coordinator.owes("t1") || !holds.holding("swe") {
+		t.Fatalf("owes %v, inbox held %v: the series of a suspected claim was settled away",
+			rig.coordinator.owes("t1"), holds.holding("swe"))
+	}
+	if armed := rig.retries.delays(); len(armed) != 1 {
+		t.Fatalf("armed %v, want one attempt to look at the suspected claim", armed)
+	}
 }

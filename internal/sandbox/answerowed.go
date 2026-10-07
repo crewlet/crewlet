@@ -585,6 +585,21 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 // owedFailed counts one failed resume of an owed answer, and schedules the next
 // attempt or — once [MaxAnswerAttempts] or [answerWindow] is spent — declines
 // the answer.
+//
+// # A claim the failure may have left is revived before the decline
+//
+// A failed attempt whose CLAIM reported the failure may have left that claim
+// on the row, landed and held by nothing ([Coordinator.suspectClaim]). A decline
+// made now would read the row as the answered run it no longer is: the store
+// refuses to let go of an answer from a claim, the series settles on that
+// refusal, and the run sits in the claim — the person's answer untaken on it,
+// the delivery already spent, nothing handed back, and the seat held behind it
+// on the next recount — until the seat changes hands. So a series that suspects
+// its claim is never declined here, on its last attempt or past its window any
+// more than before them: its next attempt runs at once, gives the claim back to
+// the answer if it landed ([Coordinator.retryRevival]), and then declines the
+// answered run and hands the reply back exactly once, through the same spent
+// bound every other decline takes.
 func (c *Coordinator) owedFailed(ctx context.Context, run PendingRun, cause error) {
 	detail := ""
 	if cause != nil {
@@ -600,8 +615,19 @@ func (c *Coordinator) owedFailed(ctx context.Context, run PendingRun, cause erro
 	r.failures++
 	live := r.live(c.now())
 	failures := r.failures
+	suspect := r.revive != nil
 	c.mu.Unlock()
 
+	if !live && suspect {
+		log.WarnContext(ctx, "sandbox_answer_resume_failed",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "failures", failures,
+			"retry_in_s", 0, "error", detail,
+			"detail", "the answer's attempts are spent, and its last claim may have landed with "+
+				"nothing driving it; the claim is given back to the answer first, and the answer "+
+				"is then let go of, once")
+		c.scheduleOwed(run.TurnID, 0)
+		return
+	}
 	if !live {
 		c.declineAnswer(ctx, run, cause)
 		return
@@ -682,7 +708,10 @@ func (c *Coordinator) retryOwed(turnID string) {
 		return
 	}
 	if !found {
+		// GONE, and with it whatever the series still owed the row: an
+		// ending somebody finished, a claim somebody ended.
 		c.endingDone(turnID)
+		c.revivalDone(turnID)
 		c.settleOwed(ctx, handle, turnID)
 		return
 	}
@@ -708,20 +737,28 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// RECOUNTED: the kept record was still a live row to every recount
 		// made while it waited, and the seat's counts are the store's answer.
 		c.syncSeat(ctx, handle)
-		if err != nil || ended || run.Status != StatusAnswered || run.LaunchID != launch {
+		if ended {
+			// THE RUN IS OVER, a claim the series suspected with it.
+			c.revivalDone(turnID)
+		}
+		moved := run.Status != StatusAnswered || run.LaunchID != launch
+		if err != nil || ended || (moved && revive == nil) {
 			c.settleOwed(ctx, handle, turnID)
 			return
 		}
 		// NOT THE ENDING'S TO END after all: the claim it was decided on had
 		// been handed back — the hand-back reported a failure and landed —
 		// and the run is answered again, owed the very resume this series
-		// is for. It goes on as one.
-		log.InfoContext(ctx, "sandbox_kept_ending_declined",
-			"turn_id", turnID, "agent", handle,
-			"detail", "the run's claim had been handed back after all, so it is resumed with "+
-				"its answer rather than ended")
+		// is for. It goes on as one. (A run that moved elsewhere goes on to
+		// the claim the series suspects, which only the series looks at.)
+		if !moved {
+			log.InfoContext(ctx, "sandbox_kept_ending_declined",
+				"turn_id", turnID, "agent", handle,
+				"detail", "the run's claim had been handed back after all, so it is resumed with "+
+					"its answer rather than ended")
+		}
 	}
-	if revive != nil && kept == nil {
+	if revive != nil {
 		var owed bool
 		if run, owed = c.retryRevival(ctx, run, launch, *revive); !owed {
 			return
@@ -1011,6 +1048,16 @@ func (c *Coordinator) suspect(turnID string, fence Fence, delay time.Duration) {
 	}
 	r.revive = &revival{fence: fence}
 	c.scheduleOwedLocked(turnID, delay)
+}
+
+// revivalDone forgets a claim the series suspected or a revival it owed, for a
+// series whose run is over.
+func (c *Coordinator) revivalDone(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if r := c.retries[turnID]; r != nil {
+		r.revive = nil
+	}
 }
 
 // endingDone forgets an owed ending, for a series about to settle it.
@@ -1327,11 +1374,22 @@ func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 
 // settleOwed forgets an owed answer — resumed, declined or moved on — and
 // lifts the seat's inbox hold if nothing else needs it.
+//
+// NOT WHILE THE SERIES STILL OWES THE ROW SOMETHING: an ending it kept, or a
+// claim it suspects ([answerRetry.revive]). Either is a run whose only driver is
+// this series, and a settle that dropped it — on a refusal that only says the
+// row is not what the settling path expected — left a claim with the person's
+// answer on it that nothing drove. The series stays, with an attempt armed if
+// none is, and the seat's hold with it.
 func (c *Coordinator) settleOwed(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
-	if r := c.retries[turnID]; r != nil && r.ending != nil {
+	if r := c.retries[turnID]; r != nil && (r.ending != nil || r.revive != nil) {
 		// AN ENDING STILL OWES THE SEAT ITS REPLY — kept by the ending this
-		// very attempt made — so the series, and the seat's hold, stay.
+		// very attempt made — or A CLAIM IS STILL SUSPECTED, which only this
+		// series will ever look at: the series, and the seat's hold, stay.
+		if r.stop == nil {
+			c.scheduleOwedLocked(turnID, answerRetryCeiling)
+		}
 		c.mu.Unlock()
 		return
 	}
