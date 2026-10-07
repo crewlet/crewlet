@@ -36,8 +36,10 @@ export interface ReconcileFinding {
    * not do and cannot undo, on an integration that is working. A reader that
    * treats every finding as a fault reports those as broken; one that keeps
    * its own list of which kinds are advisory reports a kind it has not heard
-   * of as fine, which is worse. Optional because a node older than the field
-   * sends neither — treat an absent phase as "cannot say", never as ready.
+   * of as fine, which is worse. Optional because a setup pass's own findings
+   * (`SetupRun.findings`) are marshalled without a verdict — only the
+   * integrations rows carry one. Treat an absent phase as "cannot say",
+   * never as ready.
    */
   phase?: string;
   actor?: string;
@@ -78,8 +80,10 @@ export interface ReconcileStatus {
   /**
    * The phase in a reader's words, from [integration.Phase.Label] in Go.
    *
-   * Optional because a node older than the field sends none, not because a
-   * screen may skip it: derive nothing from `phase` that this can answer.
+   * Optional because a setup pass's own report (`SetupRun.report`) is
+   * marshalled without one — the integrations rows always carry it — not
+   * because a screen may skip it: derive nothing from `phase` that this can
+   * answer.
    */
   phase_label?: string;
   /**

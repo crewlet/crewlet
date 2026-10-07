@@ -487,6 +487,7 @@ function toolState(over: Partial<SetupToolState>): SetupToolState {
     configured: true,
     enabled: true,
     satisfied: true,
+    form_complete: true,
     requirements: [],
     ...over,
   };
@@ -517,7 +518,9 @@ test("the action follows the state", () => {
   // NOTHING CONFIGURED: Connect.
   expect(kindOf(ready, [toolState({ configured: false })], false, [], false)).toBe("connect");
   // A FORM LEFT UNFINISHED: Continue.
-  expect(kindOf(ready, [toolState({ satisfied: false })], true, [], false)).toBe("continue");
+  expect(
+    kindOf(ready, [toolState({ satisfied: false, form_complete: false })], true, [], false),
+  ).toBe("continue");
   // A WORKING TOOL: Manage, which goes to its page and writes nothing.
   expect(kindOf(ready, [toolState({})], true, [], false)).toBe("manage");
   // A FAULT A NEW CREDENTIAL DOES NOT FIX is still Manage: what is wrong and
@@ -625,12 +628,24 @@ test("one unfinished surface makes the whole tool unfinished", () => {
     toolState({ key: "jira", configured: true, satisfied: true }),
     toolState({ key: "confluence", ...confluence }),
   ];
-  expect(kindOf(ready, tools({ configured: true, satisfied: false }), true, [], false)).toBe(
-    "continue",
-  );
-  expect(kindOf(ready, tools({ configured: false, satisfied: false }), true, [], false)).toBe(
-    "continue",
-  );
+  expect(
+    kindOf(
+      ready,
+      tools({ configured: true, satisfied: false, form_complete: false }),
+      true,
+      [],
+      false,
+    ),
+  ).toBe("continue");
+  expect(
+    kindOf(
+      ready,
+      tools({ configured: false, satisfied: false, form_complete: false }),
+      true,
+      [],
+      false,
+    ),
+  ).toBe("continue");
   expect(kindOf(ready, tools({ configured: true, satisfied: true }), true, [], false)).toBe(
     "manage",
   );
@@ -1629,6 +1644,7 @@ test("the disconnect roster lists each agent once", () => {
     configured: true,
     enabled: true,
     satisfied: true,
+    form_complete: true,
     seats_required: true,
     manage_path: "Delete GitHub App",
     // A COMPANY BLOCK AS WELL AS SEATS, which is GitHub's real shape and

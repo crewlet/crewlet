@@ -84,6 +84,7 @@ function tool(key: string, over: Partial<SetupToolState> = {}): SetupToolState {
     configured: false,
     enabled: false,
     satisfied: false,
+    form_complete: false,
     requirements: [
       {
         field: "admin_token",
@@ -101,8 +102,8 @@ function tool(key: string, over: Partial<SetupToolState> = {}): SetupToolState {
 
 const listing: SetupListing = {
   tools: [
-    tool("gitlab", { configured: true, enabled: true, satisfied: true }),
-    tool("datadog", { configured: true, enabled: true, satisfied: true }),
+    tool("gitlab", { configured: true, enabled: true, satisfied: true, form_complete: true }),
+    tool("datadog", { configured: true, enabled: true, satisfied: true, form_complete: true }),
     ...["slack", "mattermost", "atlassian", "jira", "confluence", "github"].map((k) => tool(k)),
   ],
   public_base_url: { present: true, resolved: true, value: "https://engine.example.com" },

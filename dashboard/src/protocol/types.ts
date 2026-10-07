@@ -3498,7 +3498,7 @@ export interface SetupToolState {
    * satisfied and has nothing left to type: both acts that produce an app
    * happen at GitHub, from that agent's own row.
    */
-  form_complete?: boolean;
+  form_complete: boolean;
   inbound_path?: string;
   public_url?: string;
   /** This build runs a provisioning pass for this vendor. */
