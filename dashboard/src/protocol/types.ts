@@ -1439,7 +1439,8 @@ export interface ObjectCollect {
   aged: number;
   deleted: number;
   referenced: number;
-  /** Chunks an earlier build stored, deleted once no node of that build is left. */
+  /** Objects an earlier build stored as content-addressed chunks, deleted once
+   *  no node of that build is left. */
   retired: number;
   /** Uploads begun more than a day ago and never finished, abandoned. */
   abandoned: number;
@@ -2283,8 +2284,8 @@ export interface WorkView {
   count_refused?: string;
 }
 
-/** One file kept in a project, as a listing draws it — everything but its
- *  chunks, which only a download reads. */
+/** One file kept in a project, as a listing draws it — everything but the
+ *  key of the object holding its bytes, which only a download reads. */
 export interface WorkFile {
   project: string;
   path: string;

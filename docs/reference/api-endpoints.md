@@ -3089,9 +3089,10 @@ that were never missing.
 
 A project holds **files** beside its work: a report a seat wrote, a spreadsheet
 an operator uploaded, the output of a run somebody wants to keep. Each is a row
-in the tracker — a path, a type, a size, a version and who wrote it — and its
-content lives in the [object store](../concepts/object-store.md), split into
-chunks placed across the fleet rather than copied onto every node. See
+in the tracker — a path, a type, a size and SHA-256, a version and who wrote
+it — and its content is one object in the
+[object store](../concepts/object-store.md), the one store the whole fleet
+shares, rather than a copy in every node's database. See
 [A project's files](../guides/work-tracker.md#a-projects-files) for what a seat
 does with them.
 

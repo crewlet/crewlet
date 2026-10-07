@@ -526,11 +526,13 @@ stream:
                                     #   nobody. The server it reaches must
                                     #   accept messages of 8 MiB
                                     #   (`max_payload: 8MB`, every server in
-                                    #   that cluster): an event may be that
-                                    #   large and every file chunk is a
-                                    #   mebibyte and its framing, so a server
-                                    #   at nats-server's 1 MiB default is
-                                    #   refused at connect, naming it
+                                    #   that cluster): an event, or a node's
+                                    #   answer to another, may be that large,
+                                    #   so a server at nats-server's 1 MiB
+                                    #   default is refused at connect, naming
+                                    #   it. A file's bytes cross in messages
+                                    #   of 128 KiB, which a server's default
+                                    #   already carries
   # replicas: 3                     # 1 solo (the default); 3 across an EMBEDDED
                                     #   cluster, where it is what makes a publish
                                     #   quorum-durable before it returns. At most
@@ -889,9 +891,10 @@ store:
   #     bucket: acme-files          #   REQUIRED. Checked at boot: a node that
                                     #   cannot reach it, or whose credentials it
                                     #   refuses, does not start
-  #     prefix: ""                  #   prepended to every key (`<prefix><hash>`),
-                                    #   so one bucket can hold more than one
-                                    #   company; e.g. `acme/`
+  #     prefix: ""                  #   prepended to every key — an object is
+                                    #   `<prefix>files/<key>` — so one bucket
+                                    #   can hold more than one company; e.g.
+                                    #   `acme/`
   #     path_style: false           #   address the bucket in the path rather
                                     #   than the host name; MinIO and most
                                     #   self-hosted gateways need it

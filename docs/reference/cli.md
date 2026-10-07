@@ -620,6 +620,17 @@ node that dialled an external NATS cluster copies the store alone and says so,
 naming the cluster as where the stream half is backed up, rather than
 presenting a partial copy as a backup.
 
+**The company's files come too**, as an `objects` line. On the default `nats`
+object store their objects are in the `OBJ_crewlet_files` stream the backup
+snapshots with the rest, and the line counts the objects the copy names
+that the stream holds (lost ones are listed beneath); on
+`s3` each object the copy names is read from the bucket into `objects/` and
+checked against its file's size and SHA-256 as it is written, and the line
+gives their count and size. A file whose object the store answered it does
+not hold, or holds wrong, does not fail the backup: it is listed beneath, as
+`PROJECT/path` and the object's key, to restore from an earlier backup or
+upload again. One the store could not answer about at all fails it.
+
 `-wait` (default 30 minutes) bounds how long the command waits for the answer,
 not the copy: the engine finishes what it started, so a wait that expires
 leaves a good backup this command has already called a failure. It is set far
