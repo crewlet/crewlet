@@ -1312,11 +1312,10 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 	trigger := reply.trigger()
 	runs, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
-		// BOTH KEYS. The match turns on the identity and falls back to the
-		// partition for a row parked before an identity was written, so a
-		// line naming one of them cannot say which read was attempted
-		// against what — and on a direct message the two are different
-		// values.
+		// BOTH KEYS. The identity admits a run and the partition picks
+		// between the runs it admits ([ConversationRef.Best]), so a line
+		// naming one of them cannot say which read was attempted against
+		// what — and on a direct message the two are different values.
 		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
 			"agent", handle, "conversation", reply.Conv.Identity,
 			"partition", reply.Conv.Partition, "error", err.Error())

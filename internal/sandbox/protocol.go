@@ -16,8 +16,8 @@
 // the inbox batch the question arrived in. A person answers where they are
 // talking, and the engine's own chat prompt routinely puts their reply in a
 // finer partition than the question was asked from — so a match on the batch
-// lost the answer outright. The rule, and what it does with a row parked
-// before a conversation identity was written, is [ConversationRef.Answers].
+// lost the answer outright. The rule is [ConversationRef.Answers], and
+// [ConversationRef.Best] chooses between the runs it admits.
 //
 // AND BY WHEN IT WAS WRITTEN, against when the question was asked
 // ([PendingRun.AskedAt]): the first reply posted after the question is the

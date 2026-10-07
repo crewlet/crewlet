@@ -108,9 +108,9 @@ type Dispatcher struct {
 	// Nil is a node with no coordinator, where no run is waiting.
 	//
 	// It takes the WHOLE delivery as a [sandbox.Reply]: the conversation
-	// reference (the match turns on the identity, and the partition travels
-	// for the rows parked before an identity was written — see
-	// [sandbox.ConversationRef.Answers]), the text, and the events, whose
+	// reference (the identity admits a run and the partition picks between
+	// the runs it admits — see [sandbox.ConversationRef.Best]), the text,
+	// and the events, whose
 	// own instants are what decide whether the delivery was written after
 	// the question it would answer ([sandbox.PendingRun.AskedAt]).
 	Answer func(ctx context.Context, handle string, reply sandbox.Reply) (sandbox.AnswerDisposition, error)

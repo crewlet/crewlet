@@ -2572,8 +2572,8 @@ func TestADirectMessagesThreadReplyReadsTheBurstsLedgerEntry(t *testing.T) {
 // strings that could never be equal: the clarification was silently never
 // delivered and the box waited out its pause TTL.
 //
-// THE PARTITION STILL TRAVELS, and only for the rows parked before an identity
-// was ever written — see [sandbox.ConversationRef.Answers]. The ledger read
+// THE PARTITION STILL TRAVELS, because it is what tells two runs parked on one
+// DM line apart — see [sandbox.ConversationRef.Best]. The ledger read
 // and the session write take the identity as they already did, which is the
 // second half asserted here: one trigger, and every reader of its conversation
 // answering the same thing.
@@ -2604,8 +2604,8 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 			"answered by nothing else", offered.Identity)
 	}
 	if offered.Partition != "chat:D1:root-1" {
-		t.Errorf("the partition did not travel beside it (%q), so a row parked "+
-			"before the identity existed carries nothing this can match",
+		t.Errorf("the partition did not travel beside it (%q), so two runs "+
+			"parked from two threads of one DM cannot be told apart",
 			offered.Partition)
 	}
 
