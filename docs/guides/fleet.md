@@ -606,8 +606,8 @@ The consequences worth stating plainly:
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Settings › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
-- **Each node's heartbeat** also carries what its build can carry out and
-  how each of its MCP servers started — one row per server, counting the
+- **Each node's heartbeat** also carries how each of its MCP servers
+  started — one row per server, counting the
   instances that started and failed, with one failure's reason. See
   [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
 
