@@ -1136,7 +1136,7 @@ type Markers interface {
 //
 // One interface at the CONSTRUCTION seam and a narrow one at each call site:
 // the webhook edge takes a Claims and nothing else, the valve takes a Counter,
-// a turn's meter takes the two verbs of [Budgets] it calls. A consumer that
+// a turn's meter takes the verbs of [Budgets] it calls. A consumer that
 // could reach the whole store would eventually use it.
 type Fleet interface {
 	Counter

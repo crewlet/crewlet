@@ -19,9 +19,9 @@ import (
 // A scope — the company, or one seat — has ONE record, and the record holds a
 // slot per period: the day, the ISO week and the month, each carrying the LABEL
 // of the window it counts (`2026-09-23`, `2026-W39`, `2026-09`), what has been
-// spent in it and when it last refused a charge. A charge is therefore still
-// one compare-and-swap per scope, the company's first and the seat's second,
-// exactly as it was on the counter that knew no calendar (see
+// spent in it and when the gate last turned a call away in it. A charge is
+// therefore still one compare-and-swap per scope, the company's first and the
+// seat's second, exactly as it was on the counter that knew no calendar (see
 // [Budgets.Charge]).
 //
 // # The roll is the reset
@@ -280,8 +280,8 @@ type WindowUsage struct {
 
 	Used int
 
-	// RefusedAt is when this window last turned a charge away, and zero
-	// once it has admitted one since.
+	// RefusedAt is when this window last turned a call away, and zero
+	// once it has admitted a charge since.
 	//
 	// It is WHEN the gate said no, and it is not what decides whether the
 	// window has room: Used against the ceiling is. A refused round is
@@ -292,21 +292,31 @@ type WindowUsage struct {
 	// stamp on a window that has room again, until the next admitted
 	// charge clears it, so a reader that took the stamp for "no room"
 	// would hold a seat back from the very room the raise made. And a
-	// window can be full with no stamp at all — a post-charge took it
-	// there, or no charge has been refused against it yet. Kept HERE, in
-	// the shared counter, because the refusal is the gate's own decision
-	// and every node reports this counter: a stamp one node kept in memory
+	// window can be full with no stamp at all: a post-charge took it there
+	// and nothing has asked the gate for a call since. Kept HERE, in the
+	// shared counter, because the refusal is the gate's own decision and
+	// every node reports this counter: a stamp one node kept in memory
 	// would appear and vanish on a dashboard as the reports of different
 	// nodes arrived.
 	//
-	// Stamped on each window that could not fit the charge and on no
-	// other, of the scope that refused and of no other. Cleared by an
-	// ADMITTED charge, which clears every window of both scopes it charged,
-	// and by the window turning over, which rolls the slot; by nothing
-	// weaker. A charge refused overall leaves every other scope's stamps
-	// alone, even where that scope would have had room, so the answer does
-	// not depend on which scope a backend happens to test first. A
-	// post-charge ([Budgets.PostCharge], [Budgets.PostChargeOrg],
+	// THE GATE SAYS NO IN TWO PLACES, AND BOTH STAMP. A charge it refuses
+	// stamps inside the write that counts the refused round
+	// ([Budgets.Charge]). And a call it refuses BEFORE the call is made is
+	// recorded by [Budgets.Refuse]: a turn's meter keeps every window an
+	// answer has shown with no room, and stops the turn's next call rather
+	// than send one the vendor would bill and the charge then refuse. That
+	// stopped call is the one whose charge used to stamp the window, so
+	// without the second record a window a post-charge filled refused every
+	// call of the turn while saying it had refused none.
+	//
+	// Stamped on each window that could not fit the call and on no other,
+	// of the scope that refused and of no other. Cleared by an ADMITTED
+	// charge, which clears every window of both scopes it charged, and by
+	// the window turning over, which rolls the slot; by nothing weaker. A
+	// charge refused overall leaves every other scope's stamps alone, even
+	// where that scope would have had room, so the answer does not depend
+	// on which scope a backend happens to test first. A post-charge
+	// ([Budgets.PostCharge], [Budgets.PostChargeOrg],
 	// [Budgets.PostChargeSeat]) neither stamps nor clears: it is not a
 	// decision about room.
 	RefusedAt time.Time
@@ -317,8 +327,9 @@ type Usage struct {
 	Scope string
 
 	// UpdatedAt is when the counter last moved — a charge, admitted or
-	// refused, since both count the round; or a post-charge.
-	// Zero only for a scope nothing has charged.
+	// refused, since both count the round; or a post-charge. Never a
+	// refusal recorded without a charge ([Budgets.Refuse]), which spends
+	// nothing. Zero only for a scope nothing has charged.
 	UpdatedAt time.Time
 
 	// Windows is one slot per period, in [period.Periods] order, each
@@ -470,9 +481,9 @@ type Budgets interface {
 	// round it recorded can have filled another.
 	//
 	// A refusal stamps the refusing windows' [WindowUsage.RefusedAt], and
-	// an admitted charge clears every stamp on both scopes it charged. See
-	// that field for why nothing weaker clears one, and for why the stamp
-	// is not what says a window has room.
+	// an admitted charge clears every stamp on both scopes it charged —
+	// [Budgets.Refuse]'s included. See that field for why nothing weaker
+	// clears one, and for why the stamp is not what says a window has room.
 	Charge(ctx context.Context, req ChargeRequest) (Spend, error)
 
 	// PostCharge adds spend that has ALREADY HAPPENED to the seat's counter
@@ -490,9 +501,11 @@ type Budgets interface {
 	// is COLLECTED in, which is the only instant the store is told about.
 	//
 	// It leaves both scopes' refusal stamps alone, because it is not a
-	// decision about room: it neither says the gate turned a charge away
-	// nor that it had room for one. A counter it takes past a cap is
-	// refused by the next Charge, which stamps it then.
+	// decision about room: it neither says the gate turned a call away nor
+	// that it had room for one. A counter it takes past a cap is stamped
+	// when the gate next turns a call away against it — a charge it
+	// refuses, or, where the caller holds the answer and stops its next
+	// call before making it, that caller's [Budgets.Refuse].
 	//
 	// Two writes, the company's first, and NEITHER IS TAKEN BACK, exactly
 	// as Charge's are not: the spend happened. The seat's outlives a caller
@@ -542,6 +555,58 @@ type Budgets interface {
 	// leaves the refusal stamps alone, because it is not a decision about
 	// room.
 	PostChargeOrg(ctx context.Context, tokens int, windows Windows) (Usage, error)
+
+	// Refuse records a refusal the gate made WITHOUT A CHARGE: on the one
+	// scope named, it stamps [WindowUsage.RefusedAt] on every capped window
+	// with no room left for a single token, and counts nothing.
+	//
+	// It is the record of a call refused before it was made. A charge is
+	// the gate, but a caller that has been answered — by a charge, a
+	// post-charge or a read — already knows a window with no room left
+	// refuses every charge after it, whatever its size, and the engine's
+	// turn meter acts on that: it keeps every window an answer showed full
+	// and stops the turn's next call rather than send one the vendor would
+	// bill and the charge then refuse. That is a refusal like a charge's,
+	// and the charge that would have stamped it is the one never made, so
+	// the caller records it here. A context assembly that took a seat past
+	// its day, a coding run's post-charge, an admitted round that filled a
+	// window exactly: before this verb, each left a window refusing every
+	// call of the turn and saying it had refused none.
+	//
+	// JUDGED AGAINST THE COUNTER, NEVER THE CALLER'S MEMORY. The scope is
+	// rolled to the windows given exactly as a charge rolls it, and every
+	// capped window is judged by the rule a charge of one token is: room
+	// for it or none. A window with room is not stamped, whatever the
+	// caller remembers — one that turned over since it was seen full is a
+	// fresh window nobody has refused, and one the caps given leave room
+	// in is not refusing under them. A slot already on a LATER window, a
+	// peer's clock having moved it, is judged as that window, as the next
+	// charge would be.
+	//
+	// OF THAT SCOPE AND OF NO OTHER, as a refused charge stamps only the
+	// scope that refused it: the caller names the scope its refusal names,
+	// the company's before the seat's, by the rule the counter names a
+	// refusal with. Every stamp it writes is cleared as a charge's is, by
+	// the scope's next admitted charge or the window turning over.
+	//
+	// IT WRITES ONLY WHAT IT STAMPS. A scope with no full window — every
+	// capped window with room, or a scope nothing has charged — is left
+	// exactly as it was, no roll persisted and no record created; a stamp
+	// is moved to this refusal's instant, since the field is when the gate
+	// LAST said no. The counter's clock ([Usage.UpdatedAt]) does not move:
+	// nothing was spent. The answer is the scope's counter as the call left
+	// it, read against the windows given.
+	//
+	// ADDITIVE BETWEEN BUILDS: the stamp is the field a charge writes, in
+	// the record a charge writes, so a build that predates this verb reads
+	// it as it reads a charge's and never calls it — its own refusals of
+	// that kind simply go unrecorded, as every one did.
+	//
+	// An error is a counter that could not be reached or a request that
+	// does not validate — no scope, windows that are not the day, week and
+	// month, a ceiling below one — and never a refusal or an admission: the
+	// caller has already refused its call, and what failed is the record.
+	Refuse(ctx context.Context, scope string, caps Caps, windows Windows) (Usage, error)
 
 	// Used reports one scope's counter against the given windows. A scope
 	// never charged reads [Unspent]; an unreachable store is an error,
@@ -671,6 +736,22 @@ func (t Tally) Count(tokens int, caps Caps, w Windows, at time.Time) (Tally, []p
 	rolled := t.Roll(w)
 	refusing := rolled.Refusing(tokens, caps)
 	return rolled.Add(tokens, at).Stamp(refusing, rolled, at), refusing
+}
+
+// Refuse is one scope's share of a refusal the gate made with no charge
+// ([Budgets.Refuse]): the tally rolled to w, and at stamped on every capped
+// period whose window has no room left for a single token. It answers the
+// periods it stamped.
+//
+// No room for a single token is [Tally.Refusing] of ONE token, which is the
+// rule and not an approximation of it: a window refuses a charge of any size
+// exactly when it refuses the smallest one. Nothing is counted and the
+// counter's clock does not move, so a tally with nothing to stamp comes back
+// as Roll alone would leave it.
+func (t Tally) Refuse(caps Caps, w Windows, at time.Time) (Tally, []period.Period) {
+	rolled := t.Roll(w)
+	full := rolled.Refusing(1, caps)
+	return rolled.Stamp(full, rolled, at), full
 }
 
 // Stamp records at as the last refusal of each period in periods, on the slots

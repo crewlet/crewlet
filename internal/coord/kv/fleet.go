@@ -1306,6 +1306,44 @@ func (f *FleetStore) PostChargeOrg(ctx context.Context, tokens int, windows coor
 	return org.Usage(coord.OrgScope, windows), nil
 }
 
+// Refuse stamps every full window of one scope with a refusal the gate made
+// without a charge, counting nothing. See [coord.Budgets.Refuse].
+//
+// ONE compare-and-swap, under the discipline a charge's own write keeps: the
+// counter read, rolled to the request's windows and judged on what it holds
+// NOW — never on what the caller saw when it decided — so a window a peer
+// rolled over or a caller's caps leave room in is not stamped, and a stamp
+// written between the read and the write by another refusal is one this
+// write races at the broker rather than overwrites blind. A counter with
+// nothing to stamp is not written at all, so a refusal can neither create a
+// record nor persist a roll; and the record it does write is the one a
+// charge writes, read alike by every build ([tallyRecord]).
+//
+// On the caller's context. Nothing is half done here — one key, one write —
+// so a caller that hung up first is told so with nothing recorded, and one
+// that must record its refusal however it ends passes a context that
+// outlives it, as the engine's meter does.
+func (f *FleetStore) Refuse(ctx context.Context, scope string, caps coord.Caps, windows coord.Windows) (coord.Usage, error) {
+	if scope == "" {
+		return coord.Usage{}, errors.New("coord/kv: a refusal needs a scope")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	if err := caps.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
+	}
+	tally, err := f.casTally(ctx, scope, "record the budget refusal",
+		func(stored coord.Tally, _ bool) (coord.Tally, bool) {
+			stamped, full := stored.Refuse(caps, windows, time.Now().UTC())
+			return stamped, len(full) > 0
+		})
+	if err != nil {
+		return coord.Usage{}, err
+	}
+	return tally.Usage(scope, windows), nil
+}
+
 // clearRefusal drops the refusals an admitted charge found on a scope.
 //
 // ONLY THE STAMPS IT SAW. Between the charge's write and this one another

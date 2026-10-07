@@ -493,6 +493,31 @@ func (f *Fleet) PostChargeOrg(_ context.Context, tokens int, windows coord.Windo
 	return org.Usage(coord.OrgScope, windows), nil
 }
 
+// Refuse stamps every full window of one scope with a refusal the gate made
+// without a charge, counting nothing. See [coord.Budgets.Refuse].
+//
+// The arithmetic is [coord.Tally.Refuse], the KV backend's too, and a scope
+// it stamps nothing on is left out of the map exactly as a scope nothing has
+// charged is, so a listing never gains a row for a refusal that wrote nothing.
+func (f *Fleet) Refuse(_ context.Context, scope string, caps coord.Caps, windows coord.Windows) (coord.Usage, error) {
+	if scope == "" {
+		return coord.Usage{}, errors.New("coord/memory: a refusal needs a scope")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	if err := caps.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stamped, full := f.budgets[scope].Refuse(caps, windows, time.Now().UTC())
+	if len(full) > 0 {
+		f.budgets[scope] = stamped
+	}
+	return stamped.Usage(scope, windows), nil
+}
+
 // Used reports one scope's counter against the given windows.
 func (f *Fleet) Used(_ context.Context, scope string, windows coord.Windows) (coord.Usage, error) {
 	if scope == "" {
