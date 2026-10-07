@@ -120,9 +120,7 @@ that no earlier attempt of that same call made is refused, as somebody else's.
 A project nobody has filed work into reports **no last change at all**, rather
 than an instant borrowed from its own creation: "nothing has ever been filed
 here" is the answer, and a made-up date would make an untouched project look
-freshly active. A company upgrading to this gets both columns filled from the
-change history it already holds, so no project reads as untouched because of
-when the engine was updated.
+freshly active.
 
 ### A project's target date
 

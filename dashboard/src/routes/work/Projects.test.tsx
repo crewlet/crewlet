@@ -376,10 +376,10 @@ test("a unit the chart no longer has is marked rather than printed plainly", asy
   expect(pill.textContent).toBe("gone");
 });
 
-// THE MAINTAINED FACT, AND ITS TWO DIFFERENT ABSENCES. A project nothing has
-// ever been filed into and a project whose work predates the column are not
-// the same thing, and only the first is something a reader acts on.
-test("when work last changed is the engine's own fact, and its absence says which", async () => {
+// THE MAINTAINED FACT, AND ITS ABSENCE. Every commit to a project's work stamps
+// it, so a project with none is one nothing has ever been filed into, and the
+// cell says so.
+test("when work last changed is the engine's own fact, and its absence says nothing was filed", async () => {
   serving({
     work_projects: {
       projects: [
@@ -392,13 +392,8 @@ test("when work last changed is the engine's own fact, and its absence says whic
           name: "New",
           task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
         }),
-        project({
-          key: "OLD",
-          name: "Old",
-          task_counts: { todo: 4, active: 0, done: 0, closed: 0 },
-        }),
       ],
-      total: 3,
+      total: 2,
       complete: true,
     },
   });
@@ -412,7 +407,6 @@ test("when work last changed is the engine's own fact, and its absence says whic
   // ONE LINE: the stacked shape was a `.col`, and the name below the instant.
   expect(when?.querySelector(".col")).toBeNull();
   expect(within(rowFor("NEW")).getByText("Nothing has been filed here")).toBeTruthy();
-  expect(within(rowFor("OLD")).getByText("Filed before this node recorded one")).toBeTruthy();
 });
 
 // A COMMIT CAN NAME NOBODY, and the wire says so by leaving the actor out: the

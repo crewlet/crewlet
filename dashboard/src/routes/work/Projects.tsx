@@ -68,7 +68,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { Segmented } from "~/ui/primitives.tsx";
-import { filed, ProjectProgress, ProjectProgressLegend } from "./census.tsx";
+import { ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
 import { targetLabel } from "~/lib/work.ts";
@@ -612,12 +612,9 @@ export function Projects() {
 /**
  * When this project's work last changed, and who changed it.
  *
- * THE ENGINE'S OWN MAINTAINED COLUMN where it has one. A node built before the
- * applier maintained it, or a project nothing has ever been filed in, carries
- * nothing — and the two are different facts: one is "this build cannot say"
- * and the other is "nothing has happened". Only the second is something a
- * reader should act on, so the absent case says which it is rather than
- * drawing a dash for both.
+ * THE ENGINE'S OWN MAINTAINED COLUMN, stamped by every commit to the project's
+ * work — so its absence has one meaning, that nothing has ever been filed here,
+ * and the cell says so rather than drawing a dash.
  */
 function LastChange({
   row,
@@ -630,11 +627,7 @@ function LastChange({
 }) {
   const change = row.last_change;
   if (!change) {
-    return filed(row.task_counts) === 0 ? (
-      <EmptyValue label="Nothing has been filed here" />
-    ) : (
-      <EmptyValue label="Filed before this node recorded one" />
-    );
+    return <EmptyValue label="Nothing has been filed here" />;
   }
   return (
     // ONE LINE, because two made every row in the directory a line and a half
