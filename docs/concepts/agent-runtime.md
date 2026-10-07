@@ -314,7 +314,7 @@ stateDiagram-v2
   before it. `seat_budget_parked` is logged with the scope, the window, its
   figures and the reset. And the park is **recorded as the gate's refusal**:
   the delivery it defers is the turn whose first charge would have been
-  refused, so the window's `refused_at` — "refusing since" on every screen and
+  refused, so the window's `refused_at` — "last refused" on every screen and
   in `crewlet budgets show` — is stamped on the scope a charge would be refused
   by, the company's before the seat's, exactly as that charge would have
   stamped it. A window a coding run or a background pass filled used to park

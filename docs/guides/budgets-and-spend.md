@@ -51,7 +51,7 @@ later model call of the turn before it is sent**: the next phase, the round-cap
 judge, the seat's other workers and an agent-mode coding run are refused without
 being made, rather than each billed and then refused — and a call stopped that
 way is the gate's refusal like any other, recorded as the window's `refused_at`
-(the "refusing since" on the Spend screens and in `crewlet budgets show`) the
+(the "last refused" on the Spend screens and in `crewlet budgets show`) the
 first time a turn holds one there. The refused round itself
 is the one a turn pays for past its ceiling — and a turn running alongside it,
 on the same company, can still pay for one round of its own before the counter
