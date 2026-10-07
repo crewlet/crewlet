@@ -27,7 +27,7 @@ func seedRuns(t *testing.T, runs ...sandbox.PendingRun) *sandbox.CoordStore {
 	for _, run := range runs {
 		// Through the launch, because that is the only way a row comes to
 		// exist: it opens launching and is moved from there.
-		if err := store.BeginLaunch(context.Background(), run, sandbox.Fence{}); err != nil {
+		if _, err := store.BeginLaunch(context.Background(), run, sandbox.Fence{}); err != nil {
 			t.Fatalf("BeginLaunch: %v", err)
 		}
 		if run.Status == "" || run.Status == sandbox.StatusLaunching {

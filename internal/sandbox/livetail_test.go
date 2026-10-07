@@ -73,7 +73,7 @@ func newTailRig(t *testing.T) *tailRig {
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
 		SandboxID: box.ID(), Placement: string(Direct), CommandID: "cmd-1",
 	}
-	if err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+	if _, err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		t.Fatalf("begin launch: %v", err)
 	}
 	if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{State: map[string]any{"x": 1}}); err != nil || !ok {
@@ -299,7 +299,7 @@ func TestATailOfAJobThatIsNotRunningSaysWhy(t *testing.T) {
 func TestALaunchingJobIsLaunchingNotStopped(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
-	if err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: "t2", AgentHandle: "swe", CodingAgent: "claude-code", Placement: string(Direct),
 	}, Fence{}); err != nil {
 		t.Fatal(err)

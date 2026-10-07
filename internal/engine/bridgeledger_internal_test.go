@@ -12,23 +12,18 @@ import (
 )
 
 // appendingStore is a pending store that records each bridged append and
-// answers it as a row holding job "launch-1" would — or, once ended, as a row
-// that has moved on.
+// answers it as a row holding job "launch-1" would.
 type appendingStore struct {
 	sandbox.PendingStore
 	mu      sync.Mutex
 	appends []sandbox.BridgeAppend
-	ended   bool
 }
 
-func (s *appendingStore) AppendBridgeCall(_ context.Context, _ string, a sandbox.BridgeAppend) (string, error) {
+func (s *appendingStore) AppendBridgeCall(_ context.Context, _ string, a sandbox.BridgeAppend) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.appends = append(s.appends, a)
-	if s.ended || (a.Launch != "" && a.Launch != "launch-1") {
-		return "", nil
-	}
-	return "launch-1", nil
+	return a.Launch == "launch-1", nil
 }
 
 // steppingMeter is a bridged meter whose total grows by one call each read.
@@ -46,21 +41,24 @@ func (m *steppingMeter) Total() runner.Bridged {
 		WorkerOutput: 40 * m.n}
 }
 
-// A SESSION'S CALLS ARE PINNED TO ITS JOB AND CARRY ITS METER.
+// A SESSION'S CALLS ARE FILED UNDER THE JOB IT WAS BOUND TO, AND CARRY ITS
+// METER.
 //
-// The first append names no job and learns the one the row holds; every later
-// append names it, so a call that outlives its job is refused by the store
-// rather than landing on the next job's record. And every append carries the
-// meter's running total as the row stores it — every figure, the cache shares
-// and the workers included — for the segment that resumes from the run to pay.
+// Every append — the first included — names the job the launch bound the
+// session to before its box existed, so a call that outlives its job is refused
+// by the store rather than landing on the next job's record. And every append
+// carries the meter's running total as the row stores it — every figure, the
+// cache shares and the workers included — for the segment that resumes from
+// the run to pay.
 //
-// Mutations: never pin, keep re-sending the empty job, or send an empty total,
-// and this goes red.
-func TestABridgeSessionsCallsArePinnedToItsJobAndCarryItsSpend(t *testing.T) {
+// Mutations: leave the first append unnamed (the ledger that learned its job
+// from the row), or send an empty total, and this goes red.
+func TestABridgeSessionsCallsAreFiledUnderItsBoundJobAndCarryItsSpend(t *testing.T) {
 	t.Parallel()
 	store := &appendingStore{}
 	meter := &steppingMeter{}
 	l := &bridgeLedger{store: store, spend: meter}
+	l.bind("launch-1")
 	for range 3 {
 		if err := l.Append(t.Context(), "run-1", tools.Call{Name: "query_episodes"}); err != nil {
 			t.Fatalf("Append: %v", err)
@@ -69,12 +67,9 @@ func TestABridgeSessionsCallsArePinnedToItsJobAndCarryItsSpend(t *testing.T) {
 	if len(store.appends) != 3 {
 		t.Fatalf("%d appends, want 3", len(store.appends))
 	}
-	if got := store.appends[0].Launch; got != "" {
-		t.Errorf("the first append named job %q before any append had landed", got)
-	}
-	for i, a := range store.appends[1:] {
+	for i, a := range store.appends {
 		if a.Launch != "launch-1" {
-			t.Errorf("append %d named job %q, want the one the first append landed under", i+2, a.Launch)
+			t.Errorf("append %d named job %q, want the one the session was bound to", i+1, a.Launch)
 		}
 	}
 	n := 3
@@ -87,23 +82,39 @@ func TestABridgeSessionsCallsArePinnedToItsJobAndCarryItsSpend(t *testing.T) {
 	}
 }
 
-// A LEDGER WHOSE FIRST APPEND LANDED NOWHERE LEARNS NOTHING. A row that is gone
-// or has moved on answers no job, and pinning to that answer would leave the
-// session's every later call naming no job — so it keeps asking, and a session
-// with no meter sends no spend at all.
-func TestABridgeSessionPinsOnlyOnAnAppendThatLanded(t *testing.T) {
+// A SESSION NO JOB WAS BOUND TO FILES NOTHING. Through the launch that cannot
+// happen — the job is named before the box that makes calls exists — so a call
+// arriving on an unbound session is a wiring mistake, and the one thing it must
+// not do is reach the store naming no job, which a store that read an empty
+// name as "whichever job the row holds" filed on the next job's record.
+//
+// Mutation: send the append whatever the ledger's binding, and this goes red.
+func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
 	t.Parallel()
-	store := &appendingStore{ended: true}
+	store := &appendingStore{}
 	l := newBridgeLedger(store, nil)
+	if err := l.Append(t.Context(), "run-1", tools.Call{Name: "read_page"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if len(store.appends) != 0 {
+		t.Fatalf("an unbound session sent %d appends to the store: %+v", len(store.appends), store.appends)
+	}
+}
+
+// A SESSION WITH NO METER SENDS NO SPEND, and a call its job no longer takes
+// is not an error to the box: the store's "not recorded" is the ordinary end
+// of a job.
+func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
+	t.Parallel()
+	store := &appendingStore{}
+	l := newBridgeLedger(store, nil)
+	l.bind("launch-0")
 	for range 2 {
 		if err := l.Append(t.Context(), "run-1", tools.Call{Name: "read_page"}); err != nil {
-			t.Fatalf("Append: %v", err)
+			t.Fatalf("Append on a job the row no longer holds: %v", err)
 		}
 	}
 	for i, a := range store.appends {
-		if a.Launch != "" {
-			t.Errorf("append %d named job %q, though no append ever landed", i+1, a.Launch)
-		}
 		if a.Spent != (sandbox.EngineSpend{}) {
 			t.Errorf("append %d carried spend %+v from a session with no meter", i+1, a.Spent)
 		}

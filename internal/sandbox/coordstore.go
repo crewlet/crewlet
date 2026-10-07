@@ -82,9 +82,14 @@ const casRetries = 16
 
 // BeginLaunch opens a launch on this turn's row. See the contract on
 // [PendingStore].
-func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) error {
+//
+// A ROW THAT VANISHES BETWEEN THE CREATE AND THE RESET is a row there is none
+// of, so the create is tried again: the turn's previous run finishing as this
+// one opens ends the row underneath the reset, and a reset that found nothing
+// used to report the launch open on a row that did not exist.
+func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (LaunchRecord, error) {
 	if run.TurnID == "" {
-		return fmt.Errorf("sandbox: a pending run needs a turn id")
+		return LaunchRecord{}, fmt.Errorf("sandbox: a pending run needs a turn id")
 	}
 	now := s.clock()
 	if run.CreatedAt.IsZero() {
@@ -104,21 +109,48 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.Launch = LaunchRecord{ID: run.LaunchID, StartedAt: now, Model: run.Launch.Model}
 	raw, err := encodeRun(run)
 	if err != nil {
-		return err
+		return LaunchRecord{}, err
 	}
-	created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
-	if err != nil {
-		return fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
+	for range casRetries {
+		created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
+		if err != nil {
+			return LaunchRecord{}, fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
+		}
+		if created {
+			return run.Launch, nil
+		}
+		reset, held, err := s.resetLaunch(ctx, run, fence)
+		if err != nil {
+			return LaunchRecord{}, err
+		}
+		if reset {
+			return run.Launch, nil
+		}
+		if held > 0 {
+			return LaunchRecord{}, fmt.Errorf("sandbox: run %s is held by a newer lease "+
+				"(epoch %d, this launch's %d), so no job was opened on it",
+				run.TurnID, held, fence.Epoch)
+		}
+		// The row went between the create and the reset: create it again.
 	}
-	if created {
-		return nil
-	}
-	// The row was already there — a second run_sandbox call in this turn,
-	// or a redelivered kick-off. Only the LAUNCH-SCOPED state is reset: the
-	// identity fields stay the existing row's, and so does the box
-	// reference, which the caller is about to reattach to.
-	_, _, err = s.mutate(ctx, run.TurnID, func(existing *PendingRun) bool {
+	return LaunchRecord{}, fmt.Errorf(
+		"sandbox: begin launch %s: the record kept appearing and vanishing under the launch",
+		run.TurnID)
+}
+
+// resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
+// there — a second run_sandbox call in this turn, or a redelivered kick-off —
+// reporting whether it reset the row and, where a newer lease refused it, that
+// lease's epoch. Neither is a row that is gone.
+//
+// Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
+// row's, and so does the box reference, which the caller is about to reattach
+// to.
+func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (bool, int64, error) {
+	var held int64
+	_, reset, err := s.mutate(ctx, run.TurnID, func(existing *PendingRun) bool {
 		if outranked(*existing, fence) {
+			held = existing.OwnerEpoch
 			return false
 		}
 		existing.Status = StatusLaunching
@@ -154,7 +186,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Charged, existing.CompanyCharged = false, false
 		return true
 	})
-	return err
+	return reset, held, err
 }
 
 // Get returns one run by turn id.
@@ -356,17 +388,19 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 //
 // A run whose row is gone is not an error: the run ended while a late call was
 // in flight, which is the ordinary shape of a box shutting down. Nor is a job
-// the row has moved on from (see the pin on [PendingStore]). The append is
-// simply dropped, and the caller — which must not fail the box's call over
-// telemetry — goes on as it would have.
-func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (string, error) {
+// the row has moved on from, or an append naming no job at all (see the pin on
+// [PendingStore]). The append is simply dropped, and the caller — which must
+// not fail the box's call over telemetry — goes on as it would have.
+func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
+	if a.Launch == "" {
+		return false, nil
+	}
 	call := a.Call
 	if call.At.IsZero() {
 		call.At = s.clock()
 	}
-	var launch string
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if a.Launch != "" && a.Launch != run.LaunchID {
+		if a.Launch != run.LaunchID {
 			return false
 		}
 		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
@@ -377,13 +411,9 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 			run.Launch = LaunchRecord{ID: run.LaunchID}
 		}
 		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
-		launch = run.LaunchID
 		return true
 	})
-	if err != nil || !won {
-		return "", err
-	}
-	return launch, nil
+	return won, err
 }
 
 // appendBounded adds one call and drops from the MIDDLE past the cap.

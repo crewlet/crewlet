@@ -2489,7 +2489,7 @@ func TestANewLaunchClearsThePreviousJobsCompanyCharge(t *testing.T) {
 		t.Fatal("setup: the partial charge was not recorded on the row")
 	}
 
-	if err := rig.pending.BeginLaunch(t.Context(), rig.get("t1"), Fence{}); err != nil {
+	if _, err := rig.pending.BeginLaunch(t.Context(), rig.get("t1"), Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if run := rig.get("t1"); run.CompanyCharged || run.Charged {
@@ -3715,7 +3715,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: "colleague", AgentHandle: "pm", CreatedAt: rig.now,
 	}, Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

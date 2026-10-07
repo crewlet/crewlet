@@ -367,7 +367,7 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	// the operation ledger and is refused on a node with nowhere to record a
 	// rebase (rebase.go).
 	began := time.Now().UTC()
-	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "run-code", WorkKey: "wk-code", WorkSince: began, AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

@@ -260,9 +260,14 @@ delegated to — because those calls happen after the part of the turn that
 launched the run has ended and charged what it spent. The part of the turn that
 resumes from the run pays them to the turn's [work
 item](../guides/work-tracker.md#spend-is-on-the-task), beside the run's own
-tokens. A call still in
-flight when its run ended is recorded under neither that run nor the next one
-the turn launches.
+tokens. Each call is recorded under the run it was made for — the bridge
+session is given the run's name before its box exists — so a call still in
+flight when the turn launches its next run (a delegated worker outliving the
+CLI that asked for it) is dropped rather than landing on the next run's record,
+where that run's resume would pay for it as its own. A late call that finishes
+after its run was collected but before any next run is recorded on its own run
+and is not paid: the resume paid what the run's record held when it was
+collected, so the task can fall short of the turn's cost and never exceed it.
 
 #### Code work inside the run
 

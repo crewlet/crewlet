@@ -14,6 +14,7 @@ package sandboxtest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
+		{"ALaunchAnswersTheJobItOpened", testALaunchAnswersTheJobItOpened},
+		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
 		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
 		{"OnlyALaunchingRunCanSuspend", testOnlyALaunchingRunCanSuspend},
@@ -102,6 +105,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"BridgeCallsDropTheMiddleNotTheStart", testBridgeCallsDropTheMiddleNotTheStart},
 		{"ABridgedRunsSpendIsTheNewestTotal", testABridgedRunsSpendIsTheNewestTotal},
 		{"ABridgedCallOutlivingItsJobIsNotTheNextJobs", testABridgedCallOutlivingItsJobIsNotTheNextJobs},
+		{"ABridgedCallNamingNoJobIsNotRecorded", testABridgedCallNamingNoJobIsNotRecorded},
+		{"ABridgedCallAfterItsJobsClaimStaysOnItsJob", testABridgedCallAfterItsJobsClaimStaysOnItsJob},
 		{"AParkedJobsCondensationIsKeptForItsAnswer", testAParkedJobsCondensationIsKeptForItsAnswer},
 	}
 	for _, tc := range cases {
@@ -153,24 +158,26 @@ var answerOnTheDM = sandbox.ConversationRef{
 
 // mustBeginLaunch opens a launch and leaves the run where a launch leaves it:
 // [sandbox.StatusLaunching], its job started and its conversation not yet
-// written.
-func mustBeginLaunch(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
+// written. It answers the job's name, as the store answered it.
+func mustBeginLaunch(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) string {
 	t.Helper()
-	if err := s.BeginLaunch(t.Context(), r, sandbox.Fence{}); err != nil {
+	launch, err := s.BeginLaunch(t.Context(), r, sandbox.Fence{})
+	if err != nil {
 		t.Fatalf("begin launch %s: %v", r.TurnID, err)
 	}
+	return launch.ID
 }
 
 // mustLaunched carries a run all the way through its launch: the row, then the
-// suspension that opens it to the completion poll.
+// suspension that opens it to the completion poll. It answers the job's name.
 //
 // BOTH HALVES, because a run that has only had the first is not one any tail
 // acts on — the poll skips it and a claim refuses it — so a case that reached
 // for the store's `create` alone would be asserting about a state the rest of
 // the engine deliberately ignores.
-func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
+func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) string {
 	t.Helper()
-	mustBeginLaunch(t, s, r)
+	launch := mustBeginLaunch(t, s, r)
 	suspended, err := s.MarkSuspended(t.Context(), r.TurnID, suspension())
 	if err != nil {
 		t.Fatalf("mark suspended %s: %v", r.TurnID, err)
@@ -178,6 +185,7 @@ func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
 	if !suspended {
 		t.Fatalf("mark suspended %s: the launch did not open to the poll", r.TurnID)
 	}
+	return launch
 }
 
 // suspension is a stand-in for the serialized Execute conversation.
@@ -250,9 +258,10 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 // suspension beside it gets, for the same reason.
 func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.PendingStore) {
 	first := run("t-relaunch-bridge")
-	mustBeginLaunch(t, s, first)
+	launch := mustBeginLaunch(t, s, first)
 	if _, err := s.AppendBridgeCall(context.Background(), first.TurnID, sandbox.BridgeAppend{
-		Call: sandbox.BridgeCall{Name: "submit_work", Args: `{"outcome":"delivered"}`, At: base},
+		Launch: launch,
+		Call:   sandbox.BridgeCall{Name: "submit_work", Args: `{"outcome":"delivered"}`, At: base},
 	}); err != nil {
 		t.Fatalf("AppendBridgeCall: %v", err)
 	}
@@ -274,8 +283,56 @@ func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.Pend
 func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
 	// The turn id is the identity. A row without one collides with every
 	// other row that forgot the same field, and nothing could ever find it.
-	if err := s.BeginLaunch(t.Context(), run(""), sandbox.Fence{}); err == nil {
+	if _, err := s.BeginLaunch(t.Context(), run(""), sandbox.Fence{}); err == nil {
 		t.Error("a run with no turn id was persisted")
+	}
+}
+
+// A LAUNCH ANSWERS THE JOB IT OPENED, on the first launch and on a relaunch
+// alike: its name and the instant it began, exactly as the row records them.
+// The answer is what an agent-mode run's bridge session is bound to before its
+// box exists, so an answer that differed from the row — a stale name, or the
+// previous job's — would file every call the box makes under a job that is not
+// its own.
+func testALaunchAnswersTheJobItOpened(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	var names []string
+	for i := range 2 {
+		opened, err := s.BeginLaunch(ctx, run("t-answered"), sandbox.Fence{})
+		if err != nil {
+			t.Fatalf("launch %d: %v", i+1, err)
+		}
+		row := mustGet(t, s, "t-answered")
+		if opened.ID == "" || opened.ID != row.LaunchID {
+			t.Fatalf("launch %d answered job %q, and the row holds %q", i+1, opened.ID, row.LaunchID)
+		}
+		if facts := row.LaunchFacts(); !facts.StartedAt.Equal(opened.StartedAt) || opened.StartedAt.IsZero() {
+			t.Errorf("launch %d answered a start of %v, and the row records %v",
+				i+1, opened.StartedAt, facts.StartedAt)
+		}
+		names = append(names, opened.ID)
+	}
+	if names[0] == names[1] {
+		t.Error("a relaunch answered the first job's name — the case exercises nothing")
+	}
+}
+
+// A LAUNCH ON A ROW A NEWER LEASE HOLDS IS REFUSED, not reported open. The
+// launch that went on from a silent no-op started a job on a row that never
+// named it, in a box nothing would ever reclaim.
+func testALaunchARowsNewerLeaseOutranksIsRefused(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := mustLaunched(t, s, run("t-outranked"))
+	if ok, err := s.ClaimOwnership(ctx, "t-outranked", "node-b:2", 7); err != nil || !ok {
+		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
+	}
+	opened, err := s.BeginLaunch(ctx, run("t-outranked"), sandbox.Fence{Owner: "node-a:1", Epoch: 3})
+	if err == nil {
+		t.Fatalf("a launch under a lease a newer one outranks was opened as job %q", opened.ID)
+	}
+	if got := mustGet(t, s, "t-outranked"); got.LaunchID != first || got.Status != sandbox.StatusRunning {
+		t.Errorf("the refused launch moved the row: job %q status %q, want %q %q",
+			got.LaunchID, got.Status, first, sandbox.StatusRunning)
 	}
 }
 
@@ -494,7 +551,7 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 // row is a run that nothing will ever settle again.
 func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
-	mustLaunched(t, s, run("t1"))
+	launch := mustLaunched(t, s, run("t1"))
 	if _, _, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
@@ -521,8 +578,8 @@ func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingS
 			return err
 		},
 		"AppendBridgeCall": func() error {
-			_, err := s.AppendBridgeCall(ctx, "t1",
-				sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page"}})
+			_, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeAppend{
+				Launch: launch, Call: sandbox.BridgeCall{Name: "read_page"}})
 			return err
 		},
 	}
@@ -989,7 +1046,7 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 	// retry that write opens charge the run again, so each is walked here;
 	// the launch that follows is a new job, and must not inherit it.
 	ctx := t.Context()
-	mustLaunched(t, s, run("t1"))
+	launch := mustLaunched(t, s, run("t1"))
 	mustReleaseCharged(t, s, mustClaim(t, s, "t1"))
 	tail := completionOf(t, s, "t1")
 	var claimed sandbox.PendingRun
@@ -1026,8 +1083,11 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 		}},
 		{"release the box", func() error { return s.ReleaseBox(ctx, "t1") }},
 		{"append a bridged call", func() error {
-			_, err := s.AppendBridgeCall(ctx, "t1",
-				sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page", At: base}})
+			recorded, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeAppend{
+				Launch: launch, Call: sandbox.BridgeCall{Name: "read_page", At: base}})
+			if err == nil && !recorded {
+				return errors.New("the append was not recorded, so it exercised nothing")
+			}
 			return err
 		}},
 	} {
@@ -1601,14 +1661,15 @@ func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.Pendin
 func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bridge")
-	mustLaunched(t, s, r)
+	launch := mustLaunched(t, s, r)
 
 	for _, name := range []string{"read_page", "post_message", "read_page"} {
-		launch, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
-			Call: sandbox.BridgeCall{Name: name, Args: `{"id":1}`, Output: name + " ok"},
+		recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+			Launch: launch,
+			Call:   sandbox.BridgeCall{Name: name, Args: `{"id":1}`, Output: name + " ok"},
 		})
-		if err != nil || launch == "" {
-			t.Fatalf("AppendBridgeCall(%s) = %q, %v", name, launch, err)
+		if err != nil || !recorded {
+			t.Fatalf("AppendBridgeCall(%s) = %v, %v", name, recorded, err)
 		}
 	}
 
@@ -1639,17 +1700,17 @@ func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
 func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bridge-fence")
-	mustLaunched(t, s, r)
+	launch := mustLaunched(t, s, r)
 	// Move the run under a NEWER owner, so the caller's own view of the
 	// lease is stale by any measure.
 	if ok, err := s.ClaimOwnership(ctx, r.TurnID, "node-b", 99); err != nil || !ok {
 		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
 	}
 
-	launch, err := s.AppendBridgeCall(ctx, r.TurnID,
-		sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page"}})
-	if err != nil || launch == "" {
-		t.Fatalf("a log append was refused by ownership: %q, %v", launch, err)
+	recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+		Launch: launch, Call: sandbox.BridgeCall{Name: "read_page"}})
+	if err != nil || !recorded {
+		t.Fatalf("a log append was refused by ownership: %v, %v", recorded, err)
 	}
 	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
 		t.Errorf("%d calls recorded", len(got.BridgeCalls))
@@ -1658,15 +1719,15 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 
 // A LATE CALL FROM A BOX THAT IS SHUTTING DOWN is the ordinary shape here, and
 // it must not be an error: the caller cannot fail the box's call over a log
-// row, so an answer of no job has to be as safe to ignore as one.
+// row, so an answer of "not recorded" has to be as safe to ignore as one.
 func testBridgeCallsForAMissingRunAreDropped(t *testing.T, s sandbox.PendingStore) {
-	launch, err := s.AppendBridgeCall(t.Context(), "never-existed",
-		sandbox.BridgeAppend{Call: sandbox.BridgeCall{Name: "read_page"}})
+	recorded, err := s.AppendBridgeCall(t.Context(), "never-existed", sandbox.BridgeAppend{
+		Launch: "a-job-that-was", Call: sandbox.BridgeCall{Name: "read_page"}})
 	if err != nil {
 		t.Fatalf("a missing run was an error: %v", err)
 	}
-	if launch != "" {
-		t.Errorf("an append onto no row reported landing under %q", launch)
+	if recorded {
+		t.Error("an append onto no row reported being recorded")
 	}
 }
 
@@ -1675,12 +1736,12 @@ func testBridgeCallsForAMissingRunAreDropped(t *testing.T, s sandbox.PendingStor
 func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bridge-cap")
-	mustLaunched(t, s, r)
+	launch := mustLaunched(t, s, r)
 
 	total := sandbox.MaxBridgeCalls + 10
 	for i := range total {
 		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
-			Call: sandbox.BridgeCall{Name: fmt.Sprintf("call-%03d", i)},
+			Launch: launch, Call: sandbox.BridgeCall{Name: fmt.Sprintf("call-%03d", i)},
 		}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
@@ -1722,22 +1783,14 @@ func bridged(n int) sandbox.EngineSpend {
 func testABridgedRunsSpendIsTheNewestTotal(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-bridge-spend")
-	mustLaunched(t, s, r)
+	launch := mustLaunched(t, s, r)
 
-	launch, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
-		Call: sandbox.BridgeCall{Name: "query_episodes"}, Spent: bridged(1)})
-	if err != nil || launch == "" {
-		t.Fatalf("first append = %q, %v", launch, err)
-	}
-	if want := mustGet(t, s, r.TurnID).LaunchID; launch != want {
-		t.Fatalf("the first append answered job %q, want the row's %q", launch, want)
-	}
 	// The third call's total lands before the second's.
-	for _, n := range []int{3, 2} {
-		if got, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+	for _, n := range []int{1, 3, 2} {
+		if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
 			Launch: launch, Call: sandbox.BridgeCall{Name: "refresh_memory"}, Spent: bridged(n),
-		}); err != nil || got != launch {
-			t.Fatalf("append %d = %q, %v; want job %q", n, got, err, launch)
+		}); err != nil || !recorded {
+			t.Fatalf("append %d = %v, %v; want it recorded on job %q", n, recorded, err, launch)
 		}
 	}
 	if got := mustGet(t, s, r.TurnID).LaunchFacts().Bridged; got != bridged(3) {
@@ -1745,43 +1798,111 @@ func testABridgedRunsSpendIsTheNewestTotal(t *testing.T, s sandbox.PendingStore)
 	}
 }
 
-// A CALL FROM A JOB THAT IS OVER IS NOT THE NEXT JOB'S. A session's first
-// append is recorded under the job the row holds, and every later one names
-// that job; once the row has moved on — a second launch on the same turn — a
-// call still in flight from the first (a worker that outlived a killed CLI) is
-// not recorded, neither its log entry nor its spend, because the second job's
-// resume would pay for it again. The second job starts with nothing bridged.
+// A CALL FROM A JOB THAT IS OVER IS NOT THE NEXT JOB'S. Every append names the
+// job its session was opened for, and once the row has moved on — a second
+// launch on the same turn — a call still in flight from the first is not
+// recorded, neither its log entry nor its spend, because the second job's
+// resume would pay for it as its own. The second job starts with nothing
+// bridged.
+//
+// BOTH SHAPES, and the second is the one a session that learned its job from
+// the row got wrong: a session whose earlier call landed, and a session whose
+// FIRST call is the late one — a delegated worker the CLI opened with, still
+// running when the reviewer relaunched. Neither may land.
 func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.PendingStore) {
-	ctx := t.Context()
-	r := run("t-bridge-pin")
+	for _, tc := range []struct {
+		name   string
+		landed bool
+	}{
+		{"after a call of its own landed", true},
+		{"as its session's first call", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			r := run("t-bridge-pin-" + fmt.Sprint(tc.landed))
+			first := mustLaunched(t, s, r)
+			if tc.landed {
+				if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+					Launch: first, Call: sandbox.BridgeCall{Name: "read_page"}, Spent: bridged(1),
+				}); err != nil || !recorded {
+					t.Fatalf("the first job's own call = %v, %v", recorded, err)
+				}
+			}
+
+			second := mustBeginLaunch(t, s, r)
+			if second == first {
+				t.Fatal("the second launch kept the first job's name — the case exercises nothing")
+			}
+			if got := mustGet(t, s, r.TurnID).LaunchFacts().Bridged; got != (sandbox.EngineSpend{}) {
+				t.Fatalf("a fresh job starts with the last one's bridged spend: %+v", got)
+			}
+
+			recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+				Launch: first, Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(4)})
+			if err != nil {
+				t.Fatalf("a late call was an error: %v", err)
+			}
+			if recorded {
+				t.Error("a call from a job that is over was recorded on the next one")
+			}
+			got := mustGet(t, s, r.TurnID)
+			if len(got.BridgeCalls) != 0 || got.LaunchFacts().Bridged != (sandbox.EngineSpend{}) {
+				t.Fatalf("the next job took a call from the last one: calls %+v, spend %+v",
+					got.BridgeCalls, got.LaunchFacts().Bridged)
+			}
+		})
+	}
+}
+
+// AN APPEND NAMING NO JOB IS RECORDED UNDER NONE. The store used to read an
+// empty job as "whichever the row holds", which was how a late first call
+// reached the next job; nothing in this build sends one, so an empty name is
+// a caller's mistake and lands nowhere rather than somewhere.
+func testABridgedCallNamingNoJobIsNotRecorded(t *testing.T, s sandbox.PendingStore) {
+	r := run("t-bridge-unnamed")
 	mustLaunched(t, s, r)
-	first, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
-		Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(1)})
-	if err != nil || first == "" {
-		t.Fatalf("first append = %q, %v", first, err)
-	}
-
-	mustBeginLaunch(t, s, run("t-bridge-pin"))
-	after := mustGet(t, s, r.TurnID)
-	if after.LaunchID == first {
-		t.Fatal("the second launch kept the first job's name — the case exercises nothing")
-	}
-	if got := after.LaunchFacts().Bridged; got != (sandbox.EngineSpend{}) {
-		t.Fatalf("a fresh job starts with the last one's bridged spend: %+v", got)
-	}
-
-	late, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
-		Launch: first, Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(4)})
+	recorded, err := s.AppendBridgeCall(t.Context(), r.TurnID, sandbox.BridgeAppend{
+		Call: sandbox.BridgeCall{Name: "read_page"}, Spent: bridged(1)})
 	if err != nil {
-		t.Fatalf("a late call was an error: %v", err)
-	}
-	if late != "" {
-		t.Errorf("a call from a job that is over was recorded under %q", late)
+		t.Fatalf("an unnamed append was an error: %v", err)
 	}
 	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 0 || got.LaunchFacts().Bridged != (sandbox.EngineSpend{}) {
-		t.Fatalf("the next job took a call from the last one: calls %+v, spend %+v",
-			got.BridgeCalls, got.LaunchFacts().Bridged)
+	if recorded || len(got.BridgeCalls) != 0 || got.LaunchFacts().Bridged != (sandbox.EngineSpend{}) {
+		t.Fatalf("an append naming no job was recorded (%v): calls %+v, spend %+v",
+			recorded, got.BridgeCalls, got.LaunchFacts().Bridged)
+	}
+}
+
+// A CALL THAT FINISHES AFTER ITS JOB'S RESUME CLAIMED IT, and before any
+// relaunch, stays on its own job: the row still holds that job, and the call is
+// evidence — a resume that fails and hands its claim back is collected again,
+// and that claim reads it. What the claim that already won read is what its
+// segment pays, so this call's spend is not in it: a late call leaves the task
+// short of the turn's cost, never past it.
+func testABridgedCallAfterItsJobsClaimStaysOnItsJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-after-claim")
+	launch := mustLaunched(t, s, r)
+	if recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+		Launch: launch, Call: sandbox.BridgeCall{Name: "read_page"}, Spent: bridged(1),
+	}); err != nil || !recorded {
+		t.Fatalf("the job's own call = %v, %v", recorded, err)
+	}
+	claimed := mustClaim(t, s, r.TurnID)
+
+	recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+		Launch: launch, Call: sandbox.BridgeCall{Name: "delegate"}, Spent: bridged(2)})
+	if err != nil || !recorded {
+		t.Fatalf("a call after the claim, before any relaunch = %v, %v; want it on its own job",
+			recorded, err)
+	}
+	if got := claimed.LaunchFacts().Bridged; got != bridged(1) {
+		t.Errorf("the claim read %+v, want what the job held when it was claimed: %+v", got, bridged(1))
+	}
+	got := mustGet(t, s, r.TurnID)
+	if len(got.BridgeCalls) != 2 || got.LaunchFacts().Bridged != bridged(2) {
+		t.Fatalf("the job's record after the late call: calls %d, spend %+v; want 2 and %+v",
+			len(got.BridgeCalls), got.LaunchFacts().Bridged, bridged(2))
 	}
 }
 

@@ -212,10 +212,10 @@ type BridgeCall struct {
 // BridgeAppend is one finished bridged call as the bridge hands it to the row
 // — see [PendingStore.AppendBridgeCall].
 type BridgeAppend struct {
-	// Launch is the job the session serves, as the store answered the
-	// session's first append; empty on that first append. The session is
-	// opened before its job exists, and its box dials only once the job is
-	// on the row, so the first append always finds the session's own job.
+	// Launch is the job the session serves, as [PendingStore.BeginLaunch]
+	// named it — handed to the session through [LaunchRequest.Opened] before
+	// the job's box existed, so no call the box makes can name any other.
+	// REQUIRED: an append naming no job is recorded under none.
 	Launch string
 
 	Call BridgeCall
@@ -743,7 +743,18 @@ type PendingStore interface {
 	// so a resume that relaunched read back as `resumed`, the settle path
 	// could not tell it from a finished turn, and it tore down the box the
 	// new job was running in.
-	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) error
+	//
+	// ANSWERS THE RECORD OF THE JOB IT OPENED — its name, minted here, and
+	// the instant it began — because the store is the one party that knows
+	// the name, and something has to hold it before the job's box can act:
+	// an agent-mode run's bridge session records every call under its own
+	// job ([BridgeAppend.Launch]), and a session that learned the name from
+	// the row later would learn whichever job the row held by then.
+	//
+	// A row a NEWER LEASE holds is refused with an error rather than left
+	// alone with none: a launch told nothing went on to start a job on a row
+	// that never named it, in a box nothing would reclaim.
+	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (LaunchRecord, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
@@ -871,18 +882,24 @@ type PendingStore interface {
 	// record by [EngineSpend.Newest], so the segment that resumes from the
 	// job can pay it ([LaunchRecord.Bridged]).
 	//
-	// PINNED TO ONE JOB. A session's first append names no job and is
-	// recorded under the one the row holds, which it answers; every later
-	// append names that job, and one the row has moved on from is NOT
-	// recorded — a call still in flight when its job ended (a worker that
-	// outlived a killed CLI) would otherwise land its call and its spend on
-	// the next job's record, and that job's resume would pay for it again.
+	// PINNED TO ONE JOB. Every append names the job its session serves
+	// ([BridgeAppend.Launch]), and is recorded only while the row holds that
+	// job. A call still in flight when its job was REPLACED — a worker that
+	// outlived a killed CLI, finishing after the reviewer relaunched — is not
+	// recorded: it would land its call and its spend on the next job's
+	// record, and that job's resume would pay for it as its own. One that
+	// finishes after its job's resume CLAIMED it, and before any relaunch, is
+	// recorded on its own job and is NOT PAID: the log is evidence, and a
+	// resume that fails and is retried claims again and reads it, but the
+	// segment that pays for a job pays what the job's record held at its
+	// claim ([ResumeRequest.Engine]). So a late call can leave the task short
+	// of the turn's cost, never past it.
 	//
-	// Answers the job the call was recorded under, or "" where it was not.
-	// "" IS NOT AN ERROR: it is a run whose row is gone, or a job that is
-	// over — the ordinary shape of a late call from a box that is shutting
-	// down — and the caller must not fail the box's call over it.
-	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (string, error)
+	// Reports whether the call was recorded. FALSE IS NOT AN ERROR: it is a
+	// run whose row is gone, or a job that is over — the ordinary shape of a
+	// late call from a box that is shutting down — and the caller must not
+	// fail the box's call over it.
+	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
 
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)

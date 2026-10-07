@@ -416,7 +416,7 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -577,7 +577,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := store.BeginLaunch(ctx, sandbox.PendingRun{
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: chargeAgent, Role: "SWE",
 		CodingAgent: "claude-code",
 	}, sandbox.Fence{}); err != nil {
@@ -766,7 +766,7 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	fleet := memory.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
-	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

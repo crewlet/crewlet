@@ -81,12 +81,15 @@ condensation of a collected run's report, failure or question, which the
 coordinator makes between two segments on whichever node collects. Each is
 counted on a tally of its own rather than a segment's: the bridge session's
 meter, whose running total rides every bridged call onto the run's row (the
-job's own record, so a relaunch never hands one job's spend to the next), and
-the condensation's, carried on the collected result — or, for a run that parks
-on a question, written with the question for the resume its answer drives. A
-collection retried after a failed resume condenses again, and only the attempt
-the landing resume ran from reaches the item, so the item can fall short of the
-turn's cost and never exceed it.
+job's own record, named to the session before its box exists, so a relaunch
+never hands one job's spend to the next), and the condensation's, carried on
+the collected result — or, for a run that parks on a question, written with the
+question for the resume its answer drives. A collection retried after a failed
+resume condenses again, and only the attempt the landing resume ran from
+reaches the item; a bridged call that finishes after its job was claimed for
+the resume stays on that job's record unpaid, and one that finishes after the
+next launch is not recorded at all. So the item can fall short of the turn's
+cost and never exceed it.
 
 ## What this does not decide
 

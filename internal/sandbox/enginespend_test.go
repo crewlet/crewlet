@@ -23,12 +23,12 @@ func condensingRig(t *testing.T, turnID string) *coordRig {
 		answer: func(part RunPart, _ string, _ int) (string, error) {
 			return "(condensed) the " + string(part), nil
 		}}
-	rig.launch(turnID)
+	launched := rig.launch(turnID)
 	rig.coordinator.countRun("swe", StatusRunning)
-	if launch, err := rig.pending.AppendBridgeCall(t.Context(), turnID, BridgeAppend{
-		Call: BridgeCall{Name: "query_episodes"}, Spent: bridgedSpend,
-	}); err != nil || launch == "" {
-		t.Fatalf("AppendBridgeCall = %q, %v", launch, err)
+	if recorded, err := rig.pending.AppendBridgeCall(t.Context(), turnID, BridgeAppend{
+		Launch: launched.LaunchID, Call: BridgeCall{Name: "query_episodes"}, Spent: bridgedSpend,
+	}); err != nil || !recorded {
+		t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
 	}
 	return rig
 }

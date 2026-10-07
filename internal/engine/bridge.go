@@ -56,10 +56,13 @@ func decodeBridgeArgs(raw string) map[string]any {
 // bridgeLedger appends a bridged run's calls to its pending-run row, and with
 // each one what the run's bridged calls have cost the engine so far.
 //
-// ONE PER SESSION, so one per job: the first append is recorded under the job
-// the row holds and answers its name, and every later one names that job, so a
-// call that outlives its job never lands on the next one's record (see
-// [sandbox.PendingStore.AppendBridgeCall]).
+// ONE PER SESSION, so one per job, and BOUND TO THAT JOB BEFORE ITS BOX EXISTS
+// ([bridgeLedger.bind], handed to [sandbox.LaunchRequest.Opened]): every append
+// names the job, so a call that outlives its job never lands on the next one's
+// record (see [sandbox.PendingStore.AppendBridgeCall]). It used to learn the job
+// from the row on its first append, and a session whose FIRST call outlived its
+// job — a delegated worker still running when the reviewer relaunched — learned
+// the next job's name and filed its call and its spend there.
 type bridgeLedger struct {
 	store sandbox.PendingStore
 
@@ -68,8 +71,8 @@ type bridgeLedger struct {
 	spend bridgedMeter
 
 	mu sync.Mutex
-	// launch is the job this session's calls are recorded under, learned
-	// from the first append that landed.
+	// launch is the job this session's calls are recorded under, as the
+	// store opened it.
 	launch string
 }
 
@@ -89,6 +92,14 @@ func newBridgeLedger(store sandbox.PendingStore, meter *runner.BridgedSpend) *br
 	return l
 }
 
+// bind names the job this session serves. Called once, by the launch, the
+// moment the store has opened the job and before its box exists.
+func (l *bridgeLedger) bind(launch string) {
+	l.mu.Lock()
+	l.launch = launch
+	l.mu.Unlock()
+}
+
 // Append records one call. See [mcpbridge.Ledger] for why an error here never
 // reaches the box.
 //
@@ -98,6 +109,11 @@ func newBridgeLedger(store sandbox.PendingStore, meter *runner.BridgedSpend) *br
 // append fails has its cost carried by the next one that lands, since the
 // total is cumulative — only the last call of a run can lose it, and then the
 // task is charged short of what the turn shows rather than past it.
+//
+// A CALL ON A SESSION NO JOB WAS BOUND TO records nothing: it cannot happen
+// through the launch, which binds before the box that makes calls exists, so it
+// is a wiring mistake — said in the log rather than filed under whatever job
+// the row holds.
 func (l *bridgeLedger) Append(ctx context.Context, runID string, call tools.Call) error {
 	if l == nil || l.store == nil {
 		return nil
@@ -105,7 +121,13 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call tools.Call
 	l.mu.Lock()
 	launch := l.launch
 	l.mu.Unlock()
-	landed, err := l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeAppend{
+	if launch == "" {
+		log.WarnContext(ctx, "bridge_ledger_unbound", "run_id", runID, "tool", call.Name,
+			"detail", "a bridged call arrived on a session no job was bound to, so it "+
+				"is recorded under none; the launch binds a session before its box exists")
+		return nil
+	}
+	recorded, err := l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeAppend{
 		Launch: launch,
 		Call: sandbox.BridgeCall{
 			Name: call.Name,
@@ -122,12 +144,10 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call tools.Call
 	if err != nil {
 		return err
 	}
-	if landed != "" {
-		l.mu.Lock()
-		if l.launch == "" {
-			l.launch = landed
-		}
-		l.mu.Unlock()
+	if !recorded {
+		// The ordinary end of a job: its row is gone, or holds the next one.
+		log.DebugContext(ctx, "bridge_call_after_its_job", "run_id", runID,
+			"launch_id", launch, "tool", call.Name)
 	}
 	return nil
 }

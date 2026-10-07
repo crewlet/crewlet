@@ -25,7 +25,7 @@ func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: rig.now,
 		Requester: "ada",

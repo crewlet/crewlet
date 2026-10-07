@@ -114,6 +114,16 @@ type LaunchRequest struct {
 	// Fence is the ownership token every mutation on the row carries.
 	Fence Fence
 
+	// Opened is told the job's name the moment the store has opened it
+	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
+	// name the job before its box can act: an agent-mode run's bridge
+	// session, which records every call the box makes under its own job
+	// ([BridgeAppend.Launch]). Learned any later — from the row, say, on the
+	// session's first append — the name would be whichever job the row held
+	// by then, which for a call that outlived its job is the next one. Nil
+	// tells nobody.
+	Opened func(launchID string)
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -154,7 +164,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	// until the turn writes the conversation a resume re-enters: nothing
 	// polls or claims a run in that window, which is what stops a job that
 	// finishes before the turn unwinds from being collected into nothing.
-	if err := store.BeginLaunch(ctx, PendingRun{
+	launch, err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		WorkSince:   req.Turn.WorkSince,
 		AgentHandle: req.Turn.AgentHandle,
@@ -182,8 +192,14 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		// the rest of that record on the launch it mints.
 		Launch:    LaunchRecord{Model: launchModel(req.LLM)},
 		CreatedAt: now(),
-	}, req.Fence); err != nil {
+	}, req.Fence)
+	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
+	}
+	// THE JOB IS NAMED BEFORE ITS BOX EXISTS, so nothing the box does can be
+	// filed under a job that is not its own — see [LaunchRequest.Opened].
+	if req.Opened != nil {
+		req.Opened(launch.ID)
 	}
 
 	box, runner, reused, err := acquire(ctx, m, req)
@@ -234,17 +250,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
 	}
 
-	// WHICH JOB THIS IS, read back from the row: the store minted the
-	// launch id, and the announcement is what a watcher pairs a start with
-	// its job's record by, and what a request for its live output names.
-	// Best effort like the announcement itself — a row that cannot be read
-	// back costs the pairing, not the run.
-	var launch LaunchRecord
-	if row, ok, err := store.Get(ctx, req.Turn.TurnID); err != nil {
-		log.WarnContext(ctx, "sandbox_launch_unread", "turn_id", req.Turn.TurnID, "error", err.Error())
-	} else if ok {
-		launch = row.LaunchFacts()
-	}
+	// WHICH JOB THIS IS, as the store opened it: the announcement is what a
+	// watcher pairs a start with its job's record by, and what a request for
+	// its live output names. The store's own answer rather than a read of the
+	// row back, which could fail and cost the pairing — and which could, in
+	// principle, find a later job than this one.
 	started := types.SandboxRunStarted{
 		LaunchID: launch.ID, StartedAt: launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,

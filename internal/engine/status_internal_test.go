@@ -615,7 +615,7 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 	// others.
 	launching := func(t *testing.T, store *sandbox.CoordStore) sandbox.PendingStore {
 		t.Helper()
-		if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 			TurnID: "run-code", WorkKey: "wk-code",
 			AgentHandle: "swe", Role: "SWE",
 		}, sandbox.Fence{}); err != nil {
@@ -840,7 +840,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 		t.Fatalf("startSandbox = (%v, %v), want a runtime brought up", started, err)
 	}
 	rt := e.sandbox.Load()
-	if err := rt.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if _, err := rt.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

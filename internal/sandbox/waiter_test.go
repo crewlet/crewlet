@@ -158,7 +158,7 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
-	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+	if _, err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
@@ -915,7 +915,7 @@ func TestTheWaiterPollsThroughTheManagerCurrentAtEachTick(t *testing.T) {
 func (r *waiterRig) seedRunning(turnID, sandboxID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
-	if err := r.pending.BeginLaunch(ctx, PendingRun{
+	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", CreatedAt: r.now,
 	}, Fence{}); err != nil {
