@@ -126,8 +126,8 @@ is its *broker kind*, derived from the `stream` block and from nothing else:
 | `client` | `type: nats` | a plain client of an external cluster somebody else runs |
 
 Every node advertises its kind on its presence lease (`crewlet fleet broker
-list` and the dashboard's **Settings › Nodes** screen show it), and a node running a build
-older than the field shows as `unknown`. The rules that are about the broker
+list` and the dashboard's **Settings › Nodes** screen show it), and a node advertising a
+kind this build does not know — a newer build's — shows as `unknown`. The rules that are about the broker
 are asked of the kind, whatever the roles: a member of a fleet — one naming a
 cluster, peers or a leaf listener — must set `stream.store_dir`, because it
 holds the fleet's streams for every node that reaches it; a leaf carries no

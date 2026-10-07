@@ -297,8 +297,8 @@ func TestUnsetRoleSetIsEveryRole(t *testing.T) {
 	if declared.RunsSeats() {
 		t.Fatal("an ingress-only node must not run seats")
 	}
-	// AND AN OLDER PEER HOLDS DATA. A presence row an older build wrote
-	// names no `data` role, and reading it as stateless would drop a
+	// AND A PEER THAT DECLARES NOTHING HOLDS DATA. A row naming no roles
+	// reads as every role, and reading it as stateless would drop a
 	// member's position out of the trim's minimum.
 	if !zero.HoldsData() {
 		t.Fatal("a profile with no declared roles must hold data")
@@ -350,11 +350,10 @@ func TestProfileRoundTripsThroughLeaseMeta(t *testing.T) {
 	assertProfile(t, FromMeta("n1", decoded), me)
 }
 
-// A peer running a build that predates the field. "Does everything, labelled
-// with nothing" is the only safe reading — the alternative is a node with no
-// roles, which drops a live peer out of the denominator and over-subscribes
-// the rest of the fleet.
-func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
+// A row that does not say. "Does everything, labelled with nothing" is the
+// only safe reading — the alternative is a node with no roles, which drops a
+// live peer out of the denominator and over-subscribes the rest of the fleet.
+func TestFromMetaOfARowThatDoesNotSayDoesEverything(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -363,7 +362,7 @@ func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
 	}{
 		{"absent", nil},
 		{"empty", map[string]any{}},
-		{"other fields only", map[string]any{"build": "v3"}},
+		{"other fields only", map[string]any{"zone": "eu"}},
 		{"explicit nulls", map[string]any{"roles": nil, "labels": nil}},
 		{"an empty role list", map[string]any{"roles": []any{}}},
 	}
@@ -371,7 +370,7 @@ func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			back := FromMeta("old", tc.meta)
+			back := FromMeta("silent", tc.meta)
 			if !back.Roles.Equal(DefaultRoles()) {
 				t.Fatalf("roles = %v, want every role", back.Roles.Names())
 			}
@@ -379,10 +378,10 @@ func TestFromMetaWithNoMetaReadsAsTheOldBehaviour(t *testing.T) {
 				t.Fatalf("labels = %v, want none", back.Labels)
 			}
 			if !back.RunsSeats() {
-				t.Fatal("an older peer must still count as a seat runner")
+				t.Fatal("a row that does not say must still count as a seat runner")
 			}
-			if back.ID != "old" {
-				t.Fatalf("id = %q, want %q", back.ID, "old")
+			if back.ID != "silent" {
+				t.Fatalf("id = %q, want %q", back.ID, "silent")
 			}
 		})
 	}
@@ -830,26 +829,25 @@ func TestPresenceCarriesNoObjectShare(t *testing.T) {
 	}
 }
 
-// A NODE'S SEAT COUNT READS OFF ITS ROW, and a row that does not say is not
-// a row that says zero.
+// A NODE'S SEAT COUNT READS OFF ITS ROW, and a count it cannot read is zero.
 //
 // Peers sum these counts to learn whether any seat is free. The count arrives
 // as an int from this process and as a float64 after a round trip through the
-// lease store; anything else — absent, as a build from before the count
-// writes it, or not a whole non-negative number — is the node not saying.
-func TestASeatCountReadsOffTheRowAndSilenceIsNotZero(t *testing.T) {
+// lease store; anything else — absent, or not a whole non-negative number —
+// reads as zero, which only ever sends the summing sweep to try.
+func TestASeatCountReadsOffTheRowAndAnUnreadableOneIsZero(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		raw  any
-		want *int
+		want int
 	}{
-		"written here":       {raw: 3, want: ptr(3)},
-		"after a round trip": {raw: float64(3), want: ptr(3)},
-		"zero, said":         {raw: float64(0), want: ptr(0)},
-		"absent":             {raw: nil, want: nil},
-		"a string":           {raw: "3", want: nil},
-		"negative":           {raw: float64(-1), want: nil},
-		"a fraction":         {raw: 2.5, want: nil},
+		"written here":       {raw: 3, want: 3},
+		"after a round trip": {raw: float64(3), want: 3},
+		"zero, said":         {raw: float64(0), want: 0},
+		"absent":             {raw: nil, want: 0},
+		"a string":           {raw: "3", want: 0},
+		"negative":           {raw: float64(-1), want: 0},
+		"a fraction":         {raw: 2.5, want: 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -857,18 +855,12 @@ func TestASeatCountReadsOffTheRowAndSilenceIsNotZero(t *testing.T) {
 			if tc.raw != nil {
 				meta[HeldKey] = tc.raw
 			}
-			got := FromMeta("node-a", meta).Held
-			switch {
-			case (got == nil) != (tc.want == nil):
-				t.Fatalf("Held = %v, want %v", got, tc.want)
-			case got != nil && *got != *tc.want:
-				t.Fatalf("Held = %d, want %d", *got, *tc.want)
+			if got := FromMeta("node-a", meta).Held; got != tc.want {
+				t.Fatalf("Held = %d, want %d", got, tc.want)
 			}
 		})
 	}
 }
-
-func ptr(n int) *int { return &n }
 
 // ── the broker kind on the wire ──────────────────────────────────────
 
@@ -896,14 +888,14 @@ func TestEveryAdvertisedBrokerKindRoundTrips(t *testing.T) {
 	}
 }
 
-// A ROW THAT DOES NOT SAY IS UNKNOWN, NEVER A LEAF — an older build's row, a
+// A ROW THAT DOES NOT SAY IS UNKNOWN, NEVER A LEAF — a row with no kind, a
 // value of the wrong type, a kind a newer build added. A leaf is the one
 // reading that would drop a member out of a capacity seal, so it is the one a
 // row that says nothing must never be given; unknown is what a seal counts.
 func TestABrokerKindTheRowDoesNotStateIsUnknownNeverALeaf(t *testing.T) {
 	t.Parallel()
 	for name, meta := range map[string]map[string]any{
-		"an older build's row":       {"roles": []any{"data"}},
+		"a row with no kind":         {"roles": []any{"data"}},
 		"no meta at all":             nil,
 		"an empty string":            {"broker": ""},
 		"a value of the wrong type":  {"broker": 7},

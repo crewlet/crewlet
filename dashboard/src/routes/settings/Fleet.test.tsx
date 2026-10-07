@@ -26,7 +26,7 @@ import type { FleetNode } from "~/protocol/types.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 
 function node(over: Partial<FleetNode> = {}): FleetNode {
-  return { id: "n1", roles: [], seats: 0, config_epoch: 3, ...over };
+  return { id: "n1", roles: [], broker: "member", seats: 0, config_epoch: 3, ...over };
 }
 
 function fact(n: FleetNode, label: string) {
@@ -38,8 +38,7 @@ describe("the broker column", () => {
 
   // WHAT EACH NODE'S BROKER IS, off the engine's own row: `unknown` is a value
   // the engine sends for a presence that does not say, and it is the one kind
-  // marked, because a capacity seal counts it as a member. An engine older
-  // than the field sends nothing, which is no value rather than an empty tag.
+  // marked, because a capacity seal counts it as a member.
   test("each kind is a tag, and unknown is the one marked", () => {
     for (const kind of ["member", "leaf", "client"]) {
       const { container } = render(<BrokerCell broker={kind} />);
@@ -51,10 +50,6 @@ describe("the broker column", () => {
     expect(within(container).getByText("unknown").closest(".crewlet-tag")!.className).toContain(
       "crewlet-tag--warning",
     );
-    cleanup();
-    render(<BrokerCell />);
-    expect(screen.queryByText("unknown")).toBeNull();
-    expect(screen.getByText("This engine predates the broker kind")).toBeTruthy();
   });
 
   test("the peek names the broker, since the column gives way under it", () => {

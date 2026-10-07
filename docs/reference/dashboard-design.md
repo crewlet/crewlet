@@ -5839,8 +5839,7 @@ most, named again by the Broker members panel), **Up since**, **Roles**, then
 Lease and Broker give way; beside a peek at 1440, Node, Seats, In flight,
 Posture and Config stay. The **Broker** column is the kind the node's presence
 advertises — `member`, `leaf` or `client` as a neutral tag, `unknown` as a
-warning since it is the one reading that is a guess, and nothing at all from a
-build older than the field. Then
+warning since it is the one reading that is a guess. Then
 **Seat placement** — each seat, the node holding it, its lease and **Since**:
 the tenure's start (`acquired_at`), stamped when the epoch is minted and
 carried through every renewal, so "since 2h ago" means the seat has not moved

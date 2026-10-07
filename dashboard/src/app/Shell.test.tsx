@@ -1008,8 +1008,8 @@ describe("the page header", () => {
   test("while a screen publishes the fleet answer the column draws it and asks none", async () => {
     const answer: FleetAnswer = {
       nodes: [
-        { id: "n1", roles: [], seats: 1, config_epoch: 3 },
-        { id: "n2", roles: [], seats: 1, config_epoch: 2 },
+        { id: "n1", roles: [], broker: "member", seats: 1, config_epoch: 3 },
+        { id: "n2", roles: [], broker: "member", seats: 1, config_epoch: 2 },
       ],
       seats: [],
       duties: [],

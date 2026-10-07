@@ -154,8 +154,8 @@ comes from the node's `stream` block — never from its roles:
 
 Every node advertises its kind on its presence lease, beside its roles and
 labels, and **Settings › Nodes** and `crewlet fleet broker list` show it. A node
-running a build older than the field shows as `unknown`, and is counted as a
-member wherever that is the safe reading.
+advertising a kind this build does not know — a newer build's — shows as
+`unknown`, and is counted as a member wherever that is the safe reading.
 
 **The broker is a fixed few members.** Three survive one member lost; five
 survive two, and five is the recommendation for a fleet whose company runs

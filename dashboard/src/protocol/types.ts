@@ -1409,10 +1409,10 @@ export interface FleetNode {
   roles: string[];
   /**
    * How the node's broker takes part in the fleet's — derived from its own
-   * `stream` block, never from its roles. `unknown` for a node running a build
-   * older than the field; absent only from an engine older still.
+   * `stream` block, never from its roles. `unknown` for a node advertising a
+   * kind this build does not know (a newer build's).
    */
-  broker?: BrokerKind | string;
+  broker: BrokerKind | string;
   labels?: Record<string, string> | null;
   /** The lease's fencing token — node id plus a per-process suffix. */
   owner?: string;

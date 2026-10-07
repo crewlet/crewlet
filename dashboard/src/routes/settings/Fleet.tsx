@@ -109,15 +109,10 @@ export function Fleet({ node }: { node?: string }) {
 
 /**
  * The Broker column's cell: the kind a node's presence advertises, `unknown`
- * marked as the one reading that is a guess — and, from an engine older than
- * the field, no value at all rather than an empty tag.
+ * marked as the one reading that is a guess.
  */
-export function BrokerCell({ broker }: { broker?: string }) {
-  return broker ? (
-    <BrokerKindTag kind={broker} />
-  ) : (
-    <EmptyValue label="This engine predates the broker kind" />
-  );
+export function BrokerCell({ broker }: { broker: string }) {
+  return <BrokerKindTag kind={broker} />;
 }
 
 function FleetScreen() {
@@ -310,12 +305,13 @@ function FleetScreen() {
                   // most, the Broker members panel below names every node's
                   // kind again, and the peek carries it among its facts.
                   drop: 2,
-                  sortValue: (n) => n.broker ?? "",
+                  sortValue: (n) => n.broker,
                   // HOW ITS BROKER TAKES PART, which the roles no longer say: a
                   // node's broker is what its stream block makes it. `unknown`
-                  // is a value — a node on a build older than the field, which
-                  // a capacity seal counts as a member — and it is marked,
-                  // because it is the one reading here that is a guess.
+                  // is a value — a node advertising a kind this build does not
+                  // know (a newer build's), which a capacity seal counts as a
+                  // member — and it is marked, because it is the one reading
+                  // here that is a guess.
                   cell: (n) => <BrokerCell broker={n.broker} />,
                 },
                 {

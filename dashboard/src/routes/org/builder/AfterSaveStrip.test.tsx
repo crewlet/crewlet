@@ -33,6 +33,7 @@ afterEach(() => {
 
 const node = (over: Partial<FleetAnswer["nodes"][number]> & { id: string }) => ({
   roles: ["seats"],
+  broker: "member",
   seats: 1,
   ...over,
 });

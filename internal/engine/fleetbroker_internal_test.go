@@ -179,7 +179,7 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf})
 	fleet.present(t, placement.NodeProfile{ID: "node-g",
 		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerClient})
-	fleet.present(t, placement.NodeProfile{ID: "old-1", Roles: placement.Roles(placement.RoleData)})
+	fleet.present(t, placement.NodeProfile{ID: "unk-1", Roles: placement.Roles(placement.RoleData)})
 	leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
 		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
 
@@ -198,7 +198,7 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 			t.Errorf("%s's row names peer %q, want the id the group counts it by", n.Node, n.Peer)
 		}
 	}
-	if kinds["old-1"] != "unknown" || kinds["leaf-1"] != "leaf" || kinds["node-a"] != "member" {
+	if kinds["unk-1"] != "unknown" || kinds["leaf-1"] != "leaf" || kinds["node-a"] != "member" {
 		t.Errorf("advertised kinds %v", kinds)
 	}
 	var got []string
@@ -211,7 +211,7 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 		"dead_member:node-e@" + jetstream.PeerIDOf("node-e"),
 		"dead_member:node-g@" + jetstream.PeerIDOf("node-g"),
 		"not_in_group:node-d@",
-		"unknown_kind:old-1@",
+		"unknown_kind:unk-1@",
 	}
 	slices.Sort(got)
 	slices.Sort(want)
@@ -251,7 +251,7 @@ func TestAMemberIsRemovedOnlyOnceItIsGoneAndThroughAnotherMember(t *testing.T) {
 	b := &fakeMember{group: groupOf("node-a", "node-b", "node-c")}
 	fleet.node(t, member("node-a", placement.RoleData), a)
 	fleet.node(t, member("node-b", placement.RoleData), b)
-	fleet.present(t, placement.NodeProfile{ID: "old-1", Roles: placement.Roles(placement.RoleData)})
+	fleet.present(t, placement.NodeProfile{ID: "unk-1", Roles: placement.Roles(placement.RoleData)})
 	leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
 		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
 
@@ -260,7 +260,7 @@ func TestAMemberIsRemovedOnlyOnceItIsGoneAndThroughAnotherMember(t *testing.T) {
 		{Node: "node-b"}, {Peer: jetstream.PeerIDOf("node-b")},
 		// A NODE THAT DOES NOT SAY WHAT ITS BROKER IS may be a member,
 		// so it is refused as one.
-		{Node: "old-1"},
+		{Node: "unk-1"},
 	} {
 		if _, err := leaf.FleetBroker().Remove(t.Context(), req); !errors.As(err, &live) {
 			t.Fatalf("removing %+v, whose node holds a live presence, answered %v", req, err)

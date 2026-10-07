@@ -424,8 +424,8 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 }
 
 // EACH NODE ROW SAYS WHAT ITS BROKER IS, off the node's own presence: a member,
-// a leaf or a client — and `unknown` for a presence that does not say, a build
-// older than the field. Never an empty cell, and never a guess from the roles,
+// a leaf or a client — and `unknown` for a presence that does not say or names
+// a kind this build does not know. Never an empty cell, and never a guess from the roles,
 // which no longer imply it: a capacity seal counts an unknown as a member, and
 // the Nodes screen marks it for that reason.
 func TestFleetSaysWhatEachNodesBrokerIs(t *testing.T) {
@@ -435,7 +435,7 @@ func TestFleetSaysWhatEachNodesBrokerIs(t *testing.T) {
 		"node-a":   {"roles": []any{"data", "seats"}, "broker": "member"},
 		"sat-1":    {"roles": []any{"seats"}, "broker": "leaf"},
 		"ext-1":    {"roles": []any{"data"}, "broker": "client"},
-		"old-1":    {"roles": []any{"data", "seats"}},
+		"unk-1":    {"roles": []any{"data", "seats"}},
 		"newer-1":  {"roles": []any{"seats"}, "broker": "observer"},
 		"noroles1": nil,
 	} {
@@ -457,7 +457,7 @@ func TestFleetSaysWhatEachNodesBrokerIs(t *testing.T) {
 		got[row["id"].(string)] = row["broker"]
 	}
 	want := map[string]any{"node-a": "member", "sat-1": "leaf", "ext-1": "client",
-		"old-1": "unknown", "newer-1": "unknown", "noroles1": "unknown"}
+		"unk-1": "unknown", "newer-1": "unknown", "noroles1": "unknown"}
 	for id, kind := range want {
 		if got[id] != kind {
 			t.Errorf("%s's row says broker %v, want %v (rows: %v)", id, got[id], kind, got)

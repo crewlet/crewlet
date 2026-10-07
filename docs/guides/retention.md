@@ -951,8 +951,8 @@ that every **publisher** was admitted. So the operation's participants are:
   it should hold — because a data node publishes records;
 - every live **broker member**, whatever its roles, because its broker holds
   queued requests whether or not the node keeps data;
-- every live node whose presence does not say what its broker is — a node
-  running a build older than the field — because leaving out a node that may
+- every live node whose presence advertises no broker kind this build knows —
+  a newer build's — because leaving out a node that may
   be a member could pass a seal it should hold, while waiting on one that is
   not costs only an acknowledgement you can `exclude`;
 - and the coordinator itself.

@@ -619,9 +619,9 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 // compare-and-set — so a wrong answer costs time or reads and never a seat
 // held twice. It errs toward TRYING. Each seat is held by one node at most, so
 // the counts sum to at most the seats held, and a sum that reaches every
-// placeable seat says every one of them is held. A node that says nothing (a
-// build that predates the count) adds nothing to the sum, which can only make
-// it read "something may be free" — the answer that tries; a node whose
+// placeable seat says every one of them is held. A count a row does not carry
+// readably reads as zero and adds nothing to the sum, which can only make it
+// read "something may be free" — the answer that tries; a node whose
 // presence lapsed is not listed, so its seats read as free the moment it goes;
 // and a roster this pass could not read concludes nothing. It can read FULL
 // while a seat is free only for as long as some node's advertised count
@@ -639,10 +639,10 @@ func (h *Host) fleetHoldsEverySeat(seats []placement.Seat, plan placement.Plan,
 	}
 	held := h.heldCount()
 	for _, p := range peers {
-		if p.ID == h.nodeID || !p.RunsSeats() || p.Held == nil {
+		if p.ID == h.nodeID || !p.RunsSeats() {
 			continue
 		}
-		held += *p.Held
+		held += p.Held
 	}
 	return held >= len(seats)-len(plan.Unplaceable)
 }

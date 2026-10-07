@@ -71,9 +71,9 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"id":    id,
 			"roles": profile.Roles.Names(),
 			// HOW ITS BROKER TAKES PART — member, leaf, client, or
-			// `unknown` for a row that does not say (a build older than
-			// the field) — which the roles no longer imply: a node's
-			// broker is what its stream block makes it.
+			// `unknown` for a kind this build does not know (a newer
+			// build's) — which the roles no longer imply: a node's broker
+			// is what its stream block makes it.
 			"broker":     profile.Broker.String(),
 			"labels":     profile.Labels,
 			"owner":      lease.Owner,

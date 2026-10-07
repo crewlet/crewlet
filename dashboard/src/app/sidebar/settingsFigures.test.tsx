@@ -33,7 +33,7 @@ function tools(...states: ("attention" | "connected" | "not_connected" | "not_in
 }
 
 function node(over: Partial<FleetNode>): FleetNode {
-  return { id: "n", roles: [], seats: 0, ...over };
+  return { id: "n", roles: [], broker: "member", seats: 0, ...over };
 }
 
 function fleet(target: number, nodes: FleetNode[]): FleetAnswer {

@@ -4008,8 +4008,8 @@ that fails is tried again ten minutes later.
 Each node row carries `broker`: how the node's broker takes part in the
 fleet's — `member` (embedded, a voter in the JetStream cluster), `leaf`
 (embedded, joining the members through `stream.leaf.urls`, holding nothing),
-`client` (`stream.type: nats`) — or `unknown` for a node running a build older
-than the field. It is derived from the node's own `stream` block, never from
+`client` (`stream.type: nats`) — or `unknown` for a node advertising a kind
+this build does not know (a newer build's). It is derived from the node's own `stream` block, never from
 its roles; [`GET /fleet/broker`](#the-brokers-membership) holds it against what
 the broker itself counts.
 
@@ -4074,7 +4074,7 @@ The finding kinds:
 |---|---|
 | `dead_member` | A voter no live node is — its process is gone, or its node came back as a leaf or a client. It is counted in every election until it returns or is removed |
 | `not_in_group` | A live node advertising a member that the group does not count: still joining, or removed while it ran, in which case it rejoins as a voter at its next restart |
-| `unknown_kind` | A live node whose presence does not say what its broker is — a build older than the field. It is counted as a member wherever that is the safe reading, a [capacity seal](../guides/retention.md#who-has-to-acknowledge) included |
+| `unknown_kind` | A live node whose presence advertises no broker kind this build knows — a newer build's. It is counted as a member wherever that is the safe reading, a [capacity seal](../guides/retention.md#who-has-to-acknowledge) included |
 
 It is the `fleet_broker` question, so the [socket's query channel](#ws-wsstream)
 answers it too. A lease table that could not be reached answers `503
