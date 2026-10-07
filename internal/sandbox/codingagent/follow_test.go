@@ -249,10 +249,10 @@ func TestAReadingIsTheSameHoweverItsReadsFell(t *testing.T) {
 	p := paths(b)
 	whole := strings.Join(claudeRunStream[:len(claudeRunStream)-1], "\n") + "\n"
 	b.Put(p.Stream(), whole)
-	once := read(t, runner.Follow(sandbox.RunHandle{}), b)
+	once := read(t, runner.Follow(launched(runner)), b)
 
 	b.Put(p.Stream(), "")
-	reading := runner.Follow(sandbox.RunHandle{})
+	reading := runner.Follow(launched(runner))
 	var polled strings.Builder
 	for i := range len(claudeRunStream) - 1 {
 		b.Put(p.Stream(), strings.Join(claudeRunStream[:i+1], "\n")+"\n")
