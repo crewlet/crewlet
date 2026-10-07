@@ -545,9 +545,9 @@ Two properties differ from the vendor path and both are visible:
   `save_page` tell a seat so on their `body` parameter, with an example a test
   holds against `pages.Links`: `[its title](#/knowledge/pages/<page id>)`. A
   `[[CONTAINER/Title]]` wiki link is not a grammar the engine reads; it is
-  drawn as the brackets it is and counts for nothing in "Linked from". An index built
-  before a node knew how to extract links is re-derived once, on its own
-  (`search.IndexDerivation`), with no rebuild command to remember.
+  drawn as the brackets it is and counts for nothing in "Linked from". A build
+  that changes what the index derives re-derives every older row once, on its
+  own (`search.IndexDerivation`), with no rebuild command to remember.
 - **THE DASHBOARD EDITS AS THE PERSON.** A save, a new page and a comment go
   through `/operator/act` bound to the signed-in seat, so the page's history
   names who wrote it — never "the dashboard". A save states the revision it

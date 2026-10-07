@@ -283,9 +283,9 @@ which would read as "nothing links here" about a page that is linked.
 **An upgrade that changes what the index derives needs no rebuild command.**
 Every indexed row records the derivation it was built under (`kb_docs.derivation`,
 compared against the build's `search.IndexDerivation`), and a row built under an
-older one is re-derived on the next lap exactly as a row whose source moved.
-The upgrade that introduced backlinks is one: every row indexed before it is
-re-read once, and until that lap finishes the node reports `building`.
+older one is re-derived on the next lap exactly as a row whose source moved. A
+later build that bumps `search.IndexDerivation` re-reads each row once, and
+until that lap finishes the node reports `building`.
 
 ---
 
