@@ -322,6 +322,11 @@ type reflectorEpoch struct {
 // answer, and an error is "the counter could not be reached", which is NOT a
 // refusal. A blip must not silently stop a company learning — the charge on
 // the way out is what keeps an unreachable counter from also being free.
+//
+// A FALSE IS A REFUSAL, not an observation: the pass asks immediately before
+// the work it gates and makes no call on false, so the engine's gate records
+// it as the budget turning that work away (the window's refusal stamp).
+// Never ask it only to look.
 type BudgetGate func(ctx context.Context, seat *org.Role) (bool, error)
 
 // SpendFlusher publishes what one turn's auxiliary calls have cost on this node
