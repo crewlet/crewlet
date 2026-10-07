@@ -180,10 +180,6 @@ function hintRows(ann: ToolAnnotations | undefined): { label: string; value: str
  * walk it replaced asked for the active configuration twice per addressed tool
  * (the server's entity and the whole document) and was a second copy of the
  * `mcp_env` inheritance rule.
- *
- * NULL IS UNKNOWN: a roster whose agent seats carry no `tool_sources` came
- * from a node older than the field, and a tool whose holders are unknown must
- * not be drawn as a tool nobody holds.
  */
 interface Holders {
   /** The seats granted it. */
@@ -194,7 +190,7 @@ interface Holders {
   why: string;
 }
 
-function holdersOf(tool: ToolRow, seats: Seat[]): Holders | null {
+function holdersOf(tool: ToolRow, seats: Seat[]): Holders {
   const agents = seats.filter((s) => s.kind === "agent");
   const server = mcpServerOf(tool.source);
   if (!server) {
@@ -208,7 +204,6 @@ function holdersOf(tool: ToolRow, seats: Seat[]): Holders | null {
     };
   }
   const granted = grantedSeats(seats, server);
-  if (granted === null) return null;
   return {
     seats: granted,
     everyone: agents.length > 0 && granted.length === agents.length,
@@ -365,12 +360,7 @@ function ToolBody({ name }: { name: string }) {
 
       <section className="col gap-2">
         <div className="t-label">Which seats hold it</div>
-        {holders === null ? (
-          <p className="t-body muted">
-            Which seats are granted <span className="mono">{server}</span> is not on the roster this
-            engine sent: the node serving it is older than the grant.
-          </p>
-        ) : holders.everyone ? (
+        {holders.everyone ? (
           <>
             <p className="t-body">
               Every agent seat — {plural(holders.seats.length, "seat")} in this company.
