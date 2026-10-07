@@ -1,12 +1,11 @@
 package openai
 
 import (
-	"strings"
+	"io"
 
 	sdk "github.com/openai/openai-go/v3"
 
-	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
 )
 
 // Detail is what an OpenAI-compatible endpoint SAID about failing a request —
@@ -31,44 +30,33 @@ import (
 // The STRUCTURED fields first, since they are the endpoint's own account. An
 // endpoint that does not answer in OpenAI's error envelope — a gateway, a
 // self-hosted server — leaves them empty, and its body is then read for what
-// it can honestly yield ([httpx.ReadRefusal]: compact JSON, an HTML page's
-// title, plain text), from the copy the SDK puts back on the response. The
-// request URL is never shown, and neither is anything the SDK's dumps would
-// add: upstream removed them for a reason this reading keeps.
-//
-// REDACTED ([redact.Secrets]) because upstream's warning is true — an endpoint
-// that rejects a key can echo it — and BOUNDED at [httpx.RefusalBytes], the one
-// bound on what a refusal says, marked where it cut: a diagnostic, never a
-// document.
+// it can honestly yield ([httpapi.SaidBody]), from the copy the SDK puts back
+// on the response. The request URL is never shown, and neither is anything
+// the SDK's dumps would add: upstream removed them for a reason this reading
+// keeps. Either way the text is redacted whole before it is bounded
+// ([httpapi.Said]), because upstream's warning is true — an endpoint that
+// rejects a key can echo it.
 func Detail(apiErr *sdk.Error) string {
 	if apiErr == nil {
 		return ""
 	}
-	message := strings.TrimSpace(apiErr.Message)
-	var filed []string
-	for _, field := range []struct{ name, value string }{
-		{"type", apiErr.Type}, {"code", apiErr.Code}, {"param", apiErr.Param},
-	} {
-		if value := strings.TrimSpace(field.value); value != "" {
-			filed = append(filed, field.name+" "+value)
-		}
+	said := httpapi.Said(apiErr.Message,
+		httpapi.Filed{Name: "type", Value: apiErr.Type},
+		httpapi.Filed{Name: "code", Value: apiErr.Code},
+		httpapi.Filed{Name: "param", Value: apiErr.Param})
+	if said != "" {
+		return said
 	}
-	if message == "" && len(filed) == 0 {
-		// NOT THE ENVELOPE, or no body at all. The SDK reads the body to
-		// build this error and puts a copy back on the response; read once
-		// here, it is not read by anything else.
-		if apiErr.Response == nil || apiErr.Response.Body == nil {
-			return ""
-		}
-		return redact.Secrets(httpx.ReadRefusal(apiErr.Response))
+	// NOT THE ENVELOPE, or no body at all. The SDK reads the body whole to
+	// build this error and puts a copy back on the response, so this read
+	// is of bytes already in memory; read once here, it is not read by
+	// anything else.
+	if apiErr.Response == nil || apiErr.Response.Body == nil {
+		return ""
 	}
-	said := strings.Join(filed, ", ")
-	switch {
-	case message == "":
-	case said == "":
-		said = message
-	default:
-		said = message + " (" + said + ")"
+	body, err := io.ReadAll(apiErr.Response.Body)
+	if said := httpapi.SaidBody(apiErr.Response.Header.Get("Content-Type"), body); said != "" || err == nil {
+		return said
 	}
-	return httpx.Refusal("text/plain", []byte(redact.Secrets(said)))
+	return "(the response body could not be read: " + err.Error() + ")"
 }

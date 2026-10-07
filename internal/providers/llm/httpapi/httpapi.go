@@ -1,5 +1,6 @@
 // Package httpapi is what the HTTP-speaking LLM backends share: how a status
-// and a set of response headers become the contract's classified error, and
+// and a set of response headers become the contract's classified error, how
+// what a provider said about refusing a request is shown on it ([Said]), and
 // how a tool call's arguments survive the JSON round trip.
 //
 // It exists because the alternative is two copies. llm.go records what two

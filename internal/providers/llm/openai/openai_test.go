@@ -475,6 +475,36 @@ func TestADetailIsBoundedAndMarked(t *testing.T) {
 	}
 }
 
+// A KEY THE BOUND RUNS THROUGH IS REDACTED WHOLE, in the envelope's message and
+// in a body outside it alike. Bounded first, the cut left the key's opening —
+// `sk-proj-` and a few characters, too short for any rule to recognise — shown
+// as it was; the body path did exactly that.
+//
+// Mutation: bound a body before redacting it, and its key's opening survives.
+func TestAKeyTheBoundRunsThroughIsRedactedWhole(t *testing.T) {
+	t.Parallel()
+	key := "sk-proj-" + strings.Repeat("Zq7", 12)
+	// The text runs to twelve bytes short of the bound, so a cut at the
+	// bound leaves `sk-proj-Zq7Z` of the key.
+	lead := strings.Repeat("refused ", httpx.RefusalBytes/8)[:httpx.RefusalBytes-12]
+	text := lead + key + " and the rest of the account"
+	for name, apiErr := range map[string]*sdk.Error{
+		"the envelope": {Message: text, Code: "invalid_api_key"},
+		"outside the envelope": {StatusCode: 502, Response: &http.Response{
+			Header: http.Header{"Content-Type": {"text/plain"}},
+			Body:   io.NopCloser(strings.NewReader(text)),
+		}},
+	} {
+		got := Detail(apiErr)
+		if strings.Contains(got, key[:len("sk-proj-")+1]) {
+			t.Errorf("%s: the key's opening survived the bound: …%q", name, got[max(len(got)-80, 0):])
+		}
+		if !strings.Contains(got, "runs past") {
+			t.Errorf("%s: detail = …%q, want it marked as cut", name, got[max(len(got)-80, 0):])
+		}
+	}
+}
+
 func TestRotatesToTheNextKeyWithinOneCall(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, n int) {
