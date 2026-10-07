@@ -367,8 +367,11 @@ func reconcileSeat(
 	// just made. Atlassian's product APIs authenticate as Basic
 	// base64(address:token), so a seat holding the token alone is refused
 	// with a 403 that reads as a broken credential. Atlassian invents the
-	// address, so this is the only place it can come from, and a seat whose
-	// token was minted by an earlier build has none recorded.
+	// address, so this is the only place it can come from, and a seat can
+	// hold a token with no address recorded: its address slot was added or
+	// renamed after the token was minted (the plan's own note asks for
+	// exactly that), or Atlassian reported no address, or a different one,
+	// on the pass that minted it.
 	//
 	// AND ONLY ON A DIFFERENCE. The sealed store is the company's, shared by
 	// the whole fleet, and a Record is a real write with an author and a

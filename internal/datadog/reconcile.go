@@ -77,9 +77,8 @@ type Result struct {
 	//
 	// REPORTED AND NEVER TOUCHED, which is the whole of it. A live
 	// organization accumulates these: a seat renamed, a handle changed, an
-	// older naming scheme this engine no longer derives — measured on one,
-	// 36 disabled accounts under `agent-cs-…@agents.crewlet.invalid` that
-	// match nothing a current pass would ask for. Every one is an identity
+	// account somebody made by hand at this engine's `.invalid` domain.
+	// Every one is an identity
 	// somebody has to decide about, and nothing named them: they are absent
 	// from the plan by construction, so no seat's result mentions them and
 	// the card read Ready over an organization full of them.
@@ -632,8 +631,8 @@ func roleIDOf(ctx context.Context, opts Options, name string) (string, error) {
 // reporting it asks for work somebody has done. Worse, it was mostly this
 // engine's own: a `remove_seats` disconnect DISABLES the accounts it removes,
 // so the ordinary reconnect-with-a-smaller-roster cycle turned every correct
-// teardown into a row on the card — which is where the 36 measured
-// `agent-cs-…` rows came from, all of them inert.
+// teardown into a row on the card — measured on one organization, 36 rows,
+// all of them inert.
 //
 // Skipping them also makes the advisory's own instruction work. Before this,
 // an operator who read the note and disabled an account watched the finding
@@ -835,8 +834,7 @@ func (r *Result) Findings() []integration.Finding {
 			Detail: "Crewlet made " +
 				integration.Count(len(addresses), "enabled service account") +
 				" at this company's own email domain matching no seat it " +
-				"provisions for — a renamed seat, a changed handle, or an " +
-				"older naming scheme",
+				"provisions for — a renamed seat or a changed handle",
 			Remedy: "Disable or delete the ones you do not want, at Datadog. " +
 				"Nothing here removes them: an account is a colleague there, " +
 				"with history attached.",

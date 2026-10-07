@@ -73,8 +73,9 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // own to write and Datadog's $ALERT_ID is the monitor.
 //
 // The title remains the fallback, for an alert delivered by a webhook
-// definition written before the template carried the id — an operator's
-// hand-made one, or this engine's own before the next pass rewrites it. A
+// definition that does not carry the id — an operator's hand-made one, or
+// this engine's own after somebody edited its payload at Datadog, until the
+// next pass rewrites it. A
 // retitled monitor then starts a new conversation, which is the correct
 // behaviour for the one case it costs anything: renaming a monitor is usually
 // redefining what it watches.
