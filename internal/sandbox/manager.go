@@ -219,6 +219,10 @@ func (m *Manager) Provider(placement Placement) (Provider, error) {
 
 // configured is the backend the CURRENT catalogue configured for a placement,
 // the only one a new box may be provisioned through.
+//
+// An empty placement is the catalogue default, the same normalisation
+// [Manager.BuildSpec] applies: every spec and row production builds names its
+// cell already, so only one built by hand arrives here empty.
 func (m *Manager) configured(placement Placement) (Provider, error) {
 	if placement == "" {
 		placement = m.placement

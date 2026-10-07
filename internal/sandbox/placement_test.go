@@ -214,24 +214,28 @@ func TestARunReconnectsThroughTheBackendThatCreatedIt(t *testing.T) {
 	}
 }
 
-// A ROW WRITTEN BEFORE THE FIELD EXISTED DECODES EMPTY, and empty is the
-// company default rather than a failure: a rolling upgrade has one build
-// writing the placement and another not, and refusing the older rows would
-// strand every run in flight across the deploy.
-func TestARowWithNoPlacementTakesTheDefault(t *testing.T) {
+// A CALLER THAT NAMES NO CELL GETS THE CATALOGUE DEFAULT, resolved into the
+// spec rather than left empty — so the row a launch writes from it names the
+// cell its box is in, and a reconnect through that row finds the box.
+func TestASpecNamingNoCellTakesTheDefault(t *testing.T) {
 	t.Parallel()
 	local := NewFakeProvider()
 	m, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{Direct: local}})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	box, _, err := m.Acquire(t.Context(), m.BuildSpec(SpecInput{}), nil)
+	spec := m.BuildSpec(SpecInput{})
+	if spec.Placement != Direct {
+		t.Fatalf("a spec naming no cell resolved to %q, want the catalogue default %q",
+			spec.Placement, Direct)
+	}
+	box, _, err := m.Acquire(t.Context(), spec, nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	run := PendingRun{SandboxID: box.ID(), CodingAgent: "claude-code"}
+	run := PendingRun{SandboxID: box.ID(), CodingAgent: "claude-code", Placement: string(spec.Placement)}
 	if _, _, err := m.Reconnect(t.Context(), Placement(run.Placement), run.SandboxID, run.CodingAgent); err != nil {
-		t.Fatalf("a row with no placement could not reconnect: %v", err)
+		t.Fatalf("the row a launch writes could not reconnect: %v", err)
 	}
 }
 

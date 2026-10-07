@@ -483,8 +483,8 @@ type PendingRun struct {
 	// configuration may have been applied again in between. Reconnecting to
 	// a remote box through the local backend does not error usefully — it
 	// reports a box that has vanished, and a run that is still going is
-	// abandoned as gone. A row written before this field existed decodes
-	// empty, which the manager reads as the provider default.
+	// abandoned as gone. Always resolved at launch ([Manager.BuildSpec]
+	// fills the default).
 	Placement string `json:"placement,omitempty"`
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
@@ -598,10 +598,6 @@ type PendingRun struct {
 	// item includes the job's tokens exactly as a completion's resume does
 	// (ADR-0022). Without these the answer's resume charged the task for
 	// the collection and never for the coding run that asked.
-	//
-	// ADDITIVE, for the reason every field here is: a row parked by a
-	// build without them decodes to zero, and its resume charges what that
-	// build would have — nothing for the job.
 	ParkedInputTokens  int `json:"parked_input_tokens,omitempty"`
 	ParkedOutputTokens int `json:"parked_output_tokens,omitempty"`
 
@@ -710,12 +706,10 @@ type PendingRun struct {
 	// read because the label is about the moment it was asked: who the
 	// requester's manager WAS then is who was asked.
 	//
-	// DECLARED WITH THE ITEM AND WITH [PendingRun.Extra], in one change,
-	// because all three answer the same hazard: a key an older build does
-	// not know is a key its compare-and-swap drops. Empty on a row parked by
-	// a build that did not resolve them, which every reader takes as "the
-	// audience string is all there is". Cleared with the question when a
-	// new job opens on the row ([PendingStore.BeginLaunch]).
+	// Empty until the run parks on a question, and cleared with the
+	// question when a new job opens on the row ([PendingStore.BeginLaunch]).
+	// A key a NEWER build adds beside these survives this build's
+	// compare-and-swap through [PendingRun.Extra].
 	AudienceHandles  []string `json:"audience_handles,omitempty"`
 	AudienceFallback bool     `json:"audience_fallback,omitempty"`
 
@@ -727,9 +721,8 @@ type PendingRun struct {
 	// ON THE ROW because the park that resolves the audience is not the
 	// frame that saw the trigger: it runs when the job finishes, possibly
 	// days later and on another node, with nothing of the dispatch left.
-	// ADDITIVE, and carried through an older build's write by
-	// [PendingRun.Extra]; a row without it resolves "requester" to the
-	// fallback, which is what a run whose requester nobody recorded is.
+	// A row without it resolves "requester" to the fallback, which is what
+	// a run whose requester nobody recorded is.
 	Requester string `json:"requester,omitempty"`
 
 	// TraceID and SpanID are the trace the run started under, so the
