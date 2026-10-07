@@ -62,7 +62,7 @@ func successorOf(t *testing.T, rig *coordRig, store PendingStore) *coordRig {
 	next.waiterRig = rig.waiterRig
 	next.coordinator.pending = store
 	next.coordinator.queue = rig.queue
-	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-b", 2); err != nil {
+	if err := next.recoverSeat(t.Context(), "node-b", 2); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	next.fireRetries()

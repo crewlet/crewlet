@@ -408,7 +408,7 @@ func TestAnAnswerARecoveredSeatOwesIsResumedByItsNewHolder(t *testing.T) {
 	run := rig.get("t1")
 	r1 := replyAt("use main", asked.Add(time.Minute))
 	if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
-		chatReply(answerOnTheDM, "use main", r1).answerOf(rig.now)); err != nil || !won {
+		chatReply(answerOnTheDM, "use main", r1).answerOf(rig.now), rigLease); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}
 
@@ -416,7 +416,7 @@ func TestAnAnswerARecoveredSeatOwesIsResumedByItsNewHolder(t *testing.T) {
 	successor.waiterRig = rig.waiterRig
 	successor.coordinator.pending = rig.pending
 	holds := successor.withHold()
-	if err := successor.coordinator.RecoverSeat(t.Context(), "swe", "node-b", 2); err != nil {
+	if err := successor.recoverSeat(t.Context(), "node-b", 2); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if !holds.holding("swe") {

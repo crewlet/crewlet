@@ -54,7 +54,7 @@ func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
 	c, err := NewCoordinator(CoordinatorOptions{
 		Queue: rig.queue, Pending: fenced, Manager: rig.manager,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
-		Lease: func(string) Fence { return rigLease },
+		Lease: leased(rigLease),
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -433,7 +433,7 @@ func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest
 	c, err := NewCoordinator(CoordinatorOptions{
 		Queue: r.queue, Pending: r.pending, Manager: m,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
-		Lease: func(string) Fence { return rigLease },
+		Lease: leased(rigLease),
 	})
 	if err != nil {
 		r.t.Fatalf("NewCoordinator: %v", err)

@@ -71,6 +71,19 @@ var ErrAnswerOwed = errors.New("sandbox: the run still holds a person's reply th
 // a copy handed back now would answer the person twice.
 var ErrAnswerTaken = errors.New("sandbox: a resumed turn already took the reply")
 
+// ErrSeatNotHeld is a write on behalf of a seat this node does not hold: the
+// lease the coordinator asks ([CoordinatorOptions.Lease]) says the seat is not
+// held here, or the store finds a newer lease than the writer's own on the run
+// ([PendingStore.RecordAnswer]). Either way the write is the seat's holder's to
+// make, and the delivery that asked for it goes back to reach that holder.
+//
+// NOT THE ZERO FENCE, which is what a node that has noticed it lost the seat
+// used to answer: the zero fence means UNFENCED — a node with no seat host, and
+// so no next holder to be fenced out by — and it constrained nothing, so such a
+// node recorded, claimed and took a person's answer past the fence its
+// successor had put on the run.
+var ErrSeatNotHeld = errors.New("sandbox: this node does not hold the seat")
+
 // ErrRunEnding is a store's refusal of a write to a run whose ending is decided
 // ([PendingRun.Ending]): from the decision on, the row takes nothing but the
 // ending's own steps — no claim, no take, no release, no relaunch, no new
@@ -317,13 +330,23 @@ type CoordinatorOptions struct {
 	// claim the holder has reaped, a resumed turn taking an answer the holder
 	// is handing back.
 	//
-	// ASKED BY THE COORDINATOR AT EVERY LAUNCH rather than carried on each
-	// launch request, because every launch path must stamp it and one that
-	// forgot would launch an unfenced row nothing in its own frame notices.
-	// The zero fence is an unfenced launch: what a node with no seat lease
-	// — and so no next holder to be fenced out by — answers. Nil answers it
-	// for every seat.
-	Lease func(handle string) Fence
+	// ASKED BY THE COORDINATOR AT EVERY WRITE IT MAKES ON A SEAT'S BEHALF —
+	// a launch, the record of an answer, the claim of a completion or of an
+	// answer, the give-back of a claim — rather than carried on each request,
+	// because every such path must carry it and one that forgot would write
+	// unfenced with nothing in its own frame noticing.
+	//
+	// THREE ANSWERS, NOT TWO. The seat's fence and true: held here, under
+	// that lease. The ZERO fence and true: an unfenced write, which is what a
+	// node with no seat lease at all — and so no next holder to be fenced
+	// out by — answers. And false: this node has a seat host and it does not
+	// hold the seat, which every write refuses up front with
+	// [ErrSeatNotHeld] and leaves to the seat's holder. The last used to be
+	// answered with the zero fence, which constrains nothing, so a node that
+	// had NOTICED it lost the seat claimed and took a person's answer past
+	// the fence its successor had put on the run. Nil answers the zero
+	// fence, held, for every seat.
+	Lease func(handle string) (fence Fence, held bool)
 
 	// Spent records a recorded answer's deliveries as WORKED, in the fleet's
 	// completion ledger, so a copy of the original delivery that reaches the
@@ -463,7 +486,7 @@ type Coordinator struct {
 	// spent is [CoordinatorOptions.Spent]; see [Coordinator.spend].
 	spent func(ctx context.Context, handle string, evs []*events.Event)
 	// lease is [CoordinatorOptions.Lease]; see [Coordinator.leaseOf].
-	lease func(handle string) Fence
+	lease func(handle string) (Fence, bool)
 
 	// life is the coordinator's own lifetime, which a scheduled retry runs
 	// under — it outlives every delivery — and ends with [Coordinator.Stop],
@@ -582,14 +605,24 @@ func (c *Coordinator) Stop() {
 	c.inflight.Wait()
 }
 
-// leaseOf is the lease a launch on a seat is stamped with —
-// [CoordinatorOptions.Lease] — and the zero, unfenced lease where none is
-// wired.
-func (c *Coordinator) leaseOf(handle string) Fence {
+// leaseOf is the lease this node writes on a seat's behalf under —
+// [CoordinatorOptions.Lease] — and whether it holds the seat at all; the zero,
+// unfenced lease, held, where none is wired.
+func (c *Coordinator) leaseOf(handle string) (Fence, bool) {
 	if c.lease == nil {
-		return Fence{}
+		return Fence{}, true
 	}
 	return c.lease(handle)
+}
+
+// notHeld logs a write refused because this node does not hold the seat, and
+// returns the refusal for the caller to report.
+func notHeld(ctx context.Context, handle, turnID, write string) error {
+	log.InfoContext(ctx, "sandbox_seat_not_held",
+		"agent", handle, "turn_id", turnID, "write", write,
+		"detail", "this node does not hold the seat, so the write is left to the seat's "+
+			"holder, whose recovery pass drives the run")
+	return fmt.Errorf("sandbox: %s for run %s on seat %q: %w", write, turnID, handle, ErrSeatNotHeld)
 }
 
 // SetManager swaps the sandbox manager, for a live reload of providers.sandbox.
@@ -812,8 +845,16 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
 func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunCompleted, trigger *events.Event) error {
-	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID),
-		c.leaseOf(ev.AgentHandle))
+	fence, held := c.leaseOf(ev.AgentHandle)
+	if !held {
+		// NOT THIS NODE'S TO CLAIM: the seat is held elsewhere, and the
+		// completion is a ROUTING failure — handed back, so it reaches the
+		// holder, and the poll fires it again for as long as the job's row
+		// is running.
+		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
+			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
+	}
+	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
 	}
@@ -1306,6 +1347,13 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, re
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.recordAnswer(ctx, run, reply)
+		if errors.Is(err, ErrSeatNotHeld) {
+			// THE SEAT'S HOLDER'S TO RECORD: nothing was written, and the
+			// delivery goes back to reach the holder — uncounted, because
+			// the budget it would spend is this node's, for a seat it
+			// does not hold.
+			return AnswerDeferred, err
+		}
 		if err != nil {
 			// THE RECORD MAY HAVE LANDED. A store that could not say is
 			// not a store that said no, so the delivery comes back — and
@@ -2935,11 +2983,18 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 		// gets it.
 		//
 		// AND IT IS FENCED TO THIS NODE'S LEASE, like every other run
-		// the seat holds: left at the old holder's, that holder — lost
-		// the seat and not noticed yet — could still claim the answer
-		// that arrives for it under a lease nothing outranked
-		// ([PendingStore.ClaimForResume]), and a run parked under no
-		// lease stayed at the zero epoch across every seat move.
+		// the seat holds, and that covers both ways an old holder can
+		// still reach it. One that has NOT noticed it lost the seat
+		// writes under its old lease, which this fence outranks: its
+		// record of an answer and its claim are refused in the store
+		// ([PendingStore.RecordAnswer], [PendingStore.ClaimForResume]).
+		// One that HAS noticed writes nothing — its lease seam answers
+		// not held, and every write on the seat's behalf is refused up
+		// front ([ErrSeatNotHeld]) — and the store refuses a record or
+		// a claim under no lease on a row any lease owns besides. Left
+		// at the old holder's, the run could be answered and claimed by
+		// a node with no seat, and a run parked under no lease stayed
+		// at the zero epoch across every seat move.
 		if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
 			log.WarnContext(ctx, "sandbox_ownership_claim_failed",
 				"turn_id", run.TurnID, "error", err.Error())

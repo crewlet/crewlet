@@ -189,6 +189,16 @@ const rigIteration = 2
 // seat to recovers it at a higher epoch — fences them out.
 var rigLease = Fence{Owner: "node-a:1", Epoch: 1}
 
+// leased is a coordinator's lease seam for a node that holds every seat under
+// fence ([CoordinatorOptions.Lease]).
+func leased(fence Fence) func(string) (Fence, bool) {
+	return func(string) (Fence, bool) { return fence, true }
+}
+
+// notLeased is the lease seam of a node that has a seat host and holds none of
+// its seats: it has noticed it lost them.
+func notLeased(string) (Fence, bool) { return Fence{}, false }
+
 // rigItem is the work item every rig launch is charged to.
 var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
 
@@ -620,7 +630,7 @@ func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) 
 	rig.park("t1")
 	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
 		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"r1"}, RecordedAt: rig.now,
-	}); err != nil || !ok {
+	}, rigLease); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 
@@ -708,7 +718,7 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 	rig.park("t1")
 
 	// The answer arrives between the reaper's snapshot and its flip.
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", Tail{Launch: rig.get("t1").LaunchID, From: Awaiting}, Fence{}); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", Tail{Launch: rig.get("t1").LaunchID, From: Awaiting}, rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)

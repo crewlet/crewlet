@@ -305,6 +305,10 @@ func newCoordRig(t *testing.T) *coordRig {
 		},
 		Now:   func() time.Time { return base.now },
 		After: rig.retries.after,
+		// THE SEAT HELD UNDER THE LEASE EVERY RIG LAUNCH IS STAMPED WITH, as
+		// a real node's coordinator holds its seats: a case that hands the
+		// seat to a successor gives that successor its own, newer lease.
+		Lease: leased(rigLease),
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -312,6 +316,14 @@ func newCoordRig(t *testing.T) *coordRig {
 	t.Cleanup(coordinator.Stop)
 	rig.coordinator = coordinator
 	return rig
+}
+
+// recoverSeat takes the seat for this rig's coordinator under owner and epoch,
+// as a seat host's acquisition does: the lease the coordinator writes on the
+// seat's behalf under from then on, and its recovery pass over the seat's runs.
+func (r *coordRig) recoverSeat(ctx context.Context, owner string, epoch int64) error {
+	r.coordinator.lease = leased(Fence{Owner: owner, Epoch: epoch})
+	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch)
 }
 
 // fireRetries runs every owed-answer attempt the coordinator has scheduled
@@ -1453,6 +1465,7 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	rig.launch("t1")
 	var stopped []string
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: endedFirst{rig.pending},
 		Manager: rig.manager, Resume: rig.resumer,
@@ -1483,7 +1496,7 @@ func TestAReapedAbandonedTailIsAnnounced(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launching("t1")
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-2", 7); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	failed := rig.failures()
@@ -1500,7 +1513,7 @@ func TestSeatRecoveryReapsALaunchNobodyFinished(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-2", 7); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	rig.finished("t1")
@@ -1554,6 +1567,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: endedFirst{rig.pending}, Manager: rig.manager, Resume: rig.resumer,
 	})
@@ -1832,6 +1846,7 @@ func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
 	rig.suspend("t1")
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue,
 		Pending:  staleFind{PendingStore: rig.pending, snapshot: asked, served: &atomic.Bool{}},
@@ -1887,6 +1902,7 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: &parkFails{PendingStore: rig.pending, left: 1},
 		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
@@ -1957,6 +1973,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 
 			spy := &statusAtAsk{recorder: rig.queue, rig: rig}
 			coordinator, err := NewCoordinator(CoordinatorOptions{
+				Lease:    leased(rigLease),
 				Audience: &audienceSpy{},
 				Queue:    spy, Pending: rig.pending, Manager: rig.manager,
 				Resume: rig.resumer, Account: rig.accountant,
@@ -2030,6 +2047,7 @@ func (r relaunchThenBreak) Resume(ctx context.Context, req ResumeRequest) error 
 func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
 	t.Helper()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    r.queue, Pending: r.pending, Manager: r.manager,
 		Resume: resume, Account: r.accountant,
@@ -2174,6 +2192,7 @@ func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
 	delivery, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: honoursCancel{rig.pending}, Manager: rig.manager,
 		Resume: drained{cancel: cancel},
@@ -2189,7 +2208,7 @@ func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
 	if got := rig.get("t1"); got.Status != StatusRunning {
 		t.Fatalf("status = %q, want the claim handed back for the seat's next owner", got.Status)
 	}
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 2); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 2); err != nil {
 		t.Fatalf("the next owner's recovery: %v", err)
 	}
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -2329,6 +2348,7 @@ func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
 	// charging the same fleet counter.
 	successor := &ledgerSpy{}
 	next, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: rig.pending, Manager: rig.manager,
 		Resume: &resumeSpy{}, Account: successor,
@@ -2368,6 +2388,7 @@ func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
 	resumer := &resumeSpy{err: fmt.Errorf("%w: the seat moved", ErrResumeUnavailable)}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: onlyTheClaim{rig.pending}, Manager: rig.manager,
 		Resume: resumer, Account: rig.accountant,
@@ -3422,6 +3443,7 @@ func TestTheResumeAnswerIsRedacted(t *testing.T) {
 func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	rig := newCoordRig(t)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: brokenStore{}, Manager: rig.manager, Resume: rig.resumer,
 	})
@@ -3494,7 +3516,7 @@ func TestClaimingASeatReParksItsRunningJobs(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a:1", 7); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-a:1", 7); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if !rig.coordinator.SeatHeldBySandbox("swe") {
@@ -3510,11 +3532,11 @@ func TestClaimingASeatReParksItsRunningJobs(t *testing.T) {
 func TestClaimingASeatReapsATailTheDeadOwnerAbandoned(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID), Fence{}); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID), rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 9); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	rig.finished("t1")
@@ -3537,7 +3559,7 @@ func TestClaimingASeatLeavesAParkedRunForItsAnswer(t *testing.T) {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a:1", 1); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-a:1", 1); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if got := rig.get("t1"); got.Status != StatusAwaiting {
@@ -3724,7 +3746,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 	claimed := rig.launch("claimed")
 	if _, won, err := rig.pending.ClaimForResume(t.Context(), "claimed",
-		CompletionTail(claimed.LaunchID), Fence{}); err != nil || !won {
+		CompletionTail(claimed.LaunchID), rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.launch("reseed")
@@ -3812,7 +3834,7 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 		t.Fatalf("ClaimOwnership = %v, %v", won, err)
 	}
 
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 9); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err == nil {
@@ -3871,6 +3893,7 @@ func TestARunsBoxIsReclaimedBeforeItsRecordIsDeleted(t *testing.T) {
 	run := rig.launch("t1")
 	witness := &finishWitness{PendingStore: rig.pending, provider: rig.provider, box: run.SandboxID}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: witness, Manager: rig.manager, Resume: rig.resumer,
 	})
@@ -3947,7 +3970,7 @@ func TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
 	t.Run("failure", func(t *testing.T) {
 		rig := newCoordRig(t)
 		rig.launching(preSplit)
-		if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
+		if err := rig.recoverSeat(t.Context(), "node-2", 7); err != nil {
 			t.Fatalf("RecoverSeat: %v", err)
 		}
 		failed := rig.failures()

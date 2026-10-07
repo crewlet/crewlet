@@ -92,6 +92,7 @@ func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) 
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: &resumeSpy{}, Hold: hold,
+		Lease: e.launchFence,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -100,9 +101,7 @@ func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) 
 	e.sandbox.Store(&sandboxRuntime{pending: rt.pending, coordinator: coordinator})
 
 	seedRunningRun(t, e, "t-raced", "box-raced")
-	if err := coordinator.RecoverSeat(t.Context(), "swe", "node-a", 1); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
+	recoverHeld(t, e, coordinator, "swe")
 	if !e.SeatHeldBySandbox("swe") {
 		t.Fatal("the running job does not hold its seat")
 	}
@@ -242,9 +241,7 @@ func TestAPausedAnswerResumesWhenThePersonResumesTheSeat(t *testing.T) {
 	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Handle: "swe",
 		Pause: &coord.SeatPause{Handle: "swe", By: "ana"}})
 	answeredRun(t, e.sandbox.Load().pending, "t-paused")
-	if err := coordinator.RecoverSeat(t.Context(), "swe", "node-a", 1); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
+	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
 		t.Fatalf("%d resumes ran on a paused seat", n)
@@ -254,6 +251,20 @@ func TestAPausedAnswerResumesWhenThePersonResumesTheSeat(t *testing.T) {
 	eventually(t, "the held-back answer to resume once the seat is resumed", func() bool {
 		return resumer.count() == 1
 	})
+}
+
+// recoverHeld recovers a seat's runs on coordinator under the lease the
+// engine's seat host holds the seat by, as the seat's acquisition does — the
+// lease the coordinator then writes on the seat's behalf under.
+func recoverHeld(t *testing.T, e *Engine, coordinator *sandbox.Coordinator, handle string) {
+	t.Helper()
+	fence, held := e.launchFence(handle)
+	if !held {
+		t.Fatalf("the premise: this node holds %s", handle)
+	}
+	if err := coordinator.RecoverSeat(t.Context(), handle, fence.Owner, fence.Epoch); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
 }
 
 // spyRuntime swaps the engine's sandbox runtime for one whose coordinator
@@ -270,7 +281,7 @@ func spyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy) {
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
-		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer,
+		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, Lease: e.launchFence,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -289,9 +300,7 @@ func TestAnAnswerWaitingOnAModelResumesWithTheApplyThatBringsOne(t *testing.T) {
 	waitHeld(t, e, "swe")
 	coordinator, resumer := spyRuntime(t, e)
 	answeredRun(t, e.sandbox.Load().pending, "t-model")
-	if err := coordinator.RecoverSeat(t.Context(), "swe", "node-a", 1); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
+	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
 		t.Fatalf("%d resumes ran in a company with no model", n)
@@ -316,9 +325,7 @@ func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) 
 	e.notify.mu.Unlock()
 	coordinator, resumer := spyRuntime(t, e)
 	answeredRun(t, e.sandbox.Load().pending, "t-posture")
-	if err := coordinator.RecoverSeat(t.Context(), "swe", "node-a", 1); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
+	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
 		t.Fatalf("%d resumes ran on a node refusing new work", n)
@@ -379,7 +386,7 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Audience: noAudience{}, Queue: e.backends.Queue, Pending: store,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
-		Hold: seatHold{engine: e}, Admit: admit, After: retries.after,
+		Hold: seatHold{engine: e}, Admit: admit, After: retries.after, Lease: e.launchFence,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -498,9 +505,7 @@ func TestStoppingTheSandboxStopsTheAnswersItWasRetrying(t *testing.T) {
 	resumer.failing = 1
 	resumer.mu.Unlock()
 	answeredRun(t, e.sandbox.Load().pending, "t-stop")
-	if err := coordinator.RecoverSeat(t.Context(), "swe", "node-a", 1); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
+	recoverHeld(t, e, coordinator, "swe")
 	eventually(t, "the first attempt to fail", func() bool { return resumer.count() == 1 })
 
 	e.stopSandbox()
@@ -548,7 +553,7 @@ func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
 	if _, won, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
 		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
 		Events: []json.RawMessage{raw}, PostedAt: reply.Timestamp, RecordedAt: time.Now().UTC(),
-	}); err != nil || !won {
+	}, sandbox.Fence{}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}
 }

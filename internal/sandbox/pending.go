@@ -1029,17 +1029,25 @@ type PendingStore interface {
 	// carries ClaimedFrom, so a failed dispatch can put it back exactly
 	// where it was.
 	//
-	// TAKEN UNDER THE CLAIMANT'S LEASE. A fenced claim is refused where a
-	// newer lease than the fence owns the run, and stamps the fence on the
-	// row as its [PendingRun.Owner] and [PendingRun.OwnerEpoch]: every write
-	// the claim makes afterwards — the take of its answer, its release, its
-	// ending — carries that lease back off the row it returns, so the seat's
-	// next holder fences the CLAIMANT out, whatever lease the row was
-	// stamped with before. Carried off a row stamped by somebody else, the
-	// fence fenced out nobody: a row launched under no lease, or one that
-	// no recovery re-stamped, sat at the zero epoch, which constrains
-	// nothing. A zero fence claims unfenced and leaves the row's owner as
-	// it stands.
+	// TAKEN UNDER THE CLAIMANT'S LEASE. A claim is refused where a newer
+	// lease than the fence owns the run, and a fenced one stamps the fence
+	// on the row as its [PendingRun.Owner] and [PendingRun.OwnerEpoch]:
+	// every write the claim makes afterwards — the take of its answer, its
+	// release, its ending — carries that lease back off the row it returns,
+	// so the seat's next holder fences the CLAIMANT out, whatever lease the
+	// row was stamped with before. Carried off a row stamped by somebody
+	// else, the fence fenced out nobody: a row launched under no lease, or
+	// one that no recovery re-stamped, sat at the zero epoch, which
+	// constrains nothing.
+	//
+	// SUPERSEDED, NOT OUTRANKED, as a take is ([PendingStore.TakeAnswer]): a
+	// ZERO fence claims only a row no lease has ever owned, and leaves its
+	// owner as it stands. Exempted as a write that holds no lease elsewhere
+	// is, a node that had noticed it lost the seat — whose lease it then
+	// answered as the zero fence — claimed the answer on a row its successor
+	// had fenced, took it and ran the turn on a seat it did not hold. Nothing
+	// that claims holds no lease where a lease exists: a recovery fences
+	// under the lease it took the seat with.
 	ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence) (PendingRun, bool, error)
 
 	// ReleaseClaim hands a claimed run back to the status it was claimed
@@ -1211,7 +1219,17 @@ type PendingStore interface {
 	// racing for one question — on two nodes across a seat handoff, or a
 	// chat reply and an answer by turn — resolve here, and the loser reads
 	// false. FALSE IS NOT AN ERROR.
-	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer) (PendingRun, bool, error)
+	//
+	// UNDER THE RECORDING NODE'S LEASE, superseded rather than outranked as
+	// a claim is ([PendingStore.ClaimForResume]): a row a newer lease than
+	// the fence owns — the zero fence included, on a row any lease owns — is
+	// refused with [ErrSeatNotHeld], because the answer is the seat holder's
+	// to record and drive. Unfenced, a node that lost the seat recorded an
+	// answer on a run its successor had recovered as awaiting, and nothing
+	// drove it until the seat moved again. The lease is not stamped:
+	// recording is not a claim of the run.
+	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
+	) (PendingRun, bool, error)
 
 	// DeclineAnswer lets go of a recorded answer the run could not be
 	// resumed with, IN ONE WRITE: the run goes back to the status the record
@@ -1695,9 +1713,14 @@ type BoxRef struct {
 // Fence is the ownership token a mutation carries.
 //
 // A ZERO FENCE MEANS UNFENCED and is deliberate rather than a default: recovery
-// writes and the boot pass legitimately have no lease yet. What must never
-// happen is a node writing under a lease it has LOST, and that is the case a
-// non-zero fence closes.
+// writes and the boot pass legitimately have no lease yet, and a node with no
+// seat host has no next holder to be fenced out by. What must never happen is a
+// node writing under a lease it has LOST, and that is the case a non-zero fence
+// closes. So the writes only a seat's holder makes — a claim, the take of an
+// answer, the record of one — refuse the zero fence too on a run any lease owns
+// ([PendingStore.ClaimForResume]), and a node that knows it does not hold the
+// seat never reaches them: its lease seam says so rather than answering the zero
+// fence ([CoordinatorOptions.Lease], [ErrSeatNotHeld]).
 type Fence struct {
 	Owner string
 	Epoch int64

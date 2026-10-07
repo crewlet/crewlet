@@ -202,14 +202,14 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 // fence checks) and exactly one must run the tail. The launch, the status, the
 // lease and the write are one compare-and-swap, so the loser sees `resumed` on
 // its re-read, or a job that is no longer its own, or a newer lease, and
-// reports false. A fenced claim stamps its lease on the row — see the contract
-// on [PendingStore].
+// reports false. A fenced claim stamps its lease on the row, and a zero one
+// claims only a row no lease owns — see the contract on [PendingStore].
 func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
 ) (PendingRun, bool, error) {
 	var before string
 	run, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.LaunchID != tail.Launch || !slices.Contains(tail.From, run.Status) ||
-			!slices.Contains(Claimable, run.Status) || outranked(*run, fence) {
+			!slices.Contains(Claimable, run.Status) || superseded(*run, fence) {
 			return false
 		}
 		before = run.Status
@@ -293,9 +293,11 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 	return err
 }
 
-// RecordAnswer records a reply as the answer to a parked run's question. See
-// the contract on [PendingStore].
-func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer) (PendingRun, bool, error) {
+// RecordAnswer records a reply as the answer to a parked run's question, under
+// the recording node's lease. See the contract on [PendingStore].
+func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	fence Fence,
+) (PendingRun, bool, error) {
 	if len(answer.EventIDs) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s names no delivery", turnID)
 	}
@@ -306,7 +308,13 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 	if answer.RecordedAt.IsZero() {
 		answer.RecordedAt = s.clock()
 	}
-	return s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	ownedBy := int64(0)
+	recorded, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if superseded(*run, fence) {
+			ownedBy = run.OwnerEpoch
+			return false
+		}
+		ownedBy = 0
 		if run.LaunchID != launch || !slices.Contains(Awaiting, run.Status) || run.Answer != nil {
 			return false
 		}
@@ -321,6 +329,11 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 		run.Answer = &recorded
 		return true
 	})
+	if err == nil && ownedBy > 0 {
+		err = fmt.Errorf("sandbox: recording an answer to run %s, which a newer lease (epoch %d) "+
+			"than the recording node's (%d) owns: %w", turnID, ownedBy, fence.Epoch, ErrSeatNotHeld)
+	}
+	return recorded, won, err
 }
 
 // DeclineAnswer lets go of a recorded answer, recording the copies it owes
@@ -367,7 +380,7 @@ func (s *CoordStore) TakeAnswer(ctx context.Context, turnID, launch string, fenc
 	taken := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != launch || run.Answer == nil ||
-			run.OwnerEpoch > fence.Epoch {
+			superseded(*run, fence) {
 			return false
 		}
 		if taken = run.Answer.Taken(); taken {
@@ -902,6 +915,15 @@ func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]P
 		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.TurnID, b.TurnID))
 	})
 	return out, nil
+}
+
+// superseded reports whether a newer lease than the fence owns the run — the
+// zero fence included, on a row any lease owns. It is [outranked] for the writes
+// only the seat's holder makes — a claim, the take of an answer, the record of
+// one — where a writer holding no lease on a row a lease owns is one that lost
+// the seat, never a recovery that has not taken one yet.
+func superseded(run PendingRun, fence Fence) bool {
+	return run.OwnerEpoch > fence.Epoch
 }
 
 // outranked reports whether a fence has been overtaken by a newer lease.

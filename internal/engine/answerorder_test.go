@@ -241,6 +241,11 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Audience: noAudience{}, Queue: q, Pending: store, Manager: manager,
 		Resume: resumer, Hold: inboxHold{q: q}, After: clock.after,
+		// THE SEAT HELD UNDER THE LEASE IT IS RECOVERED WITH BELOW, as a
+		// seat host's acquisition holds it.
+		Lease: func(string) (sandbox.Fence, bool) {
+			return sandbox.Fence{Owner: "node-a", Epoch: 1}, true
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)

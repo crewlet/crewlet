@@ -173,8 +173,13 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs a brief")
 	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
-	// carries — see [CoordinatorOptions.Lease].
-	fence := c.leaseOf(req.Turn.AgentHandle)
+	// carries — see [CoordinatorOptions.Lease]. A seat this node does not
+	// hold launches nothing: the turn asking is one its lease no longer
+	// stands behind.
+	fence, held := c.leaseOf(req.Turn.AgentHandle)
+	if !held {
+		return LaunchResult{}, notHeld(ctx, req.Turn.AgentHandle, req.Turn.TurnID, "launching a run")
+	}
 
 	// The row FIRST, so a crash between here and the box leaves a record
 	// rather than nothing. It opens in [StatusLaunching] and stays there

@@ -477,8 +477,20 @@ func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Re
 // what keeps the ordinary case as immediate as it ever was; whatever it
 // concludes, the delivery is spent — the answer is on the row, and from here
 // on the row resumes it or hands it back, never the delivery.
+//
+// UNDER THE SEAT'S LEASE, and never on a seat this node does not hold
+// ([ErrSeatNotHeld], before anything is written): the answer is the seat
+// holder's to record, because only the holder drives what is recorded. A
+// node that lost the seat and recorded anyway left the answer on a run its
+// successor had already recovered as awaiting — recorded, and driven by
+// nobody until the seat moved again. The store refuses a lease a newer one has
+// overtaken the same way, for a node that has not noticed yet.
 func (c *Coordinator) record(ctx context.Context, run PendingRun, answer RecordedAnswer) (PendingRun, bool, error) {
-	recorded, won, err := c.pending.RecordAnswer(ctx, run.TurnID, run.LaunchID, answer)
+	fence, held := c.leaseOf(run.AgentHandle)
+	if !held {
+		return PendingRun{}, false, notHeld(ctx, run.AgentHandle, run.TurnID, "recording an answer")
+	}
+	recorded, won, err := c.pending.RecordAnswer(ctx, run.TurnID, run.LaunchID, answer, fence)
 	if err != nil || !won {
 		return PendingRun{}, won, err
 	}
@@ -528,8 +540,16 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 		return
 	}
-	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID),
-		c.leaseOf(run.AgentHandle))
+	fence, held := c.leaseOf(run.AgentHandle)
+	if !held {
+		// THE SEAT IS HELD ELSEWHERE, and with it the answer: the holder's
+		// recovery pass found the run answered — or will, when it fences
+		// the row — and drives it from there. This node claims nothing.
+		_ = notHeld(ctx, run.AgentHandle, run.TurnID, "claiming an answer for its resume")
+		c.dropOwed(ctx, run.AgentHandle, run.TurnID)
+		return
+	}
+	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
 	if err != nil {
 		// THE CLAIM MAY HAVE LANDED, and one that did is a claim nothing on
 		// this node drives: no resume holds it, and no recovery pass comes
@@ -539,7 +559,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		// claim whose node stopped. It used to be left for that next
 		// holder: the run held in a claim, the seat busy behind it and the
 		// person's answer unanswered, until the seat happened to move.
-		c.suspectClaim(run)
+		c.suspectClaim(run, fence)
 		c.owedFailed(ctx, run, fmt.Errorf("sandbox: claiming %s for its recorded answer: %w",
 			run.TurnID, err))
 		return
@@ -692,6 +712,15 @@ func (c *Coordinator) retryOwed(turnID string) {
 	}
 	c.mu.Unlock()
 	if r == nil {
+		return
+	}
+	if _, held := c.leaseOf(handle); !held {
+		// THE SEAT MOVED, and whatever this series still owed the run —
+		// its resume, a hand-back, an ending it kept, a claim it suspects —
+		// is read off the row by the holder's recovery pass, which this
+		// node's writes would only race.
+		_ = notHeld(ctx, handle, turnID, "retrying an owed answer")
+		c.dropOwed(ctx, handle, turnID)
 		return
 	}
 	run, found, err := c.pending.Get(ctx, turnID)
@@ -894,8 +923,9 @@ func (c *Coordinator) oweRevival(ctx context.Context, run PendingRun, fence Fenc
 // on this node is driving that very moment. The store would keep the person
 // answered once — the revival and the take are exclusive — but the resume
 // in flight would fail for nothing.
-func (c *Coordinator) suspectClaim(run PendingRun) {
-	fence := c.leaseOf(run.AgentHandle)
+//
+// fence is the lease the claim was made under, which a give-back must carry.
+func (c *Coordinator) suspectClaim(run PendingRun, fence Fence) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r := c.retries[run.TurnID]
@@ -1426,6 +1456,31 @@ func (c *Coordinator) releaseOwed(handle string) {
 		delete(c.retries, turnID)
 	}
 	delete(c.owed, handle)
+}
+
+// dropOwed forgets one owed answer's series on a seat this node does not hold,
+// whatever it still owed the row: an ending it kept, a claim it suspects, a
+// revival it was retrying. Each is on the row, and the holder's recovery pass
+// reads the row and finishes, revives or reaps what it finds — where this
+// node's own writes, under a lease the holder has fenced or is about to, would
+// only race it. Unlike [Coordinator.settleOwed], which keeps such a series for
+// the row it alone drives.
+func (c *Coordinator) dropOwed(ctx context.Context, handle, turnID string) {
+	c.mu.Lock()
+	if r := c.retries[turnID]; r != nil {
+		if r.stop != nil && r.stop() {
+			c.inflight.Done()
+		}
+		delete(c.retries, turnID)
+	}
+	if owed := c.owed[handle]; owed != nil {
+		delete(owed, turnID)
+		if len(owed) == 0 {
+			delete(c.owed, handle)
+		}
+	}
+	c.mu.Unlock()
+	c.reconcileHold(ctx, handle)
 }
 
 // errDetail is an error's text, or empty.

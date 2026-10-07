@@ -59,7 +59,7 @@ func TestARecoveredRunHoldsTheSeatAndAReleaseForgetsTheHold(t *testing.T) {
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	rig.launch("t1")
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a", 1); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-a", 1); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if !holds.holding("swe") {
@@ -72,7 +72,7 @@ func TestARecoveredRunHoldsTheSeatAndAReleaseForgetsTheHold(t *testing.T) {
 	}
 
 	// RE-ACQUIRED: believed unheld, so the hold is taken again.
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a", 2); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-a", 2); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if got := holds.log; !slices.Equal(got, []string{"hold swe", "hold swe"}) {
@@ -87,7 +87,7 @@ func TestHoldSeatRetriesAHoldTheQueueRefused(t *testing.T) {
 	refusing := &flakyHold{fail: true}
 	rig.coordinator.hold = refusing
 	rig.launch("t1")
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-a", 1); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-a", 1); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if refusing.held {

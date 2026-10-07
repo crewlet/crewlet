@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -49,6 +50,43 @@ func TestTheEngineStampsALaunchWithItsSeatLease(t *testing.T) {
 	}
 }
 
+// A SEAT THIS NODE DOES NOT HOLD IS ANSWERED AS NOT HELD, never as the zero
+// fence. The zero fence is an UNFENCED write — what a node with no seat host
+// answers, having no next holder to be fenced out by — and it constrains
+// nothing: answered for a seat the host does not hold, a node that had noticed
+// it lost the seat recorded, claimed and took a person's answer past the fence
+// its successor had put on the run. So the engine answers it as not held, and
+// the coordinator it builds refuses a launch on it; a node with no seat host at
+// all still answers the zero fence, held.
+func TestTheEngineAnswersASeatItDoesNotHoldAsNotHeld(t *testing.T) {
+	t.Parallel()
+	e := sandboxNode(t, nil)
+	applyOK(t, e, sandboxDoc(""))
+	waitHeld(t, e, "swe")
+	if fence, held := e.launchFence("swe"); !held || !fence.Fenced() {
+		t.Fatalf("the held seat answers %+v, %v, want its lease", fence, held)
+	}
+	if fence, held := e.launchFence("nobody"); held || fence.Fenced() {
+		t.Fatalf("a seat this node does not hold answers %+v, %v, want it not held", fence, held)
+	}
+	rt := e.sandbox.Load()
+	manager := rt.coordinator.Manager()
+	_, err := rt.coordinator.Launch(t.Context(), manager, sandbox.LaunchRequest{
+		Turn:  sandbox.TurnRef{TurnID: "t-unheld", AgentHandle: "nobody", Role: "SWE"},
+		Brief: "fix the flake",
+		Spec:  manager.BuildSpec(sandbox.SpecInput{Placement: sandbox.Direct, CodingAgent: "claude-code"}),
+	})
+	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("a launch on a seat this node does not hold = %v, want it refused", err)
+	}
+	if _, found, err := rt.pending.Get(t.Context(), "t-unheld"); err != nil || found {
+		t.Fatalf("Get = %v, %v, want no row", found, err)
+	}
+	if fence, held := (&Engine{}).launchFence("swe"); !held || fence.Fenced() {
+		t.Fatalf("a node with no seat host answers %+v, %v, want the zero fence, held", fence, held)
+	}
+}
+
 // A CLAIM THAT DIED BEFORE ITS TURN TOOK THE REPLY IS REVIVED BY THE ENGINE'S
 // RECOVERY, under the lease the engine holds the seat under, and the run is
 // resumed with the reply once. The seat host is what hands the recovery its
@@ -68,6 +106,7 @@ func TestTheEngineRevivesAClaimThatDiedBeforeItsTurn(t *testing.T) {
 		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, After: retries.after,
+		Lease: e.launchFence,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -225,7 +264,7 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 	if _, ok, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
 		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
 		Events: []json.RawMessage{raw}, PostedAt: asked.Add(time.Minute),
-	}); err != nil || !ok {
+	}, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 	if _, ok, err := store.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(run.LaunchID),

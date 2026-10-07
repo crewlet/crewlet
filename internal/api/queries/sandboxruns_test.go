@@ -445,7 +445,7 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	}
 	if _, won, err := store.RecordAnswer(t.Context(), "to-ana", run.LaunchID, sandbox.RecordedAnswer{
 		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"reply-1"},
-	}); err != nil || !won {
+	}, sandbox.Fence{Owner: run.Owner, Epoch: run.OwnerEpoch}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}
 	if mine := ask(map[string]any{"audience": "ana"}); len(mine) != 0 {

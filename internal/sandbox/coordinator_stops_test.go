@@ -290,7 +290,7 @@ var placements = map[string]func(t *testing.T, rig *coordRig){
 		// cannot actually take.
 		run := rig.get("t1")
 		if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1",
-			CompletionTail(run.LaunchID), Fence{}); err != nil || !won {
+			CompletionTail(run.LaunchID), rigLease); err != nil || !won {
 			t.Fatalf("ClaimForResume = %v, %v", won, err)
 		}
 	},
@@ -306,7 +306,7 @@ var placements = map[string]func(t *testing.T, rig *coordRig){
 		// for the seat's next holder.
 		run := rig.get("t1")
 		if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
-			chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now)); err != nil || !won {
+			chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now), rigLease); err != nil || !won {
 			t.Fatalf("RecordAnswer = %v, %v", won, err)
 		}
 	},
@@ -482,7 +482,7 @@ func answersByTurn(t *testing.T, rig *coordRig) {
 // recovers takes the seat under a fresh lease, as a node claiming it does.
 func recovers(t *testing.T, rig *coordRig) {
 	t.Helper()
-	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 9); err != nil {
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
 		t.Logf("RecoverSeat: %v", err)
 	}
 }
@@ -794,12 +794,12 @@ func (s *refusingStore) ListActiveForSeat(ctx context.Context, handle string) ([
 }
 
 func (s *refusingStore) RecordAnswer(ctx context.Context, turnID, launch string,
-	answer RecordedAnswer,
+	answer RecordedAnswer, fence Fence,
 ) (PendingRun, bool, error) {
 	if s.called("RecordAnswer") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.RecordAnswer(ctx, turnID, launch, answer)
+	return s.inner.RecordAnswer(ctx, turnID, launch, answer, fence)
 }
 
 func (s *refusingStore) DeclineAnswer(ctx context.Context, turnID, launch string,

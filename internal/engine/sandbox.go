@@ -1087,9 +1087,10 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	})
 }
 
-// launchFence is the seat lease a detached run is launched under, which the
-// run's row is stamped with and every later write the launching node makes on
-// it carries — see [sandbox.CoordinatorOptions.Lease]. The seat's next holder
+// launchFence is the seat lease this node writes on a seat's behalf under —
+// a launch, the record of an answer, the claim of a completion or an answer —
+// which the run's row is stamped with and every later write the node makes on
+// it carries; see [sandbox.CoordinatorOptions.Lease]. The seat's next holder
 // fences the row to its own, newer lease, and from then on this node's writes
 // are refused rather than landing under it: a release that revives a claim the
 // holder has already reaped, or a resumed turn taking an answer the holder has
@@ -1099,18 +1100,25 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 // owner the seat's acquisition recovers its runs under — so a node fencing
 // its own rows after a restart within one lease writes the same token.
 //
-// Zero — an unfenced launch — on a node that holds no lease for the seat: one
-// with no seat host, which has no next holder to be fenced out by.
-func (e *Engine) launchFence(handle string) sandbox.Fence {
+// THREE ANSWERS. The seat's lease, held. The zero fence, held — an unfenced
+// write — on a node with no seat host, which has no next holder to be fenced
+// out by. And NOT HELD on a node whose seat host does not hold the seat, which
+// the coordinator refuses every write for ([sandbox.ErrSeatNotHeld]). That last
+// used to be the zero fence too, and the zero fence constrains nothing: a node
+// that had noticed it lost the seat recorded, claimed and took a person's answer
+// past the fence its successor had put on the run, and spent it on a turn the
+// seat's lease no longer stood behind. A node that has NOT noticed answers its
+// old lease, which the successor's fence outranks in the store.
+func (e *Engine) launchFence(handle string) (sandbox.Fence, bool) {
 	if e.node == nil {
-		return sandbox.Fence{}
+		return sandbox.Fence{}, true
 	}
 	host := e.node.Host()
 	epoch, held := host.EpochFor(handle)
 	if !held {
-		return sandbox.Fence{}
+		return sandbox.Fence{}, false
 	}
-	return sandbox.Fence{Owner: host.Owner(), Epoch: epoch}
+	return sandbox.Fence{Owner: host.Owner(), Epoch: epoch}, true
 }
 
 // sandboxTurnRef is what a detached run's durable row records about the turn

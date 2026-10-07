@@ -149,7 +149,8 @@ func TestARevivedRunWhoseHolderStoppedBeforeItsClaimIsResumedNotRevived(t *testi
 func dieOnTheWayToTheTurn(t *testing.T, rig, holder *coordRig) {
 	t.Helper()
 	launch := rig.get("t1").LaunchID
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), Fence{}); err != nil || !won {
+	lease, _ := holder.coordinator.leaseOf("swe")
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), lease); err != nil || !won {
 		t.Fatalf("the holder's claim = %v, %v", won, err)
 	}
 	holder.coordinator.Stop()
@@ -318,7 +319,7 @@ func (s *raceTheRevival) ReviveAnswer(ctx context.Context, turnID string, reviva
 		}
 		written, ok, err := s.PendingStore.ReviveAnswer(ctx, turnID, revival)
 		if _, _, claimErr := s.PendingStore.ClaimForResume(ctx, turnID,
-			RecordedAnswerTail(run.LaunchID), Fence{}); claimErr != nil {
+			RecordedAnswerTail(run.LaunchID), revival.Fence); claimErr != nil {
 			return PendingRun{}, false, claimErr
 		}
 		return written, ok, err
@@ -432,7 +433,7 @@ func (s *claimLandsThenFails) ClaimForResume(ctx context.Context, turnID string,
 func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.coordinator.lease = func(string) Fence { return rigLease }
+	rig.coordinator.lease = leased(rigLease)
 	rig.coordinator.pending = &claimLandsThenFails{PendingStore: rig.pending, fails: 1}
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
 	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
@@ -462,7 +463,7 @@ func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
 func TestAHealthyNodesUnconfirmedClaimsAreNotLostClaims(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
-	rig.coordinator.lease = func(string) Fence { return rigLease }
+	rig.coordinator.lease = leased(rigLease)
 	rig.coordinator.pending = &claimLandsThenFails{PendingStore: rig.pending, fails: MaxAnswerRevivals + 1}
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
 	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
@@ -492,7 +493,7 @@ func suspectOnTheLastAttempt(t *testing.T, rig *coordRig, beforeLast, slow func(
 	t.Helper()
 	holds := rig.withHold()
 	parkOnAQuestion(t, rig)
-	rig.coordinator.lease = func(string) Fence { return rigLease }
+	rig.coordinator.lease = leased(rigLease)
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
 	rig.resumer.failWith(errors.New("the model provider is overloaded"))
 	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
@@ -594,7 +595,7 @@ func TestASuspectedClaimKeepsItsSeries(t *testing.T) {
 	parkOnAQuestion(t, rig)
 	ctx := t.Context()
 	rig.coordinator.owe(ctx, "swe", "t1")
-	rig.coordinator.suspectClaim(rig.get("t1"))
+	rig.coordinator.suspectClaim(rig.get("t1"), rigLease)
 	rig.coordinator.settleOwed(ctx, "swe", "t1")
 	if !rig.coordinator.owes("t1") || !holds.holding("swe") {
 		t.Fatalf("owes %v, inbox held %v: the series of a suspected claim was settled away",

@@ -46,7 +46,7 @@ func answeredAndClaimed(t *testing.T, rig *coordRig, took bool) *events.Event {
 		t.Fatalf("R1 = %q, want it recorded", d)
 	}
 	launch := rig.get("t1").LaunchID
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), Fence{}); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), rigLease); err != nil || !won {
 		t.Fatalf("the dying node's claim = %v, %v", won, err)
 	}
 	if took {
@@ -126,10 +126,11 @@ func reaper(ctx context.Context, t *testing.T, rig *coordRig, store PendingStore
 	next.waiterRig = rig.waiterRig
 	next.coordinator.pending = store
 	next.coordinator.queue = rig.queue
+	owner := "node-" + string(rune('a'+epoch))
 	if prepare != nil {
 		prepare(next)
 	}
-	if err := next.coordinator.RecoverSeat(ctx, "swe", "node-"+string(rune('a'+epoch)), epoch); err != nil {
+	if err := next.recoverSeat(ctx, owner, epoch); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	return next
@@ -687,7 +688,7 @@ func TestAReapWaitsOnAnEarlierCopyItCannotClear(t *testing.T) {
 	}
 	pastRevival(t, rig)
 	launch := rig.get("t1").LaunchID
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), Fence{}); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), rigLease); err != nil || !won {
 		t.Fatalf("the dying node's claim = %v, %v", won, err)
 	}
 	rig.coordinator.Stop()
@@ -832,6 +833,8 @@ func TestAReapThatCannotReadTheFencedClaimStillRevivesOrHandsBack(t *testing.T) 
 // stays at the zero epoch until something re-stamps it.
 func parkUnfenced(t *testing.T, rig *coordRig) {
 	t.Helper()
+	// A NODE WITH NO SEAT HOST, which writes under the zero fence.
+	rig.coordinator.lease = leased(Fence{})
 	rig.launchingUnder("t1", Fence{})
 	rig.suspend("t1")
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
@@ -1134,7 +1137,7 @@ func TestAClaimCarriesTheClaimantsLease(t *testing.T) {
 			if got := rig.get("t1"); fenceOf(got) != rigLease {
 				t.Fatalf("the premise: the row is stamped %+v before the claim", fenceOf(got))
 			}
-			rig.coordinator.lease = func(string) Fence { return held }
+			rig.coordinator.lease = leased(held)
 			var claimedUnder []Fence
 			rig.resumer.during = func(ctx context.Context, _ PendingRun) {
 				got, found, err := rig.pending.Get(ctx, "t1")
