@@ -9,8 +9,8 @@
  * would reach the screen as a round with nothing said about why it ended.
  *
  * `end` and `tool_use` are a round that finished; the other four end the
- * phase. An ABSENT `stop_reason` is a backend that reported none (or an older
- * engine's record) — not reported, never "ended normally" as a fact.
+ * phase. An ABSENT `stop_reason` is a backend that reported none — not
+ * reported, never "ended normally" as a fact.
  */
 export type StopReason =
   "end" | "tool_use" | "max_tokens" | "refusal" | "context_exceeded" | "paused";
