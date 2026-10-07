@@ -343,7 +343,7 @@ func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) 
 	if err := os.MkdirAll(filepath.Dir(target), hostbox.DirMode); err != nil {
 		return localErrorf("local sandbox %s could not create %s: %v", b.layout.id, filepath.Dir(target), err)
 	}
-	return os.WriteFile(target, content, hostbox.FileMode)
+	return writeHostFile(target, path, content)
 }
 
 // ReadFile is EMPTY-ON-MISSING: the detached runner polls for marker and
@@ -642,7 +642,7 @@ func (b *containerBox) WriteFile(ctx context.Context, path string, content []byt
 		return localErrorf("container sandbox %s could not create %s: %v",
 			b.layout.id, filepath.Dir(target), err)
 	}
-	return os.WriteFile(target, content, hostbox.FileMode)
+	return writeHostFile(target, path, content)
 }
 
 func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
@@ -750,6 +750,26 @@ func readHostFile(target, path string) ([]byte, error) {
 		return nil, fmt.Errorf("local sandbox: read %s: %w", path, err)
 	}
 	return content, err
+}
+
+// writeHostFile is a local box's WriteFile once the path is resolved: content
+// put at target whole, in place, through [openHostWritable] — so a link at the
+// path is refused rather than followed out of the box, and a named pipe is
+// refused rather than waited on, each as a [NotRegularFileError] naming what
+// is there.
+func writeHostFile(target, path string, content []byte) error {
+	f, err := openHostWritable(target)
+	if err != nil {
+		return fmt.Errorf("local sandbox: open %s for writing: %w", path, err)
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("local sandbox: write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("local sandbox: write %s: %w", path, err)
+	}
+	return nil
 }
 
 // absent is whether an open failed because there is no file at the path —

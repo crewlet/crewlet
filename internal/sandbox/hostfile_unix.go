@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"syscall"
+
+	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
 // openHostRegular opens a file a local box holds, for reading — and only a
@@ -39,22 +41,56 @@ import (
 // A path that is not there answers [fs.ErrNotExist] through the error, which
 // is what the callers read as "not written yet".
 func openHostRegular(target string) (*os.File, error) {
+	return openHostFileAs(target, syscall.O_RDONLY, false)
+}
+
+// openHostWritable opens a file a local box holds for WRITING it whole —
+// created where nothing is, emptied where a regular file is — under the same
+// rule as [openHostRegular], for the same reason.
+//
+// The engine writes into a box after something has run in it: a shim and a
+// coding CLI's configuration after the setup steps' commands, which run
+// whatever a checkout's install scripts say, and a follow-up run's
+// configuration into a box a coding agent has had to itself. A plain
+// os.WriteFile there followed a link at the last element — one that leads
+// nowhere passes the escape check as itself, so the write CREATED a file
+// wherever the link pointed on the engine host — and an open of a named pipe
+// for writing waited for a reader for good, wedging the launch. So the open
+// is non-blocking and follows no link, and anything but a regular file is
+// refused before a byte is written.
+func openHostWritable(target string) (*os.File, error) {
+	return openHostFileAs(target, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC, true)
+}
+
+// openHostFileAs is the one open behind [openHostRegular] and
+// [openHostWritable].
+func openHostFileAs(target string, mode int, write bool) (*os.File, error) {
 	var (
 		fd  int
 		err error
 	)
 	for {
-		fd, err = syscall.Open(target, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+		fd, err = syscall.Open(target, mode|syscall.O_NONBLOCK|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
+			uint32(hostbox.FileMode))
 		if !errors.Is(err, syscall.EINTR) {
 			break
 		}
 	}
-	switch {
-	case errors.Is(err, syscall.ELOOP) && isLink(target):
-		// ELOOP is also a loop among the links above the last element; only
-		// a link AT it is the refusal O_NOFOLLOW makes, so that is asked.
-		return nil, &NotRegularFileError{Path: target, Kind: kindSymlink}
-	case err != nil:
+	if err != nil {
+		// SOME KINDS ARE REFUSED BEFORE THERE IS A DESCRIPTOR TO ASK: a
+		// link at the last element (ELOOP under O_NOFOLLOW), a socket
+		// (ENXIO, which a read of one used to report as a box that could
+		// not be read, so a collection retried it until the run was lost),
+		// and for a write a pipe nobody reads (ENXIO) and a directory
+		// (EISDIR). So the path itself is asked what it is. Not for an
+		// absent path, which is the answer "not written yet"; and a path
+		// whose own lookup fails — a loop among the links ABOVE the last
+		// element is ELOOP too — names no kind and stays the error it was.
+		if !errors.Is(err, syscall.ENOENT) {
+			if what := kindAt(target); what != "" {
+				return nil, &NotRegularFileError{Path: target, Kind: what, Write: write}
+			}
+		}
 		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
 	}
 	var st syscall.Stat_t
@@ -64,7 +100,7 @@ func openHostRegular(target string) (*os.File, error) {
 	}
 	if what := fileKind(st); what != "" {
 		_ = syscall.Close(fd)
-		return nil, &NotRegularFileError{Path: target, Kind: what}
+		return nil, &NotRegularFileError{Path: target, Kind: what, Write: write}
 	}
 	if err := syscall.SetNonblock(fd, false); err != nil {
 		_ = syscall.Close(fd)
@@ -73,10 +109,14 @@ func openHostRegular(target string) (*os.File, error) {
 	return os.NewFile(uintptr(fd), target), nil
 }
 
-// isLink reports whether target itself is a symbolic link.
-func isLink(target string) bool {
-	info, err := os.Lstat(target)
-	return err == nil && info.Mode()&fs.ModeSymlink != 0
+// kindAt names what target itself is, without following a link at it, or ""
+// for a regular file and for a path that cannot be looked up.
+func kindAt(target string) string {
+	var st syscall.Stat_t
+	if err := syscall.Lstat(target, &st); err != nil {
+		return ""
+	}
+	return fileKind(st)
 }
 
 // fileKind names what st describes, as a reader says it, or "" for a regular

@@ -87,7 +87,10 @@ var ErrFileTooLarge = errors.New("sandbox: the file is larger than the engine re
 // other than a regular file where it lies — a named pipe, a device, a socket,
 // a directory or a symbolic link. A backend that reads a box's files from the
 // engine host refuses one, because opening it there could block the reader or
-// never end ([NotRegularFileError] says which it was).
+// never end ([NotRegularFileError] says which it was). It refuses a WRITE to
+// one too ([NotRegularFileError.Write]), which could block or follow a link
+// out of the box; a write refused is the launch's failure, since what it was
+// writing is something the run needs.
 //
 // A REFUSAL OF THAT PIECE, NOT A BOX THAT COULD NOT BE READ. What the path
 // names is fixed by what the box holds, so a collection that retried it would
@@ -105,17 +108,28 @@ type NotRegularFileError struct {
 	// Kind is what it is, as a reader says it: "a named pipe", "a
 	// directory", "a symbolic link".
 	Kind string
+	// Write is whether it was refused as a write rather than a read.
+	Write bool
 }
 
-// Reason is why the path was not read, as the rest of a sentence about it.
+// Reason is why the path was not read — or not written, for a write — as the
+// rest of a sentence about it.
 func (e *NotRegularFileError) Reason() string {
-	if e.Kind == kindSymlink {
-		return "is a symbolic link, and a box's files are read only where they lie, so it was not read"
+	verb, done := "read", "read"
+	if e.Write {
+		verb, done = "written", "written"
 	}
-	return "is " + e.Kind + ", not a regular file, so it was not read"
+	if e.Kind == kindSymlink {
+		return "is a symbolic link, and a box's files are " + verb + " only where they lie, so it was not " + done
+	}
+	return "is " + e.Kind + ", not a regular file, so it was not " + done
 }
 
 func (e *NotRegularFileError) Error() string {
+	if e.Write {
+		return e.Path + " " + e.Reason() + ": what the engine writes into a box is a file, and " +
+			"writing anything else from the engine host could block it or write past the box"
+	}
 	return e.Path + " " + e.Reason() + ": a box's markers, reports and streams are files " +
 		"its runner writes, and reading anything else from the engine host could block it, " +
 		"never end, or read past the box"

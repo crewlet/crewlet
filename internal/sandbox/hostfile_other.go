@@ -10,3 +10,8 @@ import "os"
 func openHostRegular(string) (*os.File, error) {
 	return nil, localErrorf("%s", unsupportedReason)
 }
+
+// openHostWritable is refused for the same reason as [openHostRegular].
+func openHostWritable(string) (*os.File, error) {
+	return nil, localErrorf("%s", unsupportedReason)
+}

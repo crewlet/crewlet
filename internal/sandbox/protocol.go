@@ -317,6 +317,11 @@ type Sandbox interface {
 	// which is not proof of either answer.
 	JobRunning(ctx context.Context, commandID string) (bool, error)
 
+	// WriteFile puts content at path whole. A backend that writes the box
+	// from the engine host writes only a regular file where it lies, and
+	// refuses anything else at the path with [ErrNotRegularFile] — a link
+	// there would be followed out of the box, and a named pipe waited on
+	// for good.
 	WriteFile(ctx context.Context, path string, content []byte) error
 
 	// ReadFile reads a file the engine means to read WHOLE — a report, a
