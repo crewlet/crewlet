@@ -151,6 +151,26 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 				}
 			}
 		}
+		// TWO WHOLE KEYS FLATTENED ONTO ONE LINE, each way they get there: a
+		// shell `echo $A $B` spacing their breaks, an env dump with the
+		// breaks stripped. The first key's body must not leak because the
+		// second's BEGIN appears on the line before the first's END is
+		// found — the regression this test's package guards.
+		spaced := strings.Join(key, " ")
+		flat := strings.Join(key, "")
+		texts["two flattened onto one line, spaced"] = "KEYS=" + spaced + " " + spaced + "\n"
+		texts["two flattened onto one line, breaks removed"] = "KEYS=" + flat + flat + "\n"
+		texts["two echoed on one line"] = "+ echo " + spaced + " " + spaced + "\n"
+		texts["one-line key, then a bare BEGIN mention"] = "KEY=" + spaced +
+			" # -----BEGIN PRIVATE KEY----- format\n"
+		// A ONE-LINE KEY WHOSE END WAS LOST, followed on its line by another
+		// block's armour: a certificate's, or the next key whole. The armour
+		// ends the block at its body, as one on a later line does, and the
+		// same holds for its own END once a word has come before it.
+		noEnd := strings.Join(key[:len(key)-1], " ")
+		texts["one-line key with no END, then a certificate"] = "A=" + noEnd + " -----BEGIN CERTIFICATE----- MIIB\n"
+		texts["one-line key with no END, then a whole key"] = "A=" + noEnd + " " + spaced + "\n"
+		texts["one-line key whose END follows two words"] = "A=" + noEnd + " two words " + key[len(key)-1] + "\n"
 		for name, text := range texts {
 			got := redact.Secrets(text)
 			if leak := survivor(got, body); leak != "" {

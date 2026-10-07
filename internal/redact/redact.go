@@ -255,7 +255,8 @@ func keyBlocks(text string) ([][2]int, int) {
 	// closed is where each END a BEGIN's block reached begins, in order.
 	var closed []int
 	open := -1
-	for _, b := range keyBegin.FindAllStringIndex(text, -1) {
+	begins := keyBegin.FindAllStringIndex(text, -1)
+	for _, b := range begins {
 		if len(spans) > 0 && b[0] < spans[len(spans)-1][1] {
 			// Inside the block before it. Part of that key, not one of
 			// its own.
@@ -273,16 +274,23 @@ func keyBlocks(text string) ([][2]int, int) {
 			open = b[0]
 		}
 	}
+	// prev is where the last key armour before the END being read ends — a
+	// BEGIN's or an END's — which is as far back as [readBack] has to look
+	// for the start of the END's line.
+	prev := 0
 	for _, e := range keyEnd.FindAllStringIndex(text, -1) {
+		for len(begins) > 0 && begins[0][1] <= e[0] {
+			prev, begins = max(prev, begins[0][1]), begins[1:]
+		}
 		for len(closed) > 0 && closed[0] < e[0] {
 			closed = closed[1:]
 		}
-		if len(closed) > 0 && closed[0] == e[0] {
-			continue
+		if len(closed) == 0 || closed[0] != e[0] {
+			if start, ok := readBack(text, e, prev); ok {
+				spans = append(spans, [2]int{start, e[1]})
+			}
 		}
-		if start, ok := readBack(text, e); ok {
-			spans = append(spans, [2]int{start, e[1]})
-		}
+		prev = e[1]
 	}
 	return mergeSpans(spans), open
 }
@@ -324,35 +332,64 @@ type keyBlock struct {
 // readKey reads the block of the BEGIN armour at b (its start and end in
 // text), forward. See [keyBlocks] for the structure it reads.
 func readKey(text string, b []int) keyBlock {
+	// THE REST OF THE BEGIN LINE — nothing, the wrapping's per-line suffix,
+	// or, for a key on one line, its body — read only as far as the FIRST of
+	// three places: the line's break, the next armour on the line, and
+	// [MaxKeyBlockBytes] past this armour. Every scan here runs once per
+	// BEGIN, so each has to stop where the next BEGIN's starts. Scanned to
+	// the line's end, a line of many armours costs the armour count times the
+	// line: two megabytes of flattened key material, nearly two minutes. The
+	// bound alone is not enough either, because a long line reaches it from
+	// every armour on it: the armour count times the bound, over thirty
+	// seconds for the same two megabytes under the race detector. Stopped at
+	// the next armour, the scans of a line's BEGINs cover it once between
+	// them — which is why the armour is found first, and the break looked for
+	// only in what lies before it.
+	hi := min(len(text), b[1]+MaxKeyBlockBytes)
+	stop, armour := hi, []int(nil)
+	if a := pemArmour.FindStringIndex(text[b[1]:hi]); a != nil {
+		armour = []int{b[1] + a[0], b[1] + a[1]}
+		stop = armour[0]
+	}
+	// One byte past stop, so that a break AT the bound ends the line: a rest
+	// of exactly [MaxKeyBlockBytes] is one a key may have.
+	restEnd, next := breakWithin(text, b[1], min(len(text), stop+1))
+	overlong := false
+	switch {
+	case restEnd >= 0:
+		// The line ends before the next armour and the bound.
+	case armour != nil:
+		return oneLineKey(text, b, armour)
+	case hi == len(text):
+		// The text runs out on the BEGIN line: what is written next may
+		// still go on with it.
+		restEnd = len(text)
+	default:
+		// THE LINE GOES ON PAST THE BOUND, with no break and no armour in
+		// it — which is not the text running out. No line after it can be
+		// this block's, since a block runs no further than the bound
+		// ([keyReader.read] ends one at the first line past it), so the
+		// block is what this line holds of a body, and it ENDS here. Read as
+		// the text running out — which is what a scan stopped at the bound
+		// looks like — a BEGIN followed by a long line of anything would
+		// hold every line after it back from a live view for good
+		// ([Settled]).
+		restEnd, overlong = hi, true
+	}
+	rest := text[b[1]:restEnd]
+	trimmed := trimLine(rest)
+	// A MULTI-LINE BLOCK, or a one-line key with no armour after it on its
+	// line: now the wrapping's per-line prefix is needed, so it is read here
+	// rather than above, where a line of many armours would pay for one per
+	// BEGIN.
 	r := keyReader{
 		wrapping: wrapping{shape: prefixShape(strings.Trim(text[segmentStart(text, b[0]):b[0]], " \t"))},
 		text:     text,
 		from:     b[1],
 	}
-
-	// THE REST OF THE BEGIN LINE: nothing, the wrapping's per-line suffix,
-	// or — for a key on one line — its body.
-	restEnd, next := lineAt(text, b[1])
-	rest := text[b[1]:restEnd]
-	if keyBegin.MatchString(rest) {
-		return keyBlock{}
-	}
-	if e := keyEnd.FindStringIndex(rest); e != nil {
-		// BEGIN and END on one line: closed only with a body between, and
-		// nothing but its separators after it.
-		between := rest[:e[0]]
-		h := skipHeaders(between)
-		if body, end := runChunk(between[h:]); body && lastBase64(between[h+end:]) < 0 {
-			return keyBlock{end: b[1] + e[1], closed: true, endArmour: b[1] + e[0]}
-		}
-		return keyBlock{}
-	}
-	trimmed := trimLine(rest)
-	if trimmed == "" {
-		return r.read(next)
-	}
 	h := skipHeaders(trimmed)
-	if body, end := runChunk(trimmed[h:]); body {
+	switch body, end := runChunk(trimmed[h:]); {
+	case body:
 		// The body begins on the BEGIN line: a key on one line, or its
 		// first line glued to the armour.
 		r.body, r.end = 1, b[1]+leadingSpace(rest)+h+end
@@ -360,14 +397,44 @@ func readKey(text string, b []int) keyBlock {
 			// The enclosing text resumes on the BEGIN line itself.
 			return keyBlock{end: r.end}
 		}
-		return r.read(next)
-	}
-	if inBase64(trimmed[0]) {
+	case trimmed == "":
+	case inBase64(trimmed[0]):
 		// The armour line goes on past the armour, with no key.
 		return keyBlock{}
+	default:
+		r.suffix = trimmed
 	}
-	r.suffix = trimmed
+	if overlong {
+		return r.ended()
+	}
 	return r.read(next)
+}
+
+// oneLineKey is the block of the BEGIN armour at b when the first thing after
+// it on its line that is not its body is another armour, the one at armour: a
+// key written on one line, its breaks turned to spaces or removed.
+//
+// THE FIRST ARMOUR DECIDES, whatever it is, so that two keys flattened onto one
+// line (`K1END K2`) each close at their own END. This key's END, with nothing
+// but separators between it and the body, CLOSES the block. Any other armour —
+// the next key's BEGIN, a certificate's, a public key's — ENDS the block at its
+// body, exactly as one on a later line does ([keyReader.read]), and so does
+// this key's END once the enclosing text has resumed before it: what follows
+// the body on its line does not make the body any less a key's. Giving up on
+// the block instead published the whole body — of a key whose END was lost
+// and which the next key followed, of one a certificate followed, of one whose
+// END came after a word.
+func oneLineKey(text string, b, armour []int) keyBlock {
+	between := text[b[1]:armour[0]]
+	h := skipHeaders(between)
+	body, end := runChunk(between[h:])
+	switch {
+	case !body:
+		return keyBlock{}
+	case lastBase64(between[h+end:]) < 0 && keyEnd.MatchString(text[armour[0]:armour[1]]):
+		return keyBlock{end: armour[1], closed: true, endArmour: armour[0]}
+	}
+	return keyBlock{end: b[1] + h + end}
 }
 
 // wrapping is what a text puts round every line of a key: the armour line's
@@ -458,7 +525,15 @@ func (r *keyReader) read(pos int) keyBlock {
 		if pos >= len(r.text) {
 			return r.ranOut()
 		}
-		lineEnd, after := lineAt(r.text, pos)
+		// The line's break is looked for no further than one byte past the
+		// bound: a line that has not ended by then ends the block whatever
+		// is after it, so reading on to its end would buy nothing but a scan
+		// of all of it.
+		limit := min(len(r.text), r.from+MaxKeyBlockBytes+1)
+		lineEnd, after := breakWithin(r.text, pos, limit)
+		if lineEnd < 0 {
+			lineEnd, after = limit, -1
+		}
 		if lineEnd-r.from > MaxKeyBlockBytes {
 			return r.ended()
 		}
@@ -618,8 +693,20 @@ func (r *keyReader) header(line string) bool {
 // long base64-alphabet runs a coding run actually prints, carries no case or
 // no digits. A real key's line lacks one about once in fifty thousand, and the
 // one interrupting line a block may carry is what that costs.
-func readBack(text string, e []int) (int, bool) {
-	lineS := segmentStart(text, e[0])
+//
+// prev is where the last key armour before this END ends, BEGIN or END, or 0:
+// the start of the END's line is looked for no further back than that, since
+// a line holding another key armour is answered without it. Every unclosed END
+// reads back, so on a line of many of them a scan back to the line's start —
+// or to the bound, which a long line reaches from every END on it — would cost
+// the armour count times the line, or times the bound.
+func readBack(text string, e []int, prev int) (int, bool) {
+	lineS := segmentStartAbove(text, e[0], max(prev, e[0]-MaxKeyBlockBytes, 0))
+	if prev > 0 && lineS == prev {
+		// No break since the last key armour: the line holds it, and a key
+		// on one line is read from its BEGIN.
+		return 0, false
+	}
 	pre := text[lineS:e[0]]
 	if strings.Contains(pre, "-----") && pemArmour.MatchString(pre) {
 		// The line holds another armour: a key on one line is read from
@@ -945,8 +1032,24 @@ func armourChecksum(run string) bool {
 
 // segmentStart is where the line holding byte i starts, a line break being a
 // real one or an escaped one, as [lineAt] has it.
+//
+// BOUNDED to [MaxKeyBlockBytes] back: the line it starts is an armour line's,
+// whose prefix is a wrapping's per-line gutter, and a gutter longer than a key
+// block is none. Without the bound, every BEGIN that has no armour after it on
+// its line — the last on each line, and each whose next armour is past the
+// bound — scans back to the line start they all share, so a long line of
+// armours set far apart costs their count times the line. A real wrapping's
+// gutter is a handful of bytes, so the bound never bites a key; it only stops a
+// pathological flattened line being quadratic. An END looks back no further
+// than the key armour before it ([readBack]).
 func segmentStart(s string, i int) int {
-	for j := i - 1; j >= 0; j-- {
+	return segmentStartAbove(s, i, max(0, i-MaxKeyBlockBytes))
+}
+
+// segmentStartAbove is [segmentStart] looking back no further than floor, and
+// floor when no break lies between it and i.
+func segmentStartAbove(s string, i, floor int) int {
+	for j := i - 1; j >= floor; j-- {
 		switch {
 		case s[j] == '\n':
 			return j + 1
@@ -954,7 +1057,7 @@ func segmentStart(s string, i int) int {
 			return j + 1
 		}
 	}
-	return 0
+	return floor
 }
 
 // lineAt is where the line starting at pos ends, and where the next one
@@ -963,7 +1066,19 @@ func segmentStart(s string, i int) int {
 // a real line (a quoted scalar broken across lines with its `\n` kept) is ONE
 // break, or every line of it would be followed by an empty one.
 func lineAt(s string, pos int) (int, int) {
-	for i := pos; i < len(s); i++ {
+	if end, next := breakWithin(s, pos, len(s)); end >= 0 {
+		return end, next
+	}
+	return len(s), -1
+}
+
+// breakWithin is where the first line break that begins in s[pos:limit] begins,
+// and where the line after it starts, a break being what [lineAt] reads as one
+// — or -1 and -1 when none begins there. Only where a break BEGINS is bounded:
+// the bytes that finish it are read from s whole, so a bound that falls inside
+// an escaped break does not split it.
+func breakWithin(s string, pos, limit int) (int, int) {
+	for i := pos; i < limit; i++ {
 		switch {
 		case s[i] == '\n':
 			return i, i + 1
@@ -977,7 +1092,7 @@ func lineAt(s string, pos int) (int, int) {
 			return i, next
 		}
 	}
-	return len(s), -1
+	return -1, -1
 }
 
 // lineBefore is the line before the one starting at start (start > 0): where

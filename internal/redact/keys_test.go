@@ -622,6 +622,19 @@ func TestAKeyWhoseLastLineEndsInTheTextAroundItIsRedacted(t *testing.T) {
 	}
 }
 
+// oneLineKey is a whole RSA key written on one line, its breaks turned to
+// spaces — one of the ways two keys end up flattened onto one line (a shell
+// `echo $A $B`, an env dump with the newlines stripped).
+func oneLineKey() string {
+	return "-----BEGIN RSA PRIVATE KEY----- " + keyLine + " " + keyLine + " u1SU1Lf= -----END RSA PRIVATE KEY-----"
+}
+
+// flatKey is the same with no separator at all between the armours and the
+// body — the newlines removed rather than spaced.
+func flatKey() string {
+	return "-----BEGIN RSA PRIVATE KEY-----" + keyLine + keyLine + "u1SU1Lf=-----END RSA PRIVATE KEY-----"
+}
+
 // keyFixtures are the texts the idempotence and the settling cases run over:
 // every private-key shape above, beside the shapes that are not keys.
 func keyFixtures() map[string]string {
@@ -635,6 +648,17 @@ func keyFixtures() map[string]string {
 			pemBody(3) + "-----END RSA PRIVATE KEY-----\n",
 		"two keys": "-----BEGIN EC PRIVATE KEY-----\n" + pemBody(2) + "-----END EC PRIVATE KEY-----\nbetween\n" +
 			"-----BEGIN EC PRIVATE KEY-----\n" + pemBody(2) + "-----END EC PRIVATE KEY-----\n",
+		"two keys flattened onto one line, spaces for breaks": "KEYS=" + oneLineKey() + " " + oneLineKey() + "\n",
+		"two keys flattened onto one line, breaks removed":    "KEYS=" + flatKey() + flatKey() + "\n",
+		"two keys echoed on one line":                         "+ echo " + oneLineKey() + " " + oneLineKey() + "\n",
+		"a one-line key, then a bare BEGIN mention": "KEY=" + oneLineKey() +
+			" # -----BEGIN PRIVATE KEY----- format\n",
+		"a one-line key with no END, then a certificate": "A=-----BEGIN RSA PRIVATE KEY----- " + keyLine + " " + keyLine +
+			" u1SU1Lf= -----BEGIN CERTIFICATE----- MIIB\n",
+		"a one-line key with no END, then a whole key": "A=-----BEGIN RSA PRIVATE KEY----- " + keyLine + " " + keyLine +
+			" u1SU1Lf= " + oneLineKey() + "\n",
+		"a one-line key whose END follows two words": "A=-----BEGIN RSA PRIVATE KEY----- " + keyLine + " " + keyLine +
+			" u1SU1Lf= two words -----END RSA PRIVATE KEY-----\n",
 		"grep":           "a:-----BEGIN RSA PRIVATE KEY-----\nb: nothing here\nc: more\n",
 		"password":       "login\npassword:\n  hunter2\nnext\n",
 		"password later": "Enter password\n\n= swordfish\nok\n",
@@ -766,6 +790,42 @@ func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 	} {
 		if got := redact.Settled(c.text); got != c.want {
 			t.Errorf("%s: Settled = %d of %d; want %d", name, got, len(c.text), c.want)
+		}
+	}
+}
+
+// A BEGIN ON A LINE LONGER THAN THE BOUND HOLDS NOTHING AFTER THAT LINE: a
+// block runs no further than [redact.MaxKeyBlockBytes], so no line after it can
+// be the block's, and what the line held of a body is redacted with the line.
+// The scan of the BEGIN's line stops at the bound, and what it found there was
+// read as the text running out — an OPEN block — so a minified bundle or a run
+// of padding that mentioned the armour held every line after it back from a
+// live view for good.
+//
+// Mutation: answer a BEGIN line the scan stopped on at the bound as one the
+// text ran out on, and none of these settles past its first line.
+func TestABeginOnALineLongerThanTheBoundHoldsNothingAfterIt(t *testing.T) {
+	padding := strings.Repeat(" ", redact.MaxKeyBlockBytes+5000)
+	for name, c := range map[string]struct{ line, want string }{
+		"a minified bundle naming the armour": {
+			`var a="-----BEGIN PRIVATE KEY-----",` + strings.Repeat("b.c(d);", 12000),
+			`var a="-----BEGIN PRIVATE KEY-----",` + strings.Repeat("b.c(d);", 12000),
+		},
+		"the armour, then padding": {
+			"-----BEGIN PRIVATE KEY-----" + padding + "tail",
+			"-----BEGIN PRIVATE KEY-----" + padding + "tail",
+		},
+		"a one-line key, then padding": {
+			"-----BEGIN RSA PRIVATE KEY----- " + keyLine + " " + keyLine + padding + "tail",
+			marker + padding + "tail",
+		},
+	} {
+		text := c.line + "\nnext line\nmore\n"
+		if got := redact.Settled(text); got != len(text) {
+			t.Errorf("%s: Settled = %d of %d; want all of it", name, got, len(text))
+		}
+		if got := redact.Secrets(text); got != c.want+"\nnext line\nmore\n" {
+			t.Errorf("%s: Secrets = %.80q…; want %.80q…", name, got, c.want)
 		}
 	}
 }
