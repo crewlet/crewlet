@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
@@ -70,21 +69,7 @@ type Turn struct {
 // last KEYED unit of work precisely so an unkeyed observation cannot disarm
 // the next redelivery's dedupe, and a fabricated key walks straight through
 // that.
-//
-// FALLING BACK ONLY ON SHAPE. A `turn_completed` from a build before the split
-// carries no work key and its turn id IS one, and a rolling upgrade guarantees
-// some of those — but so does a post-split turn with no trigger key, and the
-// wire cannot tell the two apart because the field is `omitempty`. The GRAMMAR
-// can: see [workkey.IsDerived].
-func (t Turn) WorkKey() string {
-	if t.Event.WorkKey != "" {
-		return t.Event.WorkKey
-	}
-	if workkey.IsDerived(t.Event.TurnID) {
-		return t.Event.TurnID
-	}
-	return ""
-}
+func (t Turn) WorkKey() string { return t.Event.WorkKey }
 
 // DedupeKey is what the redelivery guard remembers, and it is a DIFFERENT
 // question from [Turn.WorkKey].

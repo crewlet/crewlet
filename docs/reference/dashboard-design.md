@@ -3057,10 +3057,7 @@ rules fix it, and each one names a specific mechanism:
    older row, so the screen showed a dead call for as long as the real one
    ran. A turn's `work_key` is what relates the attempts, and a card carrying
    one says `attempt 2/2` — read off the event row's own `work_key`, which the
-   server fills from the promoted column, rather than out of the payload. The
-   `0029` backfill reaches the column and deliberately not the stored payloads,
-   which record what a build that had no such field actually published, so a
-   payload read reports no unit of work for every turn older than the split. A
+   server fills from the promoted column, rather than out of the payload. A
    live frame is the one case with no column yet, and the payload is what it
    falls back to.
 

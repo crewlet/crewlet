@@ -3930,30 +3930,26 @@ func (w *finishWitness) Finish(ctx context.Context, turnID, ending string) (Pend
 	return w.PendingStore.Finish(ctx, turnID, ending)
 }
 
-// EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK, and a run parked before
-// ADR-0017 carries it in its turn id.
+// EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK the row was launched for.
 //
-// A coding run is detached: the row is written by one build and read, minutes
-// or days later and possibly on another node, by whatever is running then.
-// Nothing rewrites a parked row, so a run suspended before the split has no
-// WorkKey field at all and its TurnID IS the work key — which is why
-// [PendingRun.UnitOfWork] exists and why no publisher may reach for the raw
-// field. Reaching for it announced an empty unit of work for exactly the runs
-// that outlived the upgrade, and the completion, the question and the failure
-// are the three gestures a resumed turn's identity travels on.
-func TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
-	// A DERIVED-SHAPED TURN ID: 32 lowercase hex, which is what
-	// workkey.Derive produces and what a pre-split build put in TurnID.
-	const preSplit = "0123456789abcdef0123456789abcdef"
+// A coding run is detached: the row is read minutes or days later, possibly
+// on another node, with no trigger left to re-derive the key from, so the
+// row's WorkKey is the only place it survives. The completion, the question
+// and the failure are the three gestures a resumed turn's identity travels
+// on, and an announcement that dropped it — or carried the turn id, which
+// names one run rather than the unit of work — files its writes against the
+// wrong identity.
+func TestAnAnnouncementCarriesTheRunsUnitOfWork(t *testing.T) {
+	const turnID = "turn-1"
 
 	t.Run("clarification", func(t *testing.T) {
 		rig := newCoordRig(t)
-		rig.launch(preSplit)
+		rig.launch(turnID)
 		rig.coordinator.countRun("swe", StatusRunning)
 		rig.runner.Finish(Result{
 			NeedsInput: true, Question: "which branch?", AskTo: "requester",
 		})
-		payload, ev := rig.completion(preSplit)
+		payload, ev := rig.completion(turnID)
 		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 			t.Fatalf("OnCompleted: %v", err)
 		}
@@ -3961,15 +3957,14 @@ func TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
 		if len(asked) != 1 {
 			t.Fatalf("%d questions announced, want one", len(asked))
 		}
-		if asked[0].WorkKey != preSplit {
-			t.Errorf("WorkKey = %q, want the pre-split run's unit of work %q",
-				asked[0].WorkKey, preSplit)
+		if asked[0].WorkKey != rigWorkKey {
+			t.Errorf("WorkKey = %q, want the run's unit of work %q", asked[0].WorkKey, rigWorkKey)
 		}
 	})
 
 	t.Run("failure", func(t *testing.T) {
 		rig := newCoordRig(t)
-		rig.launching(preSplit)
+		rig.launching(turnID)
 		if err := rig.recoverSeat(t.Context(), "node-2", 7); err != nil {
 			t.Fatalf("RecoverSeat: %v", err)
 		}
@@ -3977,9 +3972,8 @@ func TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
 		if len(failed) != 1 {
 			t.Fatalf("%d failures announced, want one", len(failed))
 		}
-		if failed[0].WorkKey != preSplit {
-			t.Errorf("WorkKey = %q, want the pre-split run's unit of work %q",
-				failed[0].WorkKey, preSplit)
+		if failed[0].WorkKey != rigWorkKey {
+			t.Errorf("WorkKey = %q, want the run's unit of work %q", failed[0].WorkKey, rigWorkKey)
 		}
 	})
 }

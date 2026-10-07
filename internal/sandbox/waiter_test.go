@@ -162,7 +162,8 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 		// The item the launching turn was on, so every case runs over a
 		// row that carries one — and a write that dropped it would show.
-		WorkItem: &rigItem,
+		// The unit of work likewise.
+		WorkItem: &rigItem, WorkKey: rigWorkKey,
 		// The model the launch pointed its agent at, which the run's own
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
@@ -201,6 +202,11 @@ func notLeased(string) (Fence, bool) { return Fence{}, false }
 
 // rigItem is the work item every rig launch is charged to.
 var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+
+// rigWorkKey is the unit of work every rig launch was dispatched for —
+// distinct from every turn id a case launches under, so an announcement that
+// carried one in place of the other shows.
+const rigWorkKey = "0123456789abcdef0123456789abcdef"
 
 // suspend writes the execute_state a real suspending turn would have written,
 // which is what opens the run to the completion poll.
@@ -944,15 +950,12 @@ func TestAWaiterNeedsItsCollaborators(t *testing.T) {
 }
 
 // A COMPLETION CARRIES THE UNIT OF WORK TOO, by the same rule and for the same
-// reason: see TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun. This is
-// the announcement the dashboard's board reads and the one that routes the
-// resume, so a blank key here is a resumed turn whose writes dedupe against
-// nothing.
-func TestACompletionCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
-	const preSplit = "0123456789abcdef0123456789abcdef"
-
+// reason: see TestAnAnnouncementCarriesTheRunsUnitOfWork. This is the
+// announcement the dashboard's board reads and the one that routes the resume,
+// so a blank key here is a resumed turn whose writes dedupe against nothing.
+func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 	rig := newWaiterRig(t)
-	rig.launch(preSplit)
+	rig.launch("turn-1")
 	rig.runner.Finish(Result{Success: true})
 	rig.tick()
 
@@ -962,8 +965,7 @@ func TestACompletionCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
 	}
-	if payload.WorkKey != preSplit {
-		t.Errorf("WorkKey = %q, want the pre-split run's unit of work %q",
-			payload.WorkKey, preSplit)
+	if payload.WorkKey != rigWorkKey {
+		t.Errorf("WorkKey = %q, want the run's unit of work %q", payload.WorkKey, rigWorkKey)
 	}
 }

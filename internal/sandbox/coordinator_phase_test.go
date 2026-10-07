@@ -97,7 +97,7 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 	if rec.Model != "claude-sonnet-5" || rec.CodingAgent != "claude-code" || rec.SandboxID != launched.SandboxID {
 		t.Errorf("model/agent/box = %q/%q/%q", rec.Model, rec.CodingAgent, rec.SandboxID)
 	}
-	if rec.WorkItem == nil || *rec.WorkItem != rigItem || rec.WorkKey != launched.UnitOfWork() {
+	if rec.WorkItem == nil || *rec.WorkItem != rigItem || rec.WorkKey != launched.WorkKey {
 		t.Errorf("work item/key = %+v/%q, want the launch's", rec.WorkItem, rec.WorkKey)
 	}
 	if rec.Response != "fixed the flake" || len(rec.DeliveredRefs) != 1 || rec.Failed {

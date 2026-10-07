@@ -95,32 +95,3 @@ func Derive(eventIDs []string) string {
 	sum := sha256.Sum256([]byte(strings.Join(cleaned, "\n")))
 	return hex.EncodeToString(sum[:])[:keyChars]
 }
-
-// IsDerived reports whether a string has the shape [Derive] produces.
-//
-// IT EXISTS TO TELL TWO ERAS APART ON ONE WIRE FIELD. A `turn_id` published
-// before ADR-0017 IS a work key; one published after names a run. The payload
-// cannot say which, because the work key travels `omitempty` and an ABSENT
-// field and an EMPTY one are the same bytes — and those are exactly the two
-// cases a consumer must separate: an old build's event (fall back to the turn
-// id, which is a key) and a new build's turn with no ledgerable trigger (do
-// NOT, because there is no unit of work and inventing one arms a dedupe guard
-// against a value that means nothing).
-//
-// The shapes do not overlap and cannot drift into each other: this is
-// [keyChars] lowercase hex, and a run id is a uuid — 36 characters with four
-// dashes. Here rather than at either caller because it is a property of the
-// grammar this package owns, and a second copy of "what a work key looks
-// like" is the shape internal/whsec and internal/textcut exist because of.
-func IsDerived(s string) bool {
-	if len(s) != keyChars {
-		return false
-	}
-	for i := range len(s) {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}

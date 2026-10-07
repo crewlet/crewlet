@@ -667,9 +667,8 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		//
 		// OFF THE RESUMED TURN rather than the row, because the turn is
 		// where the row's identity was read into one shape (resumedTurn:
-		// the unit of work, and the instant it began even on a row an
-		// older build parked), and a second read of the row here is a
-		// second chance to read it differently.
+		// the unit of work, and the instant it began), and a second read
+		// of the row here is a second chance to read it differently.
 		runID:     in.Run.TurnID,
 		workKey:   in.Turn.WorkKey,
 		workSince: in.Turn.WorkSince,

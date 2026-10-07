@@ -6,16 +6,12 @@ import (
 	"log/slog"
 	"os"
 	"testing"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // TestMain silences the engine logger. Every Open logs a line per applied
@@ -39,60 +35,6 @@ func TestPendingStoreContract(t *testing.T) {
 		runs := memory.NewFleet()
 		return sandbox.NewCoordStore(runs), runs
 	})
-}
-
-// A ROW PARKED BEFORE THE SPLIT STILL KNOWS ITS UNIT OF WORK.
-//
-// Nothing rewrites a parked row, so a run suspended by a build from before
-// ADR-0017 carries no `work_key` and its `turn_id` IS one. A resume days later
-// has no trigger left to re-derive from, so reading the raw field would dedupe
-// its conversation entry and its tracker writes against nothing.
-func TestAPreSplitRunStillAnswersForItsUnitOfWork(t *testing.T) {
-	t.Parallel()
-	key := workkey.Derive([]string{"evt-a"})
-	for name, tc := range map[string]struct {
-		run  sandbox.PendingRun
-		want string
-	}{
-		"post-split, keyed":  {sandbox.PendingRun{TurnID: uuid.NewString(), WorkKey: key}, key},
-		"pre-split row":      {sandbox.PendingRun{TurnID: key}, key},
-		"post-split, no key": {sandbox.PendingRun{TurnID: uuid.NewString()}, ""},
-	} {
-		if got := tc.run.UnitOfWork(); got != tc.want {
-			t.Errorf("%s: UnitOfWork = %q, want %q", name, got, tc.want)
-		}
-	}
-}
-
-// A ROW AN OLDER BUILD PARKED STILL DERIVES ITS IDS FROM A REAL INSTANT.
-//
-// Nothing rewrites a parked row, so one parked before `work_since` existed has
-// a unit of work and no instant — and the zero instant reads as older than
-// every loss the operation ledger has recorded, so on any node whose ledger
-// had swept once every write the resumed turn made answered `unknown`. Such a
-// row answers a fixed instant off itself instead: its CreatedAt, the same on
-// every resume.
-func TestAParkedRunAnswersWhenItsWorkBegan(t *testing.T) {
-	t.Parallel()
-	key := workkey.Derive([]string{"evt-a"})
-	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
-	launched := began.Add(10 * time.Minute)
-	for name, tc := range map[string]struct {
-		run  sandbox.PendingRun
-		want time.Time
-	}{
-		"a stamped row": {sandbox.PendingRun{TurnID: uuid.NewString(), WorkKey: key,
-			WorkSince: began, CreatedAt: launched}, began},
-		"an older build's keyed row": {sandbox.PendingRun{TurnID: uuid.NewString(),
-			WorkKey: key, CreatedAt: launched}, launched},
-		"a pre-split row": {sandbox.PendingRun{TurnID: key, CreatedAt: launched}, launched},
-		"a row with no unit of work": {sandbox.PendingRun{TurnID: uuid.NewString(),
-			CreatedAt: launched}, time.Time{}},
-	} {
-		if got := tc.run.WorkBegan(); !got.Equal(tc.want) {
-			t.Errorf("%s: WorkBegan = %s, want %s", name, got, tc.want)
-		}
-	}
 }
 
 // NOTHING EMPTY EVER ANSWERS ANYTHING, and that is a rule of the value rather

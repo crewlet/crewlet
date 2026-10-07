@@ -372,9 +372,8 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 //
 // THE SAME RUN AND THE SAME UNIT OF WORK the suspended turn had, both read off
 // the row: the resume re-enters that run, and its writes stay idempotent
-// against the trigger the run was dispatched for. The instant is
-// [sandbox.PendingRun.WorkBegan], never the raw field, because a row an older
-// build parked has a key and no instant.
+// against the trigger the run was dispatched for, from the instant the first
+// half derived its ids with.
 //
 // THE START, NOT WHERE THE RESUMED HALF MINTS. That is decided afresh by every
 // attempt at the resume, against its own clock, when the telemetry that hands
@@ -384,7 +383,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 // attempt or an earlier half of the turn recorded, never here.
 func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization) *turnctx.Turn {
 	return &turnctx.Turn{
-		RunID: run.TurnID, WorkKey: run.UnitOfWork(), WorkSince: run.WorkBegan(),
+		RunID: run.TurnID, WorkKey: run.WorkKey, WorkSince: run.WorkSince,
 		Seat: seat, Org: organization,
 		Depth: run.DelegationDepth, Chain: run.DelegationChain,
 	}
@@ -418,7 +417,7 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 		}
 	}
 	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
-	if breach := panicBreach(role, agentID, run.TurnID, run.UnitOfWork(), trace, panicked); breach != nil {
+	if breach := panicBreach(role, agentID, run.TurnID, run.WorkKey, trace, panicked); breach != nil {
 		e.observe(ctx, breach)
 	}
 	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
@@ -491,7 +490,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// The unit of work beside the run, so the two halves of a
 		// suspended turn answer the same trace query as the dispatch
 		// span that started it.
-		attribute.String("crewlet.work_key", in.Run.UnitOfWork()))
+		attribute.String("crewlet.work_key", in.Run.WorkKey))
 	defer span.End()
 
 	// THE INDICATOR A RESUMED TURN SHOWS, which comes from one of two places
@@ -713,7 +712,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			pause, _ := stopOf(err)
 			role, agentID := seatIdentity(company, in.Turn.Handle())
 			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
-				in.Run.TurnID, in.Run.UnitOfWork(), pause, tracing.TraceOf(ctx)))
+				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
 			return fmt.Errorf("%w (a person stopped the resumed turn): %w",
 				sandbox.ErrResumeAbandoned, err)
 		}
@@ -796,7 +795,7 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 	// turn on that DM never looks up — the same silence this frame exists
 	// to end.
 	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.Conversation(),
-		in.Run.TurnID, in.Run.UnitOfWork(), resumeTask(in), res, e.dispatch.now())
+		in.Run.TurnID, in.Run.WorkKey, resumeTask(in), res, e.dispatch.now())
 }
 
 // resumeTask is the brief the resumed turn re-enters with.

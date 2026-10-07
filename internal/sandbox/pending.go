@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // The durable state of a detached coding job.
@@ -415,74 +414,6 @@ type BridgeCall struct {
 	At     time.Time `json:"at"`
 }
 
-// UnitOfWork is the identity this run's once-per-unit-of-work writes collapse
-// on, or "" when the run has none.
-//
-// NOT the raw field, because nothing rewrites a parked row: a run suspended by
-// a build from before ADR-0017 carries no work key at all, and its TurnID IS
-// one. A resume days later reads that row and has no trigger left to
-// re-derive from, so without this its conversation entry and its tracker
-// writes would dedupe against an empty key.
-//
-// ON SHAPE rather than on absence, for the reason [workkey.IsDerived] gives:
-// a post-split run with no ledgerable trigger is also missing the field, and
-// answering it with a run id would arm a dedupe guard with a value that means
-// nothing.
-func (r PendingRun) UnitOfWork() string {
-	if r.WorkKey != "" {
-		return r.WorkKey
-	}
-	if workkey.IsDerived(r.TurnID) {
-		return r.TurnID
-	}
-	return ""
-}
-
-// WorkBegan is the instant every operation id this run derives from its unit
-// of work ([PendingRun.UnitOfWork]) carries, or the zero instant when the run
-// has no unit of work.
-//
-// THE ROW'S OWN work_since WHERE IT HAS ONE, which is the instant the first
-// half of the turn derived its ids with, so the resumed half derives the same.
-//
-// THE START, NOT NECESSARILY WHERE THE RESUMED HALF MINTS: a resume so long
-// after this instant that the operation ledger may have swept it mints its
-// writes at the instant the engine rebases it onto instead, because every
-// operation minted here would then be one no node can vouch for. That rule is
-// the engine's, judged at every attempt against the attempt's own clock and
-// recorded in the fleet's coordination store rather than on this row — it is
-// a rule about the ledger and about the unit of work, which outlives any one
-// run's row; this is the instant it starts from.
-//
-// A FIXED INSTANT OFF THE ROW WHERE IT HAS NOT. Nothing rewrites a parked row,
-// so a run parked by a build from before that field carries a unit of work and
-// no instant, and the zero instant reads as older than every loss the
-// operation ledger has recorded: on any node whose ledger had swept once, every
-// write the resumed turn made answered `unknown`, and the run's whole second
-// half was lost. Such a row answers its own CreatedAt — when the launch wrote
-// it — which is safe on every count the instant has to meet:
-//
-//   - it is FIXED, so every resume of the row derives the same ids, and a
-//     resume that is itself retried is idempotent against the first;
-//   - it cannot collide with the first half, whose ids the older build derived
-//     another way, so a write repeated across the upgrade is a second write
-//     rather than a lost one — the same cost as a crash re-run with no ledger;
-//   - it is no LATER than any write made under it, since every such write is
-//     the resume's, after the launch — which is all the ledger's vouching needs
-//     of an operation's instant (see statelog's Publisher.vouches).
-//
-// Zero where the row has no unit of work either, which is the documented
-// "nothing to collapse" case: those ids are fresh anyway.
-func (r PendingRun) WorkBegan() time.Time {
-	switch {
-	case !r.WorkSince.IsZero():
-		return r.WorkSince.UTC()
-	case r.UnitOfWork() == "":
-		return time.Time{}
-	}
-	return r.CreatedAt.UTC()
-}
-
 // MaxBridgeCalls bounds the durable log of a bridged run.
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
@@ -511,9 +442,9 @@ type PendingRun struct {
 	// WorkKey is the unit of work that run was dispatched for. It rides
 	// the row so a resumed turn keeps the identity its writes have to be
 	// idempotent against — the resume re-enters the loop mid-round, with
-	// no trigger left to re-derive it from. Empty on a row written before
-	// this field existed, and on a turn with no ledgerable trigger, which
-	// is the documented "nothing to collapse" case.
+	// no trigger left to re-derive it from. Empty on a turn with no
+	// ledgerable trigger, which is the documented "nothing to collapse"
+	// case.
 	WorkKey string `json:"work_key,omitempty"`
 
 	// WorkSince is when that unit of work began, and it rides the row for
@@ -522,8 +453,19 @@ type PendingRun struct {
 	// could not reproduce it would derive DIFFERENT ids for the same
 	// writes, and the state log reads it to refuse deciding again an
 	// operation minted before its node adopted a donated snapshot.
-	// Zero on a row written before this field existed — read it through
-	// [PendingRun.WorkBegan], never raw.
+	//
+	// THE START, NOT NECESSARILY WHERE THE RESUMED HALF MINTS: a resume so
+	// long after this instant that the operation ledger may have swept it
+	// mints its writes at the instant the engine rebases it onto instead,
+	// because every operation minted here would then be one no node can
+	// vouch for. That rule is the engine's, judged at every attempt against
+	// the attempt's own clock and recorded in the fleet's coordination
+	// store rather than on this row — it is a rule about the ledger and
+	// about the unit of work, which outlives any one run's row.
+	//
+	// Zero where there is no work key, or where the trigger carried no
+	// timestamp; a zero start is rebased by the engine like any start past
+	// the horizon, identically in both halves of the turn.
 	WorkSince time.Time `json:"work_since,omitzero"`
 
 	AgentHandle string `json:"agent_handle"`

@@ -956,11 +956,7 @@ twenty-nine days after that work began**, when it is rebased like any other
 attempt (above): every attempt at the resume is judged against its own clock,
 and a resumed half whose earlier half was rebased inherits that instant rather
 than taking one of its own (see
-[Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). A run parked by a build from before the row
-carried that instant resumes with the row's own creation instant instead —
-fixed, so every resume of it derives the same ids — rather than with no instant
-at all, which would answer every write the resumed half made `unknown` on any
-node whose operation ledger has swept. The resume also starts from what the run
+[Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). The resume also starts from what the run
 already called — the rounds before the suspension, the parked round's own calls
 and whatever an agent-mode run called over the bridge — so the counts in its
 ids continue rather than start again. A delegated worker counts from the run's

@@ -1079,7 +1079,7 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.AgentPhaseCompleted {
 	rec := types.AgentPhaseCompleted{
 		Agent: run.AgentID, RoleName: run.Role,
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(),
+		TurnID: run.TurnID, WorkKey: run.WorkKey,
 		Iteration: facts.Iteration, Phase: types.PhaseSandbox,
 		Model: facts.Model,
 		// Redacted again, at the publish, although the runner redacts at
@@ -1166,8 +1166,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	asked := c.now()
 	announcement := types.SandboxClarificationRequested{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), SandboxID: run.SandboxID,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 		Question: redact.Secrets(result.Question), Audience: result.AskTo,
 		// THE IDENTITY, like the launch announcement: this event is
 		// display, and the durable thread is what a person reading the
@@ -1672,7 +1671,7 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 ) {
 	payload := types.SandboxRunAnswered{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), WorkItem: run.WorkItem,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
 		Via: via, Outcome: outcome, AnsweredBy: by, AnsweredBySeat: bySeat,
 	}
 	ev := events.New(payload, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
@@ -2379,8 +2378,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 	}
 	failed := types.SandboxRunFailed{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		// UnitOfWork, never the raw field: see [PendingRun.UnitOfWork].
-		TurnID: run.TurnID, WorkKey: run.UnitOfWork(), SandboxID: run.SandboxID,
+		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 		CodingAgent: run.CodingAgent,
 		Reason:      ending.Reason, Detail: redact.Secrets(detail),
 	}
