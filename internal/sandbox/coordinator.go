@@ -1906,7 +1906,8 @@ func (c *Coordinator) settleAbandoned(ctx context.Context, run PendingRun, note 
 	if readErr != nil {
 		return c.settleClaimed(ctx, run, readErr, note)
 	}
-	return c.finish(ctx, settle, ending{fence: fenceOf(run), note: note})
+	_, ours := c.finish(ctx, settle, ending{fence: fenceOf(run), note: note})
+	return ours
 }
 
 // spend is [CoordinatorOptions.Spent] for one recorded answer.
@@ -2202,7 +2203,7 @@ func claimedFrom(run PendingRun) string {
 // does from every ending ([ErrAnswerOwed]). Reports whether the run's ending is
 // this node's ([Coordinator.finish]).
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) bool {
-	ours := c.finish(ctx, run, ending{
+	_, ours := c.finish(ctx, run, ending{
 		fence: fenceOf(run),
 		note:  &failureNote{reason: reason, detail: detail},
 	})
@@ -2660,12 +2661,15 @@ func handBackIDs(owed []HandedBack) []string {
 // it lets go of handed back, its box reclaimed, its note announced and its
 // record deleted, the stop REPORTED where the ending was this call's.
 //
-// Reports whether the run's ending is THIS NODE'S — decided under this call, or
-// kept for this node's retry ([Coordinator.oweEnding]) where the decision could
-// not be confirmed, which decides it again on the same terms, its reclaim
-// included. False is a run that is somebody else's: a newer lease owns it, or
-// somebody else had already ended it — and a caller must then say nothing
-// about what became of it, because whoever holds it will.
+// Reports the ending decided under this call's license, or nil where none is
+// — which a caller reads for what the decision settled, such as whether a
+// person's answer goes back to the seat ([RecordedEnding.Returned]); and
+// whether the run's ending is THIS NODE'S — decided under this call, or kept
+// for this node's retry ([Coordinator.oweEnding]) where the decision could not
+// be confirmed, which decides it again on the same terms, its reclaim included.
+// False is a run that is somebody else's: a newer lease owns it, or somebody
+// else had already ended it — and a caller must then say nothing about what
+// became of it, because whoever holds it will.
 //
 // # The box goes after the decision, never on the caller's snapshot
 //
@@ -2699,13 +2703,13 @@ func handBackIDs(owed []HandedBack) []string {
 // [Coordinator.endClaim]. What the widest license still refuses is a person's
 // reply no turn took, which goes back to the seat before the row does
 // ([ErrAnswerOwed]).
-func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) bool {
+func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) (*RecordedEnding, bool) {
 	if outranked(run, e.fence) {
 		// A newer lease owns the run, and the snapshot already says so;
 		// the store would refuse the decision for the same reason.
 		log.WarnContext(ctx, "sandbox_finish_outranked", "turn_id", run.TurnID,
 			"owner_epoch", run.OwnerEpoch, "epoch", e.fence.Epoch)
-		return false
+		return nil, false
 	}
 	endCtx, cancel := detached(ctx)
 	defer cancel()
@@ -2716,14 +2720,14 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, e ending) bool
 			"detail", "the run's ending could not be finished yet; this node finishes it — its "+
 				"box included, once the decision is confirmed — and the seat's next recovery "+
 				"pass reaps the run if the seat moves first")
-		return true
+		return decided, true
 	}
 	if decided == nil {
 		log.InfoContext(ctx, "sandbox_finish_declined", "turn_id", run.TurnID,
 			"detail", "the run is no longer this node's to end — a newer lease owns it, or "+
 				"somebody else ended it first — so its box and its record are left to them")
 	}
-	return decided != nil
+	return decided, decided != nil
 }
 
 // detached is the context a teardown runs under.
@@ -3074,22 +3078,34 @@ func (c *Coordinator) reapTail(ctx context.Context, run PendingRun, owner string
 		// inline — is dropped when it comes round to this holder.
 		c.spend(ctx, run.AgentHandle, *run.Answer)
 	}
-	log.WarnContext(ctx, "sandbox_abandoned_tail_reaped",
-		"turn_id", run.TurnID, "agent", run.AgentHandle,
-		"sandbox_id", run.SandboxID, "status", run.Status,
-		"answer_held", run.Answer != nil, "answer_taken", taken)
 	// Fenced on the lease this node just took, so a record a newer owner has
 	// already claimed is left to that owner, and neither ended nor announced
 	// here. ANNOUNCED like the other ways a run is lost, by the ending itself:
 	// the seat's new owner is about to open its mailbox, and a turn that died
 	// with the previous owner has to be visible rather than inferred from a
 	// record that quietly left the board.
-	if !c.finish(ctx, run, ending{
+	decided, ours := c.finish(ctx, run, ending{
 		fence: fence,
 		note:  &failureNote{reason: types.SandboxFailureAbandoned, detail: detail},
-	}) {
+	})
+	if !ours {
 		return nil, reapLeft
 	}
+	// LOGGED ONCE THE ENDING IS DECIDED, because what an operator searches
+	// this line for — did the person's answer go back to the seat? — is the
+	// decision's to settle ([RecordedEnding.Returned]), and a line written
+	// before it could only say what the row held. answer_held and
+	// answer_taken are that: an answer held and not taken is one the ending
+	// returns, but a taken one is held too, and a held one an earlier decline
+	// already owes goes back as well. answer_handed_back is the one field to
+	// search; ending_decided false is a decision the store did not confirm,
+	// whose retry decides it and whose announcement says whether it went back.
+	log.WarnContext(ctx, "sandbox_abandoned_tail_reaped",
+		"turn_id", run.TurnID, "agent", run.AgentHandle,
+		"sandbox_id", run.SandboxID, "status", run.Status,
+		"answer_held", run.Answer != nil, "answer_taken", taken,
+		"answer_handed_back", decided != nil && decided.Returned,
+		"ending_decided", decided != nil)
 	return nil, reapEnded
 }
 

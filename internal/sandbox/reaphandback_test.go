@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -148,6 +149,26 @@ func abandonedOnce(t *testing.T, rig *coordRig, handedBack bool) {
 	}
 }
 
+// reapLogged asserts the reap's log line says whether the person's answer went
+// back to the seat, in the one field docs/concepts/code-sandbox.md tells an
+// operator to search for.
+func reapLogged(t *testing.T, logs *syncBuffer, handedBack bool) {
+	t.Helper()
+	var line string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, "sandbox_abandoned_tail_reaped") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no sandbox_abandoned_tail_reaped line in:\n%s", logs.String())
+	}
+	want := fmt.Sprintf("answer_handed_back=%t", handedBack)
+	if !strings.Contains(line, want) || !strings.Contains(line, "ending_decided=true") {
+		t.Fatalf("the reap logged %q, want it to say %s of a decided ending", line, want)
+	}
+}
+
 // STOPPED BETWEEN THE CLAIM AND THE TURN: the next holder gives the answer back
 // to the run — fenced to its lease, the lost claim counted — holds the seat's
 // mail behind it and resumes the run with it, once. Nothing goes back to the
@@ -188,6 +209,7 @@ func TestAClaimThatDiedBeforeItsTurnIsRevivedWithItsAnswer(t *testing.T) {
 func TestAClaimPastItsRevivalsHandsTheReplyBackOnce(t *testing.T) {
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
+	logs := captureLogs(t)
 	var holds *holdSpy
 	var witness *spentAtWrite
 	next := reaper(t.Context(), t, rig, rig.pending, 2, func(next *coordRig) {
@@ -203,6 +225,7 @@ func TestAClaimPastItsRevivalsHandsTheReplyBackOnce(t *testing.T) {
 	}
 	rig.finished("t1")
 	abandonedOnce(t, rig, true)
+	reapLogged(t, logs, true)
 	if detail := rig.failures()[0].Detail; !strings.Contains(detail, "claims of this answer have now died") {
 		t.Errorf("the announcement says %q; it should say why the run was not resumed again", detail)
 	}
@@ -234,6 +257,7 @@ func TestAClaimPastItsRevivalsHandsTheReplyBackOnce(t *testing.T) {
 func TestAClaimWhoseTurnTookTheAnswerHandsNothingBack(t *testing.T) {
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, true)
+	logs := captureLogs(t)
 	next := reaper(t.Context(), t, rig, rig.pending, 2, nil)
 
 	if got := rig.handedBack(); len(got) != 0 {
@@ -241,6 +265,9 @@ func TestAClaimWhoseTurnTookTheAnswerHandsNothingBack(t *testing.T) {
 	}
 	rig.finished("t1")
 	abandonedOnce(t, rig, false)
+	// HELD, TAKEN AND NOT HANDED BACK: the two fields the line carried
+	// before could not tell this apart from a reply that went back.
+	reapLogged(t, logs, false)
 	if spent := next.spentDeliveries(); len(spent) != 1 || spent[0].id != r1.ID.String() {
 		t.Fatalf("spent %+v, want R1's delivery recorded as worked by the reap", spent)
 	}
