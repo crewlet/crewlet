@@ -2972,8 +2972,9 @@ func TestAnAnswerForATerminallyGoneRunGoesBackThroughItsRow(t *testing.T) {
 }
 
 // statelessStore hands back a claimed run with no suspended conversation on
-// it, which is what a row written before [StatusLaunching] existed looks like
-// to this build.
+// it, which is what a row this build's launch path did not write looks like:
+// the resume has nothing to re-enter, and the run is failed as
+// no_execute_state.
 type statelessStore struct{ PendingStore }
 
 func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,

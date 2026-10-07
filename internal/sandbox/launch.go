@@ -50,8 +50,8 @@ type TurnRef struct {
 	// one after the other. They were ConversationKey and
 	// ConversationIdentity here, holding the partition and the conversation
 	// respectively — so each assignment read as its own opposite and a
-	// swapped pair looked exactly like a correct one. The wire names did
-	// not move with them; see [PendingRun].
+	// swapped pair looked exactly like a correct one. [PendingRun] spells
+	// them the same way, on the row and on the wire.
 	//
 	// Two fields where there was one, and the miss this guards against is
 	// now available twice: this struct's partition was empty at its only
