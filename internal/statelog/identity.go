@@ -194,9 +194,9 @@ var ErrLogDiverged = errors.New("statelog: the log's record at this node's check
 
 // divergedLog is what established that a log diverged from an applier's rows:
 // the checkpoint, the broker instant of the record the checkpoint names, and
-// the instant of the record the log holds at the same sequence. A consumed
-// instant of zero is a checkpoint that names no record, found diverged by the
-// operation this node's ledger says it applied there ([Runner.nameCheckpoint]).
+// the instant of the record the log holds at the same sequence. The consumed
+// instant is never zero: a checkpoint that names no record is compared with
+// nothing ([Runner.VerifyCheckpoint]).
 type divergedLog struct {
 	at             Position
 	consumed, held time.Time
@@ -210,10 +210,6 @@ func (d divergedLog) err(stream string) error {
 	// the other history's record landing AT it — holds nothing past it.
 	consumed := fmt.Sprintf("on the record the broker stored at %s",
 		d.consumed.UTC().Format(time.RFC3339Nano))
-	if d.consumed.IsZero() {
-		consumed = "where its operation ledger says it applied another operation " +
-			"than the log's record there carries"
-	}
 	return fmt.Errorf("%w: this node's checkpoint on %s is at sequence %d, %s, and "+
 		"the log's record at %d was stored at %s — the broker was restored from a "+
 		"copy older than these rows and another record has since been written at "+
