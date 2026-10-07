@@ -448,7 +448,10 @@ Four rules follow from that:
   create-only write, for the two flat collections (`mcp-servers`,
   `llm-providers`): a taken id is `412 entity_exists` rather than a
   replacement, the body's identity must match the path as on any `PUT`, and
-  the whole company is validated with the new entity in it. A seat and a unit
+  the whole company is validated with the new entity in it. An added entity
+  lands LAST in its collection's order — a server after every declared server,
+  a provider at the end of `providers.llm_order`, the order an unpinned seat
+  resolves a provider in. A seat and a unit
   are `400 not_creatable` — each has a place in the chart the path cannot
   name — and are added through `PUT /config`, which shows the whole thing.
   The id is looked up before the body is read, so a mistyped one is a `404`
@@ -502,8 +505,9 @@ refused.** The store is keyed by the name a `${VAR}` resolves through, so
 all, a success the operator only discovers when a provider fails to
 authenticate hours later. Letters, digits and underscores, starting with a
 letter or an underscore. The refusal comes before the body is read, so the
-name is what the answer points at. Reading and removing take the name as
-given, so a row written before the check can still be inspected and deleted.
+name is what the answer points at. A name outside the grammar names no
+secret, so reading one answers `404` and removing one answers
+`{"removed": false}`.
 
 **The body is the value, not a JSON wrapper.** A credential is arbitrary bytes
 — a PEM key has newlines, a token can hold anything — and an encoding step
