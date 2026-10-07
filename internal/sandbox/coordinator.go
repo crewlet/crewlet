@@ -1672,8 +1672,9 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// [StatusLaunching] until its conversation is written, and a
 		// launching run is not claimable — which is exactly why it stays:
 		// it is the assertion that the launching state is doing its job.
-		// What can still land here is a row a build predating that state
-		// wrote, read by this one across a rolling upgrade.
+		// A claimed run without one is a row this build's launch path did
+		// not write, and it is failed as no_execute_state rather than
+		// resumed into nothing.
 		log.WarnContext(ctx, "sandbox_resume_no_execute_state",
 			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
 			"detail", "the row carried no suspended conversation; the turn "+

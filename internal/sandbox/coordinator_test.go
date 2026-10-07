@@ -1014,8 +1014,8 @@ func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 //
 // No LIVE path produces one any more — a run holds [StatusLaunching] until its
 // conversation is written and a launching run is not claimable — so this
-// reaches the state the only way left: a row written by a build that predates
-// that state, read by this one across a rolling upgrade.
+// reaches the state by writing the row directly, bypassing the launch path:
+// the guard is the assertion that the launching state does its job.
 func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
@@ -2913,8 +2913,8 @@ func TestAnAnswerForATerminallyGoneRunGoesBackThroughItsRow(t *testing.T) {
 				inner: rig.pending, refuse: []string{"ReleaseClaim"},
 			}
 		},
-		// A row from a build that predates the launching state: claimable,
-		// with nothing to resume into, so the run is failed.
+		// A row the launch path did not write: claimable, with nothing to
+		// resume into, so the run is failed.
 		"a row with no suspended conversation": func(rig *coordRig) {
 			rig.coordinator.pending = statelessStore{PendingStore: rig.pending}
 		},
