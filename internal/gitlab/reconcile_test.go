@@ -4107,6 +4107,38 @@ func TestTheGroupHookGoesWhenTheCompanyMovesToProjectHooks(t *testing.T) {
 	}
 }
 
+// A NAMELESS HOOK AT THIS PATH IS SOMEBODY ELSE'S, and a pass neither
+// re-points nor removes it. Every hook this engine registers carries its name,
+// and an instance that would not keep one is refused, so a hook with no name
+// was registered by a person or another tool — adopting it would take over a
+// registration nobody handed this deployment.
+func TestANamelessHookAtThisPathIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.hooks = []hookRow{
+		foreignHook(9, "https://someone-else.example.com/webhooks/gitlab"),
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.updatedHooks) != 0 || len(f.deletedHooks) != 0 {
+		t.Errorf("updated %v, deleted %v: the nameless hook was taken over",
+			f.updatedHooks, f.deletedHooks)
+	}
+	if len(f.hooks) != 2 {
+		t.Fatalf("hooks = %+v, want the nameless one untouched beside a new one of ours", f.hooks)
+	}
+	if got := f.hooks[0].attrs["url"]; got != "https://someone-else.example.com/webhooks/gitlab" {
+		t.Errorf("the nameless hook now points at %v", got)
+	}
+	if got := f.hooks[1].attrs["name"]; got != gitlab.DefaultWebhookName {
+		t.Errorf("the hook this pass created is named %v, want %q", got, gitlab.DefaultWebhookName)
+	}
+}
+
 // THE NAME IS ONE VALUE AND TWO PACKAGES READ IT.
 //
 // config is the leaf every vendor package depends on, so it cannot import
