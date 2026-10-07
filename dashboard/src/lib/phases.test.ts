@@ -412,9 +412,9 @@ describe("a round that reached nobody", () => {
     expect(record.emptyAnswerRounds).toBe(2);
   });
 
-  test("a phase recorded before the field existed reads as zero, not NaN", () => {
-    // The envelope evolves additive-only and a rolling upgrade replays rows
-    // written by a build that had no such field.
+  test("a phase with no empty round reads as zero, not NaN", () => {
+    // The engine omits the field at zero (`omitempty`), so an ordinary phase
+    // carries no such key at all.
     expect(fromPhaseEvent(phaseEvent())!.emptyAnswerRounds).toBe(0);
   });
 });
