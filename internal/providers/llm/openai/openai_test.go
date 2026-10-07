@@ -530,6 +530,25 @@ func TestEveryKeyBenchedReportsAnExhaustedPool(t *testing.T) {
 	}
 }
 
+// AN EXHAUSTED POOL SAYS WHY ITS LAST KEY WAS BENCHED: a revoked key and a
+// spent quota bench alike, and only the endpoint's own words tell them apart.
+func TestAnExhaustedPoolSaysWhatTheEndpointToldItsLastKey(t *testing.T) {
+	t.Parallel()
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, 429, `{"error":{"message":"You exceeded your current quota",`+
+			`"type":"insufficient_quota","code":"insufficient_quota","param":null}}`)
+	})
+	_, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+	if !errors.Is(err, credential.ErrExhausted) || llm.KindOf(err) != llm.KindRateLimit {
+		t.Fatalf("err = %v, want the pool exhausted on a rate limit", err)
+	}
+	for _, want := range []string{"You exceeded your current quota", "code insufficient_quota"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
+		}
+	}
+}
+
 // --- request translation ----------------------------------------------
 
 func TestConversationTranslation(t *testing.T) {
