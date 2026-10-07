@@ -265,6 +265,32 @@ func wrappedKeys() map[string]keyForm {
 	}
 }
 
+// AN ENCRYPTED KEY ON ONE LINE is still a key: its RFC 1421 headers come
+// before its body there too — with spaces for its line breaks, as a list of its
+// lines, or with its breaks removed, the IV glued to the body. The one-line
+// reader took the header's first word for a word of prose and the line for no
+// key at all.
+//
+// Mutation: drop the one-line header skip, and each of these is left whole.
+func TestAnEncryptedKeyOnOneLineIsRedacted(t *testing.T) {
+	m := redact.Marker + "private-key]"
+	lines := []string{"-----BEGIN RSA PRIVATE KEY-----", "Proc-Type: 4,ENCRYPTED",
+		"DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF", "", keyLine, keyLine, "u1SU1Lf=",
+		"-----END RSA PRIVATE KEY-----"}
+	for name, form := range map[string]keyForm{
+		"spaces for its breaks": {"KEY=" + strings.Join(lines, " ") + " set\n", "KEY=" + m + " set\n"},
+		"a list of its lines":   {"lines = ['" + strings.Join(lines, "', '") + "']\n", "lines = ['" + m + "']\n"},
+		"its breaks removed":    {"KEY=" + strings.Join(lines, "") + "\n", "KEY=" + m + "\n"},
+		"a shell's trace of printf": {"+ printf '%s\\n' '" + strings.Join(lines, "' '") + "'\n",
+			"+ printf '%s\\n' '" + m + "'\n"},
+		"no END, its breaks removed": {"KEY=" + strings.Join(lines[:len(lines)-1], ""), "KEY=" + m},
+	} {
+		if got := redact.Secrets(form.text); got != form.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
+		}
+	}
+}
+
 // A KEY IS READ IN EVERY WRAPPING IT REACHES A TRANSCRIPT IN, now that an END
 // closes only a block of key: a reader's line numbers, a grep's context lines,
 // a log's timestamps, a diff, a JSON string escaped once or twice, a string

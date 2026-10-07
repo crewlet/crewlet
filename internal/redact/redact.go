@@ -208,7 +208,7 @@ func keySpans(text string) [][2]int {
 //   - a line of nothing but punctuation between them is the wrapping's own
 //     ([glue]): the `" +` of a string concatenated across lines;
 //   - and the whole key may be on one line, its body whitespace-separated
-//     base64 between the armours.
+//     base64 between the armours, its headers too.
 //
 // A body line that ends in anything else — the `"}` that closes the string a
 // key was written into, the `…` of a cut — ENDS the block at its base64,
@@ -264,7 +264,9 @@ func readKey(text string, b []int) keyBlock {
 	if e := keyEnd.FindStringIndex(rest); e != nil {
 		// BEGIN and END on one line: closed only with a body between, and
 		// nothing but its separators after it.
-		if body, end := runChunk(rest[:e[0]]); body && lastBase64(rest[end:e[0]]) < 0 {
+		between := rest[:e[0]]
+		h := skipHeaders(between)
+		if body, end := runChunk(between[h:]); body && lastBase64(between[h+end:]) < 0 {
 			return keyBlock{end: b[1] + e[1]}
 		}
 		return keyBlock{}
@@ -273,9 +275,11 @@ func readKey(text string, b []int) keyBlock {
 	if trimmed == "" {
 		return r.read(next)
 	}
-	if body, end := runChunk(trimmed); body {
+	h := skipHeaders(trimmed)
+	if body, end := runChunk(trimmed[h:]); body {
 		// The body begins on the BEGIN line: a key on one line, or its
 		// first line glued to the armour.
+		end += h
 		r.body, r.end, r.state = 1, b[1]+leadingSpace(rest)+end, inBody
 		if lastBase64(trimmed[end:]) >= 0 {
 			// The enclosing text resumes on the BEGIN line itself.
@@ -483,6 +487,28 @@ func prefixShape(p string) string {
 		}
 	}
 	return b.String()
+}
+
+// oneLineHeader is one of RFC 1421's headers written on the same line as the
+// body it precedes — a key with its line breaks turned to spaces, or removed —
+// with whatever separates it from what came before. The values are what
+// OpenSSL writes: `4,ENCRYPTED`, and a cipher with an IV of its block size,
+// eight bytes or sixteen, in hex — which is what ends a DEK-Info glued to the
+// body with no break at all.
+var oneLineHeader = regexp.MustCompile(`^[^A-Za-z0-9+/=]*(?:Proc-Type:\s*4,ENCRYPTED|DEK-Info:\s*[A-Za-z0-9-]+,(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{16}))`)
+
+// skipHeaders is how much of s, a key's body written on one line, is its RFC
+// 1421 headers: the one-line reader ([runChunk]) would take a header's first
+// word for a word of prose, and the line for no key at all.
+func skipHeaders(s string) int {
+	at := 0
+	for {
+		loc := oneLineHeader.FindStringIndex(s[at:])
+		if loc == nil {
+			return at
+		}
+		at += loc[1]
+	}
 }
 
 // runChunk reads a key's body written on one line, from the start of s:
