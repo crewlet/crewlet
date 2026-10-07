@@ -211,11 +211,9 @@ type Input struct {
 	// about which round this is instead of differing by however many
 	// rounds ran before the box did.
 	//
-	// Zero or less is read as one. The value comes off a durable row
-	// another process, and possibly another build, wrote; a row that
-	// cannot say where it parked resumes at one exactly as it did before
-	// this field existed, and taking a negative literally would run the
-	// loop extra rounds and file them under iteration zero.
+	// Zero or less is read as one: the value comes off a durable row, and
+	// taking a non-positive one literally would run the loop extra rounds
+	// and file them under iteration zero.
 	Round int
 }
 

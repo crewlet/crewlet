@@ -782,10 +782,9 @@ func TestTheRoundsAfterAResumedOneContinueTheNumbering(t *testing.T) {
 	assertOneEntryPerIteration(t, res.Iterations)
 }
 
-// A PARKED ROW THAT CANNOT SAY WHERE IT STOPPED resumes at round one, which is
-// what every resumed turn did before the round travelled at all. Zero is not a
-// round: taken literally the loop would run an extra one and file its ledger
-// entry under iteration zero.
+// A PARKED ROW THAT CANNOT SAY WHERE IT STOPPED (a damaged one) resumes at
+// round one. Zero is not a round: taken literally the loop would run an extra
+// one and file its ledger entry under iteration zero.
 func TestAResumedTurnWithNoParkedRoundStartsAtOne(t *testing.T) {
 	t.Parallel()
 	f := &fake{
