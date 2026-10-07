@@ -345,8 +345,9 @@ func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
 //
 // The update carries the stream's CURRENT configuration with one field
 // changed, read in the same call, because a JetStream update replaces the
-// whole configuration: sending a config built from this build's own defaults
-// would silently reset every field an operator or an earlier build had set.
+// whole configuration: sending a config built from this node's own spec would
+// silently reset every field an operator had set, or that the node which
+// created the stream set from its own Tier A.
 func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
