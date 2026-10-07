@@ -730,10 +730,10 @@ func TestADuplicatedIdentityIsMatchedToNothing(t *testing.T) {
 
 // AN IDENTIFIED LIST INSIDE A MEMBER NEVER FALLS BACK TO POSITION EITHER.
 //
-// Sandbox setup steps are matched by name within their list. A submitted
-// document is refused for two steps of one name, but a stored revision from
-// before that rule can still hold them, and it is the prior a write restores
-// from. A reorder must not trade their registry tokens.
+// Sandbox setup steps are matched by name within their list, and restore never
+// resolves a mask against a prior identity two members share: a prior can
+// hold two steps of one name (an admission rule an apply does not enforce),
+// and a reorder must not trade their registry tokens.
 func TestDuplicateStepNamesAreMatchedToNothing(t *testing.T) {
 	t.Parallel()
 	original := credentialCompany(t)
@@ -940,8 +940,9 @@ roles:
 
 // THE DUPLICATE SIBLING PROBE: TWO UNITS OF ONE NAME NEVER TRADE CREDENTIALS.
 //
-// A stored revision a build before the name rules admitted can hold two units
-// called "Platform", each with its own team's token. Reordering them, or
+// A document can hold two units called "Platform", each with its own team's
+// token — a submitted one before validation refuses it, or a prior applied
+// under the runnable rules. Reordering them, or
 // moving and renaming one, restored through position or through either of the
 // two names hands one team the other's token with no mask left standing to
 // refuse it. The only safe outcome is a mask error on both.

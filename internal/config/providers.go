@@ -48,9 +48,8 @@ type Providers struct {
 	//
 	// An explicit value WINS over the document's key order, which is what
 	// makes that round trip lossless and lets an operator pin the order
-	// deliberately. A document carrying neither — hand-written JSON, or a
-	// revision stored before this existed — falls back to sorted keys,
-	// arbitrary but stable; see ProviderOrder.
+	// deliberately. A document carrying neither — a value built in Go —
+	// falls back to sorted keys, arbitrary but stable; see ProviderOrder.
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
 	// Embeddings powers the learning subsystem's vector recall. Nil
