@@ -48,12 +48,13 @@ export function WindowMeters({
           />
           {w.state === "refusing" && (
             // THE GATE'S OWN WORD WHERE IT HAS ONE. The stamp is when a
-            // charge was actually turned away; a window with no room left
-            // for a single token refuses the next one whatever its size,
-            // and says so before any has been.
+            // call was LAST turned away — the counter moves it to every
+            // refusal it records — and a window with no room left for a
+            // single token refuses the next one whatever its size, and
+            // says so before any has been.
             <p className="t-caption">
               {w.refused_at
-                ? `Refusing charges since ${w.refused_at}.`
+                ? `Last refused a call at ${w.refused_at}.`
                 : "No further charge fits, so turns are declined at the gate."}{" "}
               Room comes back when {w.window} turns over at {w.resets_at}, or when the ceiling is
               raised.

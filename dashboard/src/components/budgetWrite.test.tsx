@@ -118,7 +118,7 @@ test("it raises the company's when only the company's window is refusing", async
   expect(screen.getByRole("dialog", { name: "Raise the company's budget" })).toBeTruthy();
 });
 
-// "REFUSING SINCE" ONLY WHERE THE WINDOW IS STILL REFUSING. A refused round is
+// "LAST REFUSED" ONLY WHERE THE WINDOW IS STILL REFUSING. A refused round is
 // counted, so a window that refused one reads past its ceiling and refusing; a
 // ceiling raised since gives it room again while its stamp stays until the
 // next admitted charge clears it, and the dialog must not call that window
@@ -136,7 +136,7 @@ test("a refusal stamp is said to be refusing only while the window still refuses
     });
     await open();
     const helper = screen.getByText(/tokens spent today/);
-    expect(/refusing since/.test(helper.textContent ?? "")).toBe(refusing);
+    expect(/last refused/.test(helper.textContent ?? "")).toBe(refusing);
     cleanup();
   }
 });
