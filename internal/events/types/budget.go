@@ -99,7 +99,7 @@ const (
 	// near fraction of its ceiling (engine.BudgetNearFraction, served
 	// beside every answer that carries a state).
 	BudgetNear BudgetState = "near"
-	// BudgetRefusing is a capped window the gate is turning charges away
+	// BudgetRefusing is a capped window the gate is turning work away
 	// in: it has no room left for a single token, which is what every
 	// window that refused a round has, since the refused round is
 	// counted. Never the refusal stamp alone — a ceiling raised since
@@ -138,10 +138,11 @@ type BudgetWindow struct {
 	Limit *int `json:"limit,omitempty"`
 	// RefusedAt is when the window last turned a call away, RFC 3339 in
 	// UTC, and absent while it has not: the gate's own record of saying
-	// no, and when — a charge it refused, or a call a turn's meter held
-	// before making it because the window was already full. A round it
-	// turned away is in Used like any other — a refused round has been
-	// billed, so the counter counts it — which is why a window that
+	// no, and when — a charge it refused, or work turned away before any
+	// call because the window was already full (a turn's next call, a
+	// seat's delivery parked, a person's question, a reflection pass). A
+	// round it turned away is in Used like any other — a refused round has
+	// been billed, so the counter counts it — which is why a window that
 	// refused a round reads past its Limit. The shared counter's stamp
 	// (coord.WindowUsage.RefusedAt), cleared by the scope's next admitted
 	// charge and by the window turning over, so every node reports the
