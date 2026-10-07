@@ -5721,12 +5721,12 @@ arguments, or the address — never an `env` value or a header), who it
 reported*) and **one chip per live node** with what that node started, and
 under THAT chip the first failure it reported, in secondary ink with the seat
 it was launched for — the chip carries the danger tone and names the node, so
-the reason does not repeat either. A per-seat server on a roster that carries
-no `tool_sources` reaches *Unknown*, never *No seat*; a shared one reaches
-every agent seat by the engine's own rule whatever the roster says. The launch
-is one line cut at its end, never broken inside a token. A node whose build
-does not report is named once above the grid and its chips read *not
-reported*, never *none*. The **From MCP servers** tile counts *n of m servers
+the reason does not repeat either. The engine puts `tool_sources` on every
+agent seat it pushes, so a shared server reaches every agent seat and a
+per-seat one the seats granted it. The launch
+is one line cut at its end, never broken inside a token. A node whose last
+heartbeat carried no status is named once above the grid and its chips read
+*not reported*, never *none*. The **From MCP servers** tile counts *n of m servers
 running* off the same answer — never the registry's origins, which read *0*
 over a table of failing servers. The section is the operator's — it names
 nodes, commands and failures — so a reader without the credential sees the
