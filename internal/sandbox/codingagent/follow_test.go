@@ -267,6 +267,53 @@ func TestAReadingIsTheSameHoweverItsReadsFell(t *testing.T) {
 	}
 }
 
+// A READING THAT BEGINS INSIDE A LINE LONGER THAN ITS WINDOW DROPS THAT LINE
+// rather than showing its tail as if it were whole. A CLI that writes more
+// than a window of stderr with no line break — \r-only progress, a minified
+// blob — and then a credential leaves the first live read landing mid-line;
+// the rest of that line, redacted with none of the text before it, put the
+// tail of the credential on screen with its rule's anchor cut off. The reading
+// now holds the open line until a break arrives and shows only whole lines
+// after it, so the settled text omits the unreadable line.
+//
+// Mutation: drop the partialOpen handling (begin starting at the file's end,
+// take showing the rest of the line), and the token's tail shows in clear.
+func TestAReadingInsideAnOverlongLineDropsIt(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewOpenCode()
+	b := box(t, runner)
+	p := paths(b)
+	// More than a window (1 MiB) of stderr with no line break at all.
+	noBreak := strings.Repeat("downloading 42% ", 70000) // ~1.07 MiB
+	token := "ghp_" + strings.Repeat("A1b2C3d4", 5)      // 40 body chars: matches the github-token rule
+	// The first read lands with only the token's HEAD written, so its tail —
+	// short enough not to look like a key's body on its own, so nothing else
+	// would hold it back — is what a later read would otherwise show in clear.
+	b.Put(p.Err(), noBreak+"Authorization: token "+token[:24])
+	reading := runner.Follow(launched(runner))
+	first := read(t, reading, b)
+	// DROPPED, NOT HELD: nothing will ever show those bytes, so they are not
+	// counted as waiting to settle; the reading says instead that it began
+	// after the stream's start, which is what that line is.
+	if !first.Front || first.Held != 0 {
+		t.Errorf("inside the overlong line: front %v, held %d; want front and nothing held",
+			first.Front, first.Held)
+	}
+
+	// The rest of the token, the line's break, and a whole line after it.
+	b.Put(p.Err(), noBreak+"Authorization: token "+token+" done\nnext line\n")
+	second := read(t, reading, b)
+
+	shown := first.Text + second.Text
+	if strings.Contains(shown, "ghp_") || strings.Contains(shown, token[24:36]) ||
+		strings.Contains(shown, "Authorization") {
+		t.Fatalf("the tail of a line longer than the window reached the screen: %q", shown)
+	}
+	if strings.TrimSpace(shown) != "next line" {
+		t.Fatalf("shown = %q; want only the whole line after the dropped one", shown)
+	}
+}
+
 // A READING SHOWS WHAT A CLAUDE RUN IS DOING — the transcript of the stream so
 // far, which under `json` was nothing at all until the run ended.
 func TestALiveReadingShowsARunningClaudeRun(t *testing.T) {

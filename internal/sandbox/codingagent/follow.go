@@ -195,6 +195,14 @@ type rawStream struct {
 	// of its origin: a stream truncated and written anew from the same
 	// place is not the text read from there before.
 	restarts int
+	// partialOpen is set when the reading began inside a line longer than
+	// the whole window, so there was no line break to begin after. Until a
+	// break arrives the reading is still mid-line, and what has come so far
+	// is the END of a line whose start is off the window — unshowable, the
+	// way [FileTail.Lines] drops a partial FIRST line. Showing it would put
+	// the tail of a credential that straddled the window's edge on screen,
+	// redacted in isolation with its rule's anchor cut off before it.
+	partialOpen bool
 }
 
 // origin names the reading of this stream as one account.
@@ -243,7 +251,9 @@ func (s *rawStream) next(ctx context.Context, box sandbox.Sandbox, path string, 
 }
 
 // begin starts the reading at the start of the stream's last [liveWindow], on
-// a line.
+// a line — or, when the window holds no line break at all, mid-line with
+// [rawStream.partialOpen] set, so the rest of that unreadable line is dropped
+// rather than shown as if it were whole ([rawStream.take]).
 func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string, done, again bool) ([]byte, bool, error) {
 	tail, err := box.ReadTail(ctx, path, liveWindow)
 	if err != nil {
@@ -252,6 +262,11 @@ func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string,
 	data, partial := tail.Lines()
 	s.start = tail.Before() + int64(partial)
 	s.pos, s.size, s.growth, s.started = s.start, tail.Size, 0, true
+	// A mid-file window with no break is one long line whose start is off
+	// the window. Lines returns nothing, and partial is the whole window;
+	// begin would otherwise start at the file's end and the next read would
+	// hand the rest of that line to the display as a whole line.
+	s.partialOpen = !tail.Whole() && len(data) == 0 && bytes.IndexByte(tail.Data, '\n') < 0
 	if again {
 		s.restarts++
 	}
@@ -260,7 +275,23 @@ func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string,
 
 // take is data up to its last line break — all of it once the stream is done
 // — and moves the reading past it.
+//
+// While [rawStream.partialOpen], the reading is still inside a line too long
+// to have begun after: its bytes so far are dropped up to the first break —
+// the rest of that line — and only then does normal line-taking resume. A
+// stream that ends (done) still inside such a line has no whole line to show,
+// so nothing settles.
 func (s *rawStream) take(data []byte, done bool) []byte {
+	if s.partialOpen {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			s.pos += int64(len(data))
+			return nil
+		}
+		s.partialOpen = false
+		s.pos += int64(i + 1)
+		data = data[i+1:]
+	}
 	n := len(data)
 	if !done {
 		n = bytes.LastIndexByte(data, '\n') + 1
