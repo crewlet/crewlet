@@ -1164,14 +1164,20 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 		// and turning it into an error would report an outage for a company
 		// that is simply out of budget; the company's record of the round
 		// is true, so taking it back would only make the counter wrong in a
-		// second place.
-		if _, _, seatErr := f.count(landed, req.Seat, req.Tokens, req.Windows, nil, false); seatErr != nil {
+		// second place. The answer then carries no seat counter: there is
+		// none this charge wrote to report.
+		refused := org.Refusal("org", refusing, req.OrgCaps, req.Windows)
+		refused.Org = org.Usage(coord.OrgScope, req.Windows)
+		seat, _, seatErr := f.count(landed, req.Seat, req.Tokens, req.Windows, nil, false)
+		if seatErr != nil {
 			log.WarnContext(ctx, "coord_kv_budget_spend_uncounted", "scope", req.Seat,
 				"tokens", req.Tokens, "error", seatErr,
 				"detail", "the company refused this round and counted it; the seat's own "+
 					"counter understates its spend by the round")
+			return refused, nil
 		}
-		return org.Refusal("org", refusing, req.OrgCaps, req.Windows), nil
+		refused.Agent = seat.Usage(req.Seat, req.Windows)
+		return refused, nil
 	}
 
 	seat, refusing, err := f.count(landed, req.Seat, req.Tokens, req.Windows, req.SeatCaps, true)
@@ -1195,7 +1201,11 @@ func (f *FleetStore) Charge(ctx context.Context, req coord.ChargeRequest) (coord
 		// Refused by the seat. The company's half stays counted, and its
 		// stamps stay too: the company had room, but the charge was
 		// refused overall, so it is not the company's refusal to clear.
-		return seat.Refusal("agent", refusing, req.SeatCaps, req.Windows), nil
+		// Both counters travel with the refusal — the round can have left
+		// the company with no room either (coord.Spend.Org).
+		refused := seat.Refusal("agent", refusing, req.SeatCaps, req.Windows)
+		refused.Org, refused.Agent = org.Usage(coord.OrgScope, req.Windows), seat.Usage(req.Seat, req.Windows)
+		return refused, nil
 	}
 	// ADMITTED, so the company has just had room in every window too. Its
 	// write above deliberately kept its stamps: it was counted before the

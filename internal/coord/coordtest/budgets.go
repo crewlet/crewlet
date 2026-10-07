@@ -268,6 +268,31 @@ func (h *fleetHarness) refusingAt(w coord.Windows, scope string) []period.Period
 	return out
 }
 
+// answered fails unless a charge's answer carries both counters read against
+// the suite's windows, the company's at org and the seat's at seat in every
+// window.
+func (h *fleetHarness) answered(got coord.Spend, org, seat int) {
+	h.t.Helper()
+	w := h.windows()
+	for _, c := range []struct {
+		counter coord.Usage
+		scope   string
+		want    int
+	}{{got.Org, coord.OrgScope, org}, {got.Agent, testSeat, seat}} {
+		if c.counter.Scope != c.scope {
+			h.t.Fatalf("the answer %+v carries %q where the %s counter belongs",
+				got, c.counter.Scope, c.scope)
+		}
+		for i, p := range period.Periods {
+			slot := c.counter.In(p)
+			if slot.Window.Label != w[i].Label || slot.Used != c.want {
+				h.t.Fatalf("the answer's %s %s window = %q at %d, want %q at %d: %+v",
+					c.scope, p, slot.Window.Label, slot.Used, w[i].Label, c.want, got)
+			}
+		}
+	}
+}
+
 var budgetCases = []fleetCase{{
 	// The reason this moved off the node's own database. Four nodes on one
 	// company each kept their own counter, so a ceiling of 500 000 was
@@ -417,6 +442,35 @@ var budgetCases = []fleetCase{{
 					scope, got)
 			}
 		}
+	},
+}, {
+	name: "a refusal answers both counters as the round left them",
+	fn: func(h *fleetHarness) {
+		// A refusal names ONE window of ONE scope, and the round it
+		// records can fill another. Here the seat refuses a round that
+		// leaves the company's day exactly at its ceiling, so the next
+		// charge is refused by the COMPANY, which is judged first — and a
+		// caller that kept only the refusal it was answered (the engine's
+		// turn meter keeps what an answer makes certain) named the seat
+		// for a refusal the company makes. So a refusal answers both
+		// counters as the charge left them, exactly as an admission does.
+		if got := h.charge(testSeat, 40, day(100), day(50)); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		got := h.charge(testSeat, 60, day(100), day(50))
+		if got.OK || got.RefusedScope != "agent" || got.RefusedUsed != 100 || got.RefusedLimit != 50 {
+			h.t.Fatalf("refusal = %+v, want the seat at 100 of its 50", got)
+		}
+		h.answered(got, 100, 100)
+
+		next := h.charge(testSeat, 1, day(100), day(50))
+		if next.OK || next.RefusedScope != "org" || next.RefusedUsed != 101 {
+			h.t.Fatalf("the next charge = %+v, want the company refusing at 101: the seat's "+
+				"refusal left the company's day with no room", next)
+		}
+		// And the company's refusal carries the seat it counted the round
+		// on, with no verdict of its own.
+		h.answered(next, 101, 101)
 	},
 }, {
 	name: "a round the company refused leaves no room for a smaller one",

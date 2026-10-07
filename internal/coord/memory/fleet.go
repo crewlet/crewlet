@@ -384,14 +384,16 @@ func (f *Fleet) ExpireApplies(cutoff time.Time) {
 //
 // The twin holds ONE mutex for the whole call, so the partial the KV backend
 // reports for a seat write that fails after the company's
-// ([coord.SeatUncountedError]) never arises here. That is not a shortcut around
-// the contract — the observable behaviour is identical, and the suite asserts
-// the behaviour — it is what a single process can honestly offer: there is no
-// second writer to race and no write that can fail, so a partial nothing could
-// ever produce would be a path with no test that could reach it. The arithmetic is [coord.Tally]'s, the same the KV
-// backend runs: the company counted and judged first, then the seat — with no
-// verdict of its own when the company refused, since the round is counted
-// there all the same.
+// ([coord.SeatUncountedError]) never arises here. That is not a shortcut
+// around the contract — the observable behaviour is identical, and the suite
+// asserts the behaviour — it is what a single process can honestly offer:
+// there is no second writer to race and no write that can fail, so a partial
+// nothing could ever produce would be a path with no test that could reach
+// it. The arithmetic is [coord.Tally]'s, the same the KV backend runs: the
+// company counted and judged first, then the seat — with no verdict of its
+// own when the company refused, since the round is counted there all the
+// same — and every answer, a refusal's included, carries both counters as the
+// charge left them ([coord.Spend.Org]).
 func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend, error) {
 	if req.Tokens <= 0 {
 		return coord.Spend{OK: true}, nil
@@ -408,13 +410,18 @@ func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend,
 	if len(refusing) > 0 {
 		// The refusal is stamped on the windows of the scope that made it,
 		// and on no other: see coord.WindowUsage.RefusedAt.
-		f.budgets[req.Seat], _ = f.budgets[req.Seat].Count(req.Tokens, nil, req.Windows, now)
-		return org.Refusal("org", refusing, req.OrgCaps, req.Windows), nil
+		seat, _ := f.budgets[req.Seat].Count(req.Tokens, nil, req.Windows, now)
+		f.budgets[req.Seat] = seat
+		refused := org.Refusal("org", refusing, req.OrgCaps, req.Windows)
+		refused.Org, refused.Agent = org.Usage(coord.OrgScope, req.Windows), seat.Usage(req.Seat, req.Windows)
+		return refused, nil
 	}
 	seat, refusing := f.budgets[req.Seat].Count(req.Tokens, req.SeatCaps, req.Windows, now)
 	if len(refusing) > 0 {
 		f.budgets[req.Seat] = seat
-		return seat.Refusal("agent", refusing, req.SeatCaps, req.Windows), nil
+		refused := seat.Refusal("agent", refusing, req.SeatCaps, req.Windows)
+		refused.Org, refused.Agent = org.Usage(coord.OrgScope, req.Windows), seat.Usage(req.Seat, req.Windows)
+		return refused, nil
 	}
 	// ADMITTED, which is also what clears both scopes' refusals: each has
 	// just had room in every window.

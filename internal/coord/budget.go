@@ -249,8 +249,21 @@ type Spend struct {
 	RefusedUsed  int
 	RefusedLimit int
 
-	// Org and Agent are both counters after an admitted charge or a
-	// post-charge, read against the request's windows. Zero on a refusal.
+	// Org and Agent are both counters AS THE CHARGE LEFT THEM, read against
+	// the request's windows — after a refusal as after an admission or a
+	// post-charge, since a refusal records the round on both.
+	//
+	// On a refusal too, because the refusal names ONE window of ONE scope,
+	// and the round it records can fill another: a round the seat refuses
+	// can leave the company's day at its ceiling, and the next charge is
+	// then refused by the company, which is judged first. A caller that
+	// keeps what an answer makes certain (the engine's turn meter) has to
+	// see that window to name the refusal it is now certain to meet, and a
+	// refusal that carried only its own window hid it.
+	//
+	// A scope whose write did not land is the zero Usage, its Scope empty:
+	// the seat, on a company refusal whose seat write failed (logged, and
+	// never an error — see [Budgets.Charge]).
 	Org   Usage
 	Agent Usage
 }
@@ -451,6 +464,10 @@ type Budgets interface {
 	// it writes nothing and answers OK. A phase whose provider reported no
 	// usage still ran, and refusing it would stop a company over a backend
 	// that omits the field.
+	//
+	// The answer carries both counters as the charge left them, a
+	// refusal's included ([Spend.Org]): a refusal names one window, and the
+	// round it recorded can have filled another.
 	//
 	// A refusal stamps the refusing windows' [WindowUsage.RefusedAt], and
 	// an admitted charge clears every stamp on both scopes it charged. See
