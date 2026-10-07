@@ -411,13 +411,6 @@ func TestAReanchorEndsTheDivergenceAndAJoinThatReplacedNothingDoesNot(t *testing
 	})
 }
 
-// offerThrough offers records 1..n as the ones this node consumed.
-func offerThrough(h *applyHarness, n uint64) {
-	for seq := uint64(1); seq <= n; seq++ {
-		h.fetch.offer(seq, env(seq, "edit", fmt.Sprint(seq), fmt.Sprintf("op-%d", seq), 1))
-	}
-}
-
 // THE VERDICT IS KEPT IN THE NODE'S OWN FILE, AND NOTHING ELSE IS ACCEPTED IN
 // ITS PLACE.
 //
