@@ -265,9 +265,7 @@ type ListQuery struct {
 	// WorkKey selects EVERY RUN of one unit of work — the attempts at a
 	// trigger that was redelivered, which TurnID by construction cannot
 	// ask for once it names one execution. Backed by the partial index
-	// schema/0029 ships; rows from before it carry the work key in
-	// turn_id, and that migration's backfill copies it across so the
-	// history answers this filter too. See ADR-0017.
+	// schema/0029 ships. See ADR-0017.
 	WorkKey string
 
 	// WorkItem selects every event on one work item, by its identity
