@@ -9,9 +9,11 @@ import (
 )
 
 // transcriptLines are the lines a coding run's transcript is made of, as far as
-// the key reader is concerned: the armour lines bare and wrapped, a body's full
-// and short lines bare and wrapped, the wrapping's own punctuation, headers, a
-// blank line, prose, a password key and its value.
+// the key reader is concerned: the armour lines bare and wrapped, glued to a
+// body's line or on one line with it, a body's full and short lines bare and
+// wrapped, blank lines bare and wrapped, the wrapping's own punctuation,
+// headers, another block's armour, base64 that is not a key's, prose and a
+// line another process wrote, a password key and its value.
 var transcriptLines = []string{
 	"-----BEGIN RSA PRIVATE KEY-----",
 	"-----END RSA PRIVATE KEY-----",
@@ -35,6 +37,18 @@ var transcriptLines = []string{
 	`{"k": "-----BEGIN PRIVATE KEY-----\n` + keyLine + `\n-----END PRIVATE KEY-----\n"}`,
 	"KEY=-----BEGIN RSA PRIVATE KEY----- " + keyLine + " -----END RSA PRIVATE KEY-----",
 	"+ printf '%s\\n' '-----BEGIN RSA PRIVATE KEY-----' '" + keyLine + "' '",
+	"     9\u2192",
+	"a.pem-3-",
+	`echo "-----BEGIN RSA PRIVATE KEY-----" >> key.pem`,
+	`echo "` + keyLine + `" >> key.pem`,
+	`echo "" >> key.pem`,
+	`echo "-----END RSA PRIVATE KEY-----" >> key.pem`,
+	"u1SU1Lf=-----END RSA PRIVATE KEY-----",
+	keyLine + "-----END PRIVATE KEY-----",
+	"KEY=-----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF " + keyLine,
+	"-----END CERTIFICATE-----",
+	strings.Repeat("9f86d081884c7d65", 4),
+	foreignLine,
 	"[tool] bash: go test ./...",
 	"ok  \tgithub.com/acme/api\t0.412s",
 	"password:",
@@ -50,6 +64,7 @@ var transcriptLines = []string{
 //
 // Seeded, so a failure names a text that fails every time.
 func TestSettledIsExactOverTranscriptsOfEveryShape(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewPCG(20261006, 7))
 	for trial := range 3000 {
 		var b strings.Builder

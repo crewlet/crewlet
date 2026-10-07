@@ -2,6 +2,7 @@ package redact_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,21 +152,26 @@ const grepOfBothArmours = grepOfTheBeginLine +
 
 // AN END CLOSES ONLY A BLOCK OF KEY: everything between it and its BEGIN has to
 // be a key's — headers, a blank line, base64 at the encoder's width — or the
-// END closes nothing. The rule paired an END with any BEGIN within 64 KiB
-// before it, whatever lay between, so a grep's match for the BEGIN line and a
-// later one for the END took every line of the run between them — the test
-// run, its failure — out of the record and the live view alike.
+// END closes nothing, and read back from it, the same prose is where the read
+// stops. The rule paired an END with any BEGIN within 64 KiB before it,
+// whatever lay between, so a grep's match for the BEGIN line and a later one
+// for the END took every line of the run between them — the test run, its
+// failure — out of the record and the live view alike.
 //
 // Mutation: pair an END with the BEGIN before it without reading what is
 // between, and the transcript between the two greps is one marker.
 func TestAnEndClosesOnlyABlockOfKey(t *testing.T) {
 	for name, text := range map[string]string{
-		"a grep's two matches, a run between":   grepOfBothArmours,
-		"one command naming both armours":       "grep -e '-----BEGIN RSA PRIVATE KEY-----' -e '-----END RSA PRIVATE KEY-----' key.pem\n",
-		"a placeholder between the armours":     "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
-		"a sentence between the armours":        "-----BEGIN PRIVATE KEY-----\nyour key goes here\n-----END PRIVATE KEY-----\n",
-		"the armours one after the other":       "a.pem:1:-----BEGIN RSA PRIVATE KEY-----\na.pem:27:-----END RSA PRIVATE KEY-----\n",
-		"prose between, then a key-shaped line": "-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + keyLine + "\n-----END RSA PRIVATE KEY-----\n",
+		"a grep's two matches, a run between": grepOfBothArmours,
+		"one command naming both armours":     "grep -e '-----BEGIN RSA PRIVATE KEY-----' -e '-----END RSA PRIVATE KEY-----' key.pem\n",
+		"a placeholder between the armours":   "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+		"a sentence between the armours":      "-----BEGIN PRIVATE KEY-----\nyour key goes here\n-----END PRIVATE KEY-----\n",
+		"the armours one after the other":     "a.pem:1:-----BEGIN RSA PRIVATE KEY-----\na.pem:27:-----END RSA PRIVATE KEY-----\n",
+		"an END under another wrapping's lines": "-----BEGIN RSA PRIVATE KEY-----\nsee below\nx:" + keyLine + "\nx:" + keyLine +
+			"\ny:-----END RSA PRIVATE KEY-----\n",
+		// Base64 at a body's width that does not read like a key's — a
+		// hash's hex, a path — is no key's body read back from an END.
+		"hex before an END": strings.Repeat(strings.Repeat("9f86d081884c7d65", 4)+"\n", 3) + "-----END RSA PRIVATE KEY-----\n",
 	} {
 		if got := redact.Secrets(text); got != text {
 			t.Errorf("%s: Secrets =\n%s\nwant it unchanged", name, got)
@@ -173,12 +179,15 @@ func TestAnEndClosesOnlyABlockOfKey(t *testing.T) {
 	}
 }
 
-// keyForm is one wrapping a key reaches text in, and what the text redacts to.
-type keyForm struct{ text, want string }
-
-// wrappedKeys is a key in every wrapping it reaches a transcript in, closed by
-// its END: each is one marker, with the wrapping around it kept.
-func wrappedKeys() map[string]keyForm {
+// A KEY IS READ BACK FROM ITS END where no BEGIN's block reached it: a body cut
+// off from its BEGIN by two lines another process wrote, by prose straight
+// after the armour, or whose BEGIN is not in the text at all — a stream's end
+// read from inside the key. Its body used to be published whole once the
+// structure stopped a forward read short of it, because nothing read back.
+//
+// Mutation: read a key only forward from its BEGIN, and every one of these
+// shows its body.
+func TestAKeyIsReadBackFromItsEnd(t *testing.T) {
 	m := redact.Marker + "private-key]"
 	numbered := func(from int, lines ...string) string {
 		var b strings.Builder
@@ -187,81 +196,321 @@ func wrappedKeys() map[string]keyForm {
 		}
 		return b.String()
 	}
-	return map[string]keyForm{
-		"plain": {
-			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(3) + "u1SU1Lf=\n-----END RSA PRIVATE KEY-----\nnext\n",
+	for name, c := range map[string]keyForm{
+		"its BEGIN not in the text": {
+			pemBody(3) + "u1SU1Lf=\n-----END RSA PRIVATE KEY-----\nnext\n",
 			m + "\nnext\n",
 		},
-		"a reader's line numbers, across a number's width": {
-			numbered(8, "-----BEGIN RSA PRIVATE KEY-----", keyLine, keyLine, keyLine, "u1SU1Lf=",
-				"-----END RSA PRIVATE KEY-----", "next"),
-			"     8\u2192" + m + "\n    14\u2192next\n",
+		"its BEGIN not in the text, under line numbers": {
+			numbered(10, keyLine, keyLine, "u1SU1Lf=", "-----END RSA PRIVATE KEY-----", "next"),
+			"    10\u2192" + m + "\n    14\u2192next\n",
 		},
-		"a grep's match and context lines": {
-			"a.pem:1:-----BEGIN RSA PRIVATE KEY-----\na.pem-2-" + keyLine + "\na.pem-3-" + keyLine +
-				"\na.pem-4-u1SU1Lf=\na.pem-5------END RSA PRIVATE KEY-----\nb.pem:9:other\n",
-			"a.pem:1:" + m + "\nb.pem:9:other\n",
+		"cut off from its BEGIN by prose": {
+			"-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + keyLine + "\n-----END RSA PRIVATE KEY-----\n",
+			"-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + m + "\n",
 		},
-		"a log's timestamps, the first line with its message": {
-			"2026-10-06T09:00:00.120Z loaded key: -----BEGIN RSA PRIVATE KEY-----\n" +
-				"2026-10-06T09:00:00.121Z " + keyLine + "\n2026-10-06T09:00:00.121Z " + keyLine +
-				"\n2026-10-06T09:00:00.122Z -----END RSA PRIVATE KEY-----\n2026-10-06T09:00:01.000Z started\n",
-			"2026-10-06T09:00:00.120Z loaded key: " + m + "\n2026-10-06T09:00:01.000Z started\n",
+		"broken by two lines in a row": {
+			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "[worker 3] connected\n[worker 4] connected\n" +
+				pemBody(2) + "u1SU1Lf=\n-----END RSA PRIVATE KEY-----\nnext\n",
+			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\nnext\n",
 		},
-		"a diff": {
-			"+-----BEGIN RSA PRIVATE KEY-----\n+" + keyLine + "\n+" + keyLine + "\n+u1SU1Lf=\n+-----END RSA PRIVATE KEY-----\n context\n",
-			"+" + m + "\n context\n",
+		"broken twice, read from both ends": {
+			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "[worker 3] connected\n[worker 4] connected\n" +
+				pemBody(2) + "[worker 5] connected\n" + pemBody(2) + "-----END RSA PRIVATE KEY-----\n",
+			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\n",
 		},
-		"escaped in a JSON string": {
-			`{"private_key": "-----BEGIN PRIVATE KEY-----\n` + keyLine + `\n` + keyLine +
-				`\nu1SU1Lf=\n-----END PRIVATE KEY-----\n", "client_email": "svc@example.com"}` + "\n",
-			`{"private_key": "` + m + `\n", "client_email": "svc@example.com"}` + "\n",
+		"escaped in a string, its BEGIN not in the text": {
+			`"` + keyLine + `\n` + keyLine + `\nu1SU1Lf=\n-----END PRIVATE KEY-----\n"}` + "\n",
+			`"` + m + `\n"}` + "\n",
 		},
-		"escaped twice": {
-			`"{\"key\": \"-----BEGIN PRIVATE KEY-----\\n` + keyLine + `\\n` + keyLine +
-				`\\n-----END PRIVATE KEY-----\\n\"}"` + "\n",
-			`"{\"key\": \"` + m + `\\n\"}"` + "\n",
+		"blank lines between its lines, any number of them": {
+			keyLine + "\n\n\n" + keyLine + "\n\n\nu1SU1Lf=\n\n\n-----END RSA PRIVATE KEY-----\nnext\n",
+			m + "\nnext\n",
 		},
-		"a quoted scalar broken across lines, its breaks kept": {
-			"key: \"-----BEGIN RSA PRIVATE KEY-----\\n\n  " + keyLine + "\\n\n  " + keyLine +
-				"\\n\n  u1SU1Lf=\\n\n  -----END RSA PRIVATE KEY-----\\n\"\nnext: 1\n",
-			"key: \"" + m + "\\n\"\nnext: 1\n",
-		},
-		"a string concatenated across lines": {
-			"const key = \"-----BEGIN RSA PRIVATE KEY-----\\n\" +\n\t\"" + keyLine + "\\n\" +\n\t\"" +
-				keyLine + "\\n\" +\n\t\"u1SU1Lf=\\n\" +\n\t\"-----END RSA PRIVATE KEY-----\\n\"\nnext\n",
-			"const key = \"" + m + "\\n\"\nnext\n",
-		},
-		"the same, read with line numbers": {
-			numbered(12, "const key = \"-----BEGIN RSA PRIVATE KEY-----\\n\" +", "\t\""+keyLine+"\\n\" +",
-				"\t\""+keyLine+"\\n\" +", "\t\"-----END RSA PRIVATE KEY-----\\n\"", "next"),
-			"    12\u2192const key = \"" + m + "\\n\"\n    16\u2192next\n",
-		},
-		"a line echoed into a file at a time": {
-			"echo \"-----BEGIN RSA PRIVATE KEY-----\" >> key.pem\necho \"" + keyLine + "\" >> key.pem\necho \"" +
-				keyLine + "\" >> key.pem\necho \"-----END RSA PRIVATE KEY-----\" >> key.pem\nchmod 600 key.pem\n",
-			"echo \"" + m + "\" >> key.pem\nchmod 600 key.pem\n",
-		},
-		"a shell's trace of printf, each line quoted": {
-			"+ printf '%s\\n' '-----BEGIN RSA PRIVATE KEY-----' '" + keyLine + "' '" + keyLine +
-				"' 'u1SU1Lf=' '-----END RSA PRIVATE KEY-----'\n+ next\n",
-			"+ printf '%s\\n' '" + m + "'\n+ next\n",
-		},
-		"on one line": {
-			"KEY=-----BEGIN RSA PRIVATE KEY----- " + keyLine + " " + keyLine + " u1SU1Lf= -----END RSA PRIVATE KEY----- set\n",
-			"KEY=" + m + " set\n",
-		},
-		"encrypted, read with line numbers": {
-			numbered(1, "-----BEGIN RSA PRIVATE KEY-----", "Proc-Type: 4,ENCRYPTED",
-				"DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF", "", keyLine, keyLine,
-				"-----END RSA PRIVATE KEY-----"),
-			"     1\u2192" + m + "\n",
-		},
-		"OpenSSH": {
-			"-----BEGIN OPENSSH PRIVATE KEY-----\n" + strings.Repeat(sshLine+"\n", 5) + "AAAEBm9uZQ==\n" +
-				"-----END OPENSSH PRIVATE KEY-----\n",
+		"its last line glued to the END": {
+			pemBody(2) + "u1SU1Lf=-----END RSA PRIVATE KEY-----\n",
 			m + "\n",
 		},
+		"a body of one line glued to its END": {
+			"cat key.pem | tail -c 90\n" + keyLine + "-----END PRIVATE KEY-----\n",
+			"cat key.pem | tail -c 90\n" + m + "\n",
+		},
+		// A line number with nothing after it reads back as a line
+		// interrupting the key, one on each side of its short last line.
+		"double-spaced under line numbers, its BEGIN not in the text": {
+			numbered(10, keyLine, "", keyLine, "", "u1SU1Lf=", "", "-----END RSA PRIVATE KEY-----", "next"),
+			"    10\u2192" + m + "\n    17\u2192next\n",
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if strings.Contains(got, keyLine) || strings.Contains(got, "u1SU1Lf=") {
+			t.Errorf("%s: key material survived:\n%s", name, got)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+	}
+}
+
+// keyForm is one wrapping a key reaches text in, and what the text redacts to.
+type keyForm struct{ text, want string }
+
+// wrapping is one way a key's lines reach a transcript, and what that text
+// redacts to.
+type wrapping struct {
+	// oneLine is whether the whole block is written on one line, where no
+	// other line can come between two of its own.
+	oneLine bool
+	wrap    func(lines []string) keyForm
+}
+
+// marker is what a private key's block redacts to.
+const marker = redact.Marker + "private-key]"
+
+// wrappings is every wrapping a key reaches a transcript in, as a function of
+// its lines from armour to armour: each wraps them and the text around them,
+// and redacts to one marker with that text kept.
+func wrappings() map[string]wrapping {
+	m := marker
+	numbered := func(from int, lines []string) string {
+		var b strings.Builder
+		for i, line := range lines {
+			fmt.Fprintf(&b, "%6d\u2192%s\n", from+i, line)
+		}
+		return b.String()
+	}
+	concatenated := func(l []string) []string {
+		out := []string{"const key = \"" + l[0] + "\\n\" +"}
+		for _, line := range l[1 : len(l)-1] {
+			out = append(out, "\t\""+line+"\\n\" +")
+		}
+		return append(out, "\t\""+l[len(l)-1]+"\\n\"")
+	}
+	each := func(l []string, f func(i int, line string) string) string {
+		var b strings.Builder
+		for i, line := range l {
+			b.WriteString(f(i, line))
+		}
+		return b.String()
+	}
+	return map[string]wrapping{
+		"plain": {wrap: func(l []string) keyForm {
+			return keyForm{strings.Join(l, "\n") + "\nnext\n", m + "\nnext\n"}
+		}},
+		"a reader's line numbers, across a number's width": {wrap: func(l []string) keyForm {
+			return keyForm{numbered(8, append(slices.Clone(l), "next")), fmt.Sprintf("%6d\u2192%s\n%6d\u2192next\n", 8, m, 8+len(l))}
+		}},
+		"a grep's match and context lines": {wrap: func(l []string) keyForm {
+			return keyForm{each(l, func(i int, line string) string {
+				if i == 0 {
+					return "a.pem:1:" + line + "\n"
+				}
+				return fmt.Sprintf("a.pem-%d-%s\n", i+1, line)
+			}) + "b.pem:9:other\n", "a.pem:1:" + m + "\nb.pem:9:other\n"}
+		}},
+		"a log's timestamps, the first line with its message": {wrap: func(l []string) keyForm {
+			return keyForm{each(l, func(i int, line string) string {
+				if i == 0 {
+					return "2026-10-06T09:00:00.120Z loaded key: " + line + "\n"
+				}
+				return "2026-10-06T09:00:00.121Z " + line + "\n"
+			}) + "2026-10-06T09:00:01.000Z started\n",
+				"2026-10-06T09:00:00.120Z loaded key: " + m + "\n2026-10-06T09:00:01.000Z started\n"}
+		}},
+		"a diff": {wrap: func(l []string) keyForm {
+			return keyForm{each(l, func(_ int, line string) string { return "+" + line + "\n" }) + " context\n", "+" + m + "\n context\n"}
+		}},
+		"escaped in a JSON string": {wrap: func(l []string) keyForm {
+			return keyForm{`{"private_key": "` + strings.Join(l, `\n`) + `\n", "client_email": "svc@example.com"}` + "\n",
+				`{"private_key": "` + m + `\n", "client_email": "svc@example.com"}` + "\n"}
+		}},
+		"escaped twice": {wrap: func(l []string) keyForm {
+			return keyForm{`"{\"key\": \"` + strings.Join(l, `\\n`) + `\\n\"}"` + "\n", `"{\"key\": \"` + m + `\\n\"}"` + "\n"}
+		}},
+		"a quoted scalar broken across lines, its breaks kept": {wrap: func(l []string) keyForm {
+			return keyForm{"key: \"" + each(l, func(i int, line string) string {
+				switch {
+				case i == len(l)-1:
+					return "  " + line + "\\n\"\n"
+				case i == 0:
+					return line + "\\n\n"
+				}
+				return "  " + line + "\\n\n"
+			}) + "next: 1\n", "key: \"" + m + "\\n\"\nnext: 1\n"}
+		}},
+		"a string concatenated across lines": {wrap: func(l []string) keyForm {
+			return keyForm{strings.Join(concatenated(l), "\n") + "\nnext\n", "const key = \"" + m + "\\n\"\nnext\n"}
+		}},
+		"the same, read with line numbers": {wrap: func(l []string) keyForm {
+			return keyForm{numbered(12, append(concatenated(l), "next")),
+				fmt.Sprintf("%6d\u2192const key = \"%s\\n\"\n%6d\u2192next\n", 12, m, 12+len(l))}
+		}},
+		"a line echoed into a file at a time": {wrap: func(l []string) keyForm {
+			return keyForm{each(l, func(_ int, line string) string { return "echo \"" + line + "\" >> key.pem\n" }) + "chmod 600 key.pem\n",
+				"echo \"" + m + "\" >> key.pem\nchmod 600 key.pem\n"}
+		}},
+		"a shell's trace of printf, each line quoted": {oneLine: true, wrap: func(l []string) keyForm {
+			return keyForm{"+ printf '%s\\n' '" + strings.Join(l, "' '") + "'\n+ next\n", "+ printf '%s\\n' '" + m + "'\n+ next\n"}
+		}},
+		"on one line": {oneLine: true, wrap: func(l []string) keyForm {
+			return keyForm{"KEY=" + strings.Join(l, " ") + " set\n", "KEY=" + m + " set\n"}
+		}},
+		"a list of its lines": {oneLine: true, wrap: func(l []string) keyForm {
+			return keyForm{"lines = ['" + strings.Join(l, "', '") + "']\n", "lines = ['" + m + "']\n"}
+		}},
+		"its line breaks removed": {oneLine: true, wrap: func(l []string) keyForm {
+			return keyForm{"KEY=" + strings.Join(l, "") + "\n", "KEY=" + m + "\n"}
+		}},
+	}
+}
+
+// fixtureKeys are keys' lines, armour to armour, made of filler: shapes, not
+// keys. One of each layout a body has — PEM's width with a short last line,
+// RFC 1421's headers before it, OpenSSH's width, a body of one line.
+func fixtureKeys() map[string][]string {
+	return map[string][]string{
+		"RSA": {"-----BEGIN RSA PRIVATE KEY-----", keyLine, keyLine, keyLine, "u1SU1Lf=", "-----END RSA PRIVATE KEY-----"},
+		"encrypted": {"-----BEGIN RSA PRIVATE KEY-----", "Proc-Type: 4,ENCRYPTED",
+			"DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF", "", keyLine, keyLine, "-----END RSA PRIVATE KEY-----"},
+		"OpenSSH": {"-----BEGIN OPENSSH PRIVATE KEY-----", sshLine, sshLine, sshLine, sshLine, sshLine, "AAAEBm9uZQ==",
+			"-----END OPENSSH PRIVATE KEY-----"},
+		"a body of one line": {"-----BEGIN PRIVATE KEY-----", keyLine, "-----END PRIVATE KEY-----"},
+	}
+}
+
+// foreignLine is a line another process writes into the middle of a key.
+const foreignLine = "[worker 3] connected"
+
+// variant is a key's lines as they reach a transcript: whole, or with
+// something else written into them.
+type variant struct {
+	// lines reads to the variant's lines from the key's.
+	lines func(lines []string) []string
+	// lineByLine is whether it can only happen to a key written a line at a
+	// time, never to one on one line.
+	lineByLine bool
+}
+
+// bodyAt is where a key's body begins in its lines: past its armour, its
+// headers and its blank line.
+func bodyAt(lines []string) int {
+	i := 1
+	for i < len(lines) && (strings.Contains(lines[i], ":") || lines[i] == "") {
+		i++
+	}
+	return i
+}
+
+// inserted is lines with more lines put in at i.
+func inserted(lines []string, i int, more ...string) []string {
+	return slices.Insert(slices.Clone(lines), i, more...)
+}
+
+// variants is every way a key's lines come between its armours that a block
+// still reads as ONE key, one marker: printed double-spaced, or broken by one
+// line another process wrote.
+func variants() map[string]variant {
+	return map[string]variant{
+		"whole": {lines: slices.Clone[[]string]},
+		"double-spaced": {lines: func(l []string) []string {
+			var out []string
+			for i, line := range l {
+				if i > 0 {
+					out = append(out, "")
+				}
+				out = append(out, line)
+			}
+			return out
+		}},
+		"broken by one line": {lineByLine: true, lines: func(l []string) []string {
+			// After the body's first half: a line of the body before
+			// it, as a forward read needs.
+			at := bodyAt(l)
+			return inserted(l, at+max(1, (len(l)-1-at)/2), foreignLine)
+		}},
+		"broken by one line before its END": {lineByLine: true, lines: func(l []string) []string {
+			return inserted(l, len(l)-1, foreignLine)
+		}},
+	}
+}
+
+// wrappedKeys is every fixture key, in every variant a block reads whole, in
+// every wrapping: each is one marker, with the wrapping around it kept.
+func wrappedKeys() map[string]keyForm {
+	forms := map[string]keyForm{}
+	for kname, key := range fixtureKeys() {
+		for vname, v := range variants() {
+			for wname, w := range wrappings() {
+				if v.lineByLine && w.oneLine {
+					continue
+				}
+				forms[kname+", "+vname+", "+wname] = w.wrap(v.lines(key))
+			}
+		}
+	}
+	return forms
+}
+
+// A KEY IS READ IN EVERY WRAPPING IT REACHES A TRANSCRIPT IN, now that an END
+// closes only a block of key: a reader's line numbers, a grep's context lines,
+// a log's timestamps, a diff, a JSON string escaped once or twice, a string
+// concatenated across lines, a line echoed at a time, the whole key on one
+// line — its encrypted headers too, with spaces for its breaks or none at all
+// — and printed double-spaced, or broken by a line another process wrote. Each
+// is one marker, with the wrapping around it kept.
+//
+// Mutation: drop the per-line prefix ([prefixOK] taking nothing but
+// punctuation), and every prefixed form survives in clear; end a block at a
+// blank line, and every double-spaced one does; at the first line that is not
+// the key's, and every broken one does.
+func TestAKeyIsReadInEveryWrapping(t *testing.T) {
+	for name, form := range wrappedKeys() {
+		got := redact.Secrets(form.text)
+		if strings.Contains(got, keyLine) || strings.Contains(got, sshLine) || strings.Contains(got, "DEK-Info") {
+			t.Errorf("%s: key material survived:\n%s", name, got)
+			continue
+		}
+		if got != form.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
+		}
+		// AND WITH NO END: the same block, cut where its END would be,
+		// is read by the same structure — its body taken, its wrapping
+		// left.
+		cut := form.text[:strings.Index(form.text, "-----END")]
+		if got := redact.Secrets(cut); strings.Contains(got, keyLine) || strings.Contains(got, sshLine) {
+			t.Errorf("%s with no END: key material survived:\n%s", name, got)
+		}
+	}
+}
+
+// BLANK LINES ARE A KEY'S, ANY NUMBER OF THEM, anywhere in its block — a key
+// printed double-spaced or more, its escaped breaks doubled in a string. The
+// structural reader ended a block at its first blank line after the body, and
+// every body line after it was published.
+//
+// Mutation: end a block at a blank line after its body, and the lines after
+// the first one survive.
+func TestBlankLinesAnywhereInAKeyAreTheKeys(t *testing.T) {
+	m := redact.Marker + "private-key]"
+	for name, c := range map[string]keyForm{
+		"real breaks": {
+			"-----BEGIN RSA PRIVATE KEY-----\n\n\n" + keyLine + "\n\n\n" + keyLine + "\n\n\nu1SU1Lf=\n\n\n" +
+				"-----END RSA PRIVATE KEY-----\nnext\n",
+			m + "\nnext\n",
+		},
+		"escaped breaks": {
+			`{"k": "-----BEGIN PRIVATE KEY-----\n\n` + keyLine + `\n\n\n` + keyLine + `\n\n-----END PRIVATE KEY-----\n"}` + "\n",
+			`{"k": "` + m + `\n"}` + "\n",
+		},
+		"no END, a trailing blank still the key's": {
+			"-----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n\n\n" + keyLine + "\n\n",
+			m + "\n\n",
+		},
+	} {
+		if got := redact.Secrets(c.text); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
 	}
 }
 
@@ -291,39 +540,11 @@ func TestAnEncryptedKeyOnOneLineIsRedacted(t *testing.T) {
 	}
 }
 
-// A KEY IS READ IN EVERY WRAPPING IT REACHES A TRANSCRIPT IN, now that an END
-// closes only a block of key: a reader's line numbers, a grep's context lines,
-// a log's timestamps, a diff, a JSON string escaped once or twice, a string
-// concatenated across lines, a line echoed at a time, the whole key on one
-// line. Each is one marker, with the wrapping around it kept.
-//
-// Mutation: drop the per-line prefix ([prefixOK] taking nothing but
-// punctuation), and every prefixed form survives in clear.
-func TestAKeyIsReadInEveryWrapping(t *testing.T) {
-	for name, form := range wrappedKeys() {
-		got := redact.Secrets(form.text)
-		if strings.Contains(got, keyLine) || strings.Contains(got, sshLine) || strings.Contains(got, "DEK-Info") {
-			t.Errorf("%s: key material survived:\n%s", name, got)
-			continue
-		}
-		if got != form.want {
-			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
-		}
-		// AND WITH NO END: the same block, cut where its END would be,
-		// is read by the same structure — its body taken, its wrapping
-		// left.
-		cut := form.text[:strings.Index(form.text, "-----END")]
-		if strings.Contains(redact.Secrets(cut), keyLine) {
-			t.Errorf("%s with no END: key material survived:\n%s", name, redact.Secrets(cut))
-		}
-	}
-}
-
 // terminatedKeys is a key whose END was never written and whose body's last
 // line ends in the text around it: the quote that closes the string it was
 // written into, or the mark of a cut.
 func terminatedKeys() map[string]keyForm {
-	m := redact.Marker + "private-key]"
+	m := marker
 	short := keyLine[:30]
 	return map[string]keyForm{
 		"a closing quote after a full line": {
@@ -390,6 +611,14 @@ func keyFixtures() map[string]string {
 		"key after a password": "password:\n-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) +
 			"-----END RSA PRIVATE KEY-----\ntail\n",
 		"grep of both armours": grepOfBothArmours,
+		"a body, then the run going on": "-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(3) +
+			"the run went on\nand on\nand on\nand on\ndone\n",
+		// The line before the END is key-shaped, but not in the END's
+		// wrapping: it is a line interrupting the key, and the three lines
+		// before the full ones are the tail's, not the body's one.
+		"a key-shaped line its END's wrapping reads as an interruption": "echo \"" + keyLine + "\" >> key.pem\n" +
+			"echo \"" + keyLine + "\" >> key.pem\nthe run printed this\nDone\na.pem-2-" + keyLine + "\n" +
+			"echo \"-----END RSA PRIVATE KEY-----\" >> key.pem\nnext\n",
 	}
 	for name, form := range wrappedKeys() {
 		fixtures["wrapped: "+name] = form.text
@@ -444,6 +673,7 @@ func settle(text string, sizes []int) (string, []string) {
 // key, the prefixed key, the password on a later line and the key after a
 // password each come out differently from the whole.
 func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
+	t.Parallel()
 	for name, text := range keyFixtures() {
 		want := redact.Secrets(text)
 		for _, sizes := range [][]int{{1}, {7}, {64}, {3, 50, 1, 200}, {len(text)}} {
@@ -458,6 +688,7 @@ func TestTextShownAsItSettlesIsTheWholeTextRedacted(t *testing.T) {
 // before its END lands is a key in clear on a screen, whatever the record
 // redacts afterwards.
 func TestNoSecretIsShownBeforeItsShapeIsSettled(t *testing.T) {
+	t.Parallel()
 	for name, text := range keyFixtures() {
 		_, steps := settle(text, []int{1})
 		for _, shown := range steps {
@@ -475,12 +706,15 @@ func TestNoSecretIsShownBeforeItsShapeIsSettled(t *testing.T) {
 // an END after that closes nothing, so nothing after it can change how the
 // header redacts. It used to be held until 64 KiB had been written after it,
 // over ordinary lines and all — the rest of the run, on a live view, for a
-// grep of the armour line.
+// grep of the armour line. A body is held a little longer: until no END
+// written next could still read it back with a short last line and a line
+// interrupting the key on either side of that.
 //
 // Mutation: hold an open BEGIN as far as an END could be paired with it at
 // any distance, and the line after the header is never shown.
 func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 	header := "x:-----BEGIN RSA PRIVATE KEY-----\n"
+	over := header + pemBody(2) + "the run went on\nand on\nand on\nand on\n"
 	for name, c := range map[string]struct {
 		text string
 		want int
@@ -488,11 +722,13 @@ func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 		"a header alone, its next line not written yet": {header, 0},
 		"a header and a line that is not a key's":       {header + "line\n", len(header + "line\n")},
 		"a header and a body line, the next to come":    {header + keyLine + "\n", 0},
-		"a header and a body that is over": {header + pemBody(2) + "the run went on\n",
-			len(header + pemBody(2) + "the run went on\n")},
 		// One word after a body could be its short last line, which an END
 		// may still follow.
 		"a header, a body and a word": {header + pemBody(2) + "line\n", 0},
+		// Three lines after it could still be an interruption, the short
+		// last line and another before an END.
+		"a header, a body and three lines": {header + pemBody(2) + "the run went on\nand on\nand on\n", 0},
+		"a header and a body that is over": {over, len(over)},
 		"a header and a closed block": {header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n",
 			len(header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n")},
 		"a grep's match and its next result": {grepOfTheBeginLine, len(grepOfTheBeginLine)},
@@ -501,11 +737,52 @@ func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 			t.Errorf("%s: Settled = %d of %d; want %d", name, got, len(c.text), c.want)
 		}
 	}
-	// A body-looking stream with no END is held no further than a key could
-	// run: past [redact.MaxKeyBlockBytes] it is settled again.
-	long := header + strings.Repeat(keyLine+"\n", redact.MaxKeyBlockBytes/len(keyLine)+2) + "line\n"
-	if got := redact.Settled(long); got != len(long) {
-		t.Errorf("Settled = %d of %d; want everything settled once no key could still be read", got, len(long))
+}
+
+// A STREAM OF KEY-SHAPED LINES IS HELD NO FURTHER BACK THAN AN END COULD READ:
+// an END written next reads back at most [redact.MaxKeyBlockBytes], so what is
+// further back than that is settled while the stream goes on, and all of it
+// once lines that are not a key's follow.
+func TestAStreamOfKeyShapedLinesIsHeldOnlyAsFarAsAnEndCouldRead(t *testing.T) {
+	stream := "x:-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", 2*redact.MaxKeyBlockBytes/len(keyLine)+4)
+	got := redact.Settled(stream)
+	if got == 0 || len(stream)-got > redact.MaxKeyBlockBytes {
+		t.Errorf("Settled = %d of %d; want all but the last %d bytes settled", got, len(stream), redact.MaxKeyBlockBytes)
+	}
+	over := stream + "the run\nwent\non\nand on\n"
+	if got := redact.Settled(over); got != len(over) {
+		t.Errorf("Settled = %d of %d; want all of it once no key could still be read", got, len(over))
+	}
+}
+
+// A LINE THAT READS LIKE A KEY'S BODY WAITS, because an END written next could
+// read it back — and nothing else does. Read back, base64 at a body's width
+// counts only when it carries upper and lower case letters and digits, as the
+// encoding of random bytes does; the long base64-alphabet runs a coding run
+// prints — an absolute path, a commit's hash — carry no case or no digits, and
+// a live view shows them the moment they are whole.
+//
+// Mutation: read any run at a body's width as a key's line back from an END,
+// and the path and the hash wait for four more lines.
+func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
+	for name, line := range map[string]string{
+		"a long path":     "[tool] Read: /home/user/crewlet/internal/sandbox/codingagent/claudestream.go",
+		"a commit's hash": "[tool] Bash: git show 9fceb02d0ae598e95dc970b74767f19372d61af8",
+		"prose":           "the build passed and the run went on",
+	} {
+		if got := redact.Settled(line + "\n"); got != len(line)+1 {
+			t.Errorf("%s: Settled = %d of %d; want it shown at once", name, got, len(line)+1)
+		}
+	}
+	text := "start\n" + keyLine + "\n"
+	for i, more := range []string{"one\n", "two\n", "three\n"} {
+		text += more
+		if got := redact.Settled(text); got != len("start\n") {
+			t.Errorf("after %d lines: Settled = %d; want the key-shaped line held", i+1, got)
+		}
+	}
+	if text += "four\n"; redact.Settled(text) != len(text) {
+		t.Errorf("Settled = %d of %d; want it shown once four lines no key's could follow it", redact.Settled(text), len(text))
 	}
 }
 
