@@ -1320,11 +1320,10 @@ phase's `cache_read_tokens` / `cache_write_tokens` (a breakdown of
 worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
 turn's `work_item`, and `steers[]` — `{round, note_id}` for each person's note
 the phase read. The live frame carries the same so far plus
-`round_started_at` and the `running_call` in flight. Each is **absent** on a
-figure nothing measured — a tool call
-nobody timed has no `duration_ms`, never a zero — so a reader treats absent as
-*not recorded*. The whole field list, and why each is measured where it is, is
-in [what a turn records about its time](../concepts/turn-engine.md#what-a-turn-records-about-its-time).
+`round_started_at` and the `running_call` in flight. Each is **absent** where
+nothing measured it — a tool call nobody timed has no `duration_ms`, never a
+zero — so a reader treats absent as *not recorded*. The whole field list, and
+why each is measured where it is, is in [what a turn records about its time](../concepts/turn-engine.md#what-a-turn-records-about-its-time).
 
 An unreadable or absent event log costs the history and nothing else: the
 answer still carries the seat and its live state.
@@ -3926,8 +3925,8 @@ the mechanism the lease table already is.
 
 **Absent is not zero.** A node whose status read overran its share of the
 heartbeat (`seat.StatusBudgetRatio`) publishes no status on that beat and
-omits those fields entirely, and the dashboard draws an em dash. A confident `0` would render an idle row for a process that is
-simply not saying.
+omits those fields entirely, and the dashboard draws an em dash. A confident
+`0` would render an idle row for a process that is simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live

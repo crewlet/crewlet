@@ -2137,10 +2137,10 @@ built by `lib/orgchart.ts` from the projection this node has APPLIED, never the
 builder's draft — a test holds that it imports none of the builder's model —
 so between a save and this node applying it the chart has not moved, and the
 "still applying revision …" note says so. Every reporting line is the
-engine's derived one; the client draws no hierarchy of its own. **The field runs to the sheet's edges**, dotted,
-under the tabs, as the artboard draws it — the screen's padding and the
-canvas's own frame are taken back for this one screen, because every pixel of
-them was a pixel of every card. **The chart opens fitted and centred**, and so
+engine's derived one; the client draws no hierarchy of its own. **The field
+runs to the sheet's edges**, dotted, under the tabs, as the artboard draws it
+— the screen's padding and the canvas's own frame are taken back for this one
+screen, because every pixel of them was a pixel of every card. **The chart opens fitted and centred**, and so
 does Fit to view: all of it, in the middle of the canvas. A person who reports
 to nobody and leads nobody is a root with no tree, and the canvas packs such a
 card beside the root it follows on the top row; placed after a founder whose
