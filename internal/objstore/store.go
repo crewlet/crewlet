@@ -306,8 +306,10 @@ func (w *watched) Close() error {
 //
 // CHECKED FOR ITS LENGTH ONLY: a page of an object cannot be checked against
 // the whole object's digest, which is the one the row keeps. A page that is
-// not the length the row's size implies is [ErrCorrupt]; a page of the right
-// length is whatever the backend holds there. It is what a tool reading a
+// not the length the row's size implies is [ErrCorrupt], and so is a LAST
+// page with a byte after it — an object held longer than its row — since the
+// final page is the one read that can see the object's end; a page of the
+// right length is whatever the backend holds there. It is what a tool reading a
 // page into a model's context takes, where reading the whole object to check
 // one page would be the wrong price. Bounded as [Store.Open] is, by the
 // budget of every byte up to the page's end, because a backend with no ranged
@@ -324,20 +326,35 @@ func (s *Store) ReadAt(ctx context.Context, o Object, off, n int64) ([]byte, err
 		return []byte{}, nil
 	}
 	want := end - off
-	ctx, cancel := context.WithTimeout(ctx, ReadBudget(end))
-	body, err := s.backend.Get(ctx, o.Key.Name(), off, want)
+	// THE LAST PAGE ASKS FOR ONE BYTE MORE THAN THE ROW SAYS IS THERE.
+	// Every backend caps its answer at the range it was asked for, so a
+	// page that asked for exactly `want` could never see an object held
+	// longer than its row; a range running past the end is answered short
+	// ([Backend.Get]), so on a sound object the probe costs nothing. An
+	// interior page asks for its own range: the byte after it is the
+	// object's next one, which proves nothing.
+	ask := want
+	if end == o.Size {
+		ask++
+	}
+	ctx, cancel := context.WithTimeout(ctx, ReadBudget(off+ask))
+	body, err := s.backend.Get(ctx, o.Key.Name(), off, ask)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("objstore: read %s: %w", o.Key, err)
 	}
 	r := &watched{ctx: ctx, cancel: cancel, r: body, what: o.Key, stall: s.stall}
 	defer func() { _ = r.Close() }()
-	// ONE BYTE PAST THE PAGE, so a backend answering more than it was
-	// asked for is caught rather than cut to fit.
+	// ONE BYTE PAST THE PAGE, so a backend answering more than the page —
+	// the probe's byte, or one that ignored its range — is caught rather
+	// than cut to fit.
 	page, err := io.ReadAll(io.LimitReader(r, want+1))
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("objstore: read %s at %d: %w", o.Key, off, err)
+	case int64(len(page)) > want && end == o.Size:
+		return nil, fmt.Errorf("%w: %s holds more than the %d bytes its row says it has",
+			ErrCorrupt, o.Key, o.Size)
 	case int64(len(page)) != want:
 		return nil, fmt.Errorf("%w: %s answered %d bytes at %d, and its row says %d are there",
 			ErrCorrupt, o.Key, len(page), off, want)

@@ -469,6 +469,32 @@ func TestARangedReadAnswersItsRange(t *testing.T) {
 	}
 }
 
+// AN OBJECT HELD LONGER THAN ITS ROW IS CAUGHT BY ITS LAST PAGE. Every backend
+// caps an answer at the range asked for, so the last page has to ask for a
+// byte past the row's end or it never sees one — and a tool reading a small
+// file whole reads exactly that page. An interior page cannot see the end,
+// and still answers.
+func TestALastPageCatchesAnObjectLongerThanItsRow(t *testing.T) {
+	t.Parallel()
+	mem := memobj.New()
+	s := newStore(t, mem)
+	body := patterned(10_000, 12)
+	o := put(t, s, body)
+	mem.Corrupt(o.Key.Name(), append(bytes.Clone(body), 'x'))
+	for _, c := range []struct{ off, n int64 }{
+		{0, 10_000}, {9_990, 10}, {9_995, 100}, {0, 1 << 20},
+	} {
+		if _, err := s.ReadAt(t.Context(), o, c.off, c.n); !errors.Is(err, objstore.ErrCorrupt) {
+			t.Fatalf("ReadAt(%d, %d) of an object a byte longer than its row = %v, want ErrCorrupt",
+				c.off, c.n, err)
+		}
+	}
+	got, err := s.ReadAt(t.Context(), o, 100, 50)
+	if err != nil || !bytes.Equal(got, body[100:150]) {
+		t.Fatalf("an interior page of it = %d bytes, %v; want the 50 the row describes", len(got), err)
+	}
+}
+
 // A DELETE TAKES THE OBJECT AWAY, AND DELETING IT AGAIN IS NOT AN ERROR — two
 // collectors judging one pass at once are both right.
 func TestADeleteIsIdempotent(t *testing.T) {
