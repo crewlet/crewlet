@@ -46,9 +46,15 @@ import (
 // verdict to wait on (its size is known only from its answer, and nothing is
 // left to stop by then), and is post-charged through the meter rather than
 // beside it so the window it fills is one the turn's next round is held on.
+//
+// And it RECORDS A REFUSAL IT MADE ITSELF ([meter.Refused]): a call the meter
+// stops before it is made is turned away by the gate as surely as a charge
+// the counter refuses, and the charge that would have stamped the window is
+// the one the stop prevents, so the meter stamps it ([coord.Budgets.Refuse]).
 type budgetCounter interface {
 	Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error)
 	PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
+	Refuse(ctx context.Context, scope string, caps coord.Caps, windows coord.Windows) (coord.Usage, error)
 	Used(ctx context.Context, scope string, windows coord.Windows) (coord.Usage, error)
 }
 
@@ -109,18 +115,39 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 // into, billed, and refused. Charged here, its answer is kept like a round's
 // ([meter.keepFilled]), and every call after it, a round or another auxiliary
 // call ([meter.Held]), is held instead of made.
+//
+// A HELD CALL IS A REFUSAL, AND IT IS RECORDED AS ONE. The window's refusal
+// stamp on the shared counter (coord.WindowUsage.RefusedAt) is what `refused_at`,
+// "refusing since" and `crewlet budgets show` report, and it used to be written
+// only by a refused charge — the charge a hold exists to prevent. So a window
+// the turn's own context assembly filled refused the executor's first round,
+// and every call after it, with no stamp at all. The meter stamps it the first
+// time it holds a call there ([meter.Refused]).
 type meter struct {
 	budgets    budgetCounter
 	agentScope string
 	basis      budgetBasis
 	now        func() time.Time
 
-	// mu guards full.
+	// mu guards full and recorded.
 	mu sync.Mutex
 	// full is every capped window this meter has seen with no room left
 	// for a single token, at most one per scope and period, each as the
 	// refusal it makes certain. See [meter.Refused].
 	full []toolloop.SpendOutcome
+	// recorded is every window whose refusal this meter has handed the
+	// counter, or is handing it now: a refusal is one event, so it is
+	// written once per window however often the turn asks. See
+	// [meter.Refused].
+	recorded map[heldWindow]bool
+}
+
+// heldWindow names one window a meter holds: the scope as a refusal names it
+// ("org", "agent"), the period, and the window's label.
+type heldWindow struct {
+	scope  string
+	period period.Period
+	window string
 }
 
 var (
@@ -195,7 +222,9 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 // RECORDED WHOLE, past a ceiling included: the call happened, and a refusal
 // here would leave the counter under its ceiling with the money gone, which
 // is the leak the auxiliary seam exists to close. What the call changes is the
-// turn's NEXT call, which [meter.Refused] and [meter.Held] now hold.
+// turn's NEXT call, which [meter.Refused] and [meter.Held] now hold — and that
+// hold, not this post-charge, is what stamps the window refusing: a
+// post-charge is not a decision about room.
 //
 // A partial write ([coord.SeatUncountedError]: the company counted it and the
 // seat did not) answers no counters, so nothing is kept from it, and the next
@@ -259,7 +288,47 @@ func (m *meter) Held(ctx context.Context) error { return toolloop.Refusal(ctx, m
 // of the two ends last; the meter does not know the call's size, so it names
 // the full one — a refusal the call is certain to meet, if not always the one
 // the counter would have chosen.
-func (m *meter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
+//
+// AND RECORDED, the first time it names a window. Every caller asks this
+// immediately before a call and makes none on true, so a true answer is the
+// gate turning that call away — and the call it stops is the one whose charge
+// would have stamped the window's refusal on the shared counter. So the meter
+// stamps it ([coord.Budgets.Refuse]) on the scope the refusal names, the
+// company's before the seat's, which stamps every window of that scope with no
+// room for a single token, judged against the counter as it stands rather
+// than against what the meter holds. Without it, a window an in-turn auxiliary
+// call, a coding run's post-charge or an admitted round filling it exactly took
+// to its ceiling refused every call of the turn while `refused_at` — "refusing
+// since" on every screen, and `crewlet budgets show` — said nothing had ever
+// been refused.
+//
+// ONCE PER WINDOW PER METER, claimed before the write, so concurrent callers
+// (a fan-out's workers, the judge beside a round) write it once between them:
+// a refusal is one event, not one write per question. Every window that write
+// stamps is claimed with it. The write is on a context that outlives the
+// caller's, because the refusal happened whatever the caller does next, and is
+// bounded by the counter's own retries and the client's request timeout. A
+// write that fails is logged and is never anything else: the refusal stands
+// either way, and what failed is the report of it, so it is not retried on the
+// next question — a counter that cannot be written is one the turn's next
+// charge fails closed on anyway.
+//
+// The answer is named again once the write's answer is kept, since it is the
+// counter's current reading of the scope: the figure a turn's budget_exhausted
+// reports is then the spend at the refusal rather than at the last charge.
+func (m *meter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	named, found := m.standing()
+	if found && m.claim(named) {
+		m.record(ctx, named)
+		named, found = m.standing()
+	}
+	return named, found
+}
+
+// standing is the refusal this meter holds, named by the counter's rule over
+// the full windows still current on its clock. It asks the counter nothing and
+// records nothing. See [meter.Refused].
+func (m *meter) standing() (toolloop.SpendOutcome, bool) {
 	now := m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -276,6 +345,58 @@ func (m *meter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 		}
 	}
 	return named, found
+}
+
+// claim reports whether this is the first time the meter refuses a call in the
+// window named, marking it so: true exactly once per window.
+func (m *meter) claim(named toolloop.SpendOutcome) bool {
+	key := heldWindow{scope: named.Scope, period: named.Period, window: named.Window}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recorded[key] {
+		return false
+	}
+	if m.recorded == nil {
+		m.recorded = map[heldWindow]bool{}
+	}
+	m.recorded[key] = true
+	return true
+}
+
+// record stamps the refusal the meter just made on the counter of the scope it
+// names, keeps what the counter answers, and claims every window that write
+// stamped. See [meter.Refused].
+func (m *meter) record(ctx context.Context, named toolloop.SpendOutcome) {
+	var (
+		scope string
+		caps  coord.Caps
+	)
+	switch named.Scope {
+	case "org":
+		scope, caps = coord.OrgScope, m.basis.org
+	case "agent":
+		scope, caps = m.agentScope, m.basis.seat
+	default:
+		// Not a scope the shared counter keeps: nothing could read a
+		// record of it.
+		return
+	}
+	usage, err := m.budgets.Refuse(context.WithoutCancel(ctx), scope, caps, m.windows())
+	if err != nil {
+		log.WarnContext(ctx, "budget_refusal_unrecorded", "scope", scope,
+			"period", string(named.Period), "window", named.Window, "error", err,
+			"detail", "the turn's call was refused all the same; the window's refused_at "+
+				"does not show this refusal until the gate next turns a call away in it")
+		return
+	}
+	m.keepFullIn(named.Scope, usage, caps)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for p, ceiling := range caps {
+		if slot := usage.In(p); windowRefuses(slot, ceiling) {
+			m.recorded[heldWindow{scope: named.Scope, period: p, window: slot.Window.Label}] = true
+		}
+	}
 }
 
 // namesBefore reports whether a refusal of a's window is the one a charge names
@@ -446,8 +567,9 @@ type refusal struct {
 // counter's own refusal names its window by: the seat can run nothing until
 // that one turns over, and naming an earlier one would wake it into a
 // refusal. A full window need carry no stamp at all — a month a collected
-// coding run post-charged past its ceiling carries none until a charge is
-// refused against it.
+// coding run post-charged past its ceiling carries none until the gate turns a
+// call away in it, by refusing a charge or by a turn's meter holding the call
+// ([meter.Refused]) — and a park makes no call, so it stamps nothing.
 //
 // THREE-VALUED. An unreachable counter is an error, never "not refusing" and
 // never "refusing": the caller decides what an unknown answer is worth, and

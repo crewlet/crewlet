@@ -479,6 +479,10 @@ func (usageReader) PostCharge(context.Context, string, int, coord.Windows) (coor
 	return coord.Spend{}, errors.New("not used by these cases")
 }
 
+func (usageReader) Refuse(context.Context, string, coord.Caps, coord.Windows) (coord.Usage, error) {
+	return coord.Usage{}, errors.New("not used by these cases")
+}
+
 // unreachableFleet is a fleet whose counters cannot be read. Embedded through
 // an alias, because coord.Fleet has a method named Fleet that a field of that
 // name would shadow.

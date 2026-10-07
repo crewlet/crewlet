@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,10 @@ func (c counters) Charge(context.Context, coord.ChargeRequest) (coord.Spend, err
 
 func (c counters) PostCharge(context.Context, string, int, coord.Windows) (coord.Spend, error) {
 	return coord.Spend{}, errors.New("not used by these cases")
+}
+
+func (c counters) Refuse(context.Context, string, coord.Caps, coord.Windows) (coord.Usage, error) {
+	return coord.Usage{}, errors.New("not used by these cases")
 }
 
 // THE HEADROOM IS THE TIGHTEST WINDOW OF EITHER SCOPE.
@@ -484,6 +489,286 @@ func TestAnAuxiliaryPostChargeIsCountedWhenItsCallReturned(t *testing.T) {
 	}
 }
 
+// refusalLog is a meter's counter that remembers every refusal handed to it,
+// and can be made to fail them.
+type refusalLog struct {
+	budgetCounter
+
+	mu     sync.Mutex
+	scopes []string
+	err    error
+}
+
+func (r *refusalLog) Refuse(ctx context.Context, scope string, caps coord.Caps, w coord.Windows) (coord.Usage, error) {
+	r.mu.Lock()
+	r.scopes = append(r.scopes, scope)
+	err := r.err
+	r.mu.Unlock()
+	if err != nil {
+		return coord.Usage{}, err
+	}
+	return r.budgetCounter.Refuse(ctx, scope, caps, w)
+}
+
+func (r *refusalLog) refused() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.scopes...)
+}
+
+// stampOf is one scope's refusal stamp in one period, read off the counter.
+func stampOf(t *testing.T, fleet *coordmem.Fleet, scope string, p period.Period, w coord.Windows) time.Time {
+	t.Helper()
+	u, err := fleet.Used(t.Context(), scope, w)
+	if err != nil {
+		t.Fatalf("Used(%s): %v", scope, err)
+	}
+	return u.In(p).RefusedAt
+}
+
+// A CALL THE METER HOLDS IS A REFUSAL THE COUNTER RECORDS.
+//
+// The turn's auxiliary calls post-charged the seat past its day — a
+// post-charge refuses nothing and stamps nothing — and the meter then held the
+// turn's next call rather than send it. That held call is the one whose charge
+// used to stamp the window, so before the meter recorded its own refusals the
+// window refused every call of the turn while its refused_at, "refusing since"
+// and `crewlet budgets show` said nothing had ever been refused. The stamp is
+// the counter's, judged by it, and spends nothing.
+func TestAHeldCallIsRecordedAsTheGatesRefusal(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+	scope, windows := scopeOf(t, c, lead), coord.WindowsAt(clock, time.UTC)
+
+	for _, tokens := range []int{60, 70} {
+		if err := m.Record(ctx, tokens, clock); err != nil {
+			t.Fatalf("Record(%d): %v", tokens, err)
+		}
+	}
+	if stamp := stampOf(t, fleet, scope, period.Day, windows); !stamp.IsZero() {
+		t.Fatalf("setup: the post-charges stamped the seat's day at %v", stamp)
+	}
+
+	from := time.Now()
+	if err := m.Held(ctx); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("Held = %v, want the seat's full day", err)
+	}
+	stamp := stampOf(t, fleet, scope, period.Day, windows)
+	if stamp.Before(from) || stamp.After(time.Now()) {
+		t.Fatalf("the seat's day refused_at = %v, want the instant the meter held the call "+
+			"(in [%v, now])", stamp, from)
+	}
+	if org := stampOf(t, fleet, coord.OrgScope, period.Day, windows); !org.IsZero() {
+		t.Errorf("the company was stamped at %v; it caps nothing and refused nothing", org)
+	}
+	u, err := fleet.Used(ctx, scope, windows)
+	if err != nil || u.In(period.Day).Used != 130 {
+		t.Errorf("the seat's day = (%+v, %v), want the 130 spent and nothing more", u.In(period.Day), err)
+	}
+}
+
+// A REFUSAL IS ONE EVENT, NOT ONE WRITE PER QUESTION.
+//
+// Every caller asks before every call — the loop each round, the judge, each
+// worker of a fan-out at once — so a meter that wrote on every true answer
+// would write the counter as often as the turn asks. It writes once per window,
+// however many ask and however concurrently, and again only for a window it
+// has not recorded: here the next day, once the first has turned over and the
+// seat filled the new one too.
+func TestAHeldWindowIsRecordedOnce(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	refusals := &refusalLog{budgetCounter: fleet}
+	m := &meter{
+		budgets: refusals, agentScope: scopeOf(t, c, lead),
+		basis: basisOf(c, lead), now: func() time.Time { return clock },
+	}
+	if err := m.Record(ctx, 150, clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if _, held := m.Refused(ctx); !held {
+				t.Error("a full day was not held")
+			}
+		})
+	}
+	wg.Wait()
+	for range 3 {
+		if err := m.Held(ctx); err == nil {
+			t.Fatal("a full day was not held")
+		}
+	}
+	if got := refusals.refused(); len(got) != 1 || got[0] != m.agentScope {
+		t.Fatalf("refusals recorded = %v, want the seat's one", got)
+	}
+
+	clock = time.Date(2026, time.March, 15, 9, 0, 0, 0, time.UTC)
+	if err := m.Record(ctx, 120, clock); err != nil {
+		t.Fatalf("Record on the next day: %v", err)
+	}
+	if _, held := m.Refused(ctx); !held {
+		t.Fatal("the next day's full window was not held")
+	}
+	if got := refusals.refused(); len(got) != 2 {
+		t.Fatalf("refusals recorded = %v, want a second for the next day's window", got)
+	}
+}
+
+// A HELD REFUSAL STAMPS THE SCOPE IT NAMES, THE COMPANY BEFORE THE SEAT.
+//
+// Both scopes' days are full. The counter judges the company first, so every
+// charge would be the company's refusal and would stamp the company alone,
+// counting the round on the seat with no verdict of its own; the meter's
+// record follows the same rule, or the seat's screens would say the seat was
+// refusing calls the company turned away.
+func TestAHeldRefusalStampsTheScopeItNames(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{Day: ceiling(100)}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+	scope, windows := scopeOf(t, c, lead), coord.WindowsAt(clock, time.UTC)
+
+	if err := m.Record(ctx, 120, clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if got, held := m.Refused(ctx); !held || got.Scope != "org" {
+		t.Fatalf("Refused = (%+v, %v), want the company's day", got, held)
+	}
+	if stamp := stampOf(t, fleet, coord.OrgScope, period.Day, windows); stamp.IsZero() {
+		t.Error("the company's day carries no refusal stamp")
+	}
+	if stamp := stampOf(t, fleet, scope, period.Day, windows); !stamp.IsZero() {
+		t.Errorf("the seat's day was stamped at %v for a refusal the company makes", stamp)
+	}
+}
+
+// A HELD REFUSAL'S RECORD IS JUDGED BY THE COUNTER, NOT BY THE METER'S MEMORY.
+//
+// A peer whose clock leads moved the seat's slot onto the next day, which has
+// room. The meter holds on through its own day (TestAHeldRefusalLastsTheTurnsOwnCalendar
+// says why), but the window the counter now holds is not refusing, and a stamp
+// there would tell every screen the gate is refusing a day nobody has refused.
+func TestAHeldRefusalStampsNoWindowTheCounterHasRoomIn(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 23, 59, 50, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if err := m.Record(ctx, 120, clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	ahead := coord.WindowsAt(clock.Add(20*time.Second), time.UTC)
+	if _, err := fleet.PostCharge(ctx, m.agentScope, 5, ahead); err != nil {
+		t.Fatalf("the peer's post-charge: %v", err)
+	}
+	if _, held := m.Refused(ctx); !held {
+		t.Fatal("the meter dropped the refusal its own day still makes")
+	}
+	for _, w := range []coord.Windows{m.windows(), ahead} {
+		if stamp := stampOf(t, fleet, m.agentScope, period.Day, w); !stamp.IsZero() {
+			t.Errorf("the seat's day read at %s is stamped at %v; the counter's day has room",
+				w[0].Label, stamp)
+		}
+	}
+}
+
+// A HELD REFUSAL IS RECORDED HOWEVER ITS CALLER ENDS, AND STANDS IF IT CANNOT BE.
+//
+// The refusal happened whether or not the caller is still listening, so the
+// record outlives a caller that hung up. And the record is the report of a
+// refusal, never the refusal: a counter that cannot take it leaves the call
+// refused exactly as it was, and is not asked again on every question.
+func TestAHeldRefusalIsRecordedOnAContextThatOutlivesItsCaller(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	windows := coord.WindowsAt(clock, time.UTC)
+
+	m := &meter{
+		budgets: deadContextRefused{fleet}, agentScope: scopeOf(t, c, lead),
+		basis: basisOf(c, lead), now: func() time.Time { return clock },
+	}
+	if err := m.Record(ctx, 150, clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	ended, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, held := m.Refused(ended); !held {
+		t.Fatal("a full day was not held for a caller that hung up")
+	}
+	if stamp := stampOf(t, fleet, m.agentScope, period.Day, windows); stamp.IsZero() {
+		t.Error("the refusal of a caller that hung up was never recorded")
+	}
+
+	failing := &refusalLog{budgetCounter: fleet, err: errors.New("the counter is unreachable")}
+	other := &org.Role{Name: "Other", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c = meteredCompany(config.TokenBudget{}, other)
+	unrecorded := &meter{
+		budgets: failing, agentScope: scopeOf(t, c, other),
+		basis: basisOf(c, other), now: func() time.Time { return clock },
+	}
+	if err := unrecorded.Record(ctx, 150, clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	for range 3 {
+		if err := unrecorded.Held(ctx); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+			t.Fatalf("Held with an unwritable record = %v, want the refusal all the same", err)
+		}
+	}
+	if got := failing.refused(); len(got) != 1 {
+		t.Errorf("record attempts = %v, want one: a refusal is reported once, not per question", got)
+	}
+}
+
+// A HELD REFUSAL REPORTS THE COUNTER'S FIGURE AT THE REFUSAL.
+//
+// The record answers the scope's counter as it stands, which includes spend
+// the meter never saw — another node's seat on the same company, a background
+// pass — so the refusal the turn reports (its budget_exhausted's used_tokens)
+// is the window's spend when the call was turned away, not when the meter was
+// last answered.
+func TestAHeldRefusalReportsTheCountersFigureAtTheRefusal(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if err := m.Record(ctx, 130, clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if _, err := fleet.PostCharge(ctx, m.agentScope, 20, m.windows()); err != nil {
+		t.Fatalf("the spend outside the turn: %v", err)
+	}
+	got, held := m.Refused(ctx)
+	if !held || got.Scope != "agent" || got.Used != 150 || got.Limit != 100 {
+		t.Fatalf("Refused = (%+v, %v), want the seat's day at the 150 the counter holds", got, held)
+	}
+}
+
 // A HELD REFUSAL IS NAMED AS THE COUNTER WOULD NAME IT NOW: the company before
 // the seat, because the company is judged first; and once the company's window
 // turns over, the seat's that still stands.
@@ -709,6 +994,13 @@ func (d deadContextRefused) PostCharge(ctx context.Context, seat string, tokens 
 		return coord.Spend{}, err
 	}
 	return d.budgets.PostCharge(ctx, seat, tokens, w)
+}
+
+func (d deadContextRefused) Refuse(ctx context.Context, scope string, caps coord.Caps, w coord.Windows) (coord.Usage, error) {
+	if err := ctx.Err(); err != nil {
+		return coord.Usage{}, err
+	}
+	return d.budgets.Refuse(ctx, scope, caps, w)
 }
 
 func (d deadContextRefused) Used(ctx context.Context, scope string, w coord.Windows) (coord.Usage, error) {
