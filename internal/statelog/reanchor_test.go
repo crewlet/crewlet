@@ -657,8 +657,8 @@ func seedCursor(t *testing.T, db store.ReplicatedHandle, stream string, at state
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, ?, ?, ?, ?, 0)
 			ON CONFLICT (stream) DO UPDATE SET
 				generation = excluded.generation, seq = excluded.seq,
 				stream_created_at = excluded.stream_created_at`,
@@ -2100,8 +2100,8 @@ func TestAnAbandonedGenerationsRecordsAreVoidWhereItsReanchorIsFollowed(t *testi
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at,
-				 void_after, void_before)
-			VALUES (?, 3, 0, ?, ?, 1, 3)`,
+				 void_after, void_before, applied_version)
+			VALUES (?, 3, 0, ?, ?, 1, 3, 0)`,
 			probeStream, store.EncodeTime(reanchorCreated), store.EncodeTime(reanchorCreated))
 		return err
 	}); err != nil {
@@ -2488,8 +2488,8 @@ func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at,
-				 void_after, void_before, stale_after)
-			VALUES (?, 2, 10, ?, ?, 1, 2, 11)`,
+				 void_after, void_before, stale_after, applied_version)
+			VALUES (?, 2, 10, ?, ?, 1, 2, 11, 0)`,
 			probeStream, store.EncodeTime(reanchorCreated), store.EncodeTime(reanchorCreated))
 		return err
 	}); err != nil {

@@ -56,8 +56,8 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	}
 	if err := e.backends.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, 0, ?, ?, ?)
+			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, 0, ?, ?, ?, 0)
 			ON CONFLICT (stream) DO NOTHING`,
 			vectors.spec.Name, int64(vstats.LastSeq),
 			store.EncodeTime(vstats.CreatedAt), store.EncodeTime(time.Now().UTC()))
@@ -332,8 +332,8 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, ?, ?, ?, ?, 0)
 			ON CONFLICT (stream) DO UPDATE SET
 				generation = excluded.generation, seq = excluded.seq,
 				stream_created_at = excluded.stream_created_at`,

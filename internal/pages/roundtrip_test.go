@@ -245,8 +245,8 @@ func (r *roundTrip) drain() {
 			}
 			_, err = tx.ExecContext(r.t.Context(), `
 				INSERT INTO statelog_cursor
-					(stream, generation, seq, stream_created_at, updated_at)
-				VALUES (?,?,?,0,0)
+					(stream, generation, seq, stream_created_at, updated_at, applied_version)
+				VALUES (?,?,?,0,0, 0)
 				ON CONFLICT (stream) DO UPDATE SET
 					generation = excluded.generation, seq = excluded.seq`,
 				record.Position.Stream, int64(record.Position.Generation),

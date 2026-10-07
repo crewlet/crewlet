@@ -418,8 +418,7 @@ applied each record — and a node whose build reads less refuses it, since it
 would arrive past a record it could never apply. A build that merely *reads* a
 newer version does not make its snapshots unadoptable: until something
 publishes a record at that version the rows hold none, and a node still on the
-older build adopts them. A checkpoint from before the rows kept this states
-the donor build's own version instead, as every manifest used to.
+older build adopts them.
 
 **An adoption carries the operation ledger with it.** The ledger — the table
 that says which operations have already been applied — travels inside the

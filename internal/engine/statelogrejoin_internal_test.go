@@ -362,8 +362,8 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, ?, ?, ?, ?, 0)
 			ON CONFLICT (stream) DO UPDATE SET
 				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
 			tracker.Domain{}.Stream().Name, int64(at.Generation), int64(last),

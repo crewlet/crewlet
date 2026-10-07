@@ -7,11 +7,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// appliedVersion is the probe log's checkpoint row's applied record version,
-// and false where the row holds none — unknown.
-func appliedVersion(t *testing.T, h *applyHarness) (int64, bool) {
+// appliedVersion is the probe log's checkpoint row's applied record version.
+func appliedVersion(t *testing.T, h *applyHarness) int64 {
 	t.Helper()
-	var v sql.NullInt64
+	var v int64
 	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT applied_version FROM statelog_cursor WHERE stream = ?`,
@@ -19,7 +18,7 @@ func appliedVersion(t *testing.T, h *applyHarness) (int64, bool) {
 	}); err != nil {
 		t.Fatalf("read the checkpoint row: %v", err)
 	}
-	return v.Int64, v.Valid
+	return v
 }
 
 // THE CHECKPOINT KEEPS THE HIGHEST RECORD VERSION ITS ROWS WERE APPLIED FROM —
@@ -40,9 +39,9 @@ func TestTheCheckpointKeepsTheRecordVersionItsRowsWereAppliedFrom(t *testing.T) 
 	if err := h.run(2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if v, known := appliedVersion(t, h); !known || v != 1 {
-		t.Fatalf("the checkpoint says its rows were applied from version %d "+
-			"(known %v), want 1 — the record at 2 was retained, not applied", v, known)
+	if v := appliedVersion(t, h); v != 1 {
+		t.Fatalf("the checkpoint says its rows were applied from version %d, "+
+			"want 1 — the record at 2 was retained, not applied", v)
 	}
 
 	// THE UPGRADE applies it, without moving the checkpoint.
@@ -50,10 +49,9 @@ func TestTheCheckpointKeepsTheRecordVersionItsRowsWereAppliedFrom(t *testing.T) 
 	if err := h.boot(0); err != nil {
 		t.Fatalf("the upgraded build's boot: %v", err)
 	}
-	if v, known := appliedVersion(t, h); !known || v != 9 {
-		t.Fatalf("after the reprocess the checkpoint says version %d (known %v), "+
-			"want 9 — the rows now hold a record only a build reading 9 can apply",
-			v, known)
+	if v := appliedVersion(t, h); v != 9 {
+		t.Fatalf("after the reprocess the checkpoint says version %d, want 9 — "+
+			"the rows now hold a record only a build reading 9 can apply", v)
 	}
 }
 
@@ -71,54 +69,22 @@ func TestARecordAGateDroppedRaisesNoAppliedVersion(t *testing.T) {
 	if err := h.run(2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if v, known := appliedVersion(t, h); !known || v != 1 {
-		t.Fatalf("the checkpoint says version %d (known %v), want 1 — the record "+
-			"at version 4 was gated and wrote nothing", v, known)
+	if v := appliedVersion(t, h); v != 1 {
+		t.Fatalf("the checkpoint says version %d, want 1 — the record "+
+			"at version 4 was gated and wrote nothing", v)
 	}
 }
 
-// A ROW NOTHING RECORDED STAYS UNKNOWN.
-//
-// A checkpoint from before the rows kept this held rows nothing recorded, and
-// a maximum over the records applied since is no bound on the ones before: a
-// row that took a later record's version as its own would let a joiner reading
-// less adopt rows applied from more.
-func TestAnAppliedVersionNobodyRecordedStaysUnknown(t *testing.T) {
-	t.Parallel()
-	h := newApplyHarness(t, probeDomain{})
-	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
-	if err := h.run(1); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	// THE ROW AS MIGRATION 0035 LEFT EVERY CHECKPOINT THAT PREDATES IT.
-	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE statelog_cursor SET applied_version = NULL`)
-		return err
-	}); err != nil {
-		t.Fatalf("forget the applied version: %v", err)
-	}
-	h.upgrade(probeDomain{})
-	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
-	if err := h.run(2); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if v, known := appliedVersion(t, h); known {
-		t.Fatalf("the checkpoint says version %d after a record applied over a row "+
-			"nothing recorded, want unknown", v)
-	}
-}
-
-// A SNAPSHOT STATES WHAT ITS ROWS HOLD, NOT WHAT ITS DONOR'S BUILD COULD READ —
-// and the build's own bound only where the file cannot say.
+// A SNAPSHOT STATES WHAT ITS ROWS HOLD, NOT WHAT ITS DONOR'S BUILD COULD READ.
 func TestASnapshotStatesTheRecordVersionItsRowsHold(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
-		applied any
+		applied int64
 		want    int
 	}{
-		{"rows applied from nothing newer than version 0", int64(0), 0},
-		{"a checkpoint nothing recorded", nil, probeDomain{}.RecordVersion()},
+		{"rows applied from nothing newer than version 0", 0, 0},
+		{"rows applied from a version above the build's own", 9, 9},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

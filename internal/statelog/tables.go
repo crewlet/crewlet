@@ -277,12 +277,11 @@ func (t tables) raiseApplied(ctx context.Context, tx *sql.Tx, v int) error {
 }
 
 // raisedApplied is the one expression that raises the row's applied record
-// version to at least by: the larger of the two, and UNKNOWN STAYS UNKNOWN — a
-// row from before the column held rows nothing recorded, and a maximum over
-// the records since is no bound on the ones before (migration 0035).
+// version to at least by: the larger of the two, so a version is only ever
+// raised — a record of a lower version applied later says nothing about the
+// ones the rows already hold.
 func raisedApplied(by string) string {
-	return `CASE WHEN statelog_cursor.applied_version IS NULL THEN NULL
-		ELSE MAX(statelog_cursor.applied_version, ` + by + `) END`
+	return `MAX(statelog_cursor.applied_version, ` + by + `)`
 }
 
 // readDerivation reads the rule set this stream's rows were derived by,

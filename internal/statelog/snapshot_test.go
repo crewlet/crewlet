@@ -94,17 +94,19 @@ func newSnapHarness(t *testing.T) *snapHarness {
 }
 
 // cursor commits the probe domain's checkpoint in the replicated estate, which
-// is what a real applier does with every batch.
+// is what a real applier does with every batch — over rows applied from the
+// probe's own record version.
 func (h *snapHarness) cursor(seq uint64) {
 	h.t.Helper()
 	if err := h.estate.Tx(h.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(h.t.Context(), `
 			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at)
-			VALUES (?, 1, ?, ?, 0)
+				(stream, generation, seq, stream_created_at, updated_at, applied_version)
+			VALUES (?, 1, ?, ?, 0, ?)
 			ON CONFLICT (stream) DO UPDATE SET
 				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
-			probeStream, int64(seq), store.EncodeTime(h.created))
+			probeStream, int64(seq), store.EncodeTime(h.created),
+			int64(probeDomain{}.RecordVersion()))
 		return err
 	}); err != nil {
 		h.t.Fatalf("commit the checkpoint at %d: %v", seq, err)
@@ -158,8 +160,9 @@ func TestASnapshotNamesEveryDomainAndItsManifestIsTheClaim(t *testing.T) {
 		t.Errorf("the manifest names position %d/%d, want 1/4200", got.Generation, got.Seq)
 	}
 	if want := (probeDomain{}).RecordVersion(); got.RecordVersion != want {
-		t.Errorf("the manifest names record version %d, want %d — a recipient "+
-			"refuses a donor whose build read more than its own",
+		t.Errorf("the manifest names record version %d, want the %d its rows were "+
+			"applied from — a recipient refuses a donor whose rows hold more than "+
+			"its build reads",
 			got.RecordVersion, want)
 	}
 	if got.Replay != statelog.ReplayStrict {
