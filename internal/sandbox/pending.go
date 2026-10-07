@@ -325,9 +325,10 @@ func (r PendingRun) answerOwed() bool {
 	return !r.Answer.Taken() || (r.Ending != nil && r.Ending.Unused)
 }
 
-// Revival is how the seat's next holder gives a dead claim's recorded answer
+// Revival is how a claim of a recorded answer that no resume holds is given
 // back to the run it answers ([PendingStore.ReviveAnswer]): which job, which
-// answer, and the lease the holder took the seat under.
+// answer, the lease the reviving node holds the seat under, and whether the
+// claim was LOST.
 type Revival struct {
 	// Launch is the job the claim took, matched exactly.
 	Launch string
@@ -336,8 +337,25 @@ type Revival struct {
 	// ([RecordedAnswer.EventIDs]); the run must hold exactly that answer.
 	Answer []string
 
-	// Fence is the holder's lease, stamped on the row by the revival.
+	// Fence is the reviving node's lease, stamped on the row by the revival.
 	Fence Fence
+
+	// Lost says the claim DIED: its node stopped, or the seat moved, between
+	// the claim and the turn that would have taken the answer, and the seat's
+	// next holder revives it ([Coordinator.reapTail]). The revival COUNTS a
+	// lost claim on the answer ([RecordedAnswer.LostClaims],
+	// [RecordedAnswer.FirstLostAt]), which is what bounds a resume that takes
+	// its node down.
+	//
+	// FALSE IS A CLAIM NOBODY LOST: one a node made itself, whose write
+	// reported a failure and landed, given back by the series that made it
+	// under the lease it was taken under ([Coordinator.suspectClaim]). No node
+	// stopped, so nothing is counted — counted, a coordination store that
+	// answered a few of a healthy node's claims with errors ended the run as
+	// an abandoned tail, announced as a node that stopped. That series is
+	// bounded by its own attempts ([MaxAnswerAttempts], [answerWindow]),
+	// which end in a decline rather than an ending.
+	Lost bool
 }
 
 // Holding are the statuses in which a run holds its seat, so the seat takes no
@@ -1241,13 +1259,15 @@ type PendingStore interface {
 	// written again.
 	TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error)
 
-	// ReviveAnswer gives a claim whose node stopped before its turn took the
-	// recorded answer back to that answer: the run returns to
-	// [StatusAnswered], owed the resume the answer drives, and the seat's
-	// next holder drives it. In the same write the row is FENCED to the
-	// holder's lease and the loss COUNTED on the answer
-	// ([RecordedAnswer.LostClaims], [RecordedAnswer.FirstLostAt]). Returns the
-	// row as written IFF THIS CALL DID.
+	// ReviveAnswer gives a claim no resume holds back to the recorded answer
+	// it was taken for: the run returns to [StatusAnswered], owed the resume
+	// the answer drives, and the reviving node drives it. In the same write
+	// the row is FENCED to the reviving node's lease and — for a claim whose
+	// node stopped before its turn took the answer ([Revival.Lost]) — the loss
+	// COUNTED on the answer ([RecordedAnswer.LostClaims],
+	// [RecordedAnswer.FirstLostAt]); a claim its own node made and could not
+	// confirm is given back uncounted. Returns the row as written IFF THIS
+	// CALL DID.
 	//
 	// Only while the run is still that claim — [StatusResumed] on that
 	// launch, holding exactly that answer, its ending not decided — and no
@@ -1608,7 +1628,9 @@ type RecordedAnswer struct {
 	// LostClaims counts the claims of this answer whose node stopped before
 	// their turn took it, each revived by the seat's next holder so that the
 	// answer reaches the run it answered ([PendingStore.ReviveAnswer]), and
-	// FirstLostAt is when the first of them was revived. ON THE ROW, because
+	// FirstLostAt is when the first of them was revived. A claim its own node
+	// made, could not confirm and gave back is none of them ([Revival.Lost]):
+	// no node stopped. ON THE ROW, because
 	// what they bound is a series no one node sees: a claim that dies is a
 	// node that stopped, and the count a node keeps of its own attempts
 	// resets with exactly that ([MaxAnswerAttempts]). See [MaxAnswerRevivals].

@@ -422,8 +422,9 @@ func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo
 	return written, won, nil
 }
 
-// ReviveAnswer gives a dead claim back to its recorded answer, fenced to the
-// seat's holder and counted. See the contract on [PendingStore].
+// ReviveAnswer gives a claim no resume holds back to its recorded answer,
+// fenced to the reviving node and — where the claim was lost — counted. See the
+// contract on [PendingStore].
 func (s *CoordStore) ReviveAnswer(ctx context.Context, turnID string, revival Revival) (PendingRun, bool, error) {
 	if len(revival.Answer) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: reviving an answer to run %s that names no "+
@@ -441,9 +442,11 @@ func (s *CoordStore) ReviveAnswer(ctx context.Context, turnID string, revival Re
 			return false
 		}
 		answer := *run.Answer
-		answer.LostClaims++
-		if answer.FirstLostAt.IsZero() {
-			answer.FirstLostAt = s.clock()
+		if revival.Lost {
+			answer.LostClaims++
+			if answer.FirstLostAt.IsZero() {
+				answer.FirstLostAt = s.clock()
+			}
 		}
 		run.Answer = &answer
 		run.Status = StatusAnswered

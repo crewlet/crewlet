@@ -397,21 +397,21 @@ func TestAClaimThatMovedUnreadablyUnderItsRevivalIsRetried(t *testing.T) {
 	resumedOnceWith(t, rig, holder, "use main")
 }
 
-// claimLandsThenFails lets the first claim of a recorded answer land and then
-// reports that it could not: the write committed, and the store's answer was
-// lost.
+// claimLandsThenFails lets the next fails claims of a recorded answer land and
+// then reports that each could not: the write committed, and the store's answer
+// was lost.
 type claimLandsThenFails struct {
 	PendingStore
-	failed bool
+	fails int
 }
 
 func (s *claimLandsThenFails) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
 ) (PendingRun, bool, error) {
 	claimed, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
-	if err != nil || s.failed || !slices.Equal(tail.From, []string{StatusAnswered}) {
+	if err != nil || !won || s.fails == 0 || !slices.Equal(tail.From, []string{StatusAnswered}) {
 		return claimed, won, err
 	}
-	s.failed = true
+	s.fails--
 	return PendingRun{}, false, errRefusedCall
 }
 
@@ -426,7 +426,7 @@ func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.coordinator.lease = func(string) Fence { return rigLease }
-	rig.coordinator.pending = &claimLandsThenFails{PendingStore: rig.pending}
+	rig.coordinator.pending = &claimLandsThenFails{PendingStore: rig.pending, fails: 1}
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
 	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
 		chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
@@ -443,4 +443,35 @@ func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
 		t.Fatal("nothing was scheduled after the claim reported a failure")
 	}
 	resumedOnceWith(t, rig, rig, "use main")
+}
+
+// A HEALTHY NODE'S OWN UNCONFIRMED CLAIMS ARE NO LOST CLAIMS. Every claim of the
+// answer lands and reports a failure, more times than the revivals of a dead
+// claim are bounded by: no node stopped, so none of them is counted on the row,
+// nothing ends the run, and the series resumes it once the store answers — with
+// the person's answer, nothing handed back and nothing announced lost. Counted as
+// lost claims, the fourth ended the run as an abandoned tail, announced as a node
+// that had stopped, on a node that never did.
+func TestAHealthyNodesUnconfirmedClaimsAreNotLostClaims(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	rig.coordinator.lease = func(string) Fence { return rigLease }
+	rig.coordinator.pending = &claimLandsThenFails{PendingStore: rig.pending, fails: MaxAnswerRevivals + 1}
+	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
+	if d, _ := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe",
+		chatReply(answerOnTheDM, "use main", r1)); d != AnswerConsumed {
+		t.Fatalf("R1 = %q, want it recorded", d)
+	}
+	for i := range MaxAnswerRevivals + 1 {
+		if got := rig.get("t1"); got.Answer == nil || got.Answer.LostClaims != 0 ||
+			!got.Answer.FirstLostAt.IsZero() {
+			t.Fatalf("after %d unconfirmed claims the answer is %+v, want nothing counted as lost",
+				i+1, got.Answer)
+		}
+		if rig.fireRetries() != 1 {
+			t.Fatalf("after %d unconfirmed claims nothing was scheduled", i+1)
+		}
+	}
+	resumedOnceWith(t, rig, rig, "use main")
+	rig.finished("t1")
 }

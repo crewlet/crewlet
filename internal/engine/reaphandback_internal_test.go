@@ -189,7 +189,7 @@ func pastRevivals(t *testing.T, e *Engine, turnID string) {
 			t.Fatalf("Get = %v, %v", found, err)
 		}
 		if _, ok, err := store.ReviveAnswer(ctx, turnID, sandbox.Revival{
-			Launch: run.LaunchID, Answer: run.Answer.EventIDs,
+			Launch: run.LaunchID, Answer: run.Answer.EventIDs, Lost: true,
 		}); err != nil || !ok {
 			t.Fatalf("revival %d = %v, %v", i+1, ok, err)
 		}

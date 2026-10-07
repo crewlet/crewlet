@@ -3170,6 +3170,9 @@ func (c *Coordinator) reviveAnswer(ctx context.Context, run PendingRun, fence Fe
 ) (revived, took *PendingRun, err error) {
 	written, won, err := c.pending.ReviveAnswer(ctx, run.TurnID, Revival{
 		Launch: run.LaunchID, Answer: run.Answer.EventIDs, Fence: fence,
+		// A CLAIM WHOSE NODE STOPPED, so it is counted: see
+		// [MaxAnswerRevivals].
+		Lost: true,
 	})
 	switch {
 	case errors.Is(err, ErrAnswerTaken):

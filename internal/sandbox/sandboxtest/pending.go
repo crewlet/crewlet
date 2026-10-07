@@ -117,6 +117,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AClaimIsTakenUnderTheClaimantsLease", testAClaimIsTakenUnderTheClaimantsLease},
 		{"ATurnTakesTheAnswerItsClaimDrives", testATurnTakesTheAnswerItsClaimDrives},
 		{"ADeadClaimsAnswerIsRevivedOnceFencedAndCounted", testADeadClaimsAnswerIsRevivedOnceFencedAndCounted},
+		{"AClaimItsOwnNodeGivesBackIsNotCounted", testAClaimItsOwnNodeGivesBackIsNotCounted},
 		{"ARevivalIsRefusedAnAnswerATurnTook", testARevivalIsRefusedAnAnswerATurnTook},
 		{"ANewQuestionForgetsTheLastOnesAnswer", testANewQuestionForgetsTheLastOnesAnswer},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
@@ -3078,17 +3079,17 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 	launch := claimedAnswerOn(t, s, "t1", answerOf("r1", "use main"), false)
 	next := sandbox.Fence{Owner: "next", Epoch: 2}
 	for name, revival := range map[string]sandbox.Revival{
-		"another launch": {Launch: "another-launch", Answer: []string{"r1"}, Fence: next},
-		"another answer": {Launch: launch, Answer: []string{"r2"}, Fence: next},
+		"another launch": {Launch: "another-launch", Answer: []string{"r1"}, Fence: next, Lost: true},
+		"another answer": {Launch: launch, Answer: []string{"r2"}, Fence: next, Lost: true},
 	} {
 		if _, ok, err := s.ReviveAnswer(ctx, "t1", revival); err != nil || ok {
 			t.Fatalf("a revival naming %s = %v, %v, want refused", name, ok, err)
 		}
 	}
-	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next}); err == nil || ok {
+	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Fence: next, Lost: true}); err == nil || ok {
 		t.Fatalf("a revival naming no answer = %v, %v, want an error", ok, err)
 	}
-	revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next}
+	revival := sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next, Lost: true}
 	revived, ok, err := s.ReviveAnswer(ctx, "t1", revival)
 	if err != nil || !ok {
 		t.Fatalf("ReviveAnswer = %v, %v", ok, err)
@@ -3122,7 +3123,7 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 		t.Fatalf("the revived run's claim = %v, %v", ok, err)
 	}
 	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
-		Fence: later}); err != nil || !ok {
+		Fence: later, Lost: true}); err != nil || !ok {
 		t.Fatalf("the second revival = %v, %v", ok, err)
 	}
 	if a := mustGet(t, s, "t1").Answer; a.LostClaims != 2 || !a.FirstLostAt.Equal(first) {
@@ -3142,6 +3143,55 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 	}
 }
 
+// A CLAIM ITS OWN NODE GIVES BACK IS NOT COUNTED. A claim whose write reported a
+// failure and landed is given back to its answer by the node that made it,
+// under the lease it was taken under: the run answered again, owed its resume —
+// and nothing counted, because no node stopped. Counted, a coordination store
+// that answered a few of a healthy node's claims with errors spent the answer's
+// revivals and ended the run as an abandoned tail. A claim that IS lost after it
+// is counted as the first.
+func testAClaimItsOwnNodeGivesBackIsNotCounted(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := claimedAnswerOn(t, s, "t1", answerOf("r1", "use main"), false)
+	own := sandbox.Fence{Owner: "own", Epoch: 1}
+	for i := range 3 {
+		if i > 0 {
+			if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), own); err != nil || !ok {
+				t.Fatalf("claim %d = %v, %v", i+1, ok, err)
+			}
+		}
+		given, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
+			Fence: own})
+		if err != nil || !ok {
+			t.Fatalf("give-back %d = %v, %v", i+1, ok, err)
+		}
+		got := mustGet(t, s, "t1")
+		if got.Status != sandbox.StatusAnswered || got.Owner != "own" || got.OwnerEpoch != 1 {
+			t.Fatalf("run %q owned by %q at %d, want it answered again under the claim's own lease",
+				got.Status, got.Owner, got.OwnerEpoch)
+		}
+		if a := got.Answer; a == nil || a.Taken() || a.LostClaims != 0 || !a.FirstLostAt.IsZero() {
+			t.Fatalf("answer after give-back %d: %+v, want the same answer, untaken, nothing counted",
+				i+1, a)
+		}
+		if given.Answer == nil || given.Answer.LostClaims != 0 || given.Status != sandbox.StatusAnswered {
+			t.Fatalf("ReviveAnswer reported %q with %+v, want the row as written", given.Status, given.Answer)
+		}
+	}
+
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch), own); err != nil || !ok {
+		t.Fatalf("the claim that dies = %v, %v", ok, err)
+	}
+	next := sandbox.Fence{Owner: "next", Epoch: 2}
+	if _, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"},
+		Fence: next, Lost: true}); err != nil || !ok {
+		t.Fatalf("the lost claim's revival = %v, %v", ok, err)
+	}
+	if a := mustGet(t, s, "t1").Answer; a.LostClaims != 1 || a.FirstLostAt.IsZero() {
+		t.Fatalf("answer lost %d claims since %v, want the one lost claim counted", a.LostClaims, a.FirstLostAt)
+	}
+}
+
 // A REVIVAL IS REFUSED AN ANSWER A TURN TOOK, with the row — the take and the
 // revival are exclusive, as the take and an ending's let-go are, so whichever
 // lands first decides and the person is answered once: by the turn, or by the
@@ -3151,7 +3201,8 @@ func testARevivalIsRefusedAnAnswerATurnTook(t *testing.T, s sandbox.PendingStore
 	ctx := t.Context()
 	next := sandbox.Fence{Owner: "next", Epoch: 2}
 	launch := claimedAnswerOn(t, s, "t1", answerOf("r1", "use main"), true)
-	row, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next})
+	row, ok, err := s.ReviveAnswer(ctx, "t1", sandbox.Revival{Launch: launch, Answer: []string{"r1"}, Fence: next,
+		Lost: true})
 	if !errors.Is(err, sandbox.ErrAnswerTaken) || ok || row.Answer == nil || !row.Answer.Taken() {
 		t.Fatalf("a revival of a taken answer = %v, %+v, %v, want refused as taken with the row",
 			ok, row.Answer, err)
@@ -3163,14 +3214,14 @@ func testARevivalIsRefusedAnAnswerATurnTook(t *testing.T, s sandbox.PendingStore
 	launch = claimedAnswerOn(t, s, "t2", answerOf("r2", "use dev"), false)
 	decide(t, s, "t2", everyJob(sandbox.Fence{}, sandbox.Active))
 	if _, ok, err := s.ReviveAnswer(ctx, "t2", sandbox.Revival{Launch: launch, Answer: []string{"r2"},
-		Fence: next}); err != nil || ok {
+		Fence: next, Lost: true}); err != nil || ok {
 		t.Fatalf("a revival of a run whose ending is decided = %v, %v, want refused", ok, err)
 	}
 	if got := mustGet(t, s, "t2"); got.Status != sandbox.StatusResumed {
 		t.Fatalf("run %q, want the decided run left as its ending found it", got.Status)
 	}
 	if _, ok, err := s.ReviveAnswer(ctx, "gone", sandbox.Revival{Launch: launch, Answer: []string{"r2"},
-		Fence: next}); err != nil || ok {
+		Fence: next, Lost: true}); err != nil || ok {
 		t.Fatalf("a revival of a run that does not exist = %v, %v", ok, err)
 	}
 }
