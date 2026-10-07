@@ -525,9 +525,9 @@ included — on the members that remain, where there are enough of them. On `s3`
 
 **Upgrade one node at a time, and let each one finish.** Seat leases
 carry a protocol version, and a node refuses to claim seats while any
-live lease is held at an older one. The rule is asymmetric on purpose:
-older nodes keep working, newer ones wait — visibly, with
-`seat_claims_blocked_by_older_protocol` — until the last old lease lapses
+live lease is held at a lower one. The rule is asymmetric on purpose:
+lower-protocol nodes keep working, higher ones wait — visibly, with
+`seat_claims_blocked_by_older_protocol` — until the last lower lease lapses
 or is released. A rolling deploy converges because that is what a rolling
 deploy does.
 
@@ -535,16 +535,10 @@ The consequences worth stating plainly:
 
 - **A stalled rollout stalls placement.** If you leave one old node
   running, the new ones hold nothing. The log line says so; watch for it.
-- **Rolling *back* across a protocol bump needs a full stop.** An older
-  build has no protocol check at all, so it will happily take over a
-  newer node's expired leases. Nothing in the table can stop it.
-- **A stalled rollout stalls the fleet duties too, on upgrades that move
-  them.** Upgrading from a build that kept the `worker:` leases beside the
-  seat leases, newer nodes run no scheduler tick, retention sweep,
-  integration reconcile or curator pass while any older node is live, and
-  say so once with `coord_kv_duties_wait_for_older_build` (and
-  `coord_kv_duties_resumed` when it ends). See
-  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
+- **Rolling *back* across a protocol bump needs a full stop.** The check
+  only ever looks down, so a lower-protocol build is never refused and
+  takes over a higher node's expired leases unchecked. Nothing in the table
+  can stop it.
 - **A node that leaves takes its turn-level history with it.** Every node's
   event store holds the events it published, and the dashboard's turns,
   traces and event log are read from every live node at query time. A node

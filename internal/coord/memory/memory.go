@@ -153,11 +153,11 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Le
 		return nil, coord.RefusedHeld
 	}
 
-	// The mixed-version gate. Refuse while ANY live lease is held at an
-	// older protocol — the disagreement is about what holding a lease
+	// The mixed-version gate. Refuse while ANY live lease is held at a
+	// lower protocol — the disagreement is about what holding a lease
 	// MEANS, so it is not scoped to the resource being claimed. Asymmetric
-	// by construction: it only ever looks for a LOWER protocol, so an
-	// older node (which has no such check to run) is never blocked.
+	// by construction: it only ever looks for a LOWER protocol, so a
+	// lower-protocol node is never blocked.
 	if !opts.Ungated {
 		for _, r := range b.rows {
 			if r.live(now) && r.protocol < protocol {

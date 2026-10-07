@@ -43,11 +43,11 @@ var protocolCases = []testCase{
 	}},
 
 	{"an_older_node_still_claims_beside_a_newer_holder", func(h *harness) {
-		// Asymmetric on purpose: the old build has no check to run, and
-		// nothing in the store can make it run one. Which is exactly why
-		// a DOWNGRADE across a protocol bump needs a full fleet drain —
-		// an older build will happily take over a newer node's expired
-		// leases.
+		// Asymmetric on purpose: the check only ever looks DOWN, so a
+		// lower-protocol claim is never gated by a higher lease. Which is
+		// exactly why a DOWNGRADE across a protocol bump needs a full
+		// fleet drain — a lower-protocol build takes over a higher node's
+		// expired leases unchecked.
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "new-node:1", TTL: LongTTL, Protocol: 2})
 		h.claim("seat:engineer", coord.AcquireOptions{Owner: "old-node:1", TTL: LongTTL, Protocol: 1})
 	}},
@@ -207,11 +207,10 @@ var protocolCases = []testCase{
 	}},
 
 	{"an_ungated_claim_still_records_its_own_protocol", func(h *harness) {
-		// Ungated skips the CHECK, never the stamp. A long-lived
-		// singleton record left at protocol 1 by a build that predates
-		// the gate would block every seat claim in the fleet the moment
-		// the version moved; carrying this build's protocol is what
-		// stops an opted-out claim from becoming the thing that blocks.
+		// Ungated skips the CHECK, never the stamp: the lease carries
+		// the claiming build's protocol like any other, so it holds a
+		// newer claim back only while a build at that protocol holds it,
+		// and never holds a claim at its own protocol back.
 		duty := h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Protocol: 3, Ungated: true,
 		})
@@ -235,10 +234,7 @@ var protocolCases = []testCase{
 		// rolling upgrade that never finishes.
 		//
 		// So the zero value is SAFE: an omitted protocol claims at this
-		// build's version, which is what the caller meant. The opposite
-		// case — a STORED record with no protocol — still reads as the
-		// oldest, because that record genuinely predates the concept;
-		// coord.StoredProtocol is the read-side half.
+		// build's version, which is what the caller meant.
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		if lease.Protocol != coord.ProtocolVersion {
 			h.t.Fatalf("a claim with no protocol recorded %d, want %d (this build)",
@@ -252,37 +248,6 @@ var protocolCases = []testCase{
 		h.claim("seat:engineer", coord.AcquireOptions{
 			Owner: "node-b:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
 		})
-	}},
-
-	{"a_stored_record_with_no_protocol_reads_as_the_oldest", func(h *harness) {
-		// The read-side half, and the fail-closed one: a record written
-		// before the field existed must gate newer claims until it
-		// lapses, exactly as a real v1 hold would.
-		//
-		// READ THE SCOPE BEFORE TRUSTING THIS CASE. Now that a claim
-		// normalises to this build, NOTHING reachable through
-		// coord.Backend can store a protocol of zero — so the suite
-		// cannot plant the record this rule is about, and what follows
-		// checks the shared helper plus the behaviour the rule
-		// reproduces, NOT that this backend calls the helper on its own
-		// decode path. A durable backend reading the field raw passes
-		// here and still lets an ancient record read as current. That
-		// obligation belongs to each durable backend's own tests, where
-		// the record can be written out of band (internal/coord/kv does
-		// it in record.go); an in-memory store has no records that
-		// predate its own process and nothing to check.
-		if got := coord.StoredProtocol(0); got != 1 {
-			h.t.Fatalf("StoredProtocol(0) = %d, want 1", got)
-		}
-		if got := coord.StoredProtocol(3); got != 3 {
-			h.t.Fatalf("StoredProtocol(3) = %d, want 3", got)
-		}
-		// An explicit older claim still gates, which is the behaviour
-		// the stored reading exists to reproduce.
-		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old:1", TTL: LongTTL, Protocol: 1})
-		h.refused("seat:engineer", coord.AcquireOptions{
-			Owner: "new:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
-		}, coord.RefusedProtocol)
 	}},
 
 	// --- the observability half ----------------------------------------
