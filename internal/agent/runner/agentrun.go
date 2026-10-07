@@ -226,10 +226,10 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 //
 // This used to hand `finishWork` a zero [toolloop.Result] while holding the
 // whole record in `bridged`, so the published event carried no response, no
-// tool calls, no tokens, no rounds and no model. The card rendered EMPTY: with
-// nothing in the ledger and nothing in the joined response there is no
-// transcript to fall back on, and the "composing its first round" placeholder
-// is gated on a phase being live, which a completed one is not. An operator
+// tool calls, no tokens, no rounds and no model. The card rendered EMPTY: it
+// draws a phase from its rounds, a record with nothing in its ledger has none
+// to draw, and the "composing its first round" placeholder is gated on a phase
+// being live, which a completed one is not. An operator
 // saw a decision word and a blank card for a run that made real tool calls.
 //
 // ONE ROUND, and that is not a stand-in for a number the engine failed to
