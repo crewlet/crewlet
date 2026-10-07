@@ -210,10 +210,10 @@ func (t table) subject(handle string, values map[string]any) string {
 // WHAT THE CONFLICT DOES IS THE TABLE'S OWN ANSWER, and it is the same split
 // table.wholeEachCycle already makes. An append-only row is immutable once
 // written, so a row already here is that row and DO NOTHING is exact — but for
-// the one column pair a holder fills afterwards, a diary note's vector, which
-// the carry takes over a stored vector of no model or another
-// (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one whose
-// UPDATE IS THE CONTENT — a counterparty profile rewritten as the seat
+// the one column pair a holder fills afterwards, a diary note's or an
+// episode's vector, which the carry takes over a stored vector of no model or
+// another (table.fillsVector, [table.fillVector]). A wholeEachCycle row is one
+// whose UPDATE IS THE CONTENT — a counterparty profile rewritten as the seat
 // learns, a skill archived, an onboarding marker flipped — and DO NOTHING
 // there discards precisely what the table is republished every cycle to
 // carry. A node that held the seat, lost it while a peer kept learning, and

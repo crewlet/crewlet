@@ -325,8 +325,13 @@ type Diary interface {
 }
 
 // Episodes is the seat's record of past turns.
+//
+// Unsearchable is what a pulled search did not reach — the seat's raw turns
+// with no vector of the query's model — so an empty answer can say so rather
+// than tell the seat it has never done the work.
 type Episodes interface {
 	Recall(ctx context.Context, q learning.RecallQuery) ([]learning.Hit, error)
+	Unsearchable(ctx context.Context, handle, model string) (int, error)
 }
 
 // Counterparties is what this seat has observed about other people.

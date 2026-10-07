@@ -71,13 +71,16 @@ func cursorArgs(after FillCursor) []any {
 //
 // A ROW ALREADY HOLDING A VECTOR OF THE SAME MODEL AT THIS WIDTH IS LEFT ALONE
 // ([staleVector]): two passes, or a pass racing the row's own write, fill it
-// once.
+// once. An episode's fill touches raw rows only, the rows recall searches.
 const (
 	staleVector = ` AND (embedding IS NULL OR embedding_model IS NULL
 		OR embedding_model <> ? OR length(embedding) <> ?)`
 
 	diaryFillSQL = `UPDATE agent_diary SET embedding = ?, embedding_model = ?
 		WHERE id = ?` + staleVector
+
+	episodeFillSQL = `UPDATE episodes SET embedding = ?, embedding_model = ?
+		WHERE id = ? AND kind = 'raw'` + staleVector
 )
 
 // fillVectors stores vectors on rows of table through statement — one of the

@@ -196,3 +196,60 @@ func TestARefillAtANewWidthReplacesAPeersCopyAtTheOld(t *testing.T) {
 		t.Fatalf("the peer kept the old width's vector: %d bytes, want 16", len(blob))
 	}
 }
+
+// AN EPISODE IS FILLED AND CARRIED LIKE A NOTE, and what its turn was asked
+// travels with it: the ask is the part of the episode's vector nothing else on
+// the row holds, so a peer that took the seat with a row lacking it could never
+// make that vector again.
+func TestAFilledEpisodeAndItsAskReachAPeerHoldingTheVectorlessRow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	holder, peer := openStore(t), openStore(t)
+	at := time.Now().UTC().Add(-time.Hour)
+	if _, err := learning.NewEpisodes(holder).Append(ctx, learning.Episode{
+		ID: "e1", Handle: seat.Handle, Role: "Engineer", TurnID: "t1",
+		StartedAt: at, EndedAt: at, TaskSummary: "Message from Ana: Slack message",
+		Ask: "The staging deploy keeps failing.", PlanSummary: "rolled back the cache change",
+		ReviewOutcome: "done",
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	episodes := tables[1]
+	if episodes.name != "episodes" || !episodes.fillsVector {
+		t.Fatalf("fixture drifted: tables[1] is %s, fills %v", episodes.name, episodes.fillsVector)
+	}
+	first, mark, err := export(ctx, holder.SQL(), episodes, seat, 0)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first export = %d rows, %v", len(first), err)
+	}
+	carryRows(t, peer, episodes, first)
+	var ask string
+	if err := peer.SQL().QueryRowContext(ctx, "SELECT ask FROM episodes WHERE id = 'e1'").Scan(&ask); err != nil {
+		t.Fatalf("read the carried ask: %v", err)
+	}
+	if ask != "The staging deploy keeps failing." {
+		t.Fatalf("the peer holds the ask %q", ask)
+	}
+
+	if filled, err := learning.NewEpisodes(holder).FillEmbeddings(ctx, []learning.VectorFill{{
+		ID: "e1", Vector: learning.Vector{Values: []float32{0.5, 0.5}, Model: "model-a"},
+	}}); err != nil || filled != 1 {
+		t.Fatalf("FillEmbeddings = %d, %v; want the episode", filled, err)
+	}
+	again, _, err := export(ctx, holder.SQL(), episodes, seat, mark)
+	if err != nil || len(again) != 1 {
+		t.Fatalf("the filled episode was not carried: %d rows, %v", len(again), err)
+	}
+	carryRows(t, peer, episodes, again)
+	var (
+		blob  []byte
+		model string
+	)
+	if err := peer.SQL().QueryRowContext(ctx,
+		"SELECT embedding, embedding_model FROM episodes WHERE id = 'e1'").Scan(&blob, &model); err != nil {
+		t.Fatalf("read the peer's episode: %v", err)
+	}
+	if len(blob) == 0 || model != "model-a" {
+		t.Fatalf("the peer still holds the vectorless episode: %d bytes in %q", len(blob), model)
+	}
+}

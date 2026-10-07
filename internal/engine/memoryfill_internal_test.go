@@ -296,3 +296,41 @@ func TestEachNodeTakesItsShareOfTheAccountBudget(t *testing.T) {
 		}
 	}
 }
+
+// A SEAT'S EPISODES ARE FILLED BESIDE ITS NOTES, from the text each was
+// embedded from — its label, what it was asked and what it did — so after a
+// model change a seat's history is reachable by meaning again, not only what
+// it did since.
+func TestTheFillReachesASeatsEpisodesFromWhatTheyStore(t *testing.T) {
+	t.Parallel()
+	db, _ := diaryFixture(t, map[string][]string{"id-a": {"the release train is thursdays"}})
+	at := time.Now().UTC().Add(-time.Hour)
+	episodes := learning.NewEpisodes(db)
+	if _, err := episodes.Append(t.Context(), learning.Episode{
+		ID: "e1", Handle: "a", Role: "Engineer", TurnID: "t1", StartedAt: at, EndedAt: at,
+		TaskSummary: "Message from Ana: Slack message", Ask: "rotate the staging certs",
+		PlanSummary: "rotated them and restarted the ingress", ReviewOutcome: "done",
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	fake := embeddings.NewFake(64)
+	report := tick(t, db, allEstablished("a"), func(string) string { return "id-a" }, fake,
+		embeddings.NewRefusals(), fillAt, memoryFillRequestsPerTick, memoryFillBytesPerTick, "")
+	if report.filled["diary"] != 1 || report.filled["episodes"] != 1 {
+		t.Fatalf("filled %v, want the note and the episode", report.filled)
+	}
+	want := embeddings.Prepare("Message from Ana: Slack message\n\nrotate the staging certs\n\n" +
+		"rotated them and restarted the ingress")
+	sent := false
+	for _, request := range fake.Requests() {
+		for _, input := range request {
+			sent = sent || input == want
+		}
+	}
+	if !sent {
+		t.Fatalf("the episode was not embedded as its label, ask and account: requests %q", fake.Requests())
+	}
+	if n, err := episodes.Unsearchable(t.Context(), "a", fake.Model()); err != nil || n != 0 {
+		t.Fatalf("after the fill %d episodes are unsearchable, %v", n, err)
+	}
+}

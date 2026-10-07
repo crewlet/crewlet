@@ -539,17 +539,18 @@ than adapt:
   store already holds is rejected, with an error naming both. Changing the
   width is a restart, which is a decision for an operator who is watching
   rather than a silent divergence discovered at the first recall weeks later:
-  after it the knowledge corpus re-embeds itself and each seat's diary is
-  re-filled by the node holding the seat, while episode vectors written at
-  the old width are not re-embedded and are reached by recency alone.
+  after it the knowledge corpus re-embeds itself and each seat's diary and
+  episodes are re-filled by the node holding the seat.
 - **Per model, at recall.** Two models of one width are two spaces —
   `text-embedding-3-small` and `embed-v4.0` both answer 1 536 floats — so
   every diary and episode vector is stored with the model it came from and
   recall compares only rows of the query's model. Changing `model` at the
-  same width is therefore an ordinary apply: each seat's diary is re-filled in
-  the new space by the node holding it, a few hundred notes a minute, and
-  episodes from the previous model are reached by recency alone rather than
-  ranked against a space they are not in.
+  same width is therefore an ordinary apply: each seat's diary and episodes
+  are re-filled in the new space by the node holding it — about a million
+  bytes of text a minute across the company — and until a row is, it is
+  reached by recency and by conversation rather than ranked against a space
+  it is not in, and `query_episodes` says how many of a seat's turns its
+  search could not reach.
 - **On every call.** A vector that comes back at the wrong width is refused
   rather than stored — on every call and not just the first, because a
   gateway or aggregator can move models mid-deployment.

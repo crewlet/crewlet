@@ -51,8 +51,16 @@ type Episode struct {
 	StartedAt time.Time
 	EndedAt   time.Time
 
-	PlanSummary   string
-	TaskSummary   string
+	PlanSummary string
+	TaskSummary string
+
+	// Ask is what the turn was asked ([Turn.Ask]), whole — the one part of
+	// the text the episode's vector is of ([episodeText]) that nothing else
+	// on the row holds, stored so the vector can be made again (node
+	// migration 0042). Empty on a compacted row, and on a row written before
+	// the column, whose vector is then of its label and what it did.
+	Ask string
+
 	ToolSequence  []string
 	SkillsUsed    []string
 	ReviewOutcome string
@@ -104,11 +112,11 @@ func NewEpisodes(db *store.DB) *Episodes { return &Episodes{db: db} }
 const episodeInsertSQL = `
 INSERT INTO episodes (
 	id, agent_handle, agent_role, work_item, turn_id, started_at, ended_at,
-	plan_summary, task_summary, tool_sequence, skills_used, review_outcome,
+	plan_summary, task_summary, ask, tool_sequence, skills_used, review_outcome,
 	duration_ms, embedding, embedding_model, kind, count, exemplar_turn_ids,
 	consolidated_into_skill_id, common_task_pattern, common_outcome,
 	success_rate, subjects_involved, notable_patterns, work_key, conversation_key
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (agent_handle, work_key) DO NOTHING`
 
 // Append records one episode, at most once per (seat, work key).
@@ -149,16 +157,7 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	res, err := e.db.SQL().ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
-		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
-		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob, model,
-		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
-		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
-		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
-		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
-	)
+	res, err := e.db.SQL().ExecContext(ctx, episodeInsertSQL, episodeInsertArgs(ep, blob, model)...)
 	if err != nil {
 		return false, fmt.Errorf("learning: append episode %s: %w", ep.ID, err)
 	}
@@ -167,6 +166,26 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 		return false, fmt.Errorf("learning: append episode %s: %w", ep.ID, err)
 	}
 	return n > 0, nil
+}
+
+// episodeInsertArgs binds [episodeInsertSQL] for ep, with the vector columns
+// the caller encoded.
+//
+// ONE BIND LIST for the statement's two callers — a raw turn's
+// [Episodes.Append] and the lifecycle's summary row — because two copies of a
+// twenty-seven-column list are two places a new column has to be added, and a
+// copy that misses it fails every fold at run time rather than at build.
+func episodeInsertArgs(ep Episode, blob, model any) []any {
+	return []any{
+		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
+		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
+		ep.PlanSummary, ep.TaskSummary, ep.Ask, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
+		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob, model,
+		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
+		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
+		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
+		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
+	}
 }
 
 // encodeEmbedding packs a vector, refusing one of the wrong width and
@@ -218,7 +237,7 @@ func encodeVectorColumns(db *store.DB, v []float32, model, discarded string) (bl
 }
 
 const episodeColumns = `id, agent_handle, agent_role, work_item, turn_id,
-	started_at, ended_at, plan_summary, task_summary, tool_sequence,
+	started_at, ended_at, plan_summary, task_summary, ask, tool_sequence,
 	skills_used, review_outcome, duration_ms, embedding, embedding_model, kind,
 	count, exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
 	common_outcome, success_rate, subjects_involved, notable_patterns,
@@ -236,7 +255,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 	)
 	if err := rows.Scan(
 		&ep.ID, &ep.Handle, &ep.Role, &ep.WorkItem, &ep.TurnID,
-		&started, &ended, &ep.PlanSummary, &ep.TaskSummary, &toolSeq,
+		&started, &ended, &ep.PlanSummary, &ep.TaskSummary, &ep.Ask, &toolSeq,
 		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &embeddingModel,
 		&kind, &ep.Count,
 		&exemplars, &consolidated, &ep.CommonTaskPattern,

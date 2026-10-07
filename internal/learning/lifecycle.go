@@ -1171,16 +1171,7 @@ func toolJaccard(a, b []string) float64 {
 // WITH NO VECTOR, whatever the row carries: a summary is never embedded (see
 // [Summary]), and similarity recall reads raw turns only.
 func insertSummaryTx(ctx context.Context, tx *sql.Tx, ep Episode) error {
-	_, err := tx.ExecContext(ctx, episodeInsertSQL,
-		ep.ID, ep.Handle, ep.Role, ep.WorkItem, ep.TurnID,
-		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
-		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), nil, nil,
-		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
-		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
-		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
-		store.NullText(ep.WorkKey), store.NullText(ep.ConversationKey),
-	)
+	_, err := tx.ExecContext(ctx, episodeInsertSQL, episodeInsertArgs(ep, nil, nil)...)
 	return err
 }
 

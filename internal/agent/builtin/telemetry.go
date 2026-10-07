@@ -124,12 +124,13 @@ func knowledgeRead(turn *turnctx.Turn, via types.KnowledgeReadVia, backend, quer
 // the model was shown at turn start, in the direction nobody looks.
 type Recaller interface {
 	// RecallEpisodes returns past turns similar to text, most similar
-	// first. An error means the search could not run, which is a different
-	// answer from none, and it says why: one wrapping
-	// [learning.ErrNoEmbeddings] is a company with no embeddings, and any
-	// other a search that failed — an embedder that refused or did not
-	// answer in time, a store that could not be read.
-	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error)
+	// first, and how many of the seat's turns it could not search. An error
+	// means the search could not run, which is a different answer from
+	// none, and it says why: one wrapping [learning.ErrNoEmbeddings] is a
+	// company with no embeddings, and any other a search that failed — an
+	// embedder that refused or did not answer in time, a store that could
+	// not be read.
+	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) (learning.EpisodeSearch, error)
 
 	// RecallMemories re-runs the personal-memory relevance filter against a
 	// hint, returning what it picked. senders are who triggered the turn —

@@ -28,6 +28,16 @@ import (
 // durable fact older than the newest fifty is unreachable and — never
 // selected — is the first thing the 500-entry trim evicts.
 //
+// An EPISODE is the same story with a worse ending. Its vector is of the turn
+// whole — label, ask and what it did — and is made as the episode is written;
+// a turn written while the provider did not answer, and after a model change
+// every turn the seat ever took, has none that recall compares, and before the
+// row stored its ask nothing could make one again. Now it does (node migration
+// 0042), so the raw episodes are filled beside the notes
+// ([learning.Episodes.Unfilled]), and `## Similar prior work` and
+// `query_episodes` reach a seat's history again rather than only what it did
+// since the change.
+//
 // # The holder, and only once the seat is established
 //
 // Only the node holding a seat writes its memory and carries it on the
@@ -238,9 +248,11 @@ type fillSource struct {
 	fill func(ctx context.Context, fills []learning.VectorFill) (int, error)
 }
 
-// memorySources are the tables of a seat's memory the fill walks, in order.
+// memorySources are the tables of a seat's memory the fill walks, in order:
+// the diary, keyed on the seat's derived agent id, and its raw episodes,
+// keyed on its handle.
 func memorySources(db *store.DB, agentIDOf func(string) string) []fillSource {
-	diary := learning.NewDiary(db)
+	diary, episodes := learning.NewDiary(db), learning.NewEpisodes(db)
 	return []fillSource{{
 		table: "diary",
 		seat:  agentIDOf,
@@ -250,6 +262,11 @@ func memorySources(db *store.DB, agentIDOf func(string) string) []fillSource {
 			return diary.Unfilled(ctx, seat, model, time.Now().UTC(), after, limit)
 		},
 		fill: diary.FillEmbeddings,
+	}, {
+		table:    "episodes",
+		seat:     func(handle string) string { return handle },
+		unfilled: episodes.Unfilled,
+		fill:     episodes.FillEmbeddings,
 	}}
 }
 

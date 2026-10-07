@@ -169,6 +169,11 @@ func (l *retrievalLog) seen() ([]string, int) {
 type episodes struct {
 	hits []learning.Hit
 	err  error
+
+	// unsearched is how many turns have no vector of any model but
+	// searchedModel.
+	unsearched    int
+	searchedModel string
 }
 
 // Recall refuses what the real one refuses, as the diary fake does.
@@ -177,6 +182,19 @@ func (e episodes) Recall(_ context.Context, q learning.RecallQuery) ([]learning.
 		return nil, learning.ErrNoEmbedding
 	}
 	return e.hits, e.err
+}
+
+// Unsearchable answers for the model the turns were embedded under: none of
+// them is outside a search of it, and every one is outside a search of any
+// other — what a company that moved models has.
+func (e episodes) Unsearchable(_ context.Context, _, model string) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	if model == e.searchedModel {
+		return 0, nil
+	}
+	return e.unsearched, nil
 }
 
 type counterparties struct {
@@ -505,6 +523,10 @@ type panickingEpisodes struct{ *reached }
 
 func (p panickingEpisodes) Recall(context.Context, learning.RecallQuery) ([]learning.Hit, error) {
 	panic(p.mark("a malformed episode"))
+}
+
+func (p panickingEpisodes) Unsearchable(context.Context, string, string) (int, error) {
+	panic(p.mark("a malformed episode count"))
 }
 
 type panickingSkills struct{ *reached }

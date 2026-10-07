@@ -228,10 +228,32 @@ func TestRecallEpisodesTellsAFailedSearchFromNoEmbeddings(t *testing.T) {
 			if failed := errors.Is(err, prefetch.ErrSimilarityFailed); failed != tc.failed {
 				t.Fatalf("err = %v: reads as a failed search %v, want %v", err, failed, tc.failed)
 			}
-			if !tc.none && !tc.failed && (err != nil || len(got) != 1) {
+			if !tc.none && !tc.failed && (err != nil || len(got.Hits) != 1) {
 				t.Fatalf("RecallEpisodes = %v, %v; want the hit", got, err)
 			}
 		})
+	}
+}
+
+// THE PULL SAYS WHAT IT COULD NOT SEARCH: turns with no vector of the query's
+// model, counted under the model the query was embedded with, so an empty
+// answer after a model change is not read as a seat that never did the work.
+func TestRecallEpisodesCountsTheTurnsItCouldNotSearch(t *testing.T) {
+	t.Parallel()
+	_, seat := company(t)
+	movedOn := episodes{unsearched: 40, searchedModel: "the-old-model"}
+	got, err := prefetch.New(prefetch.Sources{Episodes: movedOn, Embed: embeds}).
+		RecallEpisodes(t.Context(), seat, "the deploy freeze", 3)
+	if err != nil {
+		t.Fatalf("RecallEpisodes: %v", err)
+	}
+	if len(got.Hits) != 0 || got.Unsearched != 40 {
+		t.Fatalf("search = %+v, want no hits and the 40 turns it could not reach", got)
+	}
+	current := episodes{unsearched: 40, searchedModel: "m"}
+	if got, err := prefetch.New(prefetch.Sources{Episodes: current, Embed: embeds}).
+		RecallEpisodes(t.Context(), seat, "the deploy freeze", 3); err != nil || got.Unsearched != 0 {
+		t.Fatalf("a search of the model every turn has = %+v, %v; want nothing unsearched", got, err)
 	}
 }
 

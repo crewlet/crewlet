@@ -393,6 +393,55 @@ func TestQueryEpisodesSaysWhyItCouldNotSearchByMeaning(t *testing.T) {
 	}
 }
 
+// A SEARCH THAT COULD NOT REACH A SEAT'S TURNS NEVER CALLS ITS WORK NEW. After
+// a model change every turn the seat took has a vector of the old model, which
+// recall does not compare, so a search finding nothing told the seat "This is
+// new work" about work it did last week. What it did not search is said, with
+// where those turns can be read; "new work" is kept for a seat whose whole
+// history was searched.
+func TestQueryEpisodesSaysWhatItCouldNotSearch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		hits       []learning.Hit
+		unsearched int
+		want       []string
+		wantNot    string
+	}{
+		{name: "nothing found, history unsearched", unsearched: 214,
+			want:    []string{"214 earlier turns have no vector", "`conversation`"},
+			wantNot: "new work"},
+		{name: "one turn unsearched", unsearched: 1,
+			want: []string{"1 earlier turn has no vector"}, wantNot: "new work"},
+		{name: "hits beside unsearched turns", unsearched: 9,
+			hits: []learning.Hit{{Episode: learning.Episode{TaskSummary: "rotated the certs"}}},
+			want: []string{"rotated the certs", "9 earlier turns have no vector"}, wantNot: "new work"},
+		{name: "nothing found, everything searched",
+			want: []string{"This is new work"}, wantNot: "no vector"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			recall := &fakeRecall{hits: tc.hits, unsearched: tc.unsearched}
+			tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}, Recall: recall},
+				builtin.QueryEpisodesTool)
+			res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
+				"query": "rotate the staging certs",
+			})
+			if res.Failed {
+				t.Fatalf("query_episodes failed: %q", res.Output)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(res.Output, want) {
+					t.Errorf("output = %q, want it to say %q", res.Output, want)
+				}
+			}
+			if strings.Contains(res.Output, tc.wantNot) {
+				t.Errorf("output = %q, must not say %q", res.Output, tc.wantNot)
+			}
+		})
+	}
+}
+
 // A SIMILARITY ANSWER SAYS IT IS RANKED BY SIMILARITY. It was headed "your N
 // most recent turns", so a model read the closest match as its latest work.
 func TestQueryEpisodesHeadsASimilaritySearchAsMostSimilar(t *testing.T) {
@@ -708,24 +757,27 @@ func notesIn(out string) string {
 
 // fakeRecall stands in for the turn-start prefetch's searches.
 type fakeRecall struct {
-	hits    []learning.Hit
-	notes   []learning.DiaryEntry
-	err     error
-	text    string
-	hint    string
-	senders []learning.Subject
-	aux     auxspend.Use
-	limit   int
+	hits []learning.Hit
+	// unsearched is how many of the seat's turns the search says it could
+	// not reach.
+	unsearched int
+	notes      []learning.DiaryEntry
+	err        error
+	text       string
+	hint       string
+	senders    []learning.Subject
+	aux        auxspend.Use
+	limit      int
 	// memoryCalls counts what the ledger's cache is there to avoid.
 	memoryCalls int
 }
 
-func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string, limit int) ([]learning.Hit, error) {
+func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string, limit int) (learning.EpisodeSearch, error) {
 	f.text, f.limit = text, limit
 	if f.err != nil {
-		return nil, f.err
+		return learning.EpisodeSearch{}, f.err
 	}
-	return f.hits, nil
+	return learning.EpisodeSearch{Hits: f.hits, Unsearched: f.unsearched}, nil
 }
 
 func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string,

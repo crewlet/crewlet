@@ -16,6 +16,19 @@ type Hit struct {
 	Similarity float64
 }
 
+// EpisodeSearch is one similarity search over a seat's turns: what it found,
+// and how many turns it could not search at all.
+type EpisodeSearch struct {
+	Hits []Hit
+
+	// Unsearched is how many of the seat's raw turns have no vector of the
+	// query's model at this store's width ([Episodes.Unsearchable]) — not a
+	// worse match but no match, since a cosine across two spaces ranks
+	// nothing. So no hits over a seat with turns unsearched is "these were
+	// not searched", never "nothing like this was ever done".
+	Unsearched int
+}
+
 // RecallQuery bounds a similarity search.
 type RecallQuery struct {
 	Handle    string
@@ -71,10 +84,13 @@ const (
 // text apiece, keeping 5: the Go loop was 144 ms and 35.8 MB across the driver
 // boundary; this is 34 ms and 35.8 KB.
 //
-// Rows with no embedding are skipped rather than scored: they were written
-// during an embeddings outage, and treating a missing vector as a zero vector
-// would score them as maximally dissimilar to everything and rank them
-// consistently last — which reads as a judgment about their content.
+// Rows with no embedding of the query's model are skipped rather than scored:
+// they were written during an embeddings outage or under another model, and
+// treating a missing vector as a zero vector would score them as maximally
+// dissimilar to everything and rank them consistently last — which reads as a
+// judgment about their content. The node holding the seat fills them
+// ([Episodes.Unfilled]), and until it has, [Episodes.Unsearchable] says how
+// many a search did not reach.
 //
 // RAW TURNS ONLY. A compacted row summarises a cluster of turns and reads in
 // a prompt like one turn that did all of them, and it carries no vector (see

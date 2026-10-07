@@ -107,9 +107,10 @@ type table struct {
 	// a peer that already held the vectorless row would keep it, and when
 	// the seat moved there that stale copy would be the holder's.
 	//
-	// The diary only. An episode is embedded as it is written or never:
-	// the text it is embedded from is not stored whole, so nothing could
-	// fill one later.
+	// The diary and the episodes: a note's vector is of its content, and an
+	// episode's of its label, its ask and what it did — all stored on the
+	// row since node migration 0042 gave it the ask — so the holder can
+	// make either again.
 	fillsVector bool
 }
 
@@ -139,15 +140,16 @@ var tables = []table{
 		key:     []string{"id"},
 		columns: []string{
 			"id", "agent_handle", "agent_role", "work_item", "turn_id",
-			"started_at", "ended_at", "plan_summary", "task_summary",
+			"started_at", "ended_at", "plan_summary", "task_summary", "ask",
 			"tool_sequence", "skills_used", "review_outcome", "duration_ms",
 			"embedding", "embedding_model", "kind", "count", "exemplar_turn_ids",
 			"consolidated_into_skill_id", "common_task_pattern",
 			"common_outcome", "success_rate", "subjects_involved",
 			"notable_patterns", "work_key", "conversation_key",
 		},
-		blobs:     []string{"embedding"},
-		watermark: "change_seq",
+		blobs:       []string{"embedding"},
+		watermark:   "change_seq",
+		fillsVector: true,
 	},
 	{
 		name:    "counterparty_profiles",

@@ -46,10 +46,12 @@ const EpisodistSource = "episodist"
 // still lands: similarity recall skips such rows while the time-window,
 // conversation and outcome queries still surface them, and the lifecycle
 // worker never reads a vector at all — it clusters on tool overlap. A
-// transient embedding outage must never cost an episode, and nothing
-// re-embeds one later: the ask is not stored with the row, so the text the
-// vector was of cannot be rebuilt, and a vector of the label and the plan
-// alone would rank beside the whole ones as though it were one.
+// transient embedding outage must never cost an episode, and it costs the
+// vector only until the node holding the seat fills it: the ask is stored on
+// the row ([Episode.Ask]), so the text the vector is of is a function of the
+// row alone ([episodeText]), and [Episodes.Unfilled] hands the fill exactly
+// what this worker would have embedded — for a row that missed its vector, and
+// for every row after the company moves to another model.
 type Episodist struct {
 	episodes *Episodes
 	embed    Embed
@@ -138,7 +140,7 @@ func (w *Episodist) Skip(t Turn) string {
 // Reflect implements [Worker].
 func (w *Episodist) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
 	ep := w.episodeOf(t)
-	vector := w.vector(ctx, episodeText(ep, t.Ask()))
+	vector := w.vector(ctx, episodeText(ep))
 	ep.Embedding, ep.EmbeddingModel = vector.Values, vector.Model
 
 	written, err := w.episodes.Append(ctx, ep)
@@ -197,6 +199,7 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 		Duration:        time.Duration(t.Event.DurationMS) * time.Millisecond,
 		PlanSummary:     t.Event.PlanSummary,
 		TaskSummary:     t.Event.TaskSummary,
+		Ask:             t.Ask(),
 		ToolSequence:    t.Event.ToolSequence,
 		SkillsUsed:      t.Event.SkillsUsed,
 		ReviewOutcome:   t.Event.ReviewOutcome,
@@ -208,9 +211,12 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 
 // episodeText is what an episode's vector is of: the turn's label, what it
 // was asked and what it did, each that is present, one paragraph apiece.
-func episodeText(ep Episode, ask string) string {
+//
+// A FUNCTION OF THE STORED ROW ALONE, which is what lets the holder's fill make
+// the vector again ([Episodes.Unfilled]) exactly as this worker made it.
+func episodeText(ep Episode) string {
 	parts := make([]string, 0, 3)
-	for _, part := range []string{ep.TaskSummary, ask, ep.PlanSummary} {
+	for _, part := range []string{ep.TaskSummary, ep.Ask, ep.PlanSummary} {
 		if part = strings.TrimSpace(part); part != "" {
 			parts = append(parts, part)
 		}

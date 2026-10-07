@@ -272,20 +272,22 @@ func (t *queryEpisodes) defaultLimit() int {
 //
 // The REFUSAL is a message rather than an empty answer: "nothing resembles
 // this" and "this deployment cannot search by meaning" send a model to
-// opposite places, and the second one has a fallback it can still use.
-func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, error) {
+// opposite places, and the second one has a fallback it can still use. And
+// beside what it found, it reports how many of the seat's turns it could not
+// search ([learning.EpisodeSearch.Unsearched]), which is a third place.
+func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, int, error) {
 	if t.recall == nil {
-		return nil, errNoRecall
+		return nil, 0, errNoRecall
 	}
-	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
+	search, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	out := make([]learning.Episode, 0, len(hits))
-	for _, hit := range hits {
+	out := make([]learning.Episode, 0, len(search.Hits))
+	for _, hit := range search.Hits {
 		out = append(out, hit.Episode)
 	}
-	return out, nil
+	return out, search.Unsearched, nil
 }
 
 func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -311,6 +313,9 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// has to say: a similarity search is MOST SIMILAR first, and
 		// headed "most recent" it read as the seat's latest work.
 		ranked = "most recent"
+		// unsearched is how many of the seat's turns a similarity search
+		// could not reach — no vector of the current model yet.
+		unsearched int
 	)
 	switch query := strings.TrimSpace(argString(args, "query")); {
 	case query != "":
@@ -323,7 +328,7 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		if outcome != "" {
 			want = clampInt(limit*outcomeOverfetch, 1, maxEpisodeLimit)
 		}
-		found, err = t.similar(ctx, turn, query, want)
+		found, unsearched, err = t.similar(ctx, turn, query, want)
 		if err != nil {
 			return refused(tools.RefusalUnavailable, similarityRefusal(err)), nil
 		}
@@ -343,6 +348,17 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		scope += fmt.Sprintf(" that ended %s", clip(outcome))
 	}
 	if len(found) == 0 {
+		if unsearched > 0 {
+			// NOT NEW WORK — NOT SEARCHED. Recall compares only turns
+			// with a vector of the query's model, so after a model
+			// change, until the holder has embedded them again, most
+			// of a seat's history is outside the search, and "this is
+			// new work" told a seat it had never done what it did
+			// last week.
+			return tools.Result{Output: fmt.Sprintf(
+				"No earlier turns of yours that could be searched by meaning are%s. %s",
+				scope, unsearchedNote(unsearched))}, nil
+		}
 		return tools.Result{Output: fmt.Sprintf(
 			"No earlier turns of yours%s. This is new work.", scope)}, nil
 	}
@@ -352,7 +368,23 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	for _, entry := range t.render(ctx, turn, found) {
 		b.WriteString(entry)
 	}
+	if unsearched > 0 {
+		b.WriteString("\n" + unsearchedNote(unsearched))
+	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+// unsearchedNote says how many turns a search by meaning did not reach, and
+// where they can be read instead.
+func unsearchedNote(n int) string {
+	if n == 1 {
+		return "1 earlier turn has no vector of the current embedding model yet and " +
+			"was not searched — it is being embedded again; read it with " +
+			"`conversation`, or with neither argument for your most recent turns."
+	}
+	return fmt.Sprintf("%d earlier turns have no vector of the current embedding "+
+		"model yet and were not searched — they are being embedded again; read them "+
+		"with `conversation`, or with neither argument for your most recent turns.", n)
 }
 
 // render renders each recalled turn, condensing the long accounts

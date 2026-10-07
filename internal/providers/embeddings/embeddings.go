@@ -17,11 +17,12 @@
 //   - Diary and episode recall (internal/agent/prefetch, internal/learning)
 //     embed a turn's ask and each completed turn, and rank a seat's own
 //     memories against it; a failure is "no similarity search this turn".
-//   - A seat's diary (internal/learning, internal/engine) embeds each note
-//     as it is written, and the node holding the seat fills the notes left
-//     with no vector of the current model, one [Pass] a minute: a refusal is
-//     split until the note it refuses is alone and that note held back, any
-//     other failure ends the pass, and the next pass is the retry.
+//   - A seat's diary and episodes (internal/learning, internal/engine) embed
+//     each note and each completed turn as it is written, and the node
+//     holding the seat fills the rows left with no vector of the current
+//     model, one [Pass] a minute: a refusal is split until the row it refuses
+//     is alone and that row held back, any other failure ends the pass, and
+//     the next pass is the retry.
 //
 // # Nothing here retries, and what it does instead
 //
