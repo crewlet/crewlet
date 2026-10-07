@@ -872,9 +872,8 @@ export function RunScreen({ turnId }: { turnId: string }) {
               <LiveOutput turnId={run.turn_id} launchId={run.launch_id} now={now} />
             ) : RUNNING.includes(run.status) ? (
               <span className="t-caption">
-                {run.owner
-                  ? "This run's record names no job, so its live output cannot be asked for — it arrives on the turn when the run is collected."
-                  : "The run's durable record has not been written yet; its live output can be asked for once it has."}
+                The run&rsquo;s durable record has not been written yet; its live output can be
+                asked for once it has.
               </span>
             ) : (
               <p className="t-body">{doingLine(run)}</p>

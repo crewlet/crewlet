@@ -2095,7 +2095,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Operator-only**, like the rest of Settings. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
-| `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by (empty on a row an older build wrote) |
+| `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
 | `sandbox_tail` | `{turn_id, launch_id}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output: {text, source: transcript\|stderr\|none, cut, as_of, finished}` (the last 8 KiB, redacted), `not_running` with the record's `status` (`awaiting_clarification`, `launching`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left), or `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget — a draining owner, or one whose heartbeat lapsed, included (no `node` for a run nobody holds right now). A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s while a running job's span is open, and nothing else asks |
 | `budgets` | `{}` | `GET /budgets` |
 | `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
@@ -2713,9 +2713,7 @@ harmless, because whichever copy arrives second finds that question no longer
 waiting.
 
 It refuses `not_running` for a run that is not waiting for an answer, or has no
-record at all (a run that ended has none), or names no job its question was asked
-by (an answer must carry the question it answers, and one carrying none is spent
-without resuming anything). It is
+record at all (a run that ended has none). It is
 served on every company, native backends or not: the run record is the
 fleet's, and a company on Jira runs coding agents too.
 
@@ -4187,8 +4185,7 @@ reclaimed, work preserved on a pushed branch) is listed on both.
 `launch_id` names the job the row holds now. A turn can launch more than
 one — a resumed executor that calls `run_sandbox` again reuses the row — and
 `sandbox_tail` is asked by it, so a run's page polls the live
-output of the job it shows rather than of whichever replaced it. It is empty
-on a row an older build wrote, and such a run has no live output to ask for.
+output of the job it shows rather than of whichever replaced it.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed

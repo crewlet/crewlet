@@ -145,8 +145,6 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}{
 		{"AudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem",
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
-		{"ALaunchRecordKeptForAnotherJobIsNotThisOnes",
-			testALaunchRecordKeptForAnotherJobIsNotThisOnes},
 	}
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2283,14 +2281,11 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 	before := time.Now().UTC()
 	r := run("t1")
 	r.Launch = sandbox.LaunchRecord{Model: "claude-sonnet-5",
-		// Not the caller's to choose: the store names and dates the job.
-		ID: "chosen-by-the-caller", StartedAt: base, Published: true, Iteration: 9}
+		// Not the caller's to choose: the store dates the job.
+		StartedAt: base, Published: true, Iteration: 9}
 	mustLaunched(t, s, r)
 	got := mustGet(t, s, "t1")
-	facts := got.LaunchFacts()
-	if facts.ID != got.LaunchID || facts.ID == "" {
-		t.Fatalf("the launch record names %q, not the job %q", facts.ID, got.LaunchID)
-	}
+	facts := got.Launch
 	if facts.StartedAt.Before(before) || facts.StartedAt.After(time.Now().UTC()) {
 		t.Errorf("the job is dated %s, not the instant it launched", facts.StartedAt)
 	}
@@ -2306,60 +2301,18 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("release: released=%v err=%v", released, err)
 	}
 	retry := mustClaim(t, s, "t1")
-	if !retry.LaunchFacts().Published {
+	if !retry.Launch.Published {
 		t.Fatal("the retry's claim came back without the publish the first attempt made")
 	}
 	mustRelease(t, s, retry)
-	if !mustGet(t, s, "t1").LaunchFacts().Published {
+	if !mustGet(t, s, "t1").Launch.Published {
 		t.Error("a release that carried no publish erased the record of one")
 	}
 
 	mustBeginLaunch(t, s, run("t1"))
 	next := mustGet(t, s, "t1")
-	if f := next.LaunchFacts(); f.Published || f.ID != next.LaunchID || f.Iteration != 0 {
+	if f := next.Launch; f.Published || f.Iteration != 0 || f.StartedAt.Before(facts.StartedAt) {
 		t.Errorf("the second job inherited the first one's record: %+v", f)
-	}
-}
-
-func testALaunchRecordKeptForAnotherJobIsNotThisOnes(
-	t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns,
-) {
-	// A BUILD THAT PREDATES THE LAUNCH RECORD carries it through its own
-	// read-modify-write untouched — including across a relaunch it performs,
-	// which it cannot know to clear. The row is seeded the way that leaves
-	// it: a new job named, the previous job's record still on it. Read for
-	// the new job, the record is nobody's; the suspension and the release
-	// start the new job's own.
-	r := run("t1")
-	r.Status = sandbox.StatusLaunching
-	r.LaunchID = "job-new"
-	r.Launch = sandbox.LaunchRecord{ID: "job-old", StartedAt: base, Iteration: 5, Published: true}
-	body, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created, err := runs.CreateSandboxRun(t.Context(), "t1", body); err != nil || !created {
-		t.Fatalf("seed the row: created=%v err=%v", created, err)
-	}
-	if f := mustGet(t, s, "t1").LaunchFacts(); f != (sandbox.LaunchRecord{}) {
-		t.Fatalf("job-old's record answered for job-new: %+v", f)
-	}
-
-	if ok, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !ok {
-		t.Fatalf("suspend: %v %v", ok, err)
-	}
-	if f := mustGet(t, s, "t1").LaunchFacts(); f.ID != "job-new" || f.Published ||
-		f.Iteration != suspension().Iteration || !f.StartedAt.IsZero() {
-		t.Errorf("after the suspension the record is %+v, want job-new's own iteration and nothing else", f)
-	}
-	claimed := mustClaim(t, s, "t1")
-	release := releaseOf(claimed)
-	release.Published = true
-	if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
-		t.Fatalf("release: released=%v err=%v", released, err)
-	}
-	if f := mustGet(t, s, "t1").LaunchFacts(); f.ID != "job-new" || !f.Published {
-		t.Errorf("the publish was not recorded against job-new: %+v", f)
 	}
 }
 

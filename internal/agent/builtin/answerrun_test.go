@@ -115,25 +115,6 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 	}
 }
 
-// A RUN NAMING NO JOB HAS NO QUESTION AN ANSWER CAN NAME, and the node holding
-// the seat spends an answer naming none without resuming the run — so the
-// answer is refused here, where the person can be told, rather than delivered
-// to be spent unread.
-func TestAnswerRunRefusesARunWhoseQuestionItCannotName(t *testing.T) {
-	t.Parallel()
-	unnamed := parked("t1", sandbox.StatusAwaiting)
-	unnamed.LaunchID = ""
-	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": unnamed}}
-	result, _ := answerRunTool(t, desk).Call(t.Context(),
-		map[string]any{"turn_id": "t1", "answer": "use main"})
-	if !result.Failed || result.Refusal != tools.RefusalNotRunning {
-		t.Fatalf("answer_run on a run naming no job = %+v, want not_running", result)
-	}
-	if len(desk.delivered) != 0 {
-		t.Errorf("delivered %+v, an answer that names no question", desk.delivered)
-	}
-}
-
 // A DELIVERY THE BROKER NEVER CONFIRMED IS `unknown`, not a refusal: it may be
 // on the inbox, and a person told it was refused would answer somewhere else.
 func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {

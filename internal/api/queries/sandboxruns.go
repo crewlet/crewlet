@@ -148,8 +148,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// THE JOB THE ROW HOLDS NOW, which is what `sandbox_tail` is asked
 		// by: a turn can launch more than one, and the run's own page polls
 		// the live output of the job it is showing rather than of whichever
-		// replaced it. Empty on a row a build that predates it wrote, and
-		// such a run has no live output to ask for.
+		// replaced it.
 		"launch_id":    run.LaunchID,
 		"role":         run.Role,
 		"status":       run.Status,
@@ -157,8 +156,7 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// WHERE the run is, which became an operator question the moment
 		// providers.sandbox became a catalogue: one company now runs some
 		// seats on the engine host and others in a remote box, and "is
-		// this job on my machine" has no other surface. Empty on a row
-		// written before the field existed.
+		// this job on my machine" has no other surface.
 		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
 		"question":         run.Question,
@@ -166,8 +164,8 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// WHO THE QUESTION IS PUT TO, resolved against the chart when the
 		// run parked, and whether that is a fallback — the seat's lead
 		// chain — because the audience above named nobody the chart has.
-		// Always an array, empty on a run that is not parked or that a
-		// build which resolved nothing parked.
+		// Always an array, empty on a run that is not parked on a
+		// question.
 		"audience_handles":  nonNilStrings(run.AudienceHandles),
 		"audience_fallback": run.AudienceFallback,
 		"branch":            run.Branch,

@@ -499,15 +499,14 @@ type PendingRun struct {
 	// See [Tail].
 	//
 	// Minted by the store and never by the caller, for the reason the
-	// status is: a caller that could choose it could reuse one. Empty on a
-	// row a build that predates it wrote, and a completion from such a
-	// build carries none, so the two still match each other and nothing
-	// else.
+	// status is: a caller that could choose it could reuse one. Never
+	// empty on a row: the store mints it in the write that creates the row
+	// and again in every relaunch.
 	LaunchID string `json:"launch_id,omitempty"`
 
 	// Launch is what the run's own phase record needs about the job named
-	// by LaunchID — see [LaunchRecord]. Read only through
-	// [PendingRun.LaunchFacts], which refuses a record kept for another job.
+	// by LaunchID — see [LaunchRecord]. Written with LaunchID, whole, on
+	// every launch.
 	Launch LaunchRecord `json:"launch_record,omitzero"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
@@ -1692,22 +1691,15 @@ type Suspension struct {
 // the row says: when it started, which executor iteration launched it, the
 // model it ran on, and whether that record has already been published.
 //
-// KEYED ON THE JOB, by [LaunchRecord.ID], and every reader goes through
-// [PendingRun.LaunchFacts], which answers the zero record for any other job.
-// The row is the TURN's and outlives each job on it, and it is shared by every
-// build in a rolling upgrade: a build that predates this field carries it
-// through its own read-modify-write untouched ([PendingRun.Extra]) — including
-// across the relaunch it performs itself, which it cannot know to clear. A
-// record that named no job would then tell the NEXT job it had been launched
-// at the previous one's instant and already published. Keyed, a stale record
-// is simply not this job's.
+// THE JOB'S, NOT THE TURN'S. The row is the turn's and outlives each job on
+// it, so [PendingStore.BeginLaunch] replaces this record WHOLE on every launch,
+// in the same write that names the job ([PendingRun.LaunchID]): a record that
+// survived a relaunch would tell the next job it had been launched at the
+// previous one's instant and already published.
 //
-// ONE FIELD RATHER THAN FOUR for the same reason: there is one key to check,
-// and a fact added here later is scoped to its job by construction.
+// ONE FIELD RATHER THAN FOUR for the same reason: a fact added here later is
+// replaced with its job by construction.
 type LaunchRecord struct {
-	// ID is the [PendingRun.LaunchID] this record belongs to.
-	ID string `json:"launch_id"`
-
 	// StartedAt is when the job was launched, on the store's clock —
 	// written by [PendingStore.BeginLaunch], the moment the launch exists.
 	StartedAt time.Time `json:"started_at,omitzero"`
@@ -1732,13 +1724,4 @@ type LaunchRecord struct {
 	// RELEASE ([Release.Published]), the one write through which a retry
 	// reaches the publish again.
 	Published bool `json:"published,omitempty"`
-}
-
-// LaunchFacts is the [LaunchRecord] of the job this row holds now, and the
-// zero record when what the row carries belongs to another job or to none.
-func (r PendingRun) LaunchFacts() LaunchRecord {
-	if r.Launch.ID == "" || r.Launch.ID != r.LaunchID {
-		return LaunchRecord{}
-	}
-	return r.Launch
 }

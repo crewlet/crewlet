@@ -540,8 +540,8 @@ export interface SandboxRun {
    *  record's own key. See `adr/0017`. */
   turn_id: string;
   /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `sandbox_tail` is asked by. Empty on a row an older build wrote, and on
-   *  a run the live projection knows of before its durable row is read. */
+   *  `sandbox_tail` is asked by. Empty on a run the live projection knows of
+   *  before its durable row is read. */
   launch_id?: string;
   /** The unit of work behind that run. Absent on a row written before the
    *  identities were split. */

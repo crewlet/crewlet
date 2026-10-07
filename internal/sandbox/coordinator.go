@@ -1044,7 +1044,7 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // Telemetry never fails the tail: a record that could not be published is
 // logged, and the run is resumed exactly as it would have been.
 func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result Result) LaunchRecord {
-	facts := run.LaunchFacts()
+	facts := run.Launch
 	if facts.Published {
 		log.InfoContext(ctx, "sandbox_phase_already_published",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
@@ -1059,7 +1059,7 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
 		return run.Launch
 	}
-	facts.ID, facts.Published = run.LaunchID, true
+	facts.Published = true
 	return facts
 }
 
@@ -1073,9 +1073,7 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 //
 // Its clock is the store's instant for the launch and this node's for the
 // collection, so DURATION covers launch to collection: the waiter's poll
-// interval is inside it, and the coding itself is the rest. A row an older
-// build launched carries no start, and the record then states none rather
-// than a length measured from nothing.
+// interval is inside it, and the coding itself is the rest.
 func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.AgentPhaseCompleted {
 	rec := types.AgentPhaseCompleted{
 		Agent: run.AgentID, RoleName: run.Role,
@@ -1102,11 +1100,9 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		DeliveredRefs:      result.DeliveredRefs,
 		ConversationKey:    run.Conversation(),
 	}
-	if !facts.StartedAt.IsZero() {
-		rec.StartedAt = facts.StartedAt.UTC()
-		if took := collected.Sub(facts.StartedAt); took > 0 {
-			rec.DurationMS = int(took / time.Millisecond)
-		}
+	rec.StartedAt = facts.StartedAt.UTC()
+	if took := collected.Sub(facts.StartedAt); took > 0 {
+		rec.DurationMS = int(took / time.Millisecond)
 	}
 	switch {
 	case result.NeedsInput:
@@ -2169,7 +2165,7 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool,
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged,
-		Published: run.LaunchFacts().Published, Fence: fenceOf(run),
+		Published: run.Launch.Published, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:
