@@ -322,16 +322,3 @@ func upperFirst(s string) string {
 	first, size := utf8.DecodeRuneInString(s)
 	return strings.ToUpper(string(first)) + s[size:]
 }
-
-// a2aTag renders the [A2A:channel] marker a turn summary carries when the turn
-// served an agent-to-agent ask. An empty context is not an A2A turn at all,
-// which is why the whole marker disappears rather than rendering blank.
-func a2aTag(context map[string]any) string {
-	if len(context) == 0 {
-		return ""
-	}
-	if channel, _ := context["channel_id"].(string); channel != "" {
-		return " [A2A:" + channel + "]"
-	}
-	return " [A2A]"
-}

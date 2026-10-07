@@ -328,9 +328,6 @@ type AgentTurnCompleted struct {
 	OutputTokens   int             `json:"output_tokens"`
 	TotalTokens    int             `json:"total_tokens"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
-	// A2AContext is set when the turn answered an agent-to-agent ask. Absent
-	// and empty are the same fact — not an A2A turn — so no pointer.
-	A2AContext map[string]any `json:"a2a_context,omitempty"`
 
 	// The turn engine's own summary of the loop.
 	TurnID string `json:"turn_id"`
@@ -408,24 +405,23 @@ func (e AgentTurnCompleted) AgentID() string { return e.Agent }
 
 // SummaryFor renders a failed turn as failed, with the error KIND rather than
 // the message: the kind is short enough for a line and is what an operator
-// scans a feed for. A2A turns keep their channel tag either way.
+// scans a feed for.
 func (e AgentTurnCompleted) SummaryFor(actor string) string {
-	tag := a2aTag(e.A2AContext)
 	if e.Stopped {
-		return lead(actor, "turn stopped by a person"+tag)
+		return lead(actor, "turn stopped by a person")
 	}
 	if e.Failed {
 		reason := e.ErrorKind
 		if reason == "" {
 			reason = "error"
 		}
-		return lead(actor, "turn failed ("+reason+")"+tag)
+		return lead(actor, "turn failed ("+reason+")")
 	}
 	if e.Model != "" {
-		return lead(actor, fmt.Sprintf("completed LLM turn (%s, %d tokens)%s",
-			e.Model, e.TotalTokens, tag))
+		return lead(actor, fmt.Sprintf("completed LLM turn (%s, %d tokens)",
+			e.Model, e.TotalTokens))
 	}
-	return lead(actor, "completed a turn"+tag)
+	return lead(actor, "completed a turn")
 }
 
 // TurnCompleted is the turn-shaped record the learning subsystem consumes to
@@ -914,7 +910,6 @@ type AgentTurnProgress struct {
 	// round is open, and only on this live-only event: nothing persists a
 	// half-written sentence.
 	PartialRound map[string]any `json:"partial_round,omitempty"`
-	A2AContext   map[string]any `json:"a2a_context,omitempty"`
 }
 
 // EventType is the "agent_turn_progress" wire type. Live only — nothing
@@ -931,7 +926,6 @@ func (e AgentTurnProgress) AgentID() string { return e.Agent }
 // the round-by-round bits are context for a line whose real content is that the
 // seat is still alive.
 func (e AgentTurnProgress) SummaryFor(actor string) string {
-	tag := a2aTag(e.A2AContext)
 	var bits []string
 	if e.Phase != "" {
 		bits = append(bits, string(e.Phase))
@@ -946,9 +940,9 @@ func (e AgentTurnProgress) SummaryFor(actor string) string {
 		bits = append(bits, fmt.Sprintf("round %d", e.RoundNum+1))
 	}
 	if len(bits) > 0 {
-		return lead(actor, "working ("+strings.Join(bits, ", ")+")"+tag)
+		return lead(actor, "working ("+strings.Join(bits, ", ")+")")
 	}
-	return lead(actor, "working"+tag)
+	return lead(actor, "working")
 }
 
 // SubagentBatched fires once per delegate call, so a dashboard can count

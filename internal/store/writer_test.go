@@ -87,14 +87,10 @@ func TestExtractTagsReadsUnknownTypes(t *testing.T) {
 		"timestamp": "2026-04-01T12:00:00Z",
 		"source": "engine",
 		"role": "from-the-future",
-		"a2a_context": {"channel_id": "chan-7"},
 		"some_field_this_build_has_never_seen": 42
 	}`))
 	if tags["agent_role"] != "from-the-future" {
 		t.Errorf("agent_role = %q", tags["agent_role"])
-	}
-	if tags["a2a_channel_id"] != "chan-7" {
-		t.Errorf("a2a_channel_id = %q", tags["a2a_channel_id"])
 	}
 }
 

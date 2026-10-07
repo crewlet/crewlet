@@ -48,13 +48,6 @@ func TestSummaries(t *testing.T) {
 		payload: AgentTurnCompleted{RoleName: "CTO", Model: "gpt-4o", TotalTokens: 500},
 		want:    "CTO completed LLM turn (gpt-4o, 500 tokens)",
 	}, {
-		name: "an A2A turn is tagged with its channel",
-		payload: AgentTurnCompleted{
-			RoleName: "CTO", Model: "gpt-4o", TotalTokens: 500,
-			A2AContext: map[string]any{"channel_id": "chan-1"},
-		},
-		want: "CTO completed LLM turn (gpt-4o, 500 tokens) [A2A:chan-1]",
-	}, {
 		name: "a prompt measurement names the tool array it was offered",
 		payload: PromptSize{
 			RoleName: "CTO", Phase: PhaseExecute, ApproximateTokens: 7400,

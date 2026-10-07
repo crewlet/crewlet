@@ -273,17 +273,6 @@ func ExtractTags(payload []byte) map[string]string {
 			}.Ref()
 		}
 	}
-	// Turns triggered by A2A carry their channel one level down, so the
-	// cross-reference from a turn back to the conversation that caused it
-	// needs this one nested read.
-	if raw, ok := flat["a2a_context"]; ok {
-		var ctxObj struct {
-			ChannelID string `json:"channel_id"`
-		}
-		if json.Unmarshal(raw, &ctxObj) == nil && ctxObj.ChannelID != "" {
-			tags["a2a_channel_id"] = ctxObj.ChannelID
-		}
-	}
 	return tags
 }
 
