@@ -34,9 +34,7 @@ import (
 //     mailboxes exist, but it has nowhere to keep when a seat was first seen
 //     missing or that a retirement is in flight.
 //   - THE BROKER IS THE BACKSTOP. A mailbox can exist with no record: a node
-//     whose registration failed creates the mailbox anyway, and a mailbox of a
-//     seat removed before the registry existed was never registered at all.
-//     Once such a seat is gone its handle is gone from the org, so nothing but
+//     whose registration failed creates the mailbox anyway. Once such a seat is gone its handle is gone from the org, so nothing but
 //     the broker still knows the subscription is there. So every sweep also
 //     LISTS the seat mailboxes the broker holds ([queue.EventQueue]'s
 //     ListSubscriptions) and registers each one of a seat outside the roster
@@ -467,7 +465,7 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 	}
 	// A SEAT IN THE ROSTER WITH NO RECORD is a mailbox a node created before
 	// it could register it: a coordination store that refused the write, or
-	// a build that predates the registry. Registered here, so that if the
+	// a registration that lost every compare-and-set. Registered here, so that if the
 	// seat is ever removed its mailbox is remembered.
 	for _, handle := range roster {
 		if registered[handle] {
@@ -531,9 +529,8 @@ func (m *Mailboxes) discover(
 		}
 		log.WarnContext(ctx, "seat_mailbox_discovered", "handle", handle,
 			"detail", "the broker holds a mailbox for a seat that is not in the active revision and "+
-				"had no registry record (a registration that failed, or a seat removed before the "+
-				"registry existed); it is registered now and retired after the grace period like "+
-				"any other removed seat's")
+				"had no registry record (a registration that failed); it is registered now and "+
+				"retired after the grace period like any other removed seat's")
 		if _, err := m.judge(ctx, rec, clock, cutoff); err != nil {
 			errs = append(errs, err)
 		}
