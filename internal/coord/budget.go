@@ -293,21 +293,25 @@ type WindowUsage struct {
 	// charge clears it, so a reader that took the stamp for "no room"
 	// would hold a seat back from the very room the raise made. And a
 	// window can be full with no stamp at all: a post-charge took it there
-	// and nothing has asked the gate for a call since. Kept HERE, in the
+	// and nothing has asked the gate for work since. Kept HERE, in the
 	// shared counter, because the refusal is the gate's own decision and
 	// every node reports this counter: a stamp one node kept in memory
 	// would appear and vanish on a dashboard as the reports of different
 	// nodes arrived.
 	//
-	// THE GATE SAYS NO IN TWO PLACES, AND BOTH STAMP. A charge it refuses
+	// THE GATE SAYS NO IN TWO WAYS, AND BOTH STAMP. A charge it refuses
 	// stamps inside the write that counts the refused round
-	// ([Budgets.Charge]). And a call it refuses BEFORE the call is made is
-	// recorded by [Budgets.Refuse]: a turn's meter keeps every window an
-	// answer has shown with no room, and stops the turn's next call rather
-	// than send one the vendor would bill and the charge then refuse. That
-	// stopped call is the one whose charge used to stamp the window, so
-	// without the second record a window a post-charge filled refused every
-	// call of the turn while saying it had refused none.
+	// ([Budgets.Charge]). And work turned away BEFORE ANY CALL IS MADE, on
+	// what an answer from this counter already showed, is recorded by
+	// [Budgets.Refuse]: a window with no room left for a single token
+	// refuses every charge after it, so a caller holding that answer makes
+	// none. Once a window is full that is how nearly every refusal is made
+	// — the engine stops a turn's next call, parks a seat's delivery,
+	// refuses a person's question and declines a reflection pass, each
+	// before anything is sent — and the charge that would have stamped the
+	// window is the one never made, so without the second record a window
+	// a post-charge filled refused everything sent its way while saying it
+	// had refused nothing.
 	//
 	// Stamped on each window that could not fit the call and on no other,
 	// of the scope that refused and of no other. Cleared by an ADMITTED
@@ -503,9 +507,9 @@ type Budgets interface {
 	// It leaves both scopes' refusal stamps alone, because it is not a
 	// decision about room: it neither says the gate turned a call away nor
 	// that it had room for one. A counter it takes past a cap is stamped
-	// when the gate next turns a call away against it — a charge it
-	// refuses, or, where the caller holds the answer and stops its next
-	// call before making it, that caller's [Budgets.Refuse].
+	// when the gate next turns work away against it — a charge it refuses,
+	// or work a caller holding the answer turns away before making a call,
+	// recorded by that caller's [Budgets.Refuse].
 	//
 	// Two writes, the company's first, and NEITHER IS TAKEN BACK, exactly
 	// as Charge's are not: the spend happened. The seat's outlives a caller
@@ -560,18 +564,20 @@ type Budgets interface {
 	// scope named, it stamps [WindowUsage.RefusedAt] on every capped window
 	// with no room left for a single token, and counts nothing.
 	//
-	// It is the record of a call refused before it was made. A charge is
+	// It is the record of work refused before a call was made. A charge is
 	// the gate, but a caller that has been answered — by a charge, a
 	// post-charge or a read — already knows a window with no room left
-	// refuses every charge after it, whatever its size, and the engine's
-	// turn meter acts on that: it keeps every window an answer showed full
-	// and stops the turn's next call rather than send one the vendor would
-	// bill and the charge then refuse. That is a refusal like a charge's,
-	// and the charge that would have stamped it is the one never made, so
-	// the caller records it here. A context assembly that took a seat past
-	// its day, a coding run's post-charge, an admitted round that filled a
-	// window exactly: before this verb, each left a window refusing every
-	// call of the turn and saying it had refused none.
+	// refuses every charge after it, whatever its size, and the engine acts
+	// on that wherever it can: a turn's meter keeps every window an answer
+	// showed full and stops the turn's next call rather than send one the
+	// vendor would bill and the charge then refuse, and the budget park, a
+	// person's question and the reflection stage are each turned away on a
+	// read before their first call. Each is a refusal like a charge's, and
+	// the charge that would have stamped it is the one never made, so the
+	// caller records it here. A context assembly that took a seat past its
+	// day, a coding run's post-charge, a person's answers filling the
+	// company's day: before this verb, each left a window refusing
+	// everything sent its way and saying it had refused nothing.
 	//
 	// JUDGED AGAINST THE COUNTER, NEVER THE CALLER'S MEMORY. The scope is
 	// rolled to the windows given exactly as a charge rolls it, and every
