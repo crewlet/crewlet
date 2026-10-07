@@ -203,10 +203,10 @@ type CollectionReport struct {
 // AuditReport is the last audit attempt, and what the last one that ran to its
 // end found.
 //
-// THE ATTEMPT'S FIELDS ARE WHERE THEY HAVE ALWAYS BEEN — `at`, `completed`,
-// `referenced`, `missing`, `error` — because this record is the fleet's and a
-// node of the build before reads it during a rolling upgrade; the findings
-// that must outlive a failed attempt are [AuditReport.Found], beside them.
+// The attempt's fields describe that attempt whatever became of it — a failed
+// one's counts are floors — and the findings that must outlive a failed
+// attempt are [AuditReport.Found], beside them. The record is the fleet's, so
+// it evolves additively: a successor build reads it during a rolling upgrade.
 type AuditReport struct {
 	// Completed is whether the attempt asked about every object the estate
 	// names, in an estate that was complete; Referenced how many it asked
@@ -226,18 +226,6 @@ type AuditReport struct {
 	// has. It is what the alarm counts, so a failed attempt never clears
 	// it.
 	Found *AuditFindings `json:"found,omitempty"`
-}
-
-// Findings is what the last audit to run to its end found, nil before any has:
-// [AuditReport.Found] — or, in a record from a build that kept no findings
-// beside the attempt, the attempt itself where it did not fail, which is what
-// that build's attempt was.
-func (a AuditReport) Findings() *AuditFindings {
-	if a.Found != nil || a.Error != "" || a.At.IsZero() {
-		return a.Found.clone()
-	}
-	return &AuditFindings{At: a.At, Completed: a.Completed, Referenced: a.Referenced,
-		Missing: a.Missing, Damaged: a.Damaged}
 }
 
 // AuditFindings is what an audit that ran to its end found.
@@ -334,13 +322,7 @@ func (c *Collector) Status() Status {
 // recorded would carry the other half empty: the last audit's findings gone
 // from the fleet's record, and its alarm with them, an hour after the duty
 // moved.
-//
-// A record from a build that kept no [AuditReport.Found] restores its
-// attempt's findings as found when that attempt did not fail
-// ([AuditReport.Findings]), so the move across a rolling upgrade keeps what
-// the last audit found too.
 func (c *Collector) Restore(s Status) {
-	s.Audit.Found = s.Audit.Findings()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if s.Collect.At.After(c.status.Collect.At) {

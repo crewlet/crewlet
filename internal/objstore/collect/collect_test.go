@@ -648,8 +648,7 @@ func TestAFailedAuditKeepsTheLastFindings(t *testing.T) {
 }
 
 // A NODE TAKING THE DUTY PICKS UP WHAT THE LAST HOLDER RECORDED, each half
-// where it is newer than its own — and a record from the build before, which
-// kept no findings beside the attempt, gives its attempt's findings as found.
+// where it is newer than its own.
 func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -678,12 +677,5 @@ func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 	if again := h.c.Status(); again.Audit.Error != "stopped" || again.Audit.Found == nil ||
 		again.Audit.Found.Missing != 1 {
 		t.Fatalf("a newer failed attempt took the findings with it: %+v", again.Audit)
-	}
-
-	// A RECORD THE BUILD BEFORE WROTE, with no findings of its own.
-	old := newHarness(t)
-	old.c.Restore(Status{Audit: AuditReport{Completed: true, Referenced: 4, Missing: 2, At: at}})
-	if f := old.c.Status().Audit.Found; f == nil || f.Missing != 2 || f.Referenced != 4 || !f.At.Equal(at) {
-		t.Fatalf("an older build's audit restored as findings %+v", f)
 	}
 }

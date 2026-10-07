@@ -529,11 +529,6 @@ var allowedWithdrawal = map[withdrawalKey]string{
 	{"internal/store/schema/replicated/0036_a_chunk_row_names_only_its_chunk.sql", `tracker_file_chunks`}: "a migration that reshaped it",
 	{"internal/store/schema/replicated/0038_a_file_row_names_one_object.sql", `tracker_file_chunks`}:      "the migration that dropped it",
 	{"internal/store/fileobject_test.go", `tracker_file_chunks`}:                                          "the test of the migration that dropped it",
-
-	// A RECORD AN OLDER BUILD WROTE is history too: the collector's report
-	// in the coordination store outlives the build that wrote it, and the
-	// fleet view must still show that build's findings mid-rollout.
-	{"internal/api/queries/objects_test.go", `missing_chunks`}: "an older build's collection record, fed to the reader that must still show it",
 }
 
 func sprintOffence(file string, line int, hit, text string) string {

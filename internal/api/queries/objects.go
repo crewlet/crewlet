@@ -135,9 +135,7 @@ func RenderObjects(r engine.CollectionReport) FleetObjects {
 			At: a.At, Completed: a.Completed, Referenced: a.Referenced,
 			Missing: a.Missing, Damaged: a.Damaged, Error: a.Error,
 		}
-		// THROUGH Findings, so a record a node of the build before wrote
-		// — no findings beside its attempt — still says what it found.
-		if f := a.Findings(); f != nil {
+		if f := a.Found; f != nil {
 			found := &ObjectFindings{At: f.At, Completed: f.Completed, Referenced: f.Referenced,
 				Missing: f.Missing, Damaged: f.Damaged}
 			for _, m := range f.MissingFiles {
