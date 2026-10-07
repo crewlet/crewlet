@@ -285,7 +285,7 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	// A PEER activated something else, later.
 	peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "peer-revision", Summary: "from a peer",
-		Payload: []byte(`{"name":"Peer"}`), At: time.Now().Add(2 * time.Hour)})
+		Payload: []byte(`{"name":"Peer"}`), At: time.Now().Add(2 * time.Hour), Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}

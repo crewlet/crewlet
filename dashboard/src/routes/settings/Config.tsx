@@ -122,25 +122,21 @@ const NO_REVISION = {
  * THE KIND IS THE REVISION'S OWN WORD, never inferred from the label: the name
  * spaces overlap (an operator token may be called `node`), and a label alone
  * drew a node's boot seed and the reconcile loop's reloads as a person's
- * writes. A revision nobody recorded an author for — adopted from an older
- * engine's pointer — says so, which is different from "the engine wrote it".
+ * writes. Every revision carries its kind; the label may be empty (a write
+ * made with no operator identity), which is said as such.
  */
 export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   const name = revision.created_by;
   const kind = revision.created_by_kind;
-  if (!name && !kind) return <EmptyValue label="Not recorded" />;
   return (
     // THE NAME OUTRANKS ITS KIND. In a narrow By column the name was cut to
     // "n…" beside a whole `operator` chip, which is the half of the fact a
     // reader can least do without. In a revisions table (`.grid-cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
     // before the name gives up a character; the title keeps both.
-    <span
-      className="row gap-1 revision-author"
-      title={kind && name ? `${name} · ${kind}` : undefined}
-    >
+    <span className="row gap-1 revision-author" title={name ? `${name} · ${kind}` : undefined}>
       {name ? <TextCell>{name}</TextCell> : <EmptyValue label="No name recorded" />}
-      {kind && <Tag appearance="outline">{kind}</Tag>}
+      <Tag appearance="outline">{kind}</Tag>
     </span>
   );
 }

@@ -35,6 +35,7 @@ func TestAWriteKeepsThePointersInstant(t *testing.T) {
 	ahead := pinned.Add(time.Hour)
 	if _, err = s.plane.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: base.ID, Payload: base.Payload, At: ahead,
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 	}); err != nil {
 		t.Fatalf("the other node's activation: %v", err)
 	}

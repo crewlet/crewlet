@@ -588,7 +588,6 @@ Payloads are NOT included — fetch a specific revision via `GET /config/revisio
 |---|---|---|
 | `operator` | A person, through a credential: an API token on `/config` or `/setup`, or the login running `crewlet config import` / `crewlet config rekey` | The token's id, or the login (`$CREWLET_OPERATOR`, else `$USER`) |
 | `node` | The engine itself: a node seeding the store from its `-company` file at boot, or the reconcile loop's own writes (removing a disconnected integration, recording a discovered site, reloading after sealing a credential) | The node's id for a seed; `reconcile loop` for the loop |
-| `""` | **Not recorded**: a revision this node adopted from a pointer an older build published, which named nobody | `""` |
 
 Read the kind rather than inferring it from the label — the two name spaces overlap, and an operator token may be called anything. A revision reads the same on every node: the fleet's activation pointer carries its author, so a node adopting it records the origin's author rather than its own (see [Control Plane](../concepts/control-plane.md#the-design)). A kind a newer engine adds arrives as itself.
 

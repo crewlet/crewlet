@@ -3307,11 +3307,9 @@ export interface RevisionMeta {
   /**
    * WHAT `created_by` names: `operator` for a person's credential (an API
    * token, or the login running the CLI), `node` for the engine's own write
-   * (a boot seed, the reconcile loop). EMPTY when nobody recorded it — a
-   * revision a node adopted from a pointer an older build published — and a
-   * screen shows that as "not recorded" rather than picking a kind. A kind a
-   * newer engine adds arrives as itself, so this is a string rather than a
-   * closed union a newer value would silently fall outside of.
+   * (a boot seed, the reconcile loop). Always present. A kind a newer engine
+   * adds arrives as itself, so this is a string rather than a closed union a
+   * newer value would silently fall outside of.
    */
   created_by_kind: string;
   created_at: string;

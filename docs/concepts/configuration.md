@@ -530,8 +530,8 @@ CREATE TABLE company_config (
     created_by         TEXT    NOT NULL,          -- a label: token id ("founder"), a
                                                   -- login, a node id, "reconcile loop"
     created_by_kind    TEXT    NOT NULL DEFAULT '',  -- what created_by names:
-                                                  -- "operator" | "node" | "" (not recorded)
-    source             TEXT    NOT NULL,          -- "api" | "file" | "rekey" | "fleet"
+                                                  -- "operator" | "node"
+    source             TEXT    NOT NULL,          -- "api" | "file" | "rekey"
     summary            TEXT    NOT NULL,          -- short human-readable change note
     payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
                                                   -- sealed envelope when a keyring is set

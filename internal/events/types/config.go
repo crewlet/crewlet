@@ -30,9 +30,8 @@ type ConfigRevisionActivated struct {
 	RevisionSummary string `json:"revision_summary"`
 	CreatedBy       string `json:"created_by"`
 	// CreatedByKind is what CreatedBy names — `operator` or `node`
-	// (store.AuthorKind). Additive: an older build's event has none, and
-	// reads as a kind not recorded.
-	CreatedByKind string `json:"created_by_kind,omitempty"`
+	// (store.AuthorKind) — and every publisher sets it.
+	CreatedByKind string `json:"created_by_kind"`
 }
 
 // EventType is the "config_revision_activated" wire type.

@@ -696,7 +696,7 @@ func TestFleetCarriesEachNodesConfigState(t *testing.T) {
 	}
 	plane := coordmemory.NewFleet()
 	published, err := plane.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "rev-1", Payload: []byte("{}"), At: pinned})
+		RevisionID: "rev-1", Payload: []byte("{}"), At: pinned, Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2811,6 +2811,7 @@ func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
 	published, err := plane.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "rev-2", Payload: []byte("{}"), At: pinned,
 		Summary: "raise the CTO's budget",
+		Origin:  coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 	})
 	if err != nil {
 		t.Fatal(err)

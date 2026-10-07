@@ -405,26 +405,6 @@ test("with no side named the diff is read against the active revision", async ()
   expect(screen.getByText("against the active revision")).toBeDefined();
 });
 
-// A REVISION NOBODY RECORDED AN AUTHOR FOR SAYS SO. It was adopted from an
-// older engine's pointer, which named nobody — and "not recorded" is a
-// different fact from "the engine wrote it" or from an empty name.
-test("a revision with no recorded author says so rather than naming anybody", () => {
-  const { container } = render(
-    <RevisionAuthor
-      revision={{
-        revision_id: "r",
-        summary: "",
-        source: "fleet",
-        created_by: "",
-        created_by_kind: "",
-        created_at: "2026-08-22T15:00:00Z",
-      }}
-    />,
-  );
-  expect(container.textContent).toContain("Not recorded");
-  expect(container.querySelector(".crewlet-tag")).toBeNull();
-});
-
 // THE LIST SAYS WHICH ONE IS OPEN, to a reader who cannot see the fill: the
 // picked handle is a pressed toggle and every other is not, and each carries
 // its whole handle in its title because the list track is fixed and cuts one

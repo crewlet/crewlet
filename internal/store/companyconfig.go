@@ -56,10 +56,10 @@ const (
 // Valid reports a kind this build writes.
 //
 // Only a WRITE is held to it. A revision adopted from the fleet carries the
-// kind its origin recorded, which may be one a newer build added, or none at
-// all from a pointer an older build published — an unknown kind off the wire
-// is a value, and refusing it would stop this node recording a revision it is
-// running.
+// kind its origin recorded, which may be one a newer build added — an unknown
+// kind off the wire is a value, and refusing it would stop this node recording
+// a revision it is running. An EMPTY kind is no kind at all, and [Configs.Adopt]
+// refuses it.
 func (k AuthorKind) Valid() bool {
 	switch k {
 	case AuthorOperator, AuthorNode:
@@ -83,11 +83,9 @@ type Revision struct {
 
 	CreatedAt time.Time
 	CreatedBy string
-	// CreatedByKind is what CreatedBy names. EMPTY only on a revision this
-	// node adopted from a pointer that did not say — published by a build
-	// older than the one that records it, or stored before migration
-	// 0035 could classify it — and a reader shows that as "not recorded"
-	// rather than picking a kind.
+	// CreatedByKind is what CreatedBy names: never empty, and one of this
+	// build's kinds on every revision it writes — an adopted one may name a
+	// kind a newer build added, which arrives as itself.
 	CreatedByKind AuthorKind
 	Source        string
 	Summary       string
@@ -293,21 +291,27 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 // The caller passes the author, kind, source and creation instant the fleet's
 // pointer carries, so a revision reads the same on every node rather than
 // "peer" everywhere but the one it was written on. The kind is NOT held to
-// [AuthorKind.Valid] here, for the reason that method gives.
+// [AuthorKind.Valid] here, for the reason that method gives — but it must be
+// SOME kind, as must the source and both instants: the pointer always carries
+// them, and a row missing one is a guess on the audit screen.
 //
-// A row that is already here keeps its body, but an author it did not know
-// is FILLED IN when the fleet now says: a node that adopted a revision from
-// an older build's pointer, or before this was recorded at all, learns who
-// wrote it the next time the fleet points at it. A known author is never
-// overwritten — the row this node wrote itself is the authority on its own
-// write.
+// A row that is already here keeps its body and its author: the row this node
+// wrote, or adopted first, is the authority on that write. Only its active
+// flag and activated_at move — to r.ActivatedAt, the fleet's instant.
 func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	if r.ID == "" {
 		return fmt.Errorf("store: adopting a revision needs its fleet id")
 	}
-	at := r.CreatedAt
-	if at.IsZero() {
-		at = now()
+	switch {
+	case r.CreatedByKind == "":
+		return fmt.Errorf("store: adopting revision %s needs its author's kind", r.ID)
+	case r.Source == "":
+		return fmt.Errorf("store: adopting revision %s needs its source", r.ID)
+	case r.CreatedAt.IsZero():
+		return fmt.Errorf("store: adopting revision %s needs its creation instant", r.ID)
+	case r.ActivatedAt.IsZero():
+		return fmt.Errorf("store: adopting revision %s needs the instant the fleet "+
+			"activated it", r.ID)
 	}
 	payload := r.Payload
 	if len(payload) == 0 {
@@ -323,14 +327,10 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 			     (revision_id, parent_revision_id, created_at, created_by,
 			      created_by_kind, source, summary, payload, is_active, activated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-			 ON CONFLICT (revision_id) DO UPDATE
-			    SET created_by = excluded.created_by,
-			        created_by_kind = excluded.created_by_kind
-			  WHERE company_config.created_by_kind = ''
-			    AND excluded.created_by_kind <> ''`,
-			r.ID, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
+			 ON CONFLICT (revision_id) DO NOTHING`,
+			r.ID, NullText(r.ParentID), EncodeTime(r.CreatedAt), r.CreatedBy,
 			string(r.CreatedByKind), r.Source, r.Summary, string(payload),
-			EncodeTime(at)); err != nil {
+			EncodeTime(r.ActivatedAt)); err != nil {
 			return err
 		}
 		// The row may already have been here — the conflict above did
@@ -338,7 +338,7 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 		// activate is unconditional rather than part of the insert.
 		_, err := tx.ExecContext(ctx,
 			`UPDATE company_config SET is_active = 1, activated_at = ?
-			 WHERE revision_id = ?`, EncodeTime(at), r.ID)
+			 WHERE revision_id = ?`, EncodeTime(r.ActivatedAt), r.ID)
 		return err
 	})
 	if err != nil {

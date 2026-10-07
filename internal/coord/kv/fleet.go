@@ -1618,9 +1618,10 @@ func (f *FleetStore) Usage(ctx context.Context, windows coord.Windows) ([]coord.
 // key's revision is the epoch, so storing one too would give two answers that
 // could disagree.
 //
-// The ORIGIN fields are additive: a pointer an older build wrote has none of
-// them and decodes to a zero [coord.RevisionOrigin], and an older build
-// reading one this build wrote ignores them. See [coord.RevisionOrigin].
+// The ORIGIN fields travel beside the revision so a peer adopting it records
+// who wrote it. The record evolves additively: a later build must keep every
+// key here with the meaning it has here, because this build reads its pointer
+// during a rolling upgrade. See [coord.RevisionOrigin].
 type activationRecord struct {
 	RevisionID string    `json:"revision_id"`
 	At         time.Time `json:"at"`
@@ -1643,6 +1644,9 @@ func (r activationRecord) origin() coord.RevisionOrigin {
 func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/kv: an activation needs a revision id")
+	}
+	if err := req.Origin.Check(); err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/kv: activate %s: %w", req.RevisionID, err)
 	}
 	if req.Expect != "" && req.ExpectAbsent {
 		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +

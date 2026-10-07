@@ -686,28 +686,21 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 // revision, how and when, and a peer that stored `peer` from `fleet` at the
 // activation instant instead gave one revision a different author on every
 // node — so the audit screen's answer depended on which node served it, and
-// no node but the origin could say an operator had written it at all.
+// no node but the origin could say an operator had written it at all. Every
+// pointer carries a complete origin — the coordination store refuses one that
+// does not ([coord.RevisionOrigin.Check]) — so it maps straight onto the row.
 //
-// A pointer published by an older build carries no origin. Its author is
-// then EMPTY with an empty kind, which every reader shows as "not recorded":
-// naming this node, or the placeholder, would be a claim nobody made. The
-// source and the instant fall back to what the pointer does say — that the
-// revision came from the fleet, activated then — because those two are true
-// of this node's copy either way.
+// It is ACTIVE FROM THE POINTER'S INSTANT, never from its creation: the two
+// differ on every re-activation of an older revision, and activated_at is
+// what this node boots its chart with next time.
 func adopted(target coord.Activation, payload []byte) store.Revision {
 	origin := target.Origin
-	revision := store.Revision{
+	return store.Revision{
 		ID: target.RevisionID, Source: origin.Source, CreatedBy: origin.Author,
 		CreatedByKind: store.AuthorKind(origin.AuthorKind),
 		Summary:       target.Summary, Payload: payload, CreatedAt: origin.CreatedAt,
+		ActivatedAt: target.At,
 	}
-	if revision.Source == "" {
-		revision.Source = "fleet"
-	}
-	if revision.CreatedAt.IsZero() {
-		revision.CreatedAt = target.At
-	}
-	return revision
 }
 
 // record writes this node's outcome twice, to two surfaces with two

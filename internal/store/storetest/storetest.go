@@ -77,7 +77,8 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ARevisionRecordsWhatWroteIt", testARevisionRecordsWhatWroteIt},
 		{"AWriteThatDoesNotSayWhatWroteItIsRefused", testAnUnattributedWriteIsRefused},
 		{"AnAdoptedRevisionKeepsItsOriginsAuthor", testAnAdoptedRevisionKeepsItsOriginsAuthor},
-		{"AnAdoptionLearnsAnAuthorItDidNotKnow", testAnAdoptionLearnsAnUnknownAuthor},
+		{"AnAdoptionRefusesARevisionThatNamesNobody", testAnAdoptionRefusesARevisionThatNamesNobody},
+		{"AReAdoptionKeepsTheKnownAuthor", testAReAdoptionKeepsTheKnownAuthor},
 		// NOT HERE: the token counter. It is fleet state now, certified
 		// by coordtest against both coordination backends — a counter
 		// this node kept privately was the whole defect (migration

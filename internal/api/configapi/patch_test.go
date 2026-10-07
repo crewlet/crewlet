@@ -298,6 +298,7 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "from-a-peer", Summary: "a peer got there first",
 		Payload: []byte("{}"), At: pinned, Expect: base,
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
 	}); err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}

@@ -3,6 +3,8 @@ package coord
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -358,13 +360,12 @@ type Activation struct {
 // had a different author on every node and the audit screen's answer depended
 // on which node served it.
 //
-// ADDITIVE ON THE WIRE, and both directions are ordinary. An older build
-// decodes a pointer carrying this and ignores it; this build reads an older
-// pointer as a zero origin, which the adopting node records as an author NOT
-// RECORDED rather than inventing one. The fields are plain strings rather than
-// the store's kind type for the reason [NodeApply.Status] gives: this package
-// is where the engine's layers meet, and a backend should not import the
-// store to carry a word.
+// REQUIRED: every writer knows who it is, how it made the revision and when,
+// and [RevisionOrigin.Check] is what both backends hold an activation to, so
+// no pointer reaches a peer naming nobody. The fields are plain strings rather
+// than the store's kind type for the reason [NodeApply.Status] gives: this
+// package is where the engine's layers meet, and a backend should not import
+// the store to carry a word.
 //
 // The PARENT is deliberately not here. It names a revision the adopting node
 // may never have held — a node that joined after it was superseded — and the
@@ -380,6 +381,35 @@ type RevisionOrigin struct {
 	// CreatedAt is when it was written, which a re-activation of an old
 	// revision makes very different from [Activation.At].
 	CreatedAt time.Time
+}
+
+// ErrIncompleteOrigin reports an activation whose origin leaves out what a
+// peer adopting the revision records: the author's kind, the source or the
+// creation instant. The author's label may be empty — a write made with no
+// operator identity still says it was an operator's — but nothing else may.
+var ErrIncompleteOrigin = errors.New("coord: an activation needs its revision's origin")
+
+// Check reports whether the origin carries everything a peer records, as an
+// error wrapping [ErrIncompleteOrigin] naming each field that is missing.
+//
+// THE BACKEND ENFORCES IT, both of them, so the rule cannot be one a caller
+// forgot: a pointer that named nobody would put a revision on every peer with
+// no author and no source, which is the guess the origin exists to remove.
+func (o RevisionOrigin) Check() error {
+	var missing []string
+	if o.AuthorKind == "" {
+		missing = append(missing, "AuthorKind")
+	}
+	if o.Source == "" {
+		missing = append(missing, "Source")
+	}
+	if o.CreatedAt.IsZero() {
+		missing = append(missing, "CreatedAt")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: missing %s", ErrIncompleteOrigin, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // MaxApplyErrorLength bounds the failure text a node publishes.
@@ -486,8 +516,8 @@ type ActivationRequest struct {
 	At time.Time
 
 	// Origin is the revision's own record, so a peer that adopts it keeps
-	// its author. Every writer has one; a zero origin publishes a pointer
-	// every peer records as "author not recorded".
+	// its author. Every writer has one, and an activation whose origin
+	// fails [RevisionOrigin.Check] is refused.
 	Origin RevisionOrigin
 
 	// Expect is the revision the caller read before building this one.

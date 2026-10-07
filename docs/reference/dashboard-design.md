@@ -2915,15 +2915,14 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   older rows the screen never saw, and a caption reading "some of this may be
   missing" is one nobody can act on where "Knowledge answered one page" says
   where to look.
-- **Not recorded** vs **the engine.** An empty actor on a tracker or wiki
+- **The engine** vs **a stated writer.** An empty actor on a tracker or wiki
   commit is the engine's own write, and the Audit screen draws it as "the
   engine". A configuration revision is different: the revision states WHAT
   wrote it (`created_by_kind`, `operator` or `node`) and the row shows that
   word rather than assuming one — it used to label every revision `operator`,
   so a node's boot seed and the reconcile loop's reloads read as a person's
-  writes. A revision whose kind is EMPTY was adopted from an older engine's
-  pointer that named nobody, and it reads "Not recorded" on both the Audit
-  screen and Configuration's history, never "the engine" and never a guess.
+  writes. Every revision carries its kind, so neither the Audit screen nor
+  Configuration's history ever guesses one.
 - **An empty CONTAINER** vs **a query that matched nothing.** A container says
   its own emptiness, from what it already knows about itself, before the list
   it holds has answered anything — and that state REPLACES the list rather than

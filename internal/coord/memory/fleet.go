@@ -257,6 +257,9 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/memory: an activation needs a revision id")
 	}
+	if err := req.Origin.Check(); err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/memory: activate %s: %w", req.RevisionID, err)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 

@@ -29,6 +29,14 @@ import (
 // window by sleeping through it.
 var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 
+// anOrigin is the record every activation a case publishes carries, written
+// an hour before pinnedNow: the backends refuse an activation without one, and
+// a case about something else has no author to say.
+var anOrigin = coord.RevisionOrigin{
+	Author: "maya", AuthorKind: string(store.AuthorOperator), Source: "api",
+	CreatedAt: pinnedNow.Add(-time.Hour),
+}
+
 // brokenRevision is well-formed JSON that cannot be built: a seat naming a
 // provider the document does not configure. The provider block is non-empty
 // deliberately: a company with no models at all is a supported authoring
@@ -127,7 +135,7 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow})
+	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow, Origin: anOrigin})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -147,7 +155,7 @@ func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMe
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: id, Summary: summary, Payload: payload, At: pinnedNow})
+	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: id, Summary: summary, Payload: payload, At: pinnedNow, Origin: anOrigin})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -354,7 +362,7 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
-	republished, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: active.ID, Summary: summary, Payload: active.Payload, At: pinnedNow})
+	republished, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: active.ID, Summary: summary, Payload: active.Payload, At: pinnedNow, Origin: anOrigin})
 	if err != nil {
 		t.Fatalf("re-publish: %v", err)
 	}
@@ -410,7 +418,8 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	later := pinnedNow.Add(time.Hour)
 	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: target.RevisionID, Summary: "rotate", Payload: yamlToJSON(t, grownCompanyDoc),
-		At: later,
+		At:     later,
+		Origin: anOrigin,
 	}); err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
@@ -505,6 +514,7 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		}
 		if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 			RevisionID: held, Summary: "written", Payload: document, At: pinnedNow,
+			Origin: anOrigin,
 		}); err != nil {
 			t.Fatalf("activate: %v", err)
 		}
@@ -559,7 +569,7 @@ func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
 	// store is exactly the ghost this reports.
 	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "00000000-0000-0000-0000-000000000000",
-		Summary:    "ghost", At: pinnedNow}); err != nil {
+		Summary:    "ghost", At: pinnedNow, Origin: anOrigin}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.recon.Tick(t.Context()); err == nil {
