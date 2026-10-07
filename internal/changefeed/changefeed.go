@@ -77,10 +77,9 @@ var log = logging.Get("changefeed")
 //
 // Five minutes, matching the webhook edge's delivery dedupe and sized for the
 // same thing: a redelivery after a node died mid-handle, and an operator's
-// replay. It is deliberately NOT the retention of the change record — that is
-// a year — because the claim answers "did somebody already publish this
-// wake", which stops mattering as soon as no consumer could still be holding
-// the message.
+// replay. It is deliberately NOT the log's retention, because the claim
+// answers "did somebody already publish this wake", which stops mattering as
+// soon as no consumer could still be holding the message.
 const ClaimTTL = 5 * time.Minute
 
 // nakDelay is how long a failed handle waits before coming back.
@@ -164,16 +163,14 @@ type Message struct {
 	Nak func(delay time.Duration) error
 }
 
-// Record is one delivered change, whatever estate it came from.
+// Record is one delivered change, whatever log it came from.
 type Record struct {
-	// ID is the estate's own identity for this delivery: a create-only
-	// bucket key, or a log record's operation id. Stable across
-	// redeliveries, which is what lets a translator that has no id of its
-	// own use it as one.
+	// ID is the estate's own identity for this delivery: the log record's
+	// operation id. Stable across redeliveries, which is what lets a
+	// translator that has no id of its own use it as one.
 	ID string
 
-	// Position is the delivery's place in its estate — the composed log
-	// position, or the bucket revision.
+	// Position is the delivery's place in its log — the record's sequence.
 	//
 	// # Why the three fields below travel with it
 	//
@@ -181,33 +178,21 @@ type Record struct {
 	// same generation. The node that WINS a message is rarely the node
 	// that runs the woken seat, and a reanchor renumbers a log — so a
 	// wake stamped with a bare position is a number the woken node cannot
-	// safely compare with its own. A bucket feed leaves them empty and
-	// zero, which is the honest answer for an estate that has neither.
+	// safely compare with its own.
 	Position uint64
 
-	// Stream is the log's stream name, empty for a bucket feed.
+	// Stream is the log's stream name.
 	Stream string
 
-	// Gen is the log's generation, zero for a bucket feed.
+	// Gen is the log's generation.
 	Gen uint64
 
-	// Key is the bucket key, or the subject, this delivery arrived on. For
-	// diagnosis, and for a translator that parses it.
+	// Key is the subject this delivery arrived on. For diagnosis, and for
+	// a translator that parses it.
 	Key string
 
 	// Payload is the record's bytes, verbatim.
 	Payload []byte
-
-	// Removed marks a delivery that says the record is GONE rather than
-	// carrying one — a retention sweep or an operator's delete on the
-	// bucket estate. A log never produces one: its records are its
-	// history.
-	//
-	// The framework acks it and never translates it, because the decision
-	// is the same in every estate and cannot be otherwise: the wake this
-	// record once produced was delivered when it was written, and there is
-	// nothing left to derive a second one from.
-	Removed bool
 }
 
 // Publisher is the queue surface this package publishes wakes through.
@@ -349,13 +334,6 @@ func (f *Feed) Run(ctx context.Context) error {
 
 // handle processes one message, settling it exactly once.
 func (f *Feed) handle(ctx context.Context, msg *Message) {
-	if msg.Removed {
-		// The record is gone. Nothing to tell anybody: the wake it once
-		// produced was delivered when it was written.
-		log.DebugContext(ctx, "changefeed_record_removed", "key", msg.Key)
-		f.ack(ctx, msg)
-		return
-	}
 	body, wake, err := f.translator.Translate(ctx, msg.Record)
 	if err != nil {
 		// A translation failure is a RECORD THIS BUILD CANNOT READ, and a
@@ -444,8 +422,10 @@ func (f *Feed) release(ctx context.Context, id string) {
 }
 
 // triggerOf is where the record a delivery was derived from was committed, as
-// the token a wake carries ([types.RawWebhook.Trigger]) — or nothing, for an
-// estate whose deliveries carry no log position.
+// the token a wake carries ([types.RawWebhook.Trigger]) — or nothing, for a
+// delivery whose position is not a valid one. Every log delivery carries one,
+// so an empty trigger is a producer's fault the wake survives, weaker by a
+// floor, rather than a token naming a position that does not exist.
 //
 // THE COMMITTING RECORD'S OWN POSITION, because that is what the woken seat
 // must read no older than: the change that woke it. The turn hands it to its
@@ -453,7 +433,7 @@ func (f *Feed) release(ctx context.Context, id string) {
 // read has applied the change — and this is the floor that names what the seat
 // was woken for.
 func triggerOf(rec Record) string {
-	if rec.Stream == "" || rec.Position == 0 {
+	if rec.Position == 0 {
 		return ""
 	}
 	at := statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}

@@ -236,8 +236,8 @@ func TestACommittedChangeBecomesAWake(t *testing.T) {
 
 // A WAKE CARRIES WHERE THE CHANGE THAT CAUSED IT WAS COMMITTED — the record's
 // own position, as the token a turn reads back — so the seat it wakes reads
-// no older than what woke it. A delivery from an estate with no log position
-// carries none, rather than a position that names nothing.
+// no older than what woke it. A delivery carrying no valid position carries no
+// trigger, rather than one that names nothing.
 func TestAWakeCarriesThePositionOfTheChangeThatCausedIt(t *testing.T) {
 	t.Parallel()
 	docs, pub, cl := newEstate(), &capture{}, newClaims()
@@ -449,36 +449,3 @@ func (n *nameless) Source() changefeed.Source {
 type groupless struct{ probe }
 
 func (g *groupless) Source() changefeed.Source { return changefeed.Source{Name: "page"} }
-
-// A REMOVED RECORD IS ACKED AND NEVER TRANSLATED.
-//
-// The decision moved out of the two domain translators and into the framework
-// when the seam did, and it can only live in one place: every estate answers
-// it the same way — the wake this record once produced was delivered when it
-// was written — so a removal must not reach a translator and must not circle
-// back through the dead-letter path.
-func TestARemovedRecordIsAckedWithoutTranslation(t *testing.T) {
-	t.Parallel()
-	docs, pub, cl := newEstate(), &capture{}, newClaims()
-	p := newProbe()
-	run(t, docs, pub, cl, p)
-
-	writeChange(t, docs, "u1")
-	settle(t, func() bool { return p.translations() == 1 }, "the change was never translated")
-	docs.deliver(changefeed.Record{ID: "u1", Key: "item/u1", Removed: true})
-
-	// The removal must not reach the translator, and it must not circle:
-	// a later change is translated exactly once, which it would not be if
-	// the removal were being redelivered.
-	writeChange(t, docs, "u2")
-	settle(t, func() bool { return p.translations() == 2 }, "the second change never arrived")
-	time.Sleep(100 * time.Millisecond)
-	if got := p.translations(); got != 2 {
-		t.Errorf("%d translations for two changes and a removal — the removal "+
-			"is being translated or retried", got)
-	}
-	if got := docs.acks("u1"); got < 2 {
-		t.Errorf("the removal was acked %d time(s) beyond its change — a "+
-			"removal that is not acked comes back for ever", got-1)
-	}
-}
