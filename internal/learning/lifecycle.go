@@ -725,7 +725,23 @@ func (l *Lifecycle) compact(ctx context.Context, handle string, now time.Time, r
 //
 // Eligible is the exact complement of what the earlier sweeps drop: terminal
 // (see [terminalOutcomes]), unstamped, and old enough that no other reader
-// still wants the detail.
+// still wants the detail — and, of those, only rows a fold could ever take.
+//
+// ROWS THAT CAN NEVER FOLD ARE LEFT OUT BEFORE THE LIMIT, not after it: a
+// turn that called no tools (clustering has nothing to pool it by, and
+// [Lifecycle.dropToolFree] is its horizon) and an exemplar a summary retired
+// (kept raw on purpose, for good — see [splitOrphans]). The batch is the
+// OLDEST BatchSize rows and neither kind ever leaves its old end by folding, so
+// filtered out after the limit they took its slots pass after pass — a fold
+// keeps two exemplars of every cluster for good, and a chat-heavy seat's
+// tool-free turns sit among its oldest candidates until they age out at ninety
+// days — and the window held fewer and fewer rows a fold could take, until
+// once it held none compaction stopped for the seat, threshold or not.
+// [splitOrphans] still checks retirement against the anchors it reads AFTER
+// this, which covers a summary written in between. What can still hold the
+// window is a settled tool-using turn that no cluster of MinClusterSize
+// reaches inside it: such a turn has no horizon, so a seat that gathers a
+// BatchSize of them at its old end folds nothing after that.
 //
 // ORDERED BY (ended_at, id), and the id is load bearing rather than tidy.
 // Clustering is greedy over this order, so two passes that disagree about the
@@ -739,8 +755,14 @@ func (l *Lifecycle) candidates(ctx context.Context, handle string, cutoff time.T
 		   AND consolidated_into_skill_id IS NULL
 		   AND review_outcome IN `+terminalOutcomes+`
 		   AND ended_at < ?
+		   AND tool_sequence IS NOT NULL AND tool_sequence NOT IN ('[]', '')
+		   AND id NOT IN (
+		       SELECT exemplar.value FROM episodes summary,
+		              json_each(summary.exemplar_turn_ids) exemplar
+		       WHERE summary.agent_handle = ? AND summary.kind = 'compacted'
+		         AND json_valid(summary.exemplar_turn_ids))
 		 ORDER BY ended_at ASC, id ASC LIMIT ?`,
-		handle, store.EncodeTime(cutoff), l.opts.BatchSize)
+		handle, store.EncodeTime(cutoff), handle, l.opts.BatchSize)
 	if err != nil {
 		return nil, fmt.Errorf("learning: compaction candidates for %s: %w", handle, err)
 	}

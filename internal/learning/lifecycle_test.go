@@ -1524,6 +1524,42 @@ func TestTheBatchSizeBoundsOnePass(t *testing.T) {
 	}
 }
 
+// ROWS THAT CAN NEVER FOLD DO NOT HOLD THE WINDOW. The batch is the oldest
+// BatchSize candidates, and a summary's retired exemplars and a seat's
+// tool-free turns are old rows no fold ever takes: filtered out after the
+// limit, a window full of them folded nothing, pass after pass, while turns
+// that cluster waited behind them for good.
+func TestRowsThatCanNeverFoldDoNotHoldTheCompactionWindow(t *testing.T) {
+	t.Parallel()
+	l, e, sum := newLife(t, Options{BatchSize: 4, MinClusterSize: 3, ExemplarCount: 2})
+	// One fold first, which retires two exemplars at the old end.
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("old%d", i), daysAgo(80-i), "slack_post", "jira_get"))
+	}
+	mustPass(t, l)
+	if sum.calls() != 1 {
+		t.Fatalf("the first pass made %d summaries, want 1", sum.calls())
+	}
+	// Two tool-free turns, older than the work that clusters and young
+	// enough that their own horizon has not taken them.
+	write(t, e, rawEp("chat0", daysAgo(70)), rawEp("chat1", daysAgo(69)))
+	// Three turns that cluster, newer than all four rows above.
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("new%d", i), daysAgo(50-i), "gitlab_merge"))
+	}
+
+	res := mustPass(t, l)
+
+	if res.ClustersCompacted != 1 || sum.calls() != 2 {
+		t.Fatalf("a window of two retired exemplars and two tool-free turns folded %d "+
+			"clusters (%d summaries): the turns that cluster never reached it", res.ClustersCompacted,
+			sum.calls())
+	}
+	if got := idsOf(sum.seen[1].Episodes); !slices.Equal(got, []string{"new0", "new1", "new2"}) {
+		t.Fatalf("the second fold took %v, want the three turns that cluster", got)
+	}
+}
+
 // ---- the gap this port does not close ---------------------------------- //
 
 func TestTurnsThatCalledNoToolsAreNeverCompacted(t *testing.T) {
