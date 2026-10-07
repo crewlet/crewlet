@@ -80,10 +80,14 @@ var passwordRule = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+`
 var pendingPassword = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*(?:[:=]\s*)?\z`)
 
 // The private-key armour lines. ENCRYPTED is PKCS#8's encrypted form, which is
-// still the key — under a passphrase that may sit in the same environment.
+// still the key — under a passphrase that may sit in the same environment. And
+// OpenPGP's (RFC 4880 §6.2), what `gpg --export-secret-keys --armor` prints:
+// its block is the shape a PEM one is — headers, a blank line, base64 lines —
+// with one checksum line after the body, and it matched neither pattern, so
+// its whole body was published.
 var (
-	keyBegin = regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----`)
-	keyEnd   = regexp.MustCompile(`-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----`)
+	keyBegin = regexp.MustCompile(`-----BEGIN (?:(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----`)
+	keyEnd   = regexp.MustCompile(`-----END (?:(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----`)
 )
 
 // pemArmour is any PEM armour line — a private key's, or a certificate's, a
@@ -93,10 +97,10 @@ var (
 // key's.
 var pemArmour = regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]*-----`)
 
-// keyArmour is what every BEGIN and END line above ends in, tested before
-// either pattern runs: almost no text carries a key, and a substring test
-// costs nothing where a pattern execution costs a scan.
-const keyArmour = "PRIVATE KEY-----"
+// keyArmour is what every BEGIN and END line above holds, tested before either
+// pattern runs: almost no text carries a key, and a substring test costs
+// nothing where a pattern execution costs a scan.
+const keyArmour = "PRIVATE KEY"
 
 // MaxKeyBlockBytes is the longest a private key's block may run from its
 // armour line — past its BEGIN, its body and its END line; before its END,
@@ -571,10 +575,15 @@ func (r *keyReader) blankUnder(line string) bool {
 	return trailingRun(line) < minKeyLine && r.prefixOK(line)
 }
 
-// header reports whether a line is one of RFC 1421's, under the wrapping's
-// prefix.
+// keyHeaders are the header names a key's block may carry before its body:
+// RFC 1421's, on a traditional encrypted PEM key, and OpenPGP's armour headers
+// (RFC 4880 §6.2).
+var keyHeaders = []string{"Proc-Type:", "DEK-Info:", "Version:", "Comment:", "MessageID:", "Hash:", "Charset:"}
+
+// header reports whether a line is one of a key's headers ([keyHeaders]),
+// under the wrapping's prefix.
 func (r *keyReader) header(line string) bool {
-	for _, name := range []string{"Proc-Type:", "DEK-Info:"} {
+	for _, name := range keyHeaders {
 		if i := strings.Index(line, name); i >= 0 && r.prefixOK(strings.TrimRight(line[:i], " \t")) {
 			return true
 		}
@@ -891,29 +900,47 @@ func skipHeaders(s string) int {
 // base64 runs at the encoder's width ([minKeyLine]), with nothing but
 // punctuation and spaces before and between them — one space, or the quotes
 // and commas of a list of strings (`' '`, `", "`) — and at most one shorter run
-// after them, the body's last. It reports whether there is such a body, and
-// where it ends. A shorter run before any full-width one is a word, and no
-// key's.
+// after them, the body's last, and OpenPGP's checksum after that. It reports
+// whether there is such a body, and where it ends. A shorter run before any
+// full-width one is a word, and no key's.
 func runChunk(s string) (bool, int) {
 	long, end := false, 0
 	for i := 0; i < len(s); {
-		if !inBase64(s[i]) {
-			i++
-			continue
+		start, j := nextRun(s, i)
+		if start == j {
+			break
 		}
-		j := i
-		for j < len(s) && inBase64(s[j]) {
-			j++
-		}
-		if j-i < minKeyLine {
-			if long {
-				end = j
+		if j-start < minKeyLine {
+			if !long {
+				return false, 0
 			}
-			return long, end
+			if k, l := nextRun(s, j); armourChecksum(s[k:l]) {
+				return true, l
+			}
+			return true, j
 		}
 		long, end, i = true, j, j
 	}
 	return long, end
+}
+
+// nextRun is where the next run of base64 in s at or after i begins and ends,
+// both len(s) when there is none.
+func nextRun(s string, i int) (int, int) {
+	for i < len(s) && !inBase64(s[i]) {
+		i++
+	}
+	j := i
+	for j < len(s) && inBase64(s[j]) {
+		j++
+	}
+	return i, j
+}
+
+// armourChecksum reports whether a run is OpenPGP's armour checksum: `=` and
+// the four characters of a CRC-24 in base64 (RFC 4880 §6.1).
+func armourChecksum(run string) bool {
+	return len(run) == 5 && run[0] == '='
 }
 
 // segmentStart is where the line holding byte i starts, a line break being a

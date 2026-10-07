@@ -376,6 +376,10 @@ func fixtureKeys() map[string][]string {
 		"OpenSSH": {"-----BEGIN OPENSSH PRIVATE KEY-----", sshLine, sshLine, sshLine, sshLine, sshLine, "AAAEBm9uZQ==",
 			"-----END OPENSSH PRIVATE KEY-----"},
 		"a body of one line": {"-----BEGIN PRIVATE KEY-----", keyLine, "-----END PRIVATE KEY-----"},
+		// As GnuPG writes one: no armour headers, the blank line that
+		// ends them anyway, and the CRC-24 after the body.
+		"OpenPGP": {"-----BEGIN PGP PRIVATE KEY BLOCK-----", "", keyLine, keyLine, keyLine, "u1SU1Lf=", "=nE4V",
+			"-----END PGP PRIVATE KEY BLOCK-----"},
 	}
 }
 
@@ -480,6 +484,33 @@ func TestAKeyIsReadInEveryWrapping(t *testing.T) {
 		cut := form.text[:strings.Index(form.text, "-----END")]
 		if got := redact.Secrets(cut); strings.Contains(got, keyLine) || strings.Contains(got, sshLine) {
 			t.Errorf("%s with no END: key material survived:\n%s", name, got)
+		}
+	}
+}
+
+// AN OPENPGP PRIVATE KEY BLOCK IS A KEY, read by the structure a PEM one is:
+// armour headers, the blank line after them, base64 lines, and the checksum
+// line after the body. It matched neither armour pattern, so the whole block
+// — what `gpg --export-secret-keys --armor` prints — reached the record and
+// the live view in clear. A mention of its armour is no key, and a public key
+// block is none at all.
+//
+// Mutation: take OpenPGP's armour out of the patterns, and every block here
+// is left whole.
+func TestAnOpenPGPPrivateKeyBlockIsRedacted(t *testing.T) {
+	m := redact.Marker + "private-key]"
+	block := "-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\nComment: exported for the deploy\n\n" +
+		pemBody(3) + "u1SU1Lf=\n=nE4V\n"
+	for name, c := range map[string]keyForm{
+		"closed, with armour headers": {"before\n" + block + "-----END PGP PRIVATE KEY BLOCK-----\nafter\n", "before\n" + m + "\nafter\n"},
+		"its END never written":       {"before\n" + block + "gpg: signal 2 caught\n", "before\n" + m + "\ngpg: signal 2 caught\n"},
+		"a mention of its armour": {"grep -n 'BEGIN PGP' notes.md\nnotes.md:4:-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: x\nsee the vault\n",
+			"grep -n 'BEGIN PGP' notes.md\nnotes.md:4:-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: x\nsee the vault\n"},
+		"a public key block": {"-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n" + pemBody(2) + "=nE4V\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			"-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n" + pemBody(2) + "=nE4V\n-----END PGP PUBLIC KEY BLOCK-----\n"},
+	} {
+		if got := redact.Secrets(c.text); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
 		}
 	}
 }
