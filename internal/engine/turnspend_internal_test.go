@@ -523,7 +523,7 @@ func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
 	tel.jobEngine = jobEngineSpend
 	spend := segmentSpend(1)
 
-	e.publishTurnCompleted(t.Context(), tel, spend, turn.Result{Decision: phase.Done}, nil)
+	e.publishTurnCompleted(t.Context(), tel, spend, turn.Result{Decision: phase.Done}, nil, time.Now())
 
 	got := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
 	job := jobEngineSpend

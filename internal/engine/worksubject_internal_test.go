@@ -254,7 +254,7 @@ func completing(t *testing.T, written []types.WorkItem, res turn.Result) (
 	for _, item := range written {
 		tel.written.Add(item)
 	}
-	e.publishTurnCompleted(t.Context(), tel, runner.Spend{}, res, nil)
+	e.publishTurnCompleted(t.Context(), tel, runner.Spend{}, res, nil, time.Now())
 	return *only[*types.AgentTurnCompleted](t, p, "agent_turn_completed"),
 		*only[*types.TurnCompleted](t, p, "turn_completed")
 }

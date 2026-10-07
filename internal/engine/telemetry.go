@@ -398,10 +398,14 @@ func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
 // deliveries have already fired and its result is already the caller's answer.
 // A broker that refuses these events must not turn finished work into a failed
 // turn — the same rule the phase publisher states.
+//
+// ENDED IS THE CALLER'S, never this function's clock: it is the instant the
+// segment ended, which the task's turn row is measured to as well, and the
+// publish can come seconds after it — see [Engine.endSegment].
 func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
-	spend runner.Spend, res turn.Result, err error,
+	spend runner.Spend, res turn.Result, err error, ended time.Time,
 ) {
-	ended := time.Now().UTC()
+	ended = ended.UTC()
 	// A TURN A PERSON STOPPED DID NOT FAIL, although it ended on an error:
 	// the error is how the stop reached this frame. Read as a failure it
 	// would be listed with the turns that broke, and its seat drawn as in

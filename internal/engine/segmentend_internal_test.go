@@ -67,6 +67,74 @@ func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 	}
 }
 
+// A TURN'S END IS WHERE ITS SEGMENT ENDED, NOT WHERE ITS END WAS PUBLISHED.
+//
+// The card is rewritten before the completion goes out, so the publish can
+// come seconds after the segment's work did — and a completion that read its
+// own clock there measured the rewrite into the turn's duration, which then
+// disagreed with the task's turn row, stamped a moment earlier, for the same
+// segment. Both are measured to the one instant the segment ended. Driven
+// through a real runTurn on a native task whose card needs a rewrite, with a
+// rewrite slow enough to show in either figure.
+//
+// Mutation: let the completion read its own clock again, and duration_ms
+// exceeds the task's wall_ms by the rewrite.
+func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
+	t.Parallel()
+	e, served := spendingEngine(t)
+	q := e.backends.Queue.(*memory.Queue)
+	e.auxSpend = auxspend.NewLedger(q)
+	swapModel(t, e, slowRewriteModel{delay: 200 * time.Millisecond})
+
+	if _, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
+		WorkSince: time.Now().UTC(),
+		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
+	}); err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+
+	var completed *types.TurnCompleted
+	for _, ev := range q.History() {
+		if ev.Type == (types.TurnCompleted{}).EventType() {
+			completed, _ = events.DataAs[*types.TurnCompleted](ev)
+		}
+	}
+	if completed == nil {
+		t.Fatal("no turn_completed was published")
+	}
+	turns, _ := served.recorded()
+	if len(turns) != 1 || !strings.HasPrefix(turns[0].Summary, condensedCard) {
+		t.Fatalf("the task was charged %+v, want one turn carrying the rewritten card — "+
+			"without a rewrite the case exercises nothing", turns)
+	}
+	if got, want := completed.DurationMS, turns[0].Spend.WallMs; got != want {
+		t.Fatalf("turn_completed says the turn took %d ms and the task's turn row %d ms: "+
+			"the card's rewrite was measured into one of them", got, want)
+	}
+	if got := completed.EndedAt.Sub(completed.StartedAt); got.Milliseconds() != int64(completed.DurationMS) {
+		t.Errorf("the completion's end and start are %v apart, and its duration says %d ms",
+			got, completed.DurationMS)
+	}
+}
+
+// slowRewriteModel is [longAccountModel] whose rewrites — the calls offering no
+// tools — take a while to answer.
+type slowRewriteModel struct{ delay time.Duration }
+
+func (slowRewriteModel) Model() string { return "billing" }
+
+func (m slowRewriteModel) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if len(req.Tools) == 0 {
+		select {
+		case <-time.After(m.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return longAccountModel{}.Complete(ctx, req)
+}
+
 // swapModel puts one provider behind every chain the spending engine's seat
 // resolves — its phases and its auxiliary model alike.
 func swapModel(t *testing.T, e *Engine, p llm.Provider) {

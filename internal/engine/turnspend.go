@@ -90,6 +90,10 @@ type segmentCharge struct {
 	// makes — the card's rewrite — with no tally: [Engine.withCards] gives
 	// the card one of its own, since the segment's was summed already.
 	aux auxspend.Use
+	// ended is the instant the segment ended, taken ONCE: the task's turn
+	// row's wall time and the completion's end and duration are all
+	// measured to it — see [Engine.endSegment].
+	ended time.Time
 }
 
 // native reports a charge this engine's own tracker takes: one on a native
@@ -136,7 +140,7 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	cardUse := t.aux()
 	cardUse.Tally = nil
 	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed),
-		aux: cardUse}
+		aux: cardUse, ended: ended}
 	if item == nil {
 		if res.Suspended {
 			charge.carry = unchargedOf(total)
@@ -242,8 +246,21 @@ type turnRecorder interface {
 //
 // THE CHARGE IS WRITTEN AFTER THE END, as it always was: the task's turn row
 // links to the turn, and it should not name a turn whose record says it is
-// still running. Neither order costs the seat anything — the turn's frame
-// holds it until this returns, whatever this does first.
+// still running.
+//
+// THE ORDER CHANGES WHEN THINGS ARE PUBLISHED, NEVER WHAT IS MEASURED. The
+// segment ended where [turnTelemetry.chargeFor] took its instant, and the
+// completion's end and duration are measured to that same instant
+// ([segmentCharge.ended]) — so a card rewrite of up to two auxiliary calls
+// before the publish is in neither the turn's duration nor the task's wall
+// time, and the two agree for the same segment, as they did when the
+// completion went out first. What the rewrite does delay is the completion
+// itself, and with it the seat's leaving `working` and the reflection wake;
+// that is the true state of the seat rather than a cost of the order, because
+// the turn's frame holds the seat until this returns whatever this does first
+// — the seat takes no other work until the card is written either way.
+// Publishing the completion first instead would put the card's record on the
+// stream after the read the turn's end prompts, and nothing asks again.
 //
 // ONE FUNCTION for every way a segment ends — a turn that broke before its
 // first phase, a turn that ran, a resumed segment — so the three cannot drift
@@ -253,7 +270,7 @@ func (e *Engine) endSegment(ctx context.Context, tel turnTelemetry, spend runner
 ) {
 	ready := e.cardsFor(ctx, charge)
 	e.auxSpend.FlushTurn(ctx, tel.runID)
-	e.publishTurnCompleted(ctx, tel, spend, res, err)
+	e.publishTurnCompleted(ctx, tel, spend, res, err, charge.ended)
 	e.recordTurnSpend(ctx, ready)
 }
 

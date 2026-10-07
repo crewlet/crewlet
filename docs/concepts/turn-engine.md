@@ -940,7 +940,10 @@ stages this way. The newest end makes a turn `complete` or `parked`, never
 both. An end is a completion or a lost run, and a lost run used to leave its
 turn parked for good. The turn's `duration_ms` is the sum of every segment's own
 measurement, which is the time the turn worked and not the time its coding run
-took between segments. The live projection reads the same four stages onto each
+took between segments. A segment is measured to the instant its work ended —
+the same instant its task's turn row takes its wall time from — even though its
+completion is published after its card has been rewritten to fit the task, so
+the two agree and neither counts the rewrite. The live projection reads the same four stages onto each
 seat's `turn`, from `context` to `parked`, so a seat whose turn is parked says
 so rather than saying it is idle (see [Agent States](agent-runtime.md#agent-states)).
 
