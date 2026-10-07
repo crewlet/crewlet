@@ -416,8 +416,8 @@ func TestAMalformedResponseWritesNothingAndFailsNothing(t *testing.T) {
 func TestAnUnknownTierIsTreatedAsNothingDurable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, body string }{
-		// The shape an older three-scope prompt asked for. "org" must not
-		// be read as anything writable.
+		// A scope where a tier goes: "org" must not be read as anything
+		// writable.
 		{"a scope instead of a tier", `{"scope": "org", "content": "Anything."}`},
 		{"an invented tier", `{"kind": "UNIT", "content": "Anything."}`},
 		{"an empty tier", `{"kind": "", "content": "Anything."}`},

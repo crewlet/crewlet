@@ -1268,7 +1268,7 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 | | `launch_id` | On a resumed executor that collected a detached coding run: which launch it collected, since one turn can launch more than once. On a `phase: sandbox` record — the run itself, published when it is collected — it is part of the record's identity, `(turn_id, phase, iteration, launch_id)` |
 | | `activity_transcript` | On a `phase: sandbox` record only: the run's own account of what it did, tail-capped at 256 KiB and redacted. See [each run is published as a phase](code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase) |
 | | `work_item` | The item the turn is charged to, as the turn knew it when the record was published — absent while nothing named one |
-| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. **Absent** on a row nothing timed — an older build's, an agent-mode run's bridged call — because absent means "not recorded" and a zero would mean "instant" |
+| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. **Absent** on a row nothing timed — a call whose arguments did not parse, an agent-mode run's bridged call — because absent means "not recorded" and a zero would mean "instant" |
 | | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered — an unknown name, one not offered to the surface, one the skill guard refused — since the surface refused it before any server saw it |
 | `agent_turn_progress` | `rounds[]`, the cache tokens | As on the record, so far |
 | | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** — an extension raises it mid-phase — and on the opening frame, before the model has answered once |
@@ -1278,10 +1278,10 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 | `subagent_batched` | `started_at` / `round` | When the delegate call began and the executor round that made it, so a fan-out is placed under its call; each worker's `host_round` matches it |
 | `prefetch_summary` | `started_at` / `duration_ms` | The context assembly — the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |
 
-Every one of these is **additive**: an older peer's record has none of them,
-decodes with none, and re-encodes with none (a zero start is omitted rather
-than written as the year 1), so a timeline reads a missing figure as "not
-recorded" on a mixed fleet. The cache counts are the one producer of that
+Every one of these is **additive and optional**: a figure nothing measured (an
+agent-mode run's bridged call) is absent, decodes as absent and re-encodes as
+absent (a zero start is omitted rather than written as the year 1), so a
+timeline reads a missing figure as "not recorded". The cache counts are the one producer of that
 figure in the engine — every backend reports them on its completion, and until
 the loop kept them they reached nothing past the round's span attribute. The
 runner's own tally of a turn carries them too, beside the delegated workers'

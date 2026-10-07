@@ -360,9 +360,9 @@ func jsonList(v []string) string {
 
 // parseList reads a JSON array column, tolerating anything else.
 //
-// A row written by a different version, or hand-edited, costs its list rather
-// than the whole episode: the plan summary and the outcome are what recall is
-// for, and they are still readable.
+// A malformed value — a hand edit, a damaged row — costs its list rather than
+// the whole episode: the plan summary and the outcome are what recall is for,
+// and they are still readable.
 func parseList(raw string) []string {
 	if raw == "" || raw == "[]" {
 		return nil

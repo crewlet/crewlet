@@ -383,9 +383,10 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		return Decision{Tier: types.PersistShort, Entry: entry}, err
 	}
 
-	// An unknown tier is a NOOP, not a guess. A model answering
-	// {"scope": "org"} — the shape an older three-scope prompt asked for
-	// — must not have "org" read as anything writable.
+	// An unknown tier is a NOOP, not a guess. A model whose `kind` is
+	// missing or not one this prompt offers — a {"scope": "org"} that names
+	// a scope where a tier goes, say — must not have it read as anything
+	// writable.
 	log.WarnContext(ctx, "persist_decider_unknown_tier", "turn_id", t.Event.TurnID, "kind", string(tier))
 	return Decision{Tier: types.PersistNOOP}, nil
 }

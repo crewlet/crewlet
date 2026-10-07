@@ -1188,7 +1188,7 @@ func collectSkills(rows *sql.Rows) ([]Skill, error) {
 
 // parseObject reads a JSON object column, tolerating anything else.
 //
-// Same bargain as parseList: a row written by another version, or hand-edited,
+// Same bargain as parseList: a malformed value — a hand edit, a damaged row —
 // costs its frontmatter rather than the whole skill. The body is what the
 // agent needs and it is still readable.
 func parseObject(raw string) map[string]any {

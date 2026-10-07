@@ -138,14 +138,14 @@ type PromptSection struct {
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON
-// string), result and success, the round that asked for it, and — from a build
-// that timed it — `started_at` (RFC 3339, UTC), `duration_ms`, and `origin`
+// string), result and success, the round that asked for it, and — where the
+// call was timed — `started_at` (RFC 3339, UTC), `duration_ms`, and `origin`
 // (`builtin` or `mcp:<server>`) with `server` (the bare MCP server name) for
-// the tool that answered. The last four are ABSENT on a row nothing timed —
-// an older peer's, an agent-mode run's bridged call — and `origin`/`server`
-// are absent on a call no tool answered (an unknown name, one not offered, one
-// a guard refused): absent means "not recorded", never "instant" or "the
-// engine's own".
+// the tool that answered. The last four are ABSENT on a row nothing timed — a
+// call whose arguments did not parse, an agent-mode run's bridged call — and
+// `origin`/`server` are absent on a call no tool answered (an unknown name, one
+// not offered, one a guard refused): absent means "not recorded", never
+// "instant" or "the engine's own".
 //
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely

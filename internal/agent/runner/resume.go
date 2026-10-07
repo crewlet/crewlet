@@ -282,8 +282,9 @@ func priorRounds(state execstate.State) toolloop.Result {
 		// THE TIMING AND THE ORIGIN TRAVEL TOO, or the resumed record
 		// states every pre-suspend call as untimed and unattributed — the
 		// run_sandbox call that parked the phase first among them. A row
-		// that carries no start (an older build wrote it) stays untimed
-		// rather than acquiring a zero duration.
+		// that carries no start (a call whose arguments did not parse,
+		// which never ran) stays untimed rather than acquiring a zero
+		// duration.
 		if at, ok := exec["started_at"].(string); ok {
 			if parsed, err := time.Parse(time.RFC3339Nano, at); err == nil {
 				ex.StartedAt = parsed
