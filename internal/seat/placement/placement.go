@@ -98,8 +98,8 @@ var ErrUnknownRole = errors.New("unknown node role")
 // nothing does everything, and the alternative reading is an incident: a
 // peer whose row this build cannot read, or a profile built by a caller that
 // never set this, would drop out of the seat denominator and every other node
-// would compute too large a share of the seats. "Declared
-// nothing" and "does nothing" must never be the same answer.
+// would compute too large a share of the seats. "Declared nothing" and "does
+// nothing" must never be the same answer.
 //
 // An empty non-nil set reads the same way for the same reason, and is also
 // not expressible on the wire: a "roles": [] row round-trips to every role.
@@ -329,8 +329,8 @@ func (n NodeProfile) RunsIngress() bool { return n.Roles.Has(RoleIngress) }
 // or unreadable set is every role — which is the safe reading for most
 // questions and a NARROW one here: a peer whose row cannot be read is
 // counted as holding data, so the trim may wait on a position that node does
-// not report. The alternative reading would trim past a
-// member's rows, which is the one thing a trim must never do.
+// not report. The alternative reading would trim past a member's rows, which
+// is the one thing a trim must never do.
 func (n NodeProfile) HoldsData() bool { return n.Roles.Has(RoleData) }
 
 // Meta is the lease payload for this node's presence row, in the shape
@@ -356,10 +356,11 @@ func (n NodeProfile) Meta() map[string]any {
 //
 // It returns no error, deliberately. Every malformed shape has exactly one
 // correct reading — a node that does everything and is labelled with
-// nothing — and a peer's bad row must not take down the reader's sweep. An error return would create a branch whose only safe body
-// is "use that reading anyway", and the tempting wrong body (skip the peer)
-// is the incident: a live seat-running node missing from the denominator
-// makes every other node claim more than its share.
+// nothing — and a peer's bad row must not take down the reader's sweep. An
+// error return would create a branch whose only safe body is "use that
+// reading anyway", and the tempting wrong body (skip the peer) is the
+// incident: a live seat-running node missing from the denominator makes every
+// other node claim more than its share.
 //
 // The broker follows the same rule with its own safe reading: anything this
 // build cannot read is [BrokerUnknown], which a question counting members
