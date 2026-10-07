@@ -4062,13 +4062,14 @@ and full at once, depending on which screen it was drawn on. `refusing` is the
 gate's own word — no room left for a single token — and it is the condition a
 seat is parked on, so a parked seat's bar can never read as merely near. The
 refusal stamp says when the gate last turned a call away — a refused charge, or
-a call a turn held unsent because the window was already full — and only beside
-a refusing window: under a ceiling raised since, the stamp is history until the
-next admitted charge clears it, and the window is drawn by its spend. A window
-that refused a round reads past its ceiling, because the refused round is
-counted like any other (the vendor billed it), and its figures say so — 102 120
-of 100 000, the spend the company was billed for, rather than the ceiling it
-crossed.
+work turned away unsent because the window was already full (a turn's next
+call, a parked delivery, a person's question, a reflection pass) — and only
+beside a refusing window: under a ceiling raised since, the stamp is history
+until the next admitted charge clears it, and the window is drawn by its spend.
+A window that refused a round reads past its ceiling, because the refused round
+is counted like any other (the vendor billed it), and its figures say so —
+102 120 of 100 000, the spend the company was billed for, rather than the
+ceiling it crossed.
 
 Each capped window is its own bar: a scope capped by the day and by the month
 has two ceilings, and one bar can only be drawn against one of them. `ok` is

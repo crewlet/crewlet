@@ -67,6 +67,15 @@ turned over. Its message then runs again, because the park finds nothing
 refusing — unless the turn had already written outside the engine, in which
 case it is recorded, as after any refusal.
 
+The same holds wherever the engine turns work away on a window that is already
+full before making a call: a seat's delivery parked until the window turns
+over, a person's `answer_knowledge` question refused, a reflection pass or a
+conversation entry's rewrites declined. Each is the gate's refusal, recorded as
+the window's `refused_at` on the scope a charge would have been refused by —
+the company's before the seat's — so a window that a coding run, a background
+pass or a person's answers filled says when it last turned work away rather
+than reading as one that has refused nothing.
+
 A window's allowance comes back when the window turns over, rolled inside the
 first charge after the boundary — nothing has to run at midnight. There is no
 reset: to make room before a window turns over, raise its ceiling. The engine

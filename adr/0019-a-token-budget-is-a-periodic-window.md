@@ -16,10 +16,10 @@ week from Monday and the calendar month, cut on the company's one clock
 window it counts (`2026-09-23`, `2026-W39`, `2026-09`), what has been spent in
 it and when the gate last turned a call away in it. A charge is admitted only
 while every capped window of the company and of the seat has room, and it is
-still one compare-and-swap per scope: org first, then the seat. A charge that is refused
-is counted all the same — a round is charged once its reply is in, so it has
-been billed by the time it is judged — and what the refusal stops is what
-follows it.
+still one compare-and-swap per scope: org first, then the seat. A charge that
+is refused is counted all the same — a round is charged once its reply is in,
+so it has been billed by the time it is judged — and what the refusal stops is
+what follows it.
 
 **The roll is the reset.** A slot whose label is earlier than the charge's
 window is rolled — label moved on, spend and refusal cleared — inside the same

@@ -1905,17 +1905,18 @@ in the same shape.
   (`engine.BudgetNearFraction`, served as `near_fraction` on
   [`GET /budgets`](#get-budgets)), and `ok` otherwise.
 - `refused_at` is when the window last turned a call away, in UTC, and
-  **absent** while it has not: a round whose charge it refused, or a call a
-  turn did not send because the window was already full — the first such call
-  of a turn is recorded as the gate's refusal on the scope it names, the
-  company's before the seat's. A round it turned away is counted in `used`
-  like any other — the vendor billed it — so a window that refused one reads
-  past its `limit` by that round, and every later charge is refused against
-  that figure. The stamp is kept in the shared counter beside the spend, so
-  every node reports the same one, and it clears on the scope's next admitted
-  charge or when the window turns over. A window whose ceiling was raised
-  after a refusal keeps its `refused_at` until then, under a `state` of `ok`
-  or `near`: it has room again, and the stamp is history.
+  **absent** while it has not: a round whose charge it refused, or work turned
+  away before its first call because the window was already full — a turn's
+  next call, a seat's delivery parked, a person's question, a reflection pass —
+  each recorded as the gate's refusal on the scope a charge would be refused
+  by, the company's before the seat's. A round it turned away is counted in
+  `used` like any other — the vendor billed it — so a window that refused one
+  reads past its `limit` by that round, and every later charge is refused
+  against that figure. The stamp is kept in the shared counter beside the
+  spend, so every node reports the same one, and it clears on the scope's next
+  admitted charge or when the window turns over. A window whose ceiling was
+  raised after a refusal keeps its `refused_at` until then, under a `state` of
+  `ok` or `near`: it has room again, and the stamp is history.
 
 Every node publishes a `budget_meters` snapshot of the counters as soon as its
 seat host is running and every **15 seconds** (`engine.BudgetReportInterval`)
@@ -4296,7 +4297,8 @@ answer:
   **absent** where no ceiling caps the window — never `0`, which would state a
   range of nothing that is already full;
 - **`refused_at`** is when a capped window last turned a call away — a refused
-  charge, or a call a turn held unsent because the window was already full —
+  charge, or work turned away unsent because the window was already full: a
+  turn's next call, a parked delivery, a person's question, a reflection pass —
   kept in the same counter and cleared by the scope's next admitted charge or by
   the window turning over, and absent while it has not;
 - **`state`** is the engine's judgement — `refusing`, `near` or `ok`, exactly as

@@ -1494,20 +1494,25 @@ A refusal is also recorded beside the counter, as when the gate last turned a
 call away in that window (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
 and the next charge the scope admits clears it, as does the window turning
-over. The gate turns a call away in two ways, and both are recorded: it refuses
+over. The gate turns work away in two ways, and both are recorded: it refuses
 a round's charge, or — once a window is already full, because a context
-assembly, a rewrite, a coding run or an earlier round took it there — the
-turn stops its next call before sending it, since the call would be billed and
-then refused. The second is recorded the first time a turn holds a call in
-that window, on the scope the refusal names (the company's before the seat's),
-so a window that is refusing every call never reads as one that has refused
-none. Because the counter carries every round it refused, `GET /budgets`, the
-live meter and the [budget park](../concepts/agent-runtime.md#the-budget-park)
-all read a window that refused a round **over** its ceiling by the round that
-crossed it, never just short of it; `refused_at` is when the gate said no. A
-window filled with nothing asked of the gate since — a background pass, a
-coding run whose turn has not resumed — carries no `refused_at` until something
-is, though its `state` is already `refusing`.
+assembly, a rewrite, a coding run, a person's answers or an earlier round took
+it there — the work is turned away before its first call, since that call
+would be billed and then refused. That second way is every refusal of a full
+window the engine can see coming: a turn stops its next call, the
+[budget park](../concepts/agent-runtime.md#the-budget-park) defers a seat's
+delivery, a person's `answer_knowledge` question is refused, and the
+reflection stage declines a pass and a conversation entry's rewrites. Each is
+recorded on the scope a charge would be refused by (the company's before the
+seat's), a turn's once per window for each part of the turn, so a window that
+is refusing everything sent its way never reads as one that has refused
+nothing. Because the counter carries every round it refused, `GET /budgets`,
+the live meter and the park all read a window that refused a round **over** its
+ceiling by the round that crossed it, never just short of it; `refused_at` is
+when the gate last said no. A window filled with nothing asked of it since — a
+background pass, a coding run whose turn has not resumed, and no delivery,
+question or pass for that scope after it — carries no `refused_at` until
+something is, though its `state` is already `refusing`.
 
 No model call can be checked by its own size first, because its size is known
 only once it has happened. A turn's round is judged when it is charged, as

@@ -569,8 +569,9 @@ A window no ceiling caps still shows its spend, with a `LIMIT` of `unlimited`.
 when no charge fits — which every window that refused a round reaches, since
 the refused round is counted — `near`
 at nine tenths of the ceiling, `ok` otherwise. `REFUSING SINCE` is when that
-window last turned a call away — a round whose charge it refused, or a call a
-turn held unsent because the window was already full, which is recorded as the
+window last turned a call away — a round whose charge it refused, or work turned
+away unsent because the window was already full (a turn's next call, a parked
+delivery, a person's question, a reflection pass), which is recorded as the
 gate's refusal too — printed only while its `STATE` is
 `refusing`, and `-` otherwise: a window whose ceiling was raised after it
 refused reads `ok` or `near` and shows `-` there, although it keeps the

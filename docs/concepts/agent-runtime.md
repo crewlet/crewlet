@@ -301,11 +301,7 @@ stateDiagram-v2
 - **Asked.** The node reads the seat's counters and the company's, in the
   current windows. A window is refusing when it has no room left for a single
   token — and a window that refused a round always has none, because the
-  refused round is counted past its ceiling. A window can be refusing with no
-  stamp yet — a background pass or a coding run filled it and nothing has
-  asked the gate since — and a park makes no call, so it stamps nothing; the
-  stamp is written when the gate turns a call away there. The refusal stamp is
-  not asked:
+  refused round is counted past its ceiling. The refusal stamp is not asked:
   after a ceiling is raised it stays until an admitted charge clears it, and a
   park taken on it would hold the seat back from the very charge that could. A
   counter that cannot be read parks nothing: the turn runs and its own meter,
@@ -316,7 +312,14 @@ stateDiagram-v2
   2026-09-24T07:00:00Z` — and an alarm is set for the end of the refusing
   window, the one that ends **last** where several refuse, since nothing can run
   before it. `seat_budget_parked` is logged with the scope, the window, its
-  figures and the reset.
+  figures and the reset. And the park is **recorded as the gate's refusal**:
+  the delivery it defers is the turn whose first charge would have been
+  refused, so the window's `refused_at` — "refusing since" on every screen and
+  in `crewlet budgets show` — is stamped on the scope a charge would be refused
+  by, the company's before the seat's, exactly as that charge would have
+  stamped it. A window a coding run or a background pass filled used to park
+  every delivery its seat was sent while reading as one that had refused
+  nothing.
 - **Released.** At the reset, or at once when an apply changes the ceilings of
   either scope or the company's clock (which moves every window's end), the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
