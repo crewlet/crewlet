@@ -59,12 +59,6 @@ type OperatorDeps struct {
 	// degrading — see [LeadsProject].
 	LeadsProject LeadsProject
 
-	// Fleet answers whether the node that would carry a gesture out can,
-	// for the verbs another node carries out on a person's behalf — see
-	// fleet.go. Nil REFUSES those verbs as unavailable rather than
-	// letting them through unchecked.
-	Fleet Fleet
-
 	// Runs answers a parked coding run by its turn — see answerrun.go.
 	// A nil desk omits the tool.
 	Runs RunDeps
@@ -153,16 +147,16 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// A SEAT IS NEVER GIVEN IT: a question a coding run asked is a
 		// person's to answer, and a seat that could answer its own run's
 		// question would be one guessing on its own behalf.
-		{&answerRun{deps: deps.Runs, fleet: deps.Fleet}, deps.Runs.Desk != nil},
+		{&answerRun{deps: deps.Runs}, deps.Runs.Desk != nil},
 		// NOR THESE: whether a seat works is a person's decision about it,
 		// and a seat that could pause a colleague — or resume itself —
 		// would be one overruling the people who run the company.
-		{&pauseSeat{deps: deps.Pauses, fleet: deps.Fleet}, deps.Pauses.Pauses != nil},
-		{&resumeSeat{deps: deps.Pauses, fleet: deps.Fleet}, deps.Pauses.Pauses != nil},
+		{&pauseSeat{deps: deps.Pauses}, deps.Pauses.Pauses != nil},
+		{&resumeSeat{deps: deps.Pauses}, deps.Pauses.Pauses != nil},
 		// NOR THIS: a note to a running turn is a person redirecting the
 		// work, and a seat that could steer a colleague's turn would be
 		// directing it past the person who asked for the work.
-		{&steerTurn{deps: deps.Steer, fleet: deps.Fleet}, deps.Steer.Asker != nil},
+		{&steerTurn{deps: deps.Steer}, deps.Steer.Asker != nil},
 		// NOR THIS: it is a person's question answered by a model at the
 		// company's expense, and a seat has search_knowledge and a model
 		// of its own — see answerknowledge.go.

@@ -95,10 +95,6 @@ const (
 	// refused the append, the backend is not configured. Never "the object
 	// does not exist" — a caller told that files a duplicate.
 	RefusalUnavailable Refusal = "unavailable"
-
-	// RefusalPeerUpgrading — the fleet has a node too old to carry this
-	// gesture, so it is refused everywhere until the upgrade finishes.
-	RefusalPeerUpgrading Refusal = "peer_upgrading"
 )
 
 // Refusals is every class this build knows, in the order a reader's table
@@ -108,7 +104,7 @@ var Refusals = []Refusal{
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
 	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
-	RefusalUnavailable, RefusalPeerUpgrading,
+	RefusalUnavailable,
 }
 
 // Valid reports whether a class off the wire is one this build knows. The

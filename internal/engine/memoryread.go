@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 )
@@ -48,7 +47,6 @@ func (e *Engine) armMemoryReads(ctx context.Context) error {
 	}
 	e.memoryReads.Queue = e.backends.Queue
 	e.memoryReads.Leases = e.backends.Coord
-	e.memoryReads.Features = coord.FeatureReader{Leases: e.backends.Coord}
 	e.memoryReads.Attached = attached
 	stop, err := memread.Serve(ctx, e.backends.Queue, owner, attached, stores)
 	if err != nil {

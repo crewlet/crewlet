@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -65,12 +64,10 @@ type RunDeps struct {
 // the seat will resume the run with it — but that node is the only one that
 // can, and it may be paused, busy with another of the seat's coding runs
 // (which it finishes or parks before it takes this answer, as it would a chat
-// reply), restarting or mid-upgrade. What the answer became is announced there
+// reply), or restarting. What the answer became is announced there
 // as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`).
 // What it refuses up front is what this node can know: a run that is not waiting for an
-// answer (`not_running`), and a fleet whose node holding the seat runs a build
-// that cannot route the answer (`peer_upgrading`) — an older build would read
-// it as an ordinary wake and run a turn about nothing while the run waited on.
+// answer (`not_running`).
 //
 // # It answers the question it was given against
 //
@@ -83,8 +80,7 @@ type RunDeps struct {
 // run still waits on that one, and is announced `not_awaiting` otherwise
 // ([sandbox.Coordinator.AnswerByTurn]).
 type answerRun struct {
-	deps  RunDeps
-	fleet Fleet
+	deps RunDeps
 }
 
 var _ tools.SeatCallable = (*answerRun)(nil)
@@ -175,11 +171,6 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"question was asked by, so an answer cannot say which question it answers.",
 			clip(turnID))), nil
 	}
-	if refusal := seatCanCarry(ctx, t.fleet, AnswerRunTool, run.AgentHandle,
-		coord.FeatureAnswerRunByTurn); refusal != nil {
-		return *refusal, nil
-	}
-
 	given := types.SandboxAnswerGiven{
 		TurnID: run.TurnID, AgentHandle: run.AgentHandle, Answer: answer,
 		AnsweredBy: actor.Handle, AnsweredBySeat: actor.Seat,

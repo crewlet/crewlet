@@ -10,9 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// ABSENT IS NOT ZERO. A node that publishes no status (a peer running a build
-// older than the field) is not a node with no work in flight, and a confident 0
-// would draw an idle row for a process that is simply not saying.
+// ABSENT IS NOT ZERO. A node that publishes no status (its status hook overran
+// its budget on that beat, so its heartbeat carried the placement half alone)
+// is not a node with no work in flight, and a confident 0 would draw an idle
+// row for a process that is simply not saying.
 func TestANodeThatPublishesNoStatusIsNotReadAsIdle(t *testing.T) {
 	t.Parallel()
 	for name, meta := range map[string]map[string]any{
@@ -34,7 +35,6 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	started := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
-		Features: []coord.Feature{coord.FeatureMCPStatus, "a_feature_from_a_newer_build"},
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Shared: true, Started: 1, Tools: 12},
 			{Server: "jira", Started: 2, Failed: 1, Tools: 9,
@@ -50,19 +50,23 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	}
 }
 
-// AN OLDER PEER'S STATUS HONOURS NOTHING. A build that predates the feature
-// list publishes a status without one, and it must read as a node that can
-// carry none of the gated gestures — not as a node that did not report,
-// which a gate would answer "try again" for as long as it ran.
-func TestAnOlderPeersStatusDecodesWithNoFeatures(t *testing.T) {
+// A KEY THIS BUILD DOES NOT KNOW IS IGNORED. A successor sharing the fleet
+// publishes what it adds beside what this build reads, in whatever shape it
+// chooses, and a status that failed to decode over it would read as absent —
+// "not saying" — for as long as the successor ran.
+func TestAStatusKeyFromANewerBuildDecodesHarmlessly(t *testing.T) {
 	t.Parallel()
-	older := map[string]any{"in_flight": 2, "draining": false, "posture": "serve"}
-	got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: older})
-	if !ok {
-		t.Fatal("an older peer's status read as absent")
+	newer := map[string]any{
+		"in_flight": 2, "draining": false, "posture": "serve",
+		"features":           []any{"a_feature_from_a_newer_build"},
+		"from_a_newer_build": map[string]any{"nested": []any{1.5, "x"}},
 	}
-	if len(got.Features) != 0 || len(got.MCP) != 0 {
-		t.Errorf("an older status decoded features %v and mcp %v, want neither", got.Features, got.MCP)
+	got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: newer})
+	if !ok {
+		t.Fatal("a newer peer's status read as absent")
+	}
+	if want := (coord.NodeStatus{InFlight: 2, Posture: "serve"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
@@ -93,8 +97,7 @@ func TestAStatusSurvivesTheJSONRoundTripTheLeaseStoreDoes(t *testing.T) {
 	t.Parallel()
 	want := coord.NodeStatus{
 		InFlight: 7, Posture: "serve",
-		Features: []coord.Feature{coord.FeatureMCPStatus},
-		MCP:      []coord.MCPServerStatus{{Server: "github", Shared: true, Started: 1, Tools: 4}},
+		MCP: []coord.MCPServerStatus{{Server: "github", Shared: true, Started: 1, Tools: 4}},
 	}
 	raw, err := json.Marshal(map[string]any{coord.StatusKey: want.Meta()})
 	if err != nil {
@@ -126,10 +129,8 @@ func TestAnUnsetPostureIsNotPublished(t *testing.T) {
 	if _, present := meta["started_at"]; present {
 		t.Errorf("an unset start time was published: %+v", meta)
 	}
-	for _, key := range []string{"features", "mcp"} {
-		if _, present := meta[key]; present {
-			t.Errorf("an empty %s was published: %+v", key, meta)
-		}
+	if _, present := meta["mcp"]; present {
+		t.Errorf("an empty mcp was published: %+v", meta)
 	}
 	// The two that are always meaningful stay, including their zeros: a
 	// node reporting zero turns in flight IS saying something.

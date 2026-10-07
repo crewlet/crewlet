@@ -2075,7 +2075,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `what` | `params` | Answers with |
 |--------|----------|--------------|
 | `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
-| `agent_memory` | `{id, limit}` | `GET /agents/{id}/memory`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent, still taking the seat, or on a build that cannot answer) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. See [the route](#get-agentsidmemory) |
+| `agent_memory` | `{id, limit}` | `GET /agents/{id}/memory`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent or still taking the seat) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. See [the route](#get-agentsidmemory) |
 | `memory_overview` | `{}` | EVERY AGENT SEAT'S memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. Every agent in the chart, handle order, no cap. See [the section](#memory_overview) |
 | `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The listing is a page (default 50, at most 200) with `conversations_total` beside it. ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`). Same scope rule as `work_my_work` |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
@@ -2097,7 +2097,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Operator-only**, like the rest of Settings. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by (empty on a row an older build wrote) |
-| `sandbox_tail` | `{turn_id, launch_id}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output: {text, source: transcript\|stderr\|none, cut, as_of, finished}` (the last 8 KiB, redacted), `not_running` with the record's `status` (`awaiting_clarification`, `launching`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left), `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget (no `node` for a run nobody holds right now), or `owner_upgrading` naming an owner whose build does not advertise the `sandbox_tail` feature. A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s while a running job's span is open, and nothing else asks |
+| `sandbox_tail` | `{turn_id, launch_id}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output: {text, source: transcript\|stderr\|none, cut, as_of, finished}` (the last 8 KiB, redacted), `not_running` with the record's `status` (`awaiting_clarification`, `launching`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left), or `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget — a draining owner, or one whose heartbeat lapsed, included (no `node` for a run nobody holds right now). A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s while a running job's span is open, and nothing else asks |
 | `budgets` | `{}` | `GET /budgets` |
 | `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q, mode?}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all four of no company, no backend, a backend wired with no org-wide read scope, and a node whose index is still `building`. `reason` (`no_company` / `no_backend` / `no_scope` / `building`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. A search that RAN and fell short says so in its outcome rather than its `note` (which is empty whenever `available` is true): `served_mode` empty with `coverage.complete` false is a backend that did not answer, and a partial `coverage` is part of the corpus unsearched. An EMPTY `q` is the seam's PROBE: nothing runs and nothing is read, no hits are returned, but `modes` and — for the `mode` asked — the `degraded` its CONFIGURATION decides are answered, so a screen offers the modes honestly before anybody types (the dashboard asks the probe for `semantic`, the mode whose reason names what is missing). A transient reason (`embedding_failed`) is a property of a search and is never predicted. `mode` is `hybrid` (the default), `keyword` or `semantic` — the screen's label for the last is "Meaning", and any other value is refused rather than run as the default. Every answer carries what the search actually did: `mode` (resolved), `served_mode` (the ranking the hits came from; `""` when nothing ran), `modes` (what this backend can serve as asked — `[keyword]` with no embeddings provider and on Confluence), `degraded` (`no_embeddings` / `embedding_failed` / `semantic_partial` / `unsupported`, empty when it served what was asked) and `coverage{nodes:[{id,answered,error}], complete, buckets_missing}` — the fleet the scan was divided across, which is how a partial answer is told from a short corpus. A hybrid search with nothing to rank by meaning serves its keyword half; a semantic one serves nothing and says why. See [Search](../guides/search.md#three-modes-and-what-an-answer-says-it-served) |
@@ -2714,9 +2714,7 @@ waiting.
 It refuses `not_running` for a run that is not waiting for an answer, or has no
 record at all (a run that ended has none), or names no job its question was asked
 by (an answer must carry the question it answers, and one carrying none is spent
-without resuming anything), and `peer_upgrading` while the node
-holding the seat runs a build that cannot route an answer by turn — that build
-would read the answer as an ordinary wake and run a turn about nothing. It is
+without resuming anything). It is
 served on every company, native backends or not: the run record is the
 fleet's, and a company on Jira runs coding agents too.
 
@@ -2748,10 +2746,8 @@ and a retry is safe.
 
 They refuse `not_found` for a handle that names no agent seat (a person's seat
 takes no work a pause could hold), `invalid` for a reason past its bound,
-`conflict` after losing four compare-and-sets in a row to other changes to the
-same pause, and `peer_upgrading` while **any** live node runs a build that
-cannot carry a pause — any of them may be the next to hold the seat, and an
-older build would run its mail as if nothing had happened.
+and `conflict` after losing four compare-and-sets in a row to other changes to
+the same pause.
 
 ### Steering a running turn
 
@@ -2781,9 +2777,7 @@ It refuses `not_running` for a turn that has ended or parked, `conflict` for one
 already holding five notes it has not read yet (once it reads them, the note may
 be sent again), `steer_unsupported` for a turn whose executor runs as a coding
 CLI's own agentic loop — its rounds are the CLI's, and the engine has no round
-boundary to hand a note to — `invalid` for an empty or oversized note, and
-`peer_upgrading` while **any** live node runs a build that cannot take a note:
-which node runs the turn is not known until one answers.
+boundary to hand a note to — and `invalid` for an empty or oversized note.
 
 ### Answering a question from the company's knowledge
 
@@ -3056,7 +3050,7 @@ And the tool's own refusal, carrying the tool's sentence as `detail`:
 | `not_found` | `404` |
 | `forbidden` | `403` |
 | `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
-| `unavailable`, `peer_upgrading` | `503` |
+| `unavailable` | `503` |
 
 A call interrupted before the tool answered is `503` `unavailable`, never a
 refusal: whether it landed is unknown, so the answer carries **`outcome:
@@ -3636,7 +3630,7 @@ serving the request reads the seat's lease and:
 |---|---|
 | nobody | empty, with `held_by: "none"` — the copies on disk are of unknown age, and none is shown as the seat's memory |
 | this node's own incarnation | read here, once the seat is attached; while it is still arriving (hydrating before its mailbox attaches) the read is `unavailable` rather than short |
-| a peer | asked of that incarnation on an ephemeral scatter (`crewlet.held.read`), with a 2 s budget; silence is `unavailable` naming the node, never an empty memory. A peer whose build does not advertise the `held_read` [feature](../concepts/coordination.md#what-a-node-says-about-itself) is not asked at all: the read is `unavailable` at once and says the holder runs an older build, rather than waiting out the budget on every poll of a rolling upgrade |
+| a peer | asked of that incarnation on an ephemeral scatter (`crewlet.held.read`), with a 2 s budget; silence is `unavailable` naming the node, never an empty memory — a holder that is draining, or whose heartbeat lapsed, included |
 
 `held_by` is the node that answered. A node with no broker is the whole fleet
 and answers every read from its own store. `unavailable` is a `503` with a
@@ -3856,9 +3850,11 @@ the nodes, the launch commands and the first line of each failure — and
 **Off the heartbeats, not a fan-out.** Each node re-publishes what its MCP
 starts concluded on its presence lease, one row per server with its instances
 counted (a per-seat template has one instance per seat that node holds), so
-one read of the lease table is every node's answer at once. A node running a
-build older than that report is `reported: false` and its cells are UNKNOWN —
-never a row of zeros, which would read as "started nothing".
+one read of the lease table is every node's answer at once. A node whose last
+heartbeat carried no status (its status hook overran the beat) is
+`reported: false` and its cells are UNKNOWN — never a row of zeros, which would
+read as "started nothing". A node that reports and started nothing is
+`reported: true` with no rows.
 
 `servers` lists every server this node's active configuration declares, then
 any a node reports that the configuration does not carry (`configured: false`
@@ -3874,7 +3870,7 @@ so no screen re-derives it:
 | `partial` | Some started and some did not — a node's environment or one seat's credentials rather than the server |
 | `failing` | Instances were launched and none started — the server, its command or address, or credentials every seat shares |
 | `not_started` | Every reporting node started nothing for it — a per-seat template no seat on a live node declares credentials for |
-| `unreported` | No live node publishes the report at all |
+| `unreported` | No live node's latest heartbeat carried the report |
 
 `error` is one failed instance's reason, cut to 240 bytes on the heartbeat,
 and `error_seat` the seat it was launched for; the whole text is the node's

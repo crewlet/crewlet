@@ -92,31 +92,8 @@ func (f *fleet) hold(t *testing.T, handle, owner string) {
 	}
 }
 
-// present claims owner's node presence lease, its heartbeat advertising
-// features — none at all is an older build's. A node id's presence belongs to
-// its NEWEST incarnation, so one an earlier incarnation held is given up first,
-// as a restart does.
-func (f *fleet) present(t *testing.T, owner string, features ...coord.Feature) {
-	t.Helper()
-	node := memread.NodeOf(owner)
-	if was, err := f.leases.Get(t.Context(), coord.NodeResource(node)); err != nil {
-		t.Fatalf("read the presence of %s: %v", node, err)
-	} else if was != nil && was.Owner != owner {
-		if _, err := f.leases.Release(t.Context(), coord.NodeResource(node), was.Owner, was.Epoch); err != nil {
-			t.Fatalf("release %s's presence: %v", was.Owner, err)
-		}
-	}
-	lease, _, err := f.leases.TryAcquire(t.Context(), coord.NodeResource(node), coord.AcquireOptions{
-		Owner: owner, TTL: time.Minute, Preferred: node, Ungated: true,
-		Meta: map[string]any{coord.StatusKey: coord.NodeStatus{Features: features}.Meta()},
-	})
-	if err != nil || lease == nil {
-		t.Fatalf("presence of %s: %v", owner, err)
-	}
-}
-
 // reader makes n an answerer on the fleet's broker, attached to the given
-// seats and present on this build, and returns its reader.
+// seats, and returns its reader.
 func (f *fleet) reader(t *testing.T, n *node, attached ...string) *memread.Reader {
 	t.Helper()
 	q := f.broker.Client()
@@ -129,10 +106,9 @@ func (f *fleet) reader(t *testing.T, n *node, attached ...string) *memread.Reade
 		t.Fatalf("Serve: %v", err)
 	}
 	t.Cleanup(func() { _ = stop(context.Background()) })
-	f.present(t, n.owner, coord.Features...)
 	return &memread.Reader{
 		Owner: n.owner, Local: n.stores, Queue: q, Leases: f.leases, Attached: seats,
-		Features: coord.FeatureReader{Leases: f.leases}, Budget: 500 * time.Millisecond,
+		Budget: 500 * time.Millisecond,
 	}
 }
 
@@ -229,9 +205,6 @@ func TestASilentHolderIsUnavailableNotEmpty(t *testing.T) {
 	f := newFleet()
 	b := newNode(t, "node-b:1")
 	f.hold(t, "swe", "node-c:9")
-	// ITS BUILD SAYS IT ANSWERS, and it serves nothing: the silence is the
-	// case, not the build.
-	f.present(t, "node-c:9", coord.FeatureHeldRead)
 	read := f.reader(t, b)
 
 	_, err := read.Memory(t.Context(), "swe", 0)
@@ -240,65 +213,6 @@ func TestASilentHolderIsUnavailableNotEmpty(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "node-c") {
 		t.Errorf("err = %v — it should name the node that did not answer", err)
-	}
-}
-
-// A HOLDER ON AN OLDER BUILD IS NAMED AS ONE, AT ONCE — and never asked.
-//
-// Mid rolling upgrade, @swe is held by a node whose build serves no held-read
-// subject. Asking it anyway waits out the whole budget on every poll and then
-// reports a holder that "did not answer", which reads as a node in trouble.
-// The read is unavailable immediately, says the holder's build is older, and
-// puts nothing on the broker. Asked regardless (the mutation), the budget —
-// ten seconds here — is spent and the test's clock catches it.
-func TestAHolderOnAnOlderBuildIsNamedAtOnceAndNeverAsked(t *testing.T) {
-	t.Parallel()
-	f := newFleet()
-	b := newNode(t, "node-b:1")
-	f.hold(t, "swe", "node-c:9")
-	f.present(t, "node-c:9") // an older build: advertises nothing
-	read := f.reader(t, b)
-	read.Budget = 10 * time.Second
-	asks := &counting{Asker: read.Queue}
-	read.Queue = asks
-
-	start := time.Now()
-	_, err := read.Memory(t.Context(), "swe", 0)
-	if !errors.Is(err, memread.ErrUnavailable) {
-		t.Fatalf("err = %v, want ErrUnavailable", err)
-	}
-	if !strings.Contains(err.Error(), "node-c") || !strings.Contains(err.Error(), "older build") {
-		t.Errorf("err = %v — it should name the holder and say its build is older", err)
-	}
-	if asks.asked != 0 {
-		t.Errorf("asked the broker %d times — a build that cannot answer is not asked", asks.asked)
-	}
-	if took := time.Since(start); took > 2*time.Second {
-		t.Errorf("took %s — the answer is known without waiting on the holder", took)
-	}
-	if _, err := read.Threads(t.Context(), "swe", "", 0); !errors.Is(err, memread.ErrUnavailable) {
-		t.Errorf("threads: err = %v, want ErrUnavailable", err)
-	}
-}
-
-// A HOLDER WHOSE BUILD NOTHING DESCRIBES IS UNKNOWN, NOT OLDER.
-//
-// The lease names an incarnation with no presence lease — mid-drain, or its
-// heartbeat lapsed. Nothing says what it can do, so the read is unavailable to
-// be tried again, and it does not blame an upgrade that may not be happening.
-func TestAHolderWithNoPresenceIsUnknownNotOlder(t *testing.T) {
-	t.Parallel()
-	f := newFleet()
-	b := newNode(t, "node-b:1")
-	f.hold(t, "swe", "node-c:9")
-	read := f.reader(t, b)
-
-	_, err := read.Memory(t.Context(), "swe", 0)
-	if !errors.Is(err, memread.ErrUnavailable) || !errors.Is(err, coord.ErrFeatureUnknown) {
-		t.Fatalf("err = %v, want ErrUnavailable wrapping coord.ErrFeatureUnknown", err)
-	}
-	if strings.Contains(err.Error(), "older build") {
-		t.Errorf("err = %v — a holder nothing describes is not known to be older", err)
 	}
 }
 

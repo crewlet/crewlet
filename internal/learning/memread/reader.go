@@ -75,12 +75,6 @@ type Asker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 }
 
-// Features says what one incarnation's build can do — the half of
-// [coord.FeatureReader] a read needs.
-type Features interface {
-	OwnerFeature(ctx context.Context, owner string, feature coord.Feature) (bool, error)
-}
-
 // Server makes a process one of a subject's answerers.
 type Server interface {
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
@@ -102,15 +96,6 @@ type Reader struct {
 
 	// Leases reads which incarnation holds a seat. Required with Queue.
 	Leases Leases
-
-	// Features says whether the holding incarnation's build answers this
-	// read at all ([coord.FeatureHeldRead]). Required with Queue: during a
-	// rolling upgrade a seat can be held by a build that serves no such
-	// subject, and asking it anyway waits out the whole [DefaultBudget] on
-	// every poll for a reply that can never come — and then says the holder
-	// "did not answer", which reads as a node in trouble rather than one
-	// on an older build.
-	Features Features
 
 	// Attached is the seats this node has taken ALL the way — hydrated and
 	// consuming — which is when its copy of a seat's memory is current.
@@ -220,27 +205,13 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 	return r.ask(ctx, req, lease.Owner, out)
 }
 
-// ask puts one read to the incarnation holding the seat — once its build is
-// known to answer one.
+// ask puts one read to the incarnation holding the seat.
 //
-// THE HOLDER'S OWN BUILD IS ASKED ABOUT, BY OWNER: the request goes to the
-// incarnation this lease read named, so a second read of the lease could name a
-// different process than the one asked. Three answers, three outcomes: it
-// answers (ask), it definitely cannot (unavailable now, naming its build), and
-// nothing says (unavailable, retry) — the last never read as either of the
-// others, because a heartbeat blip is not an upgrade.
+// ADDRESSED BY OWNER: the request goes to the incarnation this lease read
+// named, and only that process answers, so a holder that restarted since is
+// silent rather than answered for by its successor.
 func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (string, error) {
 	node := NodeOf(owner)
-	answers, err := r.Features.OwnerFeature(ctx, owner, coord.FeatureHeldRead)
-	if err != nil {
-		return "", fmt.Errorf("%w: whether %s, which holds %s, can answer could not be read: %w",
-			ErrUnavailable, node, req.Handle, err)
-	}
-	if !answers {
-		return "", fmt.Errorf("%w: %s holds %s and runs an older build that cannot answer a "+
-			"read of a seat's memory — it can once that node is upgraded",
-			ErrUnavailable, node, req.Handle)
-	}
 	req.Owner = owner
 	raw, err := json.Marshal(req)
 	if err != nil {

@@ -15,7 +15,8 @@
  * A seat's memory is kept current only on the node holding it, so a row is
  * one of three things: counted by its holder ("node-2"), held by nobody (no
  * copy anywhere is current, so nothing is counted), or not answered — the
- * holder was silent, runs an older build, or is still taking the seat — with
+ * holder was silent, its answer could not be read, or it is still taking the
+ * seat — with
  * that reason where the counts would be. A row of zeros for the last would
  * read as an agent that remembers nothing. The answer's `coverage` names
  * every holder that did not answer, in the callout every fleet answer draws.

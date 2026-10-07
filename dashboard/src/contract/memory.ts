@@ -156,10 +156,10 @@ export interface MemoryOverviewSeat {
   /** The node holding the seat, or `none` — then nothing is counted,
    *  because no copy anywhere is current. */
   held_by: string;
-  /** Why the holder's count is NOT here — it did not answer, runs a build
-   *  that cannot, or is still taking the seat — or "" when it is. A row
-   *  with a reason carries zeros that are not a count; never draw them as
-   *  one. */
+  /** Why the holder's count is NOT here — it did not answer (or its answer
+   *  could not be read), or it is still taking the seat — or "" when it is.
+   *  A row with a reason carries zeros that are not a count; never draw
+   *  them as one. */
   unavailable: string;
 }
 

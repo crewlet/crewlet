@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -41,9 +40,9 @@ import (
 // inside the fleet read budget — NAMED, because "the run said nothing" and "the
 // node that could ask it did not answer" send a reader to opposite places, and
 // collapsing the second into an empty tail is exactly the lie a screen that
-// polls cannot recover from. A fourth, `owner_upgrading{node}`, is the owner's
-// BUILD saying it serves no such question — what a rolling upgrade looks like —
-// which is neither silence (retrying cannot help) nor a run that stopped.
+// polls cannot recover from. An owner with no presence — draining, or its
+// heartbeat lapsed — is asked like any other, and its silence is that same
+// `owner_silent`.
 //
 // A box that the owner could not read is an ERROR rather than an outcome: it
 // clears by asking again, and the reader shows the owner's own sentence.
@@ -115,15 +114,12 @@ const (
 	// TailOwnerSilent is an owning node that did not answer inside the
 	// budget, or a run no node holds right now.
 	TailOwnerSilent TailOutcome = "owner_silent"
-	// TailOwnerUpgrading is an owning node whose build serves no tail
-	// request ([coord.FeatureSandboxTail]).
-	TailOwnerUpgrading TailOutcome = "owner_upgrading"
 )
 
 // Valid reports whether this build knows the outcome.
 func (o TailOutcome) Valid() bool {
 	switch o {
-	case TailRunning, TailNotRunning, TailOwnerSilent, TailOwnerUpgrading:
+	case TailRunning, TailNotRunning, TailOwnerSilent:
 		return true
 	}
 	return false
@@ -189,12 +185,6 @@ type TailAsker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 }
 
-// TailFeatures says what one incarnation's build can do — the half of
-// [coord.FeatureReader] a tail needs.
-type TailFeatures interface {
-	OwnerFeature(ctx context.Context, owner string, feature coord.Feature) (bool, error)
-}
-
 // TailServer makes a process one of a subject's answerers.
 type TailServer interface {
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
@@ -216,13 +206,6 @@ type TailReader struct {
 	// Queue asks a peer. Nil is a node with no broker, which is the whole
 	// fleet: every run is its own.
 	Queue TailAsker
-
-	// Features says whether the owning incarnation's build answers a tail
-	// request at all. Required with Queue, for internal/learning/memread's
-	// reason: asking
-	// an older build waits out the whole budget for a reply that can never
-	// come, on every poll, and then reports an owner that "did not answer".
-	Features TailFeatures
 
 	// Budget bounds a peer's answer; zero is [TailReadBudget].
 	Budget time.Duration
@@ -278,15 +261,6 @@ func (r *TailReader) now() time.Time {
 
 // ask puts the request to the incarnation the record names.
 func (r *TailReader) ask(ctx context.Context, run PendingRun, answer TailAnswer) (TailAnswer, error) {
-	serves, err := r.Features.OwnerFeature(ctx, run.Owner, coord.FeatureSandboxTail)
-	if err != nil {
-		return TailAnswer{}, fmt.Errorf("sandbox: whether %s, which owns run %s, can answer "+
-			"could not be read: %w", answer.Node, run.TurnID, err)
-	}
-	if !serves {
-		answer.Outcome = TailOwnerUpgrading
-		return answer, nil
-	}
 	raw, err := json.Marshal(tailRequest{
 		Version: tailWireVersion, TurnID: run.TurnID, LaunchID: run.LaunchID, Owner: run.Owner,
 	})

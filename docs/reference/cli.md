@@ -860,8 +860,6 @@ request id to send again with `-request-id`, so the retry is the same request.
 The id is a UUIDv7 — the node reads the instant it carries to decide whether it
 can still vouch for a retry — and the command mints one when `-request-id` is
 not given; an id of another version is refused `invalid_request_id`.
-A fleet mid-upgrade refuses both `peer_upgrading` until every live node runs a
-build that can carry a pause.
 
 ## `crewlet retention`
 

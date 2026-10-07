@@ -144,25 +144,10 @@ func (r *Reader) Overview(ctx context.Context, handles []string) (Overview, erro
 		nodes[node] = eventfan.NodeCoverage{ID: node, Error: why}
 	}
 
-	// ASKED: the holders whose build answers an overview. Named at once
-	// otherwise, as [Reader.ask] names one for a single read.
+	// ASKED: every holder but this incarnation.
 	asked := map[string][]string{}
 	for owner, seats := range byOwner {
-		node := NodeOf(owner)
-		if owner == r.Owner {
-			continue
-		}
-		answers, err := r.Features.OwnerFeature(ctx, owner, coord.FeatureHeldRead)
-		switch {
-		case err != nil:
-			why := "whether it can answer could not be read: " + err.Error()
-			missing(node, why)
-			mark(seats, node, why)
-		case !answers:
-			why := "it runs an older build that cannot answer a read of a seat's memory"
-			missing(node, why)
-			mark(seats, node, why)
-		default:
+		if owner != r.Owner {
 			asked[owner] = seats
 		}
 	}

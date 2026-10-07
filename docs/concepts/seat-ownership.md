@@ -253,12 +253,9 @@ it is the holder and has the seat attached, asks the holding incarnation on an
 ephemeral scatter if a peer is, and answers empty — naming no holder — if no
 node holds the seat, because a copy of unknown age is not the seat's memory. A
 holder that is silent, or still hydrating the seat, is an `unavailable` answer
-rather than an empty one. So is a holder whose build cannot answer at all — the
-asker reads the holding incarnation's advertised
-[features](coordination.md#what-a-node-says-about-itself) first, and a node
-that does not advertise `held_read` is named as an older build at once rather
-than waited on for the whole two-second budget, on every poll, during a rolling
-upgrade. Every node answers for the seats it holds, including a node that
+rather than an empty one — a holder that is draining or whose heartbeat lapsed
+is asked like any other, and its silence is that same answer after the
+two-second budget. Every node answers for the seats it holds, including a node that
 serves no API. The list of every agent's memory (`memory_overview`) follows the
 same rule in one round rather than one per seat: the asker lists every seat
 lease once, reads its own seats from its store, and puts one request on the

@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -45,29 +44,11 @@ func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want
 	return out, nil
 }
 
-// steerFleet answers the steer feature gate.
-type steerFleet struct {
-	lacks bool
-	err   error
-}
-
-func (steerFleet) SeatFeature(context.Context, string, coord.Feature) (bool, error) {
-	return true, nil
-}
-
-func (f steerFleet) AllLiveHave(_ context.Context, feature coord.Feature) (bool, error) {
-	if f.err != nil {
-		return false, f.err
-	}
-	return feature == coord.FeatureSteer && !f.lacks, nil
-}
-
 // steerTool is steer_turn on the operator catalogue, with the actor carrying
 // the operation the caller's transport named for the call — its note's id.
-func steerTool(t *testing.T, asker builtin.FleetAsker, fleet builtin.Fleet, operation string) tools.Callable {
+func steerTool(t *testing.T, asker builtin.FleetAsker, operation string) tools.Callable {
 	t.Helper()
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Fleet: fleet,
 		Steer: builtin.SteerDeps{Asker: asker, Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 			return builtin.Actor{Handle: "founder-token", Kind: tracker.AuthorOperator,
 				Seat: "founder", Operation: operation}, nil
@@ -102,7 +83,7 @@ func TestSteerTurnSendsTheNoteAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
 		AgentHandle: "swe", Status: steer.StatusAccepted}}}
-	res, out := steerCall(t, steerTool(t, asker, steerFleet{}, "r-42"), "run-1", "  use staging  ")
+	res, out := steerCall(t, steerTool(t, asker, "r-42"), "run-1", "  use staging  ")
 	if res.Failed {
 		t.Fatalf("refused: %s", res.Output)
 	}
@@ -136,7 +117,7 @@ func TestNoReplyIsUnknownNotNotRunning(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			res, out := steerCall(t, steerTool(t, asker, steerFleet{}, "r-1"), "run-1", "use staging")
+			res, out := steerCall(t, steerTool(t, asker, "r-1"), "run-1", "use staging")
 			if res.Failed {
 				t.Fatalf("refused %s: %s", res.Refusal, res.Output)
 			}
@@ -157,7 +138,7 @@ func TestSteerTurnRefusesWhatTheRunningNodeRefused(t *testing.T) {
 		steer.StatusUnsupported: tools.RefusalSteerUnsupported,
 	} {
 		asker := &fleetAsker{replies: []steer.Reply{{TurnID: "run-1", AgentHandle: "swe", Status: status}}}
-		res, _ := steerCall(t, steerTool(t, asker, steerFleet{}, "r-1"), "run-1", "use staging")
+		res, _ := steerCall(t, steerTool(t, asker, "r-1"), "run-1", "use staging")
 		if !res.Failed || res.Refusal != want {
 			t.Errorf("%s: answered failed=%v %s (%s), want %s", status, res.Failed,
 				res.Refusal, res.Output, want)
@@ -165,33 +146,10 @@ func TestSteerTurnRefusesWhatTheRunningNodeRefused(t *testing.T) {
 	}
 }
 
-// ASKED NOBODY BEFORE THE FLEET CAN CARRY IT: an older node running the turn
-// would answer nothing, and the person would retry an `unknown` that can never
-// succeed there. An unreadable fleet is `unavailable`, not an upgrade.
-func TestSteerTurnIsGatedOnEveryLiveNode(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		fleet steerFleet
-		want  tools.Refusal
-	}{
-		"a node lacks it":     {steerFleet{lacks: true}, tools.RefusalPeerUpgrading},
-		"the fleet is unread": {steerFleet{err: errors.New("store down")}, tools.RefusalUnavailable},
-	} {
-		asker := &fleetAsker{}
-		res, _ := steerCall(t, steerTool(t, asker, tc.fleet, "r-1"), "run-1", "use staging")
-		if !res.Failed || res.Refusal != tc.want {
-			t.Errorf("%s: answered %s (%s), want %s", name, res.Refusal, res.Output, tc.want)
-		}
-		if len(asker.asked) != 0 {
-			t.Errorf("%s: the note was scattered anyway", name)
-		}
-	}
-}
-
 func TestSteerTurnRefusesABadNote(t *testing.T) {
 	t.Parallel()
 	asker := &fleetAsker{}
-	tool := steerTool(t, asker, steerFleet{}, "r-1")
+	tool := steerTool(t, asker, "r-1")
 	for name, args := range map[string][2]string{
 		"no turn":  {"", "use staging"},
 		"no note":  {"run-1", "   "},
@@ -207,7 +165,7 @@ func TestSteerTurnRefusesABadNote(t *testing.T) {
 	}
 	// The ask itself failing is nothing sent — unavailable, not unknown.
 	failing := &fleetAsker{err: errors.New("no broker")}
-	res, _ := steerCall(t, steerTool(t, failing, steerFleet{}, "r-1"), "run-1", "x")
+	res, _ := steerCall(t, steerTool(t, failing, "r-1"), "run-1", "x")
 	if res.Refusal != tools.RefusalUnavailable {
 		t.Errorf("an ask that could not be made answered %s", res.Refusal)
 	}

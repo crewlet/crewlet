@@ -724,13 +724,6 @@ export function LiveOutput({
           : "No node holds this run right now — it is being recovered by the seat's next owner."}
       </Callout>
     );
-  } else if (answer.outcome === "owner_upgrading") {
-    body = (
-      <Callout variant="info">
-        {answer.node ?? "The node that owns this run"} runs an older build that cannot show a run
-        live. Its output arrives on the run&rsquo;s record when it is collected.
-      </Callout>
-    );
   } else if (answer.outcome === "not_running") {
     body = (
       <span className="t-caption">
@@ -802,8 +795,6 @@ export function liveState(answer: SandboxTailAnswer | null | undefined, failed: 
   switch (answer.outcome) {
     case "owner_silent":
       return "The node that owns this run did not answer.";
-    case "owner_upgrading":
-      return "The node that owns this run cannot show it live.";
     case "not_running":
       return "The run is no longer running.";
     default:

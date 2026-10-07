@@ -3,9 +3,7 @@ package memread_test
 import (
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 )
 
@@ -92,7 +90,6 @@ func TestTheOverviewNamesAHolderThatDidNotAnswer(t *testing.T) {
 	b.remember(t, "pm", "mine", 2)
 	f.hold(t, "swe", "node-c:9")
 	f.hold(t, "pm", b.owner)
-	f.present(t, "node-c:9", coord.FeatureHeldRead)
 	read := f.reader(t, b, "pm")
 
 	got, err := read.Overview(t.Context(), []string{"pm", "swe"})
@@ -117,38 +114,6 @@ func TestTheOverviewNamesAHolderThatDidNotAnswer(t *testing.T) {
 	}
 	if pm := rowOf(t, got, "pm"); pm.DiaryTotal != 2 {
 		t.Errorf("@pm = %+v — one silent holder must not cost the rest", pm)
-	}
-}
-
-// A HOLDER ON AN OLDER BUILD IS NAMED AT ONCE AND NEVER ASKED, as a single read
-// names one.
-func TestTheOverviewNamesAnOlderHolderWithoutAsking(t *testing.T) {
-	t.Parallel()
-	f := newFleet()
-	b := newNode(t, "node-b:1")
-	f.hold(t, "swe", "node-c:9")
-	f.present(t, "node-c:9") // advertises nothing
-	read := f.reader(t, b)
-	read.Budget = 10 * time.Second
-	asks := &counting{Asker: read.Queue}
-	read.Queue = asks
-
-	start := time.Now()
-	got, err := read.Overview(t.Context(), []string{"swe"})
-	if err != nil {
-		t.Fatalf("Overview: %v", err)
-	}
-	if asks.asked != 0 {
-		t.Errorf("asked the broker %d times — a build that cannot answer is not asked", asks.asked)
-	}
-	if took := time.Since(start); took > 2*time.Second {
-		t.Errorf("took %s — the answer is known without waiting", took)
-	}
-	if swe := rowOf(t, got, "swe"); !strings.Contains(swe.Unavailable, "older build") {
-		t.Errorf("@swe = %+v, want it named as held on an older build", swe)
-	}
-	if got.Coverage.Complete {
-		t.Error("coverage complete with node-c unable to answer")
 	}
 }
 

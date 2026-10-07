@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -2135,13 +2134,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 // carrying this fleet-wide is that an operator can see where the work
 // actually is right now.
 func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
-	// FEATURES FIRST and unconditionally: they are what this BUILD honours,
-	// fixed at compile time, so no read below can change them. The MCP rows
-	// are this process's own record of what it started, read under a lock
-	// and never from a child.
+	// The MCP rows are this process's own record of what it started, read
+	// under a lock and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt,
-		Features:  slices.Clone(coord.Features),
 		MCP:       e.mcpStatus(),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {

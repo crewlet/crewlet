@@ -372,30 +372,11 @@ While both builds are live, only the older nodes charge anything, so only their 
 
 ## What a node says about itself
 
-Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture, when it started, how far its replicated state has come up — and two things a peer acts on rather than just displays:
+Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture, when it started, how far its replicated state has come up — and one thing a peer acts on rather than just displays:
 
-- **`features`** — the gestures this node's *build* can carry out on a peer's behalf. It is fixed at compile time, and a name joins it only in the build that implements it. This build advertises:
-  - `mcp_status` — the `mcp` rows below are complete, so an empty list means "started none".
-  - `answer_run_by_turn` — it takes an [answer by turn](code-sandbox.md#answering-a-parked-run) off a seat's inbox and hands it to the parked run it names; an older build would run it as a turn about nothing.
-  - `seat_pause` — it [honours a pause](agent-runtime.md#pausing-a-seat): it holds a paused seat's mail, takes that hold again before attaching a paused seat it acquires, skips its schedules and stops a turn a pause asked to stop. An older build would do none of it, so a pause is refused until every live node carries it.
-  - `steer` — it answers a [note to a turn it runs](turn-engine.md#steering-a-running-turn) and hands it to that turn's next round. An older build serves no such subject, so a note to its turns would be answered by nobody; a note is refused until every live node carries it, because which node runs the turn is not known until one answers.
-  - `held_read` — it answers a read of a [seat's memory and conversation ledger](seat-ownership.md) for the seats it holds. The read is asked of the HOLDER alone, since it is addressed to the incarnation the seat's lease names, so a seat held by an older build is answered `unavailable` at once, naming that node's build, rather than after a two-second wait for a reply that cannot come.
-  - `sandbox_tail` — it answers a request for the [live output of a coding run it owns](code-sandbox.md#watching-a-run-live). The request is asked of the run's OWNER alone, so a run owned by an older build is answered `owner_upgrading` at once rather than `owner_silent` after the whole budget.
-- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances started and how many did not, how many tools one serves, and one failure's reason (clipped to 240 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A child that dies after starting is not observed here; its next call fails and says so.
+- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances started and how many did not, how many tools one serves, and one failure's reason (clipped to 240 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A status with no rows is a node that started none. A child that dies after starting is not observed here; its next call fails and says so.
 
-Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero.
-
-### Why a gesture asks the fleet first
-
-Some gestures are accepted by one node and carried out by another: a person pauses a seat through whichever node serves their dashboard, and the node *holding* the seat is the one that has to stop taking its mail. Mid-upgrade that node may run a build that has never heard of the gesture — it would not refuse it, it would simply never do it. So before such a gesture is written it is checked against the heartbeats, and the answer is three-valued:
-
-| The fleet says | The gesture |
-|---|---|
-| every node that could carry it out advertises the feature | goes ahead |
-| one of them runs a build without it (a status with no such feature) | refused **`peer_upgrading`** — nothing to retry until the upgrade reaches that node |
-| the store could not be read, a node published no status, the seat's holder has no presence (it is draining), or no node is live | refused **`unavailable`** — a retry may well clear it |
-
-A gesture only the seat's holder carries out asks about the node whose process holds the seat lease — matched by process incarnation, so a node that restarted since does not answer for its predecessor — and one every future holder must respect asks about every live node. A seat nobody holds is answered for every live node, since any of them may claim it next.
+Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero. A key in the status this build does not know is ignored rather than refused, so a newer build sharing the fleet can publish what it adds without the older reader losing the node's status.
 
 ---
 

@@ -410,10 +410,6 @@ stateDiagram-v2
   standup held behind a week's pause would otherwise run once for every day of
   it. See [Scheduling](scheduling.md).
 
-A pause is refused `peer_upgrading` while any live node runs a build that
-cannot carry it: any of them may be the next to hold the seat. See
-[Coordination](coordination.md#what-a-node-says-about-itself).
-
 ### Steering a running turn
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn

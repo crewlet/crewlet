@@ -53,7 +53,6 @@ const (
 	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalUnavailable        = mcp.RefusalUnavailable
-	RefusalPeerUpgrading      = mcp.RefusalPeerUpgrading
 )
 
 // The tool-origin grammar: who put a tool in front of the agents.
