@@ -18,7 +18,8 @@ import (
 // duplicateNamesRevision is a stored company that breaks both admission rules
 // and none of the runnable ones: two units called "Platform" in different
 // departments, each with a seat called "Engineer" on its own explicit handle.
-// A build before those rules admitted it, and it runs.
+// A newer peer may admit it under rules this build does not share, and it
+// runs.
 var duplicateNamesRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["${K}"]}}},
   "units":[

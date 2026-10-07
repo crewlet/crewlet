@@ -184,11 +184,12 @@ type restorer struct {
 // document, at any depth, by identity.
 //
 // AN IDENTITY THAT IS EMPTY OR NOT UNIQUE IS NOT IN THE INDEX. Two units
-// called "Platform" in a prior (empty, or shared by two members) are two
-// members with no identity between them: picking either hands one team's
-// credentials to the other, and so does falling back to position. Left out,
-// their masks stay standing and validation names the field, which is the one
-// outcome that invents nothing.
+// called "Platform" in a prior — an identity shared by two members, as an
+// empty one is shared by every member without one — are two members with no
+// identity between them: picking either hands one team's credentials to the
+// other, and so does falling back to position. Left out, their masks stay
+// standing and validation names the field, which is the one outcome that
+// invents nothing.
 func indexDocumentWide(prior reflect.Value) map[reflect.Type]map[string]reflect.Value {
 	seen := map[reflect.Type]map[string]reflect.Value{}
 	ambiguous := map[reflect.Type]map[string]bool{}

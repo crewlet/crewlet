@@ -138,8 +138,8 @@ func TestReloadAndRevertRefuseARevisionThisBuildCannotRun(t *testing.T) {
 
 // duplicateNamesDoc breaks both admission rules and no runnable one: two units
 // called "Platform" in different departments, each holding a seat called
-// "Engineer" on its own explicit handle. A build before those rules admitted
-// it, and a company running on it runs.
+// "Engineer" on its own explicit handle. A newer peer may admit it under
+// rules this build does not share, and a company running on it runs.
 const duplicateNamesDoc = companyDoc + `
 units:
   - name: Engineering
