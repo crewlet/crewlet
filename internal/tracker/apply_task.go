@@ -51,10 +51,11 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// history row below is still written, because a record that
 		// produced no object change is still something that happened —
 		// and its own guard makes THAT idempotent.
-		// NO DELTAS: this record changed no document, so there is
-		// nothing for the history row to say moved.
+		// NO COMPARISON: the document this record would have moved is
+		// already its successor's, so what the row says moved is the
+		// writer's own statement — see [statedDeltas].
 		history, werr := a.writeHistory(ctx, tx, c,
-			subjectKeys{Project: current.Project, Key: current.Key}, nil)
+			subjectKeys{Project: current.Project, Key: current.Key}, statedDeltas(c))
 		if werr != nil {
 			return 0, werr
 		}

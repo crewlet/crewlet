@@ -65,66 +65,29 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 		late = boolInt(notify.Late)
 	}
 	// THE KIND IS THE RECORD'S OWN, and it is a different fact from
-	// whether anybody was told.
-	//
-	// It used to be the NOTIFICATION's, which made the feed's vocabulary a
-	// property of whether the change had an audience: the same catalogue
-	// edit filed as `catalogue_updated` when somebody heard about it and
-	// as `patch` when nobody did — and a quiet purge as `purge`, which is
-	// not a [ChangeKind] at all, so `kinds=purged` could never find it.
-	// See [MutationRecord.Kind].
-	//
-	// The ladder has three rungs and each one is reachable. The record's
-	// own kind is what this build's writers state. The notification's is
-	// what a record from the build BEFORE this field carries, which a
-	// rolling upgrade makes ordinary traffic. And [fallbackKind] is for a
-	// record from that same older build that was quiet — the only case
-	// where nothing on the record says what it did, and a guess from the
-	// operation is all there is.
+	// whether anybody was told: the same catalogue edit is
+	// `catalogue_updated` whether or not somebody heard about it, and a
+	// quiet purge is `purged`. The writer states it on every record that
+	// writes a history row, and [checkChangeKind] refuses one that does
+	// not, so it is stored verbatim — a kind a newer peer's writer
+	// introduced included, which every node then stores identically rather
+	// than replacing it with a guess of its own. See [MutationRecord.Kind].
 	kind := string(c.record.Kind)
-	switch {
-	case c.record.Kind.Valid():
-	case notify != nil:
-		kind = string(notify.Kind)
-	default:
-		kind = string(fallbackKind(applied, c.record.Op))
-	}
-	// THE DELTAS ARE THE APPLIER'S, on every commit, loud or quiet.
+	// THE DELTAS ARE THE APPLIER'S, on every commit, loud or quiet, and
+	// nobody else's — see deltas.go. A record whose apply moved nothing
+	// stores `{}`, the column's one spelling of "nothing moved", even when
+	// its wake says otherwise: the wake is built from the snapshot the
+	// writer's tool read OUTSIDE the write's transaction, so a change
+	// another writer had already made reads there as a move this record
+	// is about to make and here as no move at all. Storing the wake's
+	// claim recorded a {from,to} this apply never made, beside the row of
+	// the record that did make it.
 	//
-	// They used to be the NOTIFICATION's, which made "what changed" a
-	// property of what was ANNOUNCED: a quiet status change wrote `{}`
-	// here and produced no span, so every report derived from the spans
-	// silently omitted it. The two are the same function of the same two
-	// documents — see [TaskDeltas] — so nothing is lost by taking the
-	// applier's, and what is gained is that a record nobody was told
-	// about is still a record of what happened.
+	// The one caller with no comparison of its own passes the record's own
+	// statement in explicitly ([statedDeltas]); nothing here falls back to
+	// it.
 	if len(applied) > 0 {
 		fields = jsonOf(applied)
-	} else if notify != nil && len(notify.Fields) > 0 {
-		// THE RECORD'S OWN STATEMENT, wherever the apply found nothing
-		// to compare — AND ONLY WHEN IT HAS ONE.
-		//
-		// The length guard is what keeps this column to ONE spelling of
-		// "nothing moved". [TaskDeltas] returns a NIL map when no field
-		// moved, `jsonOf` is `json.Marshal`, and a nil map marshals to
-		// the literal `null` — so on `notify != nil` alone every loud
-		// commit that moved nothing (a comment, an ask, a purge wake, a
-		// late repair) stored `null` here while every other row stored
-		// `{}`. Both read as empty and neither breaks a reader, which
-		// is exactly why it went unnoticed: two spellings of one fact
-		// in one column, waiting for the first query that compares
-		// them.
-		//
-		// The comment that stood here claimed "a comment, a mention or
-		// an ask carries fields no document comparison can produce",
-		// and that was never true: a comment's wake builds its deltas
-		// with [TaskDeltas] like every other, so this branch can carry
-		// no key the one above could not. What it is actually for is a
-		// record whose notification was built by a DIFFERENT build —
-		// the only way the two sets can differ — and a retired kind is
-		// gated before it ever reaches an apply, so on a current build
-		// the two agree or both are empty.
-		fields = jsonOf(notify.Fields)
 	}
 
 	// THE SEAT BEHIND THE TOKEN, only from a record whose version says
@@ -539,6 +502,24 @@ func historyID(c applyContext) string {
 	return fmt.Sprintf("%s#%d", c.position.Stream, c.packed)
 }
 
+// statedDeltas is the record's WRITER'S account of what it moved — its wake's
+// fields — for the one apply that has no comparison of its own.
+//
+// That apply is a record the version guard skipped: one reprocessed below a
+// successor this node has already applied, because it was deferred here (a
+// newer peer's record this build could not read until it could). The document
+// it would have compared against is gone, replaced by its successor's, and a
+// delta computed against that successor would name a move this record never
+// made — so the writer's own statement is the only account there is. A plain
+// redelivery takes the same branch and stores nothing, since its history row
+// is already written (`ON CONFLICT (id) DO NOTHING`).
+func statedDeltas(c applyContext) map[string]Delta {
+	if c.record.Notify == nil {
+		return nil
+	}
+	return c.record.Notify.Fields
+}
+
 // batchOf answers the batch id or nil, so the column distinguishes "not part
 // of a batch" from "part of a batch with an empty name".
 func batchOf(rec MutationRecord) any {
@@ -546,64 +527,4 @@ func batchOf(rec MutationRecord) any {
 		return nil
 	}
 	return *rec.BatchID
-}
-
-// fallbackKind is what a record that names no kind and carries no notification
-// is filed under.
-//
-// # It is the compatibility rung, and it used to be the ordinary one
-//
-// Every record this build writes states its own kind ([MutationRecord.Kind]),
-// so this is reached only for a record an older build wrote QUIETLY — which a
-// rolling upgrade makes real traffic for as long as one takes, and never
-// after. It stays for exactly that window and is the only thing that can ever
-// read such a row.
-//
-// BY WHAT MOVED, in a fixed precedence, because the kind is what every feed
-// filter selects on. The order puts `status` first for the same reason the
-// spans read the delta: it is the change other tables are derived from.
-//
-// # AND IT ANSWERS ONLY IN [ChangeKind]s, which is the half that was wrong
-//
-// It used to end at `ChangeKind(op)` — the OPERATION, cast. That is a
-// different vocabulary: `patch`, `tombstone`, `restore` and `purge` are
-// [OpKind]s, none of them is a valid [ChangeKind], and three of them are
-// near-misses of one (`removed`, `restored`, `purged`). So a quiet removal
-// filed as `tombstone` and `kinds=removed` did not find it — a filter looking
-// at the right word for a row written under the wrong one, with nothing on
-// either side to say so.
-func fallbackKind(applied map[string]Delta, op OpKind) ChangeKind {
-	switch op {
-	case OpCreate:
-		// A CREATE IS A CREATE, whatever it set on the way in: every
-		// field moves from empty on a create, so deciding by what moved
-		// would file every new task under the first field in the
-		// precedence.
-		return ChangeCreated
-	case OpTombstone:
-		return ChangeRemoved
-	case OpRestore:
-		return ChangeRestored
-	case OpPurge:
-		return ChangePurged
-	}
-	for _, moved := range []struct {
-		field string
-		kind  ChangeKind
-	}{
-		{"status", ChangeStatus},
-		{"assignee", ChangeAssignee},
-		{"project", ChangeMoved},
-		{"priority", ChangeFields},
-		{"title", ChangeFields},
-		{"type", ChangeFields},
-		{"tags", ChangeFields},
-	} {
-		if _, changed := applied[moved.field]; changed {
-			return moved.kind
-		}
-	}
-	// A PATCH THAT MOVED NOTHING THIS LIST NAMES IS A FIELD EDIT, which
-	// is both true and nameable — where the operation was neither.
-	return ChangeFields
 }

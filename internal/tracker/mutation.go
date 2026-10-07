@@ -979,12 +979,8 @@ type MutationRecord struct {
 	//
 	// REQUIRED exactly where [ObjectKind.RecordsHistory] is true, and
 	// refused everywhere else — a barrier, a turn or a rank order writes
-	// no row for a kind to describe. [Writer.decide] enforces both.
-	//
-	// EMPTY ON A RECORD AN OLDER BUILD WROTE, which a rolling upgrade
-	// makes ordinary traffic: the applier falls back to [fallbackKind]
-	// there, which is the same guess as before with its invalid answers
-	// removed.
+	// no row for a kind to describe. [Writer.decide] enforces both, and
+	// the applier stores it verbatim.
 	Kind ChangeKind `json:"kind,omitempty"`
 
 	// Notify is the routing snapshot, and NIL is what "wakes nobody"

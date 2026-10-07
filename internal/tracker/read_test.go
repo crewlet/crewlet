@@ -125,6 +125,7 @@ func TestArchivingAProjectHidesItsTasksWithoutRewritingThem(t *testing.T) {
 			Subject: tracker.ProjectSubject("ENG"), Op: tracker.OpCreate,
 			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
 		},
+		Kind: tracker.ChangeProjectCreated,
 		Mutation: mustJSON(tracker.Project{
 			V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
 		}),

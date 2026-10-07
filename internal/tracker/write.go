@@ -1573,10 +1573,8 @@ func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
 // and a purge: those are the same operation on different subjects, and the
 // operation is all the applier has.
 //
-// It used to guess, from the operation and the moved fields, whenever a record
-// carried no [Notify]. The guess is still there for records an older build
-// wrote ([fallbackKind]) and it is no longer allowed to answer with a
-// non-[ChangeKind]; but a build that can state the fact states it.
+// The applier stores the kind verbatim and guesses nothing, so a record
+// reaching it without one is refused here, where the fact is known.
 //
 // THE THIRD RULE IS THE ONE WORTH THE FUNCTION: when a record carries both a
 // kind and a notification, they must AGREE. One fact with two carriers is one

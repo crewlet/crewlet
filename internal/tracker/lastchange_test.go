@@ -408,6 +408,7 @@ func seedApplyProject(t *testing.T, h *applyHarness) {
 			Subject: tracker.ProjectSubject("ENG"), Op: tracker.OpCreate,
 			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
 		},
+		Kind:     tracker.ChangeProjectCreated,
 		Mutation: body,
 	}, time.Unix(1_700_000_050, 0).UTC()); err != nil {
 		t.Fatalf("seed the project: %v", err)

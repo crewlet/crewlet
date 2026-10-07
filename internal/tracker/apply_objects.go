@@ -67,13 +67,14 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 		}
 	} else {
 		// THE VERSION GUARD SKIPPED THIS RECORD, so it wrote no
-		// document and moved no field. [Applier.applyTask] says the
-		// same thing on its own redelivery branch: the history row is
-		// still written, because a record that produced no object
-		// change is still something that happened — and a delta
-		// computed against a document a NEWER record has already
-		// replaced would name a move this record never made.
-		moved = nil
+		// document. [Applier.applyTask] says the same thing on its own
+		// redelivery branch: the history row is still written, because
+		// a record that produced no object change is still something
+		// that happened — and a delta computed against a document a
+		// NEWER record has already replaced would name a move this
+		// record never made, so the row takes the writer's own
+		// statement instead ([statedDeltas]).
+		moved = statedDeltas(c)
 	}
 	// A PROJECT, A VIEW OR A PERSON — none of which has an item key or a
 	// containing project, so both are honestly empty.
