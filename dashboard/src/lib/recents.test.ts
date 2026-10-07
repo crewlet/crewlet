@@ -110,9 +110,9 @@ describe("a store that will not cooperate", () => {
         // A ROW WITH NO WORKSPACE is not one this build writes, and one the
         // palette has no hint for.
         { path: ["work", "ENG-0"], label: "ENG-0" },
-        // A ROUTE THIS BUILD DOES NOT HAVE, which a row outlives: drawn, it
-        // would lead to Not Found for ever.
-        { path: ["activity", "turns"], label: "Turns", workspace: "activity" },
+        // A PATH THE ROUTE TABLE DOES NOT RESOLVE: drawn, it would lead to
+        // Not Found for ever.
+        { path: ["nowhere"], label: "Nowhere", workspace: "work" },
         { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" },
       ]),
     );

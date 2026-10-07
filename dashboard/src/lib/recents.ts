@@ -129,9 +129,11 @@ function valid(row: unknown): row is Recent {
     // hint for — see [Recent.workspace]. Dropped.
     typeof r.workspace === "string" &&
     r.workspace !== "" &&
-    // A PATH THE ROUTE TABLE NO LONGER HAS IS DROPPED ON READ. Storage
-    // outlives every build: a row kept before a route moved would be drawn
-    // as a row that leads to Not Found, forever, with nothing to say why.
+    // A PATH THE ROUTE TABLE DOES NOT RESOLVE IS DROPPED ON READ. Storage at
+    // this origin is untrusted input — editable, and not written only by this
+    // tab's gestures — and such a path would be drawn as a row that leads to
+    // Not Found, forever, with nothing to say why. This build never stores
+    // one: Shell remembers no Not Found page.
     resolves(r.path)
   );
 }

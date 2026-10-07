@@ -84,9 +84,12 @@ function valid(row: unknown): row is Star {
     r.path.every((p) => typeof p === "string") &&
     typeof r.label === "string" &&
     typeof r.at === "number" &&
-    // A PATH THE ROUTE TABLE NO LONGER HAS IS DROPPED ON READ. Storage
-    // outlives every build: a row kept before a route moved would be drawn
-    // as a row that leads to Not Found, forever, with nothing to say why.
+    // A PATH THE ROUTE TABLE DOES NOT RESOLVE IS DROPPED ON READ. Storage at
+    // this origin is untrusted input — editable, and not written only by this
+    // tab's gestures — and such a path would be drawn as a row that leads to
+    // Not Found, forever, with nothing to say why. This build never stores
+    // one: Shell skips a Not Found page and the star is offered only where
+    // the path resolves.
     resolves(r.path)
   );
 }
@@ -222,8 +225,8 @@ export function useToggleStar(): (entry: Omit<Star, "at">) => "starred" | "unsta
  * Test seam: drop the in-process cache so a fresh read hits storage.
  *
  * IT DOES NOT CLEAR STORAGE, which is the whole point of having it: a test
- * that seeds `crewlet_starred` with what a previous build wrote calls this to
- * make the module read that, and a reset that also emptied the key would
+ * that seeds `crewlet_starred` with a stored value calls this to make the
+ * module read that, and a reset that also emptied the key would
  * delete the fixture it was called to load. A clean slate is
  * `localStorage.clear()` beside it — one line, in the caller's own
  * `beforeEach`, where the rest of that caller's storage is cleared too.
