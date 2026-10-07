@@ -397,7 +397,7 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // every such row inflated her unread count. It is also what
 // `work_routing`'s `nobody` has always claimed of this table: "every
 // candidate was the actor" — which was true of the wake and false of the
-// rows. Rows written before this rule are removed by [rederiveOwnNotices].
+// rows.
 //
 // The retention horizon is applied AROUND the candidate computation rather
 // than inside it, which is what keeps that function free of a clock: a record

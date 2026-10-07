@@ -552,38 +552,18 @@ inside the deferral grace.
 ### Values the engine computes are recomputed once
 
 Some columns are not copied out of any record but computed from the history a
-node already holds — how often a task was reopened, for example. When a build
-adds such a column or changes how one is computed, its first boot recomputes it
-from the rows it holds, in the same transaction that records which rules the
-rows now follow, before it applies anything new. It happens once per change,
-on every node, including a node that just adopted a snapshot from a peer on a
-different build; the `statelog_rederived` log line names the domain, the rule
-versions it moved between and how many rows it wrote. The tracker's first such
-column is a task's `reopens`, recomputed from its history rows the first time a
-build that counts it boots.
-
-The second is a person's inbox positions. An earlier build stored how far a
-person had read as a bare sequence number, dropping the generation, and kept
-each read, unread or snoozed mark at whatever position the caller sent. The
-first boot of a build that stores them in full rewrites every person's row
-from what the node already holds: how far they have read comes from the change
-record that last wrote the row, and each mark's position from the history row
-of the notice it names. Where that last record had itself already lost the
-generation, the node has nothing truer to recover, and the person's next
-"read through here" restores it.
-
-The third is a project's count of **started** work (`task_counts.active`),
-which splits what used to be one "open" number into work waiting and work in
-progress. The first boot of a build that keeps it counts each project's tasks
-in the `active` status group, removed ones excluded, and the task apply keeps
-the number from then on.
-
-The fourth is the **hand-off count on each history row** — how many times
-agents had handed the task on as of that change, which is what lets an item's
-history say "hand-off 3 of 8". The count is the value the change's own record
-states when it moved it, or the one the row before it holds, so the first boot
-of a build that keeps it walks every task's history in log order and fills
-every row, and the apply carries it forward from then on.
+node already holds: in the tracker, how often a task was reopened (`reopens`),
+how much of a project's open work has been started (`task_counts.active`), the
+hand-off count on each history row, and when a task last changed
+(`updated_at`). The apply maintains each one as it goes. When the rules that
+compute them differ from the ones a node's rows were derived under — a build
+that adds such a column or changes how one is computed, a node that just
+adopted a snapshot from a peer on a different build, or a checkpoint a reanchor
+created — the node's next boot recomputes them from the rows it holds, in the
+same transaction that records which rules the rows now follow, before it
+applies anything new. It happens once per change, on every node; the
+`statelog_rederived` log line names the domain, the rule versions it moved
+between and how many rows it wrote.
 
 ## Two compacted domains: the embeddings and each node's day
 

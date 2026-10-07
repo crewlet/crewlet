@@ -74,7 +74,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// `updated_at` and no later record moved it, so every list's Updated
 	// column and its "recently updated" order read the day a task was FILED,
 	// however much had happened to it since. See [restampUpdated] for the
-	// same rule over rows a build without it wrote.
+	// same rule re-derived over every row.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	updated, err := effectiveAt(ctx, tx, id, c)
 	if err != nil {

@@ -270,11 +270,12 @@ func TestAReopenIsCountedOnlyWhenFinishedWorkIsUnfinished(t *testing.T) {
 
 // THE BACKFILL EQUALS THE REPLAY.
 //
-// A build that adds a derived column meets rows written without it, and fills
-// them by re-deriving from the history rows. The column is only fleet-identical
-// if what the re-derivation computes is exactly what the incremental rule
-// would have reached by applying the same records — so rows zeroed as a
-// predecessor left them must come back to the value the replay wrote.
+// A node whose checkpoint's rule set differs from this build's — a cursor a
+// reanchor created at derivation 0, or a later rule set — re-derives its
+// columns from the history rows. The column is only fleet-identical if what the
+// re-derivation computes is exactly what the incremental rule would have
+// reached by applying the same records — so zeroed rows must come back to the
+// value the replay wrote.
 func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -309,7 +310,7 @@ func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 		t.Fatalf("the replay counted %v, want t-1=2 t-2=0 t-3=1", replayed)
 	}
 
-	// THE PREDECESSOR'S ROWS: the column as a build without it left it.
+	// ROWS A DIFFERENT RULE SET DERIVED: the column at zero.
 	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE tracker_tasks SET reopens = 0`); err != nil {
 			return err
@@ -322,8 +323,8 @@ func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 	for id, want := range replayed {
 		if got := r.taskSpend(id)["reopens"]; got != want {
 			t.Errorf("%s re-derives to %d reopens and the replay counted %d — a "+
-				"node upgrading onto old rows would disagree with one that applied "+
-				"them", id, got, want)
+				"re-derived node would disagree with one that applied them",
+				id, got, want)
 		}
 	}
 	if tracker.DerivationVersion < 1 {
