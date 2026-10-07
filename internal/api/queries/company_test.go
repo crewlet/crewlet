@@ -425,9 +425,9 @@ func TestFleetReadsTheLeaseTable(t *testing.T) {
 
 // EACH NODE ROW SAYS WHAT ITS BROKER IS, off the node's own presence: a member,
 // a leaf or a client — and `unknown` for a presence that does not say or names
-// a kind this build does not know. Never an empty cell, and never a guess from the roles,
-// which no longer imply it: a capacity seal counts an unknown as a member, and
-// the Nodes screen marks it for that reason.
+// a kind this build does not know. Never an empty cell, and never a guess
+// from the roles, which no longer imply it: a capacity seal counts an unknown
+// as a member, and the Nodes screen marks it for that reason.
 func TestFleetSaysWhatEachNodesBrokerIs(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
