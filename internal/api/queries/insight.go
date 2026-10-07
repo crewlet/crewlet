@@ -99,10 +99,9 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		"work_key": key,
 		"attempts": siblings,
 		"events":   records,
-		// SAYS WHAT IS MISSING, exactly as `trace` does. Additive, so a
-		// client that predates the field is unaffected — and one that has it
-		// can say the gap is the middle rather than warning that the page
-		// cannot answer its own headline question.
+		// SAYS WHAT IS MISSING, exactly as `trace` does, so a client can say
+		// the gap is the middle rather than warning that the page cannot
+		// answer its own headline question.
 		"truncated": truncated,
 		"trace_ids": traces,
 		// WHICH NODES THE TURN WAS ASSEMBLED FROM. A node that did not

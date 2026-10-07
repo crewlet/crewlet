@@ -190,9 +190,8 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	// BEFORE THE BODY, so a name the grammar cannot reference is refused
 	// without moving 64 KiB of credential through the process first. Only
-	// the write checks: an out-of-grammar row that already exists must
-	// stay readable and, above all, removable, so get and delete take the
-	// name as given.
+	// the write checks: a name outside the grammar names no row, so a read
+	// of one answers not_found and a delete answers removed:false.
 	if err := secrets.CheckName(name); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":  "invalid_name",

@@ -365,8 +365,8 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	comments := detail.Comments
 	if comments == nil {
 		// AN EMPTY THREAD IS A LIST, never an absent key: a screen
-		// drawing "no comments yet" from a missing field cannot tell it
-		// from an older node that does not answer the question.
+		// drawing "no comments yet" from a missing field cannot tell an
+		// empty thread from an answer that failed to carry one.
 		comments = []tracker.Comment{}
 	}
 	out := map[string]any{

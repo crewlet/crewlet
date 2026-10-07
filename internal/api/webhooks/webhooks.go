@@ -560,13 +560,11 @@ func providerKey(d delivery) string {
 // the audit log — readable by everyone who can read an event, and impossible
 // to un-write.
 //
-// `x-gitlab-token` is that, and it is here because of what put it there. The
-// provisioner registered the minted signing key in GitLab's plaintext
-// `token` attribute rather than `signing_token`, so GitLab echoed a 32-byte
-// HMAC key back on every single delivery — and it was copied verbatim into
-// the stored headers. The provisioning bug is fixed and this engine no longer
-// sets that field, but the header must be redacted regardless: a hook created
-// by an older version still carries the old value and still sends it.
+// `x-gitlab-token` is that. GitLab sends a hook's plaintext secret token
+// verbatim in this header whenever one is set — by hand, by another tool, or
+// by a provisioner that used `token` rather than `signing_token` — so it is a
+// secret at rest the moment it is stored. This engine's provisioner sets
+// `signing_token` only, and the route never authenticates on this header.
 //
 // SIGNATURE headers are deliberately NOT redacted, and the reason is not the
 // one that used to be written here. It said "a transport re-verifies against

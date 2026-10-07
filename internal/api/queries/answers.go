@@ -1129,7 +1129,6 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	// SAYS WHEN IT CUT. A trace stops at store.MaxTraceEvents — and one
 	// shown short with no note reads as a complete causal chain that simply
 	// ends, which is the one thing a reader must not conclude from it.
-	// Additive, so a client that predates the field is unaffected.
 	//
 	// ASKED, NOT INFERRED: each node counts what it holds when its read
 	// filled (see internal/eventfan), because a trace of exactly the cap
