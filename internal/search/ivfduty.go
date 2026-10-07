@@ -165,13 +165,13 @@ func (s IndexState) Stale() int { return s.Sources - s.Filed }
 // DecideIndex is the step a tick takes: a pure function of what it read.
 //
 // IN THIS ORDER, and each case is why the next one can assume what it does: a
-// node behind the log takes no step at all; an index in another embedding space is no
-// index; a verdict that the corpus was too small is revisited the moment it
-// is not; a corpus that moved by [IVFRetrainFactor] is re-derived whatever else
-// is true, because the probe count was measured at another size; a live index
-// with unfiled rows finishes its rollout before anything judges its lists; only
-// a fully filed index has list sizes worth judging; and only a balanced one is
-// worth re-measuring.
+// node behind the log takes no step at all; an index in another embedding
+// space is no index; a verdict that the corpus was too small is revisited the
+// moment it is not; a corpus that moved by [IVFRetrainFactor] is re-derived
+// whatever else is true, because the probe count was measured at another
+// size; a live index with unfiled rows finishes its rollout before anything
+// judges its lists; only a fully filed index has list sizes worth judging; and
+// only a balanced one is worth re-measuring.
 func DecideIndex(s IndexState, model string, dim int) IndexAction {
 	if s.Behind {
 		return IndexKeep
