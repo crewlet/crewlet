@@ -207,10 +207,9 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	// context block sends the reader to get_work_item — none of which is
 	// true of a person's priority list.
 	//
-	// AN ABSENT KEY IS A TASK, which is what keeps a record written by an
-	// older build rendering exactly as it did: this metadata arrived with
-	// the non-task wakes, and a rolling upgrade puts records without it on
-	// the wire in both directions.
+	// A TASK IS THE DEFAULT FRAME: every other object kind names itself in
+	// `object`, which the parser always sets — so a wake built without the
+	// key, by hand rather than by the parser, renders as a task.
 	if kind := ObjectKind(meta[MetaObject]); kind != "" && kind != KindTask {
 		return buildObjectPrompt(kind, n, parties)
 	}

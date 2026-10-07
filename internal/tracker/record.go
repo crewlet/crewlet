@@ -719,12 +719,9 @@ type TaskPatch struct {
 	// walk whose holder died.
 	//
 	// MergeReparent rides the same append and says what that walk is for.
-	// TWO FIELDS RATHER THAN ONE RESHAPED VALUE because the record is a
-	// payload two builds share across a rolling upgrade, and evolution
-	// there is additive-only: an older node reading a newer merge mark
-	// ignores the intent and clears the marker, which is what it did
-	// before this existed. The applier clears it whenever the marker goes
-	// down, so the pair cannot drift into "not merging, but re-parenting".
+	// The two are set by one append, and the applier clears the intent
+	// whenever the marker goes down, so the pair cannot drift into "not
+	// merging, but re-parenting".
 	Merging       *bool `json:"merging,omitempty"`
 	MergeReparent *bool `json:"merge_reparent,omitempty"`
 

@@ -384,9 +384,9 @@ func (w *Writer) origin() *Origin {
 // signing it `founder`: one gesture with two different correct answers, rather
 // than one answer used for both.
 //
-// The actor answered both, so a bound founder grew a SECOND person record
-// under their credential's name — reachable only through [readPartyRecord]'s
-// fallback, and invisible to somebody who also had a record under their seat.
+// An UNBOUND token's writes key on the credential, since there is no seat to
+// key them on — and binding the token later leaves that record under the
+// credential's name, reachable only through [readPartyRecord]'s fallback.
 func (w *Writer) Record() string {
 	if w == nil {
 		return ""

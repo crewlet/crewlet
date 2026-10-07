@@ -689,9 +689,10 @@ func TestThePrioritiesFilterAnswersForEitherIdentity(t *testing.T) {
 	r := newRoundTrip(t)
 	assign(t, r, "t-1", "jane-founder")
 
-	// A LIST WRITTEN BEFORE THE BINDING KEYED THE WRITE ON THE SEAT, which
-	// is the state every company that ran an earlier build is in and the
-	// only thing the alias is still for.
+	// A LIST WRITTEN WHILE THE TOKEN WAS UNBOUND — a writer with no seat,
+	// so the write is keyed on the credential — and then the token bound
+	// to `jane-founder` in `contact.crewlet_operator_id`: the state the
+	// alias exists for.
 	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
 		OperatorID: "founder",
 	})

@@ -727,9 +727,9 @@ func collapseNotices(read []InboxNotice) []InboxNotice {
 
 // reasonRank is a reason's place in [Reasons], which IS the precedence.
 //
-// A reason this build does not know ranks LAST rather than first: an older
-// node's row is a fact about a company running two builds, and a value nothing
-// can order must not be allowed to outrank one that can be.
+// A reason this build does not know (a row a newer build's applier wrote, which
+// reaches this node in a newer donor's snapshot) ranks LAST rather than first:
+// a value nothing here can order must not outrank one that can be.
 func reasonRank(reason Reason) int {
 	if i := slices.Index(Reasons, reason); i >= 0 {
 		return i
