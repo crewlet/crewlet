@@ -527,7 +527,7 @@ func TestATurnTheBudgetEndedStillGetsItsCard(t *testing.T) {
 	if err := m.Record(t.Context(), 150, time.Now()); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	if m.Held() == nil {
+	if m.Held(t.Context()) == nil {
 		t.Fatal("the meter holds nothing; this case asserts nothing")
 	}
 	tel := dispatchTel(&nativeItem)

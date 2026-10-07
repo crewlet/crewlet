@@ -369,7 +369,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		// already past its ceiling — and again once its brief is built,
 		// since building it can be what fills the window
 		// ([Runner.executeAsAgentRun]).
-		if err := toolloop.Refusal(r.cfg.Budget); err != nil {
+		if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
 			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 		}
 		return r.executeAsAgentRun(ctx, round, notes, history)
@@ -1156,7 +1156,7 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 	// no judge, costs nothing, and its own reason is the truer account of
 	// why the phase was not extended.
 	if asks, _ := policy.ShouldAsk(req.RoundsUsed); asks && r.cfg.Judge != nil {
-		if refused := toolloop.Refusal(r.cfg.Budget); refused != nil {
+		if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
 			log.WarnContext(ctx, "extension_judge_over_budget", "phase", ph,
 				"iteration", iteration, "tokens", 0, "error", refused.Error(),
 				"detail", "the budget had already refused this turn, so the judge was not called")

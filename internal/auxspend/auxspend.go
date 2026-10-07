@@ -123,7 +123,11 @@ type Budget interface {
 	// Held is the refusal every further charge of the turn is certain to
 	// meet, or nil. Asked before a call is made, and on an error none is:
 	// the call would be billed, and every later round of the turn refused.
-	Held() error
+	// An error is therefore the gate turning that call away, which the
+	// meter records on the turn's counters as it records a refused round —
+	// so it is asked immediately before a call, on the caller's context,
+	// and never merely to look.
+	Held(ctx context.Context) error
 
 	// Record adds tokens a call has ALREADY spent to the turn's counters,
 	// in the windows current at the instant given, refusing nothing — and

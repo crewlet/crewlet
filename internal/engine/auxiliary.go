@@ -197,7 +197,7 @@ func (p recordedProvider) Model() string { return p.inner.Model() }
 
 func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if p.use.Budget != nil {
-		if held := p.use.Budget.Held(); held != nil {
+		if held := p.use.Budget.Held(ctx); held != nil {
 			return nil, fmt.Errorf("engine: auxiliary %s call not made: %w", p.use.Purpose, held)
 		}
 	}

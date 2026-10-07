@@ -354,19 +354,19 @@ func TestAMeterHoldsTheRefusalItAnsweredUntilTheWindowTurnsOver(t *testing.T) {
 	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
 	m := clockedMeter(t, fleet, c, lead, &clock)
 
-	if got, held := m.Refused(); held {
+	if got, held := m.Refused(t.Context()); held {
 		t.Fatalf("a fresh meter holds %+v", got)
 	}
 	if got, err := m.Spend(ctx, 98); err != nil || !got.OK {
 		t.Fatalf("Spend(98) = (%+v, %v), want admitted", got, err)
 	}
-	if got, held := m.Refused(); held {
+	if got, held := m.Refused(t.Context()); held {
 		t.Fatalf("a window with room left holds %+v", got)
 	}
 	if got, err := m.Spend(ctx, 3); err != nil || got.OK {
 		t.Fatalf("Spend(3) = (%+v, %v), want refused", got, err)
 	}
-	got, held := m.Refused()
+	got, held := m.Refused(t.Context())
 	midnight := time.Date(2026, time.March, 15, 0, 0, 0, 0, time.UTC)
 	if !held || got.OK || got.Scope != "agent" || got.Used != 101 || got.Limit != 100 ||
 		got.Period != period.Day || got.Window != "2026-03-14" || !got.ResetsAt.Equal(midnight) {
@@ -374,7 +374,7 @@ func TestAMeterHoldsTheRefusalItAnsweredUntilTheWindowTurnsOver(t *testing.T) {
 	}
 
 	clock = midnight
-	if got, held := m.Refused(); held {
+	if got, held := m.Refused(t.Context()); held {
 		t.Fatalf("Refused after the window turned over = %+v, want nothing: the next "+
 			"charge is judged against a new day", got)
 	}
@@ -396,7 +396,7 @@ func TestAnAdmittedRoundThatFillsAWindowIsHeld(t *testing.T) {
 	if got, err := m.Spend(t.Context(), 100); err != nil || !got.OK {
 		t.Fatalf("Spend(100) = (%+v, %v), want admitted at the ceiling", got, err)
 	}
-	got, held := m.Refused()
+	got, held := m.Refused(t.Context())
 	if !held || got.Scope != "org" || got.Period != period.Week || got.Used != 100 || got.Limit != 100 {
 		t.Fatalf("Refused = (%+v, %v), want the company's full week", got, held)
 	}
@@ -424,21 +424,21 @@ func TestAnAuxiliaryPostChargeThatFillsAWindowIsHeld(t *testing.T) {
 	if err := m.Record(ctx, 40, clock); err != nil {
 		t.Fatalf("Record(40): %v", err)
 	}
-	if got, held := m.Refused(); held {
+	if got, held := m.Refused(t.Context()); held {
 		t.Fatalf("a post-charge that left room is held as %+v", got)
 	}
-	if err := m.Held(); err != nil {
+	if err := m.Held(t.Context()); err != nil {
 		t.Fatalf("Held after a post-charge that left room = %v", err)
 	}
 
 	if err := m.Record(ctx, 90, clock); err != nil {
 		t.Fatalf("Record(90): %v", err)
 	}
-	got, held := m.Refused()
+	got, held := m.Refused(t.Context())
 	if !held || got.Scope != "agent" || got.Period != period.Day || got.Used != 130 || got.Limit != 100 {
 		t.Fatalf("Refused = (%+v, %v), want the seat's day the post-charge took to 130 of 100", got, held)
 	}
-	if err := m.Held(); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+	if err := m.Held(t.Context()); !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Errorf("Held = %v, want the refusal the turn's next call is certain to meet", err)
 	}
 	windows := coord.WindowsAt(clock, time.UTC)
@@ -479,7 +479,7 @@ func TestAnAuxiliaryPostChargeIsCountedWhenItsCallReturned(t *testing.T) {
 	}
 	// The window it filled has turned over on the meter's clock, so the
 	// turn's next call is judged on the 15th, which has room.
-	if got, held := m.Refused(); held {
+	if got, held := m.Refused(t.Context()); held {
 		t.Errorf("Refused = %+v, want nothing held on a day that has turned over", got)
 	}
 }
@@ -502,11 +502,11 @@ func TestAHeldRefusalNamesTheCompanyFirst(t *testing.T) {
 	if got, err := m.Spend(ctx, 50); err != nil || got.Scope != "org" {
 		t.Fatalf("Spend(50) = (%+v, %v), want the company's day refusing", got, err)
 	}
-	if got, held := m.Refused(); !held || got.Scope != "org" || got.Period != period.Day {
+	if got, held := m.Refused(t.Context()); !held || got.Scope != "org" || got.Period != period.Day {
 		t.Fatalf("Refused = (%+v, %v), want the company's day named before the seat's month", got, held)
 	}
 	clock = time.Date(2026, time.March, 15, 9, 0, 0, 0, time.UTC)
-	if got, held := m.Refused(); !held || got.Scope != "agent" || got.Period != period.Month {
+	if got, held := m.Refused(t.Context()); !held || got.Scope != "agent" || got.Period != period.Month {
 		t.Fatalf("Refused the next day = (%+v, %v), want the seat's month, which still stands", got, held)
 	}
 }
@@ -533,7 +533,7 @@ func TestASeatRefusalThatFillsTheCompanyIsHeldAsTheCompanys(t *testing.T) {
 	if got, err := m.Spend(ctx, 60); err != nil || got.OK || got.Scope != "agent" {
 		t.Fatalf("Spend(60) = (%+v, %v), want the seat's day refusing", got, err)
 	}
-	held, ok := m.Refused()
+	held, ok := m.Refused(t.Context())
 	if !ok || held.Scope != "org" || held.Period != period.Day || held.Used != 100 || held.Limit != 100 {
 		t.Fatalf("Refused = (%+v, %v), want the company's day the refused round filled", held, ok)
 	}
@@ -566,11 +566,11 @@ func TestARefusalHoldsEveryWindowItsRoundFilled(t *testing.T) {
 	if got, err := m.Spend(ctx, 40); err != nil || got.OK || got.Scope != "org" {
 		t.Fatalf("Spend(40) = (%+v, %v), want the company's day refusing", got, err)
 	}
-	if held, ok := m.Refused(); !ok || held.Scope != "org" || held.Period != period.Day {
+	if held, ok := m.Refused(t.Context()); !ok || held.Scope != "org" || held.Period != period.Day {
 		t.Fatalf("Refused = (%+v, %v), want the company's day", held, ok)
 	}
 	clock = time.Date(2026, time.March, 15, 9, 0, 0, 0, time.UTC)
-	held, ok := m.Refused()
+	held, ok := m.Refused(t.Context())
 	if !ok || held.Scope != "agent" || held.Period != period.Week || held.Used != 130 || held.Limit != 120 {
 		t.Fatalf("Refused the next day = (%+v, %v), want the seat's week the company's "+
 			"refused round took past its ceiling", held, ok)
@@ -621,11 +621,11 @@ func TestAHeldRefusalLastsTheTurnsOwnCalendar(t *testing.T) {
 			next, err)
 	}
 	// The meter holds the refusal its own day still makes.
-	if held, ok := m.Refused(); !ok || held.Scope != "agent" || held.Window != "2026-03-14" {
+	if held, ok := m.Refused(t.Context()); !ok || held.Scope != "agent" || held.Window != "2026-03-14" {
 		t.Fatalf("Refused = (%+v, %v), want the seat's day on the turn's own calendar", held, ok)
 	}
 	clock = time.Date(2026, time.March, 15, 0, 0, 0, 0, time.UTC)
-	if held, ok := m.Refused(); ok {
+	if held, ok := m.Refused(t.Context()); ok {
 		t.Fatalf("Refused once the turn's own day ended = %+v, want nothing", held)
 	}
 }
@@ -646,7 +646,7 @@ func TestARefusalAnsweredToACallerThatHungUpIsHeld(t *testing.T) {
 	if _, err := m.Spend(ended, 250); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Spend on an ended turn = %v, want the turn's own ending", err)
 	}
-	if got, held := m.Refused(); !held || got.Scope != "agent" || got.Used != 250 {
+	if got, held := m.Refused(t.Context()); !held || got.Scope != "agent" || got.Used != 250 {
 		t.Fatalf("Refused = (%+v, %v), want the refusal the hung-up charge met", got, held)
 	}
 }
@@ -673,12 +673,12 @@ func TestAResumedTurnsMeterHoldsWhatTheCounterAlreadyRefuses(t *testing.T) {
 	}
 	e := &Engine{backends: &Backends{Fleet: fleet}}
 
-	got, held := e.resumeMeterFor(ctx, c, lead.Handle()).Refused()
+	got, held := e.resumeMeterFor(ctx, c, lead.Handle()).Refused(t.Context())
 	if !held || got.Scope != "agent" || got.Period != period.Day || got.Used != 140 || got.Limit != 100 {
 		t.Fatalf("Refused = (%+v, %v), want the seat's day the run took past its ceiling", got, held)
 	}
 	// A fresh turn's meter asks nothing: the park has already asked.
-	if got, held := e.meterFor(c, lead.Handle()).Refused(); held {
+	if got, held := e.meterFor(c, lead.Handle()).Refused(t.Context()); held {
 		t.Errorf("a fresh meter holds %+v without a charge or a read", got)
 	}
 
@@ -687,7 +687,7 @@ func TestAResumedTurnsMeterHoldsWhatTheCounterAlreadyRefuses(t *testing.T) {
 		basis: basisOf(c, lead), now: time.Now,
 	}
 	unreadable.observe(ctx)
-	if got, held := unreadable.Refused(); held {
+	if got, held := unreadable.Refused(t.Context()); held {
 		t.Errorf("an unreadable counter left the meter holding %+v", got)
 	}
 }

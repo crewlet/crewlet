@@ -129,7 +129,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// budgets with the seat's auxiliary model, charged to the same counters,
 	// and the rewrite can be what fills the window. Asked only at the top of
 	// the phase, that run was launched and paid for whole past the ceiling.
-	if err := toolloop.Refusal(r.cfg.Budget); err != nil {
+	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 	}
 	// THE PROMPT REACHES THE RECORD, published here because nothing else

@@ -313,7 +313,7 @@ type turnBudget struct {
 	asked int
 }
 
-func (b *turnBudget) Held() error {
+func (b *turnBudget) Held(context.Context) error {
 	b.asked++
 	return b.held
 }

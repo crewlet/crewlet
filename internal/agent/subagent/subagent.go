@@ -952,8 +952,14 @@ func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutco
 // vendor bills and the slice refuses. Asked before that call, the worker ends
 // on the slice with no call made. And the parent's outranks the slice's for
 // the reason it does in [sliceMeter.Spend].
-func (m *sliceMeter) Refused() (toolloop.SpendOutcome, bool) {
-	if outcome, refused := m.inner.Refused(); refused {
+//
+// The parent's refusal is asked on the caller's context, because the parent's
+// meter records a refusal it answers: a worker stopped by the company's full
+// day is the gate turning a call away as surely as its round being refused
+// would be. The slice's own refusal records nothing — no shared counter holds
+// a slice, so there is nowhere a record would be read.
+func (m *sliceMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	if outcome, refused := m.inner.Refused(ctx); refused {
 		return outcome, true
 	}
 	m.mu.Lock()

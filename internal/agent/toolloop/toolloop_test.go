@@ -82,7 +82,7 @@ type meter struct {
 	err      error
 }
 
-func (m *meter) Refused() (toolloop.SpendOutcome, bool) {
+func (m *meter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	if m.refuseAt == 0 || m.spent < m.refuseAt {
 		return toolloop.SpendOutcome{}, false
 	}

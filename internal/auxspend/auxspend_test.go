@@ -50,7 +50,7 @@ func TestAnUnattributedCallIsRefused(t *testing.T) {
 // openBudget is a turn's meter that holds nothing and records nothing.
 type openBudget struct{}
 
-func (openBudget) Held() error                                  { return nil }
+func (openBudget) Held(context.Context) error                   { return nil }
 func (openBudget) Record(context.Context, int, time.Time) error { return nil }
 
 // A TALLY SUMS WHAT IT IS GIVEN, from every goroutine a turn hands it to, and

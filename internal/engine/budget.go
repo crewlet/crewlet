@@ -212,7 +212,7 @@ func (m *meter) Record(ctx context.Context, tokens int, at time.Time) error {
 // Held is [meter.Refused] as the turn's auxiliary calls ask it: the error the
 // turn's loop would stop on ([toolloop.Refusal]), or nil. See
 // [auxspend.Budget.Held].
-func (m *meter) Held() error { return toolloop.Refusal(m) }
+func (m *meter) Held(ctx context.Context) error { return toolloop.Refusal(ctx, m) }
 
 // Refused reports the refusal every further charge of this turn is certain to
 // meet, if this meter has seen one. See [toolloop.BudgetMeter.Refused].
@@ -259,7 +259,7 @@ func (m *meter) Held() error { return toolloop.Refusal(m) }
 // of the two ends last; the meter does not know the call's size, so it names
 // the full one — a refusal the call is certain to meet, if not always the one
 // the counter would have chosen.
-func (m *meter) Refused() (toolloop.SpendOutcome, bool) {
+func (m *meter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	now := m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()

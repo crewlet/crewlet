@@ -123,9 +123,11 @@ type Fitter interface {
 }
 
 // Hold is the turn's budget as the judge asks it: the refusal its call is
-// certain to meet, or nil.
+// certain to meet, or nil. Asked immediately before the judge's call, on its
+// context, because an error is the gate turning that call away and the turn's
+// meter records it as it records a refused round.
 type Hold interface {
-	Held() error
+	Held(ctx context.Context) error
 }
 
 // ErrHeld is a judge that did not call its model because the turn's budget
@@ -180,7 +182,7 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	}
 	evidence := j.render(ctx, req)
 	if j.hold != nil {
-		if held := j.hold.Held(); held != nil {
+		if held := j.hold.Held(ctx); held != nil {
 			// NOT ASKED: no call was made, so there is nothing to report
 			// or to charge — see [WithHold].
 			return Decision{}, fmt.Errorf("%w: %w", ErrHeld, held)

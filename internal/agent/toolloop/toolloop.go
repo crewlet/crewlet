@@ -401,7 +401,10 @@ type SpendOutcome struct {
 
 	// Used and Limit are the refusing window's spend and ceiling. Used is
 	// the spend as the refused round LEFT it — the round is recorded (see
-	// [BudgetMeter]) — so a refusal reads past its Limit by that round.
+	// [BudgetMeter]) — so a refusal reads past its Limit by that round. A
+	// standing refusal ([BudgetMeter.Refused]) refused no round of its
+	// own, so its Used is the window's spend as the meter last read it:
+	// at the Limit or past it, since that is what made it certain.
 	Used  int
 	Limit int
 
@@ -435,14 +438,27 @@ type BudgetMeter interface {
 
 	// Refused reports a refusal every further charge is CERTAIN to meet,
 	// from what this meter has already been told — it asks the counter
-	// nothing. A caller asks it before every model call it is about to
-	// make, and on true makes none: the call would be billed by the vendor,
-	// then refused, and everything it bought thrown away. That is the half
-	// of a refusal Spend cannot carry, because a refusal is answered to one
-	// caller and a turn makes its calls from several — the next round of
-	// this loop, the round-cap judge, the next phase, a sibling worker, an
-	// agent-mode executor's launch — and before this each of them paid for
-	// one call certain to be refused.
+	// nothing to decide it. A caller asks it before every model call it is
+	// about to make, and on true makes none: the call would be billed by
+	// the vendor, then refused, and everything it bought thrown away. That
+	// is the half of a refusal Spend cannot carry, because a refusal is
+	// answered to one caller and a turn makes its calls from several — the
+	// next round of this loop, the round-cap judge, the next phase, a
+	// sibling worker, an agent-mode executor's launch — and before this
+	// each of them paid for one call certain to be refused.
+	//
+	// A TRUE ANSWER IS A REFUSAL, NOT A FORECAST. Every caller asks it
+	// immediately before a call and makes no call on true, so the answer is
+	// the gate turning that call away, exactly as a refused Spend turns a
+	// round's tools away — and a meter whose counter records refusals
+	// records this one there too, which is what the context is for. The
+	// call it stops is the one whose charge would have recorded the
+	// refusal; a meter that recorded nothing left a window refusing every
+	// call of the turn while its counter said it had refused none. The
+	// record is the meter's, made once per window rather than once per
+	// question, and it never changes the answer: a refusal whose record
+	// failed is still a refusal. So it is asked only where a call is about
+	// to be made, never to look.
 	//
 	// CERTAIN, NEVER LIKELY. A meter answers true only for a window it has
 	// seen with no room left for a single token, judged by ceilings that do
@@ -471,7 +487,7 @@ type BudgetMeter interface {
 	// the counter's own rule — the company's before the seat's, the window
 	// that ends last within a scope — over every window the meter knows to
 	// be full, and is what the caller reports ([Refusal]).
-	Refused() (SpendOutcome, bool)
+	Refused(ctx context.Context) (SpendOutcome, bool)
 }
 
 // Refusal is the error a meter's standing refusal answers, or nil: nil for a
@@ -481,12 +497,14 @@ type BudgetMeter interface {
 // loop is not the only frame that calls a model on a turn's meter: the
 // round-cap judge, an agent-mode executor's launch and the engine's auxiliary
 // seam before each of the turn's auxiliary calls ask it too, so every call in
-// a turn is stopped by the same answer.
-func Refusal(meter BudgetMeter) error {
+// a turn is stopped by the same answer — and, since a true answer is a
+// refusal of the call the caller was about to make, recorded by the same
+// meter. Ask it only there.
+func Refusal(ctx context.Context, meter BudgetMeter) error {
 	if meter == nil {
 		return nil
 	}
-	outcome, refused := meter.Refused()
+	outcome, refused := meter.Refused(ctx)
 	if !refused {
 		return nil
 	}
@@ -955,7 +973,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// person's note is not marked taken by a round that never runs.
 		// The loop publishes nothing here: no round opened, and the record
 		// the caller reads already holds every round that did.
-		if err := Refusal(cfg.Budget); err != nil {
+		if err := Refusal(ctx, cfg.Budget); err != nil {
 			return nil, err
 		}
 

@@ -591,7 +591,7 @@ func (m *ceilingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOut
 // Refused holds what the meter has seen, as the engine's meter does: once
 // nothing more fits under the ceiling, every later charge is refused, and the
 // meter says so before the next call is made.
-func (m *ceilingMeter) Refused() (toolloop.SpendOutcome, bool) {
+func (m *ceilingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	used := 0
 	for _, c := range m.charges() {
 		used += c
@@ -616,7 +616,7 @@ func (m *countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutc
 }
 
 // Refused never holds a refusal: nothing caps this meter.
-func (m *countingMeter) Refused() (toolloop.SpendOutcome, bool) {
+func (m *countingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	return toolloop.SpendOutcome{}, false
 }
 

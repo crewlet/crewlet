@@ -422,7 +422,7 @@ type fillingBudget struct {
 	full bool
 }
 
-func (b *fillingBudget) Held() error {
+func (b *fillingBudget) Held(context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.full {

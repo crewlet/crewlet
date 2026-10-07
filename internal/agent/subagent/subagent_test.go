@@ -153,7 +153,7 @@ func (c countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutco
 // Refused holds a refusal once one has been answered, as the engine's meter
 // does: a meter that refuses every charge refuses every later one too, so
 // once it has said no it says so before the next call is made.
-func (c countingMeter) Refused() (toolloop.SpendOutcome, bool) {
+func (c countingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	c.m.mu.Lock()
 	defer c.m.mu.Unlock()
 	if !c.m.refuse || len(c.m.charges) == 0 {
@@ -1184,7 +1184,7 @@ func TestAWorkerStartedOnASpentSliceMakesNoCall(t *testing.T) {
 // the engine's meter does once a window it charged is full.
 type standingMeter struct{ countingMeter }
 
-func (s standingMeter) Refused() (toolloop.SpendOutcome, bool) {
+func (s standingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	return toolloop.SpendOutcome{OK: false, Scope: "agent", Used: 120, Limit: 100}, true
 }
 
@@ -2480,7 +2480,9 @@ func (b blockingMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOut
 	return b.inner.Spend(ctx, tokens)
 }
 
-func (b blockingMeter) Refused() (toolloop.SpendOutcome, bool) { return b.inner.Refused() }
+func (b blockingMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	return b.inner.Refused(ctx)
+}
 
 // errOnceMeter fails the FIRST charge and serves the rest, so a test can put a
 // store blip in the middle of a batch.
@@ -2498,7 +2500,9 @@ func (e errOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutc
 	return e.inner.Spend(ctx, tokens)
 }
 
-func (e errOnceMeter) Refused() (toolloop.SpendOutcome, bool) { return e.inner.Refused() }
+func (e errOnceMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	return e.inner.Refused(ctx)
+}
 
 // refuseOnceMeter refuses the FIRST charge and serves the rest, so a test can
 // watch what a definite refusal does to a shared reservation. The refused
@@ -2525,7 +2529,7 @@ func (r refuseOnceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendO
 	return toolloop.SpendOutcome{OK: false, Scope: "org", Used: got.Used, Limit: got.Used - tokens}, nil
 }
 
-func (r refuseOnceMeter) Refused() (toolloop.SpendOutcome, bool) {
+func (r refuseOnceMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 	return toolloop.SpendOutcome{}, false
 }
 
