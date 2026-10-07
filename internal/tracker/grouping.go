@@ -722,15 +722,29 @@ func labelsOf(table map[string]string) func(string) string {
 // ELSE, under the literal the rows hold. It is a team that has left the chart:
 // folding it into anything would be inventing a home for work whose team is
 // gone, and [unitLabels] is what says so on the heading.
+//
+// A NAME THAT IS ANOTHER UNIT'S KEY GETS NO ARM, because an id wins that
+// ambiguity everywhere a reference is resolved (`org.Organization.UnitByRef`):
+// the rows holding that string are the OTHER unit's, filed under its key, and
+// an arm folding them onto this unit's would draw one team's work in another
+// team's column. A submitted document is refused for the pair, but a revision
+// applied under the runnable rules can carry it. Two units of one name are
+// the first unit's, as resolution answers too: the first arm a CASE matches
+// is the one it takes.
 func unitAxis(column string, units Units) groupAxis {
 	axis := groupAxis{Expr: column, Unset: "(no unit)", Labels: unitLabels(units)}
 	if units == nil {
 		return axis
 	}
+	chart := units.AllUnits()
+	keys := make(map[string]bool, len(chart))
+	for _, unit := range chart {
+		keys[strings.TrimSpace(unit.Key)] = true
+	}
 	var arms strings.Builder
-	for _, unit := range units.AllUnits() {
+	for _, unit := range chart {
 		key, name := strings.TrimSpace(unit.Key), strings.TrimSpace(unit.Name)
-		if key == "" || name == "" || key == name {
+		if key == "" || name == "" || key == name || keys[name] {
 			continue
 		}
 		arms.WriteString(" WHEN ? THEN ?")
