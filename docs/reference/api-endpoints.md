@@ -83,6 +83,7 @@ node means nothing was done.
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
+| `GET` | `/agents/{id}/memory/episodes/{episode}` | One episode **whole** — its ask and its account complete, which the memory listing carries the openings of (see [below](#get-agentsidmemoryepisodesepisode)) |
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
@@ -2104,7 +2105,8 @@ REST route calls, so the two surfaces cannot diverge:
 |--------|----------|--------------|
 | `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
 | `live_call` | `{role}` (or `{id}`, the seat's handle) | `GET /query/live_call?role=…`. `{role, live_call, live_call_seq}`: the seat's call in flight with every field and its `versions`, or `live_call: null` while it has none (a seat the projection has never seen included, at `live_call_seq` 0), and the seat's `live_call_seq` beside it either way, which the tab orders the answer by against the pushes that may overtake it. From the projection alone, so it costs what a push does — the REPAIR a tab makes when an `agents` push names a version of a heavy field newer than the copy it holds: the push that carried the field was dropped (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)) |
-| `agent_memory` | `{id, limit}` | `GET /agents/{id}/memory`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent, still taking the seat, or on a build that cannot answer) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. See [the route](#get-agentsidmemory) |
+| `agent_memory` | `{id, limit}` | `GET /agents/{id}/memory`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent, still taking the seat, or on a build that cannot answer) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. An episode's `ask` and `plan_summary` are their OPENINGS, at most 600 bytes each, with each whole text's size in `ask_bytes` and `plan_summary_bytes`. See [the route](#get-agentsidmemory) |
+| `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
 | `memory_overview` | `{}` | EVERY AGENT SEAT'S memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. Every agent in the chart, handle order, no cap. See [the section](#memory_overview) |
 | `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The listing is a page (default 50, at most 200) with `conversations_total` beside it. ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`). Same scope rule as `work_my_work` |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
@@ -3609,7 +3611,8 @@ which.
   ],
   "diary_total": 142,
   "episodes": [
-    { "id", "turn_id", "agent_handle", "task_summary", "ask", "plan_summary",
+    { "id", "turn_id", "agent_handle", "task_summary", "ask", "ask_bytes",
+      "plan_summary", "plan_summary_bytes",
       "review_outcome", "tool_sequence", "skills_used",
       "conversation_key", "work_key", "created_at", "ended_at",
       "duration_ms", "compacted", "count",
@@ -3668,6 +3671,39 @@ them ended `done`, counted from the members, and what varied — which is `null`
 on a raw row. It is `null` on a compacted row too when the holder runs a build
 that does not send it: that is the holder not saying, never a compaction that
 recorded no pattern and none of its turns done.
+
+**A listed episode carries the openings of its two long texts.** An ask is
+bounded only by the event that delivered it and an account by nothing, so a
+page of fifty whole could be more than the transport carries — and the holder
+would refuse the whole read. So `ask` and `plan_summary` are each at most their
+first 600 bytes, cut between characters, and `ask_bytes` and
+`plan_summary_bytes` are the whole texts' sizes: a text is whole exactly when
+its size is its length. A holder on a build that sends no size sends `0`, its
+account whole and no ask, which a reader takes as whole. The whole row is
+[`GET /agents/{id}/memory/episodes/{episode}`](#get-agentsidmemoryepisodesepisode).
+
+### `GET /agents/{id}/memory/episodes/{episode}`
+
+One episode **whole**: the same row as the listing's, with `ask` and
+`plan_summary` complete. Also served as the `agent_episode` query, which takes
+`{id, episode}`. Answered by the node holding the seat under exactly the rules
+of `GET /agents/{id}/memory` above, and naming it.
+
+```json
+{
+  "handle": "<handle>",
+  "episode": { "id", "task_summary", "ask", "ask_bytes", "plan_summary",
+               "plan_summary_bytes", "…": "an episode row" },
+  "held_by": "node-2"
+}
+```
+
+`episode` is `null` for one the seat does not hold — the lifecycle dropped it
+or folded it into a compacted row since it was listed, or it is another seat's
+— which is an ordinary absence. An episode's ask and account came in one
+completed turn's event, which the transport held to 8 MiB, so one read whole fits
+as that event did; should one ever not, it is `unavailable`, with the holder
+saying how large the answer was, rather than cut.
 
 ### `memory_overview`
 

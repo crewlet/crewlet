@@ -1467,6 +1467,13 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 		}
 	}
 	holdShape(t, "EpisodeCompaction", compactions, false)
+	// ONE EPISODE WHOLE, which the listing carries the openings of: the
+	// same row shape, inside its own answer.
+	detail := asMap(t, answer(t, queries.Sources{
+		Memory: &memread.Reader{Owner: "node-a:1", Local: stores},
+	}, "agent_episode", map[string]any{"id": "ceo", "episode": "ep-1"}))
+	holdShape(t, "AgentEpisode", []map[string]any{detail}, false)
+	holdShape(t, "Episode", []map[string]any{asMap(t, detail["episode"])}, false)
 	holdShape(t, "SynthesizedSkill", rowsOf(t, body["skills"]), false)
 	profiles := rowsOf(t, body["counterparties"])
 	holdShape(t, "CounterpartyProfile", profiles, false)

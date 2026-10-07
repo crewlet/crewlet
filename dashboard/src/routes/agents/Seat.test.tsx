@@ -1568,6 +1568,65 @@ test("an episode says what woke it apart from what it did, and a compacted row i
   expect(screen.queryByText("The episode recorded no summary")).toBeNull();
 });
 
+// A LONG ASK IS LISTED AS ITS OPENING, MARKED, AND READ WHOLE ON DEMAND. The
+// listing carries an episode's ask and its account as their openings — fifty
+// whole asks could be more than the transport takes, and the holder refused the
+// whole memory read — with each whole text's size beside it; the row says it is
+// an opening and opens the turn whole, from the seat's holder.
+test("a long ask is listed as its marked opening and read whole on demand", async () => {
+  const whole = `${"the deploy log says ".repeat(200)}and then it stopped.`;
+  const opening = whole.slice(0, 600);
+  mount("#/agents/seats/swe?tab=memory", {
+    answers: {
+      agent_memory: memoryOf({
+        episodes: [
+          {
+            id: "e1",
+            turn_id: "e1",
+            task_summary: "Message from Ana: Slack message",
+            ask: opening,
+            ask_bytes: whole.length,
+            plan_summary: "Read the log and filed the regression.",
+            plan_summary_bytes: 38,
+            review_outcome: "done",
+            created_at: "2026-09-21T07:00:00Z",
+          },
+        ],
+        episodes_total: 1,
+      }),
+      agent_episode: (params: Record<string, unknown>) => ({
+        handle: params.id,
+        held_by: "node-2",
+        episode: {
+          id: params.episode,
+          turn_id: "e1",
+          task_summary: "Message from Ana: Slack message",
+          ask: whole,
+          ask_bytes: whole.length,
+          plan_summary: "Read the log and filed the regression.",
+          plan_summary_bytes: 38,
+          review_outcome: "done",
+          created_at: "2026-09-21T07:00:00Z",
+        },
+      }),
+    },
+  });
+  await waitFor(() => expect(screen.getByText("Message from Ana: Slack message")).toBeTruthy());
+  const row = screen
+    .getByText("Message from Ana: Slack message")
+    .closest(".grid-row") as HTMLElement;
+  const woken = row.querySelector('[data-label="Woken by"]') as HTMLElement;
+  expect(woken.textContent).toContain(`Asked: ${opening}…`);
+  // A WHOLE ACCOUNT IS NOT MARKED and offers nothing to open.
+  const did = row.querySelector('[data-label="What it did"]') as HTMLElement;
+  expect(did.textContent).toBe("Read the log and filed the regression.");
+  expect(askedFor("agent_episode")).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole("button", { name: /^Read all/ }));
+  await waitFor(() => expect(screen.getByText(/and then it stopped\./)).toBeTruthy());
+  expect(askedFor("agent_episode")[0]?.params).toEqual({ id: "swe", episode: "e1" });
+});
+
 // A HOLDER THAT DOES NOT SAY WHAT A ROW FOLDED IS NOT A ROW THAT FOLDED
 // NOTHING. A node on an older build sends a compacted row with no compaction;
 // read as zero values it said "The compaction recorded no pattern" and "0 of 12

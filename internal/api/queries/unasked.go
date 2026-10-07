@@ -41,6 +41,7 @@ type WorkSearcher interface {
 // it.
 type SeatMemory interface {
 	Memory(ctx context.Context, handle string, limit int) (memread.Memory, error)
+	Episode(ctx context.Context, handle, id string) (memread.EpisodeDetail, error)
 	Threads(ctx context.Context, handle, conversation string, limit int) (memread.Threads, error)
 	Overview(ctx context.Context, handles []string) (memread.Overview, error)
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
@@ -16,6 +17,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -765,5 +767,96 @@ func TestACompactedRowFromAnOlderHolderCarriesNoCompaction(t *testing.T) {
 			t.Errorf("the re-served row carries %q at its top level, which reads as the "+
 				"compaction's own word", key)
 		}
+	}
+}
+
+// A LISTED EPISODE CARRIES THE OPENINGS OF ITS LONG TEXTS, AND ONE READ HAS THEM
+// WHOLE. An episode's ask is bounded only by the event that delivered it and its
+// account by nothing, so a listed row carries each as its opening — cut on a
+// rune boundary, never inside a character — with the size of the whole beside
+// it, and the `episode` read returns the row with both complete. An id the seat
+// does not hold, or another seat's, is no episode rather than a failure.
+func TestAListedEpisodeCarriesItsOpeningsAndOneReadHasItWhole(t *testing.T) {
+	t.Parallel()
+	n := newNode(t, "solo:1")
+	ask := strings.Repeat("ünïcode in a pasted log line; ", 200)
+	account := strings.Repeat("rolled back and filed the regression. ", 80)
+	for _, ep := range []learning.Episode{{
+		ID: "long", Handle: "swe", TurnID: "turn-1", WorkKey: "wk-long", Kind: learning.KindRaw,
+		TaskSummary: "Message from Ana: Slack message", Ask: ask, PlanSummary: account,
+		ReviewOutcome: "done", StartedAt: pinned, EndedAt: pinned.Add(time.Minute),
+	}, {
+		ID: "theirs", Handle: "cto", TurnID: "turn-2", WorkKey: "wk-theirs", Kind: learning.KindRaw,
+		TaskSummary: "another seat's turn", StartedAt: pinned, EndedAt: pinned.Add(time.Minute),
+	}} {
+		if _, err := n.stores.Episodes.Append(t.Context(), ep); err != nil {
+			t.Fatalf("episode %s: %v", ep.ID, err)
+		}
+	}
+	reader := &memread.Reader{Owner: n.owner, Local: n.stores}
+	got, err := reader.Memory(t.Context(), "swe", 0)
+	if err != nil || len(got.Episodes) != 1 {
+		t.Fatalf("Memory = %d episodes, %v", len(got.Episodes), err)
+	}
+	row := got.Episodes[0]
+	if len(row.Ask) > memread.ListedTextBytes || !utf8.ValidString(row.Ask) ||
+		!strings.HasPrefix(ask, row.Ask) || row.AskBytes != len(ask) {
+		t.Fatalf("the listed ask is %d bytes (valid %v) of a %d-byte text named %d, want "+
+			"its opening of at most %d bytes, whole characters, and the whole size",
+			len(row.Ask), utf8.ValidString(row.Ask), len(ask), row.AskBytes, memread.ListedTextBytes)
+	}
+	if len(row.PlanSummary) > memread.ListedTextBytes || !strings.HasPrefix(account, row.PlanSummary) ||
+		row.PlanSummaryBytes != len(account) {
+		t.Fatalf("the listed account is %d bytes of %d named %d, want its opening and the "+
+			"whole size", len(row.PlanSummary), len(account), row.PlanSummaryBytes)
+	}
+
+	whole, err := reader.Episode(t.Context(), "swe", "long")
+	if err != nil || whole.Episode == nil {
+		t.Fatalf("Episode = %+v, %v", whole, err)
+	}
+	if e := whole.Episode; e.Ask != ask || e.PlanSummary != account ||
+		e.AskBytes != len(ask) || e.PlanSummaryBytes != len(account) || whole.HeldBy != "solo" {
+		t.Fatalf("the episode read whole carries a %d-byte ask and a %d-byte account (held "+
+			"by %q), want both whole", len(e.Ask), len(e.PlanSummary), whole.HeldBy)
+	}
+	for _, id := range []string{"gone", "theirs"} {
+		if absent, err := reader.Episode(t.Context(), "swe", id); err != nil || absent.Episode != nil {
+			t.Errorf("reading %q of swe = %+v, %v; want no episode and no failure", id, absent, err)
+		}
+	}
+}
+
+// A PAGE OF LONG ASKS IS NOT REFUSED BY THE TRANSPORT. Fifty turns woken by
+// large pasted logs were fifty whole asks in one reply, past what the transport
+// carries, and the holder refused the whole memory read — the screen showed the
+// seat unavailable for as long as those were its newest turns. Listed as their
+// openings, the page is a few dozen kilobytes.
+func TestAPageOfLongAsksIsAnsweredByItsHolder(t *testing.T) {
+	t.Parallel()
+	f := newFleet()
+	a, b := newNode(t, "node-a:1"), newNode(t, "node-b:1")
+	ask := strings.Repeat("x", queue.MaxPayloadBytes/memread.PageLimit+1)
+	for i := range memread.PageLimit {
+		at := pinned.Add(time.Duration(i) * time.Second)
+		if _, err := a.stores.Episodes.Append(t.Context(), learning.Episode{
+			ID: "ep-" + strconv.Itoa(i), Handle: "swe", TurnID: "turn-" + strconv.Itoa(i),
+			WorkKey: "wk-" + strconv.Itoa(i), TaskSummary: "a pasted log", Ask: ask,
+			StartedAt: at, EndedAt: at.Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("episode: %v", err)
+		}
+	}
+	f.hold(t, "swe", a.owner)
+	f.reader(t, a, "swe")
+	readB := f.reader(t, b)
+	got, err := readB.Memory(t.Context(), "swe", 0)
+	if err != nil {
+		t.Fatalf("a page of %d asks of %d bytes each was refused: %v", memread.PageLimit,
+			len(ask), err)
+	}
+	if len(got.Episodes) != memread.PageLimit || got.Episodes[0].AskBytes != len(ask) {
+		t.Fatalf("the page carried %d episodes, the first naming a %d-byte ask; want all %d "+
+			"and the whole size", len(got.Episodes), got.Episodes[0].AskBytes, memread.PageLimit)
 	}
 }

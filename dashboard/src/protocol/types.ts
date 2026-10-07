@@ -42,7 +42,7 @@ import type {
   ReconcileFinding,
   ReconcileStatus,
 } from "../contract/integrations.ts";
-import type { AgentMemory, MemoryOverview } from "../contract/memory.ts";
+import type { AgentEpisode, AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type { BackupsAnswer } from "../contract/backups.ts";
 import type {
   LinkedFromStatus,
@@ -4425,6 +4425,7 @@ export interface QueryMap {
   agent: AgentAnswer;
   live_call: LiveCallAnswer;
   agent_memory: AgentMemory;
+  agent_episode: AgentEpisode;
   memory_overview: MemoryOverview;
   events: EventsPage;
   event_series: EventSeries;

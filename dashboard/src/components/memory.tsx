@@ -15,12 +15,21 @@
  * silently disagree.
  */
 
-import type { CSSProperties } from "react";
-import { Card, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { useState, type CSSProperties } from "react";
+import { Button, Card, EmptyState, EmptyValue, Modal, Tag } from "@crewlethq/ui";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, DurationCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
-import { conversationLabel, fmtDateTime, plural, tsKey } from "~/lib/format.ts";
+import { QueryState } from "~/components/common.tsx";
+import {
+  conversationLabel,
+  fmtBytes,
+  fmtDateTime,
+  plural,
+  tsKey,
+  utf8Bytes,
+} from "~/lib/format.ts";
+import { useQuery } from "~/lib/useQuery.ts";
 import { decisionLabel, decisionTone } from "~/lib/phases.ts";
 import { uiletTone } from "~/ui/primitives.tsx";
 import type { AgentMemory } from "~/contract/memory.ts";
@@ -111,23 +120,113 @@ function OneLine({ text, caption = false }: { text: string; caption?: boolean })
 }
 
 /**
+ * Whether a listed text is its OPENING rather than all of it.
+ *
+ * The listing carries an episode's ask and its account as their openings — a
+ * page of them whole could be more than the engine's transport takes — with the
+ * size of each whole text beside it, so the text is all of it exactly when that
+ * size is its own length. A ZERO SIZE is a holder on a build that sends none,
+ * which sent its account whole and no ask, so it is read as whole.
+ */
+function isOpening(text: string, wholeBytes: number): boolean {
+  return wholeBytes > utf8Bytes(text);
+}
+
+/**
+ * The way from a listed opening to the whole text: a button naming how much
+ * there is, which opens the turn read whole (`agent_episode`).
+ */
+function ReadWhole({ seat, episode, bytes }: { seat: string; episode: EpisodeRow; bytes: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button size="small" variant="ghost" onClick={() => setOpen(true)}>
+        Read all {fmtBytes(bytes)}
+      </Button>
+      {open && <WholeEpisode seat={seat} episode={episode} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/**
+ * One turn read whole: what it was asked and what it did, complete, from the
+ * node holding the seat. An episode the seat no longer holds — the lifecycle
+ * dropped it or folded it since the list was read — is said so, which is an
+ * ordinary absence rather than a failure.
+ */
+function WholeEpisode({
+  seat,
+  episode,
+  onClose,
+}: {
+  seat: string;
+  episode: EpisodeRow;
+  onClose: () => void;
+}) {
+  const whole = useQuery("agent_episode", { id: seat, episode: episode.id });
+  const e = whole.data?.episode;
+  return (
+    <Modal
+      open
+      size="lg"
+      title={episode.task_summary || "A past turn"}
+      icon={<LayersGlyph />}
+      onClose={onClose}
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      <QueryState error={whole.error} detail={whole.detail} loading={whole.loading}>
+        {whole.data &&
+          (e ? (
+            <div className="col gap-3">
+              <section className="col gap-1" aria-label="What it was asked">
+                <span className="t-caption">Asked</span>
+                {e.ask ? <p className="prose">{e.ask}</p> : <EmptyValue label="Not recorded" />}
+              </section>
+              <section className="col gap-1" aria-label="What it did">
+                <span className="t-caption">What it did</span>
+                {e.plan_summary ? (
+                  <p className="prose">{e.plan_summary}</p>
+                ) : (
+                  <EmptyValue label="The turn recorded nothing it did" />
+                )}
+              </section>
+            </div>
+          ) : (
+            <EmptyState
+              title="No longer in this seat's memory"
+              description="The episode was dropped or folded into a compacted row since the list was read."
+            />
+          ))}
+      </QueryState>
+    </Modal>
+  );
+}
+
+/**
  * What woke a turn, and what it was asked — or, for a compacted row, how many
  * turns it stands for.
  *
  * THE LABEL IS SAID AS WHAT WOKE THE TURN, never as what it did: it names the
  * kind of event ("Message from Ana: Slack message"), and under "What it did"
  * it told an operator that every chat turn had done "Message from Ana". The
- * ask under it is what the turn was actually asked, where the row stored one.
+ * ask under it is what the turn was actually asked, where the row stored one —
+ * its opening, marked, with the way to the whole of it where it is longer.
  */
-function EpisodeWokenCell({ episode: e }: { episode: EpisodeRow }) {
+function EpisodeWokenCell({ seat, episode: e }: { seat: string; episode: EpisodeRow }) {
   if (e.compacted) {
     return <TextCell>{plural(Math.max(e.count, 1), "turn")} like this</TextCell>;
   }
   if (!e.task_summary && !e.ask) return <EmptyValue label="Not recorded" />;
+  const opening = isOpening(e.ask, e.ask_bytes);
   return (
     <span className="col" style={{ gap: 2 }}>
       {e.task_summary ? <OneLine text={e.task_summary} /> : <EmptyValue label="Not recorded" />}
-      {e.ask && <OneLine text={`Asked: ${e.ask}`} caption />}
+      {e.ask && <OneLine text={`Asked: ${e.ask}${opening ? "…" : ""}`} caption />}
+      {opening && <ReadWhole seat={seat} episode={e} bytes={e.ask_bytes} />}
     </span>
   );
 }
@@ -147,7 +246,7 @@ const COMPACTION_UNREPORTED =
  * drawn as a turn it read "The episode recorded no summary" in place of the
  * pattern it was folded into.
  */
-function EpisodeDidCell({ episode: e }: { episode: EpisodeRow }) {
+function EpisodeDidCell({ seat, episode: e }: { seat: string; episode: EpisodeRow }) {
   if (e.compacted) {
     const c = e.compaction;
     if (!c) return <EmptyValue label={COMPACTION_UNREPORTED} />;
@@ -159,10 +258,14 @@ function EpisodeDidCell({ episode: e }: { episode: EpisodeRow }) {
       </span>
     );
   }
-  return e.plan_summary ? (
-    <OneLine text={e.plan_summary} />
-  ) : (
-    <EmptyValue label="The turn recorded nothing it did" />
+  if (!e.plan_summary) return <EmptyValue label="The turn recorded nothing it did" />;
+  const opening = isOpening(e.plan_summary, e.plan_summary_bytes);
+  if (!opening) return <OneLine text={e.plan_summary} />;
+  return (
+    <span className="col" style={{ gap: 2 }}>
+      <OneLine text={`${e.plan_summary}…`} />
+      <ReadWhole seat={seat} episode={e} bytes={e.plan_summary_bytes} />
+    </span>
   );
 }
 
@@ -211,12 +314,12 @@ export function EpisodesCard({
           {
             key: "woke",
             header: "Woken by",
-            cell: (e) => <EpisodeWokenCell episode={e} />,
+            cell: (e) => <EpisodeWokenCell seat={memory.id} episode={e} />,
           },
           {
             key: "did",
             header: "What it did",
-            cell: (e) => <EpisodeDidCell episode={e} />,
+            cell: (e) => <EpisodeDidCell seat={memory.id} episode={e} />,
           },
           {
             key: "outcome",

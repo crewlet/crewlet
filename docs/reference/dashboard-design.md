@@ -2314,7 +2314,9 @@ bar of nothing named "unknown" — with the way to all of its activity on Live. 
 copy is the one kept current, and says which node answered: the diary, the
 episodes (each outcome in the reviewer's own tone — `failed` is red here as on
 a turn; each turn's **Woken by** — the waking event's label, with what it was
-asked under it — apart from **What it did**, its account, because the label
+asked under it — apart from **What it did**, its account, each an opening
+marked with `…` and a **Read all** that opens the turn whole where the text is
+longer than the list carries, because the label
 under "What it did" said every chat turn had done "Message from Ana"; and a
 compacted row as how many turns it stands for, their pattern and what varied,
 and how many of them ended done — or, from a holder on an older build that

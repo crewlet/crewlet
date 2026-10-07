@@ -63,11 +63,18 @@ interface Episode {
    *  message") — what woke it, never what it did. */
   task_summary: string;
   /** What the turn was asked: "" for a turn recorded before the ask was
-   *  stored, and on every compacted row. */
+   *  stored, and on every compacted row. On a LISTED row this is its opening
+   *  — at most 600 bytes — and `agent_episode` reads it whole. */
   ask: string;
+  /** The size of the whole ask in bytes: the ask above is all of it exactly
+   *  when this is its length. Zero from a holder on a build that sends no
+   *  size, which sends no ask either — read as a text that is whole. */
+  ask_bytes: number;
   /** What the turn DID: the review's account of what landed, or its final
-   *  answer. */
+   *  answer — on a listed row its opening, as `ask` is. */
   plan_summary: string;
+  /** The size of the whole account, as `ask_bytes` is the ask's. */
+  plan_summary_bytes: number;
   /** "" when the turn ended without a review outcome. */
   review_outcome: string;
   /** Null when the turn recorded none. */
@@ -87,6 +94,19 @@ interface Episode {
    *  whose holder runs a build that does not say, which is the holder not
    *  saying rather than a compaction that recorded nothing. */
   compaction: EpisodeCompaction | null;
+}
+
+/** One episode read WHOLE, as the `agent_episode` answer sends it: what a
+ *  listed row carries the openings of, complete — answered by the seat's
+ *  holder, which it names. */
+export interface AgentEpisode {
+  /** The handle the answer is about. */
+  handle: string;
+  /** The row with its ask and its account whole, or null when the seat no
+   *  longer holds it — the lifecycle dropped it or folded it into a compacted
+   *  row since it was listed. */
+  episode: Episode | null;
+  held_by: string;
 }
 
 /** One skill the seat drafted from its own repeated work. */

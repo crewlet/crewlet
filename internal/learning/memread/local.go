@@ -162,25 +162,42 @@ type DiaryRow struct {
 // headed the first "What it did" told an operator every chat turn had done
 // "Message from Ana". A compacted row has neither, so it carries what it is
 // instead ([EpisodeRow.Compaction]).
+//
+// A LISTED ROW CARRIES ITS TWO UNBOUNDED TEXTS AS THEIR OPENINGS — the ask and
+// the account, at most [ListedTextBytes] each, with the size of each whole
+// beside it — and [Reader.Episode] reads one row whole. Carried whole, a page of
+// fifty could be more than the transport takes, an ask being bounded only by
+// the event that delivered it, and the holder then refused the whole memory
+// read: the screen showed the seat unavailable for as long as those turns were
+// its newest.
 type EpisodeRow struct {
 	ID          string `json:"id"`
 	TurnID      string `json:"turn_id"`
 	AgentHandle string `json:"agent_handle"`
 	// TaskSummary is the label of the event that woke the turn.
 	TaskSummary string `json:"task_summary"`
-	// Ask is what the turn was asked: "" for a turn recorded before the ask
-	// was stored (node migration 0042), and on every compacted row.
-	Ask string `json:"ask"`
-	// PlanSummary is what the turn did: the review's account of what
-	// landed, or its final answer.
-	PlanSummary     string   `json:"plan_summary"`
-	ReviewOutcome   string   `json:"review_outcome"`
-	ToolSequence    []string `json:"tool_sequence"`
-	SkillsUsed      []string `json:"skills_used"`
-	ConversationKey string   `json:"conversation_key"`
-	WorkKey         string   `json:"work_key"`
-	CreatedAt       string   `json:"created_at"`
-	EndedAt         string   `json:"ended_at"`
+	// Ask is what the turn was asked — "" for a turn recorded before the ask
+	// was stored (node migration 0042), and on every compacted row — and
+	// AskBytes the size of the whole of it: on a listed row Ask is its
+	// opening, whole exactly when AskBytes is its length.
+	//
+	// ZERO FROM A HOLDER WHOSE BUILD SENDS NO SIZE, which sends no ask
+	// either; a reader takes a zero size for a text that is whole.
+	Ask      string `json:"ask"`
+	AskBytes int    `json:"ask_bytes"`
+	// PlanSummary is what the turn did — the review's account of what
+	// landed, or its final answer — and PlanSummaryBytes the size of the
+	// whole of it, as Ask's. A holder whose build sends no size sends the
+	// account whole.
+	PlanSummary      string   `json:"plan_summary"`
+	PlanSummaryBytes int      `json:"plan_summary_bytes"`
+	ReviewOutcome    string   `json:"review_outcome"`
+	ToolSequence     []string `json:"tool_sequence"`
+	SkillsUsed       []string `json:"skills_used"`
+	ConversationKey  string   `json:"conversation_key"`
+	WorkKey          string   `json:"work_key"`
+	CreatedAt        string   `json:"created_at"`
+	EndedAt          string   `json:"ended_at"`
 	// DurationMs is milliseconds: a time.Duration marshals as NANOSECONDS,
 	// which renders as a plausible and wildly wrong number.
 	DurationMs int64 `json:"duration_ms"`
@@ -210,6 +227,31 @@ type EpisodeCompaction struct {
 	Done int `json:"done"`
 	// NotablePatterns is what varied across them.
 	NotablePatterns string `json:"notable_patterns"`
+}
+
+// ListedTextBytes is how much of an episode's ask, and of its account, a listed
+// row carries: the opening a listing draws on one line, the rest one read away
+// ([Reader.Episode]).
+//
+// SIX HUNDRED, the figure a prompt is shown of a past turn's own words before
+// they are condensed (learning.EpisodeAccountBytes), and for its reason: a chat
+// message or two, or a review's account of what landed, is whole, so a text a
+// seat is shown whole is whole on the screen too. It is what bounds the page —
+// fifty rows of two openings are sixty kilobytes, where whole they were bounded
+// only by fifty events.
+const ListedTextBytes = 600
+
+// EpisodeDetail is one episode read whole, as the `agent_episode` answer sends
+// it: its ask and its account complete.
+type EpisodeDetail struct {
+	// Handle is the seat the answer is about.
+	Handle string `json:"handle"`
+	// Episode is the row, or null when the seat holds no episode of that
+	// id — the lifecycle dropped it or folded it into a compacted row since
+	// it was listed, which is an ordinary absence rather than a failure.
+	Episode *EpisodeRow `json:"episode"`
+	// HeldBy is as [Memory.HeldBy].
+	HeldBy string `json:"held_by"`
 }
 
 // SkillRow is one skill the seat drafted from its own repeated work.
@@ -318,7 +360,8 @@ func (s *Stores) Memory(ctx context.Context, handle string, limit int) (Memory, 
 		}
 	}
 	if s.Episodes != nil {
-		episodes, err := s.Episodes.Recent(ctx, handle, limit)
+		// THE OPENINGS, never the whole texts: see [EpisodeRow].
+		episodes, err := s.Episodes.Listing(ctx, handle, limit, ListedTextBytes)
 		if err != nil {
 			return Memory{}, err
 		}
@@ -378,6 +421,24 @@ func (s *Stores) Memory(ctx context.Context, handle string, limit int) (Memory, 
 	return out, nil
 }
 
+// Episode reads one of a seat's episodes whole from THIS node's store: its ask
+// and its account complete, where a listing carries their openings.
+func (s *Stores) Episode(ctx context.Context, handle, id string) (EpisodeDetail, error) {
+	out := EpisodeDetail{Handle: handle}
+	if s.Episodes == nil || id == "" {
+		return out, nil
+	}
+	e, found, err := s.Episodes.Get(ctx, handle, id)
+	if err != nil || !found {
+		return out, err
+	}
+	row := episodeRow(learning.ListedEpisode{
+		Episode: e, AskBytes: len(e.Ask), PlanSummaryBytes: len(e.PlanSummary),
+	})
+	out.Episode = &row
+	return out, nil
+}
+
 // Threads reads one seat's conversation ledger from THIS node's store — a
 // page of its threads and, when one is named, what it recorded there.
 func (s *Stores) Threads(ctx context.Context, handle, conversation string, limit int) (Threads, error) {
@@ -426,10 +487,14 @@ func diaryRow(e learning.DiaryEntry) DiaryRow {
 	}
 }
 
-func episodeRow(e learning.Episode) EpisodeRow {
+// episodeRow is one listed episode as the answer sends it: its openings, and
+// the size of each text whole.
+func episodeRow(listed learning.ListedEpisode) EpisodeRow {
+	e := listed.Episode
 	row := EpisodeRow{
 		ID: e.ID, TurnID: e.TurnID, AgentHandle: e.Handle,
-		TaskSummary: e.TaskSummary, Ask: e.Ask, PlanSummary: e.PlanSummary,
+		TaskSummary: e.TaskSummary, Ask: e.Ask, AskBytes: listed.AskBytes,
+		PlanSummary: e.PlanSummary, PlanSummaryBytes: listed.PlanSummaryBytes,
 		ReviewOutcome: e.ReviewOutcome, ToolSequence: e.ToolSequence,
 		SkillsUsed: e.SkillsUsed, ConversationKey: e.ConversationKey,
 		WorkKey: e.WorkKey, CreatedAt: iso(e.StartedAt), EndedAt: iso(e.EndedAt),

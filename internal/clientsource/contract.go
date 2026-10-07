@@ -183,6 +183,7 @@ var contract = []Entry{
 
 	// memory.ts
 	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"AgentEpisode", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"DiaryEntry", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"Episode", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"EpisodeCompaction", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},

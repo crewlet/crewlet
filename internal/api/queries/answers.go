@@ -644,6 +644,10 @@ func Register(r *Registry, s Sources) {
 		// ANSWERED BY THE HOLDER, and saying which node that was — see
 		// [Sources.Memory].
 		r.Register("agent_memory", s.agentMemory)
+		// ONE EPISODE WHOLE, which the listing carries the openings of —
+		// a page of fifty whole asks could be more than the transport
+		// takes.
+		r.Register("agent_episode", s.agentEpisode)
 		// EVERY AGENT SEAT'S TOTALS IN ONE ANSWER, each counted by its
 		// holder in one scatter — what the diaries list draws, where a
 		// read per seat would be a lease read and a scatter per row.

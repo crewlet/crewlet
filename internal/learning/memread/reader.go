@@ -55,11 +55,16 @@ const (
 	// one question addressed to MANY incarnations — every holder named in
 	// the request's `seats` answers for its own.
 	QuestionOverview Question = "overview"
+	// QuestionEpisode is one of a seat's episodes whole: [EpisodeDetail].
+	// A holder on a build from before it answers that it cannot, which the
+	// read reports as unavailable naming the reason.
+	QuestionEpisode Question = "episode"
 )
 
 // Valid reports whether this build can answer q.
 func (q Question) Valid() bool {
-	return q == QuestionMemory || q == QuestionThreads || q == QuestionOverview
+	return q == QuestionMemory || q == QuestionThreads || q == QuestionOverview ||
+		q == QuestionEpisode
 }
 
 // Leases reads which incarnation holds a seat — one seat's lease for a read of
@@ -150,6 +155,24 @@ func (r *Reader) Memory(ctx context.Context, handle string, limit int) (Memory, 
 	}
 	if holder == "" {
 		return emptyMemory(handle, HolderNone), nil
+	}
+	out.HeldBy = holder
+	return out, nil
+}
+
+// Episode is one of a seat's episodes whole, answered by its holder: what a
+// listed row carries the openings of ([EpisodeRow]).
+func (r *Reader) Episode(ctx context.Context, handle, id string) (EpisodeDetail, error) {
+	req := request{Version: WireVersion, Question: QuestionEpisode, Handle: handle, Episode: id}
+	var out EpisodeDetail
+	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
+		return r.Local.Episode(ctx, handle, id)
+	})
+	if err != nil {
+		return EpisodeDetail{}, err
+	}
+	if holder == "" {
+		return EpisodeDetail{Handle: handle, HeldBy: HolderNone}, nil
 	}
 	out.HeldBy = holder
 	return out, nil
@@ -283,13 +306,15 @@ func NodeOf(owner string) string {
 // named — or, for an overview, to every incarnation `Seats` names, each asked
 // about the seats listed under it.
 type request struct {
-	Version      int                 `json:"v"`
-	Question     Question            `json:"q"`
-	Handle       string              `json:"handle,omitempty"`
-	Owner        string              `json:"owner,omitempty"`
-	Limit        int                 `json:"limit,omitempty"`
-	Conversation string              `json:"conversation,omitempty"`
-	Seats        map[string][]string `json:"seats,omitempty"`
+	Version      int      `json:"v"`
+	Question     Question `json:"q"`
+	Handle       string   `json:"handle,omitempty"`
+	Owner        string   `json:"owner,omitempty"`
+	Limit        int      `json:"limit,omitempty"`
+	Conversation string   `json:"conversation,omitempty"`
+	// Episode names the one episode a [QuestionEpisode] read is about.
+	Episode string              `json:"episode,omitempty"`
+	Seats   map[string][]string `json:"seats,omitempty"`
 }
 
 // reply is the addressed incarnation's answer, or why it could not give one.
@@ -347,6 +372,8 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []string
 			answer, err = local.Memory(ctx, req.Handle, req.Limit)
 		case QuestionThreads:
 			answer, err = local.Threads(ctx, req.Handle, req.Conversation, req.Limit)
+		case QuestionEpisode:
+			answer, err = local.Episode(ctx, req.Handle, req.Episode)
 		}
 		if err != nil {
 			log.WarnContext(ctx, "held_read_failed", "question", string(req.Question),
@@ -394,10 +421,17 @@ func answerWith(owner string, answer any, refuse func(string) ([]byte, error)) (
 		return nil, fmt.Errorf("memread: encode an answer: %w", err)
 	}
 	// A REPLY THE TRANSPORT CANNOT CARRY IS NOT SENT AT ALL, and the asker
-	// would read the broker's refusal as a holder that never answered. Every
-	// collection is paged and an overview row is three counts and one
-	// bounded note, so this is a guard against a bug rather than a size a
-	// seat reaches — and it says so.
+	// would read the broker's refusal as a holder that never answered — so
+	// this refuses it, saying how large it was. Every collection of a memory
+	// answer is paged, a diary note is bounded where it is written
+	// (learning.MaxContentChars), and the two texts nothing bounds — an
+	// episode's ask and its account — are listed as their openings
+	// ([ListedTextBytes]); an overview row is three counts and one bounded
+	// note. So neither answer comes near the ceiling. ONE EPISODE READ WHOLE
+	// carries the two texts one completed turn's event carried, which this
+	// same ceiling held, so it is bounded by that event and not by anything
+	// here — and should one ever not fit, it is refused, by its size, rather
+	// than cut.
 	out, err := json.Marshal(reply{Version: WireVersion, Owner: owner, Answer: body})
 	if err != nil {
 		return nil, fmt.Errorf("memread: encode a reply: %w", err)

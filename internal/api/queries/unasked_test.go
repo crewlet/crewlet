@@ -231,14 +231,19 @@ type stubMemory struct {
 	threads memread.Threads
 	err     error
 
-	handle, conversation string
-	limit                int
-	handles              []string
+	handle, conversation, episode string
+	limit                         int
+	handles                       []string
 }
 
 func (s *stubMemory) Memory(_ context.Context, handle string, limit int) (memread.Memory, error) {
 	s.handle, s.limit = handle, limit
 	return s.memory, s.err
+}
+
+func (s *stubMemory) Episode(_ context.Context, handle, id string) (memread.EpisodeDetail, error) {
+	s.handle, s.episode = handle, id
+	return memread.EpisodeDetail{Handle: handle}, s.err
 }
 
 func (s *stubMemory) Threads(_ context.Context, handle, conversation string, limit int) (
