@@ -52,15 +52,14 @@ import (
 //   - v4: `failed` on a listing's filters — the event log's "Failures only",
 //     which used to narrow the rows a tab had paged in rather than the rows
 //     it was sent.
-//   - v5: `feed_only` on a HISTOGRAM's filters — the activity views' axis,
-//     which leaves out a stored type the feed does not carry
-//     (`auxiliary_spend`). A listing carries the same field at its other
-//     filters' version, because the asker re-applies it to every row a peer
-//     sent ([reapplied]); a bar it cannot re-apply to.
-//   - v6: `before` on a phase-token read — the live spend window's seed,
+//   - v5: `before` on a phase-token read — the live spend window's seed,
 //     read in pages so that no one node's reply carries its whole day
 //     ([Fleet.PhaseTokens]).
-const Protocol = 6
+//
+// `feed_only` is in no version at all, on a listing or an axis: the asker
+// narrows whatever a peer that did not know it sent ([reapplied]), so asking it
+// at a version of its own would only refuse that peer's whole answer.
+const Protocol = 5
 
 // versionOf is the lowest scatter version that answers one question with
 // these parameters.
@@ -77,14 +76,7 @@ func versionOf(q Question, params any) int {
 	switch q {
 	case QuestionSeries:
 		if p, ok := params.(seriesParams); ok {
-			v := max(2, p.List.version())
-			if p.List.FeedOnly {
-				// A BAR CANNOT BE NARROWED AFTER THE FACT, so the
-				// filter a listing leaves to its asker is a version
-				// here — see [reapplied].
-				v = max(v, 5)
-			}
-			return v
+			return max(2, p.List.version())
 		}
 		return 2
 	case QuestionEvents:
@@ -97,7 +89,7 @@ func versionOf(q Question, params any) int {
 		}
 	case QuestionPhaseTokens:
 		if p, ok := params.(phaseTokenParams); ok && p.Before != nil {
-			return 6
+			return 5
 		}
 	case QuestionTurns:
 		// A PEER THAT READS ONLY `since_days` would answer the last week
@@ -110,19 +102,24 @@ func versionOf(q Question, params any) int {
 	return 1
 }
 
-// reapplied is every listing filter the ASKER re-applies to the rows each node
-// sent ([listParams.admits]), with why it can be — and so the one kind of
-// filter a LISTING asks in no version of its own.
+// reapplied is every filter the ASKER applies again to what each node sent,
+// with how — and so the one kind of filter asked in no version of its own,
+// on a listing or on an axis.
 //
-// A filter on what every row carries in itself, its type, can be re-applied to
+// A filter on what every row carries in itself, its type, can be applied to
 // whatever a peer sent, so a peer that dropped the filter and answered wider
 // costs a shorter page rather than wrong rows — and raising the version for it
-// would cost that peer's whole answer, which is the worse trade. A HISTOGRAM
-// cannot be narrowed after the fact, a bar being a count, so its axis is still
-// asked at the filter's version ([versionOf]).
+// would cost that peer's whole answer, which is the worse trade. A LISTING is
+// narrowed row by row ([listParams.admits]). A HISTOGRAM cannot be — a bar is
+// a count — so a peer that did not narrow it is asked a second time, for the
+// axis of exactly the rows it should have left out, and that axis is taken
+// back out of the first one bar by bar ([Fleet.Histogram]). A peer that did
+// narrow it says which types it left out ([seriesPart.KeptOut]), so only what
+// it counted and the asker would not is ever asked about again.
 var reapplied = map[string]string{
 	"FeedOnly": "the activity feed's types, by each row's own type: the asker " +
-		"drops every type events.KeptOutOfFeed names from every part",
+		"drops every type events.KeptOutOfFeed names from a listing's rows, and " +
+		"subtracts the axis of each such type a peer counted from that peer's bars",
 }
 
 // admits is the filters this listing sets that the asker re-applies, as one
@@ -286,12 +283,13 @@ type listParams struct {
 	Failed *bool `json:"failed,omitempty"`
 
 	// [store.ListQuery.FeedOnly]: the rows the activity feed carries, which
-	// every view merged with the live ring asks for. v5 on a histogram, and
-	// on a listing NO VERSION OF ITS OWN: the asker re-applies it to every
-	// row a peer sent ([reapplied]), so a peer that does not know it — or
-	// knows a shorter list of the types it leaves out — answers a page the
-	// asker narrows rather than being refused, which cost a restarted node's
-	// feed every older peer's recent events for the length of an upgrade.
+	// every view merged with the live ring asks for. NO VERSION OF ITS OWN,
+	// on a listing or an axis: the asker narrows what a peer sent
+	// ([reapplied]), so a peer that does not know it — or knows a shorter
+	// list of the types it leaves out — answers what the asker narrows rather
+	// than being refused, which cost a restarted node's feed every older
+	// peer's recent events, and the Live strip and the event log's axis every
+	// older peer's bars, for the length of an upgrade.
 	FeedOnly bool `json:"feed_only,omitempty"`
 }
 
@@ -387,7 +385,7 @@ type phaseTokenParams struct {
 	AgentRole string    `json:"role,omitempty"`
 	Limit     int       `json:"limit,omitempty"`
 
-	// v6: the page a paged read resumes below — see [Fleet.PhaseTokens].
+	// v5: the page a paged read resumes below — see [Fleet.PhaseTokens].
 	// An older peer ignoring it would answer the FIRST page again, which
 	// the merge would dedupe into a page that stops where that one did.
 	Before *cursorWire `json:"before,omitempty"`
@@ -476,10 +474,9 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		h, err := log.Histogram(ctx, store.HistogramQuery{
+		return seriesPartOf(ctx, log, store.HistogramQuery{
 			ListQuery: p.List.query(), Bucket: p.Bucket, At: p.At,
 		})
-		return h, err
 	case QuestionEvent:
 		var p idParams
 		if err := decode(&p); err != nil {

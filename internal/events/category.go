@@ -237,12 +237,18 @@ var excluded = map[string]string{
 // for the feed's rows — a type filter, a turn, a trace, a work key.
 //
 // MOVING A TYPE INTO THE CLASS is a change both sides of the history scatter
-// see, because a peer on the build before still counts it as a feed row. A
-// listing needs nothing: the asker drops the rows of every type this build
-// keeps out from whatever a peer sent (internal/eventfan). A histogram does —
-// a bar cannot be narrowed after the fact — so the addition takes a new
-// scatter version for a feed-only axis, which the older peer then refuses by
-// name rather than answering with the type counted in.
+// see, because a peer on the build before still counts it as a feed row, and
+// the asker narrows that peer by this list whatever the peer knows
+// (internal/eventfan). A listing it narrows row by row. An axis it takes apart:
+// the peer's answer names the types it left out, and for each one this list
+// holds and that answer does not, the peer is asked for the axis of that type
+// alone and those bars are subtracted from its own. The subtraction is exact
+// when the older build writes none of the type — true of a type new in the
+// build that keeps it out, as auxiliary_spend is. A type an older build still
+// WRITES is subtracted from a second read its new rows can reach and the first
+// did not, so moving one into the class leaves that build's current bar short
+// by what it writes between the two reads, for the length of the upgrade; a
+// difference that goes below zero is refused and the peer named.
 var unfed = map[string]string{
 	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
 		"the auxiliary model cost for one key, several per turn beside the " +

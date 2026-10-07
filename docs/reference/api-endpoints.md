@@ -1715,13 +1715,15 @@ answers carries one shape:
   only the role name that question used to carry, and would answer every
   seat's), and `event_series` always is at least the version that added its
   `failed` split, a field an older node never sends: its bars would be summed
-  in as though none of its events failed. `feed_only` is the one filter a
-  LISTING asks in no version of its own: it is on each row's own type, so the
-  node that asked drops what an older node sent wider rather than losing that
-  node's whole answer — while an axis narrowed by it, a count nothing can
-  narrow afterwards, is asked in the version that introduced it. A later page
-  of the projection's spend seed carries its cursor in a version of its own,
-  which an older build would otherwise ignore and answer the first page again.
+  in as though none of its events failed. `feed_only` is the one filter asked
+  in no version of its own, on `events` or on `event_series`: it is on each
+  row's own type, so the node that asked narrows what an older node sent wider
+  rather than losing that node's whole answer — a listing row by row, and an
+  axis by asking that node once more for the bars of the types it counted and
+  the feed leaves out, and subtracting them from its own. A node that cannot be
+  narrowed that way is named. A later page of the projection's spend seed
+  carries its cursor in a version of its own, which an older build would
+  otherwise ignore and answer the first page again.
 - It sits at the top of each answer — beside the record's own fields on
   `event` and on `event_series` — and is `null` on `agent` and `integrations`
   when the history could not be read at all.

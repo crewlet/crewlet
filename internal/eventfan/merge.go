@@ -2,6 +2,7 @@ package eventfan
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"time"
 
@@ -251,6 +252,49 @@ func MergeSeries(base store.EventHistogram, others []store.EventHistogram) (stor
 		}
 	}
 	return out, refused
+}
+
+// subtractSeries is an axis with another taken back out of it, bar by bar: its
+// counts, its failed split, its totals and its category counts — the second
+// being the axis of rows the first counted and should not have.
+//
+// REFUSED, rather than answered, for two axes that are not bars of one window,
+// and for a difference that would go below zero anywhere: the second axis then
+// counts rows the first did not, so the two reads disagree about what the node
+// holds and neither difference is the node's answer.
+func subtractSeries(from, out store.EventHistogram) (store.EventHistogram, bool) {
+	if !aligned(from, out) {
+		return from, false
+	}
+	got := from
+	got.Bars = slices.Clone(from.Bars)
+	for j := range got.Bars {
+		got.Bars[j].Count -= out.Bars[j].Count
+		got.Bars[j].Failed -= out.Bars[j].Failed
+		if got.Bars[j].Count < 0 || got.Bars[j].Failed < 0 {
+			return from, false
+		}
+	}
+	got.Total -= out.Total
+	got.Failed -= out.Failed
+	if got.Total < 0 || got.Failed < 0 {
+		return from, false
+	}
+	got.ByCategory = make(map[string]int, len(from.ByCategory))
+	maps.Copy(got.ByCategory, from.ByCategory)
+	for k, v := range out.ByCategory {
+		left := got.ByCategory[k] - v
+		switch {
+		case left < 0:
+			return from, false
+		case left == 0:
+			// A category with no rows is absent, as the store answers it.
+			delete(got.ByCategory, k)
+		default:
+			got.ByCategory[k] = left
+		}
+	}
+	return got, true
 }
 
 // aligned reports whether two histograms are bars of one window.

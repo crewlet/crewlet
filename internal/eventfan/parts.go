@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -56,6 +57,35 @@ func listPartOf(ctx context.Context, log *store.EventLog, q store.ListQuery) (li
 	// walk. The phase and turn listings, whose `more` IS their cursor, ask
 	// the store one row past the page instead.
 	return listPart{Rows: rows, Full: len(rows) >= q.Limit}, nil
+}
+
+// seriesPart is one node's time axis, and which types it left out of it.
+//
+// THE AXIS'S OWN FIELDS AT THE TOP LEVEL, by embedding, so the reply is the
+// histogram an older asker decodes, with one field beside it that it ignores.
+type seriesPart struct {
+	store.EventHistogram
+
+	// KeptOut is every type this node's own build keeps out of the feed —
+	// what it left out of an axis asked for the feed's rows, and nothing on
+	// one that was not. ABSENT IS AN ANSWER: a build that does not send it
+	// does not know `feed_only` and left nothing out, which is exactly what
+	// its bars count. The asker takes out of them every type IT keeps out
+	// that this does not list ([Fleet.Histogram]), so a peer is narrowed by
+	// the asker's rule whichever build it runs.
+	KeptOut []string `json:"kept_out,omitempty"`
+}
+
+func seriesPartOf(ctx context.Context, log *store.EventLog, q store.HistogramQuery) (seriesPart, error) {
+	h, err := log.Histogram(ctx, q)
+	if err != nil {
+		return seriesPart{}, err
+	}
+	part := seriesPart{EventHistogram: h}
+	if q.FeedOnly {
+		part.KeptOut = events.Unfed()
+	}
+	return part, nil
 }
 
 // eventPart is one node's copy of one event, or nothing.

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -386,6 +388,9 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 //
 // THE WINDOW IS PINNED to this node's clock before anybody is asked, so every
 // node cuts the same bars — see [store.HistogramQuery.At].
+//
+// A FEED-ONLY AXIS IS NARROWED BY THE ASKER, on its own list of the types the
+// feed leaves out, whatever each peer knows: see [Fleet.narrowSeries].
 func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.EventHistogram, Coverage, error) {
 	started := time.Now()
 	if q.At.IsZero() {
@@ -393,24 +398,139 @@ func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.Ev
 	}
 	p := seriesParams{List: listParamsOf(q.ListQuery), Bucket: q.Bucket, At: q.At}
 	g, err := gather(ctx, f, QuestionSeries, p, nil,
-		func(ctx context.Context) (store.EventHistogram, error) { return f.Local.Histogram(ctx, q) })
+		func(ctx context.Context) (seriesPart, error) { return seriesPartOf(ctx, f.Local, q) })
 	if err != nil {
 		return store.EventHistogram{}, Coverage{}, err
 	}
-	others := make([]store.EventHistogram, 0, len(g.peers))
-	for _, p := range g.peers {
-		others = append(others, p.part)
+	peers, coverage, err := f.narrowSeries(ctx, q, g.peers, g.coverage)
+	if err != nil {
+		return store.EventHistogram{}, Coverage{}, err
 	}
-	merged, refused := MergeSeries(g.mine, others)
-	coverage := g.coverage
+	others := make([]store.EventHistogram, 0, len(peers))
+	for _, p := range peers {
+		others = append(others, p.part.EventHistogram)
+	}
+	merged, refused := MergeSeries(g.mine.EventHistogram, others)
 	for _, i := range refused {
 		coverage = coverage.And(Coverage{Complete: false, Nodes: []NodeCoverage{{
-			ID: g.peers[i].node, Error: "it answered a different window, so its bars " +
+			ID: peers[i].node, Error: "it answered a different window, so its bars " +
 				"cannot be summed with this node's; it is running a different build",
 		}}})
 	}
 	f.report(QuestionSeries, coverage, started)
 	return merged, coverage, nil
+}
+
+// narrowSeries takes out of each peer's axis the rows of every type this node
+// keeps out of the feed that the peer counted, and answers the peers' axes as
+// they are to be summed.
+//
+// A BAR CANNOT BE NARROWED AFTER THE FACT, but it can be taken apart: a peer
+// that did not leave a type out — a build that does not know `feed_only`, or
+// one whose list of the feed's types is shorter than this node's — is asked
+// once more, for the axis of that type alone over the same window and buckets,
+// and that axis is subtracted from its bars, its failed split and its category
+// counts. Refusing such a peer instead, by asking `feed_only` at a version of
+// its own, cost the Live strip and the event log's axis every older node's bars
+// for the length of an upgrade.
+//
+// ONE READ, NOT TWO, wherever the peer can narrow: a peer that left a type out
+// says so ([seriesPart.KeptOut]) and is never asked about it again, so in a
+// fleet on one build this asks nothing extra. Where some peer does owe a type,
+// the second read goes to the fleet's one subject like every other and every
+// node answers it — an index range of one type over one window — and only the
+// owing peers' answers are used. And it is EXACT for the peers it
+// does ask, because the axis is subtracted from a read the type's rows could
+// change between only if the peer is still writing them — and a build that
+// counts a type as a feed row is one from before that type was kept out, which
+// for every type in the class today ([events.Unfed]) is a build from before the
+// type existed. A subtraction that would leave a count below zero says the two
+// reads disagree, and that peer is named rather than summed.
+//
+// A peer that answered the axis and not the second read is named too, and left
+// out: its bars hold rows the feed does not.
+func (f *Fleet) narrowSeries(ctx context.Context, q store.HistogramQuery, parts []peer[seriesPart],
+	coverage Coverage,
+) ([]peer[seriesPart], Coverage, error) {
+	if !q.FeedOnly {
+		return parts, coverage, nil
+	}
+	// owed[i] is every type peer i counted that the feed leaves out.
+	owed := make([][]string, len(parts))
+	asked := map[string]bool{}
+	for i, part := range parts {
+		for _, kind := range events.Unfed() {
+			if slices.Contains(part.part.KeptOut, kind) || (q.Type != "" && q.Type != kind) {
+				// Left out already, or an axis that counts no row of it.
+				continue
+			}
+			owed[i] = append(owed[i], kind)
+			asked[kind] = true
+		}
+	}
+	if len(asked) == 0 {
+		return parts, coverage, nil
+	}
+	// EVERY OWED TYPE AT ONCE, so the second read costs one budget however
+	// many types are owed. The asker's own share is never one of them: it
+	// narrowed its axis in its own read.
+	type owedAxis struct {
+		byNode map[string]store.EventHistogram
+		err    error
+	}
+	axes := make(map[string]owedAxis, len(asked))
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	for kind := range asked {
+		wg.Go(func() {
+			only := q
+			only.Type, only.FeedOnly = kind, false
+			p := seriesParams{List: listParamsOf(only.ListQuery), Bucket: q.Bucket, At: q.At}
+			g, err := gather(ctx, f, QuestionSeries, p, nil,
+				func(context.Context) (seriesPart, error) { return seriesPart{}, nil })
+			byNode := make(map[string]store.EventHistogram, len(g.peers))
+			for _, got := range g.peers {
+				byNode[got.node] = got.part.EventHistogram
+			}
+			mu.Lock()
+			axes[kind] = owedAxis{byNode: byNode, err: err}
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	for _, axis := range axes {
+		if axis.err != nil {
+			return nil, Coverage{}, axis.err
+		}
+	}
+
+	out := make([]peer[seriesPart], 0, len(parts))
+	for i, part := range parts {
+		narrowed, why := part.part.EventHistogram, ""
+		for _, kind := range owed[i] {
+			axis, ok := axes[kind].byNode[part.node]
+			if !ok {
+				why = "it counted " + kind + " rows into an axis of the feed's rows, which its " +
+					"build does not leave out, and did not answer the read that would take them back out"
+				break
+			}
+			if narrowed, ok = subtractSeries(narrowed, axis); !ok {
+				why = "it counted " + kind + " rows into an axis of the feed's rows, which its " +
+					"build does not leave out, and the read that would take them back out does not " +
+					"fit its axis: the two disagree, so its bars cannot be narrowed"
+				break
+			}
+		}
+		if why != "" {
+			coverage = coverage.And(Coverage{Complete: false, Nodes: []NodeCoverage{{ID: part.node, Error: why}}})
+			continue
+		}
+		part.part.EventHistogram = narrowed
+		out = append(out, part)
+	}
+	return out, coverage, nil
 }
 
 // ByID answers one event, from whichever node holds it.
@@ -699,7 +819,7 @@ const PhaseTokenPage = 4096
 // disjoint because each resumes strictly below the last.
 //
 // The first page goes out at v1, so every build answers it; a later page
-// carries its cursor at v6, which a peer on an older build refuses by name and
+// carries its cursor at v5, which a peer on an older build refuses by name and
 // the coverage reports. A page this node could not finish — its own read
 // failing, or the read's context ending — stops the walk with the records
 // read so far, which are the window's newest, and the coverage says the

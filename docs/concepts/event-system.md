@@ -429,11 +429,19 @@ counts and a page never lists a row the feed would not hold. The row is still
 in `GET /events` without it, a turn's history and a trace.
 
 During a rolling upgrade a node on the build before may not know a type is kept
-out, or not know `feed_only` at all. A feed-only listing is still answered by
-it — the node that asked drops those rows itself, since every row names its
-type — while a feed-only axis is asked at a scatter version that node refuses,
-because a bar cannot be narrowed after the fact; it is named in the answer's
-coverage rather than counted wrong.
+out, or not know `feed_only` at all, and it is still answered and narrowed by
+the node that asked, on that node's own list of the types the feed leaves out.
+A feed-only listing it answers wider, and the node that asked drops those rows
+itself, since every row names its type. A bar cannot be narrowed that way, so
+an axis says which types it left out: one from a node that left out a type the
+asker keeps out is taken apart instead — that node is asked once more, for the
+axis of exactly that type over the same window, and those bars are subtracted
+from its own, failed split and category counts included. A build from before a
+type was kept out writes none of it (the only rows of it such a node holds are
+ones a newer build wrote before a rollback), so the difference is exact; a node
+that does not answer the second read, or whose two answers disagree, is named
+in the answer's coverage rather than counted wrong. A fleet on one build asks
+nothing extra.
 
 ---
 
