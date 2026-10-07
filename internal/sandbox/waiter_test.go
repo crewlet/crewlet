@@ -875,6 +875,106 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 	waiter.Stop()
 }
 
+// A PASS LEAVES NOTHING BEHIND IN THE CONTEXT IT WAS GIVEN. That context is
+// the loop's, which lives as long as the process, so a child of it nobody
+// cancelled stays in its list of children until the engine stops — one more
+// every pass, on every node.
+//
+// Mutation: make the walk's context twice, overwriting the first cancel func
+// with the deadline's, and every pass leaves one child registered.
+func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	waiter, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Now:       func() time.Time { return rig.now },
+		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
+		DutyTTL:   time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	parent := newChildCounter()
+	defer parent.cancel()
+	const passes = 5
+	for range passes {
+		if _, err := waiter.Tick(parent); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+	// The walk cancels its own context as it returns, AFTER the last task
+	// it started has told the round it is done — so the round's end is
+	// not quite the walk's. Wait for every task the waiter started.
+	waiter.tasks.Wait()
+	if live := parent.live(); live != 0 {
+		t.Fatalf("%d passes left %d children of their context registered; want none", passes, live)
+	}
+}
+
+// childCounter is a context that counts the children registered on it and not
+// yet cancelled. A context the standard library did not make, with an
+// AfterFunc method, is one every child derived from it registers with through
+// that method, and deregisters from by calling the stop it returned — which is
+// exactly a child's lifetime in its parent's list.
+type childCounter struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+
+	mu       sync.Mutex
+	children map[int]func()
+	next     int
+}
+
+func newChildCounter() *childCounter {
+	return &childCounter{Context: context.Background(), done: make(chan struct{}), children: map[int]func(){}}
+}
+
+func (c *childCounter) Done() <-chan struct{} { return c.done }
+
+func (c *childCounter) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *childCounter) AfterFunc(f func()) func() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.next
+	c.next++
+	c.children[id] = f
+	return func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.children[id]
+		delete(c.children, id)
+		return ok
+	}
+}
+
+func (c *childCounter) live() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.children)
+}
+
+func (c *childCounter) cancel() {
+	c.once.Do(func() {
+		close(c.done)
+		c.mu.Lock()
+		children := c.children
+		c.children = map[int]func(){}
+		c.mu.Unlock()
+		for _, f := range children {
+			f()
+		}
+	})
+}
+
 // A MANAGER SWAPPED AFTER THE WAITER STARTED IS THE ONE THE NEXT TICK POLLS
 // THROUGH — and the box a job is still running in stays reachable on a cell the
 // new catalogue dropped.

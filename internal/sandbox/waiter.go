@@ -379,8 +379,15 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	w.forget(runs)
 	work := w.order(runs)
 
-	walkCtx, stopWalk := context.WithCancel(ctx)
-	if !deadline.IsZero() {
+	// ONE CHILD OF ctx PER WALK, made once: ctx is the loop's, which lives
+	// as long as the process, and a child it was never told to forget —
+	// a cancel func overwritten before anybody called it — is held in its
+	// list of children until the loop ends, one more every pass.
+	var walkCtx context.Context
+	var stopWalk context.CancelFunc
+	if deadline.IsZero() {
+		walkCtx, stopWalk = context.WithCancel(ctx)
+	} else {
 		walkCtx, stopWalk = context.WithDeadline(ctx, deadline)
 	}
 	w.replaceWalk(stopWalk)
