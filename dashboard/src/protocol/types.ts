@@ -2737,8 +2737,8 @@ export interface WorkItemTurn {
    *  `phases` lists it too — it ran — so a card marks that chip rather than
    *  ticking every phase beside a pill that names none. */
   failed_in?: string;
-  /** What it did, in the agent's own words. Absent on a turn an older build
-   *  recorded. */
+  /** What it did, in the agent's own words. Absent when the turn failed or
+   *  parked before any segment wrote one. */
   summary?: string;
   /** What the newest review that sent the work back asked for. */
   review?: string;

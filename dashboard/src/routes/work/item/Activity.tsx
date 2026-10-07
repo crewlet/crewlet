@@ -670,15 +670,16 @@ export function TurnCard({
           </time>
         </header>
         <div className="task-turn-body">
-          {/* A TURN AN OLDER BUILD RECORDED CARRIES NO ACCOUNT, and says so
-              in one quiet line: a card per turn repeating the reason in full
-              body text read as the turn's content. The reason is the title. */}
+          {/* A TURN NO SEGMENT WROTE AN ACCOUNT FOR (it failed, or parked,
+              before one was written) says so in one quiet line: a card per
+              turn repeating the reason in full body text read as the turn's
+              content. The reason is the title. */}
           {turn.summary ? (
             <p className="task-turn-summary">{turn.summary}</p>
           ) : (
             <p
               className="task-turn-nosummary"
-              title="Recorded before a turn's own account was kept. The trace has the detail while the event history holds it."
+              title="This turn failed or parked before it wrote an account of itself. The trace has the detail while the event history holds it."
             >
               No summary recorded — see the trace
             </p>

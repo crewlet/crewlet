@@ -1323,8 +1323,8 @@ type TurnRecord struct {
 
 	// Summary is what the segment did, in the agent's own words — the
 	// reviewer's account of what landed, or the executor's artifact — cut
-	// to [MaxTurnSummary]. Empty for a segment that parked before either
-	// was written.
+	// to [MaxTurnSummary]. Empty for a segment that failed or parked before
+	// either was written.
 	//
 	// ON THE RECORD, not read back from the event history at query time,
 	// because a task's turn list is the one account of its work that has

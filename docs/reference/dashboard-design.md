@@ -2081,8 +2081,8 @@ is a card with its ask, answer or choice and a **Reply**. A turn is the
 artboard's card: "SWE ran turn 1", its phases as checked steps — the one a failed
 turn broke in wears a cross in the danger tone, and its pill says "failed in
 review" — a pill for a send-back ("sent back for another pass") or a park, what
-it did in the agent's own words (a turn an older build recorded says "No summary
-recorded — see the trace" in one quiet line), the reviewer's request on the raised rung with the
+it did in the agent's own words (a turn that failed or parked before it wrote an
+account of itself says "No summary recorded — see the trace" in one quiet line), the reviewer's request on the raised rung with the
 caution ink on its mark, the tools it called as chips ("run_sandbox ×4"), and under them, on
 a line of its own read from the left, its wall time and tokens and **Trace**. The number is the TASK's count of turns,
 so the newest card and the cost panel agree. While a seat's turn is running on
