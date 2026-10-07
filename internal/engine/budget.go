@@ -122,7 +122,7 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 //
 // A HELD CALL IS A REFUSAL, AND IT IS RECORDED AS ONE. The window's refusal
 // stamp on the shared counter (coord.WindowUsage.RefusedAt) is what `refused_at`,
-// "refusing since" and `crewlet budgets show` report, and it used to be written
+// "last refused" and `crewlet budgets show` report, and it used to be written
 // only by a refused charge — the charge a hold exists to prevent. So a window
 // the turn's own context assembly filled refused the executor's first round,
 // and every call after it, with no stamp at all. The meter stamps it the first
@@ -413,7 +413,7 @@ func (m *meter) record(ctx context.Context, named toolloop.SpendOutcome) {
 // is the one the gate exists not to make. Each of those gates used to turn its
 // work away with no stamp at all, so a window a coding run's post-charge, a
 // background pass or a person's answers had filled refused every delivery,
-// every question and every pass while `refused_at` — "refusing since" on every
+// every question and every pass while `refused_at` — "last refused" on every
 // screen, and `crewlet budgets show` — said nothing had ever been refused.
 //
 // ON THE SCOPE A CHARGE WOULD BE REFUSED BY ([refusal.By]), the company's

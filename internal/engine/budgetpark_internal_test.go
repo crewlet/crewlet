@@ -272,7 +272,7 @@ func TestASpentSeatIsParkedUntilItsWindowTurnsOver(t *testing.T) {
 // background pass — which refuses nothing and stamps nothing, so no turn ever
 // had a charge refused there: every delivery was parked before one could run.
 // Unrecorded, that window held every message its seat was sent while its
-// refused_at, "refusing since" on every screen and `crewlet budgets show` said
+// refused_at, "last refused" on every screen and `crewlet budgets show` said
 // nothing had ever been refused. The record spends nothing.
 //
 // Mutation: drop the park's record, and the day carries no stamp.

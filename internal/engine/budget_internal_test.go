@@ -550,7 +550,7 @@ func stampOf(t *testing.T, fleet *coordmem.Fleet, scope string, p period.Period,
 // post-charge refuses nothing and stamps nothing — and the meter then held the
 // turn's next call rather than send it. That held call is the one whose charge
 // used to stamp the window, so before the meter recorded its own refusals the
-// window refused every call of the turn while its refused_at, "refusing since"
+// window refused every call of the turn while its refused_at, "last refused"
 // and `crewlet budgets show` said nothing had ever been refused. The stamp is
 // the counter's, judged by it, and spends nothing.
 func TestAHeldCallIsRecordedAsTheGatesRefusal(t *testing.T) {
