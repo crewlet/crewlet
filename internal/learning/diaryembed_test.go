@@ -81,6 +81,13 @@ func TestANoteIsKeptWhenItsVectorCannotBeHad(t *testing.T) {
 			<-ctx.Done()
 			return learning.Vector{}, ctx.Err()
 		}},
+		// A VECTOR OF ZEROS has no direction: stored, the note would
+		// read as one that has its vector while no recall could ever
+		// return it, and the fill — which looks only at notes without
+		// one — would never try it again.
+		{"the provider answered a vector of zeros", func(context.Context, string) (learning.Vector, error) {
+			return learning.Vector{Values: make([]float32, 4), Model: testModel}, nil
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -161,8 +161,8 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 
 	// Same policy as an episode's embedding, and for the same reason — see
 	// Episodes.encodeEmbedding. A wrong width fails the write; a non-finite
-	// component, or a vector naming no model, costs the vector and not the
-	// observation.
+	// component, a vector of zeros, or a vector naming no model, costs the
+	// vector and not the observation.
 	blob, model, err := encodeVectorColumns(d.db, e.Embedding, e.EmbeddingModel,
 		"diary_embedding_discarded")
 	if err != nil {

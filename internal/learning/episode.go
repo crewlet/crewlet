@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -221,6 +222,14 @@ func episodeInsertArgs(ep Episode, blob, model any) []any {
 // subsystem may not lose to a bad response from an embeddings API. Storing it
 // anyway is not an option either: [store.ErrVectorNotFinite] says why.
 //
+// SO IS A VECTOR OF ZEROS, which is finite and has no direction. Turso's
+// vector_distance_cos answers it 1, orthogonal to everything (measured), so
+// stored it is a row that has its vector and that no recall returns — counted
+// searchable by [Episodes.Unsearchable], and never offered to the holder's
+// fill again, since the fill looks only at rows without one. Written without
+// it, the row is one the fill tries again, whose pass holds back an answer
+// with no direction for the hour (embeddings.Pass) rather than storing it.
+//
 // THE MODEL TRAVELS WITH THE BYTES, both or neither. A vector that names no
 // model is in no known space and no recall could compare it with anything, so
 // it is DISCARDED like a non-finite one — the row lands, its vector does not —
@@ -249,6 +258,13 @@ func encodeVectorColumns(db *store.DB, v []float32, model, discarded string) (bl
 		return nil, nil, nil
 	case err != nil:
 		return nil, nil, fmt.Errorf("learning: encode embedding: %w", err)
+	case !slices.ContainsFunc(v, func(c float32) bool { return c != 0 }):
+		// AFTER the width, which is a configuration fault whatever the
+		// components hold, and after finiteness, so every component is
+		// a number and none of them is anything but zero.
+		log.Warn(discarded, "error", "the vector has no direction — every "+
+			"component is zero — so no similarity can find the row by it")
+		return nil, nil, nil
 	}
 	return packed, model, nil
 }

@@ -144,8 +144,8 @@ const (
 // The vector rule is the writers' own ([encodeVectorColumns]): a vector of the
 // wrong width fails the whole fill — a provider answering another width is a
 // configuration fault, and every vector beside it is suspect — while a
-// non-finite one, or one naming no model, is skipped and the row stays
-// unfilled.
+// non-finite one, one of zeros, or one naming no model, is skipped and the row
+// stays unfilled.
 func fillVectors(ctx context.Context, db *store.DB, statement, table, discarded string,
 	fills []VectorFill,
 ) (int, error) {

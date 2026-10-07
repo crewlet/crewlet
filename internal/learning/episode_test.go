@@ -559,3 +559,39 @@ func TestANonFiniteEmbeddingCostsTheVectorAndNotTheEpisode(t *testing.T) {
 		t.Errorf("the non-finite vector was stored as %v", got[0].Embedding)
 	}
 }
+
+// A VECTOR OF ZEROS COSTS THE VECTOR TOO, and the row stays one the fill
+// reaches. It is finite, so nothing at the store's boundary refuses it, and it
+// has no direction: vector_distance_cos answers it 1, so stored it is a turn no
+// recall ever returns, counted searchable all the same and never offered to the
+// holder's fill again, because the fill looks only at rows without a vector.
+func TestAVectorOfZerosCostsTheVectorAndNotTheEpisode(t *testing.T) {
+	t.Parallel()
+	db := learningStore(t)
+	e := learning.NewEpisodes(db)
+	hollow := ep("hollow", "ceo", base)
+	hollow.Embedding = make([]float32, 4)
+	if _, err := e.Append(context.Background(), hollow); err != nil {
+		t.Fatalf("a vector of zeros failed the whole write: %v", err)
+	}
+	got, err := e.Recent(context.Background(), "ceo", 10)
+	if err != nil || len(got) != 1 || got[0].ID != "hollow" {
+		t.Fatalf("recent = %v, %v; want the episode written", ids(got), err)
+	}
+	if got[0].Embedding != nil {
+		t.Errorf("the vector of zeros was stored as %v", got[0].Embedding)
+	}
+	if n, err := e.Unsearchable(context.Background(), "ceo", testModel); err != nil || n != 1 {
+		t.Errorf("Unsearchable = %d, %v; want the episode, which no recall can reach", n, err)
+	}
+	unfilled, err := e.Unfilled(context.Background(), "ceo", testModel, learning.FillCursor{}, 10)
+	if err != nil || len(unfilled) != 1 {
+		t.Errorf("Unfilled = %v, %v; want the episode offered to the holder's fill", unfilled, err)
+	}
+	filled, err := e.FillEmbeddings(context.Background(), []learning.VectorFill{
+		{ID: "hollow", Vector: learning.Vector{Values: make([]float32, 4), Model: testModel}},
+	})
+	if err != nil || filled != 0 {
+		t.Errorf("a fill of zeros stored %d vectors (%v), want none", filled, err)
+	}
+}
