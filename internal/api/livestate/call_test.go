@@ -621,9 +621,9 @@ func TestTheRunningCallAppearsAndClears(t *testing.T) {
 		t.Errorf("call = %+v, want every field the frame stated", call)
 	}
 
-	// The call returned: the next frame names none, and names no item or
-	// node either, as a frame from an older build would not.
-	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+	// The call returned: the next frame names none, and names the item and
+	// the node as every frame of the call does.
+	s.Apply(env("agent_turn_progress", with(base, map[string]any{
 		"round_num": 0, "rounds": []any{map[string]any{"round": 1}},
 	}), streamOnly, at("2026-06-14T12:00:03Z")))
 	call = liveCallOf(t, s, "Lead")
@@ -631,7 +631,7 @@ func TestTheRunningCallAppearsAndClears(t *testing.T) {
 		t.Errorf("running call = %+v, want it cleared once the frame stopped naming it", call.RunningCall)
 	}
 	if call.Node != "core-1" || call.WorkItem == nil {
-		t.Errorf("node %q item %+v, want both carried from the frame that named them",
+		t.Errorf("node %q item %+v, want both as the frame named them",
 			call.Node, call.WorkItem)
 	}
 }

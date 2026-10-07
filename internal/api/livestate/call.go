@@ -212,28 +212,11 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		startedAt = cur.StartedAt
 	}
 
-	// CARRIED THE SAME WAY, and for a sharper reason than the prompt is: a
-	// progress round is published from the same frame as the opening one
-	// and does carry the key — but a round from a build that predates it
-	// does not, and the struct is rebuilt WHOLESALE every round, so one
-	// such round would blank the field for the rest of the call.
+	// The work key, the item and the node are read off the frame alone:
+	// every frame of one call, opening and round alike, names all three.
 	workKey := str(payload, "work_key")
-	if workKey == "" && cur != nil && cur.sameCall(turnID, phase, iteration) {
-		workKey = cur.WorkKey
-	}
-	// The item and the node are CARRIED for the same reason: a frame from
-	// a build that predates either names neither, and the call is rebuilt
-	// wholesale every round.
 	workItem := workItemOf(payload)
 	node := str(payload, "node")
-	if cur != nil && cur.sameCall(turnID, phase, iteration) {
-		if workItem == nil {
-			workItem = cur.WorkItem
-		}
-		if node == "" {
-			node = cur.Node
-		}
-	}
 
 	agent.liveCall = &LiveCall{
 		TurnID:         turnID,
