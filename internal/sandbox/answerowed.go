@@ -813,9 +813,10 @@ func (c *Coordinator) retryOwed(turnID string) {
 		return
 	}
 	if spent {
-		// THE BOUND IS SPENT and the decline that followed it did not
-		// land: decided again, never resumed again — the attempts it was
-		// owed have all been made.
+		// THE BOUND IS SPENT, and the decline that followed it did not
+		// land — or waited for the claim the last attempt left to be
+		// given back first ([Coordinator.owedFailed]): decided now, never
+		// resumed again — the attempts it was owed have all been made.
 		c.declineAnswer(ctx, run, errors.New("sandbox: the answer's attempts are spent and "+
 			"letting it go did not land"))
 		return
