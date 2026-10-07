@@ -174,6 +174,11 @@ type BudgetRefusal struct {
 type AnswerBudget interface {
 	// Refusing reports the company window with no room left, if any.
 	// THREE-VALUED: an unreadable counter is an error, never "room".
+	//
+	// A YES IS A REFUSAL, not an observation: it is asked immediately
+	// before the answer's first call, and the question is refused on yes,
+	// so an implementation records it as the gate turning that call away
+	// (the window's refusal stamp). Never ask it only to look.
 	Refusing(ctx context.Context) (BudgetRefusal, bool, error)
 }
 
