@@ -45,11 +45,14 @@ import (
 
 // DiaryEmbedBudget bounds embedding one note as it is written.
 //
-// TWO SECONDS, search.QueryEmbedBudget's figure and for its reason: a note is
-// one short input — at most [MaxContentChars] bytes — which a hosted endpoint
-// answers in a few hundred milliseconds at the p99, and the reflect_and_persist
-// call that writes one has a model waiting on it. A miss costs nothing but
-// time: the note lands without a vector and the holder's fill gives it one.
+// TWO SECONDS — search.QueryEmbedBudget's figure, and ONLY its figure: that
+// budget is also held at twice a semantic scan's, which says nothing about a
+// note, so tuning one leaves the other where it is. This one's reasons are its
+// own. A note is one short input — at most [MaxContentChars] bytes —
+// which a hosted endpoint answers in a few hundred milliseconds at the p99; the
+// reflect_and_persist call that writes one has a model waiting on it mid-turn;
+// and a miss costs only the vector, never the note: it lands without one, and
+// the node holding the seat fills it later.
 const DiaryEmbedBudget = 2 * time.Second
 
 // embedNote is the note's vector, or none.
