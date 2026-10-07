@@ -82,7 +82,7 @@ func TestANodeOutsideTheTableDoesNotVolunteer(t *testing.T) {
 	deadline, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	answers, err := search.Broker{Queue: coordinator}.Scatter(deadline,
-		search.FanQuery{Text: "anything"}, table)
+		search.FanQuery{Text: "anything", Methods: []search.Method{search.MethodLexical}}, table)
 	if err != nil {
 		t.Fatalf("scatter: %v", err)
 	}

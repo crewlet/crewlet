@@ -960,7 +960,7 @@ func TestAScanOverAnUnbuiltIndexSaysItCoveredNothing(t *testing.T) {
 	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{search.PageSource{}})
 	scanner := search.NodeScanner{Index: x}
 
-	got, err := scanner.Scan(t.Context(), search.FanQuery{Text: "rollback"},
+	got, err := scanner.Scan(t.Context(), search.FanQuery{Text: "rollback", Methods: []search.Method{search.MethodLexical}},
 		search.Everything())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -975,7 +975,7 @@ func TestAScanOverAnUnbuiltIndexSaysItCoveredNothing(t *testing.T) {
 	}
 
 	indexAll(t, x)
-	got, err = scanner.Scan(t.Context(), search.FanQuery{Text: "rollback"},
+	got, err = scanner.Scan(t.Context(), search.FanQuery{Text: "rollback", Methods: []search.Method{search.MethodLexical}},
 		search.Everything())
 	if err != nil {
 		t.Fatalf("scan after the build: %v", err)

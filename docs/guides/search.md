@@ -89,8 +89,8 @@ mode is still `hybrid`.
 
 A keyword search sends no vector at all, so a participant runs no vector scan
 for it; the rankers a query needs travel with it, and the asking node fuses
-only the ones it asked for even from a participant on an older build that ran
-both.
+only the ones it asked for.
+
 ## How big a corpus one node scans
 
 The semantic scan has a **one-second budget**, and how much fits inside it
