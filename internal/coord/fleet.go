@@ -160,16 +160,6 @@ const (
 	// together.
 	CustodyRetention = 32 * 24 * time.Hour
 
-	// ChunkLockTTL is how long a chunk lock outlives a holder that never let
-	// it go — the age of the bucket the locks are in (see [ObjectStores]).
-	//
-	// A MINUTE: what anybody does under one lock is one stat and one delete,
-	// or one put of at most a mebibyte, and internal/objstore bounds that
-	// work at a third of this, so a lock lapses only under a holder that has
-	// already abandoned its request. The cost of the length is how long a
-	// writer waits behind a collector that died holding one.
-	ChunkLockTTL = time.Minute
-
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
 	// a person's answer for DAYS (see sandbox.StatusAwaiting), and its
@@ -1166,8 +1156,8 @@ type Fleet interface {
 }
 
 // ObjectStores is what the whole fleet has to agree on about the object store
-// (ADR-0026): which backend its files are in, and who may touch one chunk at a
-// time.
+// (ADR-0026): which backend its files are in, and what its collector last
+// found.
 //
 // # The backend is the fleet's, and recorded once
 //
@@ -1179,32 +1169,18 @@ type Fleet interface {
 // and with no age, and every node after compares its own against it and
 // refuses to boot on a mismatch.
 //
-// # Chunk locks, aged at [ChunkLockTTL]
+// # Nothing else, and no lock
 //
-// The collector deletes a chunk no row names once it is past a grace, and a
-// file re-using such a chunk re-puts it to make it young again. The one race
-// that loses a file's bytes is a delete landing after that re-put, so the two
-// take the chunk's lock around their check and their write (internal/objstore,
-// Locks). A lock is a create-only key in a bucket whose age is the lock's
-// lifetime, so a holder that dies holding one is let go by the bucket rather
-// than by anybody's clock.
+// A deletion from the store takes no lock (ADR-0027): an object is stored
+// under a key minted for its one upload and named by that upload's write
+// alone, so no writer is ever re-using an object the collector could be
+// deleting.
 type ObjectStores interface {
 	// AgreeObjectBackend records identity as the fleet's object backend
 	// unless one is recorded, and answers the recorded one: identity
 	// itself, or what the first node recorded. An error is UNKNOWN — the
 	// caller must not open a backend it could not check.
 	AgreeObjectBackend(ctx context.Context, identity string) (string, error)
-
-	// LockChunk takes chunk's lock for owner, answering false while
-	// another owner holds it. Taking a lock this owner already holds
-	// answers true, so a retried take whose answer was lost is not a
-	// second holder.
-	LockChunk(ctx context.Context, chunk, owner string) (bool, error)
-
-	// UnlockChunk lets go of chunk's lock if owner holds it, and does
-	// nothing otherwise — a lock that aged out and was taken by somebody
-	// else is theirs.
-	UnlockChunk(ctx context.Context, chunk, owner string) error
 
 	// RecordObjectCollection stores what the collector last found, an
 	// opaque value its owner (internal/engine) encodes, replacing the last

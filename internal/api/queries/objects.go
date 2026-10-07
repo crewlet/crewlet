@@ -84,19 +84,18 @@ type ObjectCollect struct {
 	Aged       int       `json:"aged"`
 	Deleted    int       `json:"deleted"`
 	Referenced int       `json:"referenced"`
-	Refreshed  int       `json:"refreshed"`
 	Skipped    string    `json:"skipped,omitempty"`
 	Error      string    `json:"error,omitempty"`
 }
 
 // ObjectAudit is one audit, rendered.
 type ObjectAudit struct {
-	At            time.Time       `json:"at"`
-	Completed     bool            `json:"completed"`
-	Referenced    int             `json:"referenced"`
-	Missing       int             `json:"missing"`
-	MissingChunks []objstore.Hash `json:"missing_chunks,omitempty"`
-	Error         string          `json:"error,omitempty"`
+	At             time.Time      `json:"at"`
+	Completed      bool           `json:"completed"`
+	Referenced     int            `json:"referenced"`
+	Missing        int            `json:"missing"`
+	MissingObjects []objstore.Key `json:"missing_objects,omitempty"`
+	Error          string         `json:"error,omitempty"`
 }
 
 // RenderObjects is the one rendering of the collector's record.
@@ -105,14 +104,14 @@ func RenderObjects(r engine.CollectionReport) FleetObjects {
 	if c := r.Status.Collect; !c.At.IsZero() {
 		out.Collect = &ObjectCollect{
 			At: c.At, Completed: c.Completed, Listed: c.Listed, Aged: c.Aged,
-			Deleted: c.Deleted, Referenced: c.Referenced, Refreshed: c.Refreshed,
+			Deleted: c.Deleted, Referenced: c.Referenced,
 			Skipped: c.Skipped, Error: c.Error,
 		}
 	}
 	if a := r.Status.Audit; !a.At.IsZero() {
 		out.Audit = &ObjectAudit{
 			At: a.At, Completed: a.Completed, Referenced: a.Referenced,
-			Missing: a.Missing, MissingChunks: a.MissingChunks, Error: a.Error,
+			Missing: a.Missing, MissingObjects: a.MissingObjects, Error: a.Error,
 		}
 	}
 	return FleetObjects{State: ObjectsReported, ReportedObjects: out}

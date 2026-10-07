@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,7 @@ import (
 // # What every node runs, and what one data node does
 //
 // Every node holds the [objstore.Store] over the backend its Tier A names
-// ([Backends.Objects]) and reads and writes chunks through it: a stateless
+// ([Backends.Objects]) and reads and writes objects through it: a stateless
 // node uploads and downloads files exactly as a data node does, and the
 // backend keeps the copies. The one thing left for the engine is the
 // COLLECTOR — deleting what no row names, and auditing what the backend has
@@ -56,10 +57,10 @@ type objectStore struct {
 // startObjects builds this node's object store over the backend its Tier A
 // named, which [OpenBackends] opened and agreed with the fleet.
 func (e *Engine) startObjects() error {
-	if e.backends == nil || e.backends.Objects == nil || e.backends.Fleet == nil {
+	if e.backends == nil || e.backends.Objects == nil {
 		return nil
 	}
-	store, err := objstore.NewStore(e.backends.Objects, e.backends.Fleet, e.incarnation)
+	store, err := objstore.NewStore(e.backends.Objects)
 	if err != nil {
 		return fmt.Errorf("engine: the object store: %w", err)
 	}
@@ -83,10 +84,11 @@ const collectorPoll = time.Minute
 // TEN MINUTES, ten polls rather than the three every other singleton uses: the
 // lease is renewed between passes, never during one, and a collection lists
 // the whole store — a pass that outlived a three-poll lease would hand the
-// duty to a peer mid-pass. Two collectors at once are safe, since every
-// deletion is judged under its chunk's lock, and only wasteful; ten minutes is
-// what a pass over a few million chunks takes, and a dead holder costs no more
-// than ten minutes of a pass that is due hourly.
+// duty to a peer mid-pass. Two collectors at once are safe — a deletion needs
+// no lock (ADR-0027), and deleting what the other already deleted is not an
+// error — and only wasteful; ten minutes is what a listing of a few million
+// objects takes, and a dead holder costs no more than ten minutes of a pass
+// that is due hourly.
 const collectorDutyTTL = 10 * collectorPoll
 
 // collectorDuty is what the collector's duty remembers between turns.
@@ -313,17 +315,27 @@ var pinnedDomains = sync.OnceValue(func() map[string]bool {
 	return out
 })
 
-// errNoObjectStore is a read of a chunk on an engine built with no object
+// errNoObjectStore is a read of an object on an engine built with no object
 // store — a test's.
 var errNoObjectStore = errors.New("engine: this node runs no object store")
 
-// GetChunk reads one chunk — the backup's read, which carries every chunk its
-// copy names.
-func (e *Engine) GetChunk(ctx context.Context, h objstore.Hash) ([]byte, error) {
+// OpenObject streams one object back, checked against the row that names it
+// ([objstore.Store.Open]) — the backup's read, which copies every object its
+// copy of the estate names.
+func (e *Engine) OpenObject(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
 	if e.objects == nil {
 		return nil, errNoObjectStore
 	}
-	return e.objects.store.Get(ctx, h)
+	return e.objects.store.Open(ctx, o)
+}
+
+// StatObject asks the store what it holds under k — the backup's check of an
+// object a stream snapshot carries.
+func (e *Engine) StatObject(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+	if e.objects == nil {
+		return objstore.Info{}, errNoObjectStore
+	}
+	return e.objects.store.Stat(ctx, k)
 }
 
 // ObjectStore is this node's object store as the tools take it — a NIL
@@ -345,9 +357,9 @@ func (e *Engine) Objects() *objstore.Store {
 	return e.objects.store
 }
 
-// ObjectsStream is the broker stream the company's chunks live in, for the
+// ObjectsStream is the broker stream the company's objects live in, for the
 // backup — empty where they live outside the broker (an S3 bucket), which the
-// backup then copies chunk by chunk.
+// backup then copies object by object.
 func (e *Engine) ObjectsStream() string {
 	if e.backends == nil || e.backends.objectsStream == "" {
 		return ""

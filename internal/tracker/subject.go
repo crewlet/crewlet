@@ -204,17 +204,20 @@ const (
 	KindBarrier ObjectKind = "barrier"
 
 	// KindFile is one file in a project: where it lives, what it is and
-	// which chunks of the object store make it up. The bytes are NOT here —
+	// which object of the object store holds it. The bytes are NOT here —
 	// see internal/objstore and ADR-0026 — and neither is anything that
-	// would need them: the record carries the manifest, and the manifest is
-	// what keeps the chunks alive.
+	// would need them: the record names the object, and the name is what
+	// keeps the object alive.
 	//
 	// ITS SUBJECT IS ITS ADDRESS — the project and a token of the path —
 	// rather than a uuid, which is what makes a path one file: two writers
 	// putting the same path contend on one subject and exactly one wins,
 	// with no claim table and no second append. A move is a put at the new
-	// address and a removal at the old one, and costs no bytes, because the
-	// chunks are named by their content.
+	// address and a removal at the old one — and it UPLOADS THE BYTES AGAIN,
+	// because an object is named only by the write that uploaded it
+	// (ADR-0027): a put naming the old address's object would be a second
+	// write naming one key, which is the race the collector's lock-free
+	// deletion rests on there being none of.
 	KindFile ObjectKind = "file"
 )
 

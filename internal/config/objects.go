@@ -6,7 +6,7 @@ import (
 )
 
 // StoreObjects is where the company's files are kept: which backend every node
-// reads and writes their chunks through (ADR-0026).
+// reads and writes their objects through (ADR-0026).
 //
 // # Why Tier A, and why every node
 //
@@ -25,21 +25,21 @@ import (
 // bucket keeps whatever copies its provider promises. The engine places
 // nothing, so there is nothing for it to spread.
 type StoreObjects struct {
-	// Backend is where the chunks live. Empty is `nats`.
+	// Backend is where the files' objects live. Empty is `nats`.
 	Backend ObjectBackend `yaml:"backend,omitempty" json:"backend,omitempty" desc:"Where the company's files are kept: nats (the default — a bucket on the fleet's own broker, replicated at stream.replicas) or s3 (an S3-compatible bucket, named under s3)."`
 
 	// S3 is the bucket, for the `s3` backend; refused for any other.
 	S3 ObjectsS3 `yaml:"s3,omitempty" json:"s3,omitzero"`
 }
 
-// ObjectBackend is a backend the object store can keep chunks in.
+// ObjectBackend is a backend the object store can keep objects in.
 type ObjectBackend string
 
 const (
-	// ObjectBackendNATS keeps chunks in the fleet's own JetStream object
+	// ObjectBackendNATS keeps objects in the fleet's own JetStream object
 	// store. The default.
 	ObjectBackendNATS ObjectBackend = "nats"
-	// ObjectBackendS3 keeps chunks in an S3-compatible bucket.
+	// ObjectBackendS3 keeps objects in an S3-compatible bucket.
 	ObjectBackendS3 ObjectBackend = "s3"
 )
 
@@ -81,7 +81,7 @@ func (o StoreObjects) BackendOrDefault() ObjectBackend {
 	return o.Backend
 }
 
-// Identity names the store the chunks are in, for the fleet's record of it:
+// Identity names the store the objects are in, for the fleet's record of it:
 // two nodes whose identities differ would write the company's files into two
 // different places. The credentials are not part of it — two nodes may reach
 // one bucket with different keys.

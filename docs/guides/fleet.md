@@ -506,11 +506,11 @@ and the dashboard keep answering. See
 
 **A data node's drain moves no files.** The company's files are in the
 [object store](../concepts/object-store.md), not on any one node: on `nats`
-the chunks are a stream at `stream.replicas` copies on the broker's members,
+the objects are a stream at `stream.replicas` copies on the broker's members,
 with the same quorum arithmetic as the logs — three members at three replicas
 keep writing files with one down, two members at two replicas cannot write with
 either down — and a member that comes back is caught up by the broker as for
-every stream. On `s3` no node holds a chunk at all. So between one data node
+every stream. On `s3` no node holds an object at all. So between one data node
 and the next, wait for what the logs need, and nothing more for the files.
 
 ### Removing a data node for good
@@ -519,7 +519,7 @@ There is nothing to drain for the files. On `nats` the node is a broker member,
 and taking it away is taking any member away: stop it, then remove it from the
 broker's membership as [A member that is gone for good](#a-member-that-is-gone-for-good)
 describes, and the broker re-places its copies of every stream — the files'
-included — on the members that remain, where there are enough of them. On `s3` it held no chunk. See
+included — on the members that remain, where there are enough of them. On `s3` it held no object. See
 [Taking a data node away](../concepts/object-store.md#taking-a-data-node-away).
 
 **Upgrade one node at a time, and let each one finish.** Seat leases
@@ -576,6 +576,20 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
+- **Mid-rollout across the upgrade that stores each file as one object,
+  files are served by nodes of their own build.** A file's read and write
+  are operations the router sends to a data node, and the two builds name
+  them differently, so each node's file reads and writes go to a data node of
+  its own build — and are refused `unavailable` (`503` on the API) while
+  there is none, which a retry clears once there is. A file a new node
+  writes is held back, not applied, on an old data node until it is
+  upgraded, and that node declines to take a snapshot meanwhile. A file an
+  old node wrote during the rollout, or any file written before it, kept its
+  content in chunks this build no longer reads: it stays listed, its
+  download answers `410 content_retired`, and the remedy is to upload it
+  again (or remove it). The chunks themselves are left in the store until
+  every data node runs the new build. A downgrade across this upgrade is not
+  supported: the older build cannot read the replicated schema it migrated.
 
 ## Watching a fleet
 

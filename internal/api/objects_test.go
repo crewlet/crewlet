@@ -30,7 +30,12 @@ var objectsAt = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 // states, each rendered by the fleet question's own renderer.
 func renderObjectsScenarios(t *testing.T) []byte {
 	t.Helper()
-	lost := objstore.HashOf([]byte("a chunk the store lost"))
+	// A FIXED KEY, so the golden does not move with the random bits a
+	// minted one carries.
+	lost, err := objstore.ParseKey("0199b4f6-0000-7000-8000-00000000a1b2")
+	if err != nil {
+		t.Fatal(err)
+	}
 	clean := engine.CollectionReport{
 		Node: "data-a", Backend: "s3:https://s3.example.com/files/acme/",
 		Status: collect.Status{
@@ -43,10 +48,10 @@ func renderObjectsScenarios(t *testing.T) []byte {
 	missing := clean
 	missing.Backend = "nats"
 	missing.Status.Audit = collect.AuditReport{Completed: true, Referenced: 1828,
-		Missing: 1, MissingChunks: []objstore.Hash{lost}, At: objectsAt.Add(-3 * time.Hour)}
+		Missing: 1, MissingObjects: []objstore.Key{lost}, At: objectsAt.Add(-3 * time.Hour)}
 	skipped := clean
 	skipped.Status.Collect = collect.CollectionReport{Listed: 1840, Aged: 1702,
-		Skipped: "a record this node could not apply may refer to chunks in the store",
+		Skipped: "a record this node could not apply may refer to objects in the store",
 		At:      objectsAt}
 	skipped.Status.Audit = collect.AuditReport{}
 	blocks := map[string]queries.FleetObjects{

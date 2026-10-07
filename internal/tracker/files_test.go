@@ -2,7 +2,6 @@ package tracker_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,43 +18,39 @@ import (
 
 var stale = statelog.Freshness{Level: statelog.ReadStale}
 
-// manifestOf cuts content into a manifest, uploading nothing: the tracker
-// never reads a byte, so a test of it needs only the names.
-func manifestOf(t *testing.T, content []byte) objstore.Manifest {
-	t.Helper()
-	m, err := objstore.Split(t.Context(), bytes.NewReader(content), int64(len(content)),
-		func(context.Context, objstore.Chunk, []byte) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m
+// objectOf is the object an upload of content would answer, under a key
+// minted at the harness's clock: the tracker never reads a byte, so a test of
+// it needs only the names.
+func (r *roundTrip) objectOf(content []byte) objstore.Object {
+	r.t.Helper()
+	return objstore.Object{Key: objstore.KeyAt(r.at), Hash: objstore.HashOf(content),
+		Size: int64(len(content))}
 }
 
-func (r *roundTrip) putFile(op, path string, content []byte) tracker.WriteResult {
+func (r *roundTrip) putFile(op, path string, content []byte) objstore.Object {
 	r.t.Helper()
-	res, err := r.writer.PutFile(r.t.Context(), op, tracker.FilePut{
-		Project: "ENG", Path: path, ContentType: "text/markdown",
-		Manifest: manifestOf(r.t, content),
-	})
-	if err != nil {
+	o := r.objectOf(content)
+	if _, err := r.writer.PutFile(r.t.Context(), op, tracker.FilePut{
+		Project: "ENG", Path: path, ContentType: "text/markdown", Object: o,
+	}); err != nil {
 		r.t.Fatalf("PutFile %s: %v", path, err)
 	}
 	r.drain()
-	return res
+	return o
 }
 
-// chunkRows is 1 when the collector's references read finds h named, and 0
-// when it does not — what the collector deletes by.
-func (r *roundTrip) chunkRows(t *testing.T, h objstore.Hash) int {
+// named is 1 when the collector's references read finds k named, and 0 when
+// it does not — what the collector deletes by.
+func (r *roundTrip) named(t *testing.T, k objstore.Key) int {
 	t.Helper()
-	if r.referenced(t, h)[h] {
+	if r.referenced(t, k)[k] {
 		return 1
 	}
 	return 0
 }
 
 // referenced is which of among the collector's references read finds named.
-func (r *roundTrip) referenced(t *testing.T, among ...objstore.Hash) map[objstore.Hash]bool {
+func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore.Key]bool {
 	t.Helper()
 	// THROUGH THE DECLARED LIST, exactly as the engine builds the
 	// collector's sources, so this reads the statement the collector runs.
@@ -70,23 +65,24 @@ func (r *roundTrip) referenced(t *testing.T, among ...objstore.Hash) map[objstor
 	if !complete {
 		t.Fatal("the references read reported itself incomplete on a node holding every record")
 	}
-	out := make(map[objstore.Hash]bool, len(set))
-	for h := range set {
-		out[h] = true
+	out := make(map[objstore.Key]bool, len(set))
+	for k := range set {
+		out[k] = true
 	}
 	return out
 }
 
-// every is every chunk the collector's audit walk finds named.
-func (r *roundTrip) every(t *testing.T) map[objstore.Hash]bool {
+// every is every object the collector's audit walk finds named, with how
+// often it was visited.
+func (r *roundTrip) every(t *testing.T) map[objstore.Key]int {
 	t.Helper()
 	sources, err := collect.Sources(references.All, tracker.ObjectEstate{Reader: r.reader})
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := map[objstore.Hash]bool{}
-	complete, err := sources[0].Each(t.Context(), statelog.Position{}, func(h objstore.Hash) error {
-		out[h] = true
+	out := map[objstore.Key]int{}
+	complete, err := sources[0].Each(t.Context(), statelog.Position{}, func(k objstore.Key) error {
+		out[k]++
 		return nil
 	})
 	if err != nil || !complete {
@@ -95,13 +91,20 @@ func (r *roundTrip) every(t *testing.T) map[objstore.Hash]bool {
 	return out
 }
 
-// A FILE PUT, READ BACK AND REMOVED: the row, its manifest and the chunk rows
-// the object store keeps its bytes alive by, at every step.
+// A FILE PUT, READ BACK AND REMOVED: the row, the object it names and the
+// reference the object store keeps the bytes alive by, at every step.
 func TestAFileIsWrittenReadAndRemoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	content := bytes.Repeat([]byte("a quarterly plan\n"), 100_000) // two chunks
-	written := r.putFile("op-put", "/reports/q3 plan.md", content)
+	content := bytes.Repeat([]byte("a quarterly plan\n"), 100_000)
+	o := r.objectOf(content)
+	written, err := r.writer.PutFile(t.Context(), "op-put", tracker.FilePut{
+		Project: "ENG", Path: "/reports/q3 plan.md", ContentType: "text/markdown", Object: o,
+	})
+	if err != nil {
+		t.Fatalf("PutFile: %v", err)
+	}
+	r.drain()
 	if written.Position.Seq == 0 {
 		t.Fatal("a put landed at no position")
 	}
@@ -111,18 +114,15 @@ func TestAFileIsWrittenReadAndRemoved(t *testing.T) {
 		t.Fatalf("File: %v", err)
 	}
 	f := detail.File
-	want := manifestOf(t, content)
 	if f.Path != "reports/q3 plan.md" || f.Project != "ENG" || f.Size != int64(len(content)) ||
-		f.Hash != want.Hash || len(f.Chunks) != len(want.Chunks) || f.ContentType != "text/markdown" {
+		f.Hash != o.Hash || f.Object != o.Key || f.ContentType != "text/markdown" {
 		t.Fatalf("read back %+v", f)
 	}
-	if got := f.Manifest(); got.Validate() != nil || got.Hash != want.Hash {
-		t.Fatalf("the stored manifest does not validate: %+v", got)
+	if got, named := f.Content(); !named || got != o {
+		t.Fatalf("the file's content is %+v (%v), want the object put %+v", got, named, o)
 	}
-	for _, c := range want.Chunks {
-		if r.chunkRows(t, c.Hash) != 1 {
-			t.Fatalf("chunk %s of a live file is not referenced", c.Hash)
-		}
+	if r.named(t, o.Key) != 1 {
+		t.Fatalf("the object of a live file is not referenced")
 	}
 
 	listing, err := r.reader.Files(t.Context(), tracker.FileQuery{Project: "ENG", Freshness: stale})
@@ -142,11 +142,8 @@ func TestAFileIsWrittenReadAndRemoved(t *testing.T) {
 	if _, err := r.reader.File(t.Context(), "ENG", "reports/q3 plan.md", stale); !errors.Is(err, tracker.ErrNoFile) {
 		t.Fatalf("File after removal = %v, want ErrNoFile", err)
 	}
-	for _, c := range want.Chunks {
-		if r.chunkRows(t, c.Hash) != 0 {
-			t.Fatalf("chunk %s of a removed file is still referenced, so its "+
-				"bytes are never collected", c.Hash)
-		}
+	if r.named(t, o.Key) != 0 {
+		t.Fatalf("the object of a removed file is still referenced, so its bytes are never collected")
 	}
 	listing, err = r.reader.Files(t.Context(), tracker.FileQuery{Project: "ENG", Freshness: stale})
 	if err != nil || len(listing.Files) != 0 {
@@ -160,78 +157,99 @@ func TestAFileIsWrittenReadAndRemoved(t *testing.T) {
 	}
 
 	// A PUT AT THE SAME PATH BRINGS IT BACK — the address is meant to be
-	// used again — with its own content's chunks referenced.
-	again := []byte("the plan, rewritten")
-	r.putFile("op-put-again", "reports/q3 plan.md", again)
+	// used again — naming the new upload's own object.
+	again := r.putFile("op-put-again", "reports/q3 plan.md", []byte("the plan, rewritten"))
 	if _, err := r.reader.File(t.Context(), "ENG", "reports/q3 plan.md", stale); err != nil {
 		t.Fatalf("File after a put over a removal: %v", err)
 	}
-	if r.chunkRows(t, objstore.HashOf(again)) != 1 {
-		t.Fatal("the new content's chunk is not referenced")
+	if r.named(t, again.Key) != 1 {
+		t.Fatal("the new content's object is not referenced")
 	}
 }
 
 // THE COLLECTOR'S TWO READS AGREE WITH WHAT WAS WRITTEN: a batch question
-// answers exactly the chunks of it some file names, and the audit's walk
-// answers every chunk named, each once. A chunk the batch read missed would be
-// deleted; one the walk missed would never be counted lost.
-func TestTheCollectorsReadsFindEveryNamedChunk(t *testing.T) {
+// answers exactly the objects of it some file names, and the audit's walk
+// answers every object named, each once, across more than one of its pages. An
+// object the batch read missed would be deleted; one the walk missed would
+// never be counted lost.
+func TestTheCollectorsReadsFindEveryNamedObject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	var chunks []objstore.Hash
-	for i := range 8 {
-		content := []byte(fmt.Sprintf("chunk %d of the reference fixture", i))
-		r.putFile(fmt.Sprintf("op-%d", i), fmt.Sprintf("refs/%d.md", i), content)
-		chunks = append(chunks, objstore.HashOf(content))
+	var keys []objstore.Key
+	const files = 520 // past one of the walk's 500-row pages
+	for i := range files {
+		o := r.objectOf([]byte(fmt.Sprintf("object %d of the reference fixture", i)))
+		if _, err := r.writer.PutFile(t.Context(), fmt.Sprintf("op-%d", i), tracker.FilePut{
+			Project: "ENG", Path: fmt.Sprintf("refs/%d.md", i), Object: o,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, o.Key)
 	}
-	stranger := objstore.HashOf([]byte("a chunk no file names"))
-	got := r.referenced(t, append([]objstore.Hash{stranger}, chunks...)...)
+	r.drain()
+	// AND A REMOVED FILE, whose NULL no statement may answer.
+	if _, err := r.writer.RemoveFile(t.Context(), "op-rm", "ENG", "refs/0.md", tracker.NoIfMatch); err != nil {
+		t.Fatal(err)
+	}
+	r.drain()
+	stranger := objstore.KeyAt(r.at)
+	got := r.referenced(t, append([]objstore.Key{stranger}, keys...)...)
 	if got[stranger] {
-		t.Error("a chunk no file names was answered named")
+		t.Error("an object no file names was answered named")
 	}
-	for _, h := range chunks {
-		if !got[h] {
-			t.Errorf("chunk %s is named and the batch read missed it", h)
+	if got[keys[0]] {
+		t.Error("the object of a removed file was answered named")
+	}
+	for _, k := range keys[1:] {
+		if !got[k] {
+			t.Errorf("object %s is named and the batch read missed it", k)
 		}
 	}
-	if all := r.every(t); len(all) != len(chunks) {
-		t.Fatalf("the audit walk answers %d chunks, want the %d written", len(all), len(chunks))
+	all := r.every(t)
+	if len(all) != files-1 {
+		t.Fatalf("the audit walk answers %d objects, want the %d live", len(all), files-1)
+	}
+	for k, n := range all {
+		if n != 1 {
+			t.Fatalf("the audit walk visited %s %d times", k, n)
+		}
 	}
 }
 
 // A PATH IS ONE FILE: a second put replaces the first and keeps who made it,
-// and the chunks only the first content named stop being referenced.
+// and the object the first content was in stops being referenced.
 func TestAPutOverAFileReplacesItsContent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	r.putFile("op-1", "notes.txt", []byte("first"))
+	firstObject := r.putFile("op-1", "notes.txt", []byte("first"))
 	first, err := r.reader.File(t.Context(), "ENG", "notes.txt", stale)
 	if err != nil {
 		t.Fatal(err)
 	}
 	editor := r.writer.As("bo", tracker.AuthorAgent, tracker.Provenance{})
+	second := r.objectOf([]byte("second"))
 	if _, err := editor.PutFile(t.Context(), "op-2", tracker.FilePut{
-		Project: "ENG", Path: "notes.txt", Manifest: manifestOf(t, []byte("second")),
+		Project: "ENG", Path: "notes.txt", Object: second,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	r.drain()
-	second, err := r.reader.File(t.Context(), "ENG", "notes.txt", stale)
+	read, err := r.reader.File(t.Context(), "ENG", "notes.txt", stale)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.File.Hash != objstore.HashOf([]byte("second")) {
-		t.Fatalf("the content was not replaced: %+v", second.File)
+	if got, _ := read.File.Content(); got != second {
+		t.Fatalf("the content was not replaced: %+v", read.File)
 	}
-	if second.File.CreatedBy != first.File.CreatedBy || !second.File.CreatedAt.Equal(first.File.CreatedAt) {
+	if read.File.CreatedBy != first.File.CreatedBy || !read.File.CreatedAt.Equal(first.File.CreatedAt) {
 		t.Fatalf("a put re-attributed the file: created by %q at %s, was %q at %s",
-			second.File.CreatedBy, second.File.CreatedAt, first.File.CreatedBy, first.File.CreatedAt)
+			read.File.CreatedBy, read.File.CreatedAt, first.File.CreatedBy, first.File.CreatedAt)
 	}
-	if second.File.UpdatedBy != "bo" {
-		t.Fatalf("updated by %q, want bo", second.File.UpdatedBy)
+	if read.File.UpdatedBy != "bo" {
+		t.Fatalf("updated by %q, want bo", read.File.UpdatedBy)
 	}
-	if r.chunkRows(t, objstore.HashOf([]byte("first"))) != 0 {
-		t.Fatal("the replaced content's chunk is still referenced")
+	if r.named(t, firstObject.Key) != 0 {
+		t.Fatal("the replaced content's object is still referenced")
 	}
 	listing, err := r.reader.Files(t.Context(), tracker.FileQuery{Project: "ENG", Freshness: stale})
 	if err != nil || len(listing.Files) != 1 {
@@ -253,14 +271,14 @@ func TestAConditionedPutIsRefusedWhenTheFileMoved(t *testing.T) {
 	}
 	r.putFile("op-2", "plan.md", []byte("v2"))
 	_, err = r.writer.PutFile(t.Context(), "op-3", tracker.FilePut{
-		Project: "ENG", Path: "plan.md", Manifest: manifestOf(t, []byte("v3")),
+		Project: "ENG", Path: "plan.md", Object: r.objectOf([]byte("v3")),
 		IfMatch: read.File.Version,
 	})
 	if !errors.Is(err, tracker.ErrStaleVersion) {
 		t.Fatalf("a put conditioned on a moved version = %v, want ErrStaleVersion", err)
 	}
 	_, err = r.writer.PutFile(t.Context(), "op-4", tracker.FilePut{
-		Project: "ENG", Path: "never.md", Manifest: manifestOf(t, []byte("x")), IfMatch: 7,
+		Project: "ENG", Path: "never.md", Object: r.objectOf([]byte("x")), IfMatch: 7,
 	})
 	if !errors.Is(err, tracker.ErrStaleVersion) {
 		t.Fatalf("a conditioned put onto nothing = %v, want ErrStaleVersion", err)
@@ -273,7 +291,7 @@ func TestAFileIsRefusedOutsideALiveProject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	_, err := r.writer.PutFile(t.Context(), "op-1", tracker.FilePut{
-		Project: "NOPE", Path: "a.txt", Manifest: manifestOf(t, []byte("a")),
+		Project: "NOPE", Path: "a.txt", Object: r.objectOf([]byte("a")),
 	})
 	if !errors.Is(err, tracker.ErrNoProject) {
 		t.Fatalf("a put into an unknown project = %v, want ErrNoProject", err)
@@ -359,44 +377,89 @@ func TestAPathHasOneSpelling(t *testing.T) {
 	}
 }
 
-// A FILE OVER ITS CAPS IS REFUSED BY NAME, before anything is published.
+// A FILE OVER ITS CAPS IS REFUSED BY NAME, before anything is published — and
+// so is a put naming no object, or one no reader could check.
 func TestAFileOverItsCapsIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	big := objstore.Manifest{Hash: objstore.HashOf([]byte("x")), Size: tracker.MaxFileBytes + 1}
-	for i := int64(0); big.Size > 0 && i*objstore.ChunkSize < big.Size; i++ {
-		size := min(int64(objstore.ChunkSize), big.Size-i*objstore.ChunkSize)
-		big.Chunks = append(big.Chunks, objstore.Chunk{Hash: objstore.HashOf([]byte{byte(i)}), Size: size})
-	}
+	big := r.objectOf([]byte("x"))
+	big.Size = tracker.MaxFileBytes + 1
 	if _, err := r.writer.PutFile(t.Context(), "op-big", tracker.FilePut{
-		Project: "ENG", Path: "big.bin", Manifest: big,
+		Project: "ENG", Path: "big.bin", Object: big,
 	}); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Fatalf("a file over the size cap = %v", err)
 	}
 	if _, err := r.writer.PutFile(t.Context(), "op-type", tracker.FilePut{
 		Project: "ENG", Path: "a.txt", ContentType: "text/plain\r\nX-Evil: 1",
-		Manifest: manifestOf(t, []byte("a")),
+		Object: r.objectOf([]byte("a")),
 	}); err == nil {
 		t.Fatal("a content type spanning lines was accepted")
 	}
+	good := r.objectOf([]byte("a"))
+	for name, o := range map[string]objstore.Object{
+		"no object":     {},
+		"no key":        {Hash: good.Hash, Size: good.Size},
+		"a bad digest":  {Key: good.Key, Hash: "zz", Size: good.Size},
+		"negative size": {Key: good.Key, Hash: good.Hash, Size: -1},
+	} {
+		if _, err := r.writer.PutFile(t.Context(), "op-"+name, tracker.FilePut{
+			Project: "ENG", Path: "a.txt", Object: o,
+		}); err == nil {
+			t.Errorf("a put with %s was accepted", name)
+		}
+	}
 }
 
-// THE LARGEST MANIFEST A FILE MAY CARRY FITS ONE RECORD, measured rather than
-// asserted from arithmetic: [tracker.MaxFileChunks] entries, a path at its cap
-// that escapes six-fold, and a content type at its cap.
+// A PUT NAMING AN OLD KEY IS REFUSED — ADR-0027's bound, judged at the
+// write's own decide. A write naming a key minted more than RecordWithin ago
+// could land after the collector read that key as nobody's and deleted it; one
+// minted inside the bound is recorded. A key minted AHEAD of the deciding
+// node's clock is recorded too: the collector judges a key by its own minting
+// instant, so a key from a fast clock protects itself, and refusing it would
+// only fail uploads from that node.
+func TestAPutNamingAnOldKeyIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	at := func(minted time.Time) objstore.Object {
+		o := r.objectOf([]byte("aged"))
+		o.Key = objstore.KeyAt(minted)
+		return o
+	}
+	_, err := r.writer.PutFile(t.Context(), "op-old", tracker.FilePut{
+		Project: "ENG", Path: "old.md", Object: at(r.at.Add(-objstore.RecordWithin - time.Minute)),
+	})
+	if !errors.Is(err, tracker.ErrUploadStale) {
+		t.Fatalf("a put naming a key minted past the bound = %v, want ErrUploadStale", err)
+	}
+	for name, minted := range map[string]time.Time{
+		"just inside the bound": r.at.Add(-objstore.RecordWithin + time.Minute),
+		"from a clock ahead":    r.at.Add(6 * time.Hour),
+	} {
+		if _, err := r.writer.PutFile(t.Context(), "op-"+name, tracker.FilePut{
+			Project: "ENG", Path: "fresh.md", Object: at(minted),
+		}); err != nil {
+			t.Errorf("a put naming a key minted %s = %v, want it recorded", name, err)
+		}
+		r.drain()
+	}
+}
+
+// THE LARGEST FILE RECORD FITS ITS COMMIT, measured rather than asserted from
+// arithmetic: a path at its cap, a content type at its cap that escapes
+// six-fold, the digest, the size and the object's key. A file record no longer
+// grows with its content — one key names a gibibyte as it names a byte — but
+// it is still a record, and the caps on what it carries are what bound it.
 func TestTheMaximalFileFitsItsRecord(t *testing.T) {
 	t.Parallel()
+	at := time.Unix(1_700_000_000, 0).UTC()
 	file := tracker.File{
 		V: tracker.DocumentVersion, Project: "ENGINEERING",
-		Path:        strings.Repeat("\x01", 0) + strings.Repeat("é", tracker.MaxFilePath/2),
-		ContentType: strings.Repeat("t", tracker.MaxContentType),
+		Path:        strings.Repeat("é", tracker.MaxFilePath/2),
+		ContentType: strings.Repeat("\x01", tracker.MaxContentType),
 		Hash:        objstore.HashOf([]byte("whole")), Size: tracker.MaxFileBytes,
+		Object:    objstore.KeyAt(at),
 		CreatedBy: strings.Repeat("c", 64), UpdatedBy: strings.Repeat("u", 64),
-		CreatedAt: time.Unix(1_700_000_000, 0).UTC(), UpdatedAt: time.Unix(1_700_000_000, 0).UTC(),
-	}
-	for i := range tracker.MaxFileChunks {
-		h := objstore.HashOf([]byte{byte(i), byte(i >> 8)})
-		file.Chunks = append(file.Chunks, tracker.FileChunk{Hash: h, Size: objstore.ChunkSize})
+		CreatedAt: at, UpdatedAt: at,
 	}
 	body, err := json.Marshal(file)
 	if err != nil {
@@ -405,8 +468,8 @@ func TestTheMaximalFileFitsItsRecord(t *testing.T) {
 	rec := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
 			V: tracker.RecordVersion, OpID: "0193f0a0-0000-7000-8000-000000000001",
-			Subject: tracker.FileSubject(file.Project, "p"), Op: tracker.OpPatch,
-			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1,
+			Subject: tracker.FileSubject(file.Project, file.Path), Op: tracker.OpPatch,
+			CreatedAt: at, Gen: 1,
 			Writer: "node-with-a-long-name",
 			Scope:  tracker.ScopeSet{Subject: true, Container: file.Project},
 		},
@@ -418,8 +481,9 @@ func TestTheMaximalFileFitsItsRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("the maximal file record is %d bytes of a %d-byte ceiling", len(encoded), tracker.MaxCommitBytes)
-	if len(encoded) > tracker.MaxCommitBytes/3 {
-		t.Fatalf("the maximal file record is %d bytes, over a third of the %d the "+
-			"commit ceiling allows", len(encoded), tracker.MaxCommitBytes)
+	if len(encoded) > tracker.MaxCommitBytes/100 {
+		t.Fatalf("the maximal file record is %d bytes, over a hundredth of the %d the "+
+			"commit ceiling allows — a file record carries names, never its content",
+			len(encoded), tracker.MaxCommitBytes)
 	}
 }

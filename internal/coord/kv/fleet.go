@@ -360,7 +360,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why NINETEEN buckets and not one
+// # Why EIGHTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -424,8 +424,6 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           files are in, and one that expired would let the next node
 //	           to boot record a different one — the files split between two
 //	           stores with nothing failing
-//	chunkLocks a minute, the lock's own lifetime: a chunk lock is a key,
-//	           and the bucket's age is what lets go of one whose holder died
 //	custody    a day past the event log's own retention, thirty-two days:
 //	           the record names which data node keeps a stateless node's
 //	           batch, and a node that wrote one and never learned whether it
@@ -468,7 +466,6 @@ const (
 	mailboxesSuffix    = "_mailboxes"
 	objectsSuffix      = "_objects"
 	custodySuffix      = "_custody"
-	chunkLocksSuffix   = "_chunk_locks"
 	activationKey      = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
@@ -536,10 +533,6 @@ type FleetConfig struct {
 	// stateless node's batch is kept — see [coord.CustodyRetention].
 	CustodyRetention time.Duration
 
-	// ChunkLockTTL is how long a chunk lock outlives a holder that never
-	// let it go — see [coord.ChunkLockTTL].
-	ChunkLockTTL time.Duration
-
 	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
 
@@ -579,7 +572,6 @@ func (c *FleetConfig) normalize() error {
 		{"BudgetRetention", c.BudgetRetention},
 		{"StatusFreshness", c.StatusFreshness},
 		{"CustodyRetention", c.CustodyRetention},
-		{"ChunkLockTTL", c.ChunkLockTTL},
 	}
 	for _, field := range required {
 		switch {
@@ -619,7 +611,6 @@ type FleetStore struct {
 	mailboxes    jetstream.KeyValue
 	objects      jetstream.KeyValue
 	custody      jetstream.KeyValue
-	chunkLocks   jetstream.KeyValue
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -669,7 +660,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, nineteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, eighteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -757,9 +748,6 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.custody, custodySuffix,
 			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
 			cfg.CustodyRetention},
-		{&store.chunkLocks, chunkLocksSuffix,
-			"Crewlet object store chunk locks; the bucket TTL is the lock's lifetime",
-			cfg.ChunkLockTTL},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {

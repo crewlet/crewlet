@@ -200,6 +200,170 @@ func TestAListingEndsPastMetadataItCannotRead(t *testing.T) {
 	}
 }
 
+// A DELETE LEAVES NOT ONE MESSAGE — no delete marker in the metadata's place —
+// and a get's consumer is gone once the get is closed. The library's delete
+// writes a marker no later put replaces, because no name is ever put twice,
+// so every object the collector ever deleted would be a message each hourly
+// listing ships for ever.
+func TestADeleteLeavesNoMessage(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	data := bytes.Repeat([]byte("gone "), 3*natsobj.MessageBytes/5)
+	if err := b.Put(t.Context(), "files/gone", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := b.Get(deadline(t), "files/gone", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read back %d bytes, %v", len(got), err)
+	}
+	_ = r.Close()
+	if err := b.Delete(t.Context(), "files/gone"); err != nil {
+		t.Fatal(err)
+	}
+	if got := messages(t, client); got != 0 {
+		t.Fatalf("a deleted object left %d messages in %s", got, natsobj.Stream)
+	}
+	if got := consumers(t, client); got != 0 {
+		t.Fatalf("a closed get left %d consumers on %s", got, natsobj.Stream)
+	}
+}
+
+// A DELETE MARKER AN EARLIER BUILD LEFT IS LISTED, AND CLEARED BY AN ORDINARY
+// DELETE. The library's own delete — what every earlier build made — keeps
+// the marker for ever; the collector can only remove what a listing shows
+// it, so the listing shows the name, as an object of no bytes, and the delete
+// it makes purges the marker like any other metadata.
+func TestAMarkerAnEarlierBuildLeftIsListedAndCleared(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	name := string(objstore.HashOf([]byte("a chunk an earlier build stored")))
+	if err := b.Put(t.Context(), name, bytes.NewReader([]byte("chunk")), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	library, err := client.ObjectStore(t.Context(), natsobj.Bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := library.Delete(t.Context(), name); err != nil {
+		t.Fatalf("the library's own delete: %v", err)
+	}
+	if got := messages(t, client); got != 1 {
+		t.Fatalf("the library's delete left %d messages, want its one marker", got)
+	}
+	if _, err := b.Stat(t.Context(), name); !errors.Is(err, objstore.ErrNotFound) {
+		t.Fatalf("Stat of a marker = %v, want ErrNotFound", err)
+	}
+	var listed []objstore.Info
+	if err := b.List(t.Context(), func(info objstore.Info) error {
+		listed = append(listed, info)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != name || listed[0].Size != 0 || listed[0].Written.IsZero() {
+		t.Fatalf("the listing of a marker = %+v, want its name, no bytes and when it was left", listed)
+	}
+	if err := b.Delete(t.Context(), name); err != nil {
+		t.Fatal(err)
+	}
+	if got := messages(t, client); got != 0 {
+		t.Fatalf("a delete of a marker left %d messages", got)
+	}
+}
+
+// A RANGE IS FOUND BY THE MESSAGES' OWN SIZES, never by assuming each is
+// [natsobj.MessageBytes]: an object some other writer cut into pieces of its
+// own — here a byte a message, through the library's put with no filler —
+// reads back from any offset exactly.
+func TestARangeIsFoundByTheMessagesOwnSizes(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	library, err := client.ObjectStore(t.Context(), natsobj.Bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("an object stored a byte at a time, by somebody else's writer")
+	if _, err := library.Put(t.Context(), jetstream.ObjectMeta{Name: "ragged"},
+		iotest.OneByteReader(bytes.NewReader(data))); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ off, n int64 }{{0, 5}, {1, 1}, {17, 9}, {int64(len(data)) - 3, -1}} {
+		r, err := b.Get(deadline(t), "ragged", c.off, c.n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(r)
+		_ = r.Close()
+		end := int64(len(data))
+		if c.n >= 0 {
+			end = c.off + c.n
+		}
+		if err != nil || !bytes.Equal(got, data[c.off:end]) {
+			t.Fatalf("Get(%d, %d) = %q, %v; want %q", c.off, c.n, got, err, data[c.off:end])
+		}
+	}
+	if got := consumers(t, client); got != 0 {
+		t.Fatalf("ranged gets left %d consumers", got)
+	}
+}
+
+// AN OBJECT WHOSE PIECES ARE GONE ENDS BEFORE IT BEGINS — which the store
+// reads as an object holding fewer bytes than its row says — while the object
+// whose metadata went too is not found: the two are told apart, so a deletion
+// racing a read is never reported as damage.
+func TestAnObjectWhosePiecesAreGoneReadsEmpty(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	if err := b.Put(t.Context(), "hollow", bytes.NewReader(make([]byte, 1000)), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Purge(t.Context(), jetstream.WithPurgeSubject("$O."+natsobj.Bucket+".C.>")); err != nil {
+		t.Fatal(err)
+	}
+	for _, off := range []int64{0, 500} {
+		r, err := b.Get(deadline(t), "hollow", off, -1)
+		if err != nil {
+			t.Fatalf("Get at %d of an object with no pieces: %v", off, err)
+		}
+		got, err := io.ReadAll(r)
+		_ = r.Close()
+		if err != nil || len(got) != 0 {
+			t.Fatalf("Get at %d of an object with no pieces = %d bytes, %v; want none", off, len(got), err)
+		}
+	}
+	if err := b.Delete(t.Context(), "hollow"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Get(deadline(t), "hollow", 0, -1); !errors.Is(err, objstore.ErrNotFound) {
+		t.Fatalf("Get of a deleted object = %v, want ErrNotFound", err)
+	}
+}
+
+// consumers is how many consumers the bucket's stream has.
+func consumers(t *testing.T, client jetstream.JetStream) int {
+	t.Helper()
+	stream, err := client.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := stream.Info(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.State.Consumers
+}
+
 // deadline is a context fit for a read.
 func deadline(t *testing.T) context.Context {
 	t.Helper()

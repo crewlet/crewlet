@@ -133,7 +133,6 @@ func openFleetVia(t *testing.T, client jetstream.JetStream, prefix string) *Flee
 		BudgetRetention:  time.Hour,
 		StatusFreshness:  10 * time.Minute,
 		CustodyRetention: 10 * time.Minute,
-		ChunkLockTTL:     10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -1019,15 +1018,13 @@ func TestALeaderReadDecodesAKeyExactlyAsTheClientDoes(t *testing.T) {
 	}
 }
 
-// A LISTING'S LEADER READ IS ADDRESSED WHERE ITS CLIENT'S OWN REQUESTS GO.
-//
-// The read goes past the client, so it has to be addressed in the API the
-// client speaks or nothing answers it: a leaf's broker serves JetStream only
-// under the embedded fleet's domain. This package is handed a client, so it
-// recovers the API from it — and a client built any way but internal/jsapi
-// is a wiring mistake named before the broker is asked anything, rather than
-// a certifying read that fails only on the listings that raced a write.
-func TestALeaderReadIsAddressedInTheAPIItsClientSpeaks(t *testing.T) {
+// A LISTING OVER A CLIENT BUILT ANY WAY BUT internal/jsapi FAILS AS A WIRING
+// MISTAKE. Its certifying read goes past the client, so it has to be
+// addressed in the API the client speaks ([jsapi.Of]), and a client that
+// speaks neither is named before the broker is asked anything — rather than a
+// certifying read that fails only on the listings that raced a write, and is
+// retried for ever as though the store were down.
+func TestAListingOverAMisbuiltClientIsAWiringError(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	must := func(js jetstream.JetStream, err error) jetstream.JetStream {
@@ -1036,30 +1033,6 @@ func TestALeaderReadIsAddressedInTheAPIItsClientSpeaks(t *testing.T) {
 			t.Fatalf("client: %v", err)
 		}
 		return js
-	}
-	for _, c := range []struct {
-		name   string
-		client jetstream.JetStream
-		want   jsapi.API
-		refuse string
-	}{
-		{"the_account", must(jsapi.Account().Client(nc)), jsapi.Account(), ""},
-		{"the_embedded_fleet", must(jsapi.Embedded().Client(nc)), jsapi.Embedded(), ""},
-		{"a_custom_prefix", must(jetstream.NewWithAPIPrefix(nc, "$ELSEWHERE.API")), jsapi.API{}, "$ELSEWHERE.API"},
-		{"another_domain", must(jetstream.NewWithDomain(nc, "elsewhere")), jsapi.API{}, "elsewhere"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := apiOf(c.client)
-			if c.refuse != "" {
-				if err == nil || !strings.Contains(err.Error(), c.refuse) || !strings.Contains(err.Error(), "internal/jsapi") {
-					t.Fatalf("apiOf = (%v, %v), want a refusal naming %q and internal/jsapi", got, err, c.refuse)
-				}
-				return
-			}
-			if err != nil || got != c.want {
-				t.Fatalf("apiOf = (%v, %v), want %v", got, err, c.want)
-			}
-		})
 	}
 
 	t.Run("a_misbuilt_client_fails_every_listing", func(t *testing.T) {
@@ -1134,7 +1107,6 @@ func TestAKeyThePassLostIsReadBackOnTheEmbeddedFleetsDomain(t *testing.T) {
 		RebaseRetention:  10 * time.Minute,
 		StatusFreshness:  10 * time.Minute,
 		CustodyRetention: 10 * time.Minute,
-		ChunkLockTTL:     10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

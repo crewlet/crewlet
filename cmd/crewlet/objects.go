@@ -59,12 +59,12 @@ type objectsCollectView struct {
 }
 
 type objectsAuditView struct {
-	At            time.Time `json:"at"`
-	Completed     bool      `json:"completed"`
-	Referenced    int       `json:"referenced"`
-	Missing       int       `json:"missing"`
-	MissingChunks []string  `json:"missing_chunks"`
-	Error         string    `json:"error"`
+	At             time.Time `json:"at"`
+	Completed      bool      `json:"completed"`
+	Referenced     int       `json:"referenced"`
+	Missing        int       `json:"missing"`
+	MissingObjects []string  `json:"missing_objects"`
+	Error          string    `json:"error"`
 }
 
 // objectsStatus is `crewlet objects status`.
@@ -99,7 +99,7 @@ func objectsStatus(args []string, stdout, stderr io.Writer) error {
 }
 
 // renderObjects prints the block: where the files are, and what the last
-// collection and audit found — and, above all, any chunk the store has lost.
+// collection and audit found — and, above all, any object the store has lost.
 func renderObjects(w io.Writer, v objectsView) error {
 	switch v.State {
 	case "unavailable":
@@ -117,21 +117,21 @@ func renderObjects(w io.Writer, v objectsView) error {
 	fmt.Fprintf(&b, "Files are kept in: %s\n", backendName(v.Backend))
 	fmt.Fprintf(&b, "Collector:         %s\n", v.Node)
 	if c := v.Collect; c != nil {
-		fmt.Fprintf(&b, "Last collection:   %s — %d chunks listed, %d deleted%s\n",
+		fmt.Fprintf(&b, "Last collection:   %s — %d objects listed, %d deleted%s\n",
 			c.At.Format(time.RFC3339), c.Listed, c.Deleted, passNote(c.Completed, c.Skipped, c.Error))
 	} else {
 		fmt.Fprintln(&b, "Last collection:   none yet")
 	}
 	if a := v.Audit; a != nil {
-		fmt.Fprintf(&b, "Last audit:        %s — %d chunks named, %d missing%s\n",
+		fmt.Fprintf(&b, "Last audit:        %s — %d objects named, %d missing%s\n",
 			a.At.Format(time.RFC3339), a.Referenced, a.Missing, passNote(a.Completed, "", a.Error))
 		if a.Missing > 0 {
-			fmt.Fprintf(&b, "\n%d chunk(s) the company's files are made of are not in the store. "+
+			fmt.Fprintf(&b, "\n%d object(s) the company's files are kept in are not in the store. "+
 				"Restore them from a backup (docs/guides/backup.md):\n", a.Missing)
-			for _, h := range a.MissingChunks {
+			for _, h := range a.MissingObjects {
 				fmt.Fprintf(&b, "  %s\n", h)
 			}
-			if shown := len(a.MissingChunks); shown < a.Missing {
+			if shown := len(a.MissingObjects); shown < a.Missing {
 				fmt.Fprintf(&b, "  … and %d more\n", a.Missing-shown)
 			}
 		}

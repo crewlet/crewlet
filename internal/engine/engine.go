@@ -80,7 +80,7 @@ type Company struct {
 	// that must agree across nodes about WHEN a configuration took effect
 	// reads this rather than a clock, and a zero instant is a
 	// configuration none of them may apply — the chart is not written from
-	// it, and the object store's placement takes nothing from it.
+	// it.
 	ActivatedAt time.Time
 }
 

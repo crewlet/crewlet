@@ -11,10 +11,17 @@ import (
 // ErrNotFound is a name the backend holds nothing under.
 var ErrNotFound = errors.New("objstore: no such object")
 
-// ErrCorrupt is an object whose bytes are not the ones it was stored with —
-// hashing to something other than its name, or to something other than the
-// digest the backend recorded when it took them. Never handed to a reader as
-// the object.
+// ErrCorrupt is an object whose bytes are not the ones it was stored with: the
+// backend ended it short of the size its row records, handed over more, or
+// handed over exactly that many that hash to something other than the row's
+// digest. Never handed to a reader as the object ([Store.Open]).
+//
+// ONLY A DEFINITE ANSWER IS CORRUPTION. A read that FAILED before the end — a
+// deadline, a dropped link, a broker that stopped answering — is a failed
+// read and nothing more, whatever its library calls it: the object may be
+// whole, a later read may get it, and an error that said otherwise would send
+// an operator to restore a file nothing is wrong with, and a backup to record
+// it as lost.
 var ErrCorrupt = errors.New("objstore: an object's bytes are not the ones it was stored with")
 
 // ErrNoDeadline is a read asked for under a context with no deadline.
@@ -41,9 +48,8 @@ type Info struct {
 	// exceed the time the object has been visible by as long as its upload
 	// took.
 	//
-	// A put of a name already held replaces it and moves this — the
-	// property the collector's grace rests on while a file may re-use a
-	// chunk ([Locks]).
+	// It is one of the two instants the collector's grace is measured
+	// from; the other is the key's own ([Key.Minted]).
 	Written time.Time
 
 	// Digest is the SHA-256 the backend computed over the bytes it was
@@ -73,11 +79,16 @@ type PutMeta struct {
 // # A dumb store of opaque names
 //
 // A backend keeps bytes under whatever name it is handed and hands every name
-// back verbatim. It parses none: what a name means — a chunk's content
-// address today — is this package's grammar and the collector's judgement, so
-// it is written once, here, rather than once per backend, and a backend can
-// never hide an object from the collector by declining to list a name it did
-// not understand.
+// back verbatim. It parses none: what a name means — an object's key under
+// the engine's namespace ([Key.Name]), a chunk an earlier build stored, or
+// somebody else's object entirely — is this package's grammar and the
+// collector's judgement, so it is written once, here, rather than once per
+// backend, and a backend can never hide an object from the collector by
+// declining to list a name it did not understand.
+//
+// A NAME IS PUT ONCE. The store never reuses one ([Key]), so what a second put
+// of a held name does is no backend's promise, and nothing here depends on
+// it.
 //
 // # Streamed, both ways
 //
@@ -91,9 +102,7 @@ type Backend interface {
 	// read that fails, or ctx ending before then, leaves NOTHING under the
 	// name a listing or a stat could find, and the put fails with the
 	// read's own error. The end is io.EOF ITSELF and nothing else — see
-	// [Fill], which every backend reading in pieces reads through. A put
-	// of a name already held replaces it whole and moves its written
-	// instant (see [Info]).
+	// [Fill], which every backend reading in pieces reads through.
 	Put(ctx context.Context, name string, r io.Reader, m PutMeta) error
 
 	// Get streams n bytes of name from offset off — to the end when n is
@@ -103,7 +112,10 @@ type Backend interface {
 	// ctx bounds the WHOLE read, the stream included, and must carry a
 	// deadline: a read that stops moving has to end somewhere, and a
 	// backend refuses one with none ([ErrNoDeadline]) rather than pick a
-	// bound of its own. Every backend begins with [CheckRead].
+	// bound of its own. Every backend begins with [CheckRead]. And ctx
+	// ENDING ends the stream: a Read blocked on the backend returns, with
+	// ctx's error, once ctx is done — which is how [Store]'s stall
+	// watchdog stops a read that has stopped moving.
 	//
 	// The bytes are what the backend holds; checking them is [Store]'s.
 	Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error)
@@ -209,8 +221,8 @@ const MiB = 1 << 20
 
 // MiBPace is how long one mebibyte of an object is given to cross one link
 // the engine moves it over — a client's upload or download through the API, a
-// part on its way to a bucket, a chunk on its way back — and so the slowest
-// transfer the object store accepts.
+// part on its way to a bucket, an object on its way back from one — and so
+// the slowest transfer the object store accepts.
 //
 // ONE FLOOR FOR EVERY LEG, and every bound on a transfer derives from it
 // rather than restating it: two figures that agree today by coincidence are
@@ -233,3 +245,39 @@ func PaceFor(n int64) time.Duration {
 	}
 	return time.Duration((n+MiB-1)/MiB) * MiBPace
 }
+
+// ReadBase is what a read of an object is given beside its bytes' pace: the
+// backend's lookup of the object before it streams it, the request around
+// it, and a retry of either.
+//
+// A MINUTE: every one of those is a round trip of milliseconds against a
+// healthy backend, and a minute is room for the leader election or the
+// reconnect that makes one of them slow — while a read that cannot even begin
+// in a minute is not going to.
+const ReadBase = time.Minute
+
+// ReadBudget is the deadline [Store] reads an object of size bytes under,
+// whatever its caller carries: [ReadBase], and a [MiBPace] for every
+// mebibyte begun ON EACH OF THE TWO LEGS a read's bytes cross in series — from
+// the backend to this node, and from this node to whoever reads the stream: a
+// client downloading through the API, which is itself held to MiBPace per
+// mebibyte, or a backup writing its disk. Budgeted for one leg, a client at
+// the floor would spend the whole budget on its own pace and leave the
+// backend a minute for a gibibyte.
+//
+// A BOUND, not a pace: [ReadStall] is what ends a read that stops moving.
+// This is what ends one that trickles a byte a minute, which no stall
+// watchdog ever sees.
+func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
+
+// ReadStall is the longest one read of an object may wait on its backend
+// before the read is ended as stalled.
+//
+// A MINUTE — two of [MiBPace], the time a mebibyte is given: no backend
+// streaming hands over its next piece more than a mebibyte apart, the largest
+// piece any of them moves is an eight-mebibyte part read in pieces far
+// smaller, and a read that has heard nothing for a minute is waiting on a
+// broker that lost the object's pieces or a connection that has gone, either
+// of which would otherwise hold the reader until its whole budget ran out —
+// hours, for a large file.
+const ReadStall = 2 * MiBPace

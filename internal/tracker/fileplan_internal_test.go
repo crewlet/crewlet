@@ -4,28 +4,35 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// chunksAmong is the statement the object store's collector asks which of a
-// batch of chunks any file names, built from this package's own declaration.
-func chunksAmong(t *testing.T, n int) string {
+// declared is a statement the object store builds from this package's own
+// declaration, exactly as the collector, its audit and the backup build it.
+func declared(t *testing.T, build func() (string, error)) string {
 	t.Helper()
-	statement, err := FileChunkReferences.ChunksAmong(n)
+	statement, err := build()
 	if err != nil {
 		t.Fatalf("the declaration builds no statement: %v", err)
 	}
 	return statement
 }
 
-// THE TWO FILE INDEXES SERVE THE TWO QUERIES THEY NAME, read off the planner
-// for [TestEveryIndexServesARegisteredQuery]'s reason: a comment naming a
-// reader is a claim, and the plan is what checks it. The chunk read is the one
-// that matters most — the object store's collector runs it once per batch of
-// the store's listing, and without its index each run is every chunk row of
-// every file in the company.
+// THE FILE INDEXES SERVE THE QUERIES THEY NAME, read off the planner for
+// [TestEveryIndexServesARegisteredQuery]'s reason: a comment naming a reader is
+// a claim, and the plan is what checks it. The object reads are the ones that
+// matter most — the collector asks which of a batch of keys any file names
+// once per batch of the store's listing, and the audit and the backup page
+// through every named key — and without the key's index each is every file in
+// the company.
 func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
+	key := func(i byte) string {
+		return objstore.KeyAt(time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Hour)).String()
+	}
 	for _, c := range []struct {
 		name, table, index, statement string
 		args                          []any
@@ -47,14 +54,17 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 			[]any{"ENG", "", "reports/", "reports0", 201},
 		},
 		{
-			// THE DECLARATION'S OWN STATEMENT, built exactly as the
-			// collector builds it, over a batch of three.
-			"a batch's references", "tracker_file_chunks", "tracker_file_chunks_chunk_idx",
-			chunksAmong(t, 3), []any{
-				"0000000000000000000000000000000000000000000000000000000000000001",
-				"8000000000000000000000000000000000000000000000000000000000000000",
-				"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-			},
+			// THE DECLARATION'S OWN STATEMENTS, built exactly as the
+			// collector builds them, over a batch of three — and a page
+			// of the walk the audit and the backup take.
+			"a batch's references", "tracker_files", "tracker_files_object_idx",
+			declared(t, func() (string, error) { return FileObjectReferences.ObjectsAmong(3) }),
+			[]any{key(1), key(2), key(3)},
+		},
+		{
+			"a page of every reference", "tracker_files", "tracker_files_object_idx",
+			declared(t, func() (string, error) { return FileObjectReferences.ReferencesAfter(500) }),
+			[]any{key(4)},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -71,7 +81,7 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 //
 // REACHING THE INDEX IS NOT ENOUGH, which is what this used to check: every
 // query here is covered by its index, so an index whose columns lead with the
-// wrong one is still "used" — as a SCAN of every entry, which is every chunk
+// wrong one is still "used" — as a SCAN of every entry, which is every file
 // row in the company read in index order rather than heap order, and no
 // cheaper. `SEARCH` is the planner saying it will seek.
 func seeks(plan []string, table, index string) bool {

@@ -2,7 +2,6 @@ package objstore
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,76 +9,9 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/google/uuid"
 )
-
-// A SPLIT CUTS AT THE CHUNK SIZE, HANDS OVER EVERY PIECE IN ORDER, AND ITS
-// MANIFEST ADDS UP — the object's own hash is the hash of the whole, not of
-// any piece.
-func TestASplitCutsAtTheChunkSizeAndItsManifestAddsUp(t *testing.T) {
-	t.Parallel()
-	for _, size := range []int{0, 1, ChunkSize - 1, ChunkSize, ChunkSize + 1, 3*ChunkSize + 17} {
-		body := bytes.Repeat([]byte{0x5a}, size)
-		for i := range body {
-			body[i] = byte(i * 31)
-		}
-		var got bytes.Buffer
-		var pieces []Chunk
-		m, err := Split(context.Background(), bytes.NewReader(body), int64(size),
-			func(_ context.Context, c Chunk, data []byte) error {
-				if HashOf(data) != c.Hash || int64(len(data)) != c.Size {
-					t.Fatalf("size %d: a piece was handed over under the wrong name", size)
-				}
-				pieces = append(pieces, c)
-				got.Write(data)
-				return nil
-			})
-		if err != nil {
-			t.Fatalf("size %d: %v", size, err)
-		}
-		if !bytes.Equal(got.Bytes(), body) {
-			t.Fatalf("size %d: the pieces do not reassemble the object", size)
-		}
-		if m.Hash != HashOf(body) || m.Size != int64(size) {
-			t.Fatalf("size %d: manifest %s/%d, want %s/%d", size, m.Hash, m.Size,
-				HashOf(body), size)
-		}
-		wantChunks := (size + ChunkSize - 1) / ChunkSize
-		if len(m.Chunks) != wantChunks || len(pieces) != wantChunks {
-			t.Fatalf("size %d: %d chunks, want %d", size, len(m.Chunks), wantChunks)
-		}
-		if err := m.Validate(); err != nil {
-			t.Fatalf("size %d: its own manifest does not validate: %v", size, err)
-		}
-	}
-}
-
-// AN OBJECT OVER ITS LIMIT IS REFUSED BY NAME, having read one byte past it
-// rather than the whole thing.
-func TestAnObjectOverItsLimitIsRefused(t *testing.T) {
-	t.Parallel()
-	body := bytes.Repeat([]byte("x"), 100)
-	_, err := Split(context.Background(), bytes.NewReader(body), 99,
-		func(context.Context, Chunk, []byte) error { return nil })
-	if !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("Split over the limit = %v, want ErrTooLarge", err)
-	}
-	if _, err := Split(context.Background(), bytes.NewReader(body), 100,
-		func(context.Context, Chunk, []byte) error { return nil }); err != nil {
-		t.Fatalf("Split at exactly the limit = %v", err)
-	}
-}
-
-// A PIECE THE CALLER COULD NOT STORE FAILS THE SPLIT, rather than yielding a
-// manifest naming bytes that are nowhere.
-func TestAPieceThatCouldNotBeStoredFailsTheSplit(t *testing.T) {
-	t.Parallel()
-	refused := errors.New("no holder answered")
-	_, err := Split(context.Background(), strings.NewReader("abc"), 10,
-		func(context.Context, Chunk, []byte) error { return refused })
-	if !errors.Is(err, refused) {
-		t.Fatalf("Split = %v, want the put's own error", err)
-	}
-}
 
 // endsWith yields its bytes and then answers err in place of the end, as a
 // request body whose client went away does.
@@ -154,53 +86,10 @@ func TestAFillEndsOnlyAtIoEOFItself(t *testing.T) {
 	}
 }
 
-// A SPLIT ENDS ONLY WHERE ITS READER ENDS: a body cut short is a failed split
-// with no manifest, never a manifest of the half that arrived — which is what
-// an upload whose client went away mid-body was recorded as.
-func TestACutBodyFailsTheSplit(t *testing.T) {
-	t.Parallel()
-	for _, cut := range []error{io.ErrUnexpectedEOF,
-		fmt.Errorf("the file's body could not be read: %w", io.ErrUnexpectedEOF),
-		fmt.Errorf("the file's body: %w", io.EOF)} {
-		for _, size := range []int{10, ChunkSize, ChunkSize + 10} {
-			stored := 0
-			m, err := Split(context.Background(), &endsWith{bytes.NewReader(make([]byte, size)), cut},
-				int64(2*ChunkSize), func(_ context.Context, _ Chunk, data []byte) error {
-					stored += len(data)
-					return nil
-				})
-			if !errors.Is(err, cut) {
-				t.Fatalf("a body of %d bytes cut with %q split into %+v, %v; want the cut", size, cut, m, err)
-			}
-			if want := size / ChunkSize * ChunkSize; stored != want {
-				t.Errorf("a body of %d bytes cut with %q handed over %d bytes, want the %d "+
-					"of its whole chunks", size, cut, stored, want)
-			}
-		}
-	}
-}
-
-// A MANIFEST WHOSE PARTS DO NOT ADD UP IS REFUSED — it is what a reader
-// reassembles by, and what the collector keeps alive.
-func TestAManifestWhosePartsDoNotAddUpIsRefused(t *testing.T) {
-	t.Parallel()
-	good := HashOf([]byte("a"))
-	for name, m := range map[string]Manifest{
-		"no own hash":     {Size: 1, Chunks: []Chunk{{Hash: good, Size: 1}}},
-		"a bad chunk":     {Hash: good, Size: 1, Chunks: []Chunk{{Hash: "zz", Size: 1}}},
-		"an empty chunk":  {Hash: good, Size: 0, Chunks: []Chunk{{Hash: good, Size: 0}}},
-		"an oversize one": {Hash: good, Size: ChunkSize + 1, Chunks: []Chunk{{Hash: good, Size: ChunkSize + 1}}},
-		"a wrong total":   {Hash: good, Size: 2, Chunks: []Chunk{{Hash: good, Size: 1}}},
-	} {
-		if err := m.Validate(); err == nil {
-			t.Errorf("%s: validated", name)
-		}
-	}
-}
-
-// ONLY SIXTY-FOUR LOWERCASE HEX DIGITS ARE A HASH: an uppercase spelling of
-// the same digest is a second name for one chunk, which would be a second
-// file on disk.
+// ONLY SIXTY-FOUR LOWERCASE HEX DIGITS ARE A DIGEST: an uppercase spelling
+// would compare unequal to the one a read computes, and it is also the
+// spelling that tells a chunk an earlier build stored apart from everything
+// else in the store.
 func TestOnlyLowercaseHexIsAHash(t *testing.T) {
 	t.Parallel()
 	good := string(HashOf([]byte("a")))
@@ -217,30 +106,144 @@ func TestOnlyLowercaseHexIsAHash(t *testing.T) {
 
 // A DECLARATION IS WRITTEN INTO A STATEMENT, so it is refused unless every
 // name in it is a plain identifier — and unless it names the log that writes
-// the table, which is what a pass must be current on before it may call a
-// chunk unnamed.
+// the table, which is what a pass must be current on before it may call an
+// object unnamed, and the columns saying whose a reference is.
+//
+// AND NEITHER STATEMENT CAN ANSWER A NULL KEY: a removed file, or one an
+// earlier build kept in chunks, names no object, and a walk handing its NULL
+// to the key parser would stop every audit and every backup for good.
 func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 	t.Parallel()
-	good := ReferenceTable{Domain: "tracker", Table: "tracker_file_chunks", Column: "chunk"}
-	query, err := good.ChunksAmong(3)
+	good := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}}
+	among, err := good.ObjectsAmong(3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "SELECT DISTINCT chunk FROM tracker_file_chunks WHERE chunk IN (?, ?, ?)"; query != want {
-		t.Errorf("statement = %q, want %q", query, want)
+	if want := "SELECT DISTINCT object FROM tracker_files WHERE object IN (?, ?, ?)"; among != want {
+		t.Errorf("ObjectsAmong = %q, want %q", among, want)
 	}
-	if _, err := good.ChunksAmong(0); err == nil {
-		t.Error("a question about no chunks was built")
+	page, err := good.ReferencesAfter(500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "SELECT object, hash, size, project_key, path FROM tracker_files " +
+		"WHERE object IS NOT NULL AND object > ? ORDER BY object LIMIT 500"; page != want {
+		t.Errorf("ReferencesAfter = %q, want %q", page, want)
+	}
+	if _, err := good.ObjectsAmong(0); err == nil {
+		t.Error("a question about no objects was built")
+	}
+	if _, err := good.ReferencesAfter(0); err == nil {
+		t.Error("a page of no references was built")
 	}
 	for name, bad := range map[string]ReferenceTable{
-		"no domain":        {Table: "t", Column: "chunk"},
-		"a table injected": {Domain: "tracker", Table: "t; DROP TABLE t", Column: "chunk"},
-		"a quoted column":  {Domain: "tracker", Table: "t", Column: `"chunk"`},
-		"no column":        {Domain: "tracker", Table: "t"},
-		"upper case":       {Domain: "tracker", Table: "T", Column: "chunk"},
+		"no domain":        {Table: "t", Key: "object", Hash: "hash", Size: "size", Owner: []string{"path"}},
+		"a table injected": {Domain: "tracker", Table: "t; DROP TABLE t", Key: "object", Hash: "hash", Size: "size", Owner: []string{"path"}},
+		"a quoted key":     {Domain: "tracker", Table: "t", Key: `"object"`, Hash: "hash", Size: "size", Owner: []string{"path"}},
+		"no key":           {Domain: "tracker", Table: "t", Hash: "hash", Size: "size", Owner: []string{"path"}},
+		"no hash":          {Domain: "tracker", Table: "t", Key: "object", Size: "size", Owner: []string{"path"}},
+		"no size":          {Domain: "tracker", Table: "t", Key: "object", Hash: "hash", Owner: []string{"path"}},
+		"no owner":         {Domain: "tracker", Table: "t", Key: "object", Hash: "hash", Size: "size"},
+		"an owner injected": {Domain: "tracker", Table: "t", Key: "object", Hash: "hash", Size: "size",
+			Owner: []string{"path, (SELECT 1)"}},
+		"upper case": {Domain: "tracker", Table: "T", Key: "object", Hash: "hash", Size: "size", Owner: []string{"path"}},
 	} {
-		if _, err := bad.Chunks(); err == nil {
-			t.Errorf("%s: a statement was built", name)
+		if _, err := bad.ObjectsAmong(1); err == nil {
+			t.Errorf("%s: a question was built", name)
+		}
+		if _, err := bad.ReferencesAfter(1); err == nil {
+			t.Errorf("%s: a page was built", name)
+		}
+	}
+}
+
+// ONLY THE CANONICAL SPELLING OF A VERSION 7 UUID IS A KEY. Every other
+// spelling the UUID library would take is a second name for one object — a
+// second object in the store, or one the collector judges as somebody
+// else's — and a digest, the name a chunk was stored under, is not a key at
+// all.
+func TestOnlyTheCanonicalSpellingIsAKey(t *testing.T) {
+	t.Parallel()
+	k := KeyAt(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
+	good := k.String()
+	if got, err := ParseKey(good); err != nil || got != k {
+		t.Fatalf("ParseKey(%q) = %v, %v; want the key back", good, got, err)
+	}
+	v4 := uuid.New().String()
+	for name, bad := range map[string]string{
+		"empty":         "",
+		"upper case":    strings.ToUpper(good),
+		"a urn":         "urn:uuid:" + good,
+		"braced":        "{" + good + "}",
+		"bare hex":      strings.ReplaceAll(good, "-", ""),
+		"a version 4":   v4,
+		"a digest":      string(HashOf([]byte("a chunk"))),
+		"with a prefix": "files/" + good,
+		"the nil uuid":  uuid.Nil.String(),
+	} {
+		if _, err := ParseKey(bad); !errors.Is(err, ErrBadKey) {
+			t.Errorf("%s: ParseKey(%q) = %v, want ErrBadKey", name, bad, err)
+		}
+		var into Key
+		if err := into.UnmarshalText([]byte(bad)); !errors.Is(err, ErrBadKey) {
+			t.Errorf("%s: UnmarshalText(%q) = %v, want ErrBadKey", name, bad, err)
+		}
+	}
+	if _, err := (Key{}).MarshalText(); !errors.Is(err, ErrBadKey) {
+		t.Errorf("the zero key marshalled: %v", err)
+	}
+}
+
+// A KEY CARRIES THE INSTANT IT WAS MINTED, to the millisecond — what a write
+// is refused by once the key is too old and what the collector's grace is
+// measured from — and two keys minted at one instant are still two keys.
+func TestAKeyCarriesItsMintingInstant(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2031, 4, 16, 9, 30, 15, 123_456_789, time.UTC)
+	a, b := KeyAt(at), KeyAt(at)
+	if want := at.Truncate(time.Millisecond); !a.Minted().Equal(want) || a.Minted().Location() != time.UTC {
+		t.Fatalf("a key minted at %v says %v", want, a.Minted())
+	}
+	if a == b {
+		t.Fatal("two keys minted at one instant are the same key")
+	}
+	if u := uuid.UUID(a); u.Version() != 7 || u.Variant() != uuid.RFC4122 {
+		t.Fatalf("a minted key is version %d, variant %v", u.Version(), u.Variant())
+	}
+	if later := KeyAt(at.Add(time.Millisecond)); later.String() <= a.String() {
+		t.Errorf("a key minted later sorts before an earlier one: %s <= %s", later, a)
+	}
+	got, err := KeyOfName(a.Name())
+	if err != nil || got != a {
+		t.Fatalf("KeyOfName(%q) = %v, %v", a.Name(), got, err)
+	}
+	if !strings.HasPrefix(a.Name(), "files/") {
+		t.Errorf("a key is stored as %q, outside the engine's namespace", a.Name())
+	}
+	for _, foreign := range []string{a.String(), "other/" + a.String(), string(HashOf([]byte("x")))} {
+		if _, err := KeyOfName(foreign); !errors.Is(err, ErrBadKey) {
+			t.Errorf("KeyOfName(%q) = %v, want ErrBadKey", foreign, err)
+		}
+	}
+}
+
+// AN OBJECT A ROW COULD NOT NAME IS REFUSED: no key, a digest that is not
+// one, or a negative size.
+func TestAnObjectARowCannotNameIsRefused(t *testing.T) {
+	t.Parallel()
+	good := Object{Key: KeyAt(time.Now()), Hash: HashOf(nil), Size: 0}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("an empty object was refused: %v", err)
+	}
+	for name, bad := range map[string]Object{
+		"no key":        {Hash: good.Hash},
+		"no digest":     {Key: good.Key},
+		"a bad digest":  {Key: good.Key, Hash: "zz"},
+		"negative size": {Key: good.Key, Hash: good.Hash, Size: -1},
+	} {
+		if err := bad.Validate(); err == nil {
+			t.Errorf("%s: validated", name)
 		}
 	}
 }
@@ -257,5 +260,22 @@ func TestATransferIsPacedByTheMebibytesItBegins(t *testing.T) {
 		if got := PaceFor(n); got != want {
 			t.Errorf("PaceFor(%d) = %v, want %v", n, got, want)
 		}
+	}
+}
+
+// A READ IS BUDGETED A PACE PER MEBIBYTE ON EACH OF ITS TWO LEGS, beside its
+// base — and the stall it is ended at is the time a mebibyte is given, so
+// neither restates the floor the upload is held to.
+func TestAReadIsBudgetedBothLegsAtTheFloor(t *testing.T) {
+	t.Parallel()
+	for size, want := range map[int64]time.Duration{
+		0: ReadBase, 1: ReadBase + 2*MiBPace, 1 << 30: ReadBase + 2*1024*MiBPace,
+	} {
+		if got := ReadBudget(size); got != want {
+			t.Errorf("ReadBudget(%d) = %v, want %v", size, got, want)
+		}
+	}
+	if ReadStall != 2*MiBPace {
+		t.Errorf("ReadStall = %v, want two paces", ReadStall)
 	}
 }

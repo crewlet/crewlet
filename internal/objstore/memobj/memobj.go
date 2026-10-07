@@ -65,7 +65,7 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, _ objstore.
 }
 
 // Get implements [objstore.Backend], over a copy of the range taken when it
-// is called.
+// is called, read under ctx as every backend's stream is.
 func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
 	if err := objstore.CheckRead(ctx, off, n); err != nil {
 		return nil, fmt.Errorf("memobj: get %s: %w", name, err)
@@ -82,7 +82,7 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 	if n >= 0 {
 		end = min(start+n, size)
 	}
-	return io.NopCloser(bytes.NewReader(slices.Clone(o.data[start:end]))), nil
+	return io.NopCloser(objstore.ContextReader(ctx, bytes.NewReader(slices.Clone(o.data[start:end])))), nil
 }
 
 // Stat implements [objstore.Backend].

@@ -1865,8 +1865,6 @@ func (a *Applier) explode(ctx context.Context, tx *sql.Tx, subject Subject,
 		return a.explodeCatalogue(ctx, tx, subject.ID, c)
 	case KindView:
 		return a.settleDefaultView(ctx, tx, subject.ID, c)
-	case KindFile:
-		return a.explodeFileChunks(ctx, tx, subject.ID, c)
 	}
 	return 0, nil
 }

@@ -1,10 +1,10 @@
-// Package s3obj keeps the object store's chunks in an S3-compatible bucket:
+// Package s3obj keeps the object store's objects in an S3-compatible bucket:
 // Amazon S3, or anything speaking its API — Cloudflare R2, MinIO, Google Cloud
 // Storage's interoperability endpoint, Backblaze B2, Ceph's gateway.
 //
 // # When to take it
 //
-// The default backend (internal/objstore/natsobj) keeps every chunk on every
+// The default backend (internal/objstore/natsobj) keeps every object on every
 // broker member holding a copy, which is right for a fleet of three or five
 // data nodes and wrong for a company whose files outgrow one member's disk.
 // A bucket has no such ceiling, keeps its own copies, and takes the files off
@@ -13,9 +13,10 @@
 //
 // # One object per name, streamed
 //
-// Each name is the key `<prefix><name>`. A put of a key already held
-// replaces it and moves its LastModified, which is the property
-// [objstore.Backend.Put] asks for.
+// Each name is the key `<prefix><name>` — and every name the store writes is
+// `files/<key>` ([objstore.Key.Name]), so an object of the engine's sits at
+// `<prefix>files/<key>`, under a corner of the bucket an empty prefix still
+// does not share with another application's own UUID-named objects.
 //
 // LastModified is what [objstore.Info.Written] reports, and AN OBJECT PUT IN
 // PARTS CARRIES ITS UPLOAD'S START there, not its completion: Amazon dates an
@@ -82,7 +83,7 @@ type Config struct {
 	// Bucket is the bucket's name.
 	Bucket string
 	// Prefix is prepended to every key, so a bucket can hold more than
-	// one company.
+	// one company: an object is `<prefix>files/<key>`.
 	Prefix string
 	// PathStyle addresses the bucket in the path rather than the host
 	// name — what MinIO and most self-hosted gateways need.
@@ -185,8 +186,9 @@ func Open(ctx context.Context, cfg Config) (*Backend, error) {
 		// CHECKSUMS ONLY WHERE AN OPERATION REQUIRES ONE. The SDK's default
 		// sends a trailing checksum on every put and every part, which
 		// providers that are not Amazon refuse or mishandle, and buys
-		// nothing here: every chunk is checked against its own SHA-256
-		// name on every read.
+		// nothing here: every object is checked against the SHA-256 its
+		// row records on every read (objstore.Store), which no part's
+		// checksum could stand in for.
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
@@ -354,7 +356,13 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 	case err != nil:
 		return nil, fmt.Errorf("s3obj: get %s: %w", name, err)
 	}
-	return out.Body, nil
+	// THE STREAM ANSWERS ctx AT EVERY READ, not only once the transport
+	// notices the request was cancelled: a body the transport had already
+	// buffered would otherwise be handed out after the caller gave up.
+	return struct {
+		io.Reader
+		io.Closer
+	}{objstore.ContextReader(ctx, out.Body), out.Body}, nil
 }
 
 // Stat implements [objstore.Backend].

@@ -61,19 +61,17 @@ describe("file storage", () => {
     renderCard(block("reported"));
     expect(screen.getByText("S3 bucket https://s3.example.com/files/acme/")).toBeTruthy();
     expect(screen.getByText("data-a")).toBeTruthy();
-    expect(screen.getByText(/deleted 12 chunks no file names, of 1,840 stored/)).toBeTruthy();
+    expect(screen.getByText(/deleted 12 objects no file names, of 1,840 stored/)).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  test("missing chunks are an alert naming them, to restore first", () => {
+  test("missing objects are an alert naming them, to restore first", () => {
     const r = reported("missing");
     renderCard(r);
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain(
-      "1 chunk the company's files are made of is not in the store",
-    );
-    for (const h of r.audit?.missing_chunks ?? []) {
+    expect(alert.textContent).toContain("1 object holding the company's files is not in the store");
+    for (const h of r.audit?.missing_objects ?? []) {
       expect(alert.textContent).toContain(h);
     }
     expect(
@@ -114,7 +112,6 @@ describe("file storage", () => {
         aged: 0,
         deleted: 0,
         referenced: 0,
-        refreshed: 0,
         error: "the bucket did not answer",
       }),
     ).toBe("stopped: the bucket did not answer");

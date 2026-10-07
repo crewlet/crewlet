@@ -10,11 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Source is one domain whose rows refer to chunks, as the collector reads it.
+// Source is one domain whose rows refer to objects, as the collector reads it.
 //
 // The engine builds these with [Sources] from the declared tables and never
 // by hand: a source written for one table is a second answer to which tables
-// name chunks, and the day it and the declarations disagree is the day the
+// name objects, and the day it and the declarations disagree is the day the
 // backup carries a file's bytes that the collector has deleted.
 type Source interface {
 	// Name is the domain, for a log line.
@@ -28,12 +28,12 @@ type Source interface {
 	// Referenced answers which of among the domain refers to, read no
 	// earlier than at (zero: whatever this node holds), and whether the
 	// answer is COMPLETE: false while this node holds a record it could
-	// not apply that might refer to a chunk.
-	Referenced(ctx context.Context, among []objstore.Hash, at statelog.Position) (map[objstore.Hash]struct{}, bool, error)
+	// not apply that might refer to an object.
+	Referenced(ctx context.Context, among []objstore.Key, at statelog.Position) (map[objstore.Key]struct{}, bool, error)
 
-	// Each hands every chunk the domain refers to to visit, read no
+	// Each hands every object the domain refers to to visit, read no
 	// earlier than at, and reports whether the walk was COMPLETE.
-	Each(ctx context.Context, at statelog.Position, visit func(objstore.Hash) error) (bool, error)
+	Each(ctx context.Context, at statelog.Position, visit func(objstore.Key) error) (bool, error)
 }
 
 // References is every source the engine runs.
@@ -72,8 +72,8 @@ type Estate interface {
 // be read twice under two positions.
 func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, error) {
 	if len(tables) == 0 {
-		return nil, errors.New("objstore/collect: no table is declared as naming chunks — " +
-			"with none, every chunk reads as unreferenced")
+		return nil, errors.New("objstore/collect: no table is declared as naming objects — " +
+			"with none, every object reads as unreferenced")
 	}
 	byDomain := map[string]*tableSource{}
 	var built []*tableSource
@@ -94,8 +94,8 @@ func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, e
 		}
 		src, ok := byDomain[t.Domain]
 		if !ok {
-			return nil, fmt.Errorf("objstore/collect: %s names chunks and is written by "+
-				"the %s log, which this node reads no estate of — its chunks would read "+
+			return nil, fmt.Errorf("objstore/collect: %s names objects and is written by "+
+				"the %s log, which this node reads no estate of — its objects would read "+
 				"as unreferenced", t.Table, t.Domain)
 		}
 		src.tables = append(src.tables, t)
@@ -125,27 +125,29 @@ func (s *tableSource) Barrier(ctx context.Context) (statelog.Position, error) {
 
 // Referenced reads every declared table of the domain in ONE read, so the
 // tables are judged at one position and one completeness.
-func (s *tableSource) Referenced(ctx context.Context, among []objstore.Hash,
-	at statelog.Position) (map[objstore.Hash]struct{}, bool, error) {
+func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
+	at statelog.Position) (map[objstore.Key]struct{}, bool, error) {
 
-	out := map[objstore.Hash]struct{}{}
+	out := map[objstore.Key]struct{}{}
 	if len(among) == 0 {
 		return out, true, nil
 	}
 	args := make([]any, len(among))
-	for i, h := range among {
-		args[i] = string(h)
+	for i, k := range among {
+		args[i] = k.String()
 	}
 	complete, err := s.estate.Read(ctx, at, func(tx *sql.Tx) error {
 		for _, t := range s.tables {
-			query, err := t.ChunksAmong(len(among))
+			query, err := t.ObjectsAmong(len(among))
 			if err != nil {
 				return err
 			}
-			if err := scan(ctx, tx, t, query, args, func(h objstore.Hash) error {
-				out[h] = struct{}{}
-				return nil
-			}); err != nil {
+			rows, err := tx.QueryContext(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("read the objects %s names: %w", t.Table, err)
+			}
+			err = scanKeys(rows, t, func(k objstore.Key) { out[k] = struct{}{} })
+			if err != nil {
 				return err
 			}
 		}
@@ -157,45 +159,73 @@ func (s *tableSource) Referenced(ctx context.Context, among []objstore.Hash,
 	return out, complete, nil
 }
 
-// Each walks every declared table of the domain in ONE read.
+// eachPage is how many references one statement of a walk reads: a page of
+// the declaration's keyset ([objstore.ReferenceTable.ReferencesAfter]), held
+// in memory between its read and its visits.
+//
+// FIVE HUNDRED, the size of the collector's own batch ([judgeBatch]): a page
+// is a few hundred bytes a row, and a smaller one is more statements for no
+// memory anybody needed back.
+const eachPage = judgeBatch
+
+// Each walks every declared table of the domain in ONE read, a keyset page at
+// a time.
 func (s *tableSource) Each(ctx context.Context, at statelog.Position,
-	visit func(objstore.Hash) error) (bool, error) {
+	visit func(objstore.Key) error) (bool, error) {
 
 	return s.estate.Read(ctx, at, func(tx *sql.Tx) error {
 		for _, t := range s.tables {
-			query, err := t.Chunks()
+			query, err := t.ReferencesAfter(eachPage)
 			if err != nil {
 				return err
 			}
-			if err := scan(ctx, tx, t, query, nil, visit); err != nil {
-				return err
+			for after := ""; ; {
+				rows, err := tx.QueryContext(ctx, query, after)
+				if err != nil {
+					return fmt.Errorf("read the objects %s names: %w", t.Table, err)
+				}
+				var page []objstore.Key
+				if err := scanKeys(rows, t, func(k objstore.Key) { page = append(page, k) }); err != nil {
+					return err
+				}
+				for _, k := range page {
+					if err := visit(k); err != nil {
+						return err
+					}
+				}
+				if len(page) < eachPage {
+					break
+				}
+				after = page[len(page)-1].String()
 			}
 		}
 		return nil
 	})
 }
 
-// scan hands every chunk query answers over t to visit.
-func scan(ctx context.Context, tx *sql.Tx, t objstore.ReferenceTable, query string,
-	args []any, visit func(objstore.Hash) error) error {
-
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("read the chunks %s names: %w", t.Table, err)
-	}
+// scanKeys hands every key rows answers over t to visit, the first column of
+// each row, and closes rows.
+func scanKeys(rows *sql.Rows, t objstore.ReferenceTable, visit func(objstore.Key)) error {
 	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	dest := make([]any, len(cols))
+	var raw string
+	dest[0] = &raw
+	for i := 1; i < len(dest); i++ {
+		dest[i] = new(any)
+	}
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		if err := rows.Scan(dest...); err != nil {
 			return err
 		}
-		h, err := objstore.ParseHash(raw)
+		k, err := objstore.ParseKey(raw)
 		if err != nil {
-			return fmt.Errorf("%s.%s: %w", t.Table, t.Column, err)
+			return fmt.Errorf("%s.%s: %w", t.Table, t.Key, err)
 		}
-		if err := visit(h); err != nil {
-			return err
-		}
+		visit(k)
 	}
 	return rows.Err()
 }
@@ -220,16 +250,16 @@ func (r References) pin(ctx context.Context) (view, error) {
 // referenced is which of among any source refers to, and whether every
 // source answered completely, each read no earlier than the view pinned for
 // it.
-func (r References) referenced(ctx context.Context, among []objstore.Hash, v view) (map[objstore.Hash]struct{}, bool, error) {
-	all := map[objstore.Hash]struct{}{}
+func (r References) referenced(ctx context.Context, among []objstore.Key, v view) (map[objstore.Key]struct{}, bool, error) {
+	all := map[objstore.Key]struct{}{}
 	complete := true
 	for i, s := range r {
 		set, whole, err := s.Referenced(ctx, among, v[i])
 		if err != nil {
 			return nil, false, fmt.Errorf("objstore/collect: read %s's references: %w", s.Name(), err)
 		}
-		for h := range set {
-			all[h] = struct{}{}
+		for k := range set {
+			all[k] = struct{}{}
 		}
 		complete = complete && whole
 	}

@@ -124,10 +124,12 @@ const accountPrefix = "$JS.API."
 // leaf of the embedded fleet reaches the same JetStream a member does:
 //
 //   - the backup's stream snapshot, which the client has no call for at all;
-//   - coord/kv's certifying read of one key, `STREAM.MSG.GET` by last subject,
-//     which only the stream LEADER answers — on a bucket that allows direct
-//     gets, which every KV bucket does, the client only ever sends a
-//     `DIRECT.GET` that any replica answers, one that is behind included;
+//   - the read of one message from a stream's LEADER ([Leader]),
+//     `STREAM.MSG.GET` — coord/kv's certifying read of one key and the
+//     object store's read of one object's metadata — because on a stream
+//     that allows direct gets, which every KV bucket and object store does,
+//     the client only ever sends a `DIRECT.GET` that any replica answers,
+//     one that is behind included;
 //   - and coord/kv's marker sweep, a `STREAM.PURGE` bounded at a marker's
 //     own revision, whose answer carries how many messages went — which the
 //     client's own purge drops.

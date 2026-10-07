@@ -35,7 +35,7 @@ export function backendSummary(backend: string): string {
 export function collectSummary(c: ObjectCollect): string {
   if (c.error) return `stopped: ${c.error}`;
   if (c.skipped) return `deleted nothing: ${c.skipped}`;
-  const deleted = `deleted ${plural(c.deleted, "chunk")} no file names`;
+  const deleted = `deleted ${plural(c.deleted, "object")} no file names`;
   const of = `of ${fmtCount(c.listed)} stored, ${fmtCount(c.aged)} past the day's grace`;
   return c.completed ? `${deleted}, ${of}` : `${deleted} before it stopped, ${of}`;
 }
@@ -79,7 +79,7 @@ function passRows(r: ReportedObjects): PassRow[] {
  * The object store: which store holds the company's files, and the
  * collector's last collection and audit.
  *
- * MISSING CHUNKS ARE WHAT AN OPERATOR OPENS THIS FOR. Each is part of a file
+ * MISSING OBJECTS ARE WHAT AN OPERATOR OPENS THIS FOR. Each holds a file
  * nobody can download, and the store lost it after acknowledging it, so the
  * card names the first of them — the ones to restore from a backup.
  *
@@ -121,7 +121,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
   }
 
   const missing = reported.audit?.missing ?? 0;
-  const shown = reported.audit?.missing_chunks ?? [];
+  const shown = reported.audit?.missing_objects ?? [];
   return (
     <Card padding="none">
       {header}
@@ -130,7 +130,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
           <Callout variant="danger" role="alert">
             <div className="col gap-2">
               <span>
-                {plural(missing, "chunk")} the company's files are made of{" "}
+                {plural(missing, "object")} holding the company's files{" "}
                 {missing === 1 ? "is" : "are"} not in the store, so the files naming{" "}
                 {missing === 1 ? "it" : "them"} cannot be downloaded. The store lost bytes it had
                 acknowledged: check its health, and restore{" "}

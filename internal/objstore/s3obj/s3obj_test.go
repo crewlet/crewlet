@@ -37,7 +37,7 @@ func TestContract(t *testing.T) {
 	t.Parallel()
 	objstoretest.Run(t, func(t *testing.T) objstore.Backend {
 		return open(t, s3fake.Start(t, "files"), "crewlet/")
-	}, objstoretest.Options{Granularity: time.Second, Piece: s3obj.PartBytes})
+	}, objstoretest.Options{Piece: s3obj.PartBytes})
 }
 
 // A BUCKET THAT CANNOT BE REACHED FAILS THE BOOT, not the first upload.

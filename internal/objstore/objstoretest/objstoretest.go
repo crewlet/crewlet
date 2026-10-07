@@ -6,10 +6,11 @@
 // the collector rest on properties no single backend's own tests would think
 // to state: that a put which fails or is abandoned leaves nothing anybody can
 // find — a body cut short, which reads much like a body's end, included — that
-// a read with no deadline is refused rather than bounded by some
-// default of the backend's, that a put of a name already held moves its
-// written instant, and that a listing visits every name it holds — verbatim,
-// once, however slowly it is read.
+// a read with no deadline is refused rather than bounded by some default of
+// the backend's, that a read whose context ends stops rather than hands over
+// what it had in hand, that a delete leaves nothing a listing could find, and
+// that a listing visits every name it holds — verbatim, once, however slowly
+// it is read.
 package objstoretest
 
 import (
@@ -32,11 +33,6 @@ type Factory func(t *testing.T) objstore.Backend
 
 // Options tunes the suite to what a backend can promise.
 type Options struct {
-	// Granularity is the coarsest step the backend's written instants
-	// move in — a second for S3's LastModified. The re-put case waits
-	// past it before asking whether the instant moved.
-	Granularity time.Duration
-
 	// Piece is the most bytes the backend moves in one message or request
 	// of a put — an S3 part, a broker message. The large and ranged cases
 	// are sized from it, so they cross its boundaries. Zero is
@@ -76,8 +72,8 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"a_ranged_get_answers_its_range", aRangedGetAnswersItsRange},
 		{"a_name_never_put_is_not_found", aNameNeverPutIsNotFound},
 		{"a_read_without_a_deadline_is_refused", aReadWithoutADeadlineIsRefused},
+		{"a_get_whose_context_ends_stops", aGetWhoseContextEndsStops},
 		{"a_deleted_object_is_gone_and_a_second_delete_is_fine", aDeletedObjectIsGone},
-		{"a_re_put_moves_the_written_instant", aRePutMovesTheWrittenInstant},
 		{"a_put_whose_reader_fails_leaves_nothing", aPutWhoseReaderFailsLeavesNothing},
 		{"a_put_whose_context_ends_leaves_nothing", aPutWhoseContextEndsLeavesNothing},
 		{"a_listing_visits_every_name_once", aListingVisitsEveryNameOnce},
@@ -301,6 +297,33 @@ func aReadWithoutADeadlineIsRefused(t *testing.T, b objstore.Backend, _ Options)
 	}
 }
 
+// A GET WHOSE CONTEXT ENDS STOPS at the next read, with the context's own
+// error — whatever the backend had already read ahead. It is how a reader
+// that stopped moving is ended (the store's stall watchdog cancels the
+// context), and how a download whose client went away stops costing the
+// backend anything: a stream that answered from what it held in hand would
+// run on for as long as its read-ahead lasted, and one blocked on the backend
+// would never notice at all.
+func aGetWhoseContextEndsStops(t *testing.T, b objstore.Backend, opts Options) {
+	data := large(opts)
+	put(t, b, "stopped", data)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	r, err := b.Get(ctx, "stopped", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	if _, err = io.ReadFull(r, make([]byte, 100)); err != nil {
+		t.Fatalf("the first read: %v", err)
+	}
+	cancel()
+	n, err := r.Read(make([]byte, 100))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a read after the context ended = %d bytes, %v; want context.Canceled", n, err)
+	}
+}
+
 func aDeletedObjectIsGone(t *testing.T, b objstore.Backend, _ Options) {
 	data := []byte("deleted")
 	put(t, b, "deleted", data)
@@ -316,35 +339,6 @@ func aDeletedObjectIsGone(t *testing.T, b objstore.Backend, _ Options) {
 	}
 	if err := b.Delete(t.Context(), "never-put"); err != nil {
 		t.Fatalf("a Delete of a name never put = %v", err)
-	}
-	put(t, b, "deleted", data)
-	if got, err := get(t, b, "deleted", 0, -1); err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("an object put again after a delete reads %q, %v", got, err)
-	}
-}
-
-// THE COLLECTOR'S GRACE RESTS ON THIS while a file may re-use a chunk: the
-// re-put is what makes it young again.
-func aRePutMovesTheWrittenInstant(t *testing.T, b objstore.Backend, opts Options) {
-	data := []byte("re-put")
-	put(t, b, "re-put", data)
-	first, err := b.Stat(t.Context(), "re-put")
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(max(opts.Granularity, 10*time.Millisecond) + 100*time.Millisecond)
-	put(t, b, "re-put", data)
-	second, err := b.Stat(t.Context(), "re-put")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !second.Written.After(first.Written) {
-		t.Fatalf("a re-put left the written instant at %v (first put %v); the collector "+
-			"would delete a chunk a new file had just re-used", second.Written, first.Written)
-	}
-	l := listed(t, b)["re-put"]
-	if len(l) != 1 || !l[0].Written.After(first.Written) {
-		t.Fatalf("the listing says %+v for an object re-put after %v", l, first.Written)
 	}
 }
 

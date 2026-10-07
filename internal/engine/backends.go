@@ -63,7 +63,7 @@ type Backends struct {
 
 	// objectsIdentity names that backend as the fleet records it, and
 	// objectsStream the broker stream it lives in — empty for a backend
-	// outside the broker — for the backup, which copies no chunk a stream
+	// outside the broker — for the backup, which copies no object a stream
 	// snapshot already carries.
 	objectsIdentity string
 	objectsStream   string
@@ -623,7 +623,6 @@ func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered
 		BudgetRetention:  coord.BudgetRetention,
 		StatusFreshness:  coord.StatusFreshness,
 		CustodyRetention: coord.CustodyRetention,
-		ChunkLockTTL:     coord.ChunkLockTTL,
 		Replicas:         replicas,
 		Clustered:        clustered,
 	})

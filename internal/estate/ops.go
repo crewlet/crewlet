@@ -599,10 +599,20 @@ var opTurnPlaces = define("tracker.turn_places", opRead, trackerDomain, false,
 
 // ---- the tracker's writes ------------------------------------------------ //
 
-// A PROJECT'S FILES, as rows: the listing, one file with its manifest, and
-// the two writes. The BYTES never cross here — a stateless node uploads and
-// downloads chunks through its own object client, straight to the data nodes
-// that hold them, and asks this service only for the row that names them.
+// A PROJECT'S FILES, as rows: the listing, one file with the object holding
+// its bytes, and the two writes. The BYTES never cross here — every node,
+// stateless or not, streams them to and from the one object store the whole
+// fleet shares through its own client, and asks this service only for the row
+// that names them.
+//
+// THE TWO OPERATIONS WHOSE SHAPE NAMES THE OBJECT are named for it
+// (`tracker.read_file`, `tracker.write_file`) rather than keeping the names a
+// build that named chunks served: an operation's body decodes leniently, so a
+// peer of that build would read a write naming an object as one naming no
+// chunks, and a reader here would take its answer as a file with no content.
+// A name a node does not serve is answered `unserved`, which sends the router
+// on to a peer that does — so during a rolling upgrade each build's file
+// reads and writes reach a node of its own build, or none.
 var opFiles = define("tracker.files", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.FileQuery) (tracker.FileListing, error) {
 		if b.Tracker == nil {
@@ -617,7 +627,7 @@ type fileArgs struct {
 	Fresh   statelog.Freshness
 }
 
-var opFile = define("tracker.file", opRead, trackerDomain, false,
+var opFile = define("tracker.read_file", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a fileArgs) (tracker.FileDetail, error) {
 		if b.Tracker == nil {
 			return tracker.FileDetail{}, errNoHalf
@@ -630,7 +640,7 @@ type putFileArgs struct {
 	Put  tracker.FilePut
 }
 
-var opPutFile = define("tracker.put_file", opIdempotentWrite, trackerDomain, true,
+var opPutFile = define("tracker.write_file", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a putFileArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {

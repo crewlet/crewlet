@@ -1432,29 +1432,27 @@ export type ObjectsState = (typeof OBJECTS_STATES)[number];
 /** One collection pass: what the store held, and what no row named any more. */
 export interface ObjectCollect {
   at: string;
-  /** Listed the whole store and judged every chunk old enough to judge. */
+  /** Listed the whole store and judged every object old enough to judge. */
   completed: boolean;
   listed: number;
   /** Past the day's grace, and so judged. */
   aged: number;
   deleted: number;
   referenced: number;
-  /** Written again while the pass judged them, and kept. */
-  refreshed: number;
   /** Why the pass deleted nothing; absent when it ran in full. */
   skipped?: string;
   error?: string;
 }
 
-/** One audit: every chunk a row names, asked of the store. */
+/** One audit: every object a row names, asked of the store. */
 export interface ObjectAudit {
   at: string;
-  /** Asked about every named chunk, over an estate that was complete. */
+  /** Asked about every named object, over an estate that was complete. */
   completed: boolean;
   referenced: number;
   missing: number;
-  /** The first hundred missing, to restore first; `missing` is the whole count. */
-  missing_chunks?: string[];
+  /** The keys of the first hundred missing, to restore first; `missing` is the whole count. */
+  missing_objects?: string[];
   error?: string;
 }
 

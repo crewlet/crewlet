@@ -241,6 +241,14 @@ Take **`s3`** when:
 - the fleet's broker is an external NATS cluster whose operators would rather
   not hold files.
 
+**A versioned bucket keeps every object the collector deletes**, as a
+noncurrent version, for as long as the bucket's own rules say — and every
+upload is an object of its own, so a file rewritten daily leaves a noncurrent
+copy of itself every day. Give a versioned bucket a lifecycle rule that expires
+noncurrent versions (S3's `NoncurrentVersionExpiration`, or your provider's
+equivalent) after however long you want deleted files recoverable, or its size
+grows for the life of the company.
+
 ### Taking a data node away
 
 There is nothing to drain for the files. On `nats` a member that leaves is a

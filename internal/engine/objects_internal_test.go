@@ -35,7 +35,7 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 
 // A runtime without a tracker has no files, so no estate the collector reads —
 // and the engine starts no collector rather than one over nothing, which would
-// read every chunk as unreferenced.
+// read every object as unreferenced.
 func TestARuntimeWithNoTrackerOffersTheObjectStoreNoEstate(t *testing.T) {
 	t.Parallel()
 	if got := (&native{}).objectEstates(); len(got) != 0 {
@@ -43,7 +43,7 @@ func TestARuntimeWithNoTrackerOffersTheObjectStoreNoEstate(t *testing.T) {
 	}
 }
 
-// namedNothing is a source of references that names no chunk, counting the
+// namedNothing is a source of references that names no object, counting the
 // barriers each pass takes.
 type namedNothing struct{ barriers int }
 
@@ -54,12 +54,12 @@ func (s *namedNothing) Barrier(context.Context) (statelog.Position, error) {
 	return statelog.Position{}, nil
 }
 
-func (*namedNothing) Referenced(context.Context, []objstore.Hash,
-	statelog.Position) (map[objstore.Hash]struct{}, bool, error) {
-	return map[objstore.Hash]struct{}{}, true, nil
+func (*namedNothing) Referenced(context.Context, []objstore.Key,
+	statelog.Position) (map[objstore.Key]struct{}, bool, error) {
+	return map[objstore.Key]struct{}{}, true, nil
 }
 
-func (*namedNothing) Each(context.Context, statelog.Position, func(objstore.Hash) error) (bool, error) {
+func (*namedNothing) Each(context.Context, statelog.Position, func(objstore.Key) error) (bool, error) {
 	return true, nil
 }
 
@@ -68,7 +68,7 @@ func (*namedNothing) Each(context.Context, statelog.Position, func(objstore.Hash
 func collectorNode(t *testing.T, source collect.Source) (*Engine, *collectorDuty, *coordmemory.Fleet) {
 	t.Helper()
 	fleet := coordmemory.NewFleet()
-	store, err := objstore.NewStore(memobj.New(), fleet, "data-a:1")
+	store, err := objstore.NewStore(memobj.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,11 +223,10 @@ func TestAFailedPassIsRecordedWithItsError(t *testing.T) {
 // fleet shares, so one node's audit of it is the fleet's — and a node that
 // does not hold the duty, whose audit is whatever it found when it last did,
 // would raise the alarm a second time, or keep raising it after the holder
-// found the chunks restored.
+// found the objects restored.
 func TestTheMissingCountIsReportedOnlyByTheDutyHolder(t *testing.T) {
 	t.Parallel()
-	lost := objstore.HashOf([]byte("a chunk the store lost"))
-	source := &namedChunk{h: lost}
+	source := &namedObject{k: objstore.KeyAt(time.Now())}
 	e, duty, _ := collectorNode(t, source)
 	e.collectorTurn(t.Context(), nil, duty) // collect
 	e.collectorTurn(t.Context(), nil, duty) // audit
@@ -235,7 +234,7 @@ func TestTheMissingCountIsReportedOnlyByTheDutyHolder(t *testing.T) {
 	var r statelog.Reading
 	e.objectsReading(time.Now(), &r)
 	if r.ObjectsMissing != 1 {
-		t.Fatalf("the holder reads %d missing, want the one chunk the store lost", r.ObjectsMissing)
+		t.Fatalf("the holder reads %d missing, want the one object the store lost", r.ObjectsMissing)
 	}
 
 	e.collectorTurn(t.Context(), func(context.Context) (bool, error) { return false, nil }, duty)
@@ -246,25 +245,25 @@ func TestTheMissingCountIsReportedOnlyByTheDutyHolder(t *testing.T) {
 	}
 }
 
-// namedChunk is a source naming one chunk.
-type namedChunk struct {
+// namedObject is a source naming one object, which the store never held.
+type namedObject struct {
 	namedNothing
-	h objstore.Hash
+	k objstore.Key
 }
 
-func (s *namedChunk) Referenced(_ context.Context, among []objstore.Hash,
-	_ statelog.Position) (map[objstore.Hash]struct{}, bool, error) {
-	out := map[objstore.Hash]struct{}{}
-	for _, h := range among {
-		if h == s.h {
-			out[h] = struct{}{}
+func (s *namedObject) Referenced(_ context.Context, among []objstore.Key,
+	_ statelog.Position) (map[objstore.Key]struct{}, bool, error) {
+	out := map[objstore.Key]struct{}{}
+	for _, k := range among {
+		if k == s.k {
+			out[k] = struct{}{}
 		}
 	}
 	return out, true, nil
 }
 
-func (s *namedChunk) Each(_ context.Context, _ statelog.Position, visit func(objstore.Hash) error) (bool, error) {
-	return true, visit(s.h)
+func (s *namedObject) Each(_ context.Context, _ statelog.Position, visit func(objstore.Key) error) (bool, error) {
+	return true, visit(s.k)
 }
 
 // THE COLLECTOR NEVER STARTS ONCE IT HAS BEEN STOPPED. The native runtime

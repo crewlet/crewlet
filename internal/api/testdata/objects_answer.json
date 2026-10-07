@@ -10,16 +10,15 @@
         "listed": 1840,
         "aged": 1702,
         "deleted": 12,
-        "referenced": 1690,
-        "refreshed": 0
+        "referenced": 1690
       },
       "audit": {
         "at": "2026-09-01T09:00:00Z",
         "completed": true,
         "referenced": 1828,
         "missing": 1,
-        "missing_chunks": [
-          "5e5ac53c4874f42e45cc0f5706a514a15a265da07c8f7cb75687b89c5480c21d"
+        "missing_objects": [
+          "0199b4f6-0000-7000-8000-00000000a1b2"
         ]
       }
     },
@@ -36,8 +35,7 @@
         "listed": 1840,
         "aged": 1702,
         "deleted": 12,
-        "referenced": 1690,
-        "refreshed": 0
+        "referenced": 1690
       },
       "audit": {
         "at": "2026-09-01T09:00:00Z",
@@ -57,8 +55,7 @@
         "aged": 1702,
         "deleted": 0,
         "referenced": 0,
-        "refreshed": 0,
-        "skipped": "a record this node could not apply may refer to chunks in the store"
+        "skipped": "a record this node could not apply may refer to objects in the store"
       }
     },
     "unavailable": {

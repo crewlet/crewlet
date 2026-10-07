@@ -179,8 +179,8 @@ type Manifest struct {
 	// are backed up at that cluster (see [Options.Conn]).
 	Streams []StreamArtifact `json:"streams,omitempty"`
 
-	// Objects describes the chunks the store copy names, carried beside it
-	// — absent when it names none.
+	// Objects describes the objects the store copy names, carried beside
+	// it — absent when it names none.
 	Objects *ObjectArtifact `json:"objects,omitempty"`
 
 	// Domains is where each state-log domain's applier stood IN THE COPY,
@@ -296,9 +296,9 @@ type Options struct {
 	// behind it — the most confusing shape this gate has.
 	Backups coord.BackupRegister
 
-	// Objects is how the chunks the copy names are reached. Nil is a node
+	// Objects is how the objects the copy names are reached. Nil is a node
 	// that runs no object store, which is refused only when the copy names
-	// a chunk — see [ErrObjectsUnreachable].
+	// an object — see [ErrObjectsUnreachable].
 	Objects *Objects
 
 	// Metrics is where the copy's duration is recorded. Nil records
@@ -489,6 +489,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// is the only one that describes the file — and the applier ran
 	// throughout the copy, so the live cursor names where this node was
 	// when the copy started.
+	var refs []reference
 	if replicated := copyOf(manifest, store.EstateReplicated); replicated != "" {
 		path := filepath.Join(dir, replicated)
 		cursors, err := statelog.CursorsInFile(ctx, path)
@@ -504,25 +505,18 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		for stream, cursor := range cursors {
 			manifest.Domains[stream] = cursor.Position
 		}
-		// THE CHUNKS THE COPY NAMES, read from the copy for the reason
+		// THE OBJECTS THE COPY NAMES, read from the copy for the reason
 		// the positions are: the rows a restore brings back are the
 		// ones in this file, and a file created after the copy is one
 		// whose record the restore replays and whose bytes the fleet
 		// still holds.
-		hashes, err := referencedIn(ctx, path, references.All)
+		refs, err = referencedIn(ctx, path, references.All)
 		if err != nil {
 			return Manifest{}, err
 		}
 		prev := s.previousObjects(ctx, dir)
-		if manifest.Objects, err = copyObjects(ctx, dir, hashes, s.objects, prev); err != nil {
+		if manifest.Objects, err = copyObjects(ctx, dir, refs, s.objects, prev); err != nil {
 			return Manifest{}, err
-		}
-		if lost := manifest.Objects; lost != nil && len(lost.Lost) > 0 {
-			log.WarnContext(ctx, "backup_objects_lost",
-				"dir", dir, "lost", len(lost.Lost), "chunks", len(hashes),
-				"detail", "the copy names chunks the object store does not hold; "+
-					"the backup carries everything else and lists them in its "+
-					"manifest, and the objects_missing alarm counts them")
 		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
 		// copy is folded back into one file — a -wal left inside the
@@ -571,6 +565,18 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			return Manifest{}, err
 		}
 	}
+	// THE OBJECTS A STREAM CARRIES are asked about once its snapshot is
+	// taken — see [checkStreamObjects] for why after and not before.
+	if err := checkStreamObjects(ctx, manifest.Objects, refs, s.objects); err != nil {
+		return Manifest{}, err
+	}
+	if lost := manifest.Objects; lost != nil && len(lost.Lost) > 0 {
+		log.WarnContext(ctx, "backup_objects_lost",
+			"dir", dir, "lost", len(lost.Lost), "objects", len(refs),
+			"detail", "the copy names files whose objects the store does not hold, "+
+				"or holds as other bytes; the backup carries everything else and "+
+				"lists them in its manifest, and the objects_missing alarm counts them")
+	}
 
 	manifest.FinishedAt = s.now()
 	if err := writeManifest(dir, manifest); err != nil {
@@ -592,17 +598,17 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// not exist. See [Service.announce] for why a failure here does not
 	// fail the backup.
 	s.announce(ctx, dir, manifest)
-	var chunks, reused int
+	var objects, reused int
 	if manifest.Objects != nil {
-		chunks, reused = manifest.Objects.Chunks, manifest.Objects.Reused
+		objects, reused = manifest.Objects.Objects, manifest.Objects.Reused
 	}
 	log.InfoContext(ctx, "backup_taken",
 		"dir", dir,
 		"store_bytes", storeBytes(manifest),
 		"streams", len(manifest.Streams),
 		"stream_bytes", snapshotSize(manifest.Streams),
-		"chunks", chunks,
-		"chunks_reused", reused,
+		"objects", objects,
+		"objects_reused", reused,
 		"object_bytes", objectBytes(manifest),
 		"took", manifest.FinishedAt.Sub(started).String())
 	return manifest, nil
@@ -950,19 +956,19 @@ func assertReplayable(m Manifest) error {
 	return nil
 }
 
-// previousObjects is the chunk directory of this node's previous backup, when
-// it is still on this host and is not dir itself — the source a backup takes
-// the chunks it already holds from — or empty.
+// previousObjects is the object directory of this node's previous backup,
+// when it is still on this host and is not dir itself — the source a backup
+// takes the objects it already holds from — or empty.
 //
 // THIS NODE'S OWN ROW of the backup register, whose Dir is a path on this
 // host: another owner's names a directory on another machine. A register that
-// cannot be read costs the reuse and nothing else, since every chunk can still
-// be fetched.
+// cannot be read costs the reuse and nothing else, since every object can
+// still be read from the store.
 func (s *Service) previousObjects(ctx context.Context, dir string) string {
 	points, err := s.backups.BackupPoints(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "backup_previous_unknown", "error", err,
-			"detail", "every chunk is fetched from the fleet rather than reused")
+			"detail", "every object is read from the store rather than reused")
 		return ""
 	}
 	for _, p := range points {
@@ -1011,7 +1017,7 @@ func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
 		Verified: true,
 		// THE WHOLE ARTEFACT, the same three sums the `backup_taken` line
 		// logs: what an operator weighs against the disk it went to and
-		// the link it is about to be shipped over. The chunks were left
+		// the link it is about to be shipped over. The objects were left
 		// out, which for a company with files is most of it.
 		Bytes: storeBytes(manifest) + snapshotSize(manifest.Streams) + objectBytes(manifest),
 	}

@@ -405,7 +405,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	return nil
 }
 
-// objectEstates is every domain of this runtime whose rows may name chunks,
+// objectEstates is every domain of this runtime whose rows may name objects,
 // as the object store's passes read them — empty where it runs none.
 //
 // EVERY DOMAIN A DECLARATION NAMES must be here: [collect.Sources] refuses a
@@ -474,7 +474,7 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 }
 
 // startNativeCollector starts the object store's collector duty on this data
-// node: it deletes chunks no row names and audits what the store has lost,
+// node: it deletes objects no row names and audits what the store has lost,
 // both against the files the tracker's rows name — without a tracker there are
 // no files, and nothing to collect against. ONE CALL FOR BOTH CALLERS, [New]
 // and [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
@@ -491,7 +491,7 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 // usage the window is measuring. Given a pin that appends nothing instead, a
 // collection would delete against an end nobody established, the one read the
 // barrier exists for. So the collector stands down with the duties, and the
-// window costs it nothing: no write lands a file whose chunks a collection
+// window costs it nothing: no write lands a file whose object a collection
 // would free.
 //
 // THE DECLARED LIST, read through each domain's estate — never a source written

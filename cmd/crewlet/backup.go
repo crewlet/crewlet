@@ -88,9 +88,14 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		} `json:"stores"`
 		Streams []streamRow `json:"streams"`
 		Objects *struct {
-			Dir    string `json:"dir"`
-			Chunks int    `json:"chunks"`
-			Bytes  int64  `json:"bytes"`
+			Dir     string `json:"dir"`
+			Stream  string `json:"stream"`
+			Objects int    `json:"objects"`
+			Bytes   int64  `json:"bytes"`
+			Lost    []struct {
+				Object  string `json:"object"`
+				NamedBy string `json:"named_by"`
+			} `json:"lost"`
 		} `json:"objects"`
 	}
 	if err := client.patiently(*wait).post(context.Background(),
@@ -113,10 +118,17 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
 			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
 	}
-	// THE CHUNKS ARE THE COMPANY'S, not this node's share: absent only where
-	// the copy names no file at all.
+	// THE OBJECTS ARE THE COMPANY'S: absent only where the copy names no
+	// file at all. On the broker's own bucket they ride that stream's
+	// snapshot, which is what the row names rather than a directory —
+	// and their bytes are that snapshot's, so they are not counted twice.
 	if o := manifest.Objects; o != nil {
-		fmt.Fprintf(w, "objects\t%s/\t%s\t%d chunks\n", o.Dir, humanBytes(o.Bytes), o.Chunks)
+		switch {
+		case o.Stream != "":
+			fmt.Fprintf(w, "objects\tin %s\t—\t%d objects\n", o.Stream, o.Objects)
+		default:
+			fmt.Fprintf(w, "objects\t%s/\t%s\t%d objects\n", o.Dir, humanBytes(o.Bytes), o.Objects)
+		}
 	}
 	streams := manifest.Streams
 	slices.SortFunc(streams, func(a, b streamRow) int { return cmp.Compare(a.Name, b.Name) })
@@ -151,6 +163,18 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 			"its stream estate lives on the external NATS cluster it dialled. "+
 			"Back that up there, from the same moment as this copy "+
 			"(`nats account backup`).")
+	}
+	// LOST FILES ARE SAID, not left in the manifest: the backup completed
+	// and restores everything else, and the one thing an operator can do
+	// about these — restore them from an earlier backup, or upload them
+	// again — needs to know which.
+	if o := manifest.Objects; o != nil && len(o.Lost) > 0 {
+		fmt.Fprintf(stdout, "\n%d file(s) could not be carried: the object store does not hold "+
+			"their content, or holds other bytes than they record. Restore them from an "+
+			"earlier backup or upload them again:\n", len(o.Lost))
+		for _, l := range o.Lost {
+			fmt.Fprintf(stdout, "  %s (object %s)\n", l.NamedBy, l.Object)
+		}
 	}
 	return nil
 }

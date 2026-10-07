@@ -38,20 +38,20 @@ func serveObjects(t *testing.T, block *queries.FleetObjects) *httptest.Server {
 	return srv
 }
 
-func reported(missing ...objstore.Hash) *queries.FleetObjects {
+func reported(missing ...objstore.Key) *queries.FleetObjects {
 	block := queries.RenderObjects(engine.CollectionReport{
 		Node: "data-a", Backend: "s3:https://s3.example.com/files/acme/",
 		Status: collect.Status{
 			Collect: collect.CollectionReport{Completed: true, Listed: 1840, Deleted: 12, At: objectsAt},
 			Audit: collect.AuditReport{Completed: true, Referenced: 1828,
-				Missing: len(missing), MissingChunks: missing, At: objectsAt},
+				Missing: len(missing), MissingObjects: missing, At: objectsAt},
 		},
 	})
 	return &block
 }
 
 // STATUS SAYS WHERE THE FILES ARE AND WHAT THE COLLECTOR FOUND, and names
-// every missing chunk — the one thing an operator must act on.
+// every missing object — the one thing an operator must act on.
 func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 	t.Parallel()
 	out, _, err := cli(t, "objects", "status", bootstrapForURL(t, serveObjects(t, reported()).URL))
@@ -59,19 +59,19 @@ func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"an S3 bucket (https://s3.example.com/files/acme/)", "data-a",
-		"1840 chunks listed, 12 deleted", "1828 chunks named, 0 missing"} {
+		"1840 objects listed, 12 deleted", "1828 objects named, 0 missing"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status does not say %q:\n%s", want, out)
 		}
 	}
-	lost := objstore.HashOf([]byte("lost"))
+	lost := objstore.KeyAt(objectsAt)
 	out, _, err = cli(t, "objects", "status",
 		bootstrapForURL(t, serveObjects(t, reported(lost)).URL))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "1 chunk(s)") || !strings.Contains(out, string(lost)) {
-		t.Errorf("status does not name the missing chunk:\n%s", out)
+	if !strings.Contains(out, "1 object(s)") || !strings.Contains(out, lost.String()) {
+		t.Errorf("status does not name the missing object:\n%s", out)
 	}
 }
 
