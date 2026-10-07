@@ -356,6 +356,10 @@ func (p *Provider) streamOnce(
 var errNoStream = errors.New("endpoint did not stream")
 
 // classify turns an SDK failure into the contract's error.
+//
+// WITH WHAT THE ENDPOINT SAID ([Detail]): the SDK's error names the status
+// alone, and the status is all the classification needs — but a reader of the
+// error needs the endpoint's reason, which only its fields still carry.
 func (p *Provider) classify(err error) *llm.Error {
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
@@ -363,7 +367,9 @@ func (p *Provider) classify(err error) *llm.Error {
 		if apiErr.Response != nil {
 			header = apiErr.Response.Header
 		}
-		return httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
+		classified := httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
+		classified.Detail = Detail(apiErr)
+		return classified
 	}
 	return httpapi.FromTransport(err, p.name, p.model)
 }

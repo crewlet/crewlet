@@ -366,9 +366,20 @@ type Error struct {
 	Status     int
 	RetryAfter time.Duration
 	Err        error
+
+	// Detail is what the provider SAID about the failure — its own message
+	// and the codes it filed it under, redacted and bounded — where Err does
+	// not carry it: an SDK whose error answers with the status alone, so that
+	// a context length, an unserved model and a rejected key all read the
+	// same. Empty where Err says it already, or the provider said nothing.
+	// Diagnostic only: nothing classifies on it, which is Kind's job.
+	Detail string
 }
 
 func (e *Error) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("llm %s/%s: %s: %v: %s", e.Provider, e.Model, e.Kind, e.Err, e.Detail)
+	}
 	return fmt.Sprintf("llm %s/%s: %s: %v", e.Provider, e.Model, e.Kind, e.Err)
 }
 

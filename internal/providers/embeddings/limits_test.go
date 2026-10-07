@@ -374,6 +374,63 @@ func TestAFailureIsClassifiedByWhatItMeansForTheInput(t *testing.T) {
 	}
 }
 
+// A CLASSIFIED FAILURE SAYS WHAT THE ENDPOINT SAID.
+//
+// The class is decided by the status, and the SDK's error now names the status
+// alone ("OpenAI API error: 400 Bad Request") — so a refusal for a context
+// length the endpoint enforces, a `dimensions` the model does not take and a
+// model the gateway does not serve all read the same, and the operator told
+// "it will refuse this request again unchanged" cannot tell which. The
+// endpoint's own message and codes are on the error; they reach its text,
+// redacted, and an endpoint that answers outside OpenAI's envelope is read for
+// what its body says.
+func TestAClassifiedFailureSaysWhatTheEndpointSaid(t *testing.T) {
+	t.Parallel()
+	key := "sk-proj-" + strings.Repeat("Ab3", 12)
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   []string
+	}{
+		{"the envelope", 400,
+			`{"error":{"message":"This model's maximum context length is 8192 tokens",` +
+				`"type":"invalid_request_error","code":"context_length_exceeded","param":"input"}}`,
+			[]string{"maximum context length is 8192 tokens", "type invalid_request_error",
+				"code context_length_exceeded", "param input"}},
+		{"a code alone", 404,
+			`{"error":{"message":"","type":"","code":"model_not_found","param":""}}`,
+			[]string{"code model_not_found"}},
+		{"outside the envelope", 404, `{"detail":"bounded-model is not served by this gateway"}`,
+			[]string{"bounded-model is not served by this gateway"}},
+		{"an echoed key", 401,
+			`{"error":{"message":"Incorrect API key provided: ` + key + `","type":"auth","code":"invalid_api_key"}}`,
+			[]string{"Incorrect API key provided", "[REDACTED:", "code invalid_api_key"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEchoAPI(t, 4)
+			e.then(echoAnswer{status: tc.status, body: tc.body})
+			_, err := e.provider(t, small).Embed(t.Context(), "a")
+			var classified *embeddings.Error
+			if !errors.As(err, &classified) || classified.Status != tc.status {
+				t.Fatalf("Embed = %v, want a classified HTTP %d", err, tc.status)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the error does not say %q: %v", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), key) {
+				t.Errorf("the error carries the key the endpoint echoed: %v", err)
+			}
+			if strings.Contains(err.Error(), e.url) {
+				t.Errorf("the error carries the request URL: %v", err)
+			}
+		})
+	}
+}
+
 // A DEADLINE AND A DEAD SERVER ARE TRANSIENT; A CANCELLATION IS THE CALLER'S.
 // Neither of the first two says anything about the input, and asking again
 // later may succeed. A cancelled context is the caller stopping, which is not

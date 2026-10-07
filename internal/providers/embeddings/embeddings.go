@@ -434,6 +434,14 @@ type Error struct {
 
 	// Err is the underlying failure.
 	Err error
+
+	// Detail is what the provider SAID about the failure, redacted and
+	// bounded, where Err does not carry it — the OpenAI SDK's error names
+	// the status alone. It is what tells a model the endpoint does not
+	// serve, or a `dimensions` it does not take, from an input it cannot
+	// read, when all three arrive as one status. Diagnostic only: Class is
+	// what a caller branches on.
+	Detail string
 }
 
 // Error says which class and what to do about it.
@@ -441,6 +449,10 @@ func (e *Error) Error() string {
 	status := ""
 	if e.Status != 0 {
 		status = fmt.Sprintf(" (HTTP %d)", e.Status)
+	}
+	cause := fmt.Sprint(e.Err)
+	if e.Detail != "" {
+		cause += ": " + e.Detail
 	}
 	var advice string
 	switch {
@@ -454,7 +466,7 @@ func (e *Error) Error() string {
 		advice = "no request will succeed until providers.embeddings is fixed " +
 			"(api_key, model, base_url or the account behind them)"
 	}
-	return fmt.Sprintf("embeddings: %s%s: %v — %s", e.Model, status, e.Err, advice)
+	return fmt.Sprintf("embeddings: %s%s: %s — %s", e.Model, status, cause, advice)
 }
 
 // Unwrap exposes both the class and the cause to errors.Is and errors.As.

@@ -420,7 +420,9 @@ request. The input refused alone is logged as
 `search_embed_input_refused`, naming the source, the model, the bytes it was
 sent and the per-input bound the model's limits assume (a refusal inside that
 bound means `max_input_tokens` is declared wider than the endpoint enforces, or
-the endpoint refuses the text for what it says). It is then **held back for an
+the endpoint refuses the text for what it says — and the error says which,
+because it carries the endpoint's own message and codes, such as
+`code context_length_exceeded`, redacted). It is then **held back for an
 hour**: the selection passes over it, so it costs no request and takes no
 place in the tick's 1 024 — a thousand refused sources at the front of the
 oldest-first order do not stop anything written after them being embedded.

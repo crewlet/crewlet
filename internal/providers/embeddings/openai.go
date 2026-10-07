@@ -343,11 +343,22 @@ func (p *Provider) named(err error) error {
 // — while a CANCELLED context is the caller's own doing and is left
 // unclassified: it says nothing about the provider, and errors.Is(err,
 // context.Canceled) still answers through the wrap.
+//
+// WITH WHAT THE ENDPOINT SAID ([llmopenai.Detail]) wherever it answered: the
+// SDK's error names the status alone, and the class is decided by the status —
+// but an operator told "it will refuse this request again unchanged" needs the
+// endpoint's reason to tell a context length from a `dimensions` the model does
+// not take, and only the error's fields still carry it.
 func (p *Provider) classify(err error) error {
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
+		detail := llmopenai.Detail(apiErr)
 		if class := classForStatus(apiErr.StatusCode); class != nil {
-			return &Error{Model: p.model, Status: apiErr.StatusCode, Class: class, Err: err}
+			return &Error{Model: p.model, Status: apiErr.StatusCode, Class: class, Err: err,
+				Detail: detail}
+		}
+		if detail != "" {
+			return fmt.Errorf("embeddings: %s: %w: %s", p.model, err, detail)
 		}
 		return fmt.Errorf("embeddings: %s: %w", p.model, err)
 	}

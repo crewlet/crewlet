@@ -21,6 +21,7 @@ import (
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -403,6 +404,74 @@ func TestStatusClassification(t *testing.T) {
 				t.Fatalf("status %d classified %s, want %s (err: %v)", tc.status, got, tc.want, err)
 			}
 		})
+	}
+}
+
+// A CLASSIFIED FAILURE SAYS WHAT THE ENDPOINT SAID.
+//
+// The SDK's error names the status alone ("OpenAI API error: 400 Bad
+// Request"), deliberately, since its URL and the provider's fields can carry
+// secrets — so a context length, a model the gateway does not serve and a
+// parameter the model does not take all read as one 400. The kind is the
+// status's; the reason is the endpoint's, read off the error's fields, redacted
+// and bounded, and never the URL.
+func TestAClassifiedFailureSaysWhatTheEndpointSaid(t *testing.T) {
+	t.Parallel()
+	key := "sk-proj-" + strings.Repeat("Zq7", 12)
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   []string
+	}{
+		{"the envelope", 400,
+			`{"error":{"message":"This model's maximum context length is 8192 tokens",` +
+				`"type":"invalid_request_error","code":"context_length_exceeded","param":"messages"}}`,
+			[]string{"maximum context length is 8192 tokens", "type invalid_request_error",
+				"code context_length_exceeded", "param messages"}},
+		{"outside the envelope", 404, `{"detail":"gpt-test is not served by this gateway"}`,
+			[]string{"gpt-test is not served by this gateway"}},
+		{"an echoed key", 400,
+			`{"error":{"message":"Incorrect API key provided: ` + key + `","type":"invalid_request_error"}}`,
+			[]string{"Incorrect API key provided", "[REDACTED:"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, tc.status, tc.body)
+			})
+			_, err := newProvider(t, url, nil).Complete(context.Background(), userTurn("hi"))
+			var classified *llm.Error
+			if !errors.As(err, &classified) || classified.Status != tc.status ||
+				classified.Kind != llm.KindFatal {
+				t.Fatalf("Complete = %v, want a fatal HTTP %d", err, tc.status)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the error does not say %q: %v", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), key) || strings.Contains(err.Error(), url) {
+				t.Errorf("the error carries the echoed key or the request URL: %v", err)
+			}
+		})
+	}
+}
+
+// A DETAIL IS A DIAGNOSTIC, NOT A DOCUMENT: an endpoint that answers with a
+// page of text is shown the bound's worth, marked as cut, on one line.
+func TestADetailIsBoundedAndMarked(t *testing.T) {
+	t.Parallel()
+	message := strings.Repeat("the request was refused for a reason\n", 200)
+	got := Detail(&sdk.Error{Message: message, Code: "too_long"})
+	if len(got) > httpx.RefusalBytes+100 {
+		t.Errorf("detail is %d bytes, want it bounded near %d", len(got), httpx.RefusalBytes)
+	}
+	if !strings.Contains(got, "runs past") || strings.Contains(got, "\n") {
+		t.Errorf("detail = %q, want one line marked as cut", got)
+	}
+	if Detail(nil) != "" || Detail(&sdk.Error{StatusCode: 500}) != "" {
+		t.Error("an error that said nothing was given a detail")
 	}
 }
 
