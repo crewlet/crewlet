@@ -389,3 +389,99 @@ func TestTheFillReachesASeatsEpisodesFromWhatTheyStore(t *testing.T) {
 		t.Fatalf("after the fill %d episodes are unsearchable, %v", n, err)
 	}
 }
+
+// THE FILL'S REFUSALS FOLLOW THE PROVIDER'S CONFIGURATION, AS THE CORPUS DUTY'S
+// DO.
+//
+// An apply stores a provider built afresh, and one built the same — an apply
+// that changed nothing about the embeddings, a re-activation that rotated the
+// key — keeps what the fill holds back: a row the provider refused alone, and
+// the pause on a configuration it concluded refused. Keyed on the provider's
+// slot, every apply isolated each held row again and lifted the pause, while
+// the corpus duty beside it on the same node kept both. One configured
+// otherwise starts with nothing held, so a fix is tried at once.
+func TestTheFillsRefusalsFollowTheProvidersConfiguration(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNodeOf(t, embeddingDutyCompany)
+	// The node's own loop would tick on a memory of its own.
+	e.stopMemoryFill()
+	loop := &memoryFill{}
+	apply := func(provider *embeddings.Fake) *embeddings.Refusals {
+		t.Helper()
+		var held embeddings.Embedder = provider
+		e.embeddings.Store(&held)
+		e.fillMemory(t.Context(), loop)
+		if loop.refusals == nil {
+			t.Fatal("a tick with a provider held no refusal memory")
+		}
+		return loop.refusals
+	}
+	discard := func([]embeddings.PassInput, [][]float32) error { return nil }
+	poison := []embeddings.PassInput{{Scope: "diary/id-a", ID: "n1", Text: "a poison note"}}
+	send := func(memory *embeddings.Refusals, provider *embeddings.Fake) *embeddings.Pass {
+		t.Helper()
+		pass := embeddings.NewPass(memory, time.Now().UTC(), memoryFillRequestsPerTick,
+			memoryFillBytesPerTick)
+		if err := pass.Embed(t.Context(), provider, poison, discard); err != nil {
+			t.Fatalf("embed: %v", err)
+		}
+		return pass
+	}
+	narrowed := embeddings.Limits{InputBytes: 8192, BatchInputs: 64, BatchBytes: 300_000}
+
+	// A ROW REFUSED ALONE stays held across an apply that builds the
+	// provider again the same.
+	refusing := embeddings.NewFake(64)
+	refusing.Refuse("poison")
+	first := apply(refusing)
+	if pass := send(first, refusing); len(pass.RefusedAlone) != 1 {
+		t.Fatalf("the fixture refused %d inputs alone, want the poison note", len(pass.RefusedAlone))
+	}
+	same := embeddings.NewFake(64)
+	same.Refuse("poison")
+	if kept := apply(same); kept != first {
+		t.Fatal("a provider built again with the same configuration started a new " +
+			"refusal memory, so every held row is isolated again on every apply")
+	}
+	if pass := send(first, same); pass.Held != 1 || len(same.Requests()) != 0 {
+		t.Fatalf("after an apply that changed nothing the poison note was held %d time(s) "+
+			"and %d request(s) were sent, want it held and nothing sent", pass.Held,
+			len(same.Requests()))
+	}
+
+	// CONFIGURED OTHERWISE, the memory starts again and the row is tried.
+	narrower := embeddings.NewFake(64)
+	narrower.SetLimits(narrowed)
+	fresh := apply(narrower)
+	if fresh == first || fresh.Len() != 0 {
+		t.Fatal("a provider configured otherwise inherited the refusals of the one it replaced")
+	}
+	if pass := send(fresh, narrower); pass.Held != 0 || pass.Accepted != 1 {
+		t.Fatalf("the row the old configuration refused was held %d time(s) and accepted %d, "+
+			"want it sent and embedded at once", pass.Held, pass.Accepted)
+	}
+
+	// A CONFIGURATION CONCLUDED REFUSED stays paused across an apply that
+	// builds it again the same, and is judged again once it changes.
+	whole := embeddings.NewFake(64)
+	whole.Refuse("") // every request, the canary's included
+	concluded := apply(whole)
+	if pass := send(concluded, whole); !pass.Concluded {
+		t.Fatalf("the fixture did not conclude the configuration refused: %v", pass.Err())
+	}
+	again := embeddings.NewFake(64)
+	again.Refuse("")
+	if kept := apply(again); kept != concluded {
+		t.Fatal("an apply that changed nothing about the embeddings lifted the pause on " +
+			"a configuration the fill had concluded refused")
+	}
+	if pass := send(concluded, again); !pass.Paused || len(again.Requests()) != 0 {
+		t.Fatalf("after an apply that changed nothing the pass was paused %v and sent %d "+
+			"request(s), want it paused and nothing sent", pass.Paused, len(again.Requests()))
+	}
+	fixed := embeddings.NewFake(64)
+	fixed.SetLimits(narrowed)
+	if lifted := apply(fixed); lifted == concluded || send(lifted, fixed).Paused {
+		t.Fatal("a provider configured otherwise stayed under the pause of the one it replaced")
+	}
+}

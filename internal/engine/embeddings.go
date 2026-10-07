@@ -136,3 +136,56 @@ func (e *Engine) embedText(ctx context.Context, text string) (learning.Vector, e
 	}
 	return learning.Vector{Values: values, Model: embedder.Model()}, nil
 }
+
+// embedConfiguration is what a provider's refusals are a fact about: the model,
+// the width, the limits it holds inputs and requests to, and the endpoint it
+// sends to.
+//
+// ONE IDENTITY FOR BOTH MEMORIES this node keeps of what the provider refused —
+// the knowledge corpus duty's ([embedDuty]) and the memory fill's
+// ([memoryFill]) — so an apply cannot leave one loop holding what the provider
+// refused while the other isolates it all again, or lift one loop's pause on
+// a configuration concluded refused while the other's stands.
+//
+// # Why the configuration and not the provider
+//
+// Each memory used to belong to the provider's SLOT, which every apply fills
+// with a provider built afresh — so an apply that changed nothing about the
+// embeddings (a role added, a channel renamed) and re-activating an unchanged
+// revision to rotate a key both started the memory again: every input the
+// provider refuses was isolated once more, fifteen requests apiece, and a
+// configuration concluded refused was sent to again at once, on every apply.
+// A refusal is about what the provider will take; what moves that is exactly
+// these four, so a change to any of them — a lowered `max_input_tokens`,
+// another gateway, another model — starts a memory with nothing held, and
+// nothing else does.
+//
+// THE KEY IS NOT IN IT, deliberately: rotating a credential is the documented
+// gesture for a key that leaked, and it says nothing about which texts the
+// model accepts. A key the provider does not take is not a refusal at all
+// ([embeddings.ErrConfiguration]), and ends a pass without being remembered.
+type embedConfiguration struct {
+	model    string
+	width    int
+	limits   embeddings.Limits
+	endpoint string
+}
+
+// configurationOf is the configuration provider embeds under.
+//
+// READ OFF THE PROVIDER THE CALLER EMBEDS WITH, never off the slot beside it,
+// so no apply landing between two reads can pair one provider's refusals with
+// another's.
+//
+// The endpoint is read only from a provider that reports one: the shipped
+// provider does, and a provider that does not — a test's — is keyed on the
+// other three.
+func configurationOf(provider embeddings.Embedder) embedConfiguration {
+	out := embedConfiguration{
+		model: provider.Model(), width: provider.Width(), limits: provider.Limits(),
+	}
+	if at, ok := provider.(interface{ Endpoint() string }); ok {
+		out.endpoint = at.Endpoint()
+	}
+	return out
+}

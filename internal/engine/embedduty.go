@@ -148,47 +148,6 @@ type embedDuty struct {
 	done chan struct{}
 }
 
-// embedConfiguration is what a provider's refusals are a fact about: the model,
-// the width, the limits it holds inputs and requests to, and the endpoint it
-// sends to.
-//
-// # Why the configuration and not the provider
-//
-// The memory used to belong to the provider's SLOT, which every apply fills
-// with a provider built afresh — so an apply that changed nothing about the
-// embeddings (a role added, a channel renamed) and re-activating an unchanged
-// revision to rotate a key both started the memory again, and every input the
-// provider refuses was isolated once more, fifteen requests apiece, on every
-// apply. A refusal is about what the provider will take; what moves that is
-// exactly these four, so a change to any of them — a lowered
-// `max_input_tokens`, another gateway, another model — starts a memory with
-// nothing held, and nothing else does.
-//
-// THE KEY IS NOT IN IT, deliberately: rotating a credential is the documented
-// gesture for a key that leaked, and it says nothing about which texts the
-// model accepts.
-type embedConfiguration struct {
-	model    string
-	width    int
-	limits   embeddings.Limits
-	endpoint string
-}
-
-// configurationOf is the configuration provider embeds under.
-//
-// The endpoint is read only from a provider that reports one: the shipped
-// provider does, and a provider that does not — a test's — is keyed on the
-// other three.
-func configurationOf(provider embeddings.Embedder) embedConfiguration {
-	out := embedConfiguration{
-		model: provider.Model(), width: provider.Width(), limits: provider.Limits(),
-	}
-	if at, ok := provider.(interface{ Endpoint() string }); ok {
-		out.endpoint = at.Endpoint()
-	}
-	return out
-}
-
 // tickReport is what one tick did, for the tests that hold the duty's wiring:
 // the loop reads nothing of it, and every fact in it is also a log line.
 type tickReport struct {

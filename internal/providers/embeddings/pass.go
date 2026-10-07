@@ -79,7 +79,7 @@ import (
 // the ones whose embed failed when they were written, which is exactly where a
 // poison input is. A rule concluding from what the inputs did — "two inputs
 // refused alone while nothing was accepted" — took two poison notes met first
-// by a fresh memory, after any boot or apply, for a refused configuration,
+// by a fresh memory, after any boot, for a refused configuration,
 // blamed providers.embeddings and stopped the node's whole fill for an hour,
 // and again after it. And PER PASS, never once per memory: what proves a
 // configuration accepted is an acceptance NOW, a minute's worth of evidence
@@ -512,8 +512,9 @@ func keyOfInput(in PassInput) refusalKey {
 // THIS NODE'S ALONE, and in memory: a cache of what one provider told one
 // caller, whose loss costs one more isolation of each input it held. Nothing
 // about it is a fact a fleet must agree on. A caller builds a new one when the
-// provider is rebuilt, because a refusal is a fact about the provider as it was
-// configured.
+// provider is configured otherwise — its model, width, limits or endpoint —
+// because a refusal is a fact about the provider as it was configured, and
+// keeps this one when the provider is merely built again the same.
 //
 // Safe for concurrent use.
 type Refusals struct {

@@ -274,7 +274,8 @@ func TestARefusedConfigurationIsConcludedByTheCanary(t *testing.T) {
 
 // POISON INPUTS ARE NEVER THE CONFIGURATION, however few and however alone:
 // the rows a fill meets in steady state are the ones whose embed failed when
-// they were written, so a fresh memory — after any boot or apply — meeting
+// they were written, so a fresh memory — after any boot, or any change to the
+// provider's configuration — meeting
 // nothing but two poisons is the ordinary case, and the rule that concluded
 // from two inputs refused alone with nothing accepted blamed the provider
 // configuration for them and stopped the node's whole fill for an hour.

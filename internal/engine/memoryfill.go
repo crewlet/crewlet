@@ -58,8 +58,8 @@ import (
 // full batch into the same answer, every minute — and a refusal is split until
 // the input it refuses is alone, then held back for the hour
 // ([embeddings.RefusalRetry]) by a memory kept across ticks for as long as the
-// provider is the same one. The pass is bounded in what it SENDS, refused
-// requests included, never in what came of it.
+// provider is configured the same ([embedConfiguration]). The pass is bounded
+// in what it SENDS, refused requests included, never in what came of it.
 //
 // # Its own loop, beside the memory sync rather than inside it
 //
@@ -125,20 +125,17 @@ type memoryFill struct {
 	cancel context.CancelFunc
 	done   sync.WaitGroup
 
-	// refusals is what the current provider refused, kept across ticks
-	// for as long as the provider is the one in refusalsOf — the slot an
-	// apply stores a new embedder in. Touched only by the loop's own
-	// goroutine.
-	//
-	// A NEW PROVIDER IS A NEW MEMORY, the corpus duty's rule
-	// (internal/engine/embedduty.go): a refusal is a fact about the
-	// provider as it was configured, and an apply is the gesture an
-	// operator makes to change that — so it lifts a configuration the last
-	// one concluded refused at once, rather than after the hour. What that
-	// costs is one more isolation of each input the memory held, which in
-	// a seat's memory is a handful.
-	refusals   *embeddings.Refusals
-	refusalsOf *embeddings.Embedder
+	// refusals is what the provider refused, kept across ticks, and
+	// refusalsFor the configuration it belongs to ([embedConfiguration]) —
+	// the corpus duty's identity, so the two memories this node keeps of
+	// one provider move together. A refusal is a fact about the provider
+	// as it was configured, so a provider configured otherwise starts with
+	// none and a configuration concluded refused is judged again at once;
+	// one an apply merely built again the same — an unrelated change, a
+	// re-activation that rotated the key — keeps the rows it holds back
+	// and the pause it is in. Touched only by the loop's own goroutine.
+	refusals    *embeddings.Refusals
+	refusalsFor embedConfiguration
 
 	// resume is the seat the last tick's pass ran out at, where the next
 	// tick starts — so a budget spent before the last seat does not leave
@@ -189,13 +186,7 @@ func (e *Engine) stopMemoryFill() {
 // BOUNDED BY THE INTERVAL ITSELF: a tick that cannot finish before the next is
 // due has fallen behind whatever it does next.
 func (e *Engine) fillMemory(ctx context.Context, loop *memoryFill) {
-	// THE SLOT FIRST, then the provider in it, for the corpus duty's
-	// reason: an apply landing between the two reads pairs this tick's
-	// provider with the slot it replaced, which the next tick finds moved
-	// and starts over from — the other order would carry a retired
-	// provider's refusals into the new one's first hour.
-	slot := e.embeddings.Load()
-	provider, ok := batchOf(slot)
+	provider, ok := batchOf(e.embeddings.Load())
 	if !ok {
 		return
 	}
@@ -203,21 +194,34 @@ func (e *Engine) fillMemory(ctx context.Context, loop *memoryFill) {
 	if host == nil {
 		return
 	}
-	if loop.refusals == nil || loop.refusalsOf != slot {
-		loop.refusals, loop.refusalsOf = embeddings.NewRefusals(), slot
-	}
+	memory := loop.memoryFor(provider)
 	liveNodes := 1
 	if sweep, swept := host.LastSweep(); swept && sweep.LiveNodes > 1 {
 		liveNodes = sweep.LiveNodes
 	}
 	ctx, cancel := context.WithTimeout(ctx, memoryFillInterval)
 	defer cancel()
-	pass := embeddings.NewPass(loop.refusals, time.Now().UTC(), memoryFillRequestsPerTick,
+	pass := embeddings.NewPass(memory, time.Now().UTC(), memoryFillRequestsPerTick,
 		shareOf(memoryFillBytesPerTick, liveNodes))
 	report := fillHeldMemory(ctx, host, memorySources(e.backends.Store, e.agentIDOf),
 		provider, pass, loop.resume)
 	loop.resume = report.resume
 	report.log(ctx, provider)
+}
+
+// memoryFor is the refusal memory a tick embedding with provider sends under:
+// the one the loop holds while the provider is configured as it was, and a new
+// one once it is configured otherwise ([embedConfiguration]).
+//
+// THE MEMORY FOLLOWS THE CONFIGURATION, read off the very provider the tick
+// embeds with — the corpus duty's rule ([embedDuty.tick]) — so no apply
+// landing between two reads can pair one provider's refusals with another's.
+func (loop *memoryFill) memoryFor(provider embeddings.Embedder) *embeddings.Refusals {
+	if configuration := configurationOf(provider); loop.refusals == nil ||
+		loop.refusalsFor != configuration {
+		loop.refusals, loop.refusalsFor = embeddings.NewRefusals(), configuration
+	}
+	return loop.refusals
 }
 
 // shareOf is one of n equal shares of total, rounded up so no share is zero;
@@ -469,7 +473,9 @@ func (r fillReport) lines(provider embeddings.BatchEmbedder) []fillLine {
 				"plain word sent alone to judge it — the refusal is "+
 				"providers.embeddings', not any row's; the fill sends nothing for "+
 				"the pause and judges the next refusal again after it, and an "+
-				"apply of the company configuration starts it again at once")
+				"apply that changes the embeddings' model, width, limits or "+
+				"endpoint judges it again at once — one that changes anything "+
+				"else, or only the key, does not")
 	case pass.Paused:
 		add(slog.LevelDebug, "memory_fill_paused", "model", model)
 	case err != nil:

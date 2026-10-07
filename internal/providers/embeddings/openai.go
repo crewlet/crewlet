@@ -216,9 +216,9 @@ func (p *Provider) Limits() Limits { return p.limits }
 // configuration named none.
 //
 // Not part of [Embedder]: what a caller embeds is the same at any endpoint,
-// but what an endpoint REFUSES is not, so the knowledge corpus duty keys its
-// memory of refused inputs on it (internal/engine), beside the model, the
-// width and the limits.
+// but what an endpoint REFUSES is not, so the knowledge corpus duty and the
+// memory fill key their memories of refused inputs on it (internal/engine),
+// beside the model, the width and the limits.
 func (p *Provider) Endpoint() string { return p.endpoint }
 
 // EmbedBatch implements [BatchEmbedder].
