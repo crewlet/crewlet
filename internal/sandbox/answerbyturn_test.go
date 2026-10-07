@@ -611,3 +611,104 @@ func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 		t.Fatalf("resumed with %q, want the answer attributed to %q", calls[0].Answer, given.AnsweredBySeat)
 	}
 }
+
+// recordLandsThenFails records an answer and then reports that it could not:
+// the write committed, and the store's reply was lost.
+type recordLandsThenFails struct{ PendingStore }
+
+func (s recordLandsThenFails) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer,
+	fence Fence,
+) (PendingRun, bool, error) {
+	if _, ok, err := s.PendingStore.RecordAnswer(ctx, turnID, launch, answer, fence); err != nil || !ok {
+		return PendingRun{}, ok, err
+	}
+	return PendingRun{}, false, errors.New("the coordination store's reply to the record was lost")
+}
+
+// resumedOnceHeld asserts the run was resumed exactly once, with the seat's
+// inbox held through the resume, and that nothing further is owed.
+func resumedOnceHeld(t *testing.T, rig *coordRig, heldDuring *[]bool) {
+	t.Helper()
+	rig.fireRetries()
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("resumed %d times, want the run resumed once with the answer its record holds", len(calls))
+	}
+	if !slices.Equal(*heldDuring, []bool{true}) {
+		t.Fatalf("the seat's inbox held during the resumes: %v, want it held through the one", *heldDuring)
+	}
+	if rig.coordinator.owes("t1") {
+		t.Fatal("still owes the answer after resuming with it")
+	}
+}
+
+// heldThroughResumes records, for each resume, whether the seat's inbox was
+// held while it ran.
+func heldThroughResumes(rig *coordRig) *[]bool {
+	holds := rig.withHold()
+	var held []bool
+	rig.resumer.during = func(context.Context, PendingRun) { held = append(held, holds.holding("swe")) }
+	return &held
+}
+
+// AN ANSWER BY TURN WHOSE RECORD LANDED UNSEEN STARTS ITS RESUME WHEN IT COMES
+// BACK. The record committed and its reply was lost, so the delivery was handed
+// back and nothing was scheduled: the run is answered, owed a resume nothing on
+// this node drives, and nothing holds the seat's mail behind it. The redelivery
+// finds this very answer on the run, is spent as it — and starts the resume, the
+// seat's inbox held through it. Without that, the person's answer waited on the
+// run until the seat changed hands.
+func TestAnAnswerByTurnWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *testing.T) {
+	rig := newCoordRig(t)
+	launchScheduled(t, rig, "t1")
+	parksOnAQuestion(t, rig, "t1")
+	heldDuring := heldThroughResumes(rig)
+	given, ev := givenAgainst(t, rig, "t1")
+	plain := rig.coordinator.pending
+	rig.coordinator.pending = recordLandsThenFails{plain}
+
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerDeferred || err == nil {
+		t.Fatalf("the first delivery = %q, %v, want it handed back with the store's failure", d, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAnswered || got.Answer == nil ||
+		!slices.Contains(got.Answer.EventIDs, ev.ID.String()) {
+		t.Fatalf("run %q with answer %+v, want the premise: the record landed", got.Status, got.Answer)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 0 || rig.coordinator.owes("t1") {
+		t.Fatalf("resumed %d times, owes %v, after a record the store reported as failed",
+			len(calls), rig.coordinator.owes("t1"))
+	}
+
+	rig.coordinator.pending = plain
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed || err != nil {
+		t.Fatalf("the redelivery = %q, %v, want it spent as the answer it already is", d, err)
+	}
+	resumedOnceHeld(t, rig, heldDuring)
+}
+
+// AND THE SAME ON THE CHAT ROUTE: a reply whose record landed unseen comes back,
+// is recognised as the answer on the run, and starts the resume.
+func TestAReplyWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *testing.T) {
+	rig := newCoordRig(t)
+	parkOnAQuestion(t, rig)
+	heldDuring := heldThroughResumes(rig)
+	reply := chatReply(answerOnTheDM, "use main", replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute)))
+	plain := rig.coordinator.pending
+	rig.coordinator.pending = recordLandsThenFails{plain}
+
+	if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); d != AnswerDeferred || err == nil {
+		t.Fatalf("the first delivery = %q, %v, want it handed back with the store's failure", d, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAnswered || got.Answer == nil {
+		t.Fatalf("run %q with answer %+v, want the premise: the record landed", got.Status, got.Answer)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 0 || rig.coordinator.owes("t1") {
+		t.Fatalf("resumed %d times, owes %v, after a record the store reported as failed",
+			len(calls), rig.coordinator.owes("t1"))
+	}
+
+	rig.coordinator.pending = plain
+	if d, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", reply); d != AnswerConsumed || err != nil {
+		t.Fatalf("the redelivery = %q, %v, want it spent as the answer it already is", d, err)
+	}
+	resumedOnceHeld(t, rig, heldDuring)
+}
