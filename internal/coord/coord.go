@@ -222,8 +222,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 //
 // # Why three hours
 //
-// The longest duty the engine claims: the learning passes tick hourly and the
-// skill curator's lease survives three of those ticks, the same
+// The longest duty the engine claims: the learning passes tick hourly and
+// their lease survives three of those ticks, the same
 // "one missed tick must not move the duty" ratio every other duty follows. An
 // engine test asserts that this is exactly the longest duty TTL, so the number
 // cannot drift away from the duty that justifies it. Raising it is safe on a
