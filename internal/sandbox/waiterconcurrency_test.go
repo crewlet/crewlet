@@ -174,8 +174,15 @@ func TestABoxIsPolledByOnePollAtATime(t *testing.T) {
 // own TTL. A pass returns once its walk has started: the next one comes on
 // schedule, passes the held box over and polls the rest.
 //
+// Counted by EVENTS, never by a rate: what is asserted is how many times the
+// healthy box is polled while the held box's FIRST poll is still in flight, so
+// a loaded machine that runs every pass late changes the count, not the
+// verdict. The hold is a second against a 20 ms interval — some fifty passes
+// on an idle machine, and three is asked for.
+//
 // Mutation: wait for the pass's tasks in the loop, and the neighbour is polled
-// about once per bound — four times here, against about seventy.
+// at most once while the held box's first poll runs — by the pass that started
+// it — so the case goes red however fast the machine is.
 func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -188,38 +195,58 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiter.pollBound = 400 * time.Millisecond
+	waiter.pollBound = time.Second
 
 	var (
-		healthy        atomic.Int32
+		duringHold     atomic.Int32
 		stuckInFlight  atomic.Int32
 		stuckOverlaps  atomic.Int32
 		stuckPollCount atomic.Int32
+		firstHeld      = make(chan struct{})
+		firstEnded     = make(chan struct{})
 	)
 	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (bool, error) {
 		if box.ID() != stuck.SandboxID {
-			healthy.Add(1)
+			// Counted only inside the held box's first poll: its count is
+			// one while that poll runs, and two or more once it has ended.
+			if stuckPollCount.Load() == 1 && stuckInFlight.Load() == 1 {
+				duringHold.Add(1)
+			}
 			return false, nil
 		}
-		stuckPollCount.Add(1)
+		n := stuckPollCount.Add(1)
 		if stuckInFlight.Add(1) > 1 {
 			stuckOverlaps.Add(1)
 		}
-		defer stuckInFlight.Add(-1)
+		if n == 1 {
+			close(firstHeld)
+		}
+		defer func() {
+			stuckInFlight.Add(-1)
+			if n == 1 {
+				close(firstEnded)
+			}
+		}()
 		<-ctx.Done()
 		return false, ctx.Err()
 	}
 	waiter.Start(t.Context())
-	time.Sleep(1500 * time.Millisecond)
+	defer waiter.Stop()
+	for _, step := range []struct {
+		name string
+		ch   <-chan struct{}
+	}{{"began", firstHeld}, {"ended", firstEnded}} {
+		select {
+		case <-step.ch:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the held box's first poll never %s", step.name)
+		}
+	}
 	waiter.Stop()
 
-	// About seventy passes at this cadence; the old loop managed four.
-	if n := healthy.Load(); n < 20 {
-		t.Errorf("the healthy box was polled %d times in 1.5 s at a 20 ms interval; "+
-			"want its cadence kept while its neighbour sat at a 400 ms bound", n)
-	}
-	if n := stuckPollCount.Load(); n == 0 {
-		t.Error("the held box was never polled, so this case tested nothing")
+	if n := duringHold.Load(); n < 3 {
+		t.Errorf("the healthy box was polled %d times while its neighbour's first poll "+
+			"was held for a second at a 20 ms interval; want its cadence kept", n)
 	}
 	if n := stuckOverlaps.Load(); n != 0 {
 		t.Errorf("the held box was polled by two polls at once %d times; want one at a time", n)
