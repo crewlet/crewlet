@@ -14,13 +14,13 @@ import (
 //
 // Replicated migration 0038 drops `tracker_file_chunks` and the row's chunk
 // count, and gives every row an `object` column. Nothing re-applies the file
-// records behind the rows, so the migration has to leave exactly what a node
-// replaying those records from nothing writes — the row kept, every column it
-// had but the count, and NULL for its object. A row lost here is a
-// file the company can no longer even list; a row given anything but NULL is
-// one a migrated node and a replaying node disagree about for good. So the
-// case stands a database up at 0037, writes files and their chunk rows in
-// that shape, and lets the real migrator take it forward.
+// records behind the rows, so what the migration leaves is what the database
+// holds: every row kept, with every column it had but the count, and NULL for
+// its object, since no key it could name exists. A row lost here is a file
+// the company could no longer even list. So the case stands a database up at
+// 0037, writes files and their chunk rows in that shape, and lets the real
+// migrator take it forward — which is also the case that runs 0038's DROP
+// COLUMN on a table holding rows.
 func TestAFileRowFromTheChunkEraComesThroughNamingNoObject(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "replicated.db")
