@@ -35,7 +35,8 @@
 // short fails the put rather than being stored as far as it got. A part that
 // fails, or a read, abandons the upload, under a context of its own, because
 // an upload nobody completes or aborts is invisible to a listing and billed
-// until somebody does.
+// until somebody does — and one a process killed mid-upload leaves is what
+// [Backend.Pending] lists for the collector to abandon.
 //
 // # Every request is bounded
 //
@@ -403,6 +404,7 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 		Bucket: aws.String(b.bucket),
 		Prefix: aws.String(b.prefix),
 	})
+	var undated undatedCount
 	for pages.HasMorePages() {
 		page, err := call(ctx, callBudget, func(ctx context.Context) (*s3.ListObjectsV2Output, error) {
 			return pages.NextPage(ctx)
@@ -411,14 +413,112 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 			return fmt.Errorf("s3obj: list %q: %w", b.prefix, err)
 		}
 		for _, obj := range page.Contents {
+			if obj.LastModified == nil {
+				undated.add(aws.ToString(obj.Key))
+				continue
+			}
 			if err := visit(objstore.Info{
 				Name:    strings.TrimPrefix(aws.ToString(obj.Key), b.prefix),
 				Size:    aws.ToInt64(obj.Size),
-				Written: aws.ToTime(obj.LastModified).UTC(),
+				Written: obj.LastModified.UTC(),
 			}); err != nil {
 				return err
 			}
 		}
+	}
+	return undated.err("objects", "LastModified",
+		"an S3-compatible gateway must date the objects it lists for the collector to delete one")
+}
+
+// undatedCount is the entries one listing left out because the bucket gave
+// no date for them — see [objstore.ErrUndated] for why they are left out
+// rather than handed on dated at the zero time.
+type undatedCount struct {
+	n     int
+	first string
+}
+
+func (u *undatedCount) add(key string) {
+	if u.n == 0 {
+		u.first = key
+	}
+	u.n++
+}
+
+// err is the listing's answer once everything it could date was handed on:
+// nil, or [objstore.ErrUndated] naming how many entries of what went without
+// the field, and the first of them.
+func (u undatedCount) err(what, field, remedy string) error {
+	if u.n == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: the bucket answered %d %s with no %s (the first %q), "+
+		"which the engine leaves alone because it cannot judge their age; %s",
+		objstore.ErrUndated, u.n, what, field, u.first, remedy)
+}
+
+// Pending implements [objstore.Backend]: every multipart upload begun under
+// the prefix and neither completed nor aborted, a page at a time, each named
+// by what follows the prefix and dated by when it was begun.
+//
+// THE BUCKET KEEPS THEM, AND BILLS FOR THEM, UNTIL SOMEBODY ABORTS THEM: a put
+// abandons its own upload when it fails ([Backend.Put]), so one is left only
+// where the process died mid-upload — and then nothing else will ever find it,
+// since no listing of the bucket's objects shows an upload. A bucket's own
+// lifecycle rule for incomplete uploads does the same where an operator set
+// one; this does not rely on one having been.
+//
+// It needs `s3:ListBucketMultipartUploads` on the bucket, which an identity
+// granted only the object verbs lacks — the listing then fails, and says so.
+func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
+	pages := s3.NewListMultipartUploadsPaginator(b.client, &s3.ListMultipartUploadsInput{
+		Bucket: aws.String(b.bucket),
+		Prefix: aws.String(b.prefix),
+	})
+	var undated undatedCount
+	for pages.HasMorePages() {
+		page, err := call(ctx, callBudget, func(ctx context.Context) (*s3.ListMultipartUploadsOutput, error) {
+			return pages.NextPage(ctx)
+		})
+		if err != nil {
+			return fmt.Errorf("s3obj: list the uploads under %q: %w", b.prefix, err)
+		}
+		for _, u := range page.Uploads {
+			// NO DATE IS NOT "LONG AGO": handed on at the zero time, an
+			// upload still in flight would be abandoned under its put.
+			if u.Initiated == nil {
+				undated.add(aws.ToString(u.Key))
+				continue
+			}
+			if err := visit(objstore.Pending{
+				Name:    strings.TrimPrefix(aws.ToString(u.Key), b.prefix),
+				ID:      aws.ToString(u.UploadId),
+				Started: u.Initiated.UTC(),
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return undated.err("uploads", "Initiated",
+		"give the bucket a lifecycle rule that aborts incomplete multipart uploads "+
+			"(AbortIncompleteMultipartUpload), or use a gateway that dates them")
+}
+
+// Abandon implements [objstore.Backend]: an abort of the upload, which deletes
+// every part it holds. An upload that is gone — completed, or aborted already
+// — answers NoSuchUpload, which is what abandoning it was for. It needs
+// `s3:AbortMultipartUpload`.
+func (b *Backend) Abandon(ctx context.Context, p objstore.Pending) error {
+	if p.ID == "" {
+		return fmt.Errorf("s3obj: abandon %q: an upload names no upload id", p.Name)
+	}
+	_, err := call(ctx, callBudget, func(ctx context.Context) (*s3.AbortMultipartUploadOutput, error) {
+		return b.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket: aws.String(b.bucket), Key: aws.String(b.key(p.Name)), UploadId: aws.String(p.ID),
+		})
+	})
+	if err != nil && !missing(err) {
+		return fmt.Errorf("s3obj: abandon the upload %s of %s: %w", p.ID, p.Name, err)
 	}
 	return nil
 }

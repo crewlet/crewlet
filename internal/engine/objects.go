@@ -121,7 +121,7 @@ type collectionReport struct {
 // startObjectCollector starts the collector's duty against the estate's
 // references. A no-op on a node with no object store, and once the collector
 // has been stopped.
-func (e *Engine) startObjectCollector(ctx context.Context, refs collect.References) error {
+func (e *Engine) startObjectCollector(ctx context.Context, refs collect.References, era collect.ChunkEra) error {
 	o := e.objects
 	if o == nil {
 		return nil
@@ -131,7 +131,7 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	if o.collectorStopped || o.collector != nil {
 		return nil
 	}
-	c, err := collect.New(collect.Options{Store: o.store, References: refs})
+	c, err := collect.New(collect.Options{Store: o.store, References: refs, ChunkEra: era})
 	if err != nil {
 		return fmt.Errorf("engine: the object collector: %w", err)
 	}
@@ -153,10 +153,31 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 	mine := claim == nil // a node with nobody to claim from runs it alone
 	if claim != nil {
 		held, err := claim(ctx)
-		if err != nil && ctx.Err() == nil {
-			log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
+		if err != nil {
+			// UNKNOWN IS NEITHER: a claim that could not be answered
+			// says nothing about who holds the duty, so this node runs
+			// no pass — it cannot say the duty is its own — and keeps
+			// whatever it believed before, the alarm its last audit
+			// raised included. Read as "not mine", a two-second store
+			// blip would clear an alarm about lost files on the one
+			// node reporting it.
+			//
+			// BUT IT FORGETS THE RESUME. While nobody can say who holds
+			// the duty, another node may take it and record a newer
+			// pass — an audit that found files lost — so the next claim
+			// that answers held reads the fleet's record again rather
+			// than run from this node's own, older status and write
+			// those findings out of the record. Resuming twice costs a
+			// read: Restore keeps the newer of each half.
+			duty.mu.Lock()
+			duty.resumed = false
+			duty.mu.Unlock()
+			if ctx.Err() == nil {
+				log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
+			}
+			return
 		}
-		mine = err == nil && held
+		mine = held
 	}
 	duty.mu.Lock()
 	duty.holding = mine
@@ -213,9 +234,10 @@ func (d *collectorDuty) ran(last *time.Time, interval time.Duration, err error) 
 	*last = now
 }
 
-// resumeCollector picks the schedule up from the fleet's record when this
-// node takes the duty, so a duty that moved does not run every pass again at
-// once: the record says when its last holder ran each.
+// resumeCollector picks the schedule and the findings up from the fleet's
+// record when this node takes the duty, so a duty that moved does not run every
+// pass again at once — the record says when its last holder ran each — and
+// does not forget what the last audit found.
 func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
 	raw, found, err := e.backends.Fleet.ObjectCollection(ctx)
 	var last collectionReport
@@ -227,6 +249,11 @@ func (e *Engine) resumeCollector(ctx context.Context, duty *collectorDuty) {
 		// the cost is a pass run early, never one skipped.
 		log.WarnContext(ctx, "object_collector_schedule_unread", "error", err)
 	}
+	// THE FINDINGS AS WELL AS THE SCHEDULE: the next pass this node records
+	// carries its other half from here, and seeded with nothing it would
+	// write the last audit's findings — and the alarm they raise — out of
+	// the fleet's record an hour after the duty moved.
+	duty.collector.Restore(last.Status)
 	duty.mu.Lock()
 	defer duty.mu.Unlock()
 	duty.resumed = true
@@ -272,10 +299,13 @@ func (e *Engine) stopObjectCollector() {
 	}
 }
 
-// objectsReading fills the object store's half of an alarm reading: what the
-// collector's last audit found missing — on the node holding the collector's
-// duty, and nothing on any other, since the store is one the whole fleet
-// shares and one node's count of it is the fleet's.
+// objectsReading fills the object store's half of an alarm reading: the files
+// the collector's last audit to run to its end found missing or damaged — on
+// the node holding the collector's duty, and nothing on any other, since the
+// store is one the whole fleet shares and one node's count of it is the
+// fleet's. FROM THE FINDINGS, never the last attempt: an audit that failed
+// part of the way through counted a floor, and reading it would clear the
+// alarm whenever the store stopped answering.
 func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 	o := e.objects
 	if o == nil {
@@ -288,8 +318,11 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 	duty.mu.Lock()
 	holding := duty.holding
 	duty.mu.Unlock()
-	if holding {
-		out.ObjectsMissing = duty.collector.Status().Audit.Missing
+	if !holding {
+		return
+	}
+	if found := duty.collector.Status().Audit.Found; found != nil {
+		out.ObjectsMissing = found.Missing + found.Damaged
 	}
 }
 

@@ -3,6 +3,21 @@ package coordtest
 // ---- the object store ------------------------------------------------- //
 
 var objectStoreCases = []fleetCase{{
+	// THE MAINTENANCE DUTY ASKS ON EVERY TICK once the chunk era is over,
+	// so a store with no chunk locks — every store after the first
+	// retirement, and every store that never had any — must answer a quiet
+	// no-op rather than an error logged every quarter-hour for ever.
+	name: "retiring chunk locks that are not there is not an error",
+	fn: func(h *fleetHarness) {
+		for range 2 {
+			retired, err := h.f.RetireChunkLocks(h.ctx)
+			if err != nil || retired {
+				h.t.Fatalf("RetireChunkLocks = (%v, %v) on a store with none, "+
+					"want (false, nil)", retired, err)
+			}
+		}
+	},
+}, {
 	// THE LAST REPORT IS THE ANSWER, whoever wrote it: the collector's duty
 	// moves between nodes, and every node's status surface reads the latest.
 	name: "the collector's last report replaces the one before",

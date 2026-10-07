@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -207,35 +206,11 @@ func readReferences(ctx context.Context, tx *sql.Tx, t objstore.ReferenceTable,
 	}
 	defer func() { _ = rows.Close() }()
 	var page []reference
-	for rows.Next() {
-		var key, hash string
-		var size int64
-		owner := make([]sql.NullString, len(t.Owner))
-		dest := []any{&key, &hash, &size}
-		for i := range owner {
-			dest = append(dest, &owner[i])
-		}
-		if err := rows.Scan(dest...); err != nil {
-			return nil, err
-		}
-		k, err := objstore.ParseKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("%s.%s: %w", t.Table, t.Key, err)
-		}
-		h, err := objstore.ParseHash(hash)
-		if err != nil {
-			return nil, fmt.Errorf("%s.%s of %s: %w", t.Table, t.Hash, k, err)
-		}
-		names := make([]string, len(owner))
-		for i, o := range owner {
-			names[i] = o.String
-		}
-		page = append(page, reference{
-			object:  objstore.Object{Key: k, Hash: h, Size: size},
-			namedBy: strings.Join(names, "/"),
-		})
-	}
-	return page, rows.Err()
+	err = t.ScanReferences(rows, func(obj objstore.Object, namedBy string) error {
+		page = append(page, reference{object: obj, namedBy: namedBy})
+		return nil
+	})
+	return page, err
 }
 
 // copyObjects writes every object the copy names into the backup, taking each

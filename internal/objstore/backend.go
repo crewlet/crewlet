@@ -27,6 +27,15 @@ var ErrCorrupt = errors.New("objstore: an object's bytes are not the ones it was
 // ErrNoDeadline is a read asked for under a context with no deadline.
 var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 
+// ErrUndated is what a listing ([Backend.List], [Backend.Pending]) fails with,
+// once it has handed on everything it could date, when the backend answered
+// an object or an upload with no instant: an S3-compatible gateway may leave
+// the date out of a listing. Such an entry is NOT handed on, because an
+// instant nobody gave reads as the zero time — older than every grace — and
+// the collector would delete or abandon whatever it named the moment it was
+// listed, an upload still in flight among them.
+var ErrUndated = errors.New("objstore: the backend listed an entry with no date")
+
 // Info is one object a backend holds, as it reports it.
 type Info struct {
 	// Name is the object's name, verbatim — what it was put under.
@@ -49,7 +58,8 @@ type Info struct {
 	// took.
 	//
 	// It is one of the two instants the collector's grace is measured
-	// from; the other is the key's own ([Key.Minted]).
+	// from; the other is the key's own ([Key.Minted]). A listing never
+	// hands on an object with no such instant ([ErrUndated]).
 	Written time.Time
 
 	// Digest is the SHA-256 the backend computed over the bytes it was
@@ -57,6 +67,36 @@ type Info struct {
 	// an object uploaded in parts. A cross-check for an audit, never what a
 	// reader trusts: [Store] hashes every byte it hands out itself.
 	Digest Hash
+}
+
+// Pending is an upload a backend BEGAN and never finished: bytes it holds that
+// no name reaches — so no listing shows them, no get can read them and no
+// delete of a name can remove them — and that it keeps, and on a bucket bills
+// for, until something abandons them ([Backend.Abandon]).
+//
+// Every one is a put that died part of the way through without cleaning up
+// after itself — a process killed mid-upload, a crash between the two halves
+// of a delete — since a put that fails while it runs leaves nothing
+// ([Backend.Put]). And at any instant, every put in flight is one too: an
+// upload is pending until its last byte is stored, which is why the collector
+// abandons one only once it is older than any upload is allowed to take.
+type Pending struct {
+	// Name is what the upload was being stored under, verbatim — or empty
+	// where the backend cannot say: the broker's object store names an
+	// upload only in the message that completes it, so pieces it never
+	// completed belong to no name.
+	Name string
+
+	// ID is the backend's own handle on the upload — an S3 upload id, a
+	// broker object's piece identifier — which [Backend.Abandon] takes
+	// back. Opaque to everything but the backend that answered it.
+	ID string
+
+	// Started is when the backend dates the upload's beginning, in UTC and
+	// on the backend's own clock — never zero: an upload the backend cannot
+	// date is not handed on ([ErrUndated]), since the collector abandons
+	// one only once this is older than the grace.
+	Started time.Time
 }
 
 // PutMeta is what a put records beside the bytes, for an operator reading the
@@ -131,6 +171,24 @@ type Backend interface {
 	// returns. A visitor may be slow — it judges and deletes as it goes —
 	// and a listing does not skip or repeat a name for it.
 	List(ctx context.Context, visit func(Info) error) error
+
+	// Pending hands every upload the backend began and has not finished to
+	// visit ([Pending]), each once and in no particular order, stopping at
+	// the first error visit returns. A backend whose puts leave nothing
+	// behind them at any point — the twin, which stores an object whole or
+	// not at all — has none to visit.
+	Pending(ctx context.Context, visit func(Pending) error) error
+
+	// Abandon removes what p holds, as [Backend.Pending] answered it.
+	// Abandoning an upload that is gone — abandoned already, or never
+	// there — is not an error.
+	//
+	// WHETHER p COULD STILL BE FINISHING is the caller's judgement, never
+	// the backend's: an upload in flight is pending too, and abandoning it
+	// fails that put (or, on the broker, takes the pieces from under the
+	// object it is about to complete). The collector abandons only an
+	// upload begun longer ago than any upload is allowed to take.
+	Abandon(ctx context.Context, p Pending) error
 }
 
 // CheckRead refuses the reads every backend refuses: a negative offset, an

@@ -3,11 +3,17 @@ package natsobj_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -30,6 +36,32 @@ var suite = objstoretest.Options{
 	Piece:       natsobj.MessageBytes,
 	Digest:      true,
 	SlowListing: 12 * time.Second,
+	Unfinished:  unfinished,
+}
+
+// clients is the client each backend a case opened was opened on, so the
+// suite's unfinished upload can be left on the same broker.
+var clients sync.Map
+
+// unfinished leaves what a put killed before its last message leaves: pieces
+// on a subject of their own and no metadata naming them — so it has no name,
+// and its ID is the pieces' identifier.
+func unfinished(t *testing.T, b objstore.Backend) objstore.Pending {
+	t.Helper()
+	c, ok := clients.Load(b)
+	if !ok {
+		t.Fatal("the backend was not opened through open()")
+	}
+	var raw [11]byte
+	_, _ = rand.Read(raw[:])
+	nuid := strings.ToUpper(hex.EncodeToString(raw[:]))
+	for i := range 2 {
+		if _, err := c.(jetstream.JetStream).Publish(t.Context(), "$O."+natsobj.Bucket+".C."+nuid,
+			bytes.Repeat([]byte{byte(i)}, 1000)); err != nil {
+			t.Fatalf("leave an unfinished upload: %v", err)
+		}
+	}
+	return objstore.Pending{ID: nuid}
 }
 
 // THE BROKER'S OWN OBJECT STORE PASSES THE SUITE, on a member's own client.
@@ -232,6 +264,122 @@ func TestADeleteLeavesNoMessage(t *testing.T) {
 	}
 }
 
+// A DELETE INTERRUPTED BETWEEN ITS TWO PURGES LEAVES PIECES NOTHING NAMES, and
+// they are pending — found, dated and abandoned like the pieces of a put that
+// died — while the pieces of every object that still has its metadata are
+// not, a delete marker's excepted: the delete that wrote one purged its
+// pieces, so pieces still under it are leftovers too.
+func TestPiecesNoMetadataNamesArePending(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	for _, name := range []string{"files/kept", "files/interrupted"} {
+		if err := b.Put(t.Context(), name, bytes.NewReader(bytes.Repeat([]byte(name), 1000)),
+			objstore.PutMeta{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stream, err := client.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nuidOf := func(name string) string {
+		t.Helper()
+		library, err := client.ObjectStore(t.Context(), natsobj.Bucket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := library.GetInfo(t.Context(), name, jetstream.GetObjectInfoShowDeleted())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.NUID
+	}
+	interrupted := nuidOf("files/interrupted")
+	// THE FIRST HALF OF A DELETE, and then the process is gone.
+	if err := stream.Purge(t.Context(), jetstream.WithPurgeSubject("$O."+natsobj.Bucket+".M."+
+		base64.URLEncoding.EncodeToString([]byte("files/interrupted")))); err != nil {
+		t.Fatal(err)
+	}
+	// AND A MARKER WHOSE PIECES SURVIVED: the metadata says deleted, and the
+	// pieces are still there.
+	marker := string(objstore.HashOf([]byte("a chunk")))
+	if err := b.Put(t.Context(), marker, bytes.NewReader([]byte("chunk")), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	survived := nuidOf(marker)
+	library, err := client.ObjectStore(t.Context(), natsobj.Bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := library.GetInfo(t.Context(), marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Deleted, info.Size, info.Chunks, info.Digest = true, 0, 0, ""
+	raw, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Publish(t.Context(), "$O."+natsobj.Bucket+".M."+
+		base64.URLEncoding.EncodeToString([]byte(marker)), raw); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []objstore.Pending
+	if err := b.Pending(t.Context(), func(p objstore.Pending) error {
+		got = append(got, p)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, p := range got {
+		if p.Name != "" || p.Started.IsZero() {
+			t.Errorf("pending pieces answered as %+v, want no name and when they began", p)
+		}
+		ids = append(ids, p.ID)
+	}
+	slices.Sort(ids)
+	want := []string{interrupted, survived}
+	slices.Sort(want)
+	if !slices.Equal(ids, want) {
+		t.Fatalf("Pending = %q, want the interrupted delete's and the marker's pieces %q", ids, want)
+	}
+	for _, p := range got {
+		if err := b.Abandon(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := b.Get(deadline(t), "files/kept", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if data, err := io.ReadAll(r); err != nil || len(data) != len("files/kept")*1000 {
+		t.Fatalf("an object with its metadata lost its pieces to the sweep: %d bytes, %v", len(data), err)
+	}
+}
+
+// AN ABANDONED ID IS ONE SUBJECT TOKEN, or nothing is purged: spliced into the
+// purge's filter, a wildcard or a dot would take every object's pieces.
+func TestAbandonRefusesAnIDThatIsNotOneToken(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	if err := b.Put(t.Context(), "files/kept", bytes.NewReader([]byte("kept")), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"", ">", "*", "a.b", "a b"} {
+		if err := b.Abandon(t.Context(), objstore.Pending{ID: id}); err == nil {
+			t.Errorf("Abandon(%q) was accepted", id)
+		}
+	}
+	if got := messages(t, client); got != 2 {
+		t.Fatalf("the object holds %d messages after the refused abandons, want its 2", got)
+	}
+}
+
 // A DELETE MARKER AN EARLIER BUILD LEFT IS LISTED, AND CLEARED BY AN ORDINARY
 // DELETE. The library's own delete — what every earlier build made — keeps
 // the marker for ever; the collector can only remove what a listing shows
@@ -401,6 +549,8 @@ func open(t *testing.T, client jetstream.JetStream) *natsobj.Backend {
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
+	clients.Store(objstore.Backend(b), client)
+	t.Cleanup(func() { clients.Delete(objstore.Backend(b)) })
 	return b
 }
 

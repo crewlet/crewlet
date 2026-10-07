@@ -482,6 +482,13 @@ const (
 // because nothing here reads it.
 const lifetimeBudgetSuffix = "_budgets"
 
+// chunkLocksSuffix is the bucket a build that kept files in content-addressed
+// chunks locked each chunk in around a write of one the store already held.
+// This build never opens it; the maintenance duty deletes it once no node of
+// that build is left (see [FleetStore.RetireChunkLocks]), and it is not in
+// the table above because nothing here reads it.
+const chunkLocksSuffix = "_chunk_locks"
+
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
@@ -631,7 +638,7 @@ type FleetStore struct {
 
 	// bucketPrefix names the buckets, so one an earlier build kept and this
 	// one no longer opens can be addressed by its conventional name
-	// ([FleetStore.RetireLifetimeCounters]).
+	// ([FleetStore.RetireLifetimeCounters], [FleetStore.RetireChunkLocks]).
 	bucketPrefix string
 
 	// ageless is every bucket above the broker never ages — the ones whose
@@ -1548,6 +1555,22 @@ func (f *FleetStore) RetireLifetimeCounters(ctx context.Context) (bool, error) {
 		return false, nil
 	default:
 		return false, unavailable("retire the lifetime token counters", err)
+	}
+}
+
+// RetireChunkLocks deletes the chunk locks' bucket a build that kept files in
+// chunks opened, reporting whether it was there. See
+// [coord.ObjectStores.RetireChunkLocks] for why this is a decision taken under
+// the maintenance duty rather than a step of [OpenFleet].
+func (f *FleetStore) RetireChunkLocks(ctx context.Context) (bool, error) {
+	err := f.js.DeleteKeyValue(ctx, f.bucketPrefix+chunkLocksSuffix)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrBucketNotFound):
+		return false, nil
+	default:
+		return false, unavailable("retire the chunk locks", err)
 	}
 }
 

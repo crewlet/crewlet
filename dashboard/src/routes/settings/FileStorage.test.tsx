@@ -7,7 +7,13 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { cleanup, render, screen } from "@testing-library/react";
 
-import { auditSummary, backendSummary, collectSummary, FileStorage } from "./FileStorage.tsx";
+import {
+  auditRow,
+  auditSummary,
+  backendSummary,
+  collectSummary,
+  FileStorage,
+} from "./FileStorage.tsx";
 import { OBJECTS_STATES } from "~/contract/fleet.ts";
 import { Router } from "~/app/router.tsx";
 import { engineFile } from "~/test/engineFiles.ts";
@@ -61,27 +67,52 @@ describe("file storage", () => {
     renderCard(block("reported"));
     expect(screen.getByText("S3 bucket https://s3.example.com/files/acme/")).toBeTruthy();
     expect(screen.getByText("data-a")).toBeTruthy();
-    expect(screen.getByText(/deleted 12 objects no file names, of 1,840 stored/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /deleted 12 objects no file names, of 1,840 stored.*; retired 3 chunks of an earlier build, abandoned 1 unfinished upload$/,
+      ),
+    ).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
-  test("missing objects are an alert naming them, to restore first", () => {
+  test("files that cannot be read are an alert naming each file, to restore first", () => {
     const r = reported("missing");
     renderCard(r);
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("1 object holding the company's files is not in the store");
-    for (const h of r.audit?.missing_objects ?? []) {
-      expect(alert.textContent).toContain(h);
+    expect(alert.textContent).toContain("2 files cannot be read");
+    const files = r.audit?.found?.missing_files ?? [];
+    expect(files.length).toBe(2);
+    for (const m of files) {
+      expect(alert.textContent).toContain(m.named_by);
+      expect(alert.textContent).toContain(m.object);
     }
+    expect(alert.textContent).toContain("damaged");
+    expect(screen.getByText("1,828 named, 1 missing, 1 damaged")).toBeTruthy();
     expect(
       screen.getByText("the fleet's own NATS bucket, replicated at stream.replicas"),
     ).toBeTruthy();
   });
 
-  test("a collection that could not read the whole estate says it deleted nothing, and why", () => {
+  test("an audit that failed keeps what the last whole one found, and says it failed", () => {
+    renderCard(block("failed"));
+    expect(screen.getByRole("alert").textContent).toContain("2 files cannot be read");
+    expect(
+      screen.getByText(
+        /^1,828 named, 1 missing, 1 damaged \(a later audit stopped: .*did not answer\)$/,
+      ),
+    ).toBeTruthy();
+  });
+
+  test("a collection that stopped judging says what it deleted first, and why it stopped", () => {
     renderCard(block("skipped"));
-    expect(screen.getByText(/^deleted nothing: a record this node could not apply/)).toBeTruthy();
+    expect(
+      screen.getByText(/^deleted 500 objects no file names, then stopped: a record this node/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/deleted nothing/)).toBeNull();
+    // A REFUSED SWEEP is said beside the collection, with what the identity lacks.
+    expect(screen.getByRole("status").textContent).toContain("s3:ListBucketMultipartUploads");
     // No audit has ended: the row says so rather than drawing a zero.
     expect(screen.getByText("Not run yet")).toBeTruthy();
   });
@@ -101,9 +132,19 @@ describe("file storage", () => {
   });
 
   test("an incomplete audit's count is a floor, and a failed pass says what stopped it", () => {
-    expect(auditSummary({ at: "", completed: false, referenced: 10, missing: 2 })).toBe(
+    expect(auditSummary({ at: "", completed: false, referenced: 10, missing: 2, damaged: 0 })).toBe(
       "10 named so far, at least 2 missing",
     );
+    expect(
+      auditRow({
+        at: "2026-09-01T12:00:00Z",
+        completed: false,
+        referenced: 0,
+        missing: 0,
+        damaged: 0,
+        error: "the bucket did not answer",
+      }),
+    ).toBe("stopped: the bucket did not answer");
     expect(
       collectSummary({
         at: "",
@@ -112,6 +153,8 @@ describe("file storage", () => {
         aged: 0,
         deleted: 0,
         referenced: 0,
+        retired: 0,
+        abandoned: 0,
         error: "the bucket did not answer",
       }),
     ).toBe("stopped: the bucket did not answer");

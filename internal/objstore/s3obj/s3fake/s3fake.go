@@ -1,7 +1,8 @@
 // Package s3fake is an in-process S3 endpoint for tests: the calls the object
 // store makes — head bucket; put, get (whole or ranged), head and delete an
-// object; a paged ListObjectsV2; and a multipart upload's start, parts,
-// completion and abandonment — over one bucket, path-style.
+// object; a paged ListObjectsV2; a multipart upload's start, parts,
+// completion and abandonment; and a paged listing of the uploads begun and
+// not finished — over one bucket, path-style.
 //
 // It checks no signature and keeps no versions; it exists so the S3 backend
 // runs the object store's conformance suite on a test machine with no network
@@ -48,6 +49,8 @@ type Server struct {
 	uploads  map[string]*upload
 	nextID   int
 	failPart int32
+	// undated is the keys whose listings leave the date out.
+	undated map[string]bool
 }
 
 type object struct {
@@ -96,6 +99,41 @@ func (s *Server) Uploads() []string {
 	return keys
 }
 
+// Begin starts a multipart upload of key holding one part, and never finishes
+// it — what a process killed mid-upload leaves behind — answering its upload
+// id.
+func (s *Server) Begin(key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	id := fmt.Sprintf("upload-%d", s.nextID)
+	s.uploads[id] = &upload{key: key, started: now(),
+		parts: map[int32][]byte{1: []byte("a part of an upload nobody finished")}}
+	return id
+}
+
+// Undated makes the bucket's listings leave out the date of key — the upload
+// key begins from here on, if it is one, and the object key holds, if it is
+// one — as an S3-compatible gateway that omits <Initiated> or <LastModified>
+// does. A test reads what the backend makes of an entry nobody dated.
+func (s *Server) Undated(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.undated == nil {
+		s.undated = map[string]bool{}
+	}
+	s.undated[key] = true
+}
+
+// stamp spells t as a listing does, or nothing for a key [Server.Undated]
+// names. The caller holds mu.
+func (s *Server) stamp(key string, t time.Time) string {
+	if s.undated[key] {
+		return ""
+	}
+	return t.Format("2006-01-02T15:04:05.000Z")
+}
+
 // Parts is how many parts key was assembled from: zero for an object stored
 // by one put, or one the bucket does not hold.
 func (s *Server) Parts(key string) int {
@@ -125,6 +163,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case key == "" && r.Method == http.MethodGet && q.Get("list-type") == "2":
 		s.list(w, r)
+	case key == "" && r.Method == http.MethodGet && q.Has("uploads"):
+		s.listUploads(w, r)
 	case key == "":
 		s.fail(w, r, http.StatusNotImplemented, "NotImplemented")
 
@@ -359,7 +399,7 @@ type listResult struct {
 
 type listItem struct {
 	Key          string `xml:"Key"`
-	LastModified string `xml:"LastModified"`
+	LastModified string `xml:"LastModified,omitempty"`
 	Size         int    `xml:"Size"`
 }
 
@@ -388,11 +428,76 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		obj := s.objects[k]
 		out.Contents = append(out.Contents, listItem{
 			Key: k, Size: len(obj.data),
-			LastModified: obj.modified.Format("2006-01-02T15:04:05.000Z"),
+			LastModified: s.stamp(k, obj.modified),
 		})
 	}
 	s.mu.Unlock()
 	out.KeyCount = len(out.Contents)
+	s.writeXML(w, out)
+}
+
+type uploadsResult struct {
+	XMLName            xml.Name       `xml:"ListMultipartUploadsResult"`
+	Bucket             string         `xml:"Bucket"`
+	Prefix             string         `xml:"Prefix"`
+	KeyMarker          string         `xml:"KeyMarker"`
+	UploadIDMarker     string         `xml:"UploadIdMarker"`
+	NextKeyMarker      string         `xml:"NextKeyMarker,omitempty"`
+	NextUploadIDMarker string         `xml:"NextUploadIdMarker,omitempty"`
+	MaxUploads         int            `xml:"MaxUploads"`
+	IsTruncated        bool           `xml:"IsTruncated"`
+	Uploads            []uploadedItem `xml:"Upload"`
+}
+
+type uploadedItem struct {
+	Key       string `xml:"Key"`
+	UploadID  string `xml:"UploadId"`
+	Initiated string `xml:"Initiated,omitempty"`
+}
+
+// listUploads answers the uploads begun under a prefix and not finished, in
+// (key, upload id) order, [Server.PageSize] to a page — paged by the two
+// markers S3 pages them by, so a backend reading only the first page is
+// caught.
+func (s *Server) listUploads(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	prefix, afterKey, afterID := q.Get("prefix"), q.Get("key-marker"), q.Get("upload-id-marker")
+	pageSize := s.PageSize
+	if pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+	type entry struct{ key, id string }
+	s.mu.Lock()
+	var all []entry
+	started := map[string]string{}
+	for id, u := range s.uploads {
+		if !strings.HasPrefix(u.key, prefix) {
+			continue
+		}
+		if afterKey != "" && (u.key < afterKey || (u.key == afterKey && id <= afterID)) {
+			continue
+		}
+		all = append(all, entry{u.key, id})
+		started[id] = s.stamp(u.key, u.started)
+	}
+	s.mu.Unlock()
+	slices.SortFunc(all, func(a, b entry) int {
+		if c := strings.Compare(a.key, b.key); c != 0 {
+			return c
+		}
+		return strings.Compare(a.id, b.id)
+	})
+	out := uploadsResult{Bucket: s.bucket, Prefix: prefix, KeyMarker: afterKey,
+		UploadIDMarker: afterID, MaxUploads: pageSize}
+	for i, e := range all {
+		if i == pageSize {
+			last := out.Uploads[len(out.Uploads)-1]
+			out.IsTruncated, out.NextKeyMarker, out.NextUploadIDMarker = true, last.Key, last.UploadID
+			break
+		}
+		out.Uploads = append(out.Uploads, uploadedItem{Key: e.key, UploadID: e.id,
+			Initiated: started[e.id]})
+	}
 	s.writeXML(w, out)
 }
 

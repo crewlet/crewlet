@@ -588,8 +588,13 @@ The consequences worth stating plainly:
   content in chunks this build no longer reads: it stays listed, its
   download answers `410 content_retired`, and the remedy is to upload it
   again (or remove it). The chunks themselves are left in the store until
-  every data node runs the new build. A downgrade across this upgrade is not
-  supported: the older build cannot read the replicated schema it migrated.
+  every node the tracker log counts runs the new build — the *chunk era* is
+  then over — and the object store's collector deletes them a day after they
+  were written (counted as `retired` in `crewlet objects status`), while the
+  maintenance duty deletes the bucket of chunk locks the old build kept
+  (`retired_chunk_locks`). Evicting a node that will not come back ends the
+  era without it. A downgrade across this upgrade is not supported: the older
+  build cannot read the replicated schema it migrated.
 
 ## Watching a fleet
 
@@ -598,9 +603,10 @@ The consequences worth stating plainly:
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
 - **`objects_missing`** — the object store's collector audited the company's
-  files and found chunks a row names that the store does not hold, so those
-  files cannot be downloaded. Check the store's own health and restore the
-  chunks from a backup; `crewlet objects status` lists them.
+  files and found some whose bytes the store does not hold, or holds at the
+  wrong size or digest, so those files cannot be downloaded. Check the store's
+  own health and restore them from a backup, or upload them again; `crewlet
+  objects status` names them.
 - **`history_partial`** — history reads are coming back without a node: it
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.

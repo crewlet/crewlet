@@ -59,7 +59,7 @@ func (*namedNothing) Referenced(context.Context, []objstore.Key,
 	return map[objstore.Key]struct{}{}, true, nil
 }
 
-func (*namedNothing) Each(context.Context, statelog.Position, func(objstore.Key) error) (bool, error) {
+func (*namedNothing) Each(context.Context, statelog.Position, func(collect.Reference) error) (bool, error) {
 	return true, nil
 }
 
@@ -262,8 +262,11 @@ func (s *namedObject) Referenced(_ context.Context, among []objstore.Key,
 	return out, true, nil
 }
 
-func (s *namedObject) Each(_ context.Context, _ statelog.Position, visit func(objstore.Key) error) (bool, error) {
-	return true, visit(s.k)
+func (s *namedObject) Each(_ context.Context, _ statelog.Position, visit func(collect.Reference) error) (bool, error) {
+	return true, visit(collect.Reference{
+		Object:  objstore.Object{Key: s.k, Hash: objstore.HashOf(nil), Size: 0},
+		NamedBy: "ENG/lost.md",
+	})
 }
 
 // THE COLLECTOR NEVER STARTS ONCE IT HAS BEEN STOPPED. The native runtime
@@ -279,7 +282,7 @@ func TestTheCollectorNeverStartsOnceStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the references: %v", err)
 	}
-	if err := e.startObjectCollector(t.Context(), refs); err != nil {
+	if err := e.startObjectCollector(t.Context(), refs, nil); err != nil {
 		t.Fatalf("startObjectCollector on a stopped node: %v", err)
 	}
 	e.objects.collectorMu.Lock()
@@ -303,4 +306,142 @@ func (refusedEstate) Barrier(context.Context) (statelog.Position, error) {
 
 func (refusedEstate) Read(context.Context, statelog.Position, func(*sql.Tx) error) (bool, error) {
 	return false, errors.New("the estate is not answering")
+}
+
+// A NODE THAT TAKES THE DUTY PICKS UP WHAT ITS LAST HOLDER FOUND, not only
+// when: the files the last audit found missing raise the alarm on the new
+// holder at once, and the next pass it records — a collection, say — carries
+// them on in the fleet's record rather than writing them out of it.
+func TestATakenDutyKeepsTheFindingsItsLastHolderRecorded(t *testing.T) {
+	t.Parallel()
+	e, duty, fleet := collectorNode(t, &namedNothing{})
+	now := time.Now()
+	lost := collect.MissingFile{Object: objstore.KeyAt(now), NamedBy: "ENG/lost.md"}
+	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
+		Collect: collect.CollectionReport{Completed: true, At: now.Add(-2 * collect.CollectInterval)},
+		Audit: collect.AuditReport{Completed: true, Referenced: 7, Missing: 1, At: now.Add(-time.Hour),
+			Found: &collect.AuditFindings{At: now.Add(-time.Hour), Completed: true, Referenced: 7,
+				Missing: 1, MissingFiles: []collect.MissingFile{lost}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.RecordObjectCollection(t.Context(), raw); err != nil {
+		t.Fatal(err)
+	}
+
+	mine := func(context.Context) (bool, error) { return true, nil }
+	e.collectorTurn(t.Context(), mine, duty) // takes the duty, and the collection is due
+	var reading statelog.Reading
+	e.objectsReading(time.Now(), &reading)
+	if reading.ObjectsMissing != 1 {
+		t.Fatalf("the new holder reads %d missing, want the one its last holder found", reading.ObjectsMissing)
+	}
+	r, _ := collectionRecorded(t, fleet)
+	if r.Node != "data-a" || r.Status.Collect.At.Before(now) {
+		t.Fatalf("the turn recorded %+v, want this node's collection", r)
+	}
+	if f := r.Status.Audit.Found; f == nil || f.Missing != 1 || len(f.MissingFiles) != 1 ||
+		f.MissingFiles[0] != lost || r.Status.Audit.Referenced != 7 {
+		t.Fatalf("the record after the new holder's collection carries audit %+v; "+
+			"want its last holder's findings kept", r.Status.Audit)
+	}
+}
+
+// A CLAIM THAT CANNOT BE ANSWERED IS NEITHER HELD NOR LOST: the node runs no
+// pass, and keeps the alarm its last audit raised, rather than clearing an
+// alarm about lost files over a store blip.
+//
+// AND IT RESUMES AGAIN when a claim next answers held: while nobody could say
+// who held the duty, another node may have taken it and recorded an audit
+// that found more files lost, and a node running on from its own older status
+// would write those findings — and the alarm — out of the fleet's record with
+// its next pass.
+func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
+	t.Parallel()
+	source := &namedObject{k: objstore.KeyAt(time.Now())}
+	e, duty, fleet := collectorNode(t, source)
+	e.collectorTurn(t.Context(), nil, duty) // collect
+	e.collectorTurn(t.Context(), nil, duty) // audit
+	barriers := source.barriers
+
+	unknown := func(context.Context) (bool, error) {
+		return false, errors.New("the coordination store did not answer")
+	}
+	e.collectorTurn(t.Context(), unknown, duty)
+	var r statelog.Reading
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsMissing != 1 {
+		t.Fatalf("an unanswered claim left the alarm at %d, want the 1 the audit found", r.ObjectsMissing)
+	}
+	if source.barriers != barriers || !duty.holding {
+		t.Fatalf("an unanswered claim ran a pass (%d barriers) or gave the duty up (holding %v)",
+			source.barriers-barriers, duty.holding)
+	}
+
+	// Another node held the duty meanwhile, and its audit found two files
+	// lost.
+	now := time.Now()
+	lost := []collect.MissingFile{
+		{Object: source.k, NamedBy: "ENG/lost.md"},
+		{Object: objstore.KeyAt(now), NamedBy: "ENG/also-lost.md"},
+	}
+	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
+		Collect: collect.CollectionReport{Completed: true, At: now.Add(-2 * collect.CollectInterval)},
+		Audit: collect.AuditReport{Completed: true, Referenced: 2, Missing: 2, At: now,
+			Found: &collect.AuditFindings{At: now, Completed: true, Referenced: 2,
+				Missing: 2, MissingFiles: lost}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.RecordObjectCollection(t.Context(), raw); err != nil {
+		t.Fatal(err)
+	}
+	mine := func(context.Context) (bool, error) { return true, nil }
+	e.collectorTurn(t.Context(), mine, duty)
+	r = statelog.Reading{}
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsMissing != 2 {
+		t.Fatalf("the alarm reads %d missing once the claim answered, want the 2 the holder in between found",
+			r.ObjectsMissing)
+	}
+
+	// The next pass this node records carries those findings on.
+	duty.mu.Lock()
+	duty.collected = time.Time{}
+	duty.mu.Unlock()
+	e.collectorTurn(t.Context(), mine, duty)
+	rec, _ := collectionRecorded(t, fleet)
+	if rec.Node != "data-a" {
+		t.Fatalf("the due collection recorded %q's report, want this node's", rec.Node)
+	}
+	if f := rec.Status.Audit.Found; f == nil || f.Missing != 2 || len(f.MissingFiles) != 2 {
+		t.Fatalf("the pass after an unknown claim recorded findings %+v; "+
+			"want the two files the holder in between found lost", f)
+	}
+}
+
+// THE CHUNK ERA IS OVER ONLY WHEN EVERY NODE THE TRACKER LOG COUNTS READS
+// THE RECORD THAT NAMES A FILE'S OBJECT — and a census of nobody is not over,
+// since it cannot see an older node either while a chunk deleted under one
+// cannot be put back.
+func TestTheChunkEraIsOverOnlyWhenEveryCountedNodeReadsObjects(t *testing.T) {
+	t.Parallel()
+	v := tracker.FileObjectVersion
+	for _, tc := range []struct {
+		name    string
+		readers map[string]int
+		over    bool
+	}{
+		{"nobody is counted", nil, false},
+		{"a node still reads chunks", map[string]int{"a": v, "b": v - 1}, false},
+		{"a node has not reported", map[string]int{"a": v, "b": 0}, false},
+		{"every node reads objects", map[string]int{"a": v, "b": v}, true},
+		{"a later build still counts", map[string]int{"a": v, "b": v + 1}, true},
+	} {
+		if got := chunkEraOver(tc.readers); got != tc.over {
+			t.Errorf("%s: over = %v, want %v", tc.name, got, tc.over)
+		}
+	}
 }

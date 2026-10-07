@@ -3,6 +3,9 @@ package collect
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,10 +20,14 @@ import (
 
 // fakeSource is one domain's references, held in memory.
 type fakeSource struct {
-	mu         sync.Mutex
-	named      map[objstore.Key]bool
-	incomplete bool
-	barriers   int
+	mu    sync.Mutex
+	named map[objstore.Key]Reference
+	// incomplete is whether every read reports itself incomplete, and
+	// incompleteAfter how many judged batches answer complete first.
+	incomplete      bool
+	incompleteAfter int
+	judged          int
+	barriers        int
 }
 
 func (s *fakeSource) Name() string { return "tracker" }
@@ -38,33 +45,35 @@ func (s *fakeSource) Referenced(_ context.Context, among []objstore.Key,
 	defer s.mu.Unlock()
 	out := map[objstore.Key]struct{}{}
 	for _, k := range among {
-		if s.named[k] {
+		if _, ok := s.named[k]; ok {
 			out[k] = struct{}{}
 		}
+	}
+	s.judged++
+	if s.incompleteAfter > 0 && s.judged > s.incompleteAfter {
+		return out, false, nil
 	}
 	return out, !s.incomplete, nil
 }
 
-func (s *fakeSource) Each(_ context.Context, _ statelog.Position, visit func(objstore.Key) error) (bool, error) {
+func (s *fakeSource) Each(_ context.Context, _ statelog.Position, visit func(Reference) error) (bool, error) {
 	s.mu.Lock()
-	named := make([]objstore.Key, 0, len(s.named))
-	for k := range s.named {
-		named = append(named, k)
-	}
+	named := slices.Collect(maps.Values(s.named))
 	incomplete := s.incomplete
 	s.mu.Unlock()
-	for _, k := range named {
-		if err := visit(k); err != nil {
+	for _, ref := range named {
+		if err := visit(ref); err != nil {
 			return false, err
 		}
 	}
 	return !incomplete, nil
 }
 
-func (s *fakeSource) name(k objstore.Key) {
+// name records a row naming o, owned by the file at path.
+func (s *fakeSource) name(o objstore.Object, path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.named[k] = true
+	s.named[o.Key] = Reference{Object: o, NamedBy: "ENG/" + path}
 }
 
 // clock is a settable instant every piece of a case reads.
@@ -85,40 +94,157 @@ func (c *clock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+// backend is the twin with what a real backend has and the twin does not:
+// uploads begun and never finished, a store that answers "not found" for an
+// object it has not caught up with yet, and one whose questions fail.
+type backend struct {
+	*memobj.Backend
+
+	mu         sync.Mutex
+	pending    []objstore.Pending
+	pendingErr error
+	// listTail is what a listing answers once it has handed on every
+	// object — an S3 gateway's ErrUndated, say.
+	listTail error
+	// lagging is how many more times a stat of a name answers "not found"
+	// before it answers what the twin holds.
+	lagging map[string]int
+	statErr error
+}
+
+func (b *backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
+	b.mu.Lock()
+	held, failure := slices.Clone(b.pending), b.pendingErr
+	b.mu.Unlock()
+	if failure != nil {
+		return failure
+	}
+	for _, p := range held {
+		if err := visit(p); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+func (b *backend) List(ctx context.Context, visit func(objstore.Info) error) error {
+	if err := b.Backend.List(ctx, visit); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.listTail
+}
+
+func (b *backend) Abandon(_ context.Context, p objstore.Pending) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = slices.DeleteFunc(b.pending, func(q objstore.Pending) bool { return q.ID == p.ID })
+	return nil
+}
+
+func (b *backend) Stat(ctx context.Context, name string) (objstore.Info, error) {
+	b.mu.Lock()
+	failure := b.statErr
+	lag := b.lagging[name]
+	if lag > 0 {
+		b.lagging[name] = lag - 1
+	}
+	b.mu.Unlock()
+	switch {
+	case failure != nil:
+		return objstore.Info{}, failure
+	case lag > 0:
+		return objstore.Info{}, objstore.ErrNotFound
+	}
+	return b.Backend.Stat(ctx, name)
+}
+
+func (b *backend) begin(p objstore.Pending) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending = append(b.pending, p)
+}
+
+func (b *backend) pendingIDs() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []string
+	for _, p := range b.pending {
+		out = append(out, p.ID)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// era is a chunk era a case can end.
+type era struct {
+	mu   sync.Mutex
+	over bool
+	err  error
+	asks int
+}
+
+func (e *era) Over(context.Context) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.asks++
+	return e.over, e.err
+}
+
+func (e *era) end() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.over = true
+}
+
 type harness struct {
 	t       *testing.T
 	clock   *clock
-	backend *memobj.Backend
+	backend *backend
 	store   *objstore.Store
 	source  *fakeSource
+	era     *era
 	c       *Collector
 }
 
 // newHarness is a collector over an in-memory store whose writes are dated,
-// and whose keys are minted, at one settable clock.
+// and whose keys are minted, at one settable clock, in a chunk era that is
+// open until a case ends it.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	clk := &clock{now: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}
-	backend := memobj.NewAt(clk.Now)
-	store, err := objstore.NewStoreAt(backend, clk.Now)
+	b := &backend{Backend: memobj.NewAt(clk.Now), lagging: map[string]int{}}
+	store, err := objstore.NewStoreAt(b, clk.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := &fakeSource{named: map[objstore.Key]bool{}}
-	c, err := New(Options{Store: store, References: References{src}, Now: clk.Now})
+	src := &fakeSource{named: map[objstore.Key]Reference{}}
+	e := &era{}
+	c, err := New(Options{Store: store, References: References{src}, ChunkEra: e, Now: clk.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, clock: clk, backend: backend, store: store, source: src, c: c}
+	return &harness{t: t, clock: clk, backend: b, store: store, source: src, era: e, c: c}
 }
 
-func (h *harness) put(content string) objstore.Key {
+func (h *harness) put(content string) objstore.Key { return h.putObject(content).Key }
+
+func (h *harness) putObject(content string) objstore.Object {
 	h.t.Helper()
 	o, err := h.store.Put(h.t.Context(), strings.NewReader(content), 1<<20, objstore.PutMeta{})
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	return o.Key
+	return o
+}
+
+// file stores content and names it by a row, as a file's upload and record do.
+func (h *harness) file(path, content string) objstore.Object {
+	h.t.Helper()
+	o := h.putObject(content)
+	h.source.name(o, path)
+	return o
 }
 
 // putAt stores content under a key minted at minted, written at the clock's
@@ -136,7 +262,7 @@ func (h *harness) putAt(minted time.Time, content string) objstore.Key {
 
 func (h *harness) held(k objstore.Key) bool {
 	h.t.Helper()
-	_, err := h.store.Stat(h.t.Context(), k)
+	_, err := h.backend.Backend.Stat(h.t.Context(), k.Name())
 	if errors.Is(err, objstore.ErrNotFound) {
 		return false
 	}
@@ -152,8 +278,7 @@ func TestAnUnnamedObjectGoesOnlyAfterTheGrace(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	orphan := h.put("an upload whose record never came")
-	named := h.put("a file's bytes")
-	h.source.name(named)
+	named := h.file("a.md", "a file's bytes").Key
 
 	h.clock.advance(PendingGrace - time.Minute)
 	if r, err := h.c.Collect(t.Context()); err != nil || r.Deleted != 0 || !r.Completed {
@@ -172,6 +297,27 @@ func TestAnUnnamedObjectGoesOnlyAfterTheGrace(t *testing.T) {
 	}
 	if !h.held(named) {
 		t.Fatal("an object a file names was deleted")
+	}
+}
+
+// A LISTING THAT LEFT UNDATED NAMES OUT STILL HAS WHAT IT DATED JUDGED. A
+// gateway that omits an object's date fails the listing with ErrUndated once
+// it has handed on everything else, and the batch those filled is judged
+// before the pass reports the failure — or every collection on such a bucket
+// would end without deleting its last batch.
+func TestAnUndatedListingStillJudgesWhatItDated(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	orphan := h.put("an upload whose record never came")
+	h.clock.advance(PendingGrace + time.Minute)
+	h.backend.listTail = fmt.Errorf("%w: one object", objstore.ErrUndated)
+
+	r, err := h.c.Collect(t.Context())
+	if !errors.Is(err, objstore.ErrUndated) || r.Completed || r.Error == "" {
+		t.Fatalf("a pass over an undated listing = %+v, %v; want it failed with ErrUndated", r, err)
+	}
+	if r.Deleted != 1 || h.held(orphan) {
+		t.Fatalf("the pass deleted %d; want the dated orphan judged and deleted", r.Deleted)
 	}
 }
 
@@ -330,11 +476,11 @@ func TestEveryBatchIsJudged(t *testing.T) {
 	h := newHarness(t)
 	var keep []objstore.Key
 	for i := range judgeBatch*2 + 7 {
-		k := h.put("object " + time.Duration(i).String())
 		if i%3 == 0 {
-			h.source.name(k)
-			keep = append(keep, k)
+			keep = append(keep, h.file(fmt.Sprintf("%d.md", i), "object "+time.Duration(i).String()).Key)
+			continue
 		}
+		h.put("object " + time.Duration(i).String())
 	}
 	h.clock.advance(PendingGrace + time.Hour)
 	r, err := h.c.Collect(t.Context())
@@ -351,28 +497,6 @@ func TestEveryBatchIsJudged(t *testing.T) {
 	}
 }
 
-// THE AUDIT COUNTS EVERY OBJECT THE ESTATE NAMES THAT THE STORE DOES NOT HOLD,
-// and names them.
-func TestTheAuditCountsWhatTheStoreLost(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t)
-	kept := h.put("kept")
-	lost := h.put("lost")
-	h.source.name(kept)
-	h.source.name(lost)
-	if err := h.store.Delete(t.Context(), lost); err != nil {
-		t.Fatal(err)
-	}
-	r, err := h.c.Audit(t.Context())
-	if err != nil || !r.Completed || r.Referenced != 2 || r.Missing != 1 ||
-		len(r.MissingObjects) != 1 || r.MissingObjects[0] != lost {
-		t.Fatalf("Audit = %+v, %v; want the lost object counted and named", r, err)
-	}
-	if got := h.c.Status().Audit.Missing; got != 1 {
-		t.Fatalf("the status says %d missing", got)
-	}
-}
-
 // A COLLECTOR WITH NOTHING TO READ REFERENCES FROM IS REFUSED: it would read
 // every object as unreferenced and delete the company's files a day later.
 func TestACollectorWithNoReferencesIsRefused(t *testing.T) {
@@ -383,5 +507,285 @@ func TestACollectorWithNoReferencesIsRefused(t *testing.T) {
 	}
 	if _, err := New(Options{Store: store}); err == nil {
 		t.Fatal("a collector with no references was built")
+	}
+}
+
+// A CHUNK AN EARLIER BUILD STORED IS KEPT WHILE THE CHUNK ERA IS OPEN, and
+// retired — deleted, and counted apart from the objects — once it is over and
+// the chunk is past the grace; a chunk inside the grace, or an era nobody can
+// read, keeps it. A data node of the build that kept chunks reads its files'
+// chunks until it is gone, so the era, and never the estate, is what may end
+// them.
+func TestAChunkIsRetiredOnlyOnceTheChunkEraIsOver(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	chunk := string(objstore.HashOf([]byte("a chunk an earlier build stored")))
+	if err := h.backend.Put(t.Context(), chunk, strings.NewReader("chunk"), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	h.clock.advance(PendingGrace + time.Hour)
+	young := string(objstore.HashOf([]byte("a chunk stored a moment ago")))
+	if err := h.backend.Put(t.Context(), young, strings.NewReader("young"), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	stored := func(name string) bool {
+		_, err := h.backend.Backend.Stat(t.Context(), name)
+		return err == nil
+	}
+
+	r, err := h.c.Collect(t.Context())
+	if err != nil || r.Retired != 0 || !stored(chunk) {
+		t.Fatalf("a pass in an open era = %+v, %v; the chunk must stay", r, err)
+	}
+	h.era.err = errors.New("the census is unreadable")
+	h.era.over = true
+	if r, err = h.c.Collect(t.Context()); err != nil || r.Retired != 0 || !stored(chunk) {
+		t.Fatalf("a pass whose era could not be read = %+v, %v; the chunk must stay", r, err)
+	}
+	h.era.err = nil
+	r, err = h.c.Collect(t.Context())
+	if err != nil || r.Retired != 1 || r.Listed != 0 || r.Deleted != 0 || !r.Completed {
+		t.Fatalf("a pass once the era is over = %+v, %v; want the one old chunk retired", r, err)
+	}
+	if stored(chunk) {
+		t.Fatal("a chunk past the grace outlived the chunk era")
+	}
+	if !stored(young) {
+		t.Fatal("a chunk inside the grace was retired")
+	}
+}
+
+// THE ERA IS ASKED ONLY WHEN A CHUNK IS MET, and once a pass: it is a census
+// of the fleet, and a store holding no chunk has no question for it.
+func TestTheChunkEraIsAskedOnlyAboutAChunk(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.put("an object")
+	h.clock.advance(PendingGrace + time.Hour)
+	if _, err := h.c.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if h.era.asks != 0 {
+		t.Fatalf("a pass over no chunk asked the era %d times", h.era.asks)
+	}
+	for i := range 3 {
+		name := string(objstore.HashOf(fmt.Appendf(nil, "chunk %d", i)))
+		if err := h.backend.Put(t.Context(), name, strings.NewReader("c"), objstore.PutMeta{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.clock.advance(PendingGrace + time.Hour)
+	if _, err := h.c.Collect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if h.era.asks != 1 {
+		t.Fatalf("a pass over three chunks asked the era %d times, want once", h.era.asks)
+	}
+}
+
+// AN UPLOAD THAT NEVER FINISHED IS ABANDONED ONCE IT BEGAN MORE THAN THE GRACE
+// AGO — when nothing names it, or a key also minted past the grace does, or a
+// chunk does once the chunk era is over — and never when somebody else's name
+// does. Every upload in flight is pending too, which is what the grace is for.
+func TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	start := h.clock.Now()
+	oldKey := objstore.KeyAt(start)
+	freshKey := objstore.KeyAt(start.Add(PendingGrace))
+	chunk := string(objstore.HashOf([]byte("a chunk")))
+	for _, p := range []objstore.Pending{
+		{ID: "nameless", Started: start},
+		{ID: "old-key", Name: oldKey.Name(), Started: start},
+		// BEGUN LONG AGO BY THE BACKEND'S CLOCK, under a key a fast
+		// clock minted: its key is inside the grace.
+		{ID: "fresh-key", Name: freshKey.Name(), Started: start},
+		{ID: "chunk", Name: chunk, Started: start},
+		{ID: "theirs", Name: "somebody-elses/upload.bin", Started: start},
+	} {
+		h.backend.begin(p)
+	}
+	h.clock.advance(PendingGrace - time.Minute)
+	h.backend.begin(objstore.Pending{ID: "in-flight", Started: h.clock.Now()})
+
+	if r, err := h.c.Collect(t.Context()); err != nil || r.Abandoned != 0 {
+		t.Fatalf("a sweep inside the grace = %+v, %v; want nothing abandoned", r, err)
+	}
+	h.clock.advance(2 * time.Minute)
+	r, err := h.c.Collect(t.Context())
+	if err != nil || r.Abandoned != 2 {
+		t.Fatalf("a sweep past the grace = %+v, %v; want the nameless upload and the old key's", r, err)
+	}
+	if got, want := h.backend.pendingIDs(), []string{"chunk", "fresh-key", "in-flight", "theirs"}; !slices.Equal(got, want) {
+		t.Fatalf("pending after the sweep = %q, want %q", got, want)
+	}
+	h.era.end()
+	h.clock.advance(PendingGrace)
+	if r, err = h.c.Collect(t.Context()); err != nil || r.Abandoned != 3 {
+		t.Fatalf("a sweep once the era is over = %+v, %v; want the chunk's, the fresh key's "+
+			"and the one that was in flight", r, err)
+	}
+	if got := h.backend.pendingIDs(); !slices.Equal(got, []string{"theirs"}) {
+		t.Fatalf("pending = %q; somebody else's upload is never abandoned", got)
+	}
+}
+
+// A SWEEP THE BACKEND REFUSES IS REPORTED, AND THE COLLECTION STANDS: an S3
+// identity without the right to list or abort uploads is a sweep that cannot
+// run, never a collection that did not.
+func TestARefusedSweepIsReportedBesideTheCollection(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	orphan := h.put("an orphan")
+	h.backend.pendingErr = errors.New("AccessDenied: s3:ListBucketMultipartUploads")
+	h.clock.advance(PendingGrace + time.Hour)
+	r, err := h.c.Collect(t.Context())
+	if err != nil || !r.Completed || r.Deleted != 1 || !strings.Contains(r.SweepError, "AccessDenied") {
+		t.Fatalf("a collection whose sweep was refused = %+v, %v; want it complete and the "+
+			"refusal reported", r, err)
+	}
+	if h.held(orphan) {
+		t.Fatal("the collection did not run beside a refused sweep")
+	}
+}
+
+// A PASS THAT DELETED AND THEN MET AN INCOMPLETE ESTATE SAYS BOTH: what it
+// deleted before it stopped is gone, and a report that read "deleted nothing"
+// would have the operator believe otherwise.
+func TestAPassThatStoppedReportsWhatItDeletedFirst(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	for i := range judgeBatch + 10 {
+		h.put(fmt.Sprintf("orphan %d", i))
+	}
+	h.source.incompleteAfter = 1
+	h.clock.advance(PendingGrace + time.Hour)
+	r, err := h.c.Collect(t.Context())
+	if err != nil || r.Deleted != judgeBatch || r.Skipped == "" || r.Completed {
+		t.Fatalf("the pass = %+v, %v; want one batch deleted and why it stopped", r, err)
+	}
+	if got := h.c.Status().Collect; got.Deleted != judgeBatch || got.Skipped == "" {
+		t.Fatalf("the status = %+v; want both halves", got)
+	}
+}
+
+// THE AUDIT FINDS WHAT THE STORE LOST AND WHAT IT HOLDS WRONG, and names each
+// as the file it belongs to: an object it does not hold, one it holds at
+// another size, and one it holds under another digest.
+func TestTheAuditFindsMissingAndDamagedFiles(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.file("kept.md", "kept")
+	lost := h.file("lost.md", "lost")
+	short := h.file("short.md", "the whole of it")
+	bent := h.putObject("one digest")
+	bent.Hash = objstore.HashOf([]byte("another digest"))
+	h.source.name(bent, "bent.md")
+	if err := h.store.Delete(t.Context(), lost.Key); err != nil {
+		t.Fatal(err)
+	}
+	h.backend.Corrupt(short.Key.Name(), []byte("part"))
+
+	r, err := h.c.Audit(t.Context())
+	if err != nil || !r.Completed || r.Referenced != 4 || r.Missing != 1 || r.Damaged != 2 {
+		t.Fatalf("Audit = %+v, %v; want one missing and two damaged of four", r, err)
+	}
+	want := []MissingFile{
+		{Object: bent.Key, NamedBy: "ENG/bent.md", Damaged: true},
+		{Object: lost.Key, NamedBy: "ENG/lost.md"},
+		{Object: short.Key, NamedBy: "ENG/short.md", Damaged: true},
+	}
+	if r.Found == nil || r.Found.Missing != 1 || r.Found.Damaged != 2 ||
+		!slices.Equal(r.Found.MissingFiles, want) {
+		t.Fatalf("the findings = %+v, want %+v", r.Found, want)
+	}
+}
+
+// A STORE THAT HAD NOT CAUGHT UP IS NOT ONE THAT LOST THE OBJECT: a "not found"
+// is asked again at the end of the pass before the object is called missing.
+func TestALaggingNotFoundIsNotMissing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	o := h.file("new.md", "just uploaded")
+	h.backend.lagging[o.Key.Name()] = 1
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Missing != 0 || r.Found == nil || r.Found.Missing != 0 {
+		t.Fatalf("Audit = %+v, %v; an object answered once as not found and then found "+
+			"is not missing", r, err)
+	}
+	h.backend.lagging[o.Key.Name()] = 2
+	if r, err = h.c.Audit(t.Context()); err != nil || r.Missing != 1 {
+		t.Fatalf("Audit = %+v, %v; an object not found twice is missing", r, err)
+	}
+}
+
+// WHAT AN AUDIT FOUND OUTLIVES AN AUDIT THAT FAILED AFTER IT: the attempt's
+// error is reported, and its findings — which are floors — never replace the
+// last whole ones, so a broker that stopped answering mid-audit never clears
+// an alarm about files the store has lost.
+func TestAFailedAuditKeepsTheLastFindings(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	lost := h.file("lost.md", "lost")
+	if err := h.store.Delete(t.Context(), lost.Key); err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.c.Audit(t.Context())
+	if err != nil || first.Found == nil || first.Found.Missing != 1 {
+		t.Fatalf("the first audit = %+v, %v", first, err)
+	}
+	h.clock.advance(AuditInterval)
+	h.backend.statErr = errors.New("the broker stopped answering")
+	if _, err := h.c.Audit(t.Context()); err == nil {
+		t.Fatal("an audit whose every question failed succeeded")
+	}
+	got := h.c.Status().Audit
+	if got.Error == "" || !got.At.After(first.At) {
+		t.Fatalf("the status = %+v; want the failed attempt reported", got)
+	}
+	if got.Found == nil || got.Found.Missing != 1 || !got.Found.At.Equal(first.At) ||
+		len(got.Found.MissingFiles) != 1 || got.Found.MissingFiles[0].NamedBy != "ENG/lost.md" {
+		t.Fatalf("the findings after a failed audit = %+v; want the last whole audit's", got.Found)
+	}
+}
+
+// A NODE TAKING THE DUTY PICKS UP WHAT THE LAST HOLDER RECORDED, each half
+// where it is newer than its own — and a record from the build before, which
+// kept no findings beside the attempt, gives its attempt's findings as found.
+func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	at := h.clock.Now()
+	lost := MissingFile{Object: objstore.KeyAt(at), NamedBy: "ENG/lost.md"}
+	h.c.Restore(Status{
+		Collect: CollectionReport{Completed: true, Deleted: 3, At: at},
+		Audit: AuditReport{Completed: true, Referenced: 9, Missing: 1, At: at,
+			Found: &AuditFindings{At: at, Completed: true, Referenced: 9, Missing: 1,
+				MissingFiles: []MissingFile{lost}}},
+	})
+	got := h.c.Status()
+	if got.Collect.Deleted != 3 || got.Audit.Found == nil || got.Audit.Found.Missing != 1 ||
+		got.Audit.Found.MissingFiles[0] != lost {
+		t.Fatalf("the restored status = %+v", got)
+	}
+	// AN OLDER RECORD CHANGES NOTHING.
+	h.c.Restore(Status{Collect: CollectionReport{At: at.Add(-time.Hour)},
+		Audit: AuditReport{At: at.Add(-time.Hour), Found: &AuditFindings{At: at.Add(-time.Hour)}}})
+	if again := h.c.Status(); again.Collect.Deleted != 3 || again.Audit.Referenced != 9 ||
+		!again.Audit.At.Equal(at) || again.Audit.Found.Missing != 1 {
+		t.Fatalf("an older record replaced a newer status: %+v", again)
+	}
+	// A FAILED ATTEMPT NEWER THAN THE FINDINGS keeps them.
+	h.c.Restore(Status{Audit: AuditReport{At: at.Add(time.Hour), Error: "stopped"}})
+	if again := h.c.Status(); again.Audit.Error != "stopped" || again.Audit.Found == nil ||
+		again.Audit.Found.Missing != 1 {
+		t.Fatalf("a newer failed attempt took the findings with it: %+v", again.Audit)
+	}
+
+	// A RECORD THE BUILD BEFORE WROTE, with no findings of its own.
+	old := newHarness(t)
+	old.c.Restore(Status{Audit: AuditReport{Completed: true, Referenced: 4, Missing: 2, At: at}})
+	if f := old.c.Status().Audit.Found; f == nil || f.Missing != 2 || f.Referenced != 4 || !f.At.Equal(at) {
+		t.Fatalf("an older build's audit restored as findings %+v", f)
 	}
 }

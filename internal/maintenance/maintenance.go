@@ -45,6 +45,12 @@
 // because an older node still charges it on every round and would fail every
 // charge closed without it. After that tick there is nothing to retire and the
 // job costs one lease listing per sweep.
+//
+// The chunk locks a build that kept files in chunks opened are the same shape,
+// and [RetiredChunkLockJobs] deletes their bucket once the CHUNK ERA is over —
+// once no node the tracker log counts reads below the record version that
+// names a file's object — because such a node takes a chunk's lock around a
+// write and fails the write without it.
 package maintenance
 
 import (

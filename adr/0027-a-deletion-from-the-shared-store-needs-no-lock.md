@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/collect`
-- **Enforced-by:** `internal/tracker.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`
+- **Enforced-by:** `internal/tracker.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`, `internal/objstore/collect.TestAChunkIsRetiredOnlyOnceTheChunkEraIsOver`, `internal/engine.TestTheChunkEraIsOverOnlyWhenEveryCountedNodeReadsObjects`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -41,7 +41,27 @@ Five packages carry it: `objstore` (the key, its minting, and `RecordWithin`),
 `tracker` (the write that refuses an old key), `objstore/collect` (the
 judgement by both instants), `objstore/references` (the constants test) and
 every backend, whose stored instant is no earlier than its put began —
-`objstoretest` certifies that.
+`objstoretest` certifies that, and that a backend lists every upload it began
+and never finished. The chunk era's gate is `engine`'s census, read by the
+collector and by `maintenance`'s retirement of the chunk locks.
+
+Two more deletions follow the same rule, because each is the same question
+asked of bytes no listing of the objects shows:
+
+- **An upload that never finished** — an S3 multipart upload nobody completed
+  or aborted, broker pieces no metadata names — is abandoned once it BEGAN
+  more than the grace ago, and where it is under a key, once that key was also
+  minted more than the grace ago: every upload in flight is pending too, and
+  none takes as long as the grace. It needs no estate, since no row names an
+  upload that never finished.
+- **A chunk an earlier build stored** — a name of sixty-four hex digits, which
+  no key can spell — is named only by a file row on a data node of that build,
+  and such a node reads its files' chunks until it is gone. So a chunk is
+  deleted once it is past the grace AND the CHUNK ERA IS OVER: every node the
+  tracker log counts reads at least the record version that names a file's
+  object (`tracker.FileObjectVersion`), the census `internal/engine` takes for
+  that log. The bucket of chunk locks that build kept goes on the same gate,
+  under the maintenance duty, since such a node fails a write without it.
 
 ## Why the obvious alternatives are wrong
 

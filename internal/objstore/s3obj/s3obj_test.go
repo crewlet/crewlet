@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -35,9 +36,104 @@ func open(t *testing.T, srv *s3fake.Server, prefix string) *s3obj.Backend {
 // LastModified is to the second, so a re-put is asked about a second later.
 func TestContract(t *testing.T) {
 	t.Parallel()
+	var servers sync.Map
 	objstoretest.Run(t, func(t *testing.T) objstore.Backend {
-		return open(t, s3fake.Start(t, "files"), "crewlet/")
-	}, objstoretest.Options{Piece: s3obj.PartBytes})
+		srv := s3fake.Start(t, "files")
+		b := open(t, srv, "crewlet/")
+		servers.Store(objstore.Backend(b), srv)
+		return b
+	}, objstoretest.Options{Piece: s3obj.PartBytes,
+		// A MULTIPART UPLOAD BEGUN AND NEVER COMPLETED, under the
+		// prefix: what a process killed mid-upload leaves, named by
+		// what follows the prefix.
+		Unfinished: func(t *testing.T, b objstore.Backend) objstore.Pending {
+			srv, _ := servers.Load(b)
+			return objstore.Pending{Name: "files/unfinished",
+				ID: srv.(*s3fake.Server).Begin("crewlet/files/unfinished")}
+		}})
+}
+
+// AN UPLOAD OUTSIDE THE PREFIX IS NOBODY'S HERE: a bucket shared by several
+// companies holds each one's unfinished uploads under its own prefix, and a
+// backend that listed another's would have its collector abandon them.
+func TestPendingKeepsToItsPrefix(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.PageSize = 2
+	b := open(t, srv, "crewlet/")
+	srv.Begin("somebody-else/files/theirs")
+	var want []string
+	for range 5 {
+		want = append(want, srv.Begin("crewlet/files/ours"))
+	}
+	var got []string
+	if err := b.Pending(t.Context(), func(p objstore.Pending) error {
+		if p.Name != "files/ours" {
+			t.Errorf("Pending named %q, want files/ours", p.Name)
+		}
+		got = append(got, p.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("Pending listed %q across pages of two, want exactly %q", got, want)
+	}
+}
+
+// AN ENTRY THE BUCKET DID NOT DATE IS NEVER HANDED ON. An S3-compatible
+// gateway may leave <Initiated> out of an upload listing or <LastModified> out
+// of an object listing, and an entry dated at the zero time reads as older
+// than every grace: the collector would abandon an upload still in flight
+// under its put, or judge an object by its key's clock alone. So each listing
+// hands on everything it could date and then fails with ErrUndated naming
+// what it left alone.
+func TestAnUndatedEntryIsNeverHandedOn(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.PageSize = 1
+	b := open(t, srv, "crewlet/")
+
+	srv.Undated("crewlet/files/in-flight")
+	srv.Begin("crewlet/files/in-flight")
+	dated := srv.Begin("crewlet/files/dated")
+	var uploads []string
+	err := b.Pending(t.Context(), func(p objstore.Pending) error {
+		if p.Started.IsZero() {
+			t.Errorf("Pending handed on %s with no date", p.Name)
+		}
+		uploads = append(uploads, p.ID)
+		return nil
+	})
+	if !errors.Is(err, objstore.ErrUndated) {
+		t.Fatalf("Pending over an undated upload = %v, want ErrUndated", err)
+	}
+	if !slices.Equal(uploads, []string{dated}) {
+		t.Errorf("Pending handed on %q, want only the dated upload %q", uploads, dated)
+	}
+
+	for _, name := range []string{"files/a", "files/b"} {
+		if err := b.Put(t.Context(), name, bytes.NewReader([]byte(name)), objstore.PutMeta{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.Undated("crewlet/files/a")
+	var listed []string
+	err = b.List(t.Context(), func(info objstore.Info) error {
+		if info.Written.IsZero() {
+			t.Errorf("List handed on %s with no date", info.Name)
+		}
+		listed = append(listed, info.Name)
+		return nil
+	})
+	if !errors.Is(err, objstore.ErrUndated) {
+		t.Fatalf("List over an undated object = %v, want ErrUndated", err)
+	}
+	if !slices.Equal(listed, []string{"files/b"}) {
+		t.Errorf("List handed on %q, want only the dated object", listed)
+	}
 }
 
 // A BUCKET THAT CANNOT BE REACHED FAILS THE BOOT, not the first upload.

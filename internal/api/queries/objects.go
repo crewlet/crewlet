@@ -84,18 +84,40 @@ type ObjectCollect struct {
 	Aged       int       `json:"aged"`
 	Deleted    int       `json:"deleted"`
 	Referenced int       `json:"referenced"`
+	Retired    int       `json:"retired"`
+	Abandoned  int       `json:"abandoned"`
 	Skipped    string    `json:"skipped,omitempty"`
+	SweepError string    `json:"sweep_error,omitempty"`
 	Error      string    `json:"error,omitempty"`
 }
 
-// ObjectAudit is one audit, rendered.
+// ObjectAudit is the last audit attempt, rendered, and what the last audit to
+// run to its end found.
 type ObjectAudit struct {
-	At             time.Time      `json:"at"`
-	Completed      bool           `json:"completed"`
-	Referenced     int            `json:"referenced"`
-	Missing        int            `json:"missing"`
-	MissingObjects []objstore.Key `json:"missing_objects,omitempty"`
-	Error          string         `json:"error,omitempty"`
+	At         time.Time       `json:"at"`
+	Completed  bool            `json:"completed"`
+	Referenced int             `json:"referenced"`
+	Missing    int             `json:"missing"`
+	Damaged    int             `json:"damaged"`
+	Error      string          `json:"error,omitempty"`
+	Found      *ObjectFindings `json:"found,omitempty"`
+}
+
+// ObjectFindings is what an audit that ran to its end found.
+type ObjectFindings struct {
+	At           time.Time           `json:"at"`
+	Completed    bool                `json:"completed"`
+	Referenced   int                 `json:"referenced"`
+	Missing      int                 `json:"missing"`
+	Damaged      int                 `json:"damaged"`
+	MissingFiles []ObjectMissingFile `json:"missing_files,omitempty"`
+}
+
+// ObjectMissingFile is one file whose bytes the store cannot give back.
+type ObjectMissingFile struct {
+	Object  objstore.Key `json:"object"`
+	NamedBy string       `json:"named_by"`
+	Damaged bool         `json:"damaged,omitempty"`
 }
 
 // RenderObjects is the one rendering of the collector's record.
@@ -104,14 +126,26 @@ func RenderObjects(r engine.CollectionReport) FleetObjects {
 	if c := r.Status.Collect; !c.At.IsZero() {
 		out.Collect = &ObjectCollect{
 			At: c.At, Completed: c.Completed, Listed: c.Listed, Aged: c.Aged,
-			Deleted: c.Deleted, Referenced: c.Referenced,
-			Skipped: c.Skipped, Error: c.Error,
+			Deleted: c.Deleted, Referenced: c.Referenced, Retired: c.Retired,
+			Abandoned: c.Abandoned, Skipped: c.Skipped, SweepError: c.SweepError,
+			Error: c.Error,
 		}
 	}
 	if a := r.Status.Audit; !a.At.IsZero() {
 		out.Audit = &ObjectAudit{
 			At: a.At, Completed: a.Completed, Referenced: a.Referenced,
-			Missing: a.Missing, MissingObjects: a.MissingObjects, Error: a.Error,
+			Missing: a.Missing, Damaged: a.Damaged, Error: a.Error,
+		}
+		// THROUGH Findings, so a record a node of the build before wrote
+		// — no findings beside its attempt — still says what it found.
+		if f := a.Findings(); f != nil {
+			found := &ObjectFindings{At: f.At, Completed: f.Completed, Referenced: f.Referenced,
+				Missing: f.Missing, Damaged: f.Damaged}
+			for _, m := range f.MissingFiles {
+				found.MissingFiles = append(found.MissingFiles,
+					ObjectMissingFile{Object: m.Object, NamedBy: m.NamedBy, Damaged: m.Damaged})
+			}
+			out.Audit.Found = found
 		}
 	}
 	return FleetObjects{State: ObjectsReported, ReportedObjects: out}

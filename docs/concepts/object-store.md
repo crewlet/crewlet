@@ -249,6 +249,16 @@ noncurrent versions (S3's `NoncurrentVersionExpiration`, or your provider's
 equivalent) after however long you want deleted files recoverable, or its size
 grows for the life of the company.
 
+**An S3-compatible gateway must date what it lists.** The collector judges an
+object's age by the `LastModified` its bucket listing carries and an unfinished
+upload's by its `Initiated`, and a gateway that leaves either out has the
+engine leave that entry alone rather than read it as older than every grace —
+which would abandon an upload still in flight. Such a pass reports what it
+left alone in its `error` (an object) or `sweep_error` (an upload) on
+`crewlet objects status`. Uploads left that way are billed until the bucket
+aborts them itself, so give such a bucket a lifecycle rule for incomplete
+multipart uploads (S3's `AbortIncompleteMultipartUpload`).
+
 ### Taking a data node away
 
 There is nothing to drain for the files. On `nats` a member that leaves is a

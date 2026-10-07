@@ -3900,13 +3900,23 @@ start and **omits** the field rather than rendering one.
       "listed": 1840,
       "aged": 1702,
       "deleted": 12,
-      "referenced": 1690
+      "referenced": 1690,
+      "retired": 3,
+      "abandoned": 1
     },
     "audit": {
       "at": "2026-09-01T09:00:00Z",
       "completed": true,
       "referenced": 1828,
-      "missing": 0
+      "missing": 0,
+      "damaged": 0,
+      "found": {
+        "at": "2026-09-01T09:00:00Z",
+        "completed": true,
+        "referenced": 1828,
+        "missing": 0,
+        "damaged": 0
+      }
     }
   }
 }
@@ -3929,8 +3939,9 @@ writes.
 |---|---|
 | `backend` | The store every node agreed on at boot: `nats` (the data nodes' replicated bucket) or `s3:<endpoint>/<bucket>/<prefix>` |
 | `node` | The data node holding the collector's duty when it ran the passes below |
-| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row still did). `skipped` says why it deleted nothing — an estate this node could not fully read; `error` what stopped it. Absent before the first one ends |
-| `audit` | The last **audit**, which asks the store about every object a row names: `referenced`, `missing` (the whole count), `missing_objects` (the keys of the first hundred, to restore first; absent when none) and `completed` — false over an estate that was not complete, when `missing` is a floor. A non-zero `missing` raises [`objects_missing`](alarms.md). Absent before the first one ends |
+| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row still did), `retired` (objects an earlier build stored as content-addressed chunks, deleted once no node of that build is left) and `abandoned` (uploads begun more than a day ago and never finished, which no listing shows). `skipped` says why it stopped judging — an estate this node could not fully read — and the counts are what it did before it stopped; `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
+| `audit` | The last **audit attempt**, which asks the store about every object a row names: when it ended (`at`), `referenced`, `missing` (objects the store does not hold), `damaged` (objects it holds at another size, or under another digest where it keeps one), `completed` — false over an estate that was not complete, when the counts are floors — and `error`, what stopped it. Absent before the first one ends |
+| `audit.found` | What the last audit to **run to its end** found — the attempt above, or the one before it when that one failed, so a failed attempt never hides what was found: `at`, `completed`, `referenced`, `missing`, `damaged` and `missing_files`, the first hundred files that cannot be read, each `{"object", "named_by", "damaged"}` — the object's key, the file as `PROJECT/path`, and `true` where the store holds it wrong rather than not at all (absent when none). A non-zero `missing` plus `damaged` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
 
 A collection runs hourly and an audit daily, on one data node at a time; a pass
 that fails is tried again ten minutes later.

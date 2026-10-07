@@ -154,10 +154,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				CensusLog: "tracker@tracker.007"},
 			"on tracker@tracker.007 against the 1000",
 		},
-		"chunks the object store lost": {
+		"files the object store lost or damaged": {
 			statelog.KindObjectsMissing,
 			statelog.Reading{ObjectsMissing: 2},
-			"2 chunk(s) the company's files are made of are not in the object store",
+			"2 file(s) are missing from the object store or damaged in it",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -242,7 +242,7 @@ func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
 	}
 }
 
-// THE MISSING-CHUNK ALARM IS SILENT ON NOTHING MISSING — including a reading
+// THE UNREADABLE-FILES ALARM IS SILENT ON NOTHING MISSING — including a reading
 // from a node that holds no collector duty, which reports no audit at all.
 func TestTheObjectStoreAlarmIsSilentWithNothingMissing(t *testing.T) {
 	t.Parallel()

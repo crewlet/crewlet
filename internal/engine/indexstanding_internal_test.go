@@ -76,7 +76,7 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 	for _, running := range s.identityDomains() {
 		waitApplied(t, running)
 	}
-	tombs, err := duty.evicted(t.Context())
+	tombs, err := evictedOn(t.Context(), duty.identity, duty.db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,13 +89,13 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 	lagging := &embedDuty{engine: e, db: e.backends.Store, identity: append(
 		slices.Clone(duty.identity),
 		&runningLog{domain: noEvictions{s.identityDomains()[0].domain}})}
-	if partial, err := lagging.evicted(t.Context()); err != nil || len(partial) != 0 {
+	if partial, err := evictedOn(t.Context(), lagging.identity, lagging.db); err != nil || len(partial) != 0 {
 		t.Fatalf("an eviction one identity log has not applied read as %+v (%v), "+
 			"want none yet", partial, err)
 	}
 	unreadable := &embedDuty{engine: e, db: e.backends.Store, identity: append(
 		slices.Clone(duty.identity), &runningLog{domain: search.Domain{}})}
-	if _, err := unreadable.evicted(t.Context()); err == nil {
+	if _, err := evictedOn(t.Context(), unreadable.identity, unreadable.db); err == nil {
 		t.Fatal("a log that lists no evictions read as one that holds none")
 	}
 	rows, err := e.backends.Fleet.Positions(t.Context())

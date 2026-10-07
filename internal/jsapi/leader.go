@@ -117,6 +117,21 @@ func (l *Leader) Last(ctx context.Context, subject string) (Message, error) {
 	return msg, nil
 }
 
+// First answers the oldest message on subject, or [ErrNoMessage].
+func (l *Leader) First(ctx context.Context, subject string) (Message, error) {
+	msg, err := l.get(ctx, server.JSApiMsgGetRequest{NextFor: subject})
+	if err != nil {
+		return Message{}, err
+	}
+	if msg.Subject != subject {
+		// For [Leader.Last]'s reason: a message of another subject is
+		// not this one's oldest.
+		return Message{}, fmt.Errorf("jsapi: the leader of %s answered with %q for %q",
+			l.stream, msg.Subject, subject)
+	}
+	return msg, nil
+}
+
 // At answers the message at seq, on whatever subject it is, or
 // [ErrNoMessage].
 func (l *Leader) At(ctx context.Context, seq uint64) (Message, error) {

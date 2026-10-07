@@ -1174,7 +1174,8 @@ type Fleet interface {
 // A deletion from the store takes no lock (ADR-0027): an object is stored
 // under a key minted for its one upload and named by that upload's write
 // alone, so no writer is ever re-using an object the collector could be
-// deleting.
+// deleting. The bucket of chunk locks a build that kept files in chunks
+// opened is RETIRED rather than opened ([ObjectStores.RetireChunkLocks]).
 type ObjectStores interface {
 	// AgreeObjectBackend records identity as the fleet's object backend
 	// unless one is recorded, and answers the recorded one: identity
@@ -1191,6 +1192,20 @@ type ObjectStores interface {
 	// ObjectCollection reads the last report, false when none was ever
 	// written.
 	ObjectCollection(ctx context.Context) ([]byte, bool, error)
+
+	// RetireChunkLocks deletes the bucket of chunk locks a build that kept
+	// files in content-addressed chunks opened, reporting whether it was
+	// there. Retiring what is not there is not an error, so every later
+	// call is a no-op.
+	//
+	// A DECISION, NEVER A BOOT STEP, for [LifetimeCounters]' reason: a node
+	// of that build takes a chunk's lock around every write of a chunk the
+	// store already holds and fails the write when the bucket is gone, so
+	// the bucket goes only once no such node is left to write a chunk —
+	// the maintenance duty takes it then (internal/maintenance.
+	// RetiredChunkLockJobs), and takes it again if one comes back and
+	// opens the bucket anew.
+	RetireChunkLocks(ctx context.Context) (bool, error)
 }
 
 // Follows is which chat threads each seat is following.

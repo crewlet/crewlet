@@ -31,9 +31,20 @@ type Source interface {
 	// not apply that might refer to an object.
 	Referenced(ctx context.Context, among []objstore.Key, at statelog.Position) (map[objstore.Key]struct{}, bool, error)
 
-	// Each hands every object the domain refers to to visit, read no
-	// earlier than at, and reports whether the walk was COMPLETE.
-	Each(ctx context.Context, at statelog.Position, visit func(objstore.Key) error) (bool, error)
+	// Each hands every reference the domain holds to visit, read no
+	// earlier than at, and reports whether the walk was COMPLETE. visit is
+	// NEVER CALLED INSIDE A READ of the estate: it asks the backend about
+	// each, a round trip a read's connection must not be held across.
+	Each(ctx context.Context, at statelog.Position, visit func(Reference) error) (bool, error)
+}
+
+// Reference is one row naming an object: the object as the row records it, and
+// the row's owner, as a person reads it.
+type Reference struct {
+	Object objstore.Object
+	// NamedBy is the declaration's owner columns, joined by "/" — a
+	// project and a path.
+	NamedBy string
 }
 
 // References is every source the engine runs.
@@ -146,7 +157,11 @@ func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 			if err != nil {
 				return fmt.Errorf("read the objects %s names: %w", t.Table, err)
 			}
-			err = scanKeys(rows, t, func(k objstore.Key) { out[k] = struct{}{} })
+			err = t.ScanObjectsAmong(rows, func(k objstore.Key) error {
+				out[k] = struct{}{}
+				return nil
+			})
+			_ = rows.Close()
 			if err != nil {
 				return err
 			}
@@ -159,75 +174,58 @@ func (s *tableSource) Referenced(ctx context.Context, among []objstore.Key,
 	return out, complete, nil
 }
 
-// eachPage is how many references one statement of a walk reads: a page of
-// the declaration's keyset ([objstore.ReferenceTable.ReferencesAfter]), held
-// in memory between its read and its visits.
+// eachPage is how many references one read of a walk reads: a page of the
+// declaration's keyset ([objstore.ReferenceTable.ReferencesAfter]), held in
+// memory between its read and its visits.
 //
 // FIVE HUNDRED, the size of the collector's own batch ([judgeBatch]): a page
-// is a few hundred bytes a row, and a smaller one is more statements for no
-// memory anybody needed back.
+// is a few hundred bytes a row, and a smaller one is more reads for no memory
+// anybody needed back.
 const eachPage = judgeBatch
 
-// Each walks every declared table of the domain in ONE read, a keyset page at
-// a time.
+// Each walks every declared table of the domain a keyset page at a time, EACH
+// PAGE IN A READ OF ITS OWN and visited after that read has ended — see
+// [Source.Each]. The walk is complete only where every read was: each is no
+// earlier than at, so a record the node could not apply at any of them is
+// seen.
 func (s *tableSource) Each(ctx context.Context, at statelog.Position,
-	visit func(objstore.Key) error) (bool, error) {
+	visit func(Reference) error) (bool, error) {
 
-	return s.estate.Read(ctx, at, func(tx *sql.Tx) error {
-		for _, t := range s.tables {
-			query, err := t.ReferencesAfter(eachPage)
-			if err != nil {
-				return err
-			}
-			for after := ""; ; {
+	complete := true
+	for _, t := range s.tables {
+		query, err := t.ReferencesAfter(eachPage)
+		if err != nil {
+			return false, err
+		}
+		for after := ""; ; {
+			var page []Reference
+			whole, err := s.estate.Read(ctx, at, func(tx *sql.Tx) error {
 				rows, err := tx.QueryContext(ctx, query, after)
 				if err != nil {
 					return fmt.Errorf("read the objects %s names: %w", t.Table, err)
 				}
-				var page []objstore.Key
-				if err := scanKeys(rows, t, func(k objstore.Key) { page = append(page, k) }); err != nil {
-					return err
-				}
-				for _, k := range page {
-					if err := visit(k); err != nil {
-						return err
-					}
-				}
-				if len(page) < eachPage {
-					break
-				}
-				after = page[len(page)-1].String()
+				defer func() { _ = rows.Close() }()
+				return t.ScanReferences(rows, func(obj objstore.Object, namedBy string) error {
+					page = append(page, Reference{Object: obj, NamedBy: namedBy})
+					return nil
+				})
+			})
+			if err != nil {
+				return false, err
 			}
+			complete = complete && whole
+			for _, ref := range page {
+				if err := visit(ref); err != nil {
+					return false, err
+				}
+			}
+			if len(page) < eachPage {
+				break
+			}
+			after = page[len(page)-1].Object.Key.String()
 		}
-		return nil
-	})
-}
-
-// scanKeys hands every key rows answers over t to visit, the first column of
-// each row, and closes rows.
-func scanKeys(rows *sql.Rows, t objstore.ReferenceTable, visit func(objstore.Key)) error {
-	defer func() { _ = rows.Close() }()
-	cols, err := rows.Columns()
-	if err != nil {
-		return err
 	}
-	dest := make([]any, len(cols))
-	var raw string
-	dest[0] = &raw
-	for i := 1; i < len(dest); i++ {
-		dest[i] = new(any)
-	}
-	for rows.Next() {
-		if err := rows.Scan(dest...); err != nil {
-			return err
-		}
-		k, err := objstore.ParseKey(raw)
-		if err != nil {
-			return fmt.Errorf("%s.%s: %w", t.Table, t.Key, err)
-		}
-		visit(k)
-	}
-	return rows.Err()
+	return complete, nil
 }
 
 // view is what one pass read the references at: a floor per source.

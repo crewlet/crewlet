@@ -48,12 +48,15 @@
 // (internal/objstore/collect) deletes what nothing names once it is past a
 // grace measured both from when the backend stored it and from when its key
 // was minted — and [RecordWithin] is the bound on the write that names a key
-// that makes the second of those safe.
+// that makes the second of those safe. It also abandons, past the same grace,
+// the uploads a backend began and never finished ([Backend.Pending]), which no
+// listing of the objects shows.
 package objstore
 
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -373,4 +376,74 @@ func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 		strings.Join(t.Owner, `, `) + ` FROM ` + t.Table +
 		` WHERE ` + t.Key + ` IS NOT NULL AND ` + t.Key + ` > ?` +
 		` ORDER BY ` + t.Key + ` LIMIT ` + fmt.Sprint(n), nil
+}
+
+// Rows is the part of a statement's result the decoders below read — what
+// *sql.Rows offers, so a decoder is exercised without a database.
+type Rows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+// ScanObjectsAmong hands visit every key rows answers to [ReferenceTable.ObjectsAmong]'s
+// statement over t. The caller closes rows.
+//
+// THE DECODER LIVES BESIDE THE STATEMENT because the columns are this
+// package's: the collector and the backup each read these rows, and a
+// private decoder in each was two copies of one column layout that nothing
+// held to the statement or to each other — a column added here would be
+// fixed in one and mis-scanned by the other.
+func (t ReferenceTable) ScanObjectsAmong(rows Rows, visit func(Key) error) error {
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return err
+		}
+		k, err := ParseKey(raw)
+		if err != nil {
+			return fmt.Errorf("%s.%s: %w", t.Table, t.Key, err)
+		}
+		if err := visit(k); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// ScanReferences hands visit every row rows answers to [ReferenceTable.ReferencesAfter]'s
+// statement over t: the [Object] the row names, and namedBy — the row's owner
+// columns joined by "/", the file a person would look the object up as. The
+// caller closes rows; see [ReferenceTable.ScanObjectsAmong] for why the decoder is here.
+func (t ReferenceTable) ScanReferences(rows Rows, visit func(obj Object, namedBy string) error) error {
+	var (
+		key, hash string
+		size      int64
+		owner     = make([]sql.NullString, len(t.Owner))
+	)
+	dest := []any{&key, &hash, &size}
+	for i := range owner {
+		dest = append(dest, &owner[i])
+	}
+	parts := make([]string, len(owner))
+	for rows.Next() {
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+		k, err := ParseKey(key)
+		if err != nil {
+			return fmt.Errorf("%s.%s: %w", t.Table, t.Key, err)
+		}
+		h, err := ParseHash(hash)
+		if err != nil {
+			return fmt.Errorf("%s.%s of %s: %w", t.Table, t.Hash, k, err)
+		}
+		for i, o := range owner {
+			parts[i] = o.String
+		}
+		if err := visit(Object{Key: k, Hash: h, Size: size}, strings.Join(parts, "/")); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }

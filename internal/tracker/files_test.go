@@ -2,10 +2,13 @@ package tracker_test
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,17 +75,38 @@ func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore
 	return out
 }
 
-// every is every object the collector's audit walk finds named, with how
-// often it was visited.
-func (r *roundTrip) every(t *testing.T) map[objstore.Key]int {
+// readWatch is this domain as the collector reads it, and whether one of its
+// reads is open at this instant.
+type readWatch struct {
+	tracker.ObjectEstate
+	open atomic.Bool
+}
+
+func (w *readWatch) Read(ctx context.Context, at statelog.Position, fn func(*sql.Tx) error) (bool, error) {
+	w.open.Store(true)
+	defer w.open.Store(false)
+	return w.ObjectEstate.Read(ctx, at, fn)
+}
+
+// every is every reference the collector's audit walk finds, by the object it
+// names — and the walk is held to visiting each OUTSIDE a read of the estate,
+// since the audit asks the backend about each one and a read must not be held
+// open across those round trips.
+func (r *roundTrip) every(t *testing.T) map[objstore.Key][]collect.Reference {
 	t.Helper()
-	sources, err := collect.Sources(references.All, tracker.ObjectEstate{Reader: r.reader})
+	watch := &readWatch{ObjectEstate: tracker.ObjectEstate{Reader: r.reader}}
+	sources, err := collect.Sources(references.All, watch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := map[objstore.Key]int{}
-	complete, err := sources[0].Each(t.Context(), statelog.Position{}, func(k objstore.Key) error {
-		out[k]++
+	out := map[objstore.Key][]collect.Reference{}
+	complete, err := sources[0].Each(t.Context(), statelog.Position{}, func(ref collect.Reference) error {
+		if watch.open.Load() {
+			// RETURNED, never t.Fatal: a goroutine exit inside the
+			// read would leave the read's connection held.
+			return fmt.Errorf("the audit walk visited %s inside a read of the estate", ref.Object.Key)
+		}
+		out[ref.Object.Key] = append(out[ref.Object.Key], ref)
 		return nil
 	})
 	if err != nil || !complete {
@@ -176,9 +200,11 @@ func TestTheCollectorsReadsFindEveryNamedObject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	var keys []objstore.Key
+	objects := map[objstore.Key]objstore.Object{}
 	const files = 520 // past one of the walk's 500-row pages
 	for i := range files {
 		o := r.objectOf([]byte(fmt.Sprintf("object %d of the reference fixture", i)))
+		objects[o.Key] = o
 		if _, err := r.writer.PutFile(t.Context(), fmt.Sprintf("op-%d", i), tracker.FilePut{
 			Project: "ENG", Path: fmt.Sprintf("refs/%d.md", i), Object: o,
 		}); err != nil {
@@ -209,9 +235,16 @@ func TestTheCollectorsReadsFindEveryNamedObject(t *testing.T) {
 	if len(all) != files-1 {
 		t.Fatalf("the audit walk answers %d objects, want the %d live", len(all), files-1)
 	}
-	for k, n := range all {
-		if n != 1 {
-			t.Fatalf("the audit walk visited %s %d times", k, n)
+	for i, k := range keys[1:] {
+		refs := all[k]
+		if len(refs) != 1 {
+			t.Fatalf("the audit walk visited %s %d times", k, len(refs))
+		}
+		// WHAT THE ROW SAYS THE BYTES ARE, and whose they are: the
+		// audit checks the store's object against the first, and names
+		// the second when it is lost.
+		if want := fmt.Sprintf("ENG/refs/%d.md", i+1); refs[0].Object != objects[k] || refs[0].NamedBy != want {
+			t.Fatalf("the walk answered %+v, want %+v named by %s", refs[0], objects[k], want)
 		}
 	}
 }

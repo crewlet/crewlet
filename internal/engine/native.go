@@ -508,7 +508,7 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 	}
 	refs, err := collect.Sources(references.All, estates...)
 	if err == nil {
-		err = e.startObjectCollector(ctx, refs)
+		err = e.startObjectCollector(ctx, refs, e.chunkEra(n))
 	}
 	if err != nil {
 		log.WarnContext(ctx, "object_collector_not_started", "error", err)

@@ -2,6 +2,7 @@ package objstore
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -277,5 +278,106 @@ func TestAReadIsBudgetedBothLegsAtTheFloor(t *testing.T) {
 	}
 	if ReadStall != 2*MiBPace {
 		t.Errorf("ReadStall = %v, want two paces", ReadStall)
+	}
+}
+
+// fakeRows answers a statement's rows from values, so the decoders are read
+// without a database: each row is assigned into its destinations in order,
+// as database/sql's own conversion would for these column types.
+type fakeRows struct {
+	rows [][]any
+	at   int
+}
+
+func (r *fakeRows) Next() bool { r.at++; return r.at <= len(r.rows) }
+func (r *fakeRows) Err() error { return nil }
+func (r *fakeRows) Scan(dest ...any) error {
+	row := r.rows[r.at-1]
+	if len(dest) != len(row) {
+		return fmt.Errorf("scan of %d columns into %d destinations", len(row), len(dest))
+	}
+	for i, d := range dest {
+		switch d := d.(type) {
+		case *string:
+			*d = row[i].(string)
+		case *int64:
+			*d = row[i].(int64)
+		case *sql.NullString:
+			if row[i] == nil {
+				*d = sql.NullString{}
+			} else {
+				*d = sql.NullString{String: row[i].(string), Valid: true}
+			}
+		default:
+			return fmt.Errorf("column %d: destination %T", i, d)
+		}
+	}
+	return nil
+}
+
+// THE DECODERS READ THE COLUMNS THE STATEMENTS NAME, IN THEIR ORDER — key,
+// digest, size, then every owner column — and refuse a value that is not a
+// key or a digest naming the column it came from, so a corrupt row stops the
+// walk rather than being handed on as an object nobody stored. They are the
+// ONE decoder of each statement: the collector and the backup both read
+// through them.
+func TestTheDecodersReadTheStatementsColumns(t *testing.T) {
+	t.Parallel()
+	table := ReferenceTable{Domain: "tracker", Table: "tracker_files", Key: "object",
+		Hash: "hash", Size: "size", Owner: []string{"project_key", "path"}}
+	k1 := KeyAt(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
+	k2 := KeyAt(time.Date(2026, 10, 6, 13, 0, 0, 0, time.UTC))
+	h := HashOf([]byte("a"))
+
+	type ref struct {
+		obj     Object
+		namedBy string
+	}
+	var got []ref
+	err := table.ScanReferences(&fakeRows{rows: [][]any{
+		{k1.String(), string(h), int64(1), "ENG", "docs/a.md"},
+		{k2.String(), string(h), int64(1), nil, "b.md"},
+	}}, func(obj Object, namedBy string) error {
+		got = append(got, ref{obj, namedBy})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ref{{Object{Key: k1, Hash: h, Size: 1}, "ENG/docs/a.md"},
+		{Object{Key: k2, Hash: h, Size: 1}, "/b.md"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("ScanReferences = %+v, want %+v", got, want)
+	}
+
+	for name, row := range map[string][]any{
+		"tracker_files.object": {"not-a-key", string(h), int64(1), "ENG", "a"},
+		"tracker_files.hash":   {k1.String(), "nope", int64(1), "ENG", "a"},
+	} {
+		err := table.ScanReferences(&fakeRows{rows: [][]any{row}},
+			func(Object, string) error { t.Errorf("%s: a bad row was visited", name); return nil })
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("a bad %s: %v, want an error naming the column", name, err)
+		}
+	}
+	stop := errors.New("stop")
+	if err := table.ScanReferences(&fakeRows{rows: [][]any{
+		{k1.String(), string(h), int64(1), "ENG", "a"},
+	}}, func(Object, string) error { return stop }); !errors.Is(err, stop) {
+		t.Errorf("a visitor's error came back as %v", err)
+	}
+
+	var keys []Key
+	if err := table.ScanObjectsAmong(&fakeRows{rows: [][]any{{k1.String()}, {k2.String()}}},
+		func(k Key) error { keys = append(keys, k); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys[0] != k1 || keys[1] != k2 {
+		t.Errorf("ScanObjectsAmong = %v, want [%s %s]", keys, k1, k2)
+	}
+	if err := table.ScanObjectsAmong(&fakeRows{rows: [][]any{{string(h)}}},
+		func(Key) error { t.Error("a digest was visited as a key"); return nil }); err == nil ||
+		!strings.Contains(err.Error(), "tracker_files.object") {
+		t.Errorf("a digest in the key column: %v, want an error naming the column", err)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,19 +40,26 @@ func serveObjects(t *testing.T, block *queries.FleetObjects) *httptest.Server {
 }
 
 func reported(missing ...objstore.Key) *queries.FleetObjects {
+	var files []collect.MissingFile
+	for i, k := range missing {
+		files = append(files, collect.MissingFile{Object: k, NamedBy: fmt.Sprintf("ENG/lost-%d.md", i)})
+	}
+	found := &collect.AuditFindings{At: objectsAt, Completed: true, Referenced: 1828,
+		Missing: len(missing), MissingFiles: files}
 	block := queries.RenderObjects(engine.CollectionReport{
 		Node: "data-a", Backend: "s3:https://s3.example.com/files/acme/",
 		Status: collect.Status{
-			Collect: collect.CollectionReport{Completed: true, Listed: 1840, Deleted: 12, At: objectsAt},
+			Collect: collect.CollectionReport{Completed: true, Listed: 1840, Deleted: 12,
+				Retired: 3, Abandoned: 1, At: objectsAt},
 			Audit: collect.AuditReport{Completed: true, Referenced: 1828,
-				Missing: len(missing), MissingObjects: missing, At: objectsAt},
+				Missing: len(missing), At: objectsAt, Found: found},
 		},
 	})
 	return &block
 }
 
 // STATUS SAYS WHERE THE FILES ARE AND WHAT THE COLLECTOR FOUND, and names
-// every missing object — the one thing an operator must act on.
+// every file that cannot be read — the one thing an operator must act on.
 func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 	t.Parallel()
 	out, _, err := cli(t, "objects", "status", bootstrapForURL(t, serveObjects(t, reported()).URL))
@@ -59,7 +67,8 @@ func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"an S3 bucket (https://s3.example.com/files/acme/)", "data-a",
-		"1840 objects listed, 12 deleted", "1828 objects named, 0 missing"} {
+		"1840 objects listed, 12 deleted, 3 chunk(s) of an earlier build retired, " +
+			"1 unfinished upload(s) abandoned", "1828 files named, 0 missing, 0 damaged"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status does not say %q:\n%s", want, out)
 		}
@@ -70,8 +79,42 @@ func TestObjectsStatusNamesTheBackendAndWhatIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "1 object(s)") || !strings.Contains(out, lost.String()) {
-		t.Errorf("status does not name the missing object:\n%s", out)
+	if !strings.Contains(out, "1 file(s) cannot be read") ||
+		!strings.Contains(out, "ENG/lost-0.md (missing, object "+lost.String()+")") {
+		t.Errorf("status does not name the missing file:\n%s", out)
+	}
+}
+
+// A FAILED AUDIT IS SAID BESIDE WHAT THE LAST WHOLE ONE FOUND, never in its
+// place, and a collection that stopped part of the way says what it deleted
+// first — never that it deleted nothing.
+func TestObjectsStatusKeepsTheFindingsAndTheCountsOfAPassThatStopped(t *testing.T) {
+	t.Parallel()
+	lost := objstore.KeyAt(objectsAt)
+	block := queries.RenderObjects(engine.CollectionReport{
+		Node: "data-a", Backend: "nats",
+		Status: collect.Status{
+			Collect: collect.CollectionReport{Listed: 1840, Deleted: 500, At: objectsAt,
+				Skipped: "a record this node could not apply may refer to objects in the store"},
+			Audit: collect.AuditReport{At: objectsAt, Error: "the bucket did not answer",
+				Found: &collect.AuditFindings{At: objectsAt.Add(-24 * time.Hour), Completed: true,
+					Referenced: 9, Damaged: 1,
+					MissingFiles: []collect.MissingFile{{Object: lost, NamedBy: "ENG/a.md", Damaged: true}}}},
+		},
+	})
+	out, _, err := cli(t, "objects", "status", bootstrapForURL(t, serveObjects(t, &block).URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"500 deleted", "(stopped judging: a record this node",
+		"9 files named, 0 missing, 1 damaged", "a later audit, at", "stopped: the bucket did not answer",
+		"ENG/a.md (damaged, object " + lost.String() + ")"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status does not say %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "deleted nothing") {
+		t.Errorf("a pass that deleted 500 objects says it deleted nothing:\n%s", out)
 	}
 }
 

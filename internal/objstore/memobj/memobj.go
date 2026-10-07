@@ -130,6 +130,18 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 	return nil
 }
 
+// Pending implements [objstore.Backend]: the twin has no upload in pieces —
+// a put reads its whole body before it stores anything — so nothing is ever
+// begun and left unfinished.
+func (b *Backend) Pending(ctx context.Context, _ func(objstore.Pending) error) error {
+	return ctx.Err()
+}
+
+// Abandon implements [objstore.Backend]: there is never anything to abandon.
+func (b *Backend) Abandon(ctx context.Context, _ objstore.Pending) error {
+	return ctx.Err()
+}
+
 func (o held) info(name string) objstore.Info {
 	return objstore.Info{Name: name, Size: int64(len(o.data)), Written: o.written, Digest: o.digest}
 }

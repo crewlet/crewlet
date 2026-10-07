@@ -10,7 +10,8 @@
 // the backend's, that a read whose context ends stops rather than hands over
 // what it had in hand, that a delete leaves nothing a listing could find, and
 // that a listing visits every name it holds — verbatim, once, however slowly
-// it is read.
+// it is read — and that an upload begun and never finished, which no listing
+// of the names shows, is found and removed by the two verbs that exist for it.
 package objstoretest
 
 import (
@@ -47,6 +48,13 @@ type Options struct {
 	// across: long enough to outlast whatever the backend's listing could
 	// time out or restart on. Zero is a second.
 	SlowListing time.Duration
+
+	// Unfinished leaves an upload begun and never finished in b — by the
+	// backend's own means, as a process killed mid-upload would — and
+	// answers it as [objstore.Backend.Pending] should: its name (empty
+	// where the backend cannot know one) and its ID. Nil is a backend that
+	// can never hold one, which the suite then holds to listing none.
+	Unfinished func(t *testing.T, b objstore.Backend) objstore.Pending
 }
 
 // defaultPiece is a piece for a backend with none of its own.
@@ -80,6 +88,7 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"a_listing_stops_at_the_visitors_error", aListingStopsAtTheVisitorsError},
 		{"a_listing_waits_for_a_slow_visitor", aListingWaitsForASlowVisitor},
 		{"names_are_kept_verbatim", namesAreKeptVerbatim},
+		{"an_unfinished_upload_is_pending_until_abandoned", anUnfinishedUploadIsPendingUntilAbandoned},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -534,5 +543,89 @@ func namesAreKeptVerbatim(t *testing.T, b objstore.Backend, _ Options) {
 		if data, err := get(t, b, name, 0, -1); err != nil || !bytes.Equal(data, []byte{byte(i)}) {
 			t.Fatalf("Get %q = %v, %v", name, data, err)
 		}
+	}
+}
+
+// pending is every upload a pending listing visited.
+func pending(t *testing.T, b objstore.Backend) []objstore.Pending {
+	t.Helper()
+	var out []objstore.Pending
+	if err := b.Pending(t.Context(), func(p objstore.Pending) error {
+		out = append(out, p)
+		return nil
+	}); err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	return out
+}
+
+// AN UPLOAD BEGUN AND NEVER FINISHED IS PENDING UNTIL IT IS ABANDONED — and
+// nothing else is: neither an object that finished, nor a put that failed
+// while it ran, which cleans up after itself. It is the one thing a backend
+// holds that no listing of its names shows, so a backend that could not find
+// it would keep it, and bill for it, for ever; and one that answered a
+// finished object here would have the collector abandon live bytes.
+func anUnfinishedUploadIsPendingUntilAbandoned(t *testing.T, b objstore.Backend, opts Options) {
+	put(t, b, "finished", large(opts))
+	if err := b.Put(t.Context(), "failed", &failing{r: bytes.NewReader(large(opts)),
+		fail: errors.New("the client went away")}, objstore.PutMeta{}); err == nil {
+		t.Fatal("a put over a failing reader succeeded")
+	}
+	if opts.Unfinished == nil {
+		if got := pending(t, b); len(got) != 0 {
+			t.Fatalf("a backend that cannot hold an unfinished upload listed %+v", got)
+		}
+		if err := b.Abandon(t.Context(), objstore.Pending{Name: "finished", ID: "anything"}); err != nil {
+			t.Fatalf("abandoning what is not there = %v", err)
+		}
+		return
+	}
+	before := time.Now().Add(-time.Minute)
+	want := []objstore.Pending{opts.Unfinished(t, b), opts.Unfinished(t, b)}
+	got := pending(t, b)
+	if len(got) != len(want) {
+		t.Fatalf("Pending listed %+v, want exactly the two unfinished uploads %+v — "+
+			"never the finished object or the failed put", got, want)
+	}
+	for _, w := range want {
+		i := slices.IndexFunc(got, func(p objstore.Pending) bool { return p.ID == w.ID })
+		switch {
+		case i < 0:
+			t.Fatalf("Pending did not list %+v; it listed %+v", w, got)
+		case got[i].Name != w.Name:
+			t.Fatalf("Pending named %s %q, want %q", w.ID, got[i].Name, w.Name)
+		case got[i].Started.Before(before) || got[i].Started.After(time.Now().Add(time.Minute)):
+			t.Fatalf("Pending dated %s %v, want about now", w.ID, got[i].Started)
+		case got[i].Started.Location() != time.UTC:
+			t.Fatalf("Pending dated %s in %v; every instant here is UTC", w.ID, got[i].Started.Location())
+		}
+	}
+
+	stop := errors.New("enough")
+	visits := 0
+	if err := b.Pending(t.Context(), func(objstore.Pending) error {
+		visits++
+		return stop
+	}); !errors.Is(err, stop) || visits != 1 {
+		t.Fatalf("Pending = %v after %d visits; want the visitor's error after one", err, visits)
+	}
+
+	if err := b.Abandon(t.Context(), got[0]); err != nil {
+		t.Fatalf("Abandon %+v: %v", got[0], err)
+	}
+	if rest := pending(t, b); len(rest) != 1 || rest[0].ID != got[1].ID {
+		t.Fatalf("after abandoning %s, Pending listed %+v; want %s alone", got[0].ID, rest, got[1].ID)
+	}
+	if err := b.Abandon(t.Context(), got[0]); err != nil {
+		t.Fatalf("abandoning an upload a second time = %v; abandoning what is gone is not an error", err)
+	}
+	if err := b.Abandon(t.Context(), got[1]); err != nil {
+		t.Fatalf("Abandon %+v: %v", got[1], err)
+	}
+	if rest := pending(t, b); len(rest) != 0 {
+		t.Fatalf("after abandoning both, Pending listed %+v", rest)
+	}
+	if data, err := get(t, b, "finished", 0, -1); err != nil || !bytes.Equal(data, large(opts)) {
+		t.Fatalf("abandoning the unfinished uploads touched a finished object: %d bytes, %v", len(data), err)
 	}
 }

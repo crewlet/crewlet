@@ -124,7 +124,7 @@ type embedDuty struct {
 
 	// identity is every log whose domain claims identity, whose eviction
 	// records are how the fleet says a node is gone — the vector log
-	// carries none of its own ([embedDuty.evicted]) — and db the node whose
+	// carries none of its own ([evictedOn]) — and db the node whose
 	// replicated estate they are read from.
 	identity []*runningLog
 	db       *store.DB
@@ -440,7 +440,7 @@ func (d *embedDuty) keepClaimed(ctx context.Context, cancel context.CancelFunc) 
 // THE READERS ARE THE COUNTED SET — the positions register's rows for this
 // log, and every live data node that has not reported yet — because that is
 // every node that applies the log, less every node the fleet has EVICTED
-// ([embedDuty.evicted]): an operator's word that a node is not coming back,
+// ([evictedOn]): an operator's word that a node is not coming back,
 // and without it an old build's row on a machine nobody will start again would
 // hold the index back for the life of the deployment.
 func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
@@ -452,26 +452,47 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	_, deferring := d.log.runner.Deferred()
 	out.Current = d.log.runner.Committed().Seq >= stats.LastSeq && !deferring
 
-	rows, err := d.register(ctx)
-	if err != nil {
-		return out, fmt.Errorf("read the positions register: %w", err)
-	}
-	var live []statelog.Presence
-	if d.holders != nil {
-		if live, err = d.holders.LiveData(ctx); err != nil {
-			return out, fmt.Errorf("read the live data nodes: %w", err)
-		}
-	}
-	tombs, err := d.evicted(ctx)
+	readers, err := countedReaders(ctx, d.log.domain.Name(), d.register, d.holders, d.identity, d.db)
 	if err != nil {
 		return out, err
 	}
-	out.Readers = statelog.Readers(statelog.CountedSet(time.Now().UTC(),
-		reportedPositions(rows, d.log.domain.Name()), live, tombs))
+	out.Readers = readers
 	return out, nil
 }
 
-// evicted is every node the fleet has evicted and not readmitted, as a
+// countedReaders is the record version every node of domain's counted set
+// reads on its log ([statelog.Readers] over [statelog.CountedSet]): the
+// positions register's rows for the log, every live data node that has not
+// reported yet, less every node the fleet has evicted ([evictedOn]).
+//
+// ONE READING for every question of the form "does every node that applies
+// this log read what I am about to rely on" — the index step's, and the
+// object store's chunk era — because two copies of the census are two
+// answers to who is still in the fleet, and the copy that forgot the
+// evictions would hold its gate shut for a machine nobody will start again.
+func countedReaders(ctx context.Context, domain string,
+	register func(context.Context) ([]coord.NodePositions, error), holders liveData,
+	identity []*runningLog, db *store.DB) (map[string]int, error) {
+
+	rows, err := register(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the positions register: %w", err)
+	}
+	var live []statelog.Presence
+	if holders != nil {
+		if live, err = holders.LiveData(ctx); err != nil {
+			return nil, fmt.Errorf("read the live data nodes: %w", err)
+		}
+	}
+	tombs, err := evictedOn(ctx, identity, db)
+	if err != nil {
+		return nil, err
+	}
+	return statelog.Readers(statelog.CountedSet(time.Now().UTC(),
+		reportedPositions(rows, domain), live, tombs)), nil
+}
+
+// evictedOn is every node the fleet has evicted and not readmitted, as a
 // tombstone the counted set subtracts once its fence window has passed.
 //
 // FROM THE IDENTITY-CLAIMING LOGS, because the vector log carries no eviction
@@ -483,8 +504,8 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 // an error rather than none, because "evicted nowhere" read off a table nobody
 // read would hold the index back for a node an operator released — or, read
 // the other way, release it for one they did not.
-func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
-	if len(d.identity) == 0 || d.db == nil {
+func evictedOn(ctx context.Context, identity []*runningLog, db *store.DB) ([]statelog.Tombstone, error) {
+	if len(identity) == 0 || db == nil {
 		return nil, nil
 	}
 	type seen struct {
@@ -492,12 +513,12 @@ func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
 		at   time.Time
 	}
 	evicted := map[string]*seen{}
-	for _, running := range d.identity {
+	for _, running := range identity {
 		lister, ok := running.domain.(evictionLister)
 		if !ok {
 			return nil, fmt.Errorf("the %s log lists no evictions", running.domain.Name())
 		}
-		rows, err := lister.Evictions(ctx, d.db.Replicated().Reader())
+		rows, err := lister.Evictions(ctx, db.Replicated().Reader())
 		if err != nil {
 			return nil, fmt.Errorf("read the %s log's evictions: %w",
 				running.domain.Name(), err)
@@ -519,7 +540,7 @@ func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
 	}
 	var out []statelog.Tombstone
 	for node, s := range evicted {
-		if s.logs == len(d.identity) {
+		if s.logs == len(identity) {
 			out = append(out, statelog.Tombstone{NodeID: node, At: s.at})
 		}
 	}

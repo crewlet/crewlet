@@ -66,8 +66,12 @@
 //     store never reuses one ([objstore.Key]) — so every object ever deleted
 //     would leave a message the hourly listing ships for ever. Metadata
 //     first, so an object never names pieces that are gone; a crash
-//     between the two leaves pieces nothing names, which are the store's to
-//     sweep, never an object half there.
+//     between the two leaves pieces nothing names — never an object half
+//     there — which are an unfinished upload like any other.
+//   - AN UNFINISHED UPLOAD IS FOUND THROUGH THE STREAM TOO ([Backend.Pending]):
+//     pieces no metadata names, which a put killed before its last message
+//     and a delete interrupted between its purges both leave, and which no
+//     listing of the names shows. The library has no word for them at all.
 package natsobj
 
 import (
@@ -78,7 +82,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -588,6 +595,16 @@ const listResets = 5
 // stream keeps for ever until something purges it, and the collector clears
 // it with the same delete it makes of any name ([Backend.Delete]).
 func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) error {
+	return b.eachMeta(ctx, func(info *jetstream.ObjectInfo) error {
+		return visit(infoOf(info))
+	})
+}
+
+// eachMeta hands visit the newest metadata on every name's subject, its
+// ModTime the instant the broker stored it — a delete marker an earlier
+// build left included — and logs and steps over metadata it cannot decode.
+// See [Backend.List] for why it is a consumer of its own.
+func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo) error) error {
 	cons, err := b.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
 		FilterSubjects:   []string{metaSubjects},
 		DeliverPolicy:    jetstream.DeliverLastPerSubjectPolicy,
@@ -621,7 +638,7 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 				"error", err, "detail", "an object no get could read; it is left where it is")
 		default:
 			info.ModTime = meta.Timestamp
-			if err := visit(infoOf(&info)); err != nil {
+			if err := visit(&info); err != nil {
 				return err
 			}
 		}
@@ -629,6 +646,89 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 			return nil
 		}
 	}
+}
+
+// pieceSubjects is every subject the bucket keeps an object's pieces on:
+// `$O.<bucket>.C.<nuid>`, one per object.
+const pieceSubjects = "$O." + Bucket + ".C.>"
+
+// Pending implements [objstore.Backend]: every subject holding pieces that no
+// object's metadata names, dated by its oldest piece.
+//
+// THE ONLY UPLOADS THE BROKER CAN LEAVE UNFINISHED, and nothing names them:
+// the object store names an object's pieces only in the metadata message that
+// completes it, so the pieces of a put that died before that message — a
+// process killed mid-upload — and the pieces a delete interrupted between its
+// two purges ([Backend.Delete]) are on a subject no name reaches, and a
+// listing of the names never shows them. Each is [objstore.Pending] with no
+// name and its piece identifier as the ID.
+//
+// IN THIS ORDER — the piece subjects, then the metadata, then each orphan's
+// oldest piece — so a put that completes during the walk is never answered:
+// its metadata, written after its pieces, is read after them too. One that is
+// still running is answered, as every put in flight is pending; the collector
+// abandons only what began longer ago than a put may take. Every read is the
+// LEADER's: the subject listing is its stream info, and an orphan's oldest
+// piece is its message read ([jsapi.Leader]) — a replica behind the quorum
+// would answer a subject as holding nothing it in fact holds. A subject the
+// leader holds nothing on by then was finished or purged in between, and is
+// stepped over.
+func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
+	held, err := b.stream.Info(ctx, jetstream.WithSubjectFilter(pieceSubjects))
+	if err != nil {
+		return fmt.Errorf("natsobj: list the bucket's pieces: %w", err)
+	}
+	// THE CANDIDATES ARE THE SUBJECT LISTING ITSELF, whittled down by the
+	// metadata walk, so the pass holds no more than the broker's answer
+	// already did — never a second copy of the bucket's inventory.
+	orphans := held.State.Subjects
+	if len(orphans) == 0 {
+		return nil
+	}
+	err = b.eachMeta(ctx, func(info *jetstream.ObjectInfo) error {
+		// A DELETE MARKER NAMES NOTHING, whatever NUID it kept: the
+		// delete that wrote it purged the pieces, and pieces still on
+		// its subject are the leftovers of one that failed between.
+		if !info.Deleted && info.NUID != "" {
+			delete(orphans, pieceSubject(info.NUID))
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, subject := range slices.Sorted(maps.Keys(orphans)) {
+		nuid, ok := strings.CutPrefix(subject, pieceSubject(""))
+		if !ok {
+			continue
+		}
+		first, err := b.leader.First(ctx, subject)
+		switch {
+		case errors.Is(err, jsapi.ErrNoMessage):
+			continue
+		case err != nil:
+			return fmt.Errorf("natsobj: read the oldest piece on %s: %w", subject, err)
+		}
+		if err := visit(objstore.Pending{ID: nuid, Started: first.Time.UTC()}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Abandon implements [objstore.Backend]: a purge of the pieces' subject.
+//
+// THE ID IS A SINGLE SUBJECT TOKEN or it is refused: it is spliced into the
+// subject the purge filters on, and one carrying a wildcard or a dot would
+// purge the pieces of every object in the bucket.
+func (b *Backend) Abandon(ctx context.Context, p objstore.Pending) error {
+	if p.ID == "" || strings.ContainsAny(p.ID, ".*> \t\r\n") {
+		return fmt.Errorf("natsobj: abandon %q: not a piece identifier", p.ID)
+	}
+	if err := b.stream.Purge(ctx, jetstream.WithPurgeSubject(pieceSubject(p.ID))); err != nil {
+		return fmt.Errorf("natsobj: abandon the pieces %s: %w", p.ID, err)
+	}
+	return nil
 }
 
 // drop deletes a consumer once its listing or its get is over, rather than

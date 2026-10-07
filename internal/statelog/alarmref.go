@@ -88,9 +88,11 @@ var alarmMeaning = map[Kind]string{
 		"its census allows — 125 a day per agent seat (at least one seat), " +
 		"plus what the object store's collector reads on its own schedule — " +
 		"so every sizing decision under it is stale.",
-	KindObjectsMissing: "Parts of the company's files are not in the object " +
-		"store: the collector's last audit asked the store for every chunk the " +
-		"estate names, and some were not there. Those files cannot be read in full.",
+	KindObjectsMissing: "Some of the company's files cannot be read: the " +
+		"collector's last audit asked the object store for every file's bytes, " +
+		"and some were not there, or were there at the wrong size or under the " +
+		"wrong digest. Those files cannot be downloaded or read until they are " +
+		"restored.",
 }
 
 const alarmHeader = `# Alarms

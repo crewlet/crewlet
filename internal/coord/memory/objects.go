@@ -42,3 +42,9 @@ func (f *Fleet) ObjectCollection(context.Context) ([]byte, bool, error) {
 	}
 	return slices.Clone(f.objectCollection), true, nil
 }
+
+// RetireChunkLocks has nothing to retire: the twin lives and dies with its
+// process, so no earlier build's chunk locks can exist in it.
+func (f *Fleet) RetireChunkLocks(context.Context) (bool, error) {
+	return false, nil
+}
