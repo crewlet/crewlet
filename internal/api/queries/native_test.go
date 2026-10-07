@@ -522,7 +522,8 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 		map[string]any{}); err == nil {
 		t.Error("a thread asked of no item was answered")
 	}
-	// AN EMPTY THREAD IS A LIST: an absent key reads like an older node.
+	// AN EMPTY THREAD IS A LIST: an absent key reads like an answer that
+	// failed to carry one.
 	w.detail = tracker.TaskDetail{Task: tracker.Task{ID: "t-2", Key: "ENG-2"}}
 	got, _ = askNative(t, queries.Sources{Work: w}, "work_comments",
 		map[string]any{"item": "ENG-2"})

@@ -107,8 +107,8 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 		t.Errorf("nodes for t-2 = %#v; want node-b alone", other["nodes"])
 	}
 	// A SHORT TURN IS NOT A CUT ONE. The flag has to be present and false,
-	// or a client cannot tell "read to the end" from a build that predates
-	// the field — and would have to guess, which is what it was doing.
+	// or a client cannot tell "read to the end" from an answer that failed
+	// to say — and would have to guess, which is what it was doing.
 	if got["truncated"] != false {
 		t.Errorf("truncated = %#v on a three-event turn, want an explicit false",
 			got["truncated"])

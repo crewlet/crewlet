@@ -856,13 +856,10 @@ func TestAClientThatHangsUpStillLeavesARecord(t *testing.T) {
 // secret among them is a secret at rest in the audit log — readable by
 // everyone who can read an event, and impossible to un-write.
 //
-// `x-gitlab-token` is here because of what put it there. The provisioner
-// registered the minted signing key in GitLab's plaintext `token` attribute
-// rather than `signing_token`, so GitLab echoed a 32-byte HMAC key back on
-// every single delivery, and it was copied verbatim into the stored headers.
-// The provisioning bug is fixed and this engine no longer sets that field,
-// but a hook created by an older version still carries the old value and
-// still sends it.
+// `x-gitlab-token` is one of them: GitLab sends a hook's plaintext secret
+// token verbatim in it on every delivery whenever one is set — by hand, by
+// another tool, or by a provisioner that put a signing key in `token` rather
+// than `signing_token` — and a stored delivery would keep it at rest.
 func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
@@ -876,7 +873,7 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 		"webhook-signature": gitlabSignature(t, gitlabSecret, id, ts, body),
 		"X-Gitlab-Event":    "Issue Hook",
 		// The three shapes a credential arrives in.
-		"X-Gitlab-Token": "whsec_the-key-an-old-hook-still-echoes",
+		"X-Gitlab-Token": "whsec_the-key-a-plaintext-hook-echoes",
 		"Authorization":  "Bearer a-real-looking-token",
 		"Cookie":         "session=abc123",
 	}
@@ -893,7 +890,7 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	for _, secret := range []string{
-		"whsec_the-key-an-old-hook-still-echoes",
+		"whsec_the-key-a-plaintext-hook-echoes",
 		"a-real-looking-token",
 		"session=abc123",
 	} {
