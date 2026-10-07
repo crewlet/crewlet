@@ -557,9 +557,11 @@ than adapt:
 
 **What a failure costs depends on who asked, so nothing in the provider
 retries.** For a turn starting — diary and episode recall, a search's query
-vector — a timed-out or refused call is *no vector*: recall carries on with
-recency and a hybrid search with its keyword half, and a retry would be spent
-inside a prefetch somebody is waiting on. For the knowledge corpus, a failure is
+vector — a timed-out or refused call is *no vector*: personal memory keeps its
+recent half, `## Similar prior work` renders nothing and `query_episodes` says
+its search could not run (a recent turn is not similar work), and a hybrid
+search serves its keyword half — and a retry would be spent inside a prefetch
+somebody is waiting on. For the knowledge corpus, a failure is
 a backlog, and the duty asks again on its next tick. What the provider gives
 every caller instead is *which* failure it was, in three classes: **refused**
 (HTTP 400, 413 or 422, or an input past the bound — sent again unchanged it
