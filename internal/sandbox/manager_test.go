@@ -72,7 +72,7 @@ func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 
 	req := launchReq("t1")
 	req.Spec = rig.manager.BuildSpec(SpecInput{CodingAgent: "claude-code"})
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 

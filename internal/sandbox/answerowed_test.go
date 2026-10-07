@@ -248,7 +248,7 @@ func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, _ PendingRun) {
 		rig.resumer.during = nil
 		rig.now = rig.now.Add(time.Hour)
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, launchReq("t1")); err != nil {
 			t.Errorf("relaunch: %v", err)
 			return
 		}

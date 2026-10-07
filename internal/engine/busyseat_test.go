@@ -29,8 +29,9 @@ import (
 // fetched. For the length of the run each waiting message went round fetch,
 // screen, answer lookup, publish, ack, at whatever rate the broker served.
 //
-// Now the coordinator holds the seat's inbox from the moment the run starts
-// holding it, so the mail is not fetched at all: no dispatch, no requeue, no
+// Now the coordinator holds the seat's inbox from the moment the launch writes
+// the run's row — not from the started event a separate subscription processes
+// later — so the mail is not fetched at all: no dispatch, no requeue, no
 // publish. When the run stops holding the seat — here, its completion resumes
 // the turn — the hold lifts and each message is worked exactly once.
 func TestABusySeatsMailWaitsWithoutCirclingOnEveryBackend(t *testing.T) {
@@ -140,8 +141,12 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	// THE RUN STARTS, and with it the seat is held.
-	if _, err := sandbox.Launch(ctx, manager, store, q, sandbox.LaunchRequest{
+	// THE RUN STARTS, and with it the seat is held — from the launch's own
+	// write of the run's row, with NO started event processed: nothing here
+	// subscribes the seat's control topic, so the window between the launch
+	// and its announcement never closes. Mail arriving in it is what used to
+	// run a turn beside the job.
+	if _, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{TurnID: "t1", AgentID: "a-1", AgentHandle: "swe", Role: "SWE",
 			WorkKey: "wk-1", WorkSince: time.Now().UTC(),
 			ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0", Reply: "tool"},
@@ -150,18 +155,15 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
+	if !coordinator.SeatHeldBySandbox("swe") {
+		t.Fatal("the launched job does not hold its seat until its start is announced")
+	}
 	if _, err := store.MarkSuspended(ctx, "t1",
 		sandbox.Suspension{State: []byte(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	if err := coordinator.OnStarted(ctx, types.SandboxRunStarted{AgentHandle: "swe", TurnID: "t1"}); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
-	if !coordinator.SeatHeldBySandbox("swe") {
-		t.Fatal("the running job does not hold its seat")
-	}
 
-	// MAIL ARRIVES WHILE THE JOB RUNS.
+	// MAIL ARRIVES WHILE THE JOB RUNS, its start still unannounced.
 	for _, body := range []string{"is it done yet?", "also, the docs"} {
 		if err := q.Publish(ctx, topics.AgentInbox("swe"), threadReply(body)); err != nil {
 			t.Fatalf("Publish: %v", err)

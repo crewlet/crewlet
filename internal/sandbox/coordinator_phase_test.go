@@ -160,7 +160,7 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
 		req.LLM = &AgentLLM{Model: "claude-opus-5"}
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}

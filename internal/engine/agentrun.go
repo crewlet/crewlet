@@ -50,13 +50,14 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) error {
 	e := l.engine
 	var (
-		manager *sandbox.Manager
-		pending sandbox.PendingStore
+		coordinator *sandbox.Coordinator
+		manager     *sandbox.Manager
+		pending     sandbox.PendingStore
 	)
 	if rt := e.sandbox.Load(); rt != nil {
-		manager, pending = rt.coordinator.Manager(), rt.pending
+		coordinator, manager, pending = rt.coordinator, rt.coordinator.Manager(), rt.pending
 	}
-	if manager == nil || pending == nil {
+	if coordinator == nil || manager == nil || pending == nil {
 		return fmt.Errorf("this seat's executor is a coding CLI in agent mode, which "+
 			"runs in a box: configure providers.sandbox, or set `mode: text` on "+
 			"providers.llm.%s", l.codingAgent)
@@ -123,7 +124,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return err
 	}
 
-	_, err := sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
+	_, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:       l.runTurnRef(ctx),
 		Spec:       spec,
 		Setup:      setup,

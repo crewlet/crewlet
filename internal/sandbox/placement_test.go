@@ -259,7 +259,7 @@ func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 
 	req := launchReq("t1")
 	req.Spec = manager.BuildSpec(SpecInput{Placement: E2B, CodingAgent: "claude-code"})
-	res, err := Launch(t.Context(), manager, rig.pending, rig.queue, req)
+	res, err := rig.launchVia(t.Context(), manager, req)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}

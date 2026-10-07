@@ -37,7 +37,7 @@ var launchWorkSince = time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
 func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	rig := newWaiterRig(t)
 
-	res, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1"))
+	res, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1"))
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 // The panel reads the announcement; the seat's owner reads the control copy.
 func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 	rig := newWaiterRig(t)
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	got := rig.queue.topics()
@@ -114,7 +114,7 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 	req := launchReq("t1")
 	item := types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
 	req.Turn.WorkItem = &item
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	if run := rig.get("t1"); run.WorkItem == nil || *run.WorkItem != item {
@@ -135,7 +135,7 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 // them is still running.
 func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	rig := newWaiterRig(t)
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	run := rig.get("t1")
@@ -156,7 +156,7 @@ func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	req.Brief = strings.Repeat("a very long brief. ", 40)
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	rig.queue.mu.Lock()
@@ -184,7 +184,7 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 	req.Setup = []SetupStep{{Name: "git-auth", Brief: "git is already authenticated."}}
 	req.MCPServers = map[string]MCPServer{"linear": {Name: "linear"}}
 
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	started := rig.runner.Started()
@@ -219,7 +219,7 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	req := launchReq("t1")
 	req.Ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
 	req.Turn.Requester = "ada"
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	started := rig.runner.Started()
@@ -235,13 +235,13 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 // turn continues where the first stopped.
 func TestASecondCallInOneTurnReusesTheBox(t *testing.T) {
 	rig := newWaiterRig(t)
-	first, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1"))
+	first, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1"))
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	req := launchReq("t1")
 	req.ReuseBox = first.SandboxID
-	second, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req)
+	second, err := rig.launchVia(t.Context(), rig.manager, req)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAReuseOfAVanishedBoxFallsBackToAFreshOne(t *testing.T) {
 	req := launchReq("t1")
 	req.ReuseBox = "box-that-was-reaped"
 
-	res, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req)
+	res, err := rig.launchVia(t.Context(), rig.manager, req)
 	if err != nil {
 		t.Fatalf("a launch whose reuse target is gone must still run: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	rig := newWaiterRig(t)
 	rig.runner.StartErr = errors.New("the coding CLI is not installed")
 
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err == nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err == nil {
 		t.Fatal("a launch whose job never started reported success")
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 {
@@ -298,7 +298,7 @@ func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	if _, err := Launch(t.Context(), manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+	if _, err := rig.launchVia(t.Context(), manager, launchReq("t1")); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	if !witness.checked {
@@ -347,7 +347,7 @@ func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
 			rig := newWaiterRig(t)
 			tc.derail(rig)
 
-			if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err == nil {
+			if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err == nil {
 				t.Fatal("a launch that could not finish reported success")
 			}
 			// Closed means gone: a launching row left behind is polled by
@@ -363,7 +363,7 @@ func TestALaunchNeedsATurnAndABrief(t *testing.T) {
 		{Brief: "do the thing"},
 		launchWithoutBrief(),
 	} {
-		if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err == nil {
+		if _, err := rig.launchVia(t.Context(), rig.manager, req); err == nil {
 			t.Fatalf("Launch(%+v) succeeded", req.Turn)
 		}
 	}
@@ -373,4 +373,20 @@ func launchWithoutBrief() LaunchRequest {
 	req := launchReq("t1")
 	req.Brief = "   "
 	return req
+}
+
+// launchVia launches through a coordinator of its own over the rig's store and
+// queue, for a case about the launch rather than about what a coordinator
+// counts: the rig's own coordinator, where it has one, is left untouched.
+func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
+	r.t.Helper()
+	c, err := NewCoordinator(CoordinatorOptions{
+		Queue: r.queue, Pending: r.pending, Manager: m,
+		Resume: &resumeSpy{}, Audience: &audienceSpy{},
+	})
+	if err != nil {
+		r.t.Fatalf("NewCoordinator: %v", err)
+	}
+	r.t.Cleanup(c.Stop)
+	return c.Launch(ctx, m, req)
 }

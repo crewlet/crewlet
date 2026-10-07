@@ -29,9 +29,12 @@ import "context"
 // and is delivered in order when the hold lifts. Both conditions are this
 // node's own counts ([seatRuns], the owed set), moved by the coordinator's own
 // transitions, so the hold follows them at the transition itself rather than
-// at whichever delivery happens to arrive next: a park on a question, a run
-// that settles, a resume that frees the seat — and a seat recovered mid-run,
-// whose hold is taken in its preparation, before its mailbox is attached.
+// at whichever delivery happens to arrive next: a launch, from the write that
+// opens its row ([Coordinator.Launch]) — not from the started event a separate
+// subscription processes later, which left a window for the seat's next mail
+// to run beside the job — a park on a question, a run that settles, a resume
+// that frees the seat, and a seat recovered mid-run, whose hold is taken in
+// its preparation, before its mailbox is attached.
 //
 // A delivery that reaches a held seat anyway — one that raced the hold, or a
 // hold the queue refused — is DEFERRED by the screening, which asks for the

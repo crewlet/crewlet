@@ -194,6 +194,14 @@ var coordinatorEntries = map[string][]entryDrive{
 			call: answersByTurn,
 		},
 	},
+	"Launch": {{
+		name: "a run_sandbox call on the run's own turn",
+		call: func(t *testing.T, rig *coordRig) {
+			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t1")); err != nil {
+				t.Logf("Launch: %v", err)
+			}
+		},
+	}},
 	"FailRun": {{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {

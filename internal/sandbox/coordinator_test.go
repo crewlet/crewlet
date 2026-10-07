@@ -706,7 +706,7 @@ func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T)
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 		// The relaunch's start event reaches the seat before the turn
@@ -847,7 +847,7 @@ func TestAnUnreadableSettleLeavesARelaunchedJobAlone(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -983,7 +983,7 @@ func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -1550,7 +1550,7 @@ func TestAStaleCompletionDoesNotClaimTheNextRun(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}
@@ -1591,7 +1591,7 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: json.RawMessage(
@@ -1636,7 +1636,7 @@ func TestAFinishedTurnTearsDownTheBoxAFailedRelaunchLeftBehind(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		rig.provider.CreateErr = errors.New("no capacity")
 		defer func() { rig.provider.CreateErr = nil }()
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+		if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err == nil {
 			t.Error("the relaunch got a box the fixture refuses")
 		}
 	}
@@ -1742,7 +1742,7 @@ func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
 	rig.launch("t1")
 	rig.park("t1")
 	asked := rig.get("t1")
-	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
 	rig.suspend("t1")
@@ -1970,7 +1970,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 		rig.runner.StartErr = errors.New("the coding agent would not start")
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err == nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err == nil {
 			t.Error("the relaunch started a job the fixture refuses")
 		}
 	}})
@@ -2007,7 +2007,7 @@ func TestAFailedRelaunchDoesNotChargeThePreviousJobAgain(t *testing.T) {
 		// could be had either.
 		rig.provider.CreateErr = errors.New("no capacity")
 		defer func() { rig.provider.CreateErr = nil }()
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+		if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err == nil {
 			t.Error("the relaunch got a box the fixture refuses")
 		}
 	}})
@@ -2341,7 +2341,7 @@ func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
 		req.ReuseBox = r.SandboxID
-		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
 	}

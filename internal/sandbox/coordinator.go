@@ -325,6 +325,11 @@ type Coordinator struct {
 	mu   sync.Mutex
 	runs map[string]seatRuns
 
+	// moves counts the transitions [Coordinator.adjust] has applied to each
+	// seat, so a recount from the store can tell that one landed while it
+	// was reading — see [Coordinator.syncSeat].
+	moves map[string]uint64
+
 	// attempts counts the failed handoffs of one delivery to one parked
 	// run, so a resume that fails the same way every time stops circling
 	// the seat's inbox. One BUDGET PER DELIVERY, under a key naming the
@@ -380,8 +385,8 @@ type Coordinator struct {
 // person.
 type seatRuns struct {
 	// holding counts the runs in [Holding] — the ones the engine is
-	// driving, during which the seat starts no new turn and its mail is
-	// parked.
+	// driving, during which the seat starts no new turn and its inbox is
+	// held (see seathold.go).
 	holding int
 
 	// awaiting counts the runs in [Awaiting] — the ones stopped on a
@@ -428,6 +433,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		stopped:   opts.Stopped,
 		now:       opts.Now,
 		runs:      map[string]seatRuns{},
+		moves:     map[string]uint64{},
 		attempts:  map[answerKey]map[string]answerBudget{},
 		retries:   map[string]*answerRetry{},
 		owed:      map[string]map[string]struct{}{},
@@ -517,8 +523,8 @@ func (c *Coordinator) SeatRuns(handle string) (held, awaitsAnswer bool) {
 
 // SeatHeldBySandbox reports whether a detached run is HOLDING a seat, so it
 // takes no new turn until the run settles: a job can run for hours, far past
-// any broker ack window, so its seat's mail is PARKED — requeued — rather than
-// consumed and held.
+// any broker ack window, so its seat's inbox is HELD — nothing is fetched —
+// rather than its mail consumed and held (see seathold.go).
 //
 // NOT "is a run waiting for an answer", which is [Coordinator.SeatRuns]'s
 // second value. This was called AwaitingSandbox, which reads as that other
@@ -579,6 +585,7 @@ func setOf(status string) (holding, awaiting int) {
 func (c *Coordinator) adjust(handle string, holding, awaiting int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.moves[handle]++
 	runs := c.runs[handle]
 	runs.holding = max(runs.holding+holding, 0)
 	runs.awaiting = max(runs.awaiting+awaiting, 0)
@@ -603,11 +610,18 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	return nil
 }
 
-// OnStarted marks the seat held.
+// OnStarted recounts the seat from the store.
+//
+// NOT WHAT HOLDS THE SEAT. The launch did that as it wrote the run's row
+// ([Coordinator.Launch]); this event is processed on a separate subscription
+// the launching turn never waits for, and holding the seat from here left a
+// window in which the seat's next mail ran beside the job. What it still does
+// is put the store's own answer under the counts — on whichever node holds the
+// seat when it is processed, after a restart or a handoff as much as now.
 //
 // Idempotent on a redelivery, which is why it consults the store rather than
 // blindly incrementing: at-least-once means this can arrive twice, and a
-// double increment would leave the seat parked forever after the run settled.
+// double increment would leave the seat held forever after the run settled.
 func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted) error {
 	if ev.AgentHandle == "" {
 		return nil
@@ -632,27 +646,48 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted)
 // that answer, which arrives on its inbox — so each row lands in exactly one
 // of the two counts. Recounting them from two listings would let a run that
 // moved between the reads be counted in both or in neither.
+//
+// AND NEVER OVER A TRANSITION IT DID NOT SEE. A listing taken before a launch
+// wrote its row, written back after the launch counted it, would drop the run
+// from the seat's count and lift the hold the launch just took — a seat freed
+// beside a job that is starting. So a recount during which this node moved the
+// seat ([Coordinator.adjust]) is read again, and one that cannot settle within
+// [casRetries] reads leaves the counts alone, which is the same answer a
+// listing that failed gets.
 func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
-	runs, err := c.pending.ListActiveForSeat(ctx, handle)
-	if err != nil {
-		log.WarnContext(ctx, "sandbox_busy_sync_failed", "agent", handle, "error", err.Error())
+	for range casRetries {
+		c.mu.Lock()
+		moved := c.moves[handle]
+		c.mu.Unlock()
+		runs, err := c.pending.ListActiveForSeat(ctx, handle)
+		if err != nil {
+			log.WarnContext(ctx, "sandbox_busy_sync_failed", "agent", handle, "error", err.Error())
+			return
+		}
+		var counts seatRuns
+		for _, run := range runs {
+			holding, awaiting := setOf(run.Status)
+			counts.holding += holding
+			counts.awaiting += awaiting
+		}
+		c.mu.Lock()
+		if c.moves[handle] != moved {
+			c.mu.Unlock()
+			continue
+		}
+		if counts == (seatRuns{}) {
+			delete(c.runs, handle)
+		} else {
+			c.runs[handle] = counts
+		}
+		c.mu.Unlock()
+		// The hold follows the recount, as it follows every transition.
+		c.reconcileHold(ctx, handle)
 		return
 	}
-	var counts seatRuns
-	for _, run := range runs {
-		holding, awaiting := setOf(run.Status)
-		counts.holding += holding
-		counts.awaiting += awaiting
-	}
-	c.mu.Lock()
-	if counts == (seatRuns{}) {
-		delete(c.runs, handle)
-	} else {
-		c.runs[handle] = counts
-	}
-	c.mu.Unlock()
-	// The hold follows the recount, as it follows every transition.
-	c.reconcileHold(ctx, handle)
+	log.WarnContext(ctx, "sandbox_busy_sync_unsettled", "agent", handle,
+		"detail", "the seat's runs kept moving under the recount, so the counts this node "+
+			"already kept stand")
 }
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
@@ -1435,9 +1470,8 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			//
 			// The seat's busy count is RECOUNTED from the store rather than
 			// re-marked: the resumed turn is over, but it may have called
-			// run_sandbox again before it broke, and that relaunch's start
-			// event counted the seat busy on a job this settle has just
-			// ended. And nothing is announced, because the turn did resume
+			// run_sandbox again before it broke, and that relaunch counted
+			// the seat busy on a job this settle has just ended. And nothing is announced, because the turn did resume
 			// and has already published its own failed completion.
 			log.ErrorContext(ctx, "sandbox_resume_abandoned",
 				"turn_id", run.TurnID, "error", err.Error(),

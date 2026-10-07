@@ -1054,7 +1054,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 
-	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
+	return rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:  sandboxTurnRef(ctx, t, seat.Name),
 		Brief: brief,
 		Task:  t.Task,
