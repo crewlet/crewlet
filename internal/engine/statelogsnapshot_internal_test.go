@@ -80,7 +80,8 @@ func TestTheRowCarriesTheSnapshotThisNodeHolds(t *testing.T) {
 	}
 }
 
-// A DOMAIN THE ARTEFACT NAMES AND THIS NODE NO LONGER RUNS GETS NO ROW.
+// A DOMAIN THE ARTEFACT NAMES AND THIS NODE DOES NOT RUN GETS NO ROW — one a
+// newer build of this node registered before a rollback.
 func TestAnArtefactDoesNotInventADomainThisNodeDoesNotRun(t *testing.T) {
 	t.Parallel()
 	row := coord.NodePositions{
@@ -91,10 +92,10 @@ func TestAnArtefactDoesNotInventADomainThisNodeDoesNotRun(t *testing.T) {
 		Have: true,
 		Manifest: statelog.Manifest{Domains: map[string]statelog.DomainPosition{
 			"tracker": {Seq: 8, Generation: 1},
-			"retired": {Seq: 5, Generation: 1},
+			"newer":   {Seq: 5, Generation: 1},
 		}},
 	})
-	if _, invented := row.Domains["retired"]; invented {
+	if _, invented := row.Domains["newer"]; invented {
 		t.Error("a domain this node does not run reached the register — it would " +
 			"carry a committed position of zero, which the trim reads as a node " +
 			"holding that log back at the floor for ever")

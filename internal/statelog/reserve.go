@@ -85,10 +85,6 @@ import (
 // ordinary writes never use — the headroom alarm fires at a tenth of the
 // ceiling that is left for them, so an operator hears about a filling log
 // long before either line is reached.
-//
-// A NODE ON AN OLDER BUILD ADMITS NOTHING, so while a rolling upgrade runs
-// its appends fill the log to the broker's ceiling as they always did; the
-// reserve holds once every node counts its own.
 const GateReserveDivisor = 16
 
 // GateReserveFleet is how many nodes' appends in flight [GateReserveDivisor]

@@ -864,8 +864,9 @@ func TestATakeWritesTheManifestEveryBuildReads(t *testing.T) {
 // The version is what a reader must refuse, so one of another version is
 // nobody's artefact here — no donor offers it and no loop counts it as this
 // node's current one — and so is one that does not decode. One at this
-// version is read whatever else it carries: an earlier build wrote exactly
-// this shape, and a node upgraded in place still offers what it took before.
+// version is read whatever else it carries: fields are added within a
+// version, so a later build reads what this one took, and a node upgraded in
+// place still offers what it took before.
 func TestAManifestIsReadOnlyAtTheVersionThisBuildReads(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

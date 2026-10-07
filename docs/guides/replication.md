@@ -619,9 +619,8 @@ a running stream's configuration, and the broker never re-checks a reservation
 it has already granted. A log created larger than today's sizing would make it
 boots as it is, and the node logs `jetstream_stream_capacity_differs` with both
 numbers — its ceiling, and what this sizing would create it with if no log
-existed yet. A knowledge-base log created before it joined the budget, at a
-fixed 4 GiB, is the common case, and it is harmless: its reservation was
-granted when it was made. To reclaim it (or to raise any log), use
+existed yet. Its reservation was granted when it was made, so this is
+harmless. To reclaim it (or to raise any log), use
 [`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling).
 
 **And it counts at that ceiling when another log is created beside it.** A log

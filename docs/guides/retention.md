@@ -835,9 +835,7 @@ own appends still in flight, so what can land past the soft ceiling is only
 what other nodes have in flight at that instant — at most one maximum record
 (8 MiB) each. At the smallest ceiling a log may have, a gibibyte, the reserve
 is 64 MiB: seven other nodes' maximum records with room to spare for the gate
-records themselves, and every larger ceiling holds more. While a rolling
-upgrade runs, a node on an older build keeps no reserve, so the reserve
-holds once every node counts its own.
+records themselves, and every larger ceiling holds more.
 
 If a gate record is refused even there, the refusal says so and points at
 `crewlet retention set-capacity` rather than suggesting a retry; the

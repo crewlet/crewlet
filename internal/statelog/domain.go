@@ -103,9 +103,9 @@ type Domain interface {
 	// describes, so the adopter holds a row for every operation the donor
 	// applied and answers a retry of one from it, while an operation
 	// neither ledger holds is one that never applied and is decided
-	// afresh. Classed [Local] it was scrubbed out of every artefact, and
-	// the adopter could tell neither apart for anything minted before the
-	// adoption — so it answered a turn's FIRST attempt at a write
+	// afresh. Classed [Local] it would be scrubbed out of every artefact,
+	// and the adopter could tell neither apart for anything minted before
+	// the adoption — so it would answer a turn's FIRST attempt at a write
 	// `unknown` whenever the turn's trigger predated the join, which is
 	// the recovering node's whole backlog. Every node writes the same op
 	// id, subject and position from the same record; only `applied_at`,
@@ -411,8 +411,8 @@ const (
 	// rather than "Replicated minus two tables somebody remembered". The
 	// alternative is worse than untidy: classing such a table Local would
 	// scrub it from every snapshot, and an adopting node would hold a
-	// tail where its peers hold a year — which is exactly what the
-	// operation ledger did while it was Local (see [Domain.OpsTable]).
+	// tail where its peers hold a year — which is exactly what classing
+	// the operation ledger Local would do (see [Domain.OpsTable]).
 	Divergent
 
 	// Local is this node's own rows. SCRUBBED from every snapshot,

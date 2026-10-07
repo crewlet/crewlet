@@ -3241,11 +3241,11 @@ func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
 	}
 	row.SnapshotBytes = held.Manifest.Bytes
 	for name, at := range held.Manifest.Domains {
-		// ONLY A DOMAIN THIS NODE STILL RUNS. An artefact taken by an
-		// older build names domains this one does not register, and a
-		// snapshot position under a domain with no committed position
-		// beside it is a row the trim reads as a node holding that
-		// log back at zero.
+		// ONLY A DOMAIN THIS NODE RUNS. An artefact written by another
+		// build of this node (a newer one, before a rollback) can name a
+		// domain this build does not register, and a snapshot position
+		// under a domain with no committed position beside it is a row
+		// the trim reads as a node holding that log back at zero.
 		pos, runs := row.Domains[name]
 		if !runs {
 			continue

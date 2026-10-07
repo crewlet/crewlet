@@ -170,12 +170,9 @@ var SkipReasons = []SkipReason{
 // Valid reports whether a skip reason off the wire is one this build knows.
 func (s SkipReason) Valid() bool { return slices.Contains(SkipReasons, s) }
 
-// ManifestVersion is the artefact format this build writes.
-//
-// TWO SINCE THE MANIFEST NAMES ITS OWN FILE. Before that the name was DERIVED
-// from the positions, in three places independently, and an artefact whose
-// manifest does not name its file is one this build cannot find — so it is
-// refused as a version it does not read rather than resolved to an empty path.
+// ManifestVersion is the artefact format this build writes and the only one it
+// reads: a manifest of any other version is nobody's artefact here. Fields are
+// added within a version, so a later build reads what this one took.
 const ManifestVersion = 2
 
 // DomainPosition is what a manifest says about one registered domain.

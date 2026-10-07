@@ -41,9 +41,9 @@ import (
 // Sizing decides what a MISSING stream is created with and nothing else. A
 // stream's configuration has one writer and a booting node is not it, and the
 // broker never re-checks a reservation it has already granted, so a log
-// created larger than today's arithmetic would make it (a pages log from
-// before it joined the budget) boots as it is and is reported rather than
-// rewritten. Changing it is the capacity operation's, which runs where no
+// created larger than today's arithmetic would make it (one created at an
+// explicit ceiling later unset, or one a capacity operation resized) boots as
+// it is and is reported rather than rewritten. Changing it is the capacity operation's, which runs where no
 // publisher can move the number it is decided against.
 //
 // And it COUNTS at that ceiling. What the budget promises is a bound on what
@@ -293,8 +293,7 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 // the existing ones leave of the pool, whatever Tier A would give those today.
 //
 // The two numbers differ whenever a log was created at something other than
-// today's arithmetic: a knowledge-base log from before it joined the budget,
-// an explicit ceiling later unset, a log created while its volume had more
+// today's arithmetic: an explicit ceiling later unset, a log created while its volume had more
 // room, one a capacity operation resized. Dividing the pool by the ASKS
 // counted such a log at a reservation it does not have. Measured: a tracker
 // log holding 17179869184 bytes, created at an explicit ceiling later unset,
