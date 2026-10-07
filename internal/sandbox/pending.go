@@ -1256,11 +1256,11 @@ type PendingStore interface {
 //
 // TWO VALUES, AND EACH DECIDES A DIFFERENT HALF. The identity decides WHICH
 // runs a delivery may answer, because that is where a person answers. The
-// partition
-// decides WHICH OF THEM it answers when several may: the identity is coarse on
-// purpose — every run parked on one direct message shares it — so without the
-// batch the two halves of a DM's clarification are told apart by nothing but
-// creation time. See [ConversationRef.Best], which is the whole rule.
+// partition decides WHICH OF THEM it answers when several may: the identity is
+// coarse on purpose — every run parked on one direct message shares it — so
+// without the batch the two halves of a DM's clarification are told apart by
+// nothing but creation time. See [ConversationRef.Best], which is the whole
+// rule.
 //
 // A struct rather than two arguments because both are strings and a swapped
 // pair fails silently — as a run nobody can answer, which is the defect this
