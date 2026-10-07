@@ -1175,10 +1175,11 @@ export interface OrgUnit {
  * and units in the positions the document wrote them, and the hierarchy the
  * ENGINE derived from that document.
  *
- * `derived` is optional because an engine older than the field serves the
- * projection without it. A screen reading one without `derived` has the
- * authored tree and nothing else: it may show what the document says, and it
- * must not reconstruct what the engine would conclude from it.
+ * `derived` is absent only on `{}`, a node running no company, and comes from
+ * the same document as the tree beside it. A screen never reconstructs what
+ * it says from the authored tree: where the two do not pair, `lib/seats.ts`
+ * reports the hierarchy as unknown (`OrgIndex.hierarchy`) rather than
+ * concluding anything itself.
  */
 export interface OrgProjection {
   name?: string;

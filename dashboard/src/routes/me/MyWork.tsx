@@ -560,9 +560,10 @@ export function MyWork({ section }: { section: MeSection }) {
  * put to them are theirs to answer, which the engine enforces, and their work
  * is changed from the work screens — except the reorder a lead may make. A lead
  * is anybody above them in the chart (`leadsInLine`), which is the tracker's
- * own reading of "somebody in their line"; where the engine did not report its
- * hierarchy that is unknown, and the sentence says so rather than telling a
- * reader who may well lead the person that they do not.
+ * own reading of "somebody in their line"; where the engine's hierarchy does
+ * not describe the org (`OrgIndex.hierarchy`) that is unknown, and the
+ * sentence says so rather than telling a reader who may well lead the person
+ * that they do not.
  */
 export function dayHolds({
   ownDay,
@@ -581,7 +582,7 @@ export function dayHolds({
     all,
     reorder:
       lead === null
-        ? `Only somebody in ${name}’s line reorders their queue, and this engine did not report who reports to whom.`
+        ? `Only somebody in ${name}’s line reorders their queue, and the engine’s hierarchy does not say who reports to whom.`
         : `Only ${name}, or somebody they report to, reorders their queue.`,
   };
 }
@@ -690,8 +691,8 @@ function WhoseDay({
  * # The line is UNKNOWN without the engine's own hierarchy
  *
  * `OrgIndex.hierarchy` false means every reporting line is unknown rather than
- * absent — an older engine sends no `derived` block — so the group is not
- * drawn at all there. An empty "Your line" would say this reader leads nobody,
+ * absent — the engine's `derived` block does not describe the org — so the
+ * group is not drawn at all there. An empty "Your line" would say this reader leads nobody,
  * which is a claim this client cannot make.
  *
  * # And the empty row is only for a reader with no day of their own
@@ -719,9 +720,10 @@ export function whoseDayOptions(
   };
 
   // A SEAT WITH NO HANDLE CANNOT BE PICKED. The engine reports one for every
-  // seat it runs; a projection with no derived block reports none, and such a
-  // row used to be offered with an empty value — which is the SAME value as
-  // the empty row below, so picking a colleague landed on "nobody chosen".
+  // seat it runs; a hierarchy that does not describe the org reports none for
+  // a seat that declares no handle, and such a row used to be offered with an
+  // empty value — which is the SAME value as the empty row below, so picking
+  // a colleague landed on "nobody chosen".
   const named = index.seats.filter((s) => s.handle);
   const byName = (a: Seat, b: Seat) => a.name.localeCompare(b.name);
   const row = (seat: Seat, group: string): SelectOption => ({

@@ -22,12 +22,13 @@
  * linked to, could not carry its own tabs, and was one filter away from being
  * lost.
  *
- * # Not reported is not nothing
+ * # Unknown is not nothing
  *
- * An engine that sends no derived hierarchy cannot say who inherits a lead,
- * so a unit declaring none has an UNKNOWN lead rather than none — every place
- * a lead is drawn says "not reported by this engine" in that case rather than
- * leaving a blank that reads as an unmanaged team.
+ * Where the engine's derived hierarchy does not describe the tree
+ * (`OrgIndex.hierarchy`), nobody can say who inherits a lead, so a unit
+ * declaring none has an UNKNOWN lead rather than none — every place a lead is
+ * drawn says so in that case rather than leaving a blank that reads as an
+ * unmanaged team.
  */
 
 import { useMemo, type CSSProperties } from "react";
@@ -67,8 +68,8 @@ import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 /** The project page the unit keys are read from: every live project. */
 const PROJECT_PAGE = 200;
 
-/** A lead this engine did not report: never drawn as "no lead". */
-export const LEAD_NOT_REPORTED = "Lead not reported by this engine";
+/** A lead the engine's hierarchy could not tell: never drawn as "no lead". */
+export const LEAD_NOT_REPORTED = "Lead unknown";
 
 /**
  * Every live project filed to each unit, by unit name, from the tracker. A
@@ -128,9 +129,9 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
           />
           <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
             <span className="truncate t-cell">{seat.name}</span>
-            {/* ONLY A HANDLE THE ENGINE REPORTED. An engine that sends no
-                derived hierarchy leaves the handle of a seat that declares
-                none unknown, and deriving one here is the second
+            {/* ONLY A HANDLE THE ENGINE REPORTED. A derived hierarchy that
+                does not describe the tree leaves the handle of a seat that
+                declares none unknown, and deriving one here is the second
                 implementation `lib/seats.ts` exists to have removed. */}
             {seat.handle && (
               <span className="truncate t-caption mono">{handleLabel(seat.handle)}</span>
@@ -205,9 +206,9 @@ function unitView(
       { label: "Type", value: unit.type || "unit" },
       {
         label: "Lead",
-        // NOT REPORTED IS NOT NOBODY. Without the engine's derived block an
-        // inherited lead is a question this client cannot answer, and an
-        // empty cell there would read as a unit nobody leads.
+        // UNKNOWN IS NOT NOBODY. Without the engine's hierarchy an inherited
+        // lead is a question this client cannot answer, and an empty cell
+        // there would read as a unit nobody leads.
         value: lead ? (
           <>
             {lead.name}
@@ -267,7 +268,7 @@ export function UnitBlock({
   projects = new Map(),
 }: {
   unit: Unit;
-  /** Whether the engine reported the derived hierarchy (`OrgIndex.hierarchy`). */
+  /** Whether the engine's derived hierarchy describes the tree (`OrgIndex.hierarchy`). */
   hierarchy?: boolean;
   /** Project keys by unit name. */
   projects?: ReadonlyMap<string, readonly string[]>;

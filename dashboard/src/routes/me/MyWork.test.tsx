@@ -115,13 +115,15 @@ function serving(answers: Partial<Record<QueryName, Answer>>, org: unknown = fla
   return query;
 }
 
-/** Two seats and no derived block: every reporting line is UNKNOWN. */
+/** Two seats and a derived block that does not describe them: every
+ *  reporting line is UNKNOWN. */
 const flatOrg = {
   name: "Acme",
   roles: [
     { name: "Ada Okonkwo", handle: "ada", kind: "human", contact: { slack_user_id: "U0A" } },
     { name: "Rui Santos", handle: "rui", kind: "human", contact: { slack_user_id: "U0R" } },
   ],
+  derived: { seats: [], units: [] },
 };
 
 /** The same company with the ENGINE's own hierarchy: Ada leads Rui, not Bo. */
@@ -1052,11 +1054,11 @@ test("an incomplete workload answer claims no desk is empty", async () => {
   }
 });
 
-// WITHOUT THE ENGINE'S OWN HIERARCHY THERE IS NO LINE TO DRAW. An older engine
-// sends no derived block, so who reports to whom is UNKNOWN rather than empty,
-// and a "Your line" heading over nothing would be a claim this client cannot
-// make.
-test("no derived hierarchy draws no line, rather than an empty one", async () => {
+// WITHOUT THE ENGINE'S OWN HIERARCHY THERE IS NO LINE TO DRAW. A derived block
+// that does not describe the org leaves who reports to whom UNKNOWN rather
+// than empty, and a "Your line" heading over nothing would be a claim this
+// client cannot make.
+test("an undescribed hierarchy draws no line, rather than an empty one", async () => {
   serving({
     viewer: ada,
     work_my_work: emptyDay,
@@ -1395,9 +1397,7 @@ describe("somebody else's day", () => {
     location.hash = "#/me?order=priorities&handle=rui";
     serving(day("rui"));
     mount();
-    await waitFor(() =>
-      expect(screen.getByText(/did not report who reports to whom/)).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText(/does not say who reports to whom/)).toBeTruthy());
     expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
   });
 });

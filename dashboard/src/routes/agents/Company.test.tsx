@@ -129,19 +129,19 @@ async function teams(org: OrgProjection) {
   });
 }
 
-// NOT REPORTED IS NOT NOBODY, AND NOT A COUNT OF ZERO. Without the engine's
-// derived block an inherited lead is unknowable here, so a unit declaring none
-// says the engine did not report one — never a blank that reads as a team
-// nobody leads — while the headcounts, which the document does state, stay.
-test("no derived block is not a count of zero or a unit without a lead", async () => {
-  const { derived: _drop, ...flat } = ORG as OrgProjection & { derived: unknown };
-  await teams(flat as OrgProjection);
+// UNKNOWN IS NOT NOBODY, AND NOT A COUNT OF ZERO. Where the engine's derived
+// block does not describe the org an inherited lead is unknowable here, so a
+// unit declaring none says its lead is unknown — never a blank that reads as a
+// team nobody leads — while the headcounts, which the document does state,
+// stay.
+test("an undescribed hierarchy is not a count of zero or a unit without a lead", async () => {
+  await teams({ ...ORG, derived: { seats: [], units: [] } } as OrgProjection);
   expect(screen.getAllByText(LEAD_NOT_REPORTED).length).toBe(2);
   expect(screen.getByText("3 seats, 1 directly")).toBeTruthy();
   expect(screen.getByText("2 seats")).toBeTruthy();
 });
 
-test("with the derived block a unit's lead is the engine's, and nothing says unreported", async () => {
+test("with the derived block a unit's lead is the engine's, and nothing says unknown", async () => {
   await teams({
     ...ORG,
     derived: {

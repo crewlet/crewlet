@@ -263,14 +263,14 @@ test("Message is pressable for a reader who can file", async () => {
   expect(message.getAttribute("aria-disabled")).not.toBe("true");
 });
 
-// NOT REPORTED IS NOT NOBODY: without the engine's derived block the peek
-// cannot say who a seat reports to, and says that.
-test("with no derived hierarchy the peek does not claim the seat reports to nobody", async () => {
-  const { derived: _drop, ...flat } = org() as OrgProjection & { derived: unknown };
+// UNKNOWN IS NOT NOBODY: where the engine's derived block does not describe
+// the org, the peek cannot say who a seat reports to, and says that.
+test("an undescribed hierarchy does not claim the seat reports to nobody", async () => {
+  const flat = { ...org(), derived: { seats: [], units: [] } } as OrgProjection;
   // The founder declares her handle, which is what a document-only index can
   // address a seat by.
-  await mount(ANONYMOUS, { projection: flat as OrgProjection, handle: "jane" });
-  expect(screen.getByText("Not reported by this engine")).toBeTruthy();
+  await mount(ANONYMOUS, { projection: flat, handle: "jane" });
+  expect(screen.getByText(/^Unknown — the engine’s hierarchy/)).toBeTruthy();
   expect(screen.queryByText(/Nobody/)).toBeNull();
 });
 

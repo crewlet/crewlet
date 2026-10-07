@@ -281,7 +281,7 @@ function SeatPeekBody({
           ) : hierarchy ? (
             "Nobody — the top of the chart"
           ) : (
-            <EmptyValue label="Not reported by this engine" />
+            <EmptyValue label="Unknown — the engine’s hierarchy does not match this org" />
           )}
         </dd>
 

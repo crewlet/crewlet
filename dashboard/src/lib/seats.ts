@@ -19,13 +19,16 @@
  * nothing compared the two. So no manager, lead, `manages` or handle logic
  * remains here, and there is no client-side handle derivation at all.
  *
- * AN OLDER ENGINE SENDS NO `derived` BLOCK, and the index then SAYS SO
- * (`hierarchy: false`) rather than guessing: seats sit where the document
- * wrote them, a handle is known only where the document declares one, and
- * every question only the engine can answer is reported as unknown. A block
- * that does not describe the tree it arrived with is treated the same way,
- * because a chart drawn from a hierarchy that disagrees with its own seats is
- * a chart that lies.
+ * A `derived` BLOCK THAT DOES NOT DESCRIBE THE TREE IT ARRIVED WITH is not
+ * laid over it, and the index SAYS SO (`hierarchy: false`) rather than
+ * guessing: seats sit where the document wrote them, a handle is known only
+ * where the document declares one, and every question only the engine can
+ * answer is reported as unknown — because a chart drawn from a hierarchy that
+ * disagrees with its own seats is a chart that lies. The engine derives both
+ * halves from one document in one call, so this is a guard against an engine
+ * fault rather than a state a working engine produces. `{}`, the answer of a
+ * node running no company, carries neither half, and indexes as an empty
+ * hierarchy rather than an unknown one.
  *
  * THE GUARDED HALF IS NOT HERE EITHER. `/org` is anonymously readable, so the
  * projection carries a charter, a tree, the budgets as written and each
@@ -177,10 +180,11 @@ export interface Seat {
 
 export interface OrgIndex {
   /**
-   * Whether the engine's derived hierarchy is present AND describes this tree.
-   * False means every reporting line, inherited lead and placement below is
-   * UNKNOWN rather than absent, and a screen has to say so rather than
-   * drawing a zero.
+   * Whether the engine's derived hierarchy describes this tree. False — a
+   * block that does not pair with the seats and units it arrived with, which
+   * only an engine fault produces — means every reporting line, inherited
+   * lead and placement below is UNKNOWN rather than absent, and a screen has
+   * to say so rather than drawing a zero.
    */
   hierarchy: boolean;
   seats: Seat[];
@@ -297,8 +301,7 @@ function link(authored: Authored): Unit[] {
  * caller falls back to the authored tree, because half a hierarchy drawn as a
  * whole one is worse than an honest "the engine did not say".
  */
-function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | null {
-  if (!derived || typeof derived !== "object") return null;
+function overlay(authored: Authored, derived: Derived): OrgIndex | null {
   const dUnits = list(derived.units);
   const dSeats = list(derived.seats);
   if (dUnits.length !== authored.units.length || dSeats.length !== authored.seats.length) {
@@ -316,24 +319,19 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
     unit.leadInherited = !!d.lead_inherited;
   }
 
-  // Seats pair by NAME, and a name that repeats (only possible in a revision
-  // stored before names had to be unique) is not paired by position. The
-  // engine's order is not the document's — a root seat moved into a unit comes
-  // after that unit's own seats — so the first "Designer" the engine lists can
-  // be the second one the document wrote, and pairing them in turn would draw
-  // one seat's goal under the other's handle. A declared handle is what tells
-  // two such seats apart, so a seat pairs with the authored one declaring its
-  // handle, or else with one declaring none.
-  const unpaired = new Map<string, OrgSeat[]>();
-  for (const { raw } of authored.seats) {
-    const name = raw.name ?? "";
-    unpaired.set(name, [...(unpaired.get(name) ?? []), raw]);
-  }
+  // Seats pair by NAME, never by position: the engine's order is not the
+  // document's — a root seat moved into a unit comes after that unit's own
+  // seats. A name is unique in every document the engine admits, so a tree
+  // holding one twice leaves a derived seat with nothing to pair and is not
+  // described; and a seat that declares a handle pairs only with the derived
+  // seat carrying it.
+  const unpaired = new Map<string, OrgSeat>();
+  for (const { raw } of authored.seats) unpaired.set(raw.name ?? "", raw);
   const claim = (name: string, handle: string): OrgSeat | null => {
-    const candidates = unpaired.get(name) ?? [];
-    let at = candidates.findIndex((raw) => raw.handle === handle);
-    if (at < 0) at = candidates.findIndex((raw) => !raw.handle);
-    return at < 0 ? null : candidates.splice(at, 1)[0]!;
+    const raw = unpaired.get(name);
+    if (!raw || (raw.handle && raw.handle !== handle)) return null;
+    unpaired.delete(name);
+    return raw;
   };
   const byHandle = new Map<string, Seat>();
   const seats: Seat[] = [];
@@ -408,8 +406,8 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
 }
 
 /**
- * The authored tree with nothing derived: what an engine that sends no
- * `derived` block leaves a reader able to state.
+ * The authored tree with nothing derived: what a reader can still state when
+ * the engine's block does not describe the tree it arrived with.
  */
 function authoredOnly(authored: Authored): OrgIndex {
   const units = link(authored);
@@ -455,7 +453,6 @@ function authoredOnly(authored: Authored): OrgIndex {
   };
 }
 
-/** Index the org projection once. Everything a screen needs comes off this. */
 /**
  * Fill every unit's [Unit.allSeats] from its own members and its children's.
  *
@@ -476,9 +473,15 @@ function fillSubtrees(units: Unit[]): void {
   }
 }
 
+/** An empty hierarchy: what `{}` (a node running no company) and an org not
+ *  read yet describe. Laid over their empty tree it pairs, so neither reads
+ *  as a hierarchy the engine did not describe. */
+const NO_HIERARCHY: Derived = { seats: [], units: [] };
+
+/** Index the org projection once. Everything a screen needs comes off this. */
 export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {
   const authored = walk(org);
-  const built = overlay(authored, org?.derived) ?? authoredOnly(authored);
+  const built = overlay(authored, org?.derived ?? NO_HIERARCHY) ?? authoredOnly(authored);
   // AFTER whichever half built the tree, because both build one and the pass
   // reads only `seats` and `children` — which both of them have set by here.
   fillSubtrees(built.units);
@@ -567,12 +570,13 @@ export function unitDirectLabel(n: number): string {
  * find out why. [Seat.autoReports] is the engine's own subset, so this is a
  * reading of what the engine derived rather than a rule re-applied here.
  *
- * AND WITHOUT THE DERIVED BLOCK THERE IS NO COUNT TO BREAK DOWN. The tile draws
- * a marked absence in that case, so the caption says what is missing rather
- * than explaining a number that is not on screen.
+ * AND WITHOUT THE ENGINE'S HIERARCHY THERE IS NO COUNT TO BREAK DOWN
+ * ([OrgIndex.hierarchy]). The tile draws a marked absence in that case, so the
+ * caption says what is missing rather than explaining a number that is not on
+ * screen.
  */
 export function reportsCaption(seat: Seat, hierarchy: boolean): string {
-  if (!hierarchy) return "this engine did not report its hierarchy";
+  if (!hierarchy) return "the engine's hierarchy did not match this org";
   const total = seat.reports.length;
   if (total === 0) return "nobody reports to this seat";
   const auto = seat.autoReports.length;

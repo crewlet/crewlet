@@ -2414,7 +2414,9 @@ to child units that set none, a `manages` entry naming a unit stands for the
 seats in its subtree, a unit's lead manages the members nobody else manages,
 and the primary manager is the first seat in the engine's own order that
 manages a seat. The dashboard derived these in TypeScript and had already
-diverged on three of them.
+diverged on three of them. It is on every answer for a company, derived from
+the same document in the same call as the tree beside it, and absent only from
+`{}`.
 
 The fields above it stay as WRITTEN, so a reader can still tell a declared lead
 from an inherited one. Every list here may arrive as `null` (Go marshals a nil

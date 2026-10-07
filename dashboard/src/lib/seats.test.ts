@@ -148,9 +148,8 @@ const org: OrgProjection = {
 
 const index = indexOrg(org);
 
-/** The same company, from an engine that reports no derived hierarchy. */
-const { derived: _omitted, ...older } = org;
-const authored = indexOrg(older);
+/** The same company with a derived block that does not describe it. */
+const authored = indexOrg({ ...org, derived: { seats: [], units: [] } });
 
 // A LEAD IS ANYBODY ABOVE IN THE CHART, as the engine reads "somebody in
 // their line" (`leadsOf` walks every ancestor): a founder leads everybody. And
@@ -316,6 +315,40 @@ describe("the engine's hierarchy", () => {
       },
     });
     expect(phantom.hierarchy).toBe(false);
+  });
+
+  // NOTHING YET IS NOT "UNKNOWN". Before the projection arrives, and on `{}`
+  // (a node running no company), there is no tree for a block to disagree
+  // with — so no screen flashes a hierarchy the engine did not describe.
+  test("an org not read yet, and a node with no company, are an empty hierarchy", () => {
+    for (const nothing of [undefined, null, {}]) {
+      const empty = indexOrg(nothing);
+      expect(empty.hierarchy).toBe(true);
+      expect(empty.seats).toEqual([]);
+      expect(empty.units).toEqual([]);
+    }
+  });
+
+  test("a tree with no block, or one holding a name twice, is not described", () => {
+    const { derived: _absent, ...bare } = org;
+    expect(indexOrg(bare).hierarchy).toBe(false);
+    // A name is unique in every document the engine admits, so a tree that
+    // holds one twice cannot be paired by name.
+    const twice = indexOrg({
+      ...org,
+      roles: [...(org.roles ?? []), { name: "CEO" }],
+      derived: {
+        ...org.derived!,
+        seats: [...(org.derived!.seats ?? []), seat({ handle: "ceo-2", name: "CEO" })],
+      },
+    });
+    expect(twice.hierarchy).toBe(false);
+    // And a seat that declares a handle pairs only with the seat carrying it.
+    const renamed = indexOrg({
+      ...org,
+      roles: (org.roles ?? []).map((r) => (r.name === "CEO" ? { ...r, handle: "chief" } : r)),
+    });
+    expect(renamed.hierarchy).toBe(false);
   });
 
   test("a human seat holds a place in the hierarchy", () => {
