@@ -548,9 +548,8 @@ func (e emitter) workItem() *types.WorkItem {
 // anyone comparing builds can apply their own ratio rather than inheriting
 // this one.
 //
-// MEASURED IN BYTES, which is what len() of a Go string is and what the Go
-// fields are named for. The WIRE KEYS still say chars and deliberately do not
-// move — see [types.PromptSize], which carries the whole reason.
+// MEASURED IN BYTES, which is what len() of a Go string is — see
+// [types.PromptSize] for why bytes rather than characters.
 func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 	system, user string, seed []llm.Message, surface *tools.Surface,
 ) {
@@ -573,7 +572,7 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 		// encoded here is what the provider call after it is about to
 		// reject for the same reason. The log line is the only place that
 		// says WHICH term came up short, because the row itself cannot:
-		// a tool_chars of 0 beside a non-zero tool_count is visible, but
+		// a tool_bytes of 0 beside a non-zero tool_count is visible, but
 		// a conversation measured short of its own tool-call arguments
 		// reads as a perfectly ordinary figure.
 		log.WarnContext(ctx, "prompt_size_measure_failed", "phase", ph,

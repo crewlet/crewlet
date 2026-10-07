@@ -244,7 +244,7 @@ gave. Two config knobs (`injected_max_entries`, `injected_max_chars`) used to
 be documented here; neither was ever threaded to a caller, so both validated,
 defaulted and described a truncation that did not happen. The `prompt.size`
 telemetry event is where the delta shows up fleet-wide — read its
-`user_chars`, which is where this block lands, rather than its approximation:
+`user_bytes`, which is where this block lands, rather than its approximation:
 that figure also carries the tool-definition array, which is usually larger
 than the ledger and moves for reasons of its own.
 

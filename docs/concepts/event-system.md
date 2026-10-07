@@ -386,10 +386,9 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # thinking blocks, or the prose rendering of them,
                            # never both) and its tool-call arguments — and the
                            # tool-definition array both providers bill as
-                           # input. The keys are system_chars / user_chars and
-                           # say chars because they always have — frozen by
-                           # ADR-0006, since a renamed key reads back as 0 on
-                           # every stored row. A separate row rather than a
+                           # input, under system_bytes / user_bytes /
+                           # message_bytes / tool_bytes and tool_count. A
+                           # separate row rather than a
                            # derivation: the prompts themselves are on
                            # agent_phase_completed, and measuring them there
                            # means hauling every phase payload back

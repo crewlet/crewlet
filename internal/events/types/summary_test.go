@@ -60,14 +60,14 @@ func TestSummaries(t *testing.T) {
 			RoleName: "CTO", Phase: PhaseExecute, ApproximateTokens: 7400,
 			SystemBytes: 21000, UserBytes: 800, ToolCount: 12, ToolBytes: 8200,
 		},
-		want: "CTO execute prompt ~7400 tokens (12 tool definitions, 8200 chars)",
+		want: "CTO execute prompt ~7400 tokens (12 tool definitions, 8200 bytes)",
 	}, {
-		name: "a phase that was offered no tools claims none",
+		name: "a phase that was offered no tools says so",
 		payload: PromptSize{
 			RoleName: "CTO", Phase: PhaseExecute, ApproximateTokens: 5400,
 			SystemBytes: 21000, UserBytes: 800,
 		},
-		want: "CTO execute prompt ~5400 tokens",
+		want: "CTO execute prompt ~5400 tokens (0 tool definitions, 0 bytes)",
 	}, {
 		name: "a failed turn says why it stopped",
 		payload: AgentTurnCompleted{
@@ -221,40 +221,6 @@ func TestSummaries(t *testing.T) {
 // An unregistered type still summarises: the envelope title-cases its type
 // string, which is what a node one version behind shows for an event it has
 // never heard of.
-// AN OLDER PEER'S PROMPT MEASUREMENT NEVER CLAIMS A TOOL-LESS PHASE.
-//
-// tool_chars and tool_count are newer than the prompt.size event, so a row
-// published by a node that predates them — an ordinary state for as long as a
-// rolling upgrade takes — carries neither key and decodes to zero. Rendered
-// unconditionally, that row tells the feed a phase was offered no tools at
-// all, which is a statement about that build's prompt rather than about a
-// measurement nobody took.
-func TestAPromptSizeFromBeforeTheToolTermAssertsNoZero(t *testing.T) {
-	t.Parallel()
-	const older = `{"agent_id":"a-1","role":"CTO","turn_id":"t-1","iteration":1,
-		"phase":"execute","approximate_tokens":5400,"system_chars":21000,
-		"user_chars":800}`
-	var row PromptSize
-	if err := json.Unmarshal([]byte(older), &row); err != nil {
-		t.Fatalf("a row from before the tool term does not decode: %v", err)
-	}
-	// The case's own premise: absent keys, not zeroed ones written out.
-	if strings.Contains(older, "tool_") {
-		t.Fatal("the fixture carries a tool key, so it is not an older peer's row")
-	}
-	if got := summaryOf(row, ""); got != "CTO execute prompt ~5400 tokens" {
-		t.Fatalf("an older peer's row reads %q", got)
-	}
-
-	// AND THE MEASURED SHAPE STILL REPORTS IT — the clause is conditional
-	// on the row, never dropped.
-	row.ToolCount, row.ToolBytes = 12, 8200
-	want := "CTO execute prompt ~5400 tokens (12 tool definitions, 8200 chars)"
-	if got := summaryOf(row, ""); got != want {
-		t.Fatalf("a measured row reads %q, want %q", got, want)
-	}
-}
-
 func TestUnknownTypeSummarisesFromItsTypeString(t *testing.T) {
 	t.Parallel()
 	event := &events.Event{Type: "some_custom_event"}

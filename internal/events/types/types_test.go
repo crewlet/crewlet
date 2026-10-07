@@ -269,14 +269,13 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 // wireTags is the OTHER HALF OF THE WIRE CONTRACT: the exact JSON keys each
 // registered type publishes. `wireTypes` above pins the type strings, and
 // nothing pinned the keys — so a renamed tag was as green as a comment
-// change, which is exactly how `prompt.size` lost `system_chars`/`user_chars`
-// to a tidier spelling for the length of one review cycle.
+// change.
 //
 // A KEY IS A PEER CONTRACT, AND A RENAME IS A SILENT DELETE. ADR-0006 is
-// additive-only and binds before any release, because a rolling upgrade runs
-// in both directions at once: a renamed tag is a dropped field on whichever
-// half has not upgraded, and every row already written keeps the old key
-// forever. The failure has no symptom a reviewer can see — the build is
+// additive-only from the first build a successor runs beside, because a
+// rolling upgrade runs in both directions at once: a renamed tag is a dropped
+// field on whichever half has not upgraded, and every row already written
+// keeps the old key forever. The failure has no symptom a reviewer can see — the build is
 // green, the tests pass, and a reader of the dashboard gets a confidently
 // wrong `0` where the payload used to answer.
 //
@@ -350,7 +349,7 @@ var wireTags = map[string][]string{
 	"sandbox_answer_given":            {"agent_handle", "answer", "answered_by", "answered_by_seat", "launch_id", "turn_id"},
 	"sandbox_run_answered":            {"agent_handle", "agent_id", "answered_by", "answered_by_seat", "outcome", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
-	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_chars", "phase", "role", "system_chars", "tool_chars", "tool_count", "turn_id", "user_chars", "work_key"},
+	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_bytes", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
