@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +97,26 @@ import (
 // left standing has a reply nobody is interested in and the server serves the
 // next request of the consumer instead — measured on a member that serves
 // leaves as well as on one that does not.
+//
+// # A status is matched to the request it NAMES, never to the oldest
+//
+// Every request is answered on the one inbox, but each is sent with a reply
+// subject of its own beneath it (`<inbox>.<n>`), and that is where the server
+// addresses the status that ends it. A record names no request — it arrives
+// under the subject it was stored on — so records are counted against the
+// request standing, of which a fetch keeps one. Statuses had been counted the
+// same way, against the oldest request, and the server sends one the client
+// has nothing left to count it against: a request carrying a byte bound whose
+// BATCH fills with bytes to spare is ended, and then followed by a
+// `409 Batch Completed` (nats-server's consumer.go, after the delivery that
+// filled it). The client had already counted that request out on its last
+// record, so the status ended the NEXT fetch's request instead, the fetch
+// sent another, and the server held two — measured in
+// TestAPullHonoursBothOfItsBounds as five records in flight after pulls that
+// returned four, whenever the status reached the callback after the next
+// request was sent. Addressed by its own subject, a status for a request no
+// longer counted — that trailing one, or a `408` for a request presumed gone
+// — ends nothing.
 
 // pullGrace is how long past its own expiry a request is still counted as one
 // the server may be serving.
@@ -114,7 +135,10 @@ type puller struct {
 	nc      *nats.Conn
 	log     *slog.Logger
 	subject string // the consumer's MSG.NEXT subject, in the connection's API
-	sub     *nats.Subscription
+	// inbox is the standing inbox's prefix: [puller.sub] holds every subject
+	// beneath it, and each request replies on one of its own.
+	inbox string
+	sub   *nats.Subscription
 
 	// fetching serialises fetches: the buffer's order is the log's, and two
 	// readers would each take part of it.
@@ -133,8 +157,10 @@ type puller struct {
 	// behind it: the burst it belonged to is complete.
 	settled bool
 	// requests are the requests the server may still be serving, oldest
-	// first — the order the server fills and ends them in.
+	// first — the order the server fills them in.
 	requests []*standingRequest
+	// sent numbers the requests, naming each one's reply subject.
+	sent uint64
 	// failure is a status that ended a request as a failure, for the next
 	// fetch to report.
 	failure error
@@ -147,6 +173,9 @@ type puller struct {
 // standingRequest is one request as the client counts it: what the server
 // still owes it, and when the client stops expecting its end.
 type standingRequest struct {
+	// reply is the subject the server answers this request on, and so the
+	// subject of the status that ends it. Empty for none the server holds.
+	reply string
 	batch int
 	// bytesLeft is what is left of a byte bound, and bounded whether the
 	// request carried one.
@@ -161,14 +190,21 @@ func (q *Queue) newPuller(stream, consumer string) (*puller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: address the pulls on %s: %w", consumer, err)
 	}
-	p := &puller{nc: q.nc, log: q.log, subject: subject, wake: make(chan struct{}, 1)}
+	p := &puller{nc: q.nc, log: q.log, subject: subject, inbox: q.nc.NewInbox(),
+		wake: make(chan struct{}, 1)}
 	// A CALLBACK SUBSCRIPTION rather than a channel one. A channel the
 	// library delivers into drops what finds it full, and a dropped
 	// delivery is a record in flight that nobody holds until the ack
 	// window returns it — so it would have to be sized by the largest
 	// batch, which is the allocation this file exists to remove. The
 	// callback's queue grows with what arrives.
-	if p.sub, err = q.nc.Subscribe(q.nc.NewInbox(), p.deliver); err != nil {
+	//
+	// ONE WILDCARD rather than a subscription per request, so that every
+	// reply subject is covered before its request is sent: a subscription
+	// made per request has to reach the server — and across a leaf link,
+	// the hub — before the request does, or the server finds no interest
+	// in the reply and drops the request.
+	if p.sub, err = q.nc.Subscribe(p.inbox+".*", p.deliver); err != nil {
 		return nil, fmt.Errorf("jetstream: subscribe the pulls on %s: %w", consumer, err)
 	}
 	return p, nil
@@ -238,18 +274,20 @@ func (p *puller) request(batch, maxBytes int, wait time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("jetstream: encode a pull: %w", err)
 	}
-	if err := p.nc.PublishRequest(p.subject, p.sub.Subject, body); err != nil {
+	p.sent++
+	reply := p.inbox + "." + strconv.FormatUint(p.sent, 10)
+	if err := p.nc.PublishRequest(p.subject, reply, body); err != nil {
 		return fmt.Errorf("jetstream: send a pull: %w", err)
 	}
 	p.requests = append(p.requests, &standingRequest{
-		batch: batch, bytesLeft: maxBytes, bounded: maxBytes > 0,
+		reply: reply, batch: batch, bytesLeft: maxBytes, bounded: maxBytes > 0,
 		until: time.Now().Add(max(wait, 0) + pullGrace),
 	})
 	return nil
 }
 
 // deliver is the inbox's callback: one delivery, or one status about the
-// oldest standing request.
+// request whose reply subject it arrived on.
 func (p *puller) deliver(msg *nats.Msg) {
 	status, failure := pullStatus(msg)
 	p.mu.Lock()
@@ -271,9 +309,13 @@ func (p *puller) deliver(msg *nats.Msg) {
 		meta, unreadable := msg.Metadata()
 		p.settled = unreadable != nil || meta.NumPending == 0
 		if len(p.requests) > 0 {
-			// The server fills its requests oldest first, and one it
-			// has filled — a batch met, or a byte bound met exactly —
-			// it removes without a word.
+			// A record names no request, and the server fills the
+			// requests it holds in turn, so it is counted against
+			// the oldest. One that fills — its batch met, or a byte
+			// bound met exactly — the server has ended: with no
+			// word, or, for a batch met under a byte bound with
+			// bytes to spare, with a `409 Batch Completed` naming a
+			// request no longer counted here.
 			r := p.requests[0]
 			r.batch--
 			r.bytesLeft -= msg.Size()
@@ -286,8 +328,13 @@ func (p *puller) deliver(msg *nats.Msg) {
 		p.mu.Unlock()
 		return
 	default:
-		if len(p.requests) > 0 {
-			p.requests = p.requests[1:]
+		// THE REQUEST THE STATUS NAMES, wherever it stands, and none if
+		// it names one no longer counted — see the head of this file.
+		for i, r := range p.requests {
+			if r.reply == msg.Subject {
+				p.requests = append(p.requests[:i:i], p.requests[i+1:]...)
+				break
+			}
 		}
 		if failure != nil {
 			p.failure = failure
