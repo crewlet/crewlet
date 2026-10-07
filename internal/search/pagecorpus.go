@@ -73,8 +73,8 @@ const (
 // pageSelectionStatement: the published pages whose vector in the asked space
 // is missing or was computed from another body, title or container, oldest
 // first, each with its key, its title and the digest of the vector it has
-// there — and not its body, which pageOpeningStatement reads for the pages
-// the selection keeps ([selectStale]). Bound: the space twice, the limit.
+// there — and not its body, which pageOpeningRead reads for the pages the
+// selection keeps ([selectStale]). Bound: the space twice, the limit.
 const pageSelectionStatement = `
 	SELECT p.id, p.container, p.edit_version, p.title,
 	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
@@ -124,7 +124,8 @@ const pageCoverageStatement = `
 
 // pageSelection, pageOpeningRead, pageWithdrawals and pageCoverageCount are
 // the four statements this corpus runs, each with its arguments — one place,
-// so the plan gate explains what runs rather than a copy.
+// so the plan gate explains what runs rather than a copy. Each is what runs:
+// pageOpeningRead is the [openingRead] [selectStale] prepares and binds.
 func pageSelection(model string, dim, limit int) (string, []any) {
 	return pageSelectionStatement, []any{model, dim, model, dim, limit}
 }
@@ -154,7 +155,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int, hel
 		statement, args := pageSelection(model, dim, limit+held.Len())
 		var err error
 		if stale, err = selectStale(ctx, tx, statement, args, limit, held,
-			pageOpeningStatement); err != nil {
+			pageOpeningRead); err != nil {
 			return err
 		}
 

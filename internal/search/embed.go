@@ -1559,7 +1559,9 @@ const taskSelectionStatement = `
 	LIMIT ?`
 
 // TaskOpeningRead is the statement [TaskCorpus.Stale] reads one selected task's
-// opening with — by its primary key — and its arguments. See [TaskSelection].
+// opening with — by its primary key — and its arguments: the [openingRead]
+// [selectStale] runs, prepared once and bound per task, so the pair the plan
+// gate explains is the pair that runs. See [TaskSelection].
 func TaskOpeningRead(id string) (string, []any) {
 	return taskOpeningStatement, []any{embedReadChars, id}
 }
@@ -1610,7 +1612,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int, hel
 		statement, args := TaskSelection(model, dim, limit+held.Len())
 		var err error
 		if stale, err = selectStale(ctx, tx, statement, args, limit, held,
-			taskOpeningStatement); err != nil {
+			TaskOpeningRead); err != nil {
 			return err
 		}
 
@@ -1634,6 +1636,12 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int, hel
 // that held does not hold, and then reads each kept source's opening with
 // opening, by its primary key, inside the same transaction.
 //
+// THE OPENING READ IS RUN AS THE CORPUS NAMES IT, statement and arguments both
+// ([openingRead]), never with arguments bound here: the plan gate explains the
+// pair the corpus's own function returns ([TaskOpeningRead]), and arguments
+// this function bound itself would be a second copy of that list for the gate
+// to certify while something else ran.
+//
 // TWO STATEMENTS RATHER THAN ONE, and the pass-over is why. A held source is
 // recognised by its key ([Held]), so it is passed over before its body is
 // read; read in the selection itself, every held source's body — up to
@@ -1651,7 +1659,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int, hel
 // the source was selected at, and a vector would be published as one text's
 // while computed from another's.
 func selectStale(ctx context.Context, tx *sql.Tx, statement string, args []any,
-	limit int, held Held, opening string) ([]Document, error) {
+	limit int, held Held, opening openingRead) ([]Document, error) {
 	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
@@ -1679,13 +1687,21 @@ func selectStale(ctx context.Context, tx *sql.Tx, statement string, args []any,
 	if len(stale) == 0 {
 		return nil, nil
 	}
-	read, err := tx.PrepareContext(ctx, opening)
+	prepared, _ := opening(stale[0].ID)
+	read, err := tx.PrepareContext(ctx, prepared)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = read.Close() }()
 	for i := range stale {
-		if err := read.QueryRowContext(ctx, embedReadChars, stale[i].ID).Scan(&stale[i].Body); err != nil {
+		statement, args := opening(stale[i].ID)
+		if statement != prepared {
+			return nil, fmt.Errorf("read the opening of %s: the corpus's opening "+
+				"read names another statement for it than for %s — an opening "+
+				"read is one statement for every source, prepared once a "+
+				"selection", stale[i].ID, stale[0].ID)
+		}
+		if err := read.QueryRowContext(ctx, args...).Scan(&stale[i].Body); err != nil {
 			// NOT EVEN sql.ErrNoRows is an answer here: the row was
 			// read a moment ago in this same snapshot.
 			return nil, fmt.Errorf("read the opening of %s: %w", stale[i].ID, err)
@@ -1693,6 +1709,13 @@ func selectStale(ctx context.Context, tx *sql.Tx, statement string, args []any,
 	}
 	return stale, nil
 }
+
+// openingRead is a corpus's read of one selected source's opening by its
+// primary key — the statement and its arguments for that source
+// ([TaskOpeningRead]) — and it is ONE STATEMENT FOR EVERY SOURCE, only the
+// arguments naming the source, which is what lets [selectStale] prepare it
+// once a selection rather than a thousand times.
+type openingRead func(id string) (statement string, args []any)
 
 // selectGone runs a corpus's withdrawals statement: the ids of vectors whose
 // source is gone.
