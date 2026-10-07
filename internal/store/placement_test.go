@@ -250,27 +250,7 @@ var nodeEstatePlacements = []placement{
 	// A per-node OBSERVATION about shared infrastructure. Two nodes
 	// legitimately hold different answers, which is what makes a shared
 	// copy wrong rather than merely unnecessary.
-	//
-	// `chat_thread_follows` was in this group and did not belong: two
-	// nodes holding different follows is not a legitimate difference, it
-	// is the bug. It is in coordination now — see ADR-0003 and node
-	// migration 0028 — and the table that remains is the handoff source
-	// rather than a member of this group.
 	// -----------------------------------------------------------------
-	{
-		Table: "chat_thread_follows",
-		Why: "NOT a fact this node decides — the follows are coordination's, " +
-			"and migration 0028 is why. What is left here is the one-time " +
-			"HANDOFF SOURCE: rows written before the move are carried onto " +
-			"the fleet's bucket at the next start by " +
-			"internal/notify/followsync, exactly as internal/fleetsecrets " +
-			"carries secret_values. Nothing reads it at runtime and nothing " +
-			"writes it, so its steady state is empty. It is not dropped " +
-			"because a migration runs before any Go code on every boot — so " +
-			"a drop here, or in any later numbered file a database could " +
-			"apply in the same pass, would leave the handoff an empty table " +
-			"and silently destroy every ACTIVE thread subscription.",
-	},
 	{
 		Table: "stream_identity",
 		Why: "What this node last saw of each stream's identity, which is how " +

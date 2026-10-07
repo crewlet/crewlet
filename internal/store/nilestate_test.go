@@ -181,10 +181,9 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		// a [store.ReplicatedHandle] — whose own roster is the next test — at
 		// every site across internal/search, internal/tracker and
 		// internal/engine that once took a nil peer and segfaulted.
-		"Configs":       func(t *testing.T) { _ = d.Configs() },
-		"Events":        func(t *testing.T) { _ = d.Events() },
-		"SecretValues":  func(t *testing.T) { _ = d.SecretValues(nil) },
-		"ThreadFollows": func(t *testing.T) { _ = d.ThreadFollows() },
+		"Configs":      func(t *testing.T) { _ = d.Configs() },
+		"Events":       func(t *testing.T) { _ = d.Events() },
+		"SecretValues": func(t *testing.T) { _ = d.SecretValues(nil) },
 	}
 
 	// THE ROSTER IS THE TYPE'S OWN. A method added to *DB and not classified

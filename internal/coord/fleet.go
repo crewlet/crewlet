@@ -1302,20 +1302,4 @@ type Follows interface {
 	// re-assert loses by a nanosecond — and the next mention re-follows
 	// through the ordinary path.
 	Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error)
-
-	// FollowIfAbsent records a follow only where none exists, reporting
-	// whether this call created it.
-	//
-	// THE ONE-TIME HANDOFF'S WRITE — see internal/notify/followsync — and
-	// create-only is what makes it safe to run while inbound chat is live.
-	// A plain Follow would overwrite whatever the fleet already holds: a
-	// stale local row landing on top of a fresh mention downgrades the
-	// reason an operator reads, and one whose fleet copy was unfollowed
-	// after the move began would be resurrected by a node that booted late.
-	//
-	// It is also what makes two nodes handing off at once correct with
-	// nothing agreed between them: both hold their own local table, the
-	// keys overlap, exactly one create wins, and the loser removes its own
-	// row having learned the fleet already has the record.
-	FollowIfAbsent(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error)
 }
