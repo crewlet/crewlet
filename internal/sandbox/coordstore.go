@@ -93,6 +93,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// Not the caller's to choose: a row exists to be launched into, and
 	// the only status that can mean is launching.
 	run.Status = StatusLaunching
+	// OWNED BY THE LEASE THAT LAUNCHED IT — see [PendingStore.BeginLaunch].
+	if fence.Fenced() {
+		run.Owner, run.OwnerEpoch = fence.Owner, fence.Epoch
+	}
 	// Nor is the name of the job, and it is new on every launch, the
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
@@ -124,6 +128,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		existing.Launch = run.Launch
+		if fence.Fenced() {
+			existing.Owner, existing.OwnerEpoch = fence.Owner, fence.Epoch
+		}
 		// The previous job's suspension is not this job's. Left in place
 		// it is worse than absent: a completion claimed before the new
 		// suspension lands would resume the conversation the LAST call
@@ -211,6 +218,13 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		}
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
+		if run.Answer != nil && run.Answer.Taken() {
+			// The turn that took it gave the claim back as a retry, so
+			// the answer is the run's again — see [RecordedAnswer.TakenAt].
+			answer := *run.Answer
+			answer.TakenAt = time.Time{}
+			run.Answer = &answer
+		}
 		if release.Published {
 			// Onto THIS job's record, starting one where the row carries
 			// none of its own: a row an older build launched has no record,
@@ -305,29 +319,55 @@ func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, a
 	return declined, won, err
 }
 
-// OweHandBack records the copies a run that is about to end owes the seat. See
+// TakeAnswer records that a claimed run's turn took its recorded answer. See
 // the contract on [PendingStore].
-func (s *CoordStore) OweHandBack(ctx context.Context, turnID, launch string, handBack []HandedBack,
-	fence Fence,
-) (bool, error) {
-	if len(handBack) == 0 {
-		return false, fmt.Errorf("sandbox: owing run %s's seat a hand-back of nothing", turnID)
-	}
-	owed := false
+func (s *CoordStore) TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
+	taken := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.Status != StatusResumed || run.LaunchID != launch || outranked(*run, fence) {
+		if run.Status != StatusResumed || run.LaunchID != launch || run.Answer == nil ||
+			outranked(*run, fence) {
+			return false
+		}
+		if taken = run.Answer.Taken(); taken {
+			return false
+		}
+		answer := *run.Answer
+		answer.TakenAt = s.clock()
+		run.Answer = &answer
+		return true
+	})
+	return won || (err == nil && taken), err
+}
+
+// OweHandBack lets go of the recorded answer a claimed run is ending without,
+// owing its copies to the seat in the same write. See the contract on
+// [PendingStore].
+func (s *CoordStore) OweHandBack(ctx context.Context, turnID, launch string, answer []string,
+	handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
+	if len(answer) == 0 || len(handBack) == 0 {
+		return PendingRun{}, false, fmt.Errorf("sandbox: letting go of an answer to run %s that "+
+			"names no delivery or owes no copy", turnID)
+	}
+	var owing PendingRun
+	owed := false
+	written, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.LaunchID != launch || run.Answer == nil ||
+			outranked(*run, fence) || !slices.Equal(run.Answer.EventIDs, answer) {
 			return false
 		}
 		if owed = len(run.HandBack) > 0; owed {
+			owing = *run
 			return false
 		}
+		run.Answer = nil
 		run.HandBack = slices.Clone(handBack)
 		return true
 	})
 	if err == nil && owed {
-		err = fmt.Errorf("sandbox: owing run %s's seat a hand-back: %w", turnID, ErrHandBackOwed)
+		return owing, false, fmt.Errorf("sandbox: letting go of run %s's answer: %w", turnID, ErrHandBackOwed)
 	}
-	return won, err
+	return written, won, err
 }
 
 // ClearHandBack removes published copies from a run's hand-back. See the

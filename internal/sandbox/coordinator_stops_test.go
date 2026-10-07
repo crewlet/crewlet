@@ -791,12 +791,19 @@ func (s *refusingStore) DeclineAnswer(ctx context.Context, turnID, launch string
 }
 
 func (s *refusingStore) OweHandBack(ctx context.Context, turnID, launch string,
-	handBack []HandedBack, fence Fence,
-) (bool, error) {
+	answer []string, handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
 	if s.called("OweHandBack") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.OweHandBack(ctx, turnID, launch, answer, handBack, fence)
+}
+
+func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
+	if s.called("TakeAnswer") {
 		return false, errRefusedCall
 	}
-	return s.inner.OweHandBack(ctx, turnID, launch, handBack, fence)
+	return s.inner.TakeAnswer(ctx, turnID, launch, fence)
 }
 
 func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error) {

@@ -112,9 +112,6 @@ type LaunchRequest struct {
 	// provisions a fresh box, and the work re-seeds from the pushed branch.
 	ReuseBox string
 
-	// Fence is the ownership token every mutation on the row carries.
-	Fence Fence
-
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -175,6 +172,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if strings.TrimSpace(req.Brief) == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs a brief")
 	}
+	// THE SEAT'S LEASE, which the row is stamped with and every write below
+	// carries — see [CoordinatorOptions.Lease].
+	fence := c.leaseOf(req.Turn.AgentHandle)
 
 	// The row FIRST, so a crash between here and the box leaves a record
 	// rather than nothing. It opens in [StatusLaunching] and stays there
@@ -209,7 +209,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// the rest of that record on the launch it mints.
 		Launch:    LaunchRecord{Model: launchModel(req.LLM)},
 		CreatedAt: now(),
-	}, req.Fence); err != nil {
+	}, fence); err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
 	}
 	// HELD FROM HERE, before anything below can fail or the turn can
@@ -223,7 +223,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// point closes it: a run left LAUNCHING is polled by nothing and
 		// claimed by nothing, so it sits on its seat's busy count and its
 		// box until the seat happens to move to another node.
-		c.abandon(ctx, m, req, "")
+		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, err
 	}
 
@@ -231,8 +231,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if err = store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
 		PauseTTLSec: req.Spec.PauseTTLSec,
-	}, req.Fence); err != nil {
-		c.abandon(ctx, m, req, box.ID())
+	}, fence); err != nil {
+		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
 	}
 
@@ -249,7 +249,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		MCPServers: req.MCPServers,
 	})
 	if err != nil {
-		c.abandon(ctx, m, req, box.ID())
+		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: starting the coding agent: %w", err)
 	}
 
@@ -260,8 +260,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
-	}, req.Fence); err != nil {
-		c.abandon(ctx, m, req, box.ID())
+	}, fence); err != nil {
+		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
 	}
 
@@ -368,7 +368,7 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 // A context of its own, because the failure that got us here is often the
 // caller's context expiring — and a teardown skipped for that reason leaves a
 // box running to its TTL with nobody to collect it, and a row nobody settles.
-func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, sandboxID string) {
+func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest, fence Fence, sandboxID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	if sandboxID != "" {
@@ -385,7 +385,7 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	// Every live status, like every other settle that has already reclaimed
 	// the box: this launch is abandoned whatever the row reached.
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
-	if _, _, err := c.endRecord(ctx, run, req.Fence, Active); err != nil {
+	if _, _, err := c.endRecord(ctx, run, ending{fence: fence, whileIn: Active}); err != nil {
 		log.WarnContext(ctx, "sandbox_launch_finish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}

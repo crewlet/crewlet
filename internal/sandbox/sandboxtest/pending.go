@@ -1,8 +1,9 @@
 // Package sandboxtest is the pending-run store's contract suite.
 //
 // THE PROPERTIES THAT MATTER HERE ARE THE STORE'S. The at-most-once tail claim,
-// the scoped release and the charge record it carries, the epoch fence, the
-// box record's two halves moving together: each is a conditional write, not
+// the scoped release and the charge record it carries, the epoch fence and the
+// launch that stamps it, an answer taken by a turn or let go of but never both,
+// the box record's two halves moving together: each is a conditional write, not
 // code around one, so a suite that ran only against a fake would assert the
 // author's intent and nothing about the store. The one implementation is
 // [sandbox.CoordStore]. The record operations it is built on are certified on
@@ -81,6 +82,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ParkingCarriesTheBranch", testParkingCarriesTheBranch},
 		{"OwnershipIsNotStolenByAnOlderLease", testOwnershipIsNotStolenByAnOlderLease},
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
+		{"ALaunchStampsTheLeaseThatLaunchedIt", testALaunchStampsTheLeaseThatLaunchedIt},
 		{"ReleasingABoxClearsBothHalves", testReleasingABoxClearsBothHalves},
 		{"ExecuteStateRoundTrips", testExecuteStateRoundTrips},
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
@@ -99,6 +101,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ADeclineOwesItsCopiesInTheSameWrite", testADeclineOwesItsCopiesInTheSameWrite},
 		{"WhatARowOwesTheSeatIsBoundedAndOutlivesNothing", testWhatARowOwesTheSeatIsBoundedAndOutlivesNothing},
 		{"AnEndingRecordsTheReplyItLetsGoOnItsClaim", testAnEndingRecordsTheReplyItLetsGoOnItsClaim},
+		{"ALetGoWaitsForTheCopiesAlreadyOwed", testALetGoWaitsForTheCopiesAlreadyOwed},
+		{"ATurnTakesTheAnswerItsClaimDrives", testATurnTakesTheAnswerItsClaimDrives},
 		{"ANewQuestionForgetsTheLastOnesAnswer", testANewQuestionForgetsTheLastOnesAnswer},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -1071,6 +1075,58 @@ func testOwnershipIsNotStolenByAnOlderLease(t *testing.T, s sandbox.PendingStore
 	// within one lease must not be locked out of it.
 	if won, err := s.ClaimOwnership(t.Context(), "t1", "node-b:3", 5); err != nil || !won {
 		t.Errorf("a node could not re-claim its own run: won=%v err=%v", won, err)
+	}
+}
+
+// A RUN IS OWNED BY THE LEASE THAT LAUNCHED IT: a fenced launch stamps its
+// fence on the row, so the launching node's own writes — which carry that fence
+// back off the row — are refused once the seat's next holder fences the row to
+// a newer lease. Unstamped, the row sat at the zero epoch, and the zero fence
+// constrains nothing: the node that lost the seat could release a claim the
+// next holder had reaped. A relaunch restamps; an unfenced launch stamps
+// nothing.
+func testALaunchStampsTheLeaseThatLaunchedIt(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	lease := sandbox.Fence{Owner: "node-a:1", Epoch: 3}
+	if err := s.BeginLaunch(ctx, run("t1"), lease); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.Owner != lease.Owner || got.OwnerEpoch != lease.Epoch {
+		t.Fatalf("owner %q epoch %d, want the launching lease %+v", got.Owner, got.OwnerEpoch, lease)
+	}
+	if ok, err := s.MarkSuspended(ctx, "t1", suspension()); err != nil || !ok {
+		t.Fatalf("MarkSuspended = %v, %v", ok, err)
+	}
+	launch := mustGet(t, s, "t1").LaunchID
+	claimed, ok, err := s.ClaimForResume(ctx, "t1", sandbox.CompletionTail(launch))
+	if err != nil || !ok || claimed.OwnerEpoch != lease.Epoch {
+		t.Fatalf("claim = %v (epoch %d), %v, want it carrying the launching lease", ok,
+			claimed.OwnerEpoch, err)
+	}
+	// THE NEXT HOLDER FENCES IT, and the launching node's release is refused.
+	if ok, err := s.ClaimOwnership(ctx, "t1", "node-b:1", 4); err != nil || !ok {
+		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
+	}
+	if released, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{
+		Launch: launch, To: sandbox.StatusRunning,
+		Fence: sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch},
+	}); err != nil || released {
+		t.Fatalf("the launching node's release after the next holder fenced the row = %v, %v, "+
+			"want refused", released, err)
+	}
+	// A RELAUNCH RESTAMPS, under the lease that relaunched.
+	if err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{Owner: "node-c:1", Epoch: 6}); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.Owner != "node-c:1" || got.OwnerEpoch != 6 {
+		t.Fatalf("owner %q epoch %d after the relaunch, want node-c:1 at 6", got.Owner, got.OwnerEpoch)
+	}
+	// AN UNFENCED LAUNCH STAMPS NOTHING.
+	if err := s.BeginLaunch(ctx, run("t2"), sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch t2: %v", err)
+	}
+	if got := mustGet(t, s, "t2"); got.Owner != "" || got.OwnerEpoch != 0 {
+		t.Fatalf("an unfenced launch stamped %q at %d", got.Owner, got.OwnerEpoch)
 	}
 }
 
@@ -2292,40 +2348,169 @@ func testWhatARowOwesTheSeatIsBoundedAndOutlivesNothing(t *testing.T, s sandbox.
 }
 
 // AN ENDING THAT LETS A REPLY GO RECORDS IT FIRST, on the claim it ends: only on
-// the run the caller claimed, on that launch, and only one decline's worth.
+// the run the caller claimed, on that launch, holding that answer, and only one
+// decline's worth. The answer leaves the row in the same write, so a let-go
+// repeated after a crash finds nothing left to let go of.
 func testAnEndingRecordsTheReplyItLetsGoOnItsClaim(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
 	launch := mustGet(t, s, "t1").LaunchID
-	owe := func(launch string) (bool, error) {
-		return s.OweHandBack(ctx, "t1", launch, []sandbox.HandedBack{copyOf("r1")}, sandbox.Fence{})
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
-	// NOT A CLAIM: a parked run is nobody's to end with a reply.
-	if ok, err := owe(launch); err != nil || ok {
+	owe := func(launch string, answer ...string) (sandbox.PendingRun, bool, error) {
+		return s.OweHandBack(ctx, "t1", launch, answer, []sandbox.HandedBack{copyOf("r1")}, sandbox.Fence{})
+	}
+	// NOT A CLAIM: an answered run is owed its resume, not an ending.
+	if _, ok, err := owe(launch, "r1"); err != nil || ok {
 		t.Fatalf("OweHandBack on a run nobody claimed = %v, %v, want refused", ok, err)
 	}
-	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.AnswerTail(launch)); err != nil || !ok {
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch)); err != nil || !ok {
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
 	}
-	if ok, err := owe("another-launch"); err != nil || ok {
+	if _, ok, err := owe("another-launch", "r1"); err != nil || ok {
 		t.Fatalf("OweHandBack for another launch = %v, %v, want refused", ok, err)
 	}
-	if _, err := s.OweHandBack(ctx, "t1", launch, nil, sandbox.Fence{}); err == nil {
+	if _, ok, err := owe(launch, "other"); err != nil || ok {
+		t.Fatalf("OweHandBack of an answer the run does not hold = %v, %v, want refused", ok, err)
+	}
+	if _, _, err := s.OweHandBack(ctx, "t1", launch, []string{"r1"}, nil, sandbox.Fence{}); err == nil {
 		t.Error("a hand-back of nothing was accepted")
 	}
-	if ok, err := owe(launch); err != nil || !ok {
+	if _, _, err := owe(launch); err == nil {
+		t.Error("a let-go naming no delivery was accepted")
+	}
+	written, ok, err := owe(launch, "r1")
+	if err != nil || !ok {
 		t.Fatalf("OweHandBack on the claim = %v, %v", ok, err)
 	}
-	if got := mustGet(t, s, "t1"); len(got.HandBack) != 1 || got.HandBack[0].ID != "r1-copy" {
-		t.Fatalf("hand-back = %+v, want r1's copy owed", got.HandBack)
+	for name, got := range map[string]sandbox.PendingRun{"returned": written, "stored": mustGet(t, s, "t1")} {
+		if got.Status != sandbox.StatusResumed || got.Answer != nil ||
+			len(got.HandBack) != 1 || got.HandBack[0].ID != "r1-copy" {
+			t.Fatalf("%s row = %q answer %+v hand-back %+v, want the claim kept, the answer gone "+
+				"and r1's copy owed, from the one write", name, got.Status, got.Answer, got.HandBack)
+		}
 	}
-	if ok, err := owe(launch); !errors.Is(err, sandbox.ErrHandBackOwed) || ok {
-		t.Fatalf("a second OweHandBack over owed copies = %v, %v, want ErrHandBackOwed", ok, err)
+	// LET GO ONCE: a repeat finds no answer left to let go of.
+	if _, ok, err := owe(launch, "r1"); err != nil || ok {
+		t.Fatalf("a second let-go of the same answer = %v, %v, want refused", ok, err)
 	}
-	if ok, err := s.OweHandBack(ctx, "gone", launch, []sandbox.HandedBack{copyOf("r1")},
-		sandbox.Fence{}); err != nil || ok {
+	// AND NEVER TAKEN AFTER IT: the reply is the seat's now.
+	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
+		t.Fatalf("TakeAnswer after the answer was let go = %v, %v, want refused", ok, err)
+	}
+	if _, ok, err := s.OweHandBack(ctx, "gone", launch, []string{"r1"},
+		[]sandbox.HandedBack{copyOf("r1")}, sandbox.Fence{}); err != nil || ok {
 		t.Errorf("OweHandBack on a run that does not exist = %v, %v", ok, err)
+	}
+}
+
+// A LET-GO WAITS FOR THE COPIES ALREADY OWED, and says what they are: a claimed
+// answer is let go of only once an earlier decline's copies are out, so the row
+// never owes more than one decline's worth.
+func testALetGoWaitsForTheCopiesAlreadyOwed(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer r1 = %v, %v", ok, err)
+	}
+	if ok, err := decline(t, s, launch, "r1"); err != nil || !ok {
+		t.Fatalf("DeclineAnswer r1 = %v, %v", ok, err)
+	}
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r2", "use dev")); err != nil || !ok {
+		t.Fatalf("RecordAnswer r2 = %v, %v", ok, err)
+	}
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch)); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	owing, ok, err := s.OweHandBack(ctx, "t1", launch, []string{"r2"},
+		[]sandbox.HandedBack{copyOf("r2")}, sandbox.Fence{})
+	if !errors.Is(err, sandbox.ErrHandBackOwed) || ok ||
+		len(owing.HandBack) != 1 || owing.HandBack[0].ID != "r1-copy" {
+		t.Fatalf("a let-go over owed copies = %v, %+v, %v, want refused with r1's copy", ok,
+			owing.HandBack, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Answer == nil || len(got.HandBack) != 1 {
+		t.Fatalf("answer %+v hand-back %+v, want r2 still on the claim and only r1's copy owed",
+			got.Answer, got.HandBack)
+	}
+	published(t, s, "r1-copy")
+	if _, ok, err := s.OweHandBack(ctx, "t1", launch, []string{"r2"},
+		[]sandbox.HandedBack{copyOf("r2")}, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("a let-go once r1's copy was out = %v, %v", ok, err)
+	}
+}
+
+// A TURN TAKES ITS ANSWER ONCE, on the claim that drives it, and a release
+// gives it back to the run for the retry: what the seat's next holder reads to
+// tell a reply a turn used from one nobody ever got to.
+func testATurnTakesTheAnswerItsClaimDrives(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main")); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	// NOT BEFORE THE CLAIM: an answer still owed its resume is nobody's.
+	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || ok {
+		t.Fatalf("TakeAnswer before the claim = %v, %v, want refused", ok, err)
+	}
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch)); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Answer == nil || got.Answer.Taken() {
+		t.Fatalf("answer %+v, want it claimed and NOT taken: a claim is not a turn", got.Answer)
+	}
+	if ok, err := s.TakeAnswer(ctx, "t1", "another-launch", sandbox.Fence{}); err != nil || ok {
+		t.Fatalf("TakeAnswer for another launch = %v, %v, want refused", ok, err)
+	}
+	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("TakeAnswer = %v, %v", ok, err)
+	}
+	taken := mustGet(t, s, "t1").Answer
+	if taken == nil || !taken.Taken() {
+		t.Fatalf("answer %+v, want it taken", taken)
+	}
+	// IDEMPOTENT, and the instant is the first one's.
+	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("a repeated TakeAnswer = %v, %v, want true", ok, err)
+	}
+	if got := mustGet(t, s, "t1").Answer; !got.TakenAt.Equal(taken.TakenAt) {
+		t.Errorf("a repeated take moved the instant from %v to %v", taken.TakenAt, got.TakenAt)
+	}
+	// A RELEASE GIVES IT BACK: the retry's turn takes it again.
+	if released, err := s.ReleaseClaim(ctx, "t1", sandbox.Release{
+		Launch: launch, To: sandbox.StatusAnswered,
+	}); err != nil || !released {
+		t.Fatalf("ReleaseClaim = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusAnswered || got.Answer == nil ||
+		got.Answer.Taken() {
+		t.Fatalf("run = %q answer %+v, want it owed again and not taken", got.Status, got.Answer)
+	}
+	// A NEWER LEASE FENCES A TAKE OUT: the seat's next holder decides on a
+	// row nobody who lost the seat can still write.
+	if _, ok, err := s.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(launch)); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if ok, err := s.ClaimOwnership(ctx, "t1", "next", 5); err != nil || !ok {
+		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
+	}
+	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{Owner: "old", Epoch: 1}); err != nil || ok {
+		t.Fatalf("TakeAnswer under an outranked fence = %v, %v, want refused", ok, err)
+	}
+	if got := mustGet(t, s, "t1").Answer; got == nil || got.Taken() {
+		t.Fatalf("answer %+v, want it untaken after the outranked take", got)
+	}
+	if ok, err := s.TakeAnswer(ctx, "t1", launch, sandbox.Fence{Owner: "next", Epoch: 5}); err != nil || !ok {
+		t.Fatalf("TakeAnswer under the row's own lease = %v, %v", ok, err)
+	}
+	if ok, err := s.TakeAnswer(ctx, "gone", launch, sandbox.Fence{}); err != nil || ok {
+		t.Errorf("TakeAnswer on a run that does not exist = %v, %v", ok, err)
 	}
 }
 

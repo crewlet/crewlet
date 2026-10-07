@@ -1,0 +1,110 @@
+package engine
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/workkey"
+)
+
+// A LAUNCH THE ENGINE MAKES IS STAMPED WITH THE LEASE IT HOLDS THE SEAT UNDER,
+// through the coordinator it builds — the wiring between the seat host that
+// knows the lease and the coordinator that stamps the row, which a coordinator
+// test with a fixed lease cannot see. It is what lets the seat's next holder
+// fence this node off the run: a row left at the zero epoch is fenced by
+// nothing.
+func TestTheEngineStampsALaunchWithItsSeatLease(t *testing.T) {
+	t.Parallel()
+	e := sandboxNode(t, nil)
+	applyOK(t, e, sandboxDoc(""))
+	waitHeld(t, e, "swe")
+	rt := e.sandbox.Load()
+	manager := rt.coordinator.Manager()
+	if _, err := rt.coordinator.Launch(t.Context(), manager, sandbox.LaunchRequest{
+		Turn:  sandbox.TurnRef{TurnID: "t-stamped", AgentHandle: "swe", Role: "SWE"},
+		Brief: "fix the flake",
+		Spec: manager.BuildSpec(sandbox.SpecInput{
+			Placement: sandbox.Direct, CodingAgent: "claude-code",
+		}),
+	}); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	run, found, err := rt.pending.Get(t.Context(), "t-stamped")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	host := e.node.Host()
+	epoch, held := host.EpochFor("swe")
+	if !held || epoch == 0 {
+		t.Fatalf("the premise: the seat is held under a lease (%d, %v)", epoch, held)
+	}
+	if run.Owner != host.Owner() || run.OwnerEpoch != epoch {
+		t.Fatalf("the run is owned by %q at %d, want the seat's lease %q at %d",
+			run.Owner, run.OwnerEpoch, host.Owner(), epoch)
+	}
+}
+
+// A REPLY THE ENGINE'S REAP HANDS BACK IS SPENT IN ITS COMPLETION LEDGER FIRST.
+// A run whose claim died before its turn took the person's reply is reaped by
+// the seat's next holder — this node, as it takes the seat — and the reply goes
+// back to the inbox as a copy. Its original delivery is recorded as worked in
+// the fleet's completion ledger, through the dispatcher the engine builds, so
+// a node that recorded the answer and stopped before acknowledging it cannot
+// have the original come round afterwards as a second message.
+func TestTheEngineSpendsTheReplyItsReapHandsBack(t *testing.T) {
+	t.Parallel()
+	e := sandboxNode(t, nil)
+	reply := events.New(types.ExternalNotification{
+		NotificationSource: "slack", SourceEventType: "message",
+		Sender: "ana", Body: "use main",
+	}, events.TraceContext{})
+	seedClaimedAnswer(t, e, "t-reaped", reply)
+
+	applyOK(t, e, sandboxDoc(""))
+	waitHeld(t, e, "swe")
+	key := workkey.Derive([]string{reply.ID.String()})
+	eventually(t, "the reaped reply to be spent in the completion ledger", func() bool {
+		return e.dispatch.Completions.Worked(t.Context(), "swe", []string{key})[key]
+	})
+	eventually(t, "the reaped run to be ended", func() bool {
+		_, found, err := e.sandbox.Load().pending.Get(t.Context(), "t-reaped")
+		return err == nil && !found
+	})
+}
+
+// seedClaimedAnswer records a run on the swe seat that parked on a question,
+// was answered with reply, and was CLAIMED for the answer's resume by a node
+// that stopped before its turn took the answer.
+func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Event) {
+	t.Helper()
+	seedRunningRun(t, e, turnID, "box-"+turnID)
+	store := sandbox.NewCoordStore(e.backends.Fleet)
+	ctx := t.Context()
+	asked := time.Now().UTC().Add(-time.Hour)
+	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{
+		Question: "which branch?", AskedAt: asked,
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	raw, err := json.Marshal(reply)
+	if err != nil {
+		t.Fatalf("encode the reply: %v", err)
+	}
+	run, found, err := store.Get(ctx, turnID)
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	if _, ok, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
+		Text: "use main", EventIDs: []string{reply.ID.String()},
+		Events: []json.RawMessage{raw}, PostedAt: asked.Add(time.Minute),
+	}); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	if _, ok, err := store.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(run.LaunchID)); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+}

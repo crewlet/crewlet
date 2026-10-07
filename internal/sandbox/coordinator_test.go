@@ -76,12 +76,42 @@ type resumeSpy struct {
 	// the turn calling run_sandbox again (the box-reuse branch), or an event
 	// redelivered to the seat while the turn runs.
 	during func(ctx context.Context, run PendingRun)
+
+	// beforeTurn makes an [ErrResumeAbandoned] one that broke BEFORE the
+	// turn began — a panic re-entering the conversation — rather than one
+	// that broke after acting: [ResumeRequest.Begin] is never called.
+	beforeTurn bool
+
+	// begun counts the re-entries whose turn began ([ResumeRequest.Begin]
+	// answered nil).
+	begun int
+
+	// beforeBegin runs inside a re-entry whose turn is about to begin, before
+	// [ResumeRequest.Begin]: the window between a claim and its turn, which
+	// a stalled process can be caught in while the seat moves.
+	beforeBegin func(ctx context.Context)
 }
 
+// Resume is a re-entry as the engine makes one: a turn that runs — one that
+// returns nil, or breaks after acting — BEGINS first, and a Begin that refuses
+// stops it before it runs, with Begin's own error; every other failure is a
+// re-entry that never reached its turn.
 func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
-	err, during := s.err, s.during
-	if err == nil || errors.Is(err, ErrResumeAbandoned) {
+	err, during, beforeBegin := s.err, s.during, s.beforeBegin
+	runs := err == nil || (errors.Is(err, ErrResumeAbandoned) && !s.beforeTurn)
+	s.mu.Unlock()
+	if runs && beforeBegin != nil {
+		beforeBegin(ctx)
+	}
+	if runs && req.Begin != nil {
+		if beginErr := req.Begin(ctx); beginErr != nil {
+			return beginErr
+		}
+	}
+	s.mu.Lock()
+	if runs {
+		s.begun++
 		s.owned++
 	}
 	if err == nil {
@@ -94,6 +124,13 @@ func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 		during(ctx, req.Run)
 	}
 	return err
+}
+
+// turnsBegun is how many re-entries began their turn. See begun.
+func (s *resumeSpy) turnsBegun() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.begun
 }
 
 // ownedHolds is how many re-entries ended their own hold. See owned.
@@ -197,10 +234,29 @@ type coordRig struct {
 	mu      sync.Mutex
 	stopped []string
 
+	// spent is every delivery the coordinator recorded as worked
+	// ([CoordinatorOptions.Spent]), in order, with how many messages had
+	// reached the seat's inbox when it did.
+	spent []spentAt
+
 	// retries are the owed-answer attempts the coordinator scheduled, by
 	// the order it scheduled them: a test fires them when it chooses (see
 	// [coordRig.fireRetries]) rather than waiting out a real backoff.
 	retries scheduled
+}
+
+// spentAt is one delivery the coordinator recorded as worked.
+type spentAt struct {
+	handle, id      string
+	publishedBefore int
+}
+
+// spentDeliveries is every delivery the coordinator recorded as worked, in
+// order.
+func (r *coordRig) spentDeliveries() []spentAt {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]spentAt(nil), r.spent...)
 }
 
 // stoppedTurns is every turn the coordinator reported as stopped, in order,
@@ -228,6 +284,16 @@ func newCoordRig(t *testing.T) *coordRig {
 			rig.mu.Lock()
 			defer rig.mu.Unlock()
 			rig.stopped = append(rig.stopped, handle+"/"+turnID)
+		},
+		Spent: func(_ context.Context, handle string, evs []*events.Event) {
+			published := len(rig.handedBack())
+			rig.mu.Lock()
+			defer rig.mu.Unlock()
+			for _, ev := range evs {
+				rig.spent = append(rig.spent, spentAt{
+					handle: handle, id: ev.ID.String(), publishedBefore: published,
+				})
+			}
 		},
 		Now:   func() time.Time { return base.now },
 		After: rig.retries.after,
@@ -3525,7 +3591,7 @@ func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	rig.coordinator.settleFailed(ctx, run, types.SandboxFailureCollect,
-		"the box could not be read back")
+		"the box could not be read back", false)
 
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v, want the failed run's box %q: it will run to its "+

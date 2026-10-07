@@ -68,6 +68,23 @@ func successorOf(t *testing.T, rig *coordRig, store PendingStore) *coordRig {
 	return next
 }
 
+// A DECLINE SPENDS THE REPLY'S OWN DELIVERY BEFORE IT LETS THE REPLY GO: the
+// copy is the reply from then on, and the original coming round afterwards — a
+// node that recorded the answer and stopped before acknowledging it — must be
+// dropped by the completion ledger rather than worked beside the copy.
+func TestADeclineSpendsTheReplyBeforeLettingItGo(t *testing.T) {
+	rig := newCoordRig(t)
+	r1 := owedAnAnswerItCannotResume(t, rig)
+	rig.fireRetries() // the last attempt fails, and the answer is let go of
+	spent := rig.spentDeliveries()
+	if len(spent) != 1 || spent[0].id != r1.ID.String() || spent[0].publishedBefore != 0 {
+		t.Fatalf("spent %+v, want R1's own delivery recorded as worked before its copy went out", spent)
+	}
+	if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(r1.ID).String()}) {
+		t.Fatalf("handed back %v, want R1's copy once", got)
+	}
+}
+
 // STOPPED BEFORE THE WRITE: nothing is handed back, the answer is still the
 // run's, and the next holder resumes the run with it — the reply reaches the
 // seat once, as the answer, and never as a message as well.

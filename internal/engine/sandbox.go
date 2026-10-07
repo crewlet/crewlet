@@ -364,6 +364,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		DeliveredRefs: req.DeliveredRefs,
 		InputTokens:   req.InputTokens,
 		OutputTokens:  req.OutputTokens,
+		Begin:         req.Begin,
 	})
 }
 
@@ -449,6 +450,11 @@ type resumeInput struct {
 	// [sandbox.ResumeRequest.InputTokens].
 	InputTokens  int
 	OutputTokens int
+
+	// Begin is the coordinator's commit, called once the segment is certain
+	// to run and before any of it does — see [sandbox.ResumeRequest.Begin].
+	// Nil commits nothing.
+	Begin func(ctx context.Context) error
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -645,6 +651,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		})
 	if err != nil {
 		return err
+	}
+	// THE SEGMENT IS NOW CERTAIN TO RUN, and the coordinator records that
+	// before any of it does — for a person's recorded answer, that THIS TURN
+	// TOOK IT ([sandbox.ResumeRequest.Begin]). The row is all the seat's next
+	// holder can read if this process stops from here on, and it is what
+	// tells a reply a turn has used from one nobody ever got to, which goes
+	// back to the seat. A commit that cannot be made is a RETRY like every
+	// return above: nothing has run, and a turn run without it would be read
+	// after a crash as one that never got the answer — and the reply handed
+	// back to the seat a second time.
+	if in.Begin != nil {
+		if beginErr := in.Begin(ctx); beginErr != nil {
+			return beginErr
+		}
 	}
 	// THE SEGMENT IS ON THE RECORD ONCE IT IS CERTAIN TO RUN, and not a
 	// line earlier — which is where the dispatch path's start differs, and
@@ -1070,6 +1090,32 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	})
 }
 
+// launchFence is the seat lease a detached run is launched under, which the
+// run's row is stamped with and every later write the launching node makes on
+// it carries — see [sandbox.CoordinatorOptions.Lease]. The seat's next holder
+// fences the row to its own, newer lease, and from then on this node's writes
+// are refused rather than landing under it: a release that revives a claim the
+// holder has already reaped, or a resumed turn taking an answer it is handing
+// back.
+//
+// The lease's OWN owner, the incarnation [seat.Host.Owner] names, which is the
+// owner the seat's acquisition recovers its runs under — so a node fencing
+// its own rows after a restart within one lease writes the same token.
+//
+// Zero — an unfenced launch — on a node that holds no lease for the seat: one
+// with no seat host, which has no next holder to be fenced out by.
+func (e *Engine) launchFence(handle string) sandbox.Fence {
+	if e.node == nil {
+		return sandbox.Fence{}
+	}
+	host := e.node.Host()
+	epoch, held := host.EpochFor(handle)
+	if !held {
+		return sandbox.Fence{}
+	}
+	return sandbox.Fence{Owner: host.Owner(), Epoch: epoch}
+}
+
 // sandboxTurnRef is what a detached run's durable row records about the turn
 // that launched it.
 //
@@ -1437,11 +1483,37 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
 		Hold:  seatHold{engine: e},
 		Admit: e.mayResumeAnswer,
+		// A recorded answer that leaves its run by a route that does not
+		// hold its delivery — handed back, or taken by a retried resume's
+		// turn — is recorded as worked in the same completion ledger the
+		// dispatcher records a consumed answer in, so the original
+		// delivery coming round afterwards is dropped rather than run as a
+		// second message. See [sandbox.CoordinatorOptions.Spent].
+		Spent: e.spendAnswer,
+		// Every launch is stamped with the seat lease this node runs the
+		// seat under, so the seat's next holder can fence this node off
+		// the run. See [sandbox.CoordinatorOptions.Lease].
+		Lease: e.launchFence,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &sandboxRuntime{pending: pending, coordinator: coordinator}, nil
+}
+
+// spendAnswer records the deliveries a parked run's recorded answer arrived in
+// as worked, for the coordinator ([sandbox.CoordinatorOptions.Spent]).
+//
+// THE DISPATCHER'S OWN RECORD OF A CONSUMED ANSWER, written to the same fleet
+// completion ledger under the same keys ([Dispatcher.recordAnswered]), so a
+// copy of the delivery reaching the seat afterwards is dropped by the ledger
+// check every delivery passes — the one check that does not depend on the run
+// still being there to recognise it.
+func (e *Engine) spendAnswer(ctx context.Context, handle string, evs []*events.Event) {
+	if e.dispatch == nil {
+		return
+	}
+	e.dispatch.recordAnswered(ctx, handle, evs)
 }
 
 // startSandboxWaiter starts the completion poll, once the node exists and a

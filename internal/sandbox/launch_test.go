@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,52 @@ func launchReq(turnID string) LaunchRequest {
 
 // launchWorkSince is when the launching turn's unit of work began.
 var launchWorkSince = time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+
+// A LAUNCH IS STAMPED WITH THE LEASE ITS SEAT IS HELD UNDER, asked of the
+// coordinator's own [CoordinatorOptions.Lease] rather than handed in by each
+// launch path, so a path cannot forget it: the row carries the lease, and the
+// node's every later write carries it back off the row — which is what lets
+// the seat's next holder fence this node out. Launched unfenced, the row sat
+// at the zero epoch, which constrains nothing.
+func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
+	rig := newWaiterRig(t)
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t1"); got.Owner != rigLease.Owner || got.OwnerEpoch != rigLease.Epoch {
+		t.Fatalf("owner %q epoch %d, want the seat's lease %+v", got.Owner, got.OwnerEpoch, rigLease)
+	}
+	// AND A LAUNCH THAT FAILS ENDS ITS ROW UNDER IT, rather than unfenced.
+	fenced := &finishFences{PendingStore: rig.pending}
+	c, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: fenced, Manager: rig.manager,
+		Resume: &resumeSpy{}, Audience: &audienceSpy{},
+		Lease: func(string) Fence { return rigLease },
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(c.Stop)
+	rig.provider.CreateErr = errors.New("no capacity")
+	if _, err := c.Launch(t.Context(), rig.manager, launchReq("t2")); err == nil {
+		t.Fatal("a launch whose box could not be made succeeded")
+	}
+	if !slices.Equal(fenced.fences, []Fence{rigLease}) {
+		t.Fatalf("the failed launch ended its row under %+v, want the seat's lease", fenced.fences)
+	}
+}
+
+// finishFences records the fence every ending is asked under.
+type finishFences struct {
+	PendingStore
+	fences []Fence
+}
+
+func (s *finishFences) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+) (PendingRun, bool, error) {
+	s.fences = append(s.fences, fence)
+	return s.PendingStore.Finish(ctx, turnID, fence, whileIn)
+}
 
 func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	rig := newWaiterRig(t)
@@ -377,12 +424,14 @@ func launchWithoutBrief() LaunchRequest {
 
 // launchVia launches through a coordinator of its own over the rig's store and
 // queue, for a case about the launch rather than about what a coordinator
-// counts: the rig's own coordinator, where it has one, is left untouched.
+// counts: the rig's own coordinator, where it has one, is left untouched. The
+// seat is held under [rigLease], as a real node's is.
 func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
 	r.t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
 		Queue: r.queue, Pending: r.pending, Manager: m,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
+		Lease: func(string) Fence { return rigLease },
 	})
 	if err != nil {
 		r.t.Fatalf("NewCoordinator: %v", err)

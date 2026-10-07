@@ -159,13 +159,13 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
-	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+	if err := r.pending.BeginLaunch(ctx, run, rigLease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1",
 		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
-	}, Fence{}); err != nil {
+	}, rigLease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
 	return r.get(turnID)
@@ -174,6 +174,12 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // rigIteration is the executor iteration every rig launch suspends in. Not 1,
 // so a record that fell back to a default would show.
 const rigIteration = 2
+
+// rigLease is the seat lease every rig launch is made under, which the row is
+// stamped with as a real launch's is ([PendingStore.BeginLaunch]): its node's
+// writes carry it, and a seat's next holder — every successor a case hands the
+// seat to recovers it at a higher epoch — fences them out.
+var rigLease = Fence{Owner: "node-a:1", Epoch: 1}
 
 // rigItem is the work item every rig launch is charged to.
 var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}

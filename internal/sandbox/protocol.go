@@ -27,6 +27,17 @@
 // person's message handed back to the broker returns behind their next one,
 // which then took the question. See answerowed.go.
 //
+// AND IT REACHES THE SEAT ONCE, whatever becomes of the run. A recorded reply
+// is either TAKEN by a resumed turn — written on the row at the last moment
+// before the turn runs ([RecordedAnswer.TakenAt], [ResumeRequest.Begin]) — or
+// LET GO back to the seat's inbox through an outbox on the row
+// ([PendingRun.HandBack]): after its attempts are spent, by an ending no turn
+// reached, or by the seat's next holder reaping a claim whose node stopped
+// before its turn took it ([Coordinator.RecoverSeat]). The two are exclusive
+// by the row's own compare-and-set, and the reap fences the row to its lease
+// before it decides, which holds because every run is stamped with the lease
+// that launched it ([CoordinatorOptions.Lease]).
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 

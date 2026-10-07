@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // A RETRIED RESUME THAT FINDS ITS RUN GONE HANDS THE REPLY BACK EXACTLY ONCE,
@@ -155,23 +156,46 @@ func TestARetryWhoseRunEndsStoppedBeforeTheDeleteHandsNothingBackTwice(t *testin
 	rig.finished("t1")
 }
 
-// A ROW THAT CANNOT RECORD THE REPLY gets it published before it is ended,
-// rather than after: the one order that cannot lose it to the ending.
-func TestARetryWhoseRunEndsHandsBackWhatItCouldNotRecord(t *testing.T) {
+// A ROW THAT CANNOT RECORD THE REPLY IS NOT ENDED until it can: the ending is
+// kept, with the answer still on the row and the seat's inbox held behind it,
+// and nothing is announced yet. Once the store takes the let-go, the reply is
+// handed back once, the run ended, and the loss announced once. The reply used
+// to be published straight off the refusal instead — and lost, with the row
+// deleted under it, when the broker refused that publish too.
+func TestARetryWhoseRunEndsKeepsItsEndingUntilTheReplyIsRecorded(t *testing.T) {
 	rig := newCoordRig(t)
-	r1, _ := owedAnAnswerWhoseRunEnds(t, rig, "OweHandBack")
-	ended := &endsAfterHandBack{refusingStore: rig.coordinator.pending.(*refusingStore), rig: rig}
-	rig.coordinator.pending = ended
+	holds := rig.withHold()
+	r1, store := owedAnAnswerWhoseRunEnds(t, rig, "OweHandBack")
 	rig.fireRetries()
-	copyID := declinedCopyID(r1.ID).String()
-	if got := rig.handedBack(); !slices.Equal(got, []string{copyID}) {
+	if got := rig.handedBack(); len(got) != 0 {
+		t.Fatalf("handed back %v before the reply was recorded as owed", got)
+	}
+	got, found, err := rig.pending.Get(t.Context(), "t1")
+	if err != nil || !found || got.Answer == nil {
+		t.Fatalf("run %+v (found %v, %v), want it kept with its answer: an ending that could not "+
+			"record the reply deleted the only record of it", got.Answer, found, err)
+	}
+	if !holds.holding("swe") {
+		t.Fatal("the seat's inbox was let go while the reply its ended run owes is unrecorded")
+	}
+	if n := len(rig.failures()); n != 0 {
+		t.Fatalf("announced %d failures for an ending that has not landed", n)
+	}
+
+	store.refuse = []string{"ReleaseClaim"}
+	if rig.fireRetries() != 1 {
+		t.Fatal("nothing was scheduled to finish the kept ending")
+	}
+	if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(r1.ID).String()}) {
 		t.Fatalf("handed back %v, want R1's copy once", got)
 	}
-	if !ended.checked || !ended.publishedFirst {
-		t.Fatalf("the run was ended (checked %v) before its unrecordable reply was published "+
-			"(%v)", ended.checked, ended.publishedFirst)
-	}
 	rig.finished("t1")
+	if got := rig.failures(); len(got) != 1 || got[0].Reason != types.SandboxFailureClaimStranded {
+		t.Fatalf("announced %+v, want the run's loss once, under the reason it was decided on", got)
+	}
+	if holds.holding("swe") {
+		t.Fatal("the seat's inbox stays held after the reply was handed back and the run ended")
+	}
 }
 
 // finishOnce lets the first Finish through — the one the owed copy refuses —
@@ -187,23 +211,6 @@ func (s *finishOnce) Finish(ctx context.Context, turnID string, fence Fence, whi
 	s.finishes++
 	if s.finishes > 1 {
 		return PendingRun{}, false, errRefusedCall
-	}
-	return s.refusingStore.Finish(ctx, turnID, fence, whileIn)
-}
-
-// endsAfterHandBack records, at the delete, whether the reply was already on
-// the seat's inbox.
-type endsAfterHandBack struct {
-	*refusingStore
-	rig                     *coordRig
-	checked, publishedFirst bool
-}
-
-func (s *endsAfterHandBack) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
-) (PendingRun, bool, error) {
-	if !s.checked {
-		s.checked = true
-		s.publishedFirst = len(s.rig.handedBack()) > 0
 	}
 	return s.refusingStore.Finish(ctx, turnID, fence, whileIn)
 }
