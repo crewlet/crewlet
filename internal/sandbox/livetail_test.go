@@ -890,30 +890,60 @@ func TestManyViewersCostOneReadOfTheBox(t *testing.T) {
 // going — and the read goes on, for the reading rather than the request, so
 // the next request is answered from what it found without reading again.
 //
-// Mutation: answer under the registration's own context, and the request
-// waits as long as the box does.
+// PUT TO THE OWNER ITSELF, through its own handler, because what is asserted
+// is the OWNER's bound. Asked across the broker with a short budget, the case
+// measured the reply crossing it too: the owner answers at three quarters of
+// the budget, and under a loaded race-enabled run the last quarter was not
+// always enough for the reply to land, so the asker reported a silent owner
+// and the case failed on a bound the owner had kept.
+//
+// Mutation: answer under the registration's own context, and the answer waits
+// as long as the box does.
 func TestAnAbandonedRequestFreesItsAnswerSlot(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceTranscript, "slow\n")
 	gate := make(chan struct{})
 	rig.runner.LiveGate = gate
-	rig.serve(t, boxOwner)
-	reader := rig.reader(t, everyBuildServes)
-	reader.Budget = 400 * time.Millisecond
+	owner := &capturingServer{TailServer: rig.client(t)}
+	rig.serveWith(t, boxOwner, owner, rig.feeds(t))
 
+	req, err := json.Marshal(tailRequest{
+		Version: tailWireVersion, TurnID: "t1", LaunchID: rig.launch, Owner: boxOwner,
+		Cursor: &TailCursor{}, BudgetMS: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan []byte, 1)
 	began := time.Now()
-	_, err := reader.Tail(t.Context(), TailQuery{TurnID: "t1", LaunchID: rig.launch, Cursor: &TailCursor{}})
-	if err == nil || !strings.Contains(err.Error(), "took longer than this request could wait") {
-		t.Fatalf("a request on a slow box = %v; want the owner saying the read is still going", err)
+	go func() {
+		raw, err := owner.handler(t.Context(), req)
+		if err != nil {
+			t.Errorf("the owner's handler: %v", err)
+		}
+		answered <- raw
+	}()
+	var raw []byte
+	select {
+	case raw = <-answered:
+	case <-time.After(5 * time.Second):
+		close(gate)
+		t.Fatal("the owner's answer waited on a box that never answered; want its share of the budget")
 	}
 	if waited := time.Since(began); waited > 2*time.Second {
-		t.Fatalf("the request waited %v on a box that never answered; want its budget", waited)
+		t.Errorf("the owner answered after %v on a 400 ms budget; want about three quarters of it", waited)
+	}
+	var rep tailReply
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rep.Error, "took longer than this request could wait") {
+		t.Fatalf("the owner's answer on a slow box = %+v; want it saying the read is still going", rep)
 	}
 	close(gate)
 	eventually(t, func() bool { return rig.runner.Reads() == 1 }, "the read did not go on")
-	reader.Budget = 30 * time.Second
-	got := rig.tail(t, reader, &TailCursor{})
+	got := rig.tail(t, rig.reader(t, everyBuildServes), &TailCursor{})
 	if got.Output == nil || got.Output.Text != "slow\n" || rig.runner.Reads() != 1 {
 		t.Errorf("the next request = %+v after %d reads; want what the read found, read once",
 			got.Output, rig.runner.Reads())
