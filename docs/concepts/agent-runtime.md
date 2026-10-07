@@ -301,7 +301,11 @@ stateDiagram-v2
 - **Asked.** The node reads the seat's counters and the company's, in the
   current windows. A window is refusing when it has no room left for a single
   token — and a window that refused a round always has none, because the
-  refused round is counted past its ceiling. The refusal stamp is not asked:
+  refused round is counted past its ceiling. A window can be refusing with no
+  stamp yet — a background pass or a coding run filled it and nothing has
+  asked the gate since — and a park makes no call, so it stamps nothing; the
+  stamp is written when the gate turns a call away there. The refusal stamp is
+  not asked:
   after a ceiling is raised it stays until an admitted charge clears it, and a
   park taken on it would hold the seat back from the very charge that could. A
   counter that cannot be read parks nothing: the turn runs and its own meter,
@@ -321,7 +325,9 @@ stateDiagram-v2
 - **Refused mid-flight.** A window that had room when the delivery was claimed
   can run out during the turn. That turn stops with `budget_exhausted` and makes
   no model call after the refusal — its meter holds it, so the next phase, the
-  round-cap judge and the turn's other workers are refused before they are sent
+  round-cap judge and the turn's other workers are refused before they are sent,
+  and the first call it holds in a window is recorded on the counter as the
+  gate's refusal, the stamp a refused charge would have written
   ([Turn Engine](turn-engine.md#runtime-invariants), invariant 4) — and the
   seat is parked exactly as above — unless the turn had already written outside
   the engine (an MCP write, a colleague ask, a coding run), in which case the

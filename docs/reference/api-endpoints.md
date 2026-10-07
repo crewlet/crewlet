@@ -1904,8 +1904,11 @@ in the same shape.
   `used` reaches **nine tenths** of `limit`
   (`engine.BudgetNearFraction`, served as `near_fraction` on
   [`GET /budgets`](#get-budgets)), and `ok` otherwise.
-- `refused_at` is when the window last turned a charge away, in UTC, and
-  **absent** while it has not. The round it turned away is counted in `used`
+- `refused_at` is when the window last turned a call away, in UTC, and
+  **absent** while it has not: a round whose charge it refused, or a call a
+  turn did not send because the window was already full — the first such call
+  of a turn is recorded as the gate's refusal on the scope it names, the
+  company's before the seat's. A round it turned away is counted in `used`
   like any other — the vendor billed it — so a window that refused one reads
   past its `limit` by that round, and every later charge is refused against
   that figure. The stamp is kept in the shared counter beside the spend, so
@@ -4292,9 +4295,10 @@ answer:
 - **`limit`** is configuration, from the active company revision, and
   **absent** where no ceiling caps the window — never `0`, which would state a
   range of nothing that is already full;
-- **`refused_at`** is when a capped window last turned a charge away, kept in
-  the same counter and cleared by the scope's next admitted charge or by the
-  window turning over, and absent while it has not;
+- **`refused_at`** is when a capped window last turned a call away — a refused
+  charge, or a call a turn held unsent because the window was already full —
+  kept in the same counter and cleared by the scope's next admitted charge or by
+  the window turning over, and absent while it has not;
 - **`state`** is the engine's judgement — `refusing`, `near` or `ok`, exactly as
   on the [live meter](#the-live-token-meter) — and `near_fraction` beside it is
   the one threshold behind `near` (0.9), for a screen that draws it as a mark.

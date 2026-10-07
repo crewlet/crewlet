@@ -1490,14 +1490,24 @@ part-way through a day judges what the day has already spent rather than
 starting from zero, and `GET /budgets` shows an uncapped company's spend
 rather than nothing.
 
-A refusal is also recorded beside the counter, as when that window last
-refused a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
+A refusal is also recorded beside the counter, as when the gate last turned a
+call away in that window (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
 and the next charge the scope admits clears it, as does the window turning
-over. Because the counter carries the refused round, `GET /budgets`, the live
-meter and the [budget park](../concepts/agent-runtime.md#the-budget-park) all
-read a refusing window **over** its ceiling by the round that crossed it, never
-just short of it; `refused_at` is when the gate said no.
+over. The gate turns a call away in two ways, and both are recorded: it refuses
+a round's charge, or — once a window is already full, because a context
+assembly, a rewrite, a coding run or an earlier round took it there — the
+turn stops its next call before sending it, since the call would be billed and
+then refused. The second is recorded the first time a turn holds a call in
+that window, on the scope the refusal names (the company's before the seat's),
+so a window that is refusing every call never reads as one that has refused
+none. Because the counter carries every round it refused, `GET /budgets`, the
+live meter and the [budget park](../concepts/agent-runtime.md#the-budget-park)
+all read a window that refused a round **over** its ceiling by the round that
+crossed it, never just short of it; `refused_at` is when the gate said no. A
+window filled with nothing asked of the gate since — a background pass, a
+coding run whose turn has not resumed — carries no `refused_at` until something
+is, though its `state` is already `refusing`.
 
 No model call can be checked by its own size first, because its size is known
 only once it has happened. A turn's round is judged when it is charged, as

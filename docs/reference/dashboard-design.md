@@ -4061,8 +4061,9 @@ kit's `Meter` ramp had its own — so one window read as healthy, nearly spent
 and full at once, depending on which screen it was drawn on. `refusing` is the
 gate's own word — no room left for a single token — and it is the condition a
 seat is parked on, so a parked seat's bar can never read as merely near. The
-refusal stamp says when the gate last turned a charge away, and only beside a
-refusing window: under a ceiling raised since, the stamp is history until the
+refusal stamp says when the gate last turned a call away — a refused charge, or
+a call a turn held unsent because the window was already full — and only beside
+a refusing window: under a ceiling raised since, the stamp is history until the
 next admitted charge clears it, and the window is drawn by its spend. A window
 that refused a round reads past its ceiling, because the refused round is
 counted like any other (the vendor billed it), and its figures say so — 102 120
@@ -5702,7 +5703,9 @@ a real value to be read, rather than a null the client would read as easily
 as the value it replaced: its turn is woken by a TASK assigned to the seat, so
 a live call names its `work_item` whole and states its `max_rounds`; a seat's
 `turn.stage` is seen in `phase`; a second seat caps its own day below one
-model call, so the gate refuses it for real and its meter arrives with
+model call, so the gate refuses it for real — a round's charge, or the call the
+seat's meter holds once its own context assembly has filled the day, which the
+meter records as the gate's refusal — and its meter arrives with
 `refused_at`, `resets_at` and `state: refusing`; and the health push has to
 count its live `nodes` and name the worst of its standing `alarms` (the company
 has never taken a backup, so one stands). The replay and the Go half each hold
