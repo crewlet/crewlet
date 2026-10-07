@@ -902,7 +902,7 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			if !t.open() {
 				continue
 			}
-			group, err := q.next(limits, room)
+			group, isolating, err := q.next(limits, room)
 			if err != nil {
 				// UNREACHABLE: every text is cut inside the model's
 				// own bound ([Embedder.inputBound]) and the limits were
@@ -918,7 +918,7 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 				continue
 			}
 			spent = true
-			n, err := e.request(ctx, q, dim, group, &t)
+			n, err := e.request(ctx, q, dim, group, isolating, &t)
 			published += n
 			if err != nil {
 				failed = append(failed, err)
@@ -1036,13 +1036,15 @@ func (e *Embedder) inputBound() int {
 	return min(EmbedInputBytes, e.deps.Embedder.Limits().InputBytes)
 }
 
-// request sends one request — a group the model's limits admit — and acts on
+// request sends one request — a group the model's limits admit, taken from the
+// corpus's isolation where isolating says so ([corpusQueue.next]) — and acts on
 // the answer: publishes what it embedded, splits what it refused, holds back
-// an input refused alone, or ends the tick's requests.
+// an input refused alone, or ends the tick's requests and puts the group back
+// where it came from ([corpusQueue.unanswered]).
 //
 // It returns the records it published, and an error only for a publish that
 // failed, which stops the tick ([Embedder.Tick]).
-func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group []pending, t *tickRequests) (int, error) {
+func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group []pending, isolating bool, t *tickRequests) (int, error) {
 	texts := make([]string, len(group))
 	for i, p := range group {
 		texts[i] = p.text
@@ -1057,12 +1059,14 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 		// A SHORT ANSWER IS A RE-FILING, never a partial result: vectors
 		// are matched to sources by position. The provider's contract
 		// rules it out, so an implementation that broke it is not one to
-		// send the rest of the tick to.
+		// send the rest of the tick to — and it says nothing about which
+		// input, if any, the provider would refuse.
 		e.deps.Logger.WarnContext(ctx, "search_embed_request_failed",
 			"source", string(q.source), "model", e.deps.Model,
 			"inputs", len(group), "error", fmt.Sprintf("the provider returned "+
 				"%d vectors for %d inputs", len(vectors), len(group)))
 		t.stopped = true
+		q.unanswered(group, isolating)
 		return 0, nil
 	case err == nil:
 		t.accepted++
@@ -1109,8 +1113,9 @@ func (e *Embedder) request(ctx context.Context, q *corpusQueue, dim int, group [
 	}
 	// NOT ABOUT AN INPUT — transient, the configuration, a cancellation or
 	// an answer this package could not read — so the next request would
-	// meet it too.
+	// meet it too, and an isolation's half sent into it is still a suspect.
 	t.stopped = true
+	q.unanswered(group, isolating)
 	e.deps.Logger.WarnContext(ctx, "search_embed_request_failed",
 		"source", string(q.source), "model", e.deps.Model,
 		"inputs", len(group), "error", err.Error(),

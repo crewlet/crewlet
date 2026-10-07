@@ -412,9 +412,11 @@ half it accepts on the way is embedded as it goes. With the two corpora, each
 is guaranteed sixteen of a tick's requests and half of its sources, so a
 neighbour embedding a backlog of short items cannot spend the tick out from
 under the isolation and it finishes inside the tick it is met in. Where it
-cannot — more corpora, or a model that takes few inputs a request — the halves
-a tick did not reach are kept, and the next tick resumes the isolation where
-it stopped rather than starting again from the whole request. The input refused alone is logged as
+cannot — more corpora, a model that takes few inputs a request, or a rate limit
+that ends the tick's requests partway — the halves a tick did not reach are
+kept, the one the failure met in flight among them, and the next tick resumes
+the isolation where it stopped rather than starting again from the whole
+request. The input refused alone is logged as
 `search_embed_input_refused`, naming the source, the model, the bytes it was
 sent and the per-input bound the model's limits assume (a refusal inside that
 bound means `max_input_tokens` is declared wider than the endpoint enforces, or

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math/bits"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1171,6 +1172,70 @@ func TestAnIsolationATickCannotFinishIsResumedByTheNext(t *testing.T) {
 	}
 }
 
+// A HALF THE PROVIDER GAVE NO ANSWER ABOUT IS STILL A SUSPECT.
+//
+// A failure that is not about an input — a rate limit, an answer that cannot be
+// matched to the inputs — ends the tick's requests. When it met the half of an
+// isolation in flight, that half was dropped rather than kept with the rest, so
+// the input it held went back among ordinary neighbours and was refused inside
+// a fresh request of 128: against a gateway answering a fixed number of
+// requests a minute, every tick cut the isolation at the same depth, and the
+// input was never isolated. Kept, each tick takes it one half further, so it is
+// alone within one tick per halving — and no request carrying it is ever
+// larger than the one before.
+func TestAHalfTheProviderDidNotAnswerStaysASuspect(t *testing.T) {
+	t.Parallel()
+	for name, exhausted := range map[string]func([]string) ([][]float32, error){
+		"a rate limit": func([]string) ([][]float32, error) {
+			return nil, &embeddings.Error{Model: embedModel, Status: 429,
+				Class: embeddings.ErrTransient, Err: errors.New("the gateway's minute is spent")}
+		},
+		"an answer that cannot be matched to its inputs": func(texts []string) ([][]float32, error) {
+			return make([][]float32, len(texts)-1), nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newEmbedHarness(t)
+			h.embedder.blank = true
+			const poison = "page document 00000"
+			h.embedder.refuse(poison)
+			duty := h.dutyOver(&scriptedCorpus{source: search.SourcePage, backlog: -1})
+
+			// A GATEWAY ANSWERING ONE REQUEST A TICK, the harshest: each
+			// tick's first request is refused and its second, the half
+			// holding the input, goes unanswered — so one tick per halving,
+			// log₂ 128, and the tick that sends it alone.
+			ticks := bits.Len(uint(search.EmbedBatch))
+			for range ticks {
+				h.embedder.ration(1, exhausted)
+				if _, err := duty.Tick(t.Context()); err != nil {
+					t.Fatalf("tick: %v", err)
+				}
+			}
+			var sizes []int
+			for _, request := range h.embedder.sent() {
+				if slices.ContainsFunc(request, func(text string) bool {
+					return strings.Contains(text, poison)
+				}) {
+					sizes = append(sizes, len(request))
+				}
+			}
+			for i := 1; i < len(sizes); i++ {
+				if sizes[i] > sizes[i-1] {
+					t.Fatalf("the requests carrying the refused input were %v "+
+						"sources long — the isolation started again from a whole "+
+						"request after a half of it went unanswered", sizes)
+				}
+			}
+			if got := h.refusals.Len(); got != 1 {
+				t.Fatalf("%d input(s) refused alone after %d ticks of two requests "+
+					"(requests carrying it: %v), want the one", got, ticks, sizes)
+			}
+		})
+	}
+}
+
 // AN UNREADABLE CORPUS COSTS ITSELF AND NOT THE TICK.
 //
 // This is the same starvation arriving as an error rather than as a backlog:
@@ -1693,6 +1758,22 @@ type scriptedEmbedder struct {
 	// ones included — so a test can see how the tick's requests were
 	// divided.
 	batches [][]string
+	// answering is how many more requests are answered as scripted once a
+	// test has rationed the embedder ([scriptedEmbedder.ration]), and
+	// exhausted how every request past them is answered instead — before
+	// any refusal is looked at, as a gateway in front of the model answers
+	// a request it will not forward. Nil exhausted is no ration.
+	answering int
+	exhausted func(texts []string) ([][]float32, error)
+}
+
+// ration answers the next n requests as scripted and every request after them
+// with exhausted, until the next ration — a gateway that answers a fixed
+// number of requests a minute, rationed again each tick.
+func (s *scriptedEmbedder) ration(n int, exhausted func(texts []string) ([][]float32, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.answering, s.exhausted = n, exhausted
 }
 
 // refuse makes every request carrying an input that contains marker refused.
@@ -1721,7 +1802,18 @@ func (s *scriptedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]
 	poison, blank := s.poisonID, s.blank
 	s.batches = append(s.batches, append([]string(nil), texts...))
 	refused := slices.Clone(s.refused)
+	var exhausted func([]string) ([][]float32, error)
+	if s.exhausted != nil {
+		if s.answering > 0 {
+			s.answering--
+		} else {
+			exhausted = s.exhausted
+		}
+	}
 	s.mu.Unlock()
+	if exhausted != nil {
+		return exhausted(texts)
+	}
 	for _, marker := range refused {
 		for _, text := range texts {
 			if strings.Contains(text, marker) {

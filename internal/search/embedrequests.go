@@ -42,9 +42,11 @@ import (
 // off at the end of a tick used to be thrown away with the tick, while the
 // input it was closing on stayed the oldest stale source and opened the next
 // tick's first request: the same 128, the same halves, the same end, every
-// tick. So the halves a tick did not reach are kept ([Refusals.suspend]) and
-// the corpus's next tick sends them first, where the last one stopped
-// ([corpusQueue.resume]) — an isolation takes as many ticks as its requests
+// tick. So the halves a tick did not reach are kept ([Refusals.suspend]) — the
+// one in flight when a failure that is not about an input ended the tick's
+// requests among them, since no answer cleared it ([corpusQueue.unanswered])
+// — and the corpus's next tick sends them first, where the last one stopped
+// ([corpusQueue.resume]): an isolation takes as many ticks as its requests
 // need and never starts again. Each corpus also holds its share of the tick's
 // SOURCES in reserve while it can work ([tickRequests.room]), so a neighbour
 // embedding full requests cannot spend the ceiling out from under it.
@@ -198,17 +200,20 @@ func (q *corpusQueue) resume(groups [][]frontierKey) {
 
 // next is the corpus's next request — the longest run of its oldest sources
 // that fits one request inside limits and room — or nil when it has none.
+// isolating says the request was taken from the corpus's isolation
+// ([corpusQueue.split]), which is where it goes back to if the provider gives
+// no answer about it ([corpusQueue.unanswered]).
 //
 // A SOURCE WITH NOTHING TO EMBED is passed over without a request, and is
 // selected again next tick, as it always was: an input with no text is never
 // sent ([embeddings.Limits.Requests] files it in no request). A source offered
 // ALONE ends the run before it and is a request by itself.
-func (q *corpusQueue) next(limits embeddings.Limits, room int) ([]pending, error) {
+func (q *corpusQueue) next(limits embeddings.Limits, room int) (group []pending, isolating bool, err error) {
 	if room <= 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	if len(q.split) > 0 {
-		group := q.split[0]
+		group = q.split[0]
 		q.split = q.split[1:]
 		if len(group) > room {
 			// A HALF LARGER THAN THE ROOM LEFT is sent at the room's
@@ -219,18 +224,18 @@ func (q *corpusQueue) next(limits embeddings.Limits, room int) ([]pending, error
 			q.split = append([][]pending{group[room:]}, q.split...)
 			group = group[:room]
 		}
-		return group, nil
+		return group, true, nil
 	}
 	for len(q.waiting) > 0 && q.waiting[0].text == "" {
 		q.waiting = q.waiting[1:]
 	}
 	if len(q.waiting) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	if q.waiting[0].alone {
-		group := q.waiting[:1]
+		group = q.waiting[:1]
 		q.waiting = q.waiting[1:]
-		return group, nil
+		return group, false, nil
 	}
 	run := q.waiting[:min(len(q.waiting), room)]
 	for i, p := range run {
@@ -245,16 +250,38 @@ func (q *corpusQueue) next(limits embeddings.Limits, room int) ([]pending, error
 	}
 	groups, err := limits.Requests(texts)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// run[0] has text, so the first request holds at least it.
 	first := groups[0]
-	group := make([]pending, len(first))
+	group = make([]pending, len(first))
 	for i, at := range first {
 		group[i] = run[at]
 	}
 	q.waiting = q.waiting[first[len(first)-1]+1:]
-	return group, nil
+	return group, false, nil
+}
+
+// unanswered puts back a request the provider gave NO ANSWER ABOUT ITS INPUTS
+// — a failure that is not about an input, or an answer that cannot be matched
+// to them — which ends the tick's requests ([Embedder.request]); isolating is
+// what [corpusQueue.next] said of it.
+//
+// A REQUEST FROM THE ISOLATION GOES BACK TO THE FRONT OF IT, because nothing
+// has cleared its sources: they are still the suspects of a refused request,
+// and the tick's end suspends them with the rest ([Refusals.suspend]). Dropped,
+// they went back among ordinary neighbours, and the input they hold was
+// refused inside a fresh request of 128 — so a gateway that answers a fixed
+// number of requests a minute cut every tick's isolation at the same depth,
+// and the input was never isolated at all.
+//
+// ONE FROM THE SELECTION NEEDS NOTHING: its sources are selected again next
+// tick, since the selection is derived from the rows, and a due retry offered
+// alone keeps its refusal, still due.
+func (q *corpusQueue) unanswered(group []pending, isolating bool) {
+	if isolating {
+		q.split = append([][]pending{group}, q.split...)
+	}
 }
 
 // halves splits a refused request in two, the first half the larger.

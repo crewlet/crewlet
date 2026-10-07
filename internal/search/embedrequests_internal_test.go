@@ -27,12 +27,13 @@ func TestAHalfTheTickHasNoRoomForStaysASuspect(t *testing.T) {
 	q := &corpusQueue{split: [][]pending{half, later}}
 	limits := embeddings.Limits{InputBytes: 8192, BatchInputs: 128, BatchBytes: 300_000}
 
-	group, err := q.next(limits, 3)
+	group, isolating, err := q.next(limits, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(group) != 3 || group[0].doc.ID != "s0" {
-		t.Fatalf("sent %d source(s) from %q, want the first three of the half", len(group), group[0].doc.ID)
+	if len(group) != 3 || group[0].doc.ID != "s0" || !isolating {
+		t.Fatalf("sent %d source(s) from %q (isolating: %v), want the first three "+
+			"of the half, as part of the isolation", len(group), group[0].doc.ID, isolating)
 	}
 	if len(q.split) != 2 || len(q.split[0]) != 5 || q.split[0][0].doc.ID != "s3" ||
 		q.split[1][0].doc.ID != "later" {
