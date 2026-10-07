@@ -476,7 +476,6 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
 		CustodyRetention: time.Minute,
-		ChunkLockTTL:     time.Minute,
 		BudgetRetention:  time.Minute,
 		BucketPrefix:     prefix,
 	})
@@ -1047,6 +1046,50 @@ func TestTheLifetimeCountersAreRetiredAndTheWindowsKept(t *testing.T) {
 	}
 }
 
+// THE CHUNK LOCKS ARE RETIRED, ONCE, AND THEN NOTHING IS.
+//
+// A build that kept files in content-addressed chunks locked each chunk in
+// `<prefix>_chunk_locks`. Nothing in this build opens it; deleting it is the
+// maintenance duty's decision once no node of that build is left, and this is
+// the delete. The object store's own records beside it must survive, and a
+// second retirement must be a quiet no-op.
+func TestTheChunkLocksAreRetiredAndTheObjectRecordsKept(t *testing.T) {
+	nc := embeddedNATS(t)
+	store := openFleet(t, nc)
+	ctx := t.Context()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	legacy := store.bucketPrefix + chunkLocksSuffix
+	old, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: legacy, TTL: time.Minute})
+	if err != nil {
+		t.Fatalf("plant the chunk locks' bucket: %v", err)
+	}
+	if _, err := old.Put(ctx, "a-chunk", []byte(`{"owner":"data-a"}`)); err != nil {
+		t.Fatalf("plant a chunk lock: %v", err)
+	}
+	if _, err := store.AgreeObjectBackend(ctx, "nats"); err != nil {
+		t.Fatalf("AgreeObjectBackend: %v", err)
+	}
+
+	retired, err := store.RetireChunkLocks(ctx)
+	if err != nil || !retired {
+		t.Fatalf("RetireChunkLocks = (%v, %v), want (true, nil)", retired, err)
+	}
+	if _, err := js.KeyValue(ctx, legacy); !errors.Is(err, jetstream.ErrBucketNotFound) {
+		t.Fatalf("the chunk locks' bucket is still there after its retirement: %v", err)
+	}
+	if got, err := store.AgreeObjectBackend(ctx, "s3:elsewhere"); err != nil || got != "nats" {
+		t.Fatalf("the recorded object backend reads %q, %v after the retirement, want nats: "+
+			"the retirement deleted the wrong bucket", got, err)
+	}
+	retired, err = store.RetireChunkLocks(ctx)
+	if err != nil || retired {
+		t.Fatalf("a second RetireChunkLocks = (%v, %v), want (false, nil)", retired, err)
+	}
+}
+
 // THE WINDOWED COUNTERS AGE, AND THE AGE IS THE CONFIGURED ONE.
 //
 // The lifetime bucket had no age, so every seat that ever ran kept a record
@@ -1120,7 +1163,6 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		CooldownMax: time.Minute, StatusFreshness: time.Minute,
 		CustodyRetention: time.Minute,
-		ChunkLockTTL:     time.Minute,
 		BudgetRetention:  time.Minute,
 		BucketPrefix:     fmt.Sprintf("f%d", bucketSeq.Add(1)),
 	})

@@ -1432,30 +1432,61 @@ export type ObjectsState = (typeof OBJECTS_STATES)[number];
 /** One collection pass: what the store held, and what no row named any more. */
 export interface ObjectCollect {
   at: string;
-  /** Listed the whole store and judged every chunk old enough to judge. */
+  /** Listed the whole store and judged every object old enough to judge. */
   completed: boolean;
   listed: number;
   /** Past the day's grace, and so judged. */
   aged: number;
   deleted: number;
   referenced: number;
-  /** Written again while the pass judged them, and kept. */
-  refreshed: number;
-  /** Why the pass deleted nothing; absent when it ran in full. */
+  /** Objects an earlier build stored as content-addressed chunks, deleted once
+   *  no node of that build is left. */
+  retired: number;
+  /** Uploads begun more than a day ago and never finished, abandoned. */
+  abandoned: number;
+  /** Why the pass stopped judging; absent when it ran in full. Its counts stand either way. */
   skipped?: string;
+  /** What kept the pass from abandoning unfinished uploads; the collection stands. */
+  sweep_error?: string;
   error?: string;
 }
 
-/** One audit: every chunk a row names, asked of the store. */
-export interface ObjectAudit {
+/** One file whose bytes the store cannot give back. */
+export interface ObjectMissingFile {
+  /** The object the file's row names. */
+  object: string;
+  /** The file, as `PROJECT/path`. */
+  named_by: string;
+  /** The store holds it with the wrong bytes, rather than not at all. */
+  damaged?: boolean;
+}
+
+/** What an audit that ran to its end found. */
+export interface ObjectFindings {
   at: string;
-  /** Asked about every named chunk, over an estate that was complete. */
+  /** Over an estate that was complete; when false the counts are floors. */
   completed: boolean;
   referenced: number;
   missing: number;
-  /** The first hundred missing, to restore first; `missing` is the whole count. */
-  missing_chunks?: string[];
+  damaged: number;
+  /** The first hundred files that cannot be read; `missing` + `damaged` is the whole count. */
+  missing_files?: ObjectMissingFile[];
+}
+
+/** The last audit attempt: every object a row names, asked of the store. */
+export interface ObjectAudit {
+  at: string;
+  /** Asked about every named object, over an estate that was complete. */
+  completed: boolean;
+  referenced: number;
+  missing: number;
+  damaged: number;
   error?: string;
+  /**
+   * What the last audit to run to its end found — this attempt, or the one
+   * before it when this one failed. Absent before any has.
+   */
+  found?: ObjectFindings;
 }
 
 /** The collector's last report, every field but the passes present. */
@@ -2253,8 +2284,8 @@ export interface WorkView {
   count_refused?: string;
 }
 
-/** One file kept in a project, as a listing draws it — everything but its
- *  chunks, which only a download reads. */
+/** One file kept in a project, as a listing draws it — everything but the
+ *  key of the object holding its bytes, which only a download reads. */
 export interface WorkFile {
   project: string;
   path: string;

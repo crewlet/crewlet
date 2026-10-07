@@ -12,5 +12,6 @@ import (
 // that passes against it is a test of the contract.
 func TestContract(t *testing.T) {
 	t.Parallel()
-	objstoretest.Run(t, func(*testing.T) objstore.Backend { return memobj.New() }, objstoretest.Options{})
+	objstoretest.Run(t, func(*testing.T) objstore.Backend { return memobj.New() },
+		objstoretest.Options{Digest: true})
 }

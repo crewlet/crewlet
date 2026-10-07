@@ -2155,12 +2155,14 @@ assistant (the same four tools), or over REST —
 streams a download without either passing through a model.
 
 **The bytes are not in the tracker.** A file is a row saying where it lives,
-what it is and which **chunks** make it up; the chunks are in the
-[object store](../concepts/object-store.md) — one store the whole fleet
-shares, a bucket on the fleet's own broker or an S3 bucket — rather than in
-every data node's database. So a node that holds no data at all reads and
-writes files as any other node does. Every upload stores its bytes **before** it writes the row naming
-them, so a file that is listed is always a file that can be read.
+what it is, its size and SHA-256, and which **object** holds its bytes; the
+object is in the [object store](../concepts/object-store.md) — one store the
+whole fleet shares, a bucket on the fleet's own broker or an S3 bucket —
+rather than in every data node's database. So a node that holds no data at all reads and
+writes files as any other node does. Every upload stores its bytes as a
+new object **before** it writes the row naming it, so a file that is listed is
+always a file that can be read, and every read is checked against the row's
+hash.
 
 | | |
 |---|---|
@@ -2175,8 +2177,11 @@ project rather than delivered to an inbox, so a seat that finished a report
 comments on the task that asked for it.
 
 **A move is a write and a removal.** There is no rename: write the file at its
-new path and remove the old one. The content is not copied — the new row names
-the same chunks — so a move costs two small records whatever the file's size.
+new path and remove the old one. The write uploads the content again — every
+upload is an object of its own, and nothing is shared between two files — so a
+move costs the file's size in storage until the old object is collected — by
+the first hourly collection after the removal, once the old object is more than
+a day old.
 
 ## Removing, deleting and purging
 

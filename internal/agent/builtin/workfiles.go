@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"path"
 	"strings"
@@ -21,7 +22,7 @@ import (
 // The project file tools.
 //
 // A file is TWO THINGS in two places: a row in the tracker saying it exists
-// and which chunks it is, and the chunks themselves in the object store. So
+// and which object holds it, and the object itself in the object store. So
 // these tools take both halves — [FileReader] and [FileWriter] for the row,
 // [ObjectStore] for the bytes — and a write is always bytes first, row second:
 // the other order would publish a file whose content is not anywhere yet.
@@ -46,10 +47,22 @@ type FileWriter interface {
 	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (tracker.WriteResult, error)
 }
 
-// ObjectStore is the fleet's object store as these tools need it.
+// ObjectStore is the fleet's object store as these tools need it: a write
+// streams the content into a new object ([objstore.Store.Put]), a read takes
+// a page of one ([objstore.Store.ReadAt]).
 type ObjectStore interface {
-	Put(ctx context.Context, h objstore.Hash, data []byte) error
-	ReadAt(ctx context.Context, m objstore.Manifest, off, n int64) ([]byte, error)
+	Put(ctx context.Context, r io.Reader, limit int64, m objstore.PutMeta) (objstore.Object, error)
+	ReadAt(ctx context.Context, o objstore.Object, off, n int64) ([]byte, error)
+}
+
+// retiredFile is what a read of a file an earlier build kept in chunks is
+// told: the file is listed and can be written again or removed, and its
+// content is gone — which no retry changes, so it is not a failed read.
+func retiredFile(tool string, f tracker.File) tools.Result {
+	return refused(tools.RefusalNotFound, fmt.Sprintf("%s: %s in %s was saved by an "+
+		"earlier build that kept files in chunks, and its content cannot be read "+
+		"any more. Write it again with %s if you have it, or remove it with %s.",
+		tool, f.Path, f.Project, tracker.WriteProjectFileTool, tracker.RemoveProjectFileTool))
 }
 
 // The read page.
@@ -242,11 +255,25 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"size": f.Size, "version": f.Version, "hash": f.Hash,
 		"updated_by": f.UpdatedBy, "updated_at": f.UpdatedAt, "offset": offset,
 	}
-	page, err := t.deps.Objects.ReadAt(ctx, f.Manifest(), offset, int64(limit))
-	if err != nil {
-		return failed(fmt.Sprintf("%s: %s in %s exists, and its content could not "+
-			"be read right now (%v). The file is NOT empty or missing — try again, "+
-			"or say you could not read it.", t.Name(), f.Path, f.Project, err)), nil
+	object, named := f.Content()
+	if !named {
+		return retiredFile(t.Name(), f), nil
+	}
+	page, err := t.deps.Objects.ReadAt(ctx, object, offset, int64(limit))
+	switch {
+	case errors.Is(err, objstore.ErrCorrupt):
+		// NOT A FAILED READ: the store answered, with bytes that are not
+		// the ones the file records, and a retry reads the same bytes.
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s in %s exists, and "+
+			"the object store holds content for it that is not what was written "+
+			"(%v). Trying again will not help — do not use what it holds, and tell "+
+			"a person the file needs restoring or writing again.",
+			t.Name(), f.Path, f.Project, err)), nil
+	case err != nil:
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s in %s exists, and "+
+			"its content could not be read right now (%v). The file is NOT empty or "+
+			"missing — try again, or say you could not read it.",
+			t.Name(), f.Path, f.Project, err)), nil
 	}
 	if encoding == "base64" {
 		answer["encoding"], answer["content"] = "base64", base64.StdEncoding.EncodeToString(page)
@@ -388,20 +415,41 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if contentType == "" {
 		contentType = guessContentType(filePath, encoding)
 	}
-	// THE BYTES FIRST — see the file's head.
-	manifest, err := objstore.Split(ctx, bytes.NewReader(content), tracker.MaxFileBytes,
-		func(ctx context.Context, c objstore.Chunk, data []byte) error {
-			return t.deps.Objects.Put(ctx, c.Hash, data)
-		})
-	if err != nil {
-		return failed(fmt.Sprintf("%s: %s was not written, and nothing was recorded: "+
-			"its content could not be stored (%v)", t.Name(), filePath, err)), nil
+	ifVersion := uint64(max(argInt(args, "if_version", 0), 0))
+	if same, ok := t.unchanged(ctx, project, filePath, contentType, content, ifVersion); ok {
+		return jsonResult(withOperation(map[string]any{
+			"project": project, "path": filePath, "size": same.Size, "hash": same.Hash,
+			"content_type": same.ContentType, "outcome": "unchanged",
+			"version": same.Version,
+		}, actor))
 	}
+	// THE BYTES FIRST — see the file's head.
+	object, err := t.deps.Objects.Put(ctx, bytes.NewReader(content), tracker.MaxFileBytes,
+		objstore.PutMeta{ContentType: contentType})
+	switch {
+	case errors.Is(err, objstore.ErrTooLarge):
+		return failed(fmt.Sprintf("%s: %s was not written: its content is over the "+
+			"%d bytes a project's file may hold", t.Name(), filePath, int64(tracker.MaxFileBytes))), nil
+	case err != nil:
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s was not written, "+
+			"and nothing was recorded: its content could not be stored (%v)",
+			t.Name(), filePath, err)), nil
+	}
+	// NOTHING IS DELETED ON A REFUSAL BELOW: a retry under one operation can
+	// be refused on one node after another committed it, and the object
+	// would then be that file's content. The collector removes what no row
+	// names.
 	opID := opIDFor(actor, t.Name(), "file", project+"/"+filePath, args)
 	result, err := t.deps.FileWriter(actor).PutFile(ctx, opID, tracker.FilePut{
-		Project: project, Path: filePath, ContentType: contentType, Manifest: manifest,
-		IfMatch: uint64(max(argInt(args, "if_version", 0), 0)),
+		Project: project, Path: filePath, ContentType: contentType, Object: object,
+		IfMatch: ifVersion,
 	})
+	if errors.Is(err, tracker.ErrUploadStale) {
+		// THE ONE WRITE REFUSAL THE SAME CALL FIXES: the call uploads the
+		// content anew, under a fresh key.
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s was not written: %v. "+
+			"Make the same call again.", t.Name(), filePath, err)), nil
+	}
 	if err != nil {
 		return writeFailure(actor, t.Name(), err), nil
 	}
@@ -410,14 +458,44 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("%s was written to %s", filePath, project), opID,
 			result.Unvouched, unknownNext(result.Unvouched, sameCall(actor, t.Name()),
 				fmt.Sprintf("Read %s in %s with %s", filePath, project, tracker.ReadProjectFileTool),
-				"it writes the same content again, which changes nothing but the version"))), nil
+				"it writes the same content again, which changes nothing"))), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{
-		"project": project, "path": filePath, "size": manifest.Size, "hash": manifest.Hash,
+		"project": project, "path": filePath, "size": object.Size, "hash": object.Hash,
 		"content_type": contentType, "outcome": string(result.Outcome),
 		"position": positionOf(result.Position), "version": result.Version,
 	}, actor))
+}
+
+// unchanged answers the live file at project/filePath when writing content
+// there would change nothing: the same bytes and the same type, and no
+// if_version it has moved past.
+//
+// SKIPPED RATHER THAN WRITTEN AGAIN because a write is no longer free when its
+// content is: every upload is an object of its own (ADR-0026), so a seat that
+// re-saves a report it did not change would store the whole of it again, and
+// leave the copy it replaced in the store for a day. The tool holds the
+// content in memory, so the comparison is one digest against the row's.
+// Anything this read cannot settle — no reader, a failed read, a file with no
+// content this build can read — is written.
+func (t *writeProjectFile) unchanged(ctx context.Context, project, filePath,
+	contentType string, content []byte, ifVersion uint64) (tracker.File, bool) {
+
+	if t.deps.Files == nil {
+		return tracker.File{}, false
+	}
+	detail, err := t.deps.Files.File(ctx, project, filePath,
+		statelog.Freshness{Level: seatReadLevel})
+	if err != nil {
+		return tracker.File{}, false
+	}
+	f := detail.File
+	if _, named := f.Content(); !named || f.Hash != objstore.HashOf(content) ||
+		f.ContentType != contentType || (ifVersion != 0 && ifVersion != f.Version) {
+		return tracker.File{}, false
+	}
+	return f, true
 }
 
 // guessContentType is a content type from a path's extension, or the plain

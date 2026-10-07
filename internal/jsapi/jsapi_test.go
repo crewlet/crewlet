@@ -2,9 +2,11 @@ package jsapi_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 )
@@ -50,5 +52,49 @@ func TestASubjectReachedPastTheClientLandsOnTheSameAPI(t *testing.T) {
 	}
 	if _, err := jsapi.Embedded().Subject("crewlet.agent.x"); err == nil {
 		t.Error("a subject outside the JetStream API was rewritten rather than refused")
+	}
+}
+
+// A CLIENT IS READ BACK AS THE API IT SPEAKS, and one built any way but this
+// package is refused by name.
+//
+// A caller handed a client — coordination's leader reads and purges, the
+// object store's metadata reads — reaches past it with raw requests, which
+// have to be addressed where the client's own go or nothing answers them; a
+// client speaking neither API is a wiring mistake named before the broker is
+// asked anything.
+func TestAClientIsReadBackAsTheAPIItSpeaks(t *testing.T) {
+	t.Parallel()
+	nc := &nats.Conn{}
+	must := func(js jetstream.JetStream, err error) jetstream.JetStream {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("client: %v", err)
+		}
+		return js
+	}
+	for _, c := range []struct {
+		name   string
+		client jetstream.JetStream
+		want   jsapi.API
+		refuse string
+	}{
+		{"the_account", must(jsapi.Account().Client(nc)), jsapi.Account(), ""},
+		{"the_embedded_fleet", must(jsapi.Embedded().Client(nc)), jsapi.Embedded(), ""},
+		{"a_custom_prefix", must(jetstream.NewWithAPIPrefix(nc, "$ELSEWHERE.API")), jsapi.API{}, "$ELSEWHERE.API"},
+		{"another_domain", must(jetstream.NewWithDomain(nc, "elsewhere")), jsapi.API{}, "elsewhere"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := jsapi.Of(c.client)
+			if c.refuse != "" {
+				if err == nil || !strings.Contains(err.Error(), c.refuse) || !strings.Contains(err.Error(), "internal/jsapi") {
+					t.Fatalf("Of = (%v, %v), want a refusal naming %q and internal/jsapi", got, err, c.refuse)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("Of = (%v, %v), want %v", got, err, c.want)
+			}
+		})
 	}
 }

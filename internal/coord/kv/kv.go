@@ -352,7 +352,7 @@ type Config struct {
 	// MaxAge. Required.
 	//
 	// It is a property of the BUCKET, not of a call: see the package doc.
-	// A per-call seat, presence or objects TTL longer than the age in force is
+	// A per-call seat or presence TTL longer than the age in force is
 	// refused; a shorter one is honoured against the store's own clock. Duty
 	// TTLs do not depend on it: they are bounded by coord.MaxDutyTTL.
 	//
@@ -438,8 +438,8 @@ type lane struct {
 type Store struct {
 	js jetstream.JetStream
 
-	// leases holds seat, presence and object-store membership leases, and
-	// a duty an older build claimed before the duty bucket existed.
+	// leases holds seat and presence leases, and a duty an older build
+	// claimed before the duty bucket existed.
 	leases *lane
 	// duties holds every duty lease this build claims.
 	duties *lane
@@ -515,7 +515,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 
 	leases, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket:      cfg.BucketPrefix + leasesSuffix,
-		Description: "Crewlet seat, presence and object-store membership leases; the bucket TTL is the lease TTL and its expiry is the arbiter",
+		Description: "Crewlet seat and presence leases; the bucket TTL is the lease TTL and its expiry is the arbiter",
 		TTL:         cfg.TTL,
 		Replicas:    cfg.Replicas,
 	})
@@ -716,7 +716,7 @@ func readBucket(ctx context.Context, bucket jetstream.KeyValue) (bucketFacts, er
 }
 
 // TTL reports the seat lease TTL IN FORCE, which is the seat lease bucket's
-// own age: what expires a seat, presence or object-store membership lease, and
+// own age: what expires a seat or presence lease, and
 // what [Store.validateTTL] holds every such claim to.
 //
 // NOT NECESSARILY THIS NODE'S CONFIGURED VALUE: the bucket is adopted rather
@@ -781,7 +781,7 @@ func (s *Store) laneFor(resource string) *lane {
 // Only the duty class is in two: the duty bucket, where this build writes one,
 // and the seat lease bucket after it, where a node of an older build still
 // holds one during the rolling upgrade the package doc describes. Every other
-// class — seats, presence and object-store membership — lives in the seat
+// class — seats and presence — lives in the seat
 // lease bucket alone, so each membership read on a heartbeat costs what it did
 // before duties had a bucket of their own.
 func (s *Store) lanesFor(class coord.Class) []*lane {
@@ -1830,7 +1830,7 @@ func (s *Store) held(ctx context.Context, e entry, clk *clock) (bool, error) {
 	// A seat lease taken at the bucket's full age expires by DISAPPEARING
 	// (the bucket's MaxAge reaps it), so a record that can still be read is
 	// live by construction, and no clock is consulted at all. This is the
-	// whole production path for seats, presence and object-store membership.
+	// whole production path for seats and presence.
 	if e.lane.reapsAtMax && e.value.ttl() >= e.lane.maxTTL {
 		return true, nil
 	}

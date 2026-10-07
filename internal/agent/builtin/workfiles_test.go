@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -23,6 +26,11 @@ type fakeFiles struct {
 	files   map[string]tracker.File
 	version uint64
 	writers []string
+
+	// puts counts the writes that reached the row, and refuse is what
+	// every write is refused with when set.
+	puts   int
+	refuse error
 }
 
 func newFakeFiles() *fakeFiles { return &fakeFiles{files: map[string]tracker.File{}} }
@@ -72,13 +80,14 @@ func (f *fakeFiles) PutFile(_ context.Context, _ string, put tracker.FilePut) (t
 	if put.IfMatch != tracker.NoIfMatch && (!held || current.Version != put.IfMatch) {
 		return tracker.WriteResult{}, tracker.ErrStaleVersion
 	}
-	f.version++
-	file := tracker.File{Project: put.Project, Path: put.Path, ContentType: put.ContentType,
-		Hash: put.Manifest.Hash, Size: put.Manifest.Size, Version: f.version,
-		UpdatedAt: time.Unix(1_700_000_000, 0).UTC()}
-	for _, c := range put.Manifest.Chunks {
-		file.Chunks = append(file.Chunks, tracker.FileChunk{Hash: c.Hash, Size: c.Size})
+	if f.refuse != nil {
+		return tracker.WriteResult{}, f.refuse
 	}
+	f.version++
+	f.puts++
+	file := tracker.File{Project: put.Project, Path: put.Path, ContentType: put.ContentType,
+		Hash: put.Object.Hash, Size: put.Object.Size, Object: put.Object.Key, Version: f.version,
+		UpdatedAt: time.Unix(1_700_000_000, 0).UTC()}
 	f.files[f.key(put.Project, put.Path)] = file
 	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied,
 		Version: int64(f.version), Position: statelog.Position{Stream: "S", Generation: 1, Seq: f.version}}}, nil
@@ -99,38 +108,56 @@ func (f *fakeFiles) RemoveFile(_ context.Context, _, project, path string,
 	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
-// fakeObjects is an object store in memory, which reads a range as the real
-// client does: by the manifest's chunks.
+// fakeObjects is an object store in memory, each upload an object under a key
+// of its own, as the real store keeps them.
 type fakeObjects struct {
-	mu     sync.Mutex
-	chunks map[objstore.Hash][]byte
+	mu      sync.Mutex
+	objects map[objstore.Key][]byte
+
+	// corrupt makes every read answer the store's corruption sentinel.
+	corrupt bool
 }
 
-func newFakeObjects() *fakeObjects { return &fakeObjects{chunks: map[objstore.Hash][]byte{}} }
+func newFakeObjects() *fakeObjects { return &fakeObjects{objects: map[objstore.Key][]byte{}} }
 
-func (o *fakeObjects) Put(_ context.Context, h objstore.Hash, data []byte) error {
+func (o *fakeObjects) Put(_ context.Context, r io.Reader, limit int64,
+	_ objstore.PutMeta) (objstore.Object, error) {
+
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return objstore.Object{}, err
+	}
+	if int64(len(data)) > limit {
+		return objstore.Object{}, objstore.ErrTooLarge
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.chunks[h] = append([]byte(nil), data...)
-	return nil
+	k := objstore.KeyAt(time.Now())
+	o.objects[k] = data
+	return objstore.Object{Key: k, Hash: objstore.HashOf(data), Size: int64(len(data))}, nil
 }
 
-func (o *fakeObjects) ReadAt(_ context.Context, m objstore.Manifest, off, n int64) ([]byte, error) {
+func (o *fakeObjects) ReadAt(_ context.Context, obj objstore.Object, off, n int64) ([]byte, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	var whole []byte
-	for _, c := range m.Chunks {
-		data, ok := o.chunks[c.Hash]
-		if !ok {
-			return nil, fmt.Errorf("chunk %s is nowhere", c.Hash)
-		}
-		whole = append(whole, data...)
+	if o.corrupt {
+		return nil, fmt.Errorf("%w: %s", objstore.ErrCorrupt, obj.Key)
+	}
+	whole, ok := o.objects[obj.Key]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", objstore.ErrNotFound, obj.Key)
 	}
 	end := min(off+n, int64(len(whole)))
 	if off >= end {
 		return []byte{}, nil
 	}
 	return whole[off:end], nil
+}
+
+func (o *fakeObjects) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.objects)
 }
 
 func fileDeps(files *fakeFiles, objects *fakeObjects) builtin.WorkDeps {
@@ -166,8 +193,8 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 	if written["project"] != "ENG" || written["content_type"] != "text/markdown; charset=utf-8" {
 		t.Fatalf("write answered %v", written)
 	}
-	if len(objects.chunks) != 1 {
-		t.Fatalf("the content is in %d chunks, want 1 stored before the row", len(objects.chunks))
+	if n := objects.count(); n != 1 {
+		t.Fatalf("the content is in %d objects, want 1 stored before the row", n)
 	}
 	if files.writers[0] != "eng" {
 		t.Fatalf("the write was attributed to %v, want the turn's seat", files.writers)
@@ -287,10 +314,108 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 		t.Fatal(got.Output)
 	}
 	objects.mu.Lock()
-	clear(objects.chunks)
+	clear(objects.objects)
 	objects.mu.Unlock()
 	got = callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "lost.md"})
 	if !got.Failed || !strings.Contains(got.Output, "NOT empty or missing") {
 		t.Fatalf("a read whose bytes failed answered %s", got.Output)
+	}
+}
+
+// A FILE AN EARLIER BUILD KEPT IN CHUNKS IS LISTED AND CANNOT BE READ — and
+// the read says so as a file whose content is gone, which no retry changes,
+// never as a read that failed and might work next time.
+func TestAFileKeptInChunksIsRefusedAsGone(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	reg := workRegistry(t, fileDeps(files, objects))
+	files.files[files.key("ENG", "old.md")] = tracker.File{Project: "ENG", Path: "old.md",
+		Hash: objstore.HashOf([]byte("old")), Size: 3, Version: 1}
+
+	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "old.md"})
+	if !got.Failed || got.Refusal != tools.RefusalNotFound ||
+		!strings.Contains(got.Output, "earlier build that kept files in chunks") {
+		t.Fatalf("a read of a file kept in chunks answered %s (refusal %q)", got.Output, got.Refusal)
+	}
+	if listed := fileAnswer(t, callWork(t, reg, tracker.ListProjectFilesTool,
+		map[string]any{}).Output); listed["count"] != float64(1) {
+		t.Fatalf("the file kept in chunks is not listed: %v", listed)
+	}
+}
+
+// CONTENT THE STORE HOLDS WRONG IS NOT A READ TO RETRY: the store answered,
+// and its bytes are not the file's — so the seat is told not to use them and
+// to get the file restored, rather than to try again.
+func TestCorruptContentIsNotAReadToRetry(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	reg := workRegistry(t, fileDeps(files, objects))
+	if got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+		"path": "a.md", "content": "a",
+	}); got.Failed {
+		t.Fatal(got.Output)
+	}
+	objects.mu.Lock()
+	objects.corrupt = true
+	objects.mu.Unlock()
+	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "a.md"})
+	if !got.Failed || got.Refusal != tools.RefusalUnavailable ||
+		!strings.Contains(got.Output, "will not help") {
+		t.Fatalf("a read of corrupt content answered %s (refusal %q)", got.Output, got.Refusal)
+	}
+}
+
+// WRITING WHAT THE FILE ALREADY HOLDS STORES NOTHING: every upload is an
+// object of its own, so a seat re-saving an unchanged file would store all of
+// it again and leave the copy it replaced in the store for a day. A change of
+// content, or of type, is written.
+func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	reg := workRegistry(t, fileDeps(files, objects))
+	write := func(args map[string]any) map[string]any {
+		t.Helper()
+		got := callWork(t, reg, tracker.WriteProjectFileTool, args)
+		if got.Failed {
+			t.Fatal(got.Output)
+		}
+		return fileAnswer(t, got.Output)
+	}
+	first := write(map[string]any{"path": "r.md", "content": "same"})
+	again := write(map[string]any{"path": "r.md", "content": "same"})
+	if again["outcome"] != "unchanged" || again["version"] != first["version"] ||
+		objects.count() != 1 || files.puts != 1 {
+		t.Fatalf("writing the same content again answered %v, storing %d objects "+
+			"and %d writes", again, objects.count(), files.puts)
+	}
+	if changed := write(map[string]any{"path": "r.md", "content": "other"}); changed["outcome"] == "unchanged" {
+		t.Fatalf("a change of content was skipped: %v", changed)
+	}
+	if retyped := write(map[string]any{"path": "r.md", "content": "other",
+		"content_type": "text/plain"}); retyped["outcome"] == "unchanged" {
+		t.Fatalf("a change of type was skipped: %v", retyped)
+	}
+	if objects.count() != 3 || files.puts != 3 {
+		t.Fatalf("three different writes stored %d objects and %d rows", objects.count(), files.puts)
+	}
+}
+
+// AN UPLOAD TOO OLD TO RECORD IS ONE THE SAME CALL FIXES: the call uploads the
+// content anew, under a fresh key — so the seat is told to make it again,
+// rather than that the write failed.
+func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	files.refuse = fmt.Errorf("%w: r.md", tracker.ErrUploadStale)
+	reg := workRegistry(t, fileDeps(files, objects))
+	got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+		"path": "r.md", "content": "late",
+	})
+	if !got.Failed || got.Refusal != tools.RefusalUnavailable ||
+		!strings.Contains(got.Output, "Make the same call again") {
+		t.Fatalf("a stale upload answered %s (refusal %q)", got.Output, got.Refusal)
+	}
+	if !errors.Is(files.refuse, tracker.ErrUploadStale) {
+		t.Fatal("the premise")
 	}
 }

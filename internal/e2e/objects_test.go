@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -72,17 +73,19 @@ func download(t *testing.T, n *node, project, path string) (int, []byte) {
 
 // A FILE UPLOADED TO ONE NODE DOWNLOADS FROM ANOTHER, byte for byte.
 //
-// Several chunks, so the download reassembles a manifest rather than handing
-// back one message; and from the member the upload did not touch, so what it
-// serves came through the log (the row) and the object store (the bytes)
-// rather than from anything the first member still holds in memory.
+// Many of the broker's messages, so the download streams an object the bucket
+// holds in pieces rather than handing back one; and from the member the
+// upload did not touch, so what it serves came through the log (the row) and
+// the object store (the bytes) rather than from anything the first member
+// still holds in memory. The row's digest is the content's, so the download
+// was verified against what was uploaded rather than against itself.
 func TestAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T) {
 	noParallel(t)
 	c := startCluster(t, fleetSize)
 	c.hydrated(t)
 	content := bytes.Repeat([]byte("region,quarter,revenue\nemea,q3,1200\n"), 90_000)
-	if len(content) <= 2*objstore.ChunkSize {
-		t.Fatalf("the fixture is %d bytes, under three chunks", len(content))
+	if len(content) <= 2*natsobj.MessageBytes {
+		t.Fatalf("the fixture is %d bytes, under three of the bucket's messages", len(content))
 	}
 
 	// STORED ON THE FIRST ATTEMPT: the bucket is created as the node boots,
@@ -102,11 +105,13 @@ func TestAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chunks := (len(content) + objstore.ChunkSize - 1) / objstore.ChunkSize
 	if detail.File.UpdatedBy != e2eOperatorID || detail.File.Size != int64(len(content)) ||
-		len(detail.File.Chunks) != chunks {
-		t.Errorf("the other member's row: by %q, %d bytes, %d chunks",
-			detail.File.UpdatedBy, detail.File.Size, len(detail.File.Chunks))
+		detail.File.Hash != objstore.HashOf(content) || detail.File.Object.IsZero() {
+		t.Errorf("the other member's row: by %q, %d bytes, digest %s, object %s",
+			detail.File.UpdatedBy, detail.File.Size, detail.File.Hash, detail.File.Object)
+	}
+	if answer["hash"] != string(objstore.HashOf(content)) {
+		t.Errorf("the upload answered digest %v, want the content's", answer["hash"])
 	}
 }
 
@@ -143,7 +148,11 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	if detail.File.UpdatedBy != "ceo" {
 		t.Errorf("the file is attributed to %q", detail.File.UpdatedBy)
 	}
-	rc, err := p.data.engine.Objects().Open(t.Context(), detail.File.Manifest())
+	object, named := detail.File.Content()
+	if !named {
+		t.Fatalf("the data node's row names no object: %+v", detail.File)
+	}
+	rc, err := p.data.engine.Objects().Open(t.Context(), object)
 	if err != nil {
 		t.Fatalf("open the file's bytes on the data node: %v", err)
 	}

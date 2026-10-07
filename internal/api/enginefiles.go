@@ -50,12 +50,27 @@ func (f engineFiles) File(ctx context.Context, project, path string,
 	return f.reader.File(ctx, project, path, fresh)
 }
 
-func (f engineFiles) Open(ctx context.Context, m objstore.Manifest) (io.ReadCloser, error) {
-	return f.objects.Open(ctx, m)
+// AcceptsFiles reads the project through the router, as the write's own
+// decide will: a project the read cannot find is [tracker.ErrNoProject], and an
+// archived one is refused in the writer's own sentence.
+func (f engineFiles) AcceptsFiles(ctx context.Context, project string, fresh statelog.Freshness) error {
+	detail, err := f.reader.Project(ctx, tracker.ProjectDetailQuery{
+		Project: project, Level: fresh.Level,
+		MinPosition: fresh.MinPosition, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+	})
+	if err != nil {
+		return err
+	}
+	return tracker.AcceptFiles(detail.Key, detail.Archived)
 }
 
-func (f engineFiles) PutChunk(ctx context.Context, h objstore.Hash, data []byte) error {
-	return f.objects.Put(ctx, h, data)
+func (f engineFiles) Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
+	return f.objects.Open(ctx, o)
+}
+
+func (f engineFiles) Put(ctx context.Context, r io.Reader, limit int64,
+	m objstore.PutMeta) (objstore.Object, error) {
+	return f.objects.Put(ctx, r, limit, m)
 }
 
 func (f engineFiles) operator(operator string) estate.WorkWriter {

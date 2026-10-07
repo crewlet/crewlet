@@ -370,13 +370,14 @@ type Reading struct {
 	LinearizableReads, LinearizableReadsExpected int
 	CensusLog                                    string
 
-	// ObjectsMissing is how many chunks the estate names that the object
-	// store does not hold, as the collector's last COMPLETED audit found —
-	// on the node holding the collector's duty, and zero on every other,
-	// since the store is one the whole fleet shares and one node's count of
-	// it is the fleet's. Parts of files nobody can read in full. Any value
-	// above zero is an alarm, for the gated record's reason: there is no
-	// threshold below which a file that cannot be opened is acceptable.
+	// ObjectsMissing is how many files' bytes the object store does not
+	// hold, or holds wrong — at another size, or under another digest — as
+	// the collector's last audit to run to its end found: on the node
+	// holding the collector's duty, and zero on every other, since the
+	// store is one the whole fleet shares and one node's count of it is
+	// the fleet's. Files nobody can read. Any value above zero is an alarm,
+	// for the gated record's reason: there is no threshold below which a
+	// file that cannot be opened is acceptable.
 	ObjectsMissing int
 }
 
@@ -757,13 +758,13 @@ var table = []rule{
 	{
 		kind: KindObjectsMissing,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d chunk(s) the company's files are made of are not "+
-				"in the object store", r.ObjectsMissing), r.ObjectsMissing > 0
+			return fmt.Sprintf("%d file(s) are missing from the object store or "+
+				"damaged in it", r.ObjectsMissing), r.ObjectsMissing > 0
 		},
-		remedy: "The backend lost bytes it had acknowledged: check its own health " +
-			"(the NATS bucket OBJ_crewlet_files on the data nodes, or the S3 " +
-			"bucket) and restore the missing chunks from a backup — see " +
-			"docs/guides/backup.md. `crewlet objects status` names them.",
+		remedy: "The backend lost or changed bytes it had acknowledged: check its " +
+			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
+			"the S3 bucket) and restore those files from a backup, or upload them " +
+			"again — see docs/guides/backup.md. `crewlet objects status` names them.",
 	},
 }
 

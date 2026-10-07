@@ -13,7 +13,7 @@ subcommand below is served by it.
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `REFUSING SINCE` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
-| `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
+| `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
@@ -24,7 +24,7 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
-| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: chunks listed and deleted by the last collection, chunks named and **missing** by the last audit, with the missing hashes listed. `-json` prints the fleet view's `objects` block as the node answered it |
+| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted, chunks of an earlier build retired and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a build older than the field) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
@@ -595,9 +595,10 @@ counter zeroed by hand left no record of who made the room or why.
 crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-token TOKEN] [-wait DURATION]
 ```
 
-Copies a running node's two durable estates — its store file and every
-JetStream stream and coordination bucket — into one directory, and verifies
-the store copy before calling it a backup.
+Copies what a running node holds — its own store file, the replicated
+estate's file on a node with the `data` role, and every JetStream stream and
+coordination bucket — into one directory, and verifies each store copy before
+calling it a backup.
 
 **It writes to the engine's host, not yours.** `-dir` is resolved where the
 node runs; nothing is downloaded. A relative path is refused rather than
@@ -615,10 +616,22 @@ address to give the `nats` CLI. The one process that can reach both is the
 engine, and this asks it to.
 
 The report names what it captured, per estate. Every node holds its own store
-whatever its `node.roles`, and on the embedded topology its own broker too; a
-node that dialled an external NATS cluster copies the store alone and says so,
+whatever its `node.roles`, a data node the replicated estate beside it, and on
+the embedded topology its own broker too; a node that dialled an external NATS
+cluster copies its store files alone and says so,
 naming the cluster as where the stream half is backed up, rather than
 presenting a partial copy as a backup.
+
+**The company's files come too**, as an `objects` line. On the default `nats`
+object store their objects are in the `OBJ_crewlet_files` stream the backup
+snapshots with the rest, and the line counts the objects the copy names
+that the stream holds (lost ones are listed beneath); on
+`s3` each object the copy names is read from the bucket into `objects/` and
+checked against its file's size and SHA-256 as it is written, and the line
+gives their count and size. A file whose object the store answered it does
+not hold, or holds wrong, does not fail the backup: it is listed beneath, as
+`PROJECT/path` and the object's key, to restore from an earlier backup or
+upload again. One the store could not answer about at all fails it.
 
 `-wait` (default 30 minutes) bounds how long the command waits for the answer,
 not the copy: the engine finishes what it started, so a wait that expires
@@ -711,23 +724,31 @@ It prints the store the fleet's files are in — the fleet's own NATS bucket
 the node that ran the last passes of the `object-collector` duty, and one line
 for each pass:
 
-- **Last collection** — how many chunks it listed in the store and how many it
-  deleted for being older than a day with no row naming them. A collection that
-  deleted nothing on purpose says why (`deleted nothing: …` — the node's view of
-  the estate was incomplete, so a row it could not read might name any chunk),
-  one that stopped says what stopped it, and one that did not finish says
-  `incomplete`.
-- **Last audit** — how many chunks the company's rows name and how many of them
-  the store does not hold. When any are missing it lists their hashes (the
-  first hundred, and how many more), since each is part of a file nobody can
-  download; restore them from a [backup](../guides/backup.md).
+- **Last collection** — how many objects it listed in the store, how many it
+  deleted for being older than a day with no row naming them, how many chunks
+  an earlier build stored it retired once no node of that build was left, and
+  how many uploads begun more than a day ago and never finished it abandoned.
+  A collection that stopped judging says why (`stopped judging: …` — the
+  node's view of the estate was incomplete, so a row it could not read might
+  name any object) beside what it had deleted before it stopped; one that
+  stopped says what stopped it, and one that did not finish says
+  `incomplete`. A sweep of unfinished uploads the store refused — on S3, an
+  identity without `s3:ListBucketMultipartUploads` or
+  `s3:AbortMultipartUpload` — is a line of its own beneath.
+- **Last audit** — from the last audit to run to its end: how many files the
+  company's rows name, how many the store does not hold (**missing**) and how
+  many it holds at the wrong size or digest (**damaged**). An audit that
+  failed after it is said beneath, never in its place. When any file cannot
+  be read it lists them — the file, whether it is missing or damaged, and its
+  object's key; the first hundred, and how many more — to restore from a
+  [backup](../guides/backup.md) or upload again.
 
 Before the collector has finished a pass — on a new fleet, in the minute or so
 before a data node first claims the duty — it says so. `-json` prints the block exactly as the node answered it,
 for a script. The exit status is non-zero when the node cannot say — its
 coordination store did not answer, the node runs no object store, or it
-answered a state this build does not know — and zero otherwise, missing chunks
-included: a store that lost bytes is an answer, and the
+answered a state this build does not know — and zero otherwise, files that
+cannot be read included: a store that lost bytes is an answer, and the
 [`objects_missing`](alarms.md) alarm is what pages for it.
 
 ## `crewlet fleet broker`

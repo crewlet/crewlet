@@ -75,6 +75,8 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
 // createRounds bounds [createKey]'s loop.
@@ -187,7 +189,7 @@ type leaderPurge struct {
 
 // newLeaderPurge addresses the purges of kv's stream in the API js speaks.
 func newLeaderPurge(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderPurge, error) {
-	api, err := apiOf(js)
+	api, err := jsapi.Of(js)
 	if err != nil {
 		return nil, err
 	}

@@ -4,14 +4,14 @@ import (
 	"context"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// FileReader is the read side of a project's files this surface calls.
+// FileReader is the read side of a project's files this surface calls: the
+// listing, and nothing else — one file and its object are read by the byte
+// route, which is the only thing that opens them.
 type FileReader interface {
 	Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error)
-	File(ctx context.Context, project, path string, fresh statelog.Freshness) (tracker.FileDetail, error)
 }
 
 // workFiles answers a page of one project's files.

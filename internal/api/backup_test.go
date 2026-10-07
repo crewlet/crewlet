@@ -139,12 +139,13 @@ func TestAFailedBackupIsAnEngineError(t *testing.T) {
 	}
 }
 
-// A copy naming chunks no data node could supply is the FLEET's condition, and
-// one that clears: a 500 would send an operator to this node's logs for a node
-// that is down somewhere else, and the chunk list stays in the log.
-func TestUnreachableChunksAreTheFleetsStateNotTheNodes(t *testing.T) {
+// A copy naming objects the store did not answer for is the FLEET's condition,
+// and one that clears: a 500 would send an operator to this node's logs for a
+// store that is unreachable somewhere else, and the list of objects stays in
+// the log.
+func TestUnreachableObjectsAreTheFleetsStateNotTheNodes(t *testing.T) {
 	t.Parallel()
-	taker := &fakeBackup{err: fmt.Errorf("%w: 3 of 40 chunks (ab12…)", backup.ErrObjectsUnreachable)}
+	taker := &fakeBackup{err: fmt.Errorf("%w: 3 of 40 objects (ENG/q3.csv …)", backup.ErrObjectsUnreachable)}
 	a := newApp(t, api.Options{Bootstrap: guarded(), Backup: taker})
 
 	status, body := post(t, a, "/backup?dir=/tmp/x", "t0ken")
@@ -155,7 +156,7 @@ func TestUnreachableChunksAreTheFleetsStateNotTheNodes(t *testing.T) {
 		t.Errorf("error = %v, want objects_unreachable", body["error"])
 	}
 	if body["detail"] != nil {
-		t.Errorf("the chunk list reached the caller: %v", body["detail"])
+		t.Errorf("the list of objects reached the caller: %v", body["detail"])
 	}
 	if body["hint"] == nil {
 		t.Error("the caller was not told what to do about it")

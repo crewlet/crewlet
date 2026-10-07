@@ -586,12 +586,14 @@ gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate 
 	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheGateAnswerMatchesItsGoldenFile
 
-# internal/api/testdata/objects_answer.json is the object store's renderings —
-# the fleet view's placement block in each of its states, every gesture answer
-# and every refusal — written by the renderers /fleet and the /objects routes
-# answer through, for `gate-answer`'s reason: the dashboard's fleet screen suite
-# loads the SAME file as its fixture, so a change to the rendering fails on
-# both sides until each follows it. Read the diff before committing it.
+# internal/api/testdata/objects_answer.json is the object store's rendering —
+# the `objects` block GET /fleet answers (the collector's last collection and
+# audit) in each of its states — written by the renderer /fleet answers
+# through, for `gate-answer`'s reason: the file-storage card's suite on the
+# dashboard's Settings › Nodes screen loads the SAME file as its fixture, and
+# docs/reference/api-endpoints.md's GET /fleet example is held to it, so a
+# change to the rendering fails on every side until each follows it. Read the
+# diff before committing it.
 objects-answer: ## regenerate internal/api/testdata/objects_answer.json from the object store's renderers
 	CREWLET_REGENERATE_OBJECTS_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheObjectsAnswerMatchesItsGoldenFile

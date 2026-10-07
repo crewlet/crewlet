@@ -48,7 +48,7 @@ eighteen in full.
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
 | `list_project_files` | A project's files — reports, specs, notes — in path order, a page at a time |
 | `read_project_file` | One file's text, a page at a time from an offset; bytes as base64 on request |
-| `write_project_file` | Put a file at a path, creating it or replacing it, with an optional `if_version` |
+| `write_project_file` | Put a file at a path, creating it or replacing it, with an optional `if_version`. Writing exactly what the file already holds, with the same type, stores nothing and answers `outcome: unchanged` |
 | `remove_project_file` | Take a file out of a project; its content is deleted from storage |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |

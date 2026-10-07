@@ -196,7 +196,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&taskActivity{deps: deps.Work}, feedReads(deps.Work)},
 		{&myWork{deps: deps.Work}, feedReads(deps.Work)},
 		// AND THE PROJECT'S FILES, which need the object store as well as
-		// the tracker — a file is a row naming chunks, and a surface
+		// the tracker — a file is a row naming an object, and a surface
 		// holding one half could only record content it cannot store. See
 		// workfiles.go.
 		{&listProjectFiles{deps: deps.Work}, deps.Work.Files != nil},

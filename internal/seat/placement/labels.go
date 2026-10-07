@@ -11,8 +11,7 @@ import (
 //
 // SIXTY-THREE: Kubernetes' limit on a label name — the length of a DNS label —
 // which is the grammar an operator writing node.labels most likely already
-// types, and a bound on what every presence lease and every object placement
-// map repeats once per key.
+// types, and a bound on what every presence lease repeats once per key.
 const MaxLabelKeyBytes = 63
 
 // ErrLabelKey is a string that is not a node label key.

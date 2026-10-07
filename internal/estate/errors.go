@@ -62,6 +62,7 @@ var sentinels = []sentinel{
 	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
 	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
+	{"tracker.ErrUploadStale", tracker.ErrUploadStale},
 
 	{"pages.ErrBadCursor", pages.ErrBadCursor},
 	{"pages.ErrConflict", pages.ErrConflict},

@@ -262,23 +262,30 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		if file.RemovedAt != nil {
 			removedAt = store.EncodeTime(*file.RemovedAt)
 		}
+		// NULL FOR A ROW NAMING NO OBJECT — a removal, or a put an earlier
+		// build wrote naming chunks — which every statement the object
+		// store builds leaves out by name.
+		var object any
+		if !file.Object.IsZero() {
+			object = file.Object.String()
+		}
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_files
-				(id, project_key, path, content_type, hash, size, chunks,
+				(id, project_key, path, content_type, hash, size, object,
 				 created_by, created_at, updated_by, updated_at,
 				 removed_by, removed_at, version, document)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (id) DO UPDATE SET
 				project_key = excluded.project_key, path = excluded.path,
 				content_type = excluded.content_type, hash = excluded.hash,
-				size = excluded.size, chunks = excluded.chunks,
+				size = excluded.size, object = excluded.object,
 				created_by = excluded.created_by, created_at = excluded.created_at,
 				updated_by = excluded.updated_by, updated_at = excluded.updated_at,
 				removed_by = excluded.removed_by, removed_at = excluded.removed_at,
 				version = excluded.version, document = excluded.document
 			WHERE excluded.version > tracker_files.version`,
 			key, file.Project, file.Path, file.ContentType, string(file.Hash),
-			file.Size, len(file.Chunks), file.CreatedBy,
+			file.Size, object, file.CreatedBy,
 			store.EncodeTime(file.CreatedAt), file.UpdatedBy,
 			store.EncodeTime(file.UpdatedAt), file.RemovedBy, removedAt,
 			c.packed, []byte(c.record.Mutation))

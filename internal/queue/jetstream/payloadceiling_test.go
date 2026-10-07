@@ -32,9 +32,8 @@ func externalServer(t *testing.T, maxPayload int32) *server.Server {
 
 // AN EXTERNAL BROKER BELOW THE CONTRACT IS REFUSED AT THE DIAL, naming the one
 // setting that fixes it. Accepted, a node on nats-server's 1 MiB default
-// started cleanly and then had every file chunk — a mebibyte and its framing —
-// and every event over a mebibyte refused at its publish, with nothing saying
-// the broker was the reason.
+// started cleanly and then had every event over a mebibyte refused at its
+// publish, with nothing saying the broker was the reason.
 func TestAnExternalBrokerBelowThePayloadContractIsRefused(t *testing.T) {
 	t.Parallel()
 	ns := externalServer(t, 0)

@@ -200,7 +200,6 @@ package kv
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -465,9 +464,11 @@ func certify(ctx context.Context, read *leaderReader, what string,
 	return nil
 }
 
-// leaderReader reads a key's newest message from the stream LEADER: a
-// `$JS.API.STREAM.MSG.GET` with `last_by_subj`, the one read of a single key
-// that no replica answers from its own copy.
+// leaderReader reads a key's newest message from the stream LEADER, decoded
+// as the bucket handle decodes an entry: the bucket's half of
+// [jsapi.Leader], which is the one leader read every caller in the engine
+// shares — the request, its address across a leaf link and the reading of
+// the leader's answer.
 //
 // NOT the bucket handle's Get, which on these buckets is a direct get any
 // replica may answer — see the file doc for what that cost. And not the
@@ -475,62 +476,19 @@ func certify(ctx context.Context, read *leaderReader, what string,
 // client picks the API from the stream's allow_direct flag alone and offers
 // no way to ask for the other one.
 type leaderReader struct {
-	conn    *nats.Conn
-	subject string // the MSG.GET subject of this bucket's stream, in the client's API
-	bucket  string
-	pre     string // the subject prefix a key is written under
-
-	// timeout bounds a read whose context has no deadline — the client's
-	// OWN default, taken from the client, because this read goes past the
-	// client and would otherwise be the one request in a listing that
-	// waited for ever on a leader that never answers.
-	timeout time.Duration
+	leader *jsapi.Leader
+	bucket string
+	pre    string // the subject prefix a key is written under
 }
 
 // newLeaderReader addresses the leader reads of kv's stream in the API js
 // speaks.
 func newLeaderReader(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderReader, error) {
-	api, err := apiOf(js)
+	leader, err := jsapi.NewLeader(js, bucketStream(kv))
 	if err != nil {
 		return nil, err
 	}
-	subject, err := api.Subject(fmt.Sprintf(server.JSApiMsgGetT, bucketStream(kv)))
-	if err != nil {
-		return nil, err
-	}
-	return &leaderReader{
-		conn:    js.Conn(),
-		subject: subject,
-		bucket:  kv.Bucket(),
-		pre:     bucketSubjects(kv),
-		timeout: js.Options().DefaultTimeout,
-	}, nil
-}
-
-// apiOf names which of the engine's two JetStream APIs js was built on.
-//
-// This package is handed a client rather than an API, and a request that goes
-// past the client has to be addressed where the client's own go or it is
-// answered by nothing: a leaf's broker serves JetStream only under the
-// embedded fleet's domain. [jsapi.API.Subject] is the one rule for that
-// address, so this recovers the API from the client instead of spelling the
-// address a second time. Every client the engine builds comes from
-// [jsapi.API.Client], so any other shape is a wiring mistake and is named.
-func apiOf(js jetstream.JetStream) (jsapi.API, error) {
-	switch o := js.Options(); {
-	case o.APIPrefix != "":
-		return jsapi.API{}, fmt.Errorf("the JetStream client addresses the "+
-			"custom API prefix %q, which is neither API this engine speaks — "+
-			"build it with internal/jsapi", o.APIPrefix)
-	case o.Domain == "":
-		return jsapi.Account(), nil
-	case o.Domain == jsapi.Domain:
-		return jsapi.Embedded(), nil
-	default:
-		return jsapi.API{}, fmt.Errorf("the JetStream client addresses the "+
-			"domain %q, which is neither API this engine speaks — build it "+
-			"with internal/jsapi", o.Domain)
-	}
+	return &leaderReader{leader: leader, bucket: kv.Bucket(), pre: bucketSubjects(kv)}, nil
 }
 
 // last answers the newest message on key's subject as the stream leader holds
@@ -538,7 +496,14 @@ func apiOf(js jetstream.JetStream) (jsapi.API, error) {
 // message at all is ErrKeyNotFound, and a delete or purge marker is an entry
 // whose Operation says so.
 func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
-	return r.get(ctx, key, server.JSApiMsgGetRequest{LastFor: r.pre + key})
+	msg, err := r.leader.Last(ctx, r.pre+key)
+	if errors.Is(err, jsapi.ErrNoMessage) {
+		return nil, jetstream.ErrKeyNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.entry(key, msg)
 }
 
 // at answers key's message at one revision as the stream leader holds it —
@@ -548,58 +513,31 @@ func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValue
 // one; a replica says it of a revision it has not applied YET as well, which
 // is the answer this exists not to give.
 func (r *leaderReader) at(ctx context.Context, key string, revision uint64) (jetstream.KeyValueEntry, error) {
-	return r.get(ctx, key, server.JSApiMsgGetRequest{Seq: revision})
-}
-
-// get asks the leader one message question about key and decodes the answer
-// exactly as the client's KV Get decodes one.
-func (r *leaderReader) get(ctx context.Context, key string,
-	ask server.JSApiMsgGetRequest) (jetstream.KeyValueEntry, error) {
-
-	if _, bounded := ctx.Deadline(); !bounded {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.timeout)
-		defer cancel()
-	}
-	subject := r.pre + key
-	req, err := json.Marshal(ask)
-	if err != nil {
-		return nil, fmt.Errorf("encode the read: %w", err)
-	}
-	reply, err := r.conn.RequestWithContext(ctx, r.subject, req)
-	if err != nil {
-		return nil, err
-	}
-	var resp server.JSApiMsgGetResponse
-	if err := json.Unmarshal(reply.Data, &resp); err != nil {
-		return nil, fmt.Errorf("decode the leader's answer: %w", err)
-	}
-	switch msg := resp.Message; {
-	case resp.Error != nil && server.IsNatsErr(resp.Error, server.JSNoMessageFoundErr):
+	msg, err := r.leader.At(ctx, revision)
+	switch {
+	case errors.Is(err, jsapi.ErrNoMessage):
 		return nil, jetstream.ErrKeyNotFound
-	case resp.Error != nil:
-		return nil, resp.Error
-	case msg == nil:
-		return nil, errors.New("the leader answered with neither a message nor an error")
-	case msg.Subject != subject && ask.Seq != 0:
+	case err != nil:
+		return nil, err
+	case msg.Subject != r.pre+key:
 		// A REVISION ANOTHER KEY HOLDS is not this key's at that revision:
 		// what GetRevision answers it, for the same reason.
 		return nil, jetstream.ErrKeyNotFound
-	case msg.Subject != subject:
-		// A broker that answered about another subject did not do what it
-		// was asked, and recording its message under this key would list a
-		// value the key never held.
-		return nil, fmt.Errorf("the leader answered with %q for %q", msg.Subject, subject)
-	default:
-		op, err := operationOf(msg.Header)
-		if err != nil {
-			return nil, err
-		}
-		return leaderEntry{
-			bucket: r.bucket, key: key, value: msg.Data,
-			revision: msg.Sequence, created: msg.Time, op: op,
-		}, nil
 	}
+	return r.entry(key, msg)
+}
+
+// entry is a message the leader answered, as the KV entry the client's own
+// Get would have decoded it to.
+func (r *leaderReader) entry(key string, msg jsapi.Message) (jetstream.KeyValueEntry, error) {
+	op, err := operationOf(msg.Header)
+	if err != nil {
+		return nil, err
+	}
+	return leaderEntry{
+		bucket: r.bucket, key: key, value: msg.Data,
+		revision: msg.Sequence, created: msg.Time, op: op,
+	}, nil
 }
 
 // live answers key's LIVE value as the leader holds it, the way the bucket

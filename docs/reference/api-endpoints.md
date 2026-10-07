@@ -92,7 +92,7 @@ node means nothing was done.
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/agents/activity` | Every seat's turns over a window of company days — counts, the first-pass rate over reviewed turns, turn-duration quantiles and a day-by-day series (see [`seat_activity`](#queries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
-| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are placed. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
+| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are kept with what the object store's collector last found. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
@@ -122,7 +122,7 @@ node means nothing was done.
 | `GET` | `/work/projects` | Every **project** work is filed into, with its `task_counts` — `{todo, active, done, closed}`, one per status group, read from maintained columns and never aggregated per poll; there is no `open`, which folded the waiting work into the started work, so a caller wanting every unfinished item adds `todo` and `active` — its `target_date` (the day, `YYYY-MM-DD` on the company's clock, the lead means it to be finished; omitted when none is set), its `last_change` (when the project's work last changed and who changed it, ABSENT for a project nothing has been filed into), its chart-owned unit and its lead. `?q=` narrows by a word in the key, the name or the purpose and `?unit=` to the projects one unit owns — **named by the unit's `id` or by its name, in any case**, since a stored unit carries whichever was current when the row was written. `?archived=` SELECTS a set rather than widening one — `false` (the default) for the live projects, `only` for the retired ones alone, `true` for both — so "what did we retire" is a query rather than a caller's own filter over a wider answer. `?sort=` orders the whole selected set before the page is taken: one of `key`, `name`, `unit`, `todo`, `active`, `done`, `closed`, `last_change`, `target`, each optionally with a leading `-` for descending, defaulting to `key`, with the key breaking every tie; a project with no `last_change` or no `target_date` sorts last in both directions. An `archived` or `sort` value that is neither is a **400** naming the parameter and what it accepts. `?limit=` caps at 200, which is also the default. The answer carries a `census` — `{active, archived}`, the same question under the same `q` and `unit` MINUS its archival term — so a caller that selected one set can still tell an empty set from an empty company; `total` is the census of the mode that was asked for. A set read, so it carries `complete` and its `incomplete` beside the read level |
 | `GET` | `/work/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three; a `for_type` the company does not file answers 400 `bad_params`, not 404 — the project is there and the argument is what to change |
 | `GET` | `/work/files` | One project's **files**, in path order: `?project=` (required), `?folder=` to narrow to the paths under one folder, `?removed=true` to include removed files, `?limit=` (default 200, max 1000) and `?after=`, the `next` the previous page answered. An unknown project is `404 no_project`, never an empty page (see [below](#project-files)) |
-| `GET` | `/work/files/{project}/{path...}` | One file's **bytes**, streamed, with its version as the `ETag`. `503 content_unavailable` where the file is listed and no copy of its content could be read (see [below](#project-files)) |
+| `GET` | `/work/files/{project}/{path...}` | One file's **bytes**, streamed, with its version as the `ETag`. `503 content_unavailable` where the file is listed and its content could not be read right now, `410 content_retired` where an earlier build kept it in chunks (see [below](#project-files)) |
 | `PUT` | `/work/files/{project}/{path...}` | Write a file: the request body is its content, `Content-Type` its type, `If-Match` the version it replaces and `?op_id=` how an `unknown` answer is retried. **Always needs an operator token** — the write is attributed to the person (see [below](#project-files)) |
 | `DELETE` | `/work/files/{project}/{path...}` | Remove a file. Same credential, `If-Match` and `?op_id=` as the write |
 | `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days. Each record carries `fields` — what MOVED, as `{"<field>": {"from": …, "to": …}}` — for every kind and not only the ones about a task: a project reconcile names the purpose, unit or epoch that changed, a view save the query parameters, a priorities write the order before and after, and a dependency the item it now waits on. A task's own row draws on twenty-eight names: `title`, `status`, `assignee`, `priority`, `project`, `type`, `tags`, `due`, `due_all_day`, `start`, `estimate`, `points`, `reporter`, `watchers`, `muted`, `collaborators`, `parent`, `routing_unit`, `archived`, `removed_with`, `waiting_on`, `linked`, `duplicates`, `page`, `blocking`, `checklists`, `fields` and `body`. Values are the STORED form (a status slug, a whole RFC3339 instant, an item's id) rather than a rendering, because every node writes the row identically and a rendering would depend on the reader's zone and the company's live vocabulary; a collection is cut at a whole member and ends with `+N more`. The two largest are MARKED rather than carried: `body` is `<N> bytes` on each side (empty where there was none) and never the prose, and `checklists` is `<list>: <done> of <total> done` per named list, plus `(<n> promoted)` where an item became a sub-item. `fields` names each custom value by its SLUG — resolved against the project's catalogue by the node applying the change, which is why a NOTIFICATION carries every other delta and not this one — with a choice as its option's slug, a multi-valued field's members joined with `/`, and a count of any whose field the project no longer declares The ANSWER also carries `keys`, an id-to-item-key map naming the tasks those deltas point at — `waiting_on`, `linked` and `duplicates` but never `page`, which names a knowledge-base page; the `blocking` mirror; a person's `priorities` queue; and the two scalars that name a task, `parent` and `removed_with` — resolved on the answering node: a delta records another task by its ID, because a key belongs to that task's own row and a history row is written once and never repaired. An id this node holds no row for is absent rather than empty, and a renderer falls back to the id |
@@ -3089,9 +3089,10 @@ that were never missing.
 
 A project holds **files** beside its work: a report a seat wrote, a spreadsheet
 an operator uploaded, the output of a run somebody wants to keep. Each is a row
-in the tracker — a path, a type, a size, a version and who wrote it — and its
-content lives in the [object store](../concepts/object-store.md), split into
-chunks placed across the fleet rather than copied onto every node. See
+in the tracker — a path, a type, a size and SHA-256, a version and who wrote
+it — and its content is one object in the
+[object store](../concepts/object-store.md), the one store the whole fleet
+shares, rather than a copy in every node's database. See
 [A project's files](../guides/work-tracker.md#a-projects-files) for what a seat
 does with them.
 
@@ -3119,10 +3120,14 @@ curl -OJ -H "Authorization: Bearer $CREWLET_API_TOKEN" \
 }
 ```
 
-**The content goes first.** An upload writes every chunk before it records the
-file, so a file that is listed is a file whose content the fleet holds. A write
-cut off halfway leaves chunks nothing names, which the collector removes a day
-later; it never leaves a row pointing at content that is not there.
+**The content goes first.** An upload streams the whole body into one new
+object in the store before it records the file, so a file that is listed is a
+file whose content the fleet holds. A write cut off halfway, or refused once its
+object is stored, leaves an object nothing names, which the collector removes a
+day later; it never leaves a row pointing at content that is not there. A body
+whose `Content-Length` is already over 1 GiB, and an upload into a project that
+does not exist (`404 no_project`) or is archived (`400 invalid`), are refused
+before any of it is read.
 
 **A write names the version it replaces.** `If-Match` carries the `ETag` the
 download answered. Absent, the write creates the path or overwrites whatever is
@@ -3141,14 +3146,19 @@ present only where the write is known to have landed. An `unknown` is retried
 by sending the same request again with the `op_id` it answered.
 
 **Each mebibyte has 30 seconds to cross**, in either direction: an upload's
-next mebibyte to arrive once the last one is stored, a download's next to be
+mebibyte has 30 seconds of the time the server spends waiting on the client to
+arrive, never counting the time the server spends storing what already arrived,
+and a download's next to be
 taken by the client once it has been fetched — a floor of about 35 KB/s, far
-under any real link. A whole-body deadline cannot bound a stream of up to a
+under any real link, and the same floor the object store holds its own
+transfers to. A whole-body deadline cannot bound a stream of up to a
 gibibyte without capping real uploads, and none at all let a client trickle one
 a byte at a time, or open a download and never read it, holding the handler and
-its connection for as long as it liked. An upload that stops arriving answers
-`400 unreadable_body` and records nothing; a download the client stops taking
-is cut, which the client sees as a body shorter than its `Content-Length`.
+its connection for as long as it liked. An upload that stops arriving — a
+connection closed mid-body included — answers `400 unreadable_body` and records
+nothing; a download the client stops taking, or whose content stops being
+readable part way, is cut, which the client sees as a body shorter than its
+`Content-Length`.
 
 **A download is served as an attachment**, with the file's own type and the
 same `default-src 'none'` policy every non-dashboard response carries, so a file
@@ -3159,12 +3169,16 @@ origin.
 |---|---|---|
 | `400` | `bad_path` | The path is empty, longer than 1024 bytes, not UTF-8, ends in `/`, has an empty folder or a `.` or `..` in it, or carries a control character or a backslash. A leading `/` is dropped rather than refused |
 | `400` | `bad_if_match` | `If-Match` is not a version |
+| `400` | `invalid` | The write can never land as sent: the project is archived (unarchive it first), or the content type is over 255 bytes or spans lines |
 | `400` | `unreadable_body` | The upload's body stopped arriving: the connection closed, or a mebibyte of it took more than 30 seconds (see below) |
 | `403` | `operator_required` | A write whose credential names no operator |
 | `404` | `no_project` / `no_file` | No such project, or no file at that path |
 | `412` | `version_moved` | `If-Match` names a version the file has moved past |
-| `413` | `too_large` | The content is over 1 GiB |
-| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or no copy of the content could be read |
+| `409` | `upload_expired` | The upload took longer than a write may name its object after (twelve hours from when its key was minted); send it again |
+| `410` | `content_retired` | The file was saved by an earlier build that kept files in chunks, and its content cannot be read any more; it is still listed, and can be uploaded again or removed |
+| `413` | `body_too_large` | The content is over 1 GiB — refused before reading where `Content-Length` says so, and otherwise once the body passes it |
+| `500` | `content_corrupt` | The store answered with content that is not what the file records; trying again reads the same bytes, so restore the file from a backup or upload it again |
+| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or the file's content could not be read right now |
 
 The byte routes are mounted only where the tracker is native **and** the node
 runs the object store. A company on Jira has no project files to serve.
@@ -3888,13 +3902,22 @@ start and **omits** the field rather than rendering one.
       "aged": 1702,
       "deleted": 12,
       "referenced": 1690,
-      "refreshed": 0
+      "retired": 3,
+      "abandoned": 1
     },
     "audit": {
       "at": "2026-09-01T09:00:00Z",
       "completed": true,
       "referenced": 1828,
-      "missing": 0
+      "missing": 0,
+      "damaged": 0,
+      "found": {
+        "at": "2026-09-01T09:00:00Z",
+        "completed": true,
+        "referenced": 1828,
+        "missing": 0,
+        "damaged": 0
+      }
     }
   }
 }
@@ -3917,8 +3940,9 @@ writes.
 |---|---|
 | `backend` | The store every node agreed on at boot: `nats` (the data nodes' replicated bucket) or `s3:<endpoint>/<bucket>/<prefix>` |
 | `node` | The data node holding the collector's duty when it ran the passes below |
-| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every chunk past the day's grace (`completed`), and its counts — `listed`, `aged` (past the grace, so judged), `deleted` (no row named them), `referenced` (a row still did), `refreshed` (written again while it judged them, and kept). `skipped` says why it deleted nothing — an estate this node could not fully read; `error` what stopped it. Absent before the first one ends |
-| `audit` | The last **audit**, which asks the store about every chunk a row names: `referenced`, `missing` (the whole count), `missing_chunks` (the first hundred, to restore first; absent when none) and `completed` — false over an estate that was not complete, when `missing` is a floor. A non-zero `missing` raises [`objects_missing`](alarms.md). Absent before the first one ends |
+| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every object past the day's grace (`completed`), and its counts — `listed` (the objects under the engine's own namespace), `aged` (past the grace by both the store's clock and the key's own, so judged), `deleted` (no row named them), `referenced` (a row still did), `retired` (objects an earlier build stored as content-addressed chunks, deleted once no node of that build is left) and `abandoned` (uploads begun more than a day ago and never finished, which no listing shows). `skipped` says why it stopped judging — an estate this node could not fully read — and the counts are what it did before it stopped; `sweep_error` what kept it from abandoning unfinished uploads, which does not fail the collection (on S3, an identity without `s3:ListBucketMultipartUploads` or `s3:AbortMultipartUpload`); `error` what stopped it. Absent before the first one ends |
+| `audit` | The last **audit attempt**, which asks the store about every object a row names: when it ended (`at`), `referenced`, `missing` (objects the store does not hold), `damaged` (objects it holds at another size, or under another digest where it keeps one), `completed` — false over an estate that was not complete, when the counts are floors — and `error`, what stopped it. Absent before the first one ends |
+| `audit.found` | What the last audit to **run to its end** found — the attempt above, or the one before it when that one failed, so a failed attempt never hides what was found: `at`, `completed`, `referenced`, `missing`, `damaged` and `missing_files`, the first hundred files that cannot be read, each `{"object", "named_by", "damaged"}` — the object's key, the file as `PROJECT/path`, and `true` where the store holds it wrong rather than not at all (absent when none). A non-zero `missing` plus `damaged` here raises [`objects_missing`](alarms.md). Absent before any audit has run to its end |
 
 A collection runs hourly and an audit daily, on one data node at a time; a pass
 that fails is tried again ten minutes later.
@@ -4223,7 +4247,7 @@ of 100 000.
 ### `POST /backup`
 
 Copies this node's durable state — both of its store files, every JetStream
-stream and coordination bucket, and every chunk of the company's files that
+stream and coordination bucket, and every object holding a company file that
 the store copy names — into `?dir=`, a directory **on the engine's host**.
 
 ```bash
@@ -4244,7 +4268,7 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
      "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
      "migrations": ["0001_tracker.sql", "…"]}
   ],
-  "objects": {"dir": "objects", "chunks": 40, "bytes": 41943040, "reused": 36,
+  "objects": {"dir": "objects", "objects": 40, "bytes": 41943040, "reused": 36,
               "reused_from": "/var/backups/crewlet/2026-08-29T18-00/objects"},
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
@@ -4284,17 +4308,23 @@ Four refusals, each pointing somewhere different:
   rather than only logged, unlike every other route here, because it is the
   caller's own command to fix. A disk that fails or fills while the directory
   is prepared is the node's failure, not the path's, and answers `500`.
-- **503 `objects_unreachable`** — the store copy names chunks of the
-  company's files that the S3 bucket did not answer for. Nothing is wrong with
-  this node or the command: check that it reaches the bucket and take the
-  backup again. A backup without those chunks is refused rather than written,
-  because they may well be intact there. A chunk the bucket *answered* it does
-  not hold is different — it is lost whatever the backup does — and is listed
-  in the manifest's `objects.lost` rather than refused, so one lost file never
-  stops every later backup and, with them, the trim (see
-  [Backup](../guides/backup.md)). On the default `nats` backend the chunks are
-  in a stream the backup snapshots with every other (`objects.stream` names
-  it, and no chunk is copied on its own), so this refusal does not arise.
+- **503 `objects_unreachable`** — the store copy names objects holding the
+  company's files that the object store did not answer for. Nothing is wrong
+  with this node or the command: check that it reaches the store and take the
+  backup again. A backup without those objects is refused rather than written,
+  because they may well be intact there. An object the store *answered* it does
+  not hold, or holds as bytes other than the ones the file records, is
+  different — it is lost whatever the backup does — and is listed in the
+  manifest's `objects.lost` (each with the file that named it, as
+  `{"object", "named_by"}`) rather than refused, so one lost file never stops
+  every later backup and, with them, the trim (see
+  [Backup](../guides/backup.md)). On an S3 bucket each object is copied into
+  `objects/` under the bucket's own layout and checked against its row as it
+  is written. On the default `nats` backend the objects are in a stream the
+  backup snapshots with every other (`objects.stream` names it, and no object
+  is copied on its own); once the snapshot is taken the store is asked about
+  each object the copy names, so the same refusal and the same `lost` list
+  apply there too.
 - **A copy without the stream estate.** A node that dialled an external NATS
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest

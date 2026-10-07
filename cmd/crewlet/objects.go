@@ -50,21 +50,34 @@ type objectsView struct {
 }
 
 type objectsCollectView struct {
-	At        time.Time `json:"at"`
-	Completed bool      `json:"completed"`
-	Listed    int       `json:"listed"`
-	Deleted   int       `json:"deleted"`
-	Skipped   string    `json:"skipped"`
-	Error     string    `json:"error"`
+	At         time.Time `json:"at"`
+	Completed  bool      `json:"completed"`
+	Listed     int       `json:"listed"`
+	Deleted    int       `json:"deleted"`
+	Retired    int       `json:"retired"`
+	Abandoned  int       `json:"abandoned"`
+	Skipped    string    `json:"skipped"`
+	SweepError string    `json:"sweep_error"`
+	Error      string    `json:"error"`
 }
 
 type objectsAuditView struct {
-	At            time.Time `json:"at"`
-	Completed     bool      `json:"completed"`
-	Referenced    int       `json:"referenced"`
-	Missing       int       `json:"missing"`
-	MissingChunks []string  `json:"missing_chunks"`
-	Error         string    `json:"error"`
+	At    time.Time           `json:"at"`
+	Error string              `json:"error"`
+	Found *objectsFindingView `json:"found"`
+}
+
+type objectsFindingView struct {
+	At           time.Time `json:"at"`
+	Completed    bool      `json:"completed"`
+	Referenced   int       `json:"referenced"`
+	Missing      int       `json:"missing"`
+	Damaged      int       `json:"damaged"`
+	MissingFiles []struct {
+		Object  string `json:"object"`
+		NamedBy string `json:"named_by"`
+		Damaged bool   `json:"damaged"`
+	} `json:"missing_files"`
 }
 
 // objectsStatus is `crewlet objects status`.
@@ -99,7 +112,7 @@ func objectsStatus(args []string, stdout, stderr io.Writer) error {
 }
 
 // renderObjects prints the block: where the files are, and what the last
-// collection and audit found — and, above all, any chunk the store has lost.
+// collection and audit found — and, above all, any object the store has lost.
 func renderObjects(w io.Writer, v objectsView) error {
 	switch v.State {
 	case "unavailable":
@@ -117,26 +130,50 @@ func renderObjects(w io.Writer, v objectsView) error {
 	fmt.Fprintf(&b, "Files are kept in: %s\n", backendName(v.Backend))
 	fmt.Fprintf(&b, "Collector:         %s\n", v.Node)
 	if c := v.Collect; c != nil {
-		fmt.Fprintf(&b, "Last collection:   %s — %d chunks listed, %d deleted%s\n",
-			c.At.Format(time.RFC3339), c.Listed, c.Deleted, passNote(c.Completed, c.Skipped, c.Error))
+		fmt.Fprintf(&b, "Last collection:   %s — %d objects listed, %d deleted, "+
+			"%d chunk(s) of an earlier build retired, %d unfinished upload(s) abandoned%s\n",
+			c.At.Format(time.RFC3339), c.Listed, c.Deleted, c.Retired, c.Abandoned,
+			passNote(c.Completed, c.Skipped, c.Error))
+		if c.SweepError != "" {
+			fmt.Fprintf(&b, "                   unfinished uploads could not be swept: %s\n", c.SweepError)
+		}
 	} else {
 		fmt.Fprintln(&b, "Last collection:   none yet")
 	}
-	if a := v.Audit; a != nil {
-		fmt.Fprintf(&b, "Last audit:        %s — %d chunks named, %d missing%s\n",
-			a.At.Format(time.RFC3339), a.Referenced, a.Missing, passNote(a.Completed, "", a.Error))
-		if a.Missing > 0 {
-			fmt.Fprintf(&b, "\n%d chunk(s) the company's files are made of are not in the store. "+
-				"Restore them from a backup (docs/guides/backup.md):\n", a.Missing)
-			for _, h := range a.MissingChunks {
-				fmt.Fprintf(&b, "  %s\n", h)
+	// THE FINDINGS ARE THE LAST AUDIT TO RUN TO ITS END, and an attempt that
+	// failed after it is said beside them rather than in their place: what
+	// the store has lost does not stop being lost because an audit could
+	// not finish.
+	a := v.Audit
+	switch {
+	case a == nil:
+		fmt.Fprintln(&b, "Last audit:        none yet")
+	case a.Found == nil:
+		fmt.Fprintf(&b, "Last audit:        none has finished — the last, at %s, stopped: %s\n",
+			a.At.Format(time.RFC3339), a.Error)
+	default:
+		f := a.Found
+		fmt.Fprintf(&b, "Last audit:        %s — %d files named, %d missing, %d damaged%s\n",
+			f.At.Format(time.RFC3339), f.Referenced, f.Missing, f.Damaged, passNote(f.Completed, "", ""))
+		if a.Error != "" && a.At.After(f.At) {
+			fmt.Fprintf(&b, "                   a later audit, at %s, stopped: %s\n",
+				a.At.Format(time.RFC3339), a.Error)
+		}
+		if lost := f.Missing + f.Damaged; lost > 0 {
+			fmt.Fprintf(&b, "\n%d file(s) cannot be read: the store does not hold their bytes, "+
+				"or holds them wrong. Restore them from a backup (docs/guides/backup.md), or "+
+				"upload them again:\n", lost)
+			for _, m := range f.MissingFiles {
+				what := "missing"
+				if m.Damaged {
+					what = "damaged"
+				}
+				fmt.Fprintf(&b, "  %s (%s, object %s)\n", m.NamedBy, what, m.Object)
 			}
-			if shown := len(a.MissingChunks); shown < a.Missing {
-				fmt.Fprintf(&b, "  … and %d more\n", a.Missing-shown)
+			if shown := len(f.MissingFiles); shown < lost {
+				fmt.Fprintf(&b, "  … and %d more\n", lost-shown)
 			}
 		}
-	} else {
-		fmt.Fprintln(&b, "Last audit:        none yet")
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
@@ -154,12 +191,16 @@ func backendName(identity string) string {
 }
 
 // passNote is what to say after a pass's counts when it did not run in full.
+//
+// A PASS THAT STOPPED KEEPS ITS COUNTS: a collection that met an estate it
+// could not fully read had already deleted what it counted before it stopped,
+// so the note says why it stopped and never that it deleted nothing.
 func passNote(completed bool, skipped, failed string) string {
 	switch {
 	case failed != "":
 		return " (stopped: " + failed + ")"
 	case skipped != "":
-		return " (deleted nothing: " + skipped + ")"
+		return " (stopped judging: " + skipped + ")"
 	case !completed:
 		return " (incomplete)"
 	}

@@ -1558,10 +1558,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// raw field is empty on a node named through CREWLET_NODE_ID, and
 		// this id keys the node's trim hold and its announced backup point.
 		NodeID: nodeID,
-		// Every chunk the store copy names, read from whichever node
-		// holds it: this node holds only its share, and a backup of the
-		// company carries all of them.
-		Objects: &backup.Objects{Get: e.GetChunk, Stream: e.ObjectsStream()},
+		// Every object the store copy names, streamed from the one store
+		// the fleet shares and checked against the row naming it — or,
+		// where they ride the broker's own bucket, asked after once its
+		// stream is snapshotted.
+		Objects: &backup.Objects{Open: e.OpenObject, Stat: e.StatObject,
+			Stream: e.ObjectsStream()},
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
 		// process would be two sets of series for one fleet.
@@ -1791,7 +1793,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// could not destroy a task under any circumstances.
 		Purger: nativePurger(e),
 		// A PROJECT'S FILE BYTES, streamed: the download and the upload
-		// read and write chunks through this node's object client and
+		// read and write objects through this node's object store and
 		// the rows through its tracker, attributed to the operator.
 		Files: api.EngineFiles(e),
 		// Both estates a node holds, reachable only from inside it: the

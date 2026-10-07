@@ -1,5 +1,46 @@
 {
   "fleet": {
+    "failed": {
+      "state": "reported",
+      "backend": "nats",
+      "node": "data-a",
+      "collect": {
+        "at": "2026-09-01T12:00:00Z",
+        "completed": true,
+        "listed": 1840,
+        "aged": 1702,
+        "deleted": 12,
+        "referenced": 1690,
+        "retired": 3,
+        "abandoned": 1
+      },
+      "audit": {
+        "at": "2026-09-01T12:00:00Z",
+        "completed": false,
+        "referenced": 412,
+        "missing": 0,
+        "damaged": 0,
+        "error": "objstore/collect: ask the store for a key: the bucket did not answer",
+        "found": {
+          "at": "2026-09-01T09:00:00Z",
+          "completed": true,
+          "referenced": 1828,
+          "missing": 1,
+          "damaged": 1,
+          "missing_files": [
+            {
+              "object": "0199b4f6-0000-7000-8000-00000000a1b2",
+              "named_by": "ENG/reports/q3 plan.md"
+            },
+            {
+              "object": "0199b4f6-0000-7000-8000-00000000c3d4",
+              "named_by": "OPS/runbooks/restore.md",
+              "damaged": true
+            }
+          ]
+        }
+      }
+    },
     "missing": {
       "state": "reported",
       "backend": "nats",
@@ -11,16 +52,33 @@
         "aged": 1702,
         "deleted": 12,
         "referenced": 1690,
-        "refreshed": 0
+        "retired": 3,
+        "abandoned": 1
       },
       "audit": {
         "at": "2026-09-01T09:00:00Z",
         "completed": true,
         "referenced": 1828,
         "missing": 1,
-        "missing_chunks": [
-          "5e5ac53c4874f42e45cc0f5706a514a15a265da07c8f7cb75687b89c5480c21d"
-        ]
+        "damaged": 1,
+        "found": {
+          "at": "2026-09-01T09:00:00Z",
+          "completed": true,
+          "referenced": 1828,
+          "missing": 1,
+          "damaged": 1,
+          "missing_files": [
+            {
+              "object": "0199b4f6-0000-7000-8000-00000000a1b2",
+              "named_by": "ENG/reports/q3 plan.md"
+            },
+            {
+              "object": "0199b4f6-0000-7000-8000-00000000c3d4",
+              "named_by": "OPS/runbooks/restore.md",
+              "damaged": true
+            }
+          ]
+        }
       }
     },
     "not_yet": {
@@ -37,13 +95,22 @@
         "aged": 1702,
         "deleted": 12,
         "referenced": 1690,
-        "refreshed": 0
+        "retired": 3,
+        "abandoned": 1
       },
       "audit": {
         "at": "2026-09-01T09:00:00Z",
         "completed": true,
         "referenced": 1828,
-        "missing": 0
+        "missing": 0,
+        "damaged": 0,
+        "found": {
+          "at": "2026-09-01T09:00:00Z",
+          "completed": true,
+          "referenced": 1828,
+          "missing": 0,
+          "damaged": 0
+        }
       }
     },
     "skipped": {
@@ -55,10 +122,12 @@
         "completed": false,
         "listed": 1840,
         "aged": 1702,
-        "deleted": 0,
+        "deleted": 500,
         "referenced": 0,
-        "refreshed": 0,
-        "skipped": "a record this node could not apply may refer to chunks in the store"
+        "retired": 0,
+        "abandoned": 0,
+        "skipped": "a record this node could not apply may refer to objects in the store",
+        "sweep_error": "s3obj: list the uploads under \"acme/\": AccessDenied"
       }
     },
     "unavailable": {

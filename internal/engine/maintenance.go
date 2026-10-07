@@ -138,6 +138,13 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// node's list runs per tick, and a node with no backend
 		// contributes nothing rather than an empty sweep.
 		if n := e.native.Load(); n != nil {
+			// AND THE CHUNK LOCKS a build that kept files in chunks
+			// opened, gated on that build being gone from the tracker
+			// log's census rather than on the protocol floor — see
+			// [maintenance.RetiredChunkLockJobs] and [chunkEra]. Here,
+			// where the native runtime is, because the census is of a
+			// log only it runs.
+			jobs = append(jobs, maintenance.RetiredChunkLockJobs(fleet, e.chunkEra(n))...)
 			if n.writer != nil {
 				// THE REPLICATED ESTATE WITH ITS WRITE SIDE, which is
 				// what the tracker's two exceptions to the applier-only

@@ -41,7 +41,8 @@ const (
 	MaxFilePage     = 1000
 )
 
-// FileRow is one file as a listing shows it — everything but the chunks.
+// FileRow is one file as a listing shows it — everything but the object its
+// bytes are in, which only a reader of the bytes needs.
 type FileRow struct {
 	Project     string     `json:"project"`
 	Path        string     `json:"path"`
@@ -178,7 +179,8 @@ func fileListScope(project string) statelog.ScopeSet {
 	}}.Normalised()
 }
 
-// FileDetail is one file with its manifest — what a reader opens it by.
+// FileDetail is one file with the object holding its bytes — what a reader
+// opens it by ([File.Content]).
 type FileDetail struct {
 	File File `json:"file"`
 
@@ -192,8 +194,13 @@ type FileDetail struct {
 // removed, is [ErrNoFile].
 //
 // A POINT READ, so a record this node could not apply on this file's own
-// address refuses the read rather than answering around it — a manifest from
-// before a put this node has not applied is the wrong bytes, not fewer of them.
+// address refuses the read rather than answering around it — the object a put
+// this node has not applied replaced is the wrong bytes, not fewer of them.
+//
+// A LIVE FILE NAMING NO OBJECT IS ANSWERED, not refused: it is a file an
+// earlier build kept in chunks, which is listed and can be removed or written
+// again, and a reader of its bytes says so in its own words
+// ([File.Content]).
 func (r *Reader) File(ctx context.Context, project, path string,
 	fresh statelog.Freshness) (FileDetail, error) {
 
@@ -240,7 +247,7 @@ func (r *Reader) File(ctx context.Context, project, path string,
 // ObjectEstate is this domain as the object store's collector reads it: a
 // barrier on the tracker's log, and a read of this node's rows that says
 // whether it covers every record. WHICH rows is not here — the collector
-// builds that from the declared tables ([FileChunkReferences]), so a
+// builds that from the declared tables ([FileObjectReferences]), so a
 // statement written beside the declaration can never disagree with it. See
 // internal/objstore/collect's Estate.
 type ObjectEstate struct {
@@ -250,17 +257,17 @@ type ObjectEstate struct {
 // Name is the domain, as a declaration spells it.
 func (ObjectEstate) Name() string { return Domain{}.Name() }
 
-// chunkScope is the references' closure: the whole domain, because a file can
-// be in any project and a record this node could not apply may be a put of
-// any of them — which is exactly the case the collector must see as
+// objectScope is the references' closure: the whole domain, because a file
+// can be in any project and a record this node could not apply may be a put
+// of any of them — which is exactly the case the collector must see as
 // incomplete.
-var chunkScope = statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}
+var objectScope = statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}
 
 // Barrier waits until this node has applied everything the log had committed
 // when it was called, and answers where that is.
 func (s ObjectEstate) Barrier(ctx context.Context) (statelog.Position, error) {
 	served, err := s.Reader.log.Read(ctx, statelog.Query{
-		Level: statelog.ReadLinearizable, Scope: chunkScope, Set: true,
+		Level: statelog.ReadLinearizable, Scope: objectScope, Set: true,
 	}, func(*sql.Tx) error { return nil })
 	if err != nil {
 		return statelog.Position{}, err
@@ -274,7 +281,7 @@ func (s ObjectEstate) Read(ctx context.Context, at statelog.Position,
 	fn func(*sql.Tx) error) (bool, error) {
 
 	served, err := s.Reader.log.Read(ctx, statelog.Query{
-		Level: statelog.ReadStale, Scope: chunkScope, Set: true, MinPosition: at,
+		Level: statelog.ReadStale, Scope: objectScope, Set: true, MinPosition: at,
 	}, fn)
 	if err != nil {
 		return false, err

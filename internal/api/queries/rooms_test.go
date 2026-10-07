@@ -135,10 +135,6 @@ func (emptyFiles) Files(context.Context, tracker.FileQuery) (tracker.FileListing
 	return tracker.FileListing{}, nil
 }
 
-func (emptyFiles) File(context.Context, string, string, statelog.Freshness) (tracker.FileDetail, error) {
-	return tracker.FileDetail{}, tracker.ErrNoFile
-}
-
 // emptyWork and emptyPages are the native readers with nothing in them, on
 // fakeChannels' terms: this sweep is about which NAMES exist.
 type emptyWork struct{}

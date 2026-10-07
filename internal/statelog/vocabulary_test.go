@@ -31,7 +31,7 @@ import (
 // # What is on the list, and what is deliberately NOT
 //
 // The list is the names and phrases whose ONLY correct number of occurrences
-// is zero. Four words that read like them are deliberately absent, and adding
+// is zero. Five words that read like them are deliberately absent, and adding
 // any of them would break working code:
 //
 //   - `partition` survives on its own, as the LexoRank shape partition and as
@@ -43,6 +43,12 @@ import (
 //   - `original_max_bytes` survives as a field of the capacity record, where
 //     it is the value the pending classification compares against — deleting
 //     it would delete the reconcile.
+//   - `chunk` survives on its own in four live senses — a JetStream snapshot
+//     arrives in chunks, a statelog snapshot transfer is sent in chunks, a
+//     batched SQL statement binds a chunk of ids (`slices.Chunk`), and the
+//     dashboard's bundle is split into chunks — and the object store's
+//     retirement of an earlier build's chunks is live code. Only the names
+//     the content-addressed file store spelled are gone.
 //
 // # What it can and cannot see
 //
@@ -77,6 +83,23 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"CREWLET_L1_TRACKER_TRACKER_007",
 		"crewlet.l1.tracker.007.tracker.>",
 		"map_epoch",
+		"DELETE FROM tracker_file_chunks WHERE project = ?",
+		"store.LockChunk(ctx, hash, owner)",
+		"defer store.UnlockChunk(ctx, hash, owner)",
+		"coord.ChunkLockTTL",
+		"memory.SetChunkLockTTL(time.Second)",
+		`"missing_chunks": 3`,
+		"data, err := store.GetChunk(ctx, h)",
+		"if len(chunks) > tracker.MaxFileChunks {",
+		"tracker.FileChunkReferences",
+		"objstore.Split(r, sink)",
+		"make([]byte, objstore.ChunkSize)",
+		"var m objstore.Manifest",
+		"the collector takes the chunk's lock under the chunk locks bucket",
+		"a chunk lock held by the writer",
+		"crewlet_chunk_locks",
+		"Crewlet seat, presence and object-store membership leases",
+		"nothing said so until the object store's membership, a lease,",
 	} {
 		if hits := matchWithdrawn(positive); len(hits) == 0 {
 			t.Errorf("control: %q carries a withdrawn name and the matcher did "+
@@ -107,6 +130,21 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"ExecuteState map[string]any",
 		"CREWLET_LOG_LEVEL",
 		"crewlet.log",
+		// The fleet's BROKER membership is live: an operator reads and
+		// changes it through `crewlet fleet`.
+		"serve the fleet's broker membership",
+		"the object store's collector",
+		// The live senses of `chunk`: a snapshot's and a transfer's
+		// pieces, a batched statement, the dashboard's bundle, and the
+		// retirement of what the content-addressed store left behind,
+		// whose coordination method keeps its name.
+		"a JetStream snapshot arrives in chunks",
+		"the transfer sends the snapshot in 1 MiB chunks",
+		"for chunk := range slices.Chunk(ids, ScanBatch) {",
+		"a chunk per workspace, and the next one fetched",
+		"ok, err := f.RetireChunkLocks(ctx)",
+		"chunkEraOver",
+		"func chunkNamed(name string) bool",
 	} {
 		if hits := matchWithdrawn(negative); len(hits) > 0 {
 			t.Errorf("control: %q is live and the matcher flagged it on %v",
@@ -301,6 +339,39 @@ var withdrawn = map[string]string{
 	`map_epoch`:           "as above",
 	`CREWLET_L[0-9]`:      "a state log's stream is its domain's own name, never a layout's",
 	`crewlet\.l[0-9]`:     "as above, for its subjects",
+
+	// THE CONTENT-ADDRESSED FILE STORE: files cut into 1 MiB chunks named
+	// by their SHA-256, a manifest listing them on the file's row, a table
+	// of chunk rows beside it, and a coordination lock per chunk around a
+	// deletion and a re-put. Every upload is ONE object under a key minted
+	// for it and never reused now, so nothing is shared, nothing is locked
+	// and a row names one object. What survives is the RETIREMENT of what
+	// that build left behind, and each surviving occurrence is allowed by
+	// name below.
+	`tracker_file_chunks`: "a file row names one object; migration 0038 dropped the chunk table",
+	`chunk_locks`:         "no build opens the lock bucket; only its retirement names it",
+	`LockChunk`:           "a deletion takes no lock (ADR-0027)",
+	`UnlockChunk`:         "as above",
+	`ChunkLockTTL`:        "as above; there is no lock to age",
+	`missing_chunks`:      "the audit names missing and damaged FILES (missing_files)",
+	`GetChunk`:            "a read streams one object through Store.Open",
+	`MaxFileChunks`:       "a file is one object; MaxFileBytes is its only bound",
+	`FileChunkReferences`: "the declaration is FileObjectReferences",
+	`objstore\.Split\b`:   "the backend streams the whole upload; nothing cuts it",
+	`objstore\.ChunkSize`: "as above; an object has no chunk size",
+	`objstore\.Manifest`:  "a row names one objstore.Object, not a list of chunks",
+	`\bchunk lock`:        "a deletion takes no lock; only the old bucket's retirement names one",
+
+	// THE PLACED OBJECT STORE: object bytes on chosen data nodes, a lease
+	// per member saying which nodes kept them, and a repair duty that read
+	// that membership. The store is one the fleet shares now (natsobj or
+	// s3obj) and keeps its own copies, so no node claims a membership of
+	// it and the seat lease bucket holds seats and presence alone. Two
+	// literal spellings rather than one pattern with a class, because the
+	// prefilter reads each pattern's literal core and a bracket in it is a
+	// core no line holds — a guard that silently matches nothing.
+	`\bobject-store membership`:   "no node is a member of the object store; it is one shared store",
+	`\bobject store's membership`: "as above",
 }
 
 // listFile is this file, which cannot be its own violation.
@@ -456,6 +527,48 @@ var allowedWithdrawal = map[withdrawalKey]string{
 	{"internal/store/schema/node/0021_pages_normalised_titles.sql", `projection_cursor`}: "a migration that reshaped it",
 	{"internal/store/schema/node/0025_the_projection_leaves.sql", `projection_keys`}:     "the migration that dropped it",
 	{"internal/store/schema/node/0025_the_projection_leaves.sql", `projection_cursor`}:   "the migration that dropped it",
+
+	// THE CHUNK TABLE'S MIGRATIONS, for the same reason: the three that
+	// created and reshaped it and the one that dropped it, plus the test
+	// that carries a database holding chunk rows through that drop.
+	{"internal/store/schema/replicated/0031_a_project_keeps_files.sql", `tracker_file_chunks`}:            "the migration that created it",
+	{"internal/store/schema/replicated/0032_a_chunk_row_names_its_slot.sql", `tracker_file_chunks`}:       "a migration that reshaped it",
+	{"internal/store/schema/replicated/0036_a_chunk_row_names_only_its_chunk.sql", `tracker_file_chunks`}: "a migration that reshaped it",
+	{"internal/store/schema/replicated/0038_a_file_row_names_one_object.sql", `tracker_file_chunks`}:      "the migration that dropped it",
+	{"internal/store/fileobject_test.go", `tracker_file_chunks`}:                                          "the test of the migration that dropped it",
+
+	// A RECORD AN OLDER BUILD WROTE is history too: the collector's report
+	// in the coordination store outlives the build that wrote it, and the
+	// fleet view must still show that build's findings mid-rollout.
+	{"internal/api/queries/objects_test.go", `missing_chunks`}: "an older build's collection record, fed to the reader that must still show it",
+
+	// THE RETIREMENT OF THE LOCK BUCKET, which is the one place the locks
+	// are still named, because it is the code and the prose that delete
+	// what a build that kept chunks left behind: coord's RetireChunkLocks on
+	// both backends and its conformance case, the maintenance job that
+	// calls it (`retired_chunk_locks`) and the engine arming it, and the
+	// pages and the decision record telling an operator when it goes.
+	{"internal/coord/fleet.go", `\bchunk lock`}:                                    "RetireChunkLocks, the contract",
+	{"internal/coord/kv/fleet.go", `\bchunk lock`}:                                 "RetireChunkLocks on the broker",
+	{"internal/coord/kv/fleet.go", `chunk_locks`}:                                  "the retired bucket's suffix",
+	{"internal/coord/kv/kv_test.go", `\bchunk lock`}:                               "the test of RetireChunkLocks",
+	{"internal/coord/kv/kv_test.go", `chunk_locks`}:                                "as above",
+	{"internal/coord/memory/objects.go", `\bchunk lock`}:                           "RetireChunkLocks on the twin",
+	{"internal/coord/coordtest/objects.go", `\bchunk lock`}:                        "RetireChunkLocks's conformance case",
+	{"internal/maintenance/chunklocks.go", `\bchunk lock`}:                         "the retirement job",
+	{"internal/maintenance/chunklocks.go", `chunk_locks`}:                          "the retirement job's name",
+	{"internal/maintenance/chunklocks_test.go", `\bchunk lock`}:                    "the retirement job's tests",
+	{"internal/maintenance/chunklocks_test.go", `chunk_locks`}:                     "as above",
+	{"internal/maintenance/maintenance.go", `\bchunk lock`}:                        "the package doc's list of retirements",
+	{"internal/engine/maintenance.go", `\bchunk lock`}:                             "the engine arming the retirement job",
+	{"internal/engine/maintenance_test.go", `\bchunk lock`}:                        "the test that it is armed",
+	{"internal/engine/maintenance_test.go", `chunk_locks`}:                         "as above",
+	{"adr/0027-a-deletion-from-the-shared-store-needs-no-lock.md", `\bchunk lock`}: "the decision record's account of the retirement",
+	{"docs/concepts/object-store.md", `chunk_locks`}:                               "what an earlier build left, and when it goes",
+	{"docs/concepts/coordination.md", `chunk_locks`}:                               "the retired bucket and its job",
+	{"docs/guides/deployment.md", `chunk_locks`}:                                   "the bucket the maintenance duty deletes",
+	{"docs/guides/fleet.md", `\bchunk lock`}:                                       "the rolling upgrade's account of the retirement",
+	{"docs/guides/fleet.md", `chunk_locks`}:                                        "as above",
 }
 
 func sprintOffence(file string, line int, hit, text string) string {
