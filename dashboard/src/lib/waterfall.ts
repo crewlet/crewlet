@@ -40,8 +40,8 @@
  *
  * # What cannot be placed is still shown
  *
- * A record an older engine wrote has no instants at all, and an agent-mode
- * executor's rounds ran inside somebody else's loop. Those are UNTIMED rows —
+ * An agent-mode executor's rounds ran inside somebody else's loop and its
+ * calls carry no instants. Those are UNTIMED rows —
  * listed under the waterfall as "not placed on this clock" — rather than bars
  * drawn at an invented position, or dropped. The list says PLACED rather than
  * timed because a call can be measured and still have nowhere to go: timed

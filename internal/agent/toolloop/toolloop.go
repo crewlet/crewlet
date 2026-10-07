@@ -220,10 +220,9 @@ type Execution struct {
 	// Measured HERE, around [Surface.Execute], because a round's calls are
 	// SERIAL and the question a reader asks of a slow round is which call
 	// held it: the round's own span covers the provider call only, and the
-	// phase's covers everything. Both are zero on an execution this build
-	// did not time — a resumed phase's pre-suspend rows written by an older
-	// build, an agent-mode run's bridged calls — and zero means "not
-	// measured", never "instant".
+	// phase's covers everything. Both are zero on an execution nothing
+	// timed — an agent-mode run's bridged calls, which ran inside somebody
+	// else's loop — and zero means "not measured", never "instant".
 	StartedAt time.Time
 	Duration  time.Duration
 
