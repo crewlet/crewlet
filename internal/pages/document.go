@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// DocumentVersion is the shape version every record here carries, on the same
-// terms as [work.DocumentVersion]: a page is read, modified and written back
-// by whichever node the request landed on, so an older build's save would
-// strip a newer build's field out of the head. Unknown fields round-trip; an
-// unknown VERSION is refused rather than downgraded.
+// DocumentVersion is the shape version every stored document carries. A page
+// head is decoded and re-encoded by every later apply on this node, so a field
+// this build does not know is carried through unchanged rather than dropped,
+// and an unknown VERSION is refused rather than downgraded: a rewrite from here
+// would lose whatever that shape added.
 const DocumentVersion = 1
 
 // Container is a space: a unit's, the org root's, or the skills container.
@@ -73,10 +73,6 @@ type Page struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 	TrashedAt *time.Time `json:"trashed_at,omitempty"`
 
-	// LastChange is the complete record of what most recently happened, so
-	// a projector can repair a missing change key from the head alone.
-	LastChange *Change `json:"last_change,omitempty"`
-
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -117,35 +113,12 @@ type Comment struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	LastChange *Change `json:"last_change,omitempty"`
-
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// TitleClaim is one container's hold on one normalised title.
-//
-// ITS OWN RECORD, first-writer-wins, rather than a uniqueness check before
-// the page write: two nodes creating "Deploy Runbook" at once would both
-// check, both find nothing, and both create. The claim is the only thing that
-// makes a title an address.
-type TitleClaim struct {
-	V int `json:"v"`
-
-	Container string `json:"container"`
-
-	// Title is the NORMALISED form — the key's own content, kept on the
-	// record so a listing can report what a claim holds without decoding
-	// the key.
-	Title string `json:"title"`
-
-	PageID    string    `json:"page_id"`
-	CreatedAt time.Time `json:"created_at"`
-
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
-// Change is one entry in the record a wake is derived from. Create-only and
-// never rewritten, for the reason [work.Change] is.
+// Change is one page history row's document: what a change was, by whom, and
+// the excerpt a card shows. Create-only and never rewritten — a history row
+// records something that happened.
 type Change struct {
 	V int `json:"v"`
 
@@ -157,48 +130,19 @@ type Change struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
-	Fields map[string]Delta `json:"fields,omitempty"`
-
 	CommentID string `json:"comment_id,omitempty"`
 
 	// Excerpt is at most [MaxExcerpt] bytes of what a card should show.
 	Excerpt string `json:"excerpt,omitempty"`
-
-	Mentions []string `json:"mentions,omitempty"`
 
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
 	Quiet bool `json:"quiet,omitempty"`
 
-	HeadRevision uint64 `json:"head_revision,omitempty"`
-
-	Snapshot Snapshot `json:"snapshot"`
-
 	CreatedAt time.Time `json:"created_at"`
 
 	Extra map[string]json.RawMessage `json:"-"`
-}
-
-// Delta is one field's before and after, as text.
-type Delta struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
-// Snapshot is the routing state of a page at the moment of a change, copied
-// at write time so the node that wins a feed message routes without reading
-// anything.
-type Snapshot struct {
-	Container string `json:"container"`
-	Title     string `json:"title"`
-	Status    Status `json:"status"`
-	Author    string `json:"author,omitempty"`
-	Version   int    `json:"version"`
-
-	// Watchers is the set MINUS the muted, computed once at write time so
-	// the feed never has to subtract and can never forget to.
-	Watchers []string `json:"watchers,omitempty"`
 }
 
 // ErrUnknownVersion reports a document a newer build wrote.
@@ -216,20 +160,19 @@ func (e ErrUnknownVersion) Error() string {
 
 // ---- encoding --------------------------------------------------------- //
 
-// The known field names per record. Explicit rather than reflective, for the
-// reason [work] gives: a name missing here is decoded into the struct AND
-// carried as unknown, so the next encode writes the stale carried copy back
-// over what the caller set. A test asserts every declared name is covered.
+// The known field names per record: what the zero value marshals, plus every
+// `omitempty` name it leaves out, listed by hand. A name missing here is
+// decoded into the struct AND carried as unknown, so the next encode writes
+// the stale carried copy back over what the caller set —
+// [TestEveryDeclaredFieldIsKnown] holds each list to its type's tags.
 var (
 	containerFields = fieldSet(Container{}, "name", "purpose", "chart_epoch")
 	pageFields      = fieldSet(Page{}, "parent_id", "body", "labels", "watchers",
-		"muted", "author", "trashed_at", "last_change")
+		"muted", "author", "trashed_at")
 	revisionFields = fieldSet(Revision{}, "message", "author")
-	commentFields  = fieldSet(Comment{}, "mentions", "reply_to", "last_change")
-	claimFields    = fieldSet(TitleClaim{})
+	commentFields  = fieldSet(Comment{}, "mentions", "reply_to")
 	changeFields   = fieldSet(Change{}, "actor", "actor_kind", "operator_id",
-		"fields", "comment_id", "excerpt", "mentions", "turn_id", "chain",
-		"quiet", "head_revision")
+		"comment_id", "excerpt", "turn_id", "chain", "quiet")
 )
 
 // EncodeContainer renders a container.
@@ -295,23 +238,6 @@ func DecodeComment(data []byte) (Comment, error) {
 	}
 	if err := checkVersion(c.V); err != nil {
 		return Comment{}, err
-	}
-	c.Extra = extra
-	return c, nil
-}
-
-// EncodeClaim renders a title claim.
-func EncodeClaim(c TitleClaim) ([]byte, error) { return encode(c, c.Extra) }
-
-// DecodeClaim reads a title claim.
-func DecodeClaim(data []byte) (TitleClaim, error) {
-	var c TitleClaim
-	extra, err := decodeInto(data, &c, claimFields, c.V)
-	if err != nil {
-		return TitleClaim{}, fmt.Errorf("pages: decode title claim: %w", err)
-	}
-	if err := checkVersion(c.V); err != nil {
-		return TitleClaim{}, err
 	}
 	c.Extra = extra
 	return c, nil
