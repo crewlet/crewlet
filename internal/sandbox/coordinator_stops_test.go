@@ -461,9 +461,15 @@ func completesUnreadable(t *testing.T, rig *coordRig) {
 // the run, as the dispatcher does off the seat's inbox.
 func answersByTurn(t *testing.T, rig *coordRig) {
 	t.Helper()
+	// THE QUESTION THE ROW IS ON NOW, as answer_run names it off the row it
+	// checked — whatever status the row was placed in.
+	run, _, _ := rig.pending.Get(t.Context(), "t1")
 	given := types.SandboxAnswerGiven{
 		TurnID: "t1", AgentHandle: "swe", Answer: "the release branch",
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+		AnsweredBy: "founder-token", AnsweredBySeat: "founder", LaunchID: run.LaunchID,
+	}
+	if given.LaunchID == "" {
+		given.LaunchID = "launch-of-a-run-with-no-record"
 	}
 	if _, err := rig.coordinator.AnswerByTurn(t.Context(), given,
 		events.New(given, events.TraceContext{})); err != nil {

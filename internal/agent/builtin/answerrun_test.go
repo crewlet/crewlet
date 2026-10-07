@@ -132,6 +132,25 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 	}
 }
 
+// A RUN NAMING NO JOB HAS NO QUESTION AN ANSWER CAN NAME, and the node holding
+// the seat spends an answer naming none without resuming the run — so the
+// answer is refused here, where the person can be told, rather than delivered
+// to be spent unread.
+func TestAnswerRunRefusesARunWhoseQuestionItCannotName(t *testing.T) {
+	t.Parallel()
+	unnamed := parked("t1", sandbox.StatusAwaiting)
+	unnamed.LaunchID = ""
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": unnamed}}
+	result, _ := answerRunTool(t, desk, fleetFake{}).Call(t.Context(),
+		map[string]any{"turn_id": "t1", "answer": "use main"})
+	if !result.Failed || result.Refusal != tools.RefusalNotRunning {
+		t.Fatalf("answer_run on a run naming no job = %+v, want not_running", result)
+	}
+	if len(desk.delivered) != 0 {
+		t.Errorf("delivered %+v, an answer that names no question", desk.delivered)
+	}
+}
+
 // AN OWNER THAT CANNOT READ THE EVENT IS REFUSED `peer_upgrading` — an older
 // build would take the answer for an ordinary wake and run a turn about nothing
 // while the run waited on — and a fleet that could not be read is

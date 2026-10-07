@@ -2779,7 +2779,9 @@ harmless, because whichever copy arrives second finds that question no longer
 waiting.
 
 It refuses `not_running` for a run that is not waiting for an answer, or has no
-record at all (a run that ended has none), and `peer_upgrading` while the node
+record at all (a run that ended has none), or names no job its question was asked
+by (an answer must carry the question it answers, and one carrying none is spent
+without resuming anything), and `peer_upgrading` while the node
 holding the seat runs a build that cannot route an answer by turn — that build
 would read the answer as an ordinary wake and run a turn about nothing. It is
 served on every company, native backends or not: the run record is the

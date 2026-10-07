@@ -2805,7 +2805,7 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 func answerGiven(turnID string) *events.Event {
 	return events.New(types.SandboxAnswerGiven{
 		TurnID: turnID, AgentHandle: "ceo", Answer: "use main",
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
+		AnsweredBy: "founder-token", AnsweredBySeat: "founder", LaunchID: "launch-" + turnID,
 	}, events.TraceContext{})
 }
 

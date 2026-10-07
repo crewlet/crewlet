@@ -57,8 +57,8 @@ func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 	}
 }
 
-// givenFor is an operator's answer to one run, as a node that predates the
-// question it answers would give it: naming the run alone.
+// givenFor is an operator's answer to one run that names the run alone and no
+// question — which no answer this build delivers does.
 func givenFor(turnID string) (types.SandboxAnswerGiven, *events.Event) {
 	given := types.SandboxAnswerGiven{
 		TurnID: turnID, AgentHandle: "swe", Answer: "use the release branch",
@@ -139,7 +139,7 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 
-	given, ev := givenFor("t1")
+	given, ev := givenAgainst(t, rig, "t1")
 	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
 	if err != nil || disposition != AnswerConsumed {
 		t.Fatalf("AnswerByTurn = %q, %v, want consumed", disposition, err)
@@ -188,7 +188,7 @@ func TestAnAnswerByTurnToARunAlreadyAnsweredIsNotMine(t *testing.T) {
 	// finds it taken.
 	rig.coordinator.pending = staleRead{PendingStore: rig.coordinator.pending, snapshot: run}
 
-	given, ev := givenFor("t1")
+	given, ev := givenAgainst(t, rig, "t1")
 	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
 	if err != nil || disposition != AnswerNotMine {
 		t.Fatalf("AnswerByTurn = %q, %v, want not_mine", disposition, err)
@@ -290,26 +290,52 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 	})
 }
 
-// AN ANSWER THAT NAMES NO QUESTION KEEPS THE POSITIONAL MATCH. It was given
-// through a node that predates the field, across a rolling upgrade, and
-// refusing it would strand the answer: it answers whatever the run waits on.
-func TestAnAnswerByTurnNamingNoQuestionAnswersTheOneOpen(t *testing.T) {
+// AN ANSWER THAT NAMES NO QUESTION IS SPENT, NOT RESUMED WITH. Which question it
+// answers cannot be known: the run may have moved on to a question its giver
+// never saw, and resuming it with the answer would pair the two exactly as the
+// question's name exists to stop. It is spent with the reason — not handed back,
+// since no retry can supply what it lacks — and the run keeps waiting.
+func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
-	rig.resumer.during = asksAgain(t, rig)
-	first, firstEv := givenAgainst(t, rig, "t1")
-	if d, _ := rig.coordinator.AnswerByTurn(t.Context(), first, firstEv); d != AnswerConsumed {
-		t.Fatalf("the first answer = %q, want it to resume the run", d)
-	}
-	rig.resumer.during = nil
+	store := &refusingStore{inner: rig.coordinator.pending}
+	rig.coordinator.pending = store
 
-	legacy, legacyEv := givenFor("t1")
-	if d, err := rig.coordinator.AnswerByTurn(t.Context(), legacy, legacyEv); err != nil || d != AnswerConsumed {
-		t.Fatalf("an answer naming no question = %q, %v, want it to answer the open one", d, err)
+	unnamed, ev := givenFor("t1")
+	d, err := rig.coordinator.AnswerByTurn(t.Context(), unnamed, ev)
+	if d != AnswerNotMine || !errors.Is(err, errAnswerNamesNoQuestion) {
+		t.Fatalf("an answer naming no question = %q, %v, want it spent with the reason", d, err)
 	}
-	if n := len(rig.resumer.calls()); n != 2 {
-		t.Fatalf("resumed %d times, want twice", n)
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Fatalf("resumed %d times with an answer that names no question", n)
+	}
+	if calls := store.calls(); len(calls) != 0 {
+		t.Fatalf("the store was asked %v: an answer naming no question is refused before "+
+			"the run is read", calls)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting || got.Answer != nil {
+		t.Fatalf("run %q with answer %+v, want it still waiting on its question", got.Status, got.Answer)
+	}
+}
+
+// THE DESK WILL NOT DELIVER ONE: an answer naming no question would only be
+// spent by the node holding the seat, so it is refused before anything is put
+// on the seat's inbox.
+func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
+	rig := newCoordRig(t)
+	desk := AnswerDesk{Pending: rig.pending, Queue: rig.queue}
+	given, _ := givenFor("t1")
+	before := rig.queue.count()
+	if err := desk.Deliver(t.Context(), given); err == nil {
+		t.Fatal("the desk delivered an answer that names no question")
+	}
+	if rig.queue.count() != before {
+		t.Fatal("the desk published an answer it refused")
+	}
+	given.LaunchID = "launch-1"
+	if err := desk.Deliver(t.Context(), given); err != nil {
+		t.Fatalf("the desk refused an answer naming its question: %v", err)
 	}
 }
 
@@ -320,11 +346,13 @@ func TestAnAnswerByTurnToARunNotWaitingIsSpentAndSaysWhy(t *testing.T) {
 	rig := newCoordRig(t)
 	launchScheduled(t, rig, "running")
 
-	given, ev := givenFor("running")
+	given, ev := givenAgainst(t, rig, "running")
 	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerNotMine {
 		t.Fatalf("answering a running job = %q, %v, want not_mine", d, err)
 	}
-	given, ev = givenFor("never-was")
+	given, _ = givenFor("never-was")
+	given.LaunchID = "launch-of-a-run-long-over"
+	ev = events.New(given, events.TraceContext{})
 	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerNotMine {
 		t.Fatalf("answering a run with no record = %q, %v, want not_mine", d, err)
 	}
@@ -349,7 +377,7 @@ func TestAnAnswerByTurnOverAnUnreadableStoreComesBack(t *testing.T) {
 	parksOnAQuestion(t, rig, "t1")
 	rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"Get"}}
 
-	given, ev := givenFor("t1")
+	given, ev := givenAgainst(t, rig, "t1")
 	d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
 	if d != AnswerDeferred || err == nil {
 		t.Fatalf("AnswerByTurn over an unreadable store = %q, %v, want deferred with the cause", d, err)
@@ -368,7 +396,7 @@ func TestAnAnswerByTurnWhoseResumeFailedComesBack(t *testing.T) {
 	parksOnAQuestion(t, rig, "t1")
 	rig.resumer.failWith(errors.New("the node lost the seat"))
 
-	given, ev := givenFor("t1")
+	given, ev := givenAgainst(t, rig, "t1")
 	if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerDeferred {
 		t.Fatalf("AnswerByTurn with a failing resume = %q, want deferred", d)
 	}

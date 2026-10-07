@@ -168,6 +168,12 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
 			"waiting for an answer — there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
+	case run.LaunchID == "":
+		// NO QUESTION TO NAME: the answer must carry the one it answers, and
+		// one that carries none is spent unread by the node holding the seat.
+		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s names no job its "+
+			"question was asked by, so an answer cannot say which question it answers.",
+			clip(turnID))), nil
 	}
 	if refusal := seatCanCarry(ctx, t.fleet, AnswerRunTool, run.AgentHandle,
 		coord.FeatureAnswerRunByTurn); refusal != nil {

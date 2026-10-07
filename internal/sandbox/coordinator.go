@@ -1367,9 +1367,10 @@ func (c *Coordinator) owes(turnID string) bool {
 // a job that has parked never runs again. The claim itself names the launch,
 // so a launch that moves between the read and the claim loses it. An
 // answer whose question is gone is spent as `not_awaiting`, exactly like one
-// that reached a run nobody was waiting on. An answer carrying no question —
-// given through a node that predates the field, across a rolling upgrade —
-// keeps the positional match that was all there was.
+// that reached a run nobody was waiting on. An answer carrying NO question is
+// refused before the run is read and spent with that reason
+// ([errAnswerNamesNoQuestion]): which question it answers cannot be known, and
+// resuming the run with it would be the pairing this rule exists to stop.
 //
 // # What the caller does with each answer
 //
@@ -1408,6 +1409,17 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome,
 			given.AnsweredBy, given.AnsweredBySeat)
 	}
+	if given.LaunchID == "" {
+		// NO QUESTION NAMED, so none this answer can be paired with: spent,
+		// and said why, rather than resumed into whatever the run waits on.
+		log.ErrorContext(ctx, "sandbox_answer_names_no_question",
+			"turn_id", given.TurnID, "agent", given.AgentHandle,
+			"answered_by", given.AnsweredBy, "answered_by_seat", given.AnsweredBySeat,
+			"detail", "an answer by turn arrived naming no question (launch_id), so which "+
+				"question it answers cannot be known; it is spent without resuming the run, "+
+				"and the person has to answer the run again")
+		return AnswerNotMine, fmt.Errorf("%w: run %s", errAnswerNamesNoQuestion, given.TurnID)
+	}
 	run, found, err := c.pending.Get(ctx, given.TurnID)
 	if err != nil {
 		// A STORE THAT COULD NOT BE READ IS NOT A RUN THAT IS GONE. Handed
@@ -1434,7 +1446,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 				"names; it is dropped rather than resumed under the wrong seat")
 		return AnswerNotMine, nil
 	}
-	if !slices.Contains(Awaiting, run.Status) || !answersQuestion(given, run) {
+	if !slices.Contains(Awaiting, run.Status) || given.LaunchID != run.LaunchID {
 		// NOT WAITING, OR NOT WAITING ON THE QUESTION THIS ANSWERS: the run
 		// was resumed and has moved on to a question of its own since the
 		// answer was given. See "The question it answers" above.
@@ -1483,17 +1495,11 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	return AnswerNotMine, err
 }
 
-// answersQuestion reports whether an answer by turn was given against the
-// question the run is waiting on now — see "The question it answers" at
-// [Coordinator.AnswerByTurn]. One that names no question was given through a
-// node that predates the field, and keeps the positional match it would have
-// made.
-func answersQuestion(given types.SandboxAnswerGiven, run PendingRun) bool {
-	if given.LaunchID == "" {
-		return true
-	}
-	return given.LaunchID == run.LaunchID
-}
+// errAnswerNamesNoQuestion is an answer by turn that carries no
+// [types.SandboxAnswerGiven.LaunchID]: it is spent rather than resumed with,
+// because the question it answers cannot be known.
+var errAnswerNamesNoQuestion = errors.New("sandbox: the answer names no question it answers " +
+	"(no launch_id), so it is spent without resuming the run")
 
 // answeredAs is what a settled answer became, from what the resume left the
 // delivery: a turn that ran consumed it, and anything else is a run that is

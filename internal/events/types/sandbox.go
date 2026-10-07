@@ -338,9 +338,12 @@ type SandboxAnswerGiven struct {
 	// question, it resumes the run only while the run still waits on that
 	// one, and is spent as `not_awaiting` otherwise.
 	//
-	// ADDITIVE: an answer given through a node that predates it carries
-	// none, and keeps the positional match that node would have made.
-	LaunchID string `json:"launch_id,omitempty"`
+	// REQUIRED. An answer naming no question cannot be told from one given
+	// against a question the run has since moved past, so the node holding
+	// the seat spends it without resuming the run (internal/sandbox's
+	// Coordinator.AnswerByTurn); `answer_run` stamps it off the row it
+	// checked, and the answer desk will not deliver one without it.
+	LaunchID string `json:"launch_id"`
 }
 
 // EventType is the "sandbox_answer_given" wire type.

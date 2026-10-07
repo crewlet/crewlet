@@ -128,7 +128,7 @@ func TestAnAnswerByTurnReachesACoordinatorTheApplyBroughtUp(t *testing.T) {
 	if answer == nil {
 		t.Fatal("the dispatcher has no route for an answer by turn")
 	}
-	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main"}
+	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main", LaunchID: "launch-1"}
 	trigger := events.New(given, events.TraceContext{})
 
 	disposition, err := answer(t.Context(), given, trigger)
