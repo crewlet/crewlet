@@ -595,7 +595,10 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 		if row.Time.Before(out.since) || !row.Time.Before(at) {
 			continue
 		}
-		ingress := ingressOf(row)
+		// The ROUTE the delivery arrived at, never its source: the Forge
+		// relay files the Jira and Confluence events it carries under
+		// their product, and counted there the relay itself would read 0.
+		ingress := row.Tags["route"]
 		out.count[ingress]++
 		if row.Time.After(out.last[ingress]) {
 			out.last[ingress] = row.Time
@@ -603,17 +606,6 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 	}
 	s.countOutcomes(ctx, &out, at)
 	return out
-}
-
-// ingressOf is the route one delivery row arrived at: its `route` tag, or its
-// source for a row written before deliveries named their route — when the
-// only edge that relayed another integration's events filed them under that
-// integration, which is where such a row was always counted.
-func ingressOf(row store.EventRecord) string {
-	if route := row.Tags["route"]; route != "" {
-		return route
-	}
-	return row.Source
 }
 
 // deliveryWindow is where the window a page of deliveries covers starts. Its

@@ -134,7 +134,7 @@ func TestIntegrationCountsAreTheFleets(t *testing.T) {
 	fleet, a, b := twoNodes(t)
 	at := time.Now().UTC().Add(-time.Hour)
 	if err := a.Append(t.Context(), store.EventRecord{ID: "delivered", Type: "webhook:push",
-		Source: "gitlab", Category: "webhook", Summary: "push", Time: at}); err != nil {
+		Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"}, Summary: "push", Time: at}); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.Append(t.Context(), store.EventRecord{ID: "dropped", Type: "notification_skipped",
@@ -189,7 +189,7 @@ func TestAFullPageFromTwoNodesIsTheWholeHistory(t *testing.T) {
 		}
 		oldest = at.Add(-time.Duration(i+1) * time.Minute)
 		if err := log.Append(t.Context(), store.EventRecord{ID: fmt.Sprintf("w%03d", i),
-			Type: "webhook:push", Source: "gitlab", Category: "webhook", Summary: "push",
+			Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"}, Summary: "push",
 			Time: oldest}); err != nil {
 			t.Fatal(err)
 		}

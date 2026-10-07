@@ -1526,7 +1526,7 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 	for i := range 2 {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: "w" + strconv.Itoa(i), Type: "webhook:push", Time: now,
-			Source: "gitlab", Category: "webhook", Summary: "push",
+			Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"}, Summary: "push",
 		}); err != nil {
 			t.Fatalf("append: %v", err)
 		}
@@ -1628,8 +1628,7 @@ func TestASurfaceReadOverASocketCountsItsDeliveries(t *testing.T) {
 // files them under the product they belong to, so counted by source the relay's
 // row read 0 and "never" on every Cloud tenant whose relay carried everything.
 // Counted under BOTH, the Atlassian card — which sums its surfaces — would
-// count each relayed event twice. A row written before deliveries named their
-// route counts under its source, where it always did.
+// count each relayed event twice.
 //
 // Mutation: count by source alone, and forge reads 0; count by route AND
 // source, and the three surfaces sum to more deliveries than arrived.
@@ -1646,13 +1645,6 @@ func TestARelayedDeliveryCountsAtItsIngressOnce(t *testing.T) {
 	appendDelivery(t, log, "jira", types.InboundDelivery{
 		Label: "webhook:jira:issue_updated", Route: "jira", Text: "issue updated",
 	}, at.Add(2*time.Second))
-	// A row from before the route tag: filed under its product, as then.
-	if err := log.Append(t.Context(), store.EventRecord{
-		ID: "old", Type: "forge:avi:jira:updated:issue", Source: "jira",
-		Category: events.WebhookCategory, Summary: "issue updated", Time: at.Add(3 * time.Second),
-	}); err != nil {
-		t.Fatalf("append an older row: %v", err)
-	}
 	cfg := company(t)
 	cfg.Integrations.ForgeAppID = "app-123"
 	body := asMap(t, answer(t, queries.Sources{
@@ -1671,8 +1663,8 @@ func TestARelayedDeliveryCountsAtItsIngressOnce(t *testing.T) {
 			total += n
 		}
 	}
-	// jira is not configured here, so its two direct and older rows are
-	// counted under a surface the answer has no row for: the configured
+	// jira is not configured here, so its direct row is counted under a
+	// surface the answer has no row for: the configured
 	// rows hold exactly the relay's two.
 	if total != 2 {
 		t.Errorf("the rows sum to %v deliveries, want 2 — a relayed delivery counted at "+
@@ -1701,7 +1693,7 @@ func TestIntegrationOutcomesAreCountedAtTheDeliveriesInstant(t *testing.T) {
 	}
 	edge := first.Add(-store.EventHistory).Add(time.Second)
 	for _, r := range []store.EventRecord{
-		{ID: "w0", Type: "webhook:push", Source: "gitlab", Category: "webhook", Summary: "push"},
+		{ID: "w0", Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"}, Summary: "push"},
 		{ID: "s0", Type: "notification_skipped", Source: "engine", Category: "notification",
 			Summary: "skipped", Tags: map[string]string{"notification_source": "gitlab"}},
 	} {
@@ -1791,7 +1783,7 @@ func TestIntegrationOutcomesOutnumberingDeliveriesCoverTheInboundWindow(t *testi
 	// the window's top: it is no more an arrival than the drop beside it.
 	for i, when := range []time.Time{oldest, at.Add(-2 * time.Hour), at} {
 		if err := log.Append(t.Context(), store.EventRecord{
-			ID: fmt.Sprintf("w%d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook",
+			ID: fmt.Sprintf("w%d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"},
 			Summary: "push", Time: when,
 		}); err != nil {
 			t.Fatalf("append: %v", err)
@@ -1904,7 +1896,7 @@ func TestACappedDeliveryPageNamesTheWindowItsOutcomesAreCountedOver(t *testing.T
 	newest := at.Add(-time.Minute)
 	for i := range queries.MaxEventPage + 1 {
 		if err := log.Append(t.Context(), store.EventRecord{
-			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook",
+			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"},
 			Summary: "push", Time: newest.Add(-time.Duration(i) * time.Second),
 		}); err != nil {
 			t.Fatalf("append: %v", err)
@@ -1957,7 +1949,7 @@ func TestTheNewestDeliveryIsNeverBeforeItsWindow(t *testing.T) {
 	for i := range queries.MaxEventPage + 1 {
 		newest = second.Add(time.Duration(i+1) * time.Microsecond)
 		if err := log.Append(t.Context(), store.EventRecord{
-			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook",
+			ID: fmt.Sprintf("w%03d", i), Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"},
 			Summary: "push", Time: newest,
 		}); err != nil {
 			t.Fatalf("append: %v", err)
@@ -2065,7 +2057,7 @@ func TestAnUncountableOutcomeIsNullBesideItsDeliveries(t *testing.T) {
 	t.Parallel()
 	log := openStore(t).Events()
 	if err := log.Append(t.Context(), store.EventRecord{
-		ID: "w0", Type: "webhook:push", Source: "gitlab", Category: "webhook",
+		ID: "w0", Type: "webhook:push", Source: "gitlab", Category: "webhook", Tags: map[string]string{"route": "gitlab"},
 		Summary: "push", Time: time.Now().UTC().Add(-time.Hour),
 	}); err != nil {
 		t.Fatalf("append: %v", err)

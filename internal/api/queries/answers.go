@@ -409,7 +409,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("trace", s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
 		// can span several turns and one turn several traces. See the
-		// answer, and migration 0014 which made it askable at all.
+		// answer, and migration 0015 which made it askable at all.
 		r.Register("turn", s.turn)
 		// AND THE LIST OF THEM, which did not exist: a turn is the unit
 		// of work this engine does and every other surface is a
@@ -929,7 +929,7 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 		ChannelID:    strings.TrimSpace(p.String("channel_id")),
 		Actor:        p.String("actor"),
 		RelatedAgent: p.String("agent"),
-		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
+		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0015, AND
 		// DEAD: the column exists, the reader filters on it, and no
 		// surface ever passed one — so "every event of this turn" was
 		// answerable by the store and unaskable from anywhere.

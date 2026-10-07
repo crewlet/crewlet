@@ -34,7 +34,7 @@ func (stubSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
 //
 // One trace can span several turns — a webhook that wakes two seats — and a
 // turn resumed on another node after a restart can span several traces. Until
-// `turn_id` was promoted to an indexed column (migration 0014) neither could be
+// `turn_id` was promoted to an indexed column (migrations 0015 and 0018) neither could be
 // asked, so "show me everything that happened in this unit of work" had no
 // answer at all: a long self-iterating turn pushes its own earlier phases out
 // of the seat's window and out of the feed, which is exactly the turn worth
@@ -582,7 +582,7 @@ func stringList(t *testing.T, v any) []string {
 }
 
 // THE WINDOW IS A FILTER AND NOT THE CURSOR, and `turn_id` was declared,
-// documented against migration 0014, and unaskable.
+// documented against migration 0015, and unaskable.
 //
 // `store.ListQuery` carried `TurnID` and the reader filtered on it, and no
 // surface ever passed one — so "every event of this turn" was answerable by
