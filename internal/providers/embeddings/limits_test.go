@@ -427,11 +427,12 @@ func TestNoAnswerIsTransientAndACancellationIsTheCallers(t *testing.T) {
 	}
 }
 
-// A BATCH REQUEST HAS A CEILING OF ITS OWN. A single Embed is a query or a
-// turn's ask and keeps the fifteen seconds a turn start can afford; a batch
-// request carries up to the model's request total and is held to the batch
-// ceiling — which the SDK tells the server, so the test can read it there
-// rather than wait it out.
+// A BATCH REQUEST HAS A CEILING OF ITS OWN. A single Embed carries one short
+// text and is held to EmbedTimeout, the ceiling for a caller that sets no
+// tighter deadline — a query or a turn's ask sets its own two seconds, which
+// wins; a batch request carries up to the model's request total and is held
+// to the batch ceiling — which the SDK tells the server, so the test can read
+// it there rather than wait it out.
 func TestABatchRequestHasACeilingOfItsOwn(t *testing.T) {
 	t.Parallel()
 	e := newEchoAPI(t, 4)

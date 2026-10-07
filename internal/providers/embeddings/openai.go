@@ -22,18 +22,25 @@ const (
 	DefaultBaseURL = "https://api.openai.com/v1"
 
 	// EmbedTimeout bounds one [Provider.Embed] request: the ceiling for a
-	// caller that sets no deadline of its own, such as an episode embedded
-	// after its turn has ended.
+	// caller that sets no tighter deadline of its own. An episode embedded
+	// after its turn has ended is held to the same fifteen seconds, by a
+	// deadline it sets for its own reason (learning.DefaultEmbedTimeout).
 	//
 	// SHORT, and much shorter than a completion's, because every caller of
 	// a single embedding has something waiting behind it and a cheap answer
 	// to a slow embedder — no vector, so no similarity search — while
-	// waiting two minutes to avoid that would be the wrong trade. A caller
-	// with a tighter budget sets a deadline on its context, which wins: a
-	// search's query vector, a turn's ask at turn start, the hint a recall
-	// tool passes and a note as it is written are each held to two seconds
-	// (search.QueryEmbedBudget, and the budgets anchored to it), because a
-	// person or a starting turn is waiting on them.
+	// waiting two minutes to avoid that would be the wrong trade.
+	//
+	// A caller with a tighter budget sets a deadline on its context, which
+	// wins, and TWO BUDGETS of two seconds do. A search's query vector is
+	// held to search.QueryEmbedBudget, and so, BY REFERENCE to it
+	// (prefetch.EmbedBudget), are a turn's ask at turn start and the hint a
+	// recall tool passes: a person or a turn is waiting on each. A note as
+	// it is written is held to learning.DiaryEmbedBudget, a budget of its
+	// OWN that shares only the figure: the reflect_and_persist call keeping
+	// the note has a model waiting on it, and a note that misses the budget
+	// is filled later rather than lost. Changing one leaves the other where
+	// it is.
 	EmbedTimeout = 15 * time.Second
 
 	// BatchTimeout bounds one request of a [Provider.EmbedBatch] call.
