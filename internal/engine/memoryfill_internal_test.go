@@ -494,6 +494,88 @@ func TestARowLongerThanATickDoesNotStopTheFill(t *testing.T) {
 	}
 }
 
+// A ROW ANSWERED WITH NO DIRECTION DOES NOT STOP THE FILL EITHER. The provider
+// accepted the request and answered one piece of a long row with a vector of
+// zeros, so the row can keep no vector — and forgotten, as it was, the next
+// tick began the row again at its first piece, newest first, and spent the
+// same requests reaching the same piece: a row whose prefix costs a tick took
+// every tick, and the seat behind it was never filled. Held back for the hour,
+// with what was embedded before the piece kept, it costs nothing until its
+// retry, never begins again at its first piece, and the seat behind it is
+// filled on the next tick.
+func TestARowAnsweredWithNoDirectionDoesNotStopTheFill(t *testing.T) {
+	t.Parallel()
+	limits := embeddings.Limits{InputBytes: 64, BatchInputs: 4, BatchBytes: 4096}
+	db, diary := diaryFixture(t, map[string][]string{"id-b": facts(20, "b")})
+	words := make([]string, 600)
+	for i := range words {
+		words[i] = fmt.Sprintf("w%04dz", i)
+	}
+	ask := strings.Join(words, " ")
+	at := time.Now().UTC().Add(-time.Hour)
+	episodes := learning.NewEpisodes(db)
+	if _, err := episodes.Append(t.Context(), learning.Episode{
+		ID: "e1", Handle: "a", Role: "Engineer", TurnID: "t1", StartedAt: at, EndedAt: at,
+		TaskSummary: "Message from Ana: Slack message", Ask: ask,
+		PlanSummary: "read the log and filed the regression", ReviewOutcome: "done",
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	pieces := embeddings.Chunks("Message from Ana: Slack message\n\n"+ask+
+		"\n\nread the log and filed the regression", limits.InputBytes)
+	// THE PIECE THE FIFTH REQUEST BEGINS WITH answers zeros, and a tick sends
+	// five: the row's prefix and the piece take a whole tick.
+	const perTick = 5
+	stop := (perTick - 1) * limits.BatchInputs
+	fake := embeddings.NewFake(64)
+	fake.SetLimits(limits)
+	fake.AnswerZero(strings.Fields(pieces[stop])[0])
+	whole := 0
+	for _, piece := range pieces {
+		whole += len(piece)
+	}
+
+	seats := allEstablished("a", "b")
+	ids := func(h string) string { return "id-" + h }
+	memory := embeddings.NewRefusals()
+	resume := ""
+	filledAt := -1
+	for minute := 0; minute < 10; minute++ {
+		before := len(fake.Requests())
+		report := tick(t, db, seats, ids, fake, memory, fillAt.Add(time.Duration(minute)*time.Minute),
+			perTick, memoryFillBytesPerTick, resume)
+		resume = report.resume
+		if minute == 0 {
+			named := false
+			for _, line := range report.lines(fake) {
+				named = named || (line.msg == "memory_fill_vector_unusable" &&
+					slices.Contains(line.args, any("e1")) && slices.Contains(line.args, any(whole)))
+			}
+			if !named {
+				t.Fatalf("the tick that met the piece reported %v, want the row named as "+
+					"unusable with its %d bytes", report.lines(fake), whole)
+			}
+			continue
+		}
+		for _, request := range fake.Requests()[before:] {
+			if slices.Contains(request, pieces[0]) || slices.Contains(request, pieces[stop]) {
+				t.Fatalf("minute %d sent the held row again (%q) inside its retry", minute, request[0])
+			}
+		}
+		if filledAt < 0 && unfilled(t, diary, "id-b", fake.Model()) == 0 {
+			filledAt = minute
+		}
+	}
+	if filledAt < 0 || filledAt > 1 {
+		t.Fatalf("seat b's notes were filled at minute %d, want the tick after the row "+
+			"was held — %d of them are still unfilled", filledAt,
+			unfilled(t, diary, "id-b", fake.Model()))
+	}
+	if n, err := episodes.Unsearchable(t.Context(), "a", fake.Model()); err != nil || n != 1 {
+		t.Fatalf("%d of seat a's episodes are unsearchable (%v), want the held row", n, err)
+	}
+}
+
 // THE FILL'S REFUSALS FOLLOW THE PROVIDER'S CONFIGURATION, AS THE CORPUS DUTY'S
 // DO.
 //

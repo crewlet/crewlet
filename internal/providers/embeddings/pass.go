@@ -44,11 +44,23 @@ import (
 //     request, and then offered again alone. A changed text is a new input
 //     (it is remembered by the digest of what was sent) and is offered at
 //     once.
+//   - AN INPUT ANSWERED WITH NO DIRECTION IS HELD BACK TOO. A request the
+//     provider accepted may still answer one input with a vector nothing can
+//     use — all zeros, or a component that is not finite, for the input or
+//     for one of its pieces, or pieces whose directions cancel — which no
+//     cosine can compare, no pool can weigh and no store keeps. Its
+//     neighbours keep their vectors; it is held back for [RefusalRetry] like
+//     an input refused alone, and is then offered again with its neighbours,
+//     from the piece that had none. It is a fact about this text under this
+//     configuration as a refusal is: forgotten and sent again, it was read
+//     on every pass for ever, and a text longer than a pass paid every
+//     request before that piece again each time it came round.
 //   - ANY OTHER FAILURE ENDS THE PASS — a rate limit, a timeout, a server
-//     down, a credential or model refused ([ErrConfiguration]), a
-//     cancellation, an answer this package could not read — because it is a
-//     fact about the provider rather than about an input, and every request
-//     after it would meet it too. The caller's next pass is the retry.
+//     down, a credential or model refused ([ErrConfiguration]), an answer of
+//     another width than the provider's own, a cancellation, an answer this
+//     package could not read — because it is a fact about the provider rather
+//     than about an input, and every request after it would meet it too. The
+//     caller's next pass is the retry.
 //
 // And a pass is BOUNDED in what it SENDS — its requests and the prepared bytes
 // of its inputs — never in what came of them: a refused request was still a
@@ -77,8 +89,10 @@ import (
 // and pooled when its last piece is in, to the bit as one call would have pooled
 // them. A pass that runs out mid-way leaves the rest to the next, which resumes
 // at the next piece rather than at the first, and a failure costs only the
-// request it met. What the memory keeps of such an input is one sum the width of
-// a vector, and it is forgotten like everything else the memory holds about an
+// request it met. A piece refused, or answered with no direction, holds the
+// input back with that sum kept, so its retry an hour on resumes at that piece
+// too. What the memory keeps of such an input is one sum the width of a
+// vector, and it is forgotten like everything else the memory holds about an
 // input no pass meets any more.
 //
 // # When the refusal is the configuration's
@@ -177,6 +191,21 @@ type PassRefusal struct {
 	Err error
 }
 
+// PassUnusable is one input whose answer had no direction to keep: the
+// provider accepted the request and answered this input — or one of its
+// pieces — with a vector of zeros or one that is not finite, or its pieces'
+// directions cancelled (see [Pass]).
+type PassUnusable struct {
+	Input PassInput
+	// Bytes is the prepared bytes of its pieces, as [PassRefusal.Bytes].
+	Bytes int
+	// Retry says an answer for it had no direction before, and this was its
+	// due retry.
+	Retry bool
+	// Err says what had no direction: which piece, or the pool.
+	Err error
+}
+
 // PassProgress is one input a pass embedded part of and left for the next pass
 // to finish: a text longer than what the pass could send (see [Pass]).
 type PassProgress struct {
@@ -207,15 +236,19 @@ type Pass struct {
 	proven bool
 
 	// Requests and Bytes are what the pass sent, the canary included;
-	// Accepted the inputs it embedded; Unusable the inputs of an accepted
-	// request whose answer had no direction to pool; Refused the requests
-	// of inputs refused; Canaries the canaries it sent to judge one; Held
-	// the inputs it passed over because they were refused alone inside the
-	// last [RefusalRetry].
-	Requests, Bytes, Accepted, Unusable, Refused, Canaries, Held int
+	// Accepted the inputs it embedded; Refused the requests of inputs
+	// refused; Canaries the canaries it sent to judge one; Held the inputs
+	// it passed over because they were refused alone, or answered with no
+	// direction, inside the last [RefusalRetry].
+	Requests, Bytes, Accepted, Refused, Canaries, Held int
 
 	// RefusedAlone are the inputs refused sent alone, in the order they were.
 	RefusedAlone []PassRefusal
+
+	// Unusable are the inputs of an accepted request whose answer had no
+	// direction to keep, in the order they were answered: each is held back
+	// for [RefusalRetry].
+	Unusable []PassUnusable
 
 	// Unfinished are the inputs this pass embedded part of and stopped
 	// before finishing: the next pass sends the rest.
@@ -274,9 +307,11 @@ type queued struct {
 	advanced bool
 
 	// limit is the largest call it may be sent in, 0 for any; retry says
-	// it is the due retry of an input refused alone.
+	// it is the due retry of an input refused alone, and again that an
+	// answer for it had no direction before.
 	limit int
 	retry bool
+	again bool
 }
 
 // next is the first of q's pieces still to send.
@@ -303,9 +338,10 @@ type call struct {
 
 // Embed sends inputs, in order, under the pass, and hands store each input whose
 // embedding it settled — positionally, with its vector, or a nil one for an
-// input whose answer had no direction to pool. An input embedded only in part
-// by the time the pass stops is not handed over; the next pass that is offered
-// it finishes it ([Pass.Unfinished]).
+// input whose answer had no direction to keep ([Pass.Unusable]), which the
+// memory holds back. An input embedded only in part by the time the pass stops
+// is not handed over; the next pass that is offered it finishes it
+// ([Pass.Unfinished]).
 //
 // It returns store's error, which ends the pass too: a store that refuses a
 // write refuses the next one identically, and carrying on would spend the
@@ -358,6 +394,9 @@ func (p *Pass) Embed(ctx context.Context, e BatchEmbedder, inputs []PassInput,
 			err = fmt.Errorf("embeddings: %s answered %d vectors for %d pieces",
 				e.Model(), len(raw), len(pieces))
 		}
+		if err == nil {
+			err = widthsOf(raw, width, e.Model())
+		}
 		p.requests--
 		p.bytes -= c.bytes
 		p.Requests++
@@ -402,11 +441,11 @@ func (p *Pass) Embed(ctx context.Context, e BatchEmbedder, inputs []PassInput,
 }
 
 // settle takes an accepted call's answer: every member it embedded whole, or
-// finished, is settled — accepted with its vector, or unusable with none — and
-// forgotten by the memory; a member it carried only part of has what was
-// embedded of it summed, kept in the memory for the next pass, and stays at the
-// front of from for the rest. It returns the settled inputs and their vectors,
-// which are the first len(settled) members of from.
+// finished, is settled — accepted with its vector and forgotten by the memory,
+// or unusable with none and held back by it — and a member it carried only part
+// of has what was embedded of it summed, kept in the memory for the next pass,
+// and stays at the front of from for the rest. It returns the settled inputs
+// and their vectors, which are the first len(settled) members of from.
 func (p *Pass) settle(c call, raw [][]float32, spans [][2]int, width int,
 	from []queued,
 ) ([]PassInput, [][]float32) {
@@ -414,19 +453,23 @@ func (p *Pass) settle(c call, raw [][]float32, spans [][2]int, width int,
 		settled []PassInput
 		vectors [][]float32
 	)
-	for i, q := range c.members {
+	for i := range c.members {
+		q := &from[i]
 		answer := raw[spans[i][0]:spans[i][1]]
-		vector, done := p.embedded(&from[i], c.upTo[i], answer, width)
+		vector, done, unusable := p.embedded(q, c.upTo[i], answer, width)
 		if !done {
 			// Only the front member of a call is ever sent in part,
 			// and it is then the call's only member.
 			break
 		}
-		p.refusals.forget(q.key)
-		if vector != nil {
-			p.Accepted++
+		if unusable != nil {
+			p.refusals.noDirection(q.key, q.begun, p.now)
+			p.Unusable = append(p.Unusable, PassUnusable{
+				Input: q.in, Bytes: q.total, Retry: q.again, Err: unusable,
+			})
 		} else {
-			p.Unusable++
+			p.refusals.forget(q.key)
+			p.Accepted++
 		}
 		settled = append(settled, q.in)
 		vectors = append(vectors, vector)
@@ -439,36 +482,68 @@ func (p *Pass) settle(c call, raw [][]float32, spans [][2]int, width int,
 // piece's vector as the provider answered it, the vector [Embedder.Embed] gives
 // the same text wherever the provider answers an array as it answers a string,
 // and an input of several takes the [Pool] of all of them, the vector
-// [EmbedWhole] gives it, summed across however many calls carried them. An input
-// whose pieces cannot be pooled — a piece's vector with no direction, or
-// directions that cancel — settles with a nil vector, and costs only itself.
+// [EmbedWhole] gives it, summed across however many calls carried them.
+//
+// An answer with NO DIRECTION settles q with no vector and says why: a single
+// piece's vector of zeros or not finite, the first such piece of several — q's
+// begun is then the sum of every piece before it, so the retry resumes at that
+// piece — or pieces whose directions cancel, which leave nothing to resume and
+// begin again. It costs only q; its neighbours in the call keep theirs.
 //
 // Not settled — pieces still to send — what is summed of it is kept in the
 // memory, so a pass that stops here leaves the next one to send only the rest.
-func (p *Pass) embedded(q *queued, upTo int, answer [][]float32, width int) ([]float32, bool) {
+func (p *Pass) embedded(q *queued, upTo int, answer [][]float32, width int) (
+	vector []float32, done bool, unusable error,
+) {
 	from := q.next()
 	if from == 0 && upTo == len(q.pieces) && len(q.pieces) == 1 {
-		return answer[0], true
+		if _, err := directionOf(answer[0]); err != nil {
+			return nil, true, fmt.Errorf("embeddings: the vector %w", err)
+		}
+		return answer[0], true, nil
 	}
 	sum := q.begun
 	if sum == nil {
 		sum = newPooling(width)
 	}
-	for i, vector := range answer {
-		if sum.add(vector, q.sizes[from+i]) != nil {
-			return nil, true
+	for i, piece := range answer {
+		if err := sum.add(piece, q.sizes[from+i]); err != nil {
+			// add sums nothing of the piece it refuses, so sum is
+			// every piece before it.
+			q.begun = sum
+			return nil, true, err
 		}
 	}
 	if upTo < len(q.pieces) {
 		q.begun, q.rest, q.advanced = sum, q.rest-bytesOf(q.sizes[from:upTo]), true
 		p.refusals.keep(q.key, sum, p.now)
-		return nil, false
+		return nil, false, nil
 	}
 	vector, err := sum.vector()
 	if err != nil {
-		return nil, true
+		q.begun = nil
+		return nil, true, err
 	}
-	return vector, true
+	return vector, true, nil
+}
+
+// widthsOf checks that every vector of an answer is width wide — the width the
+// provider reports ([Embedder.Width]) and every pool of a pass is summed at.
+//
+// AN ANSWER OF ANOTHER WIDTH IS THE PROVIDER'S, never an input's: a model
+// configured otherwise than the store was sized for answers every input so
+// ([ErrConfiguration]), so it ends the pass like any failure that is not about
+// an input. Judged one input at a time, as a pool refusing the piece, it would
+// hold every input back for an hour for a fault none of them has. Every
+// provider this build ships checks its answers already; this says the pass
+// does not lean on it.
+func widthsOf(raw [][]float32, width int, model string) error {
+	for _, vector := range raw {
+		if _, err := checkedWidth(vector, width, model); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // unfinished records, when the pass stops, the input at the front of either
@@ -565,16 +640,17 @@ func (p *Pass) queue(inputs []PassInput, limits Limits, width int) (suspects, fr
 			q.sizes[i] = len(piece)
 		}
 		q.total = bytesOf(q.sizes)
-		standing, limit, begun := p.refusals.standingOf(q.key, p.now)
-		if begun != nil && begun.width == width && begun.pieces < len(pieces) {
+		known := p.refusals.standingOf(q.key, p.now)
+		if b := known.begun; b != nil && b.width == width && b.pieces < len(pieces) {
 			// THE SAME TEXT UNDER THE SAME CONFIGURATION is the same
 			// pieces, so what was summed of them is still theirs; any
 			// other shape is a sum of something else, and the input
 			// starts again.
-			q.begun = begun
+			q.begun = b
 		}
 		q.rest = bytesOf(q.sizes[q.next():])
-		switch standing {
+		q.again = known.unusable
+		switch known.standing {
 		case refusalHeld:
 			p.Held++
 			continue
@@ -582,7 +658,7 @@ func (p *Pass) queue(inputs []PassInput, limits Limits, width int) (suspects, fr
 			q.limit, q.retry = 1, true
 			suspects = append(suspects, q)
 		case refusalSuspect:
-			q.limit = limit
+			q.limit = known.limit
 			suspects = append(suspects, q)
 		default:
 			fresh = append(fresh, q)
@@ -699,10 +775,11 @@ func keyOfInput(in PassInput) refusalKey {
 
 // Refusals is what ONE provider configuration refused, held across the passes
 // sent to it: the size each input of an unfinished isolation may be sent in,
-// when an input was refused alone, and until when a configuration the [canary]
-// found refused is left alone — see [Pass]. And, beside them, what it has
-// embedded of each text a pass began and did not finish ([PassProgress]),
-// which is a fact about the same provider for the same reason.
+// when an input was refused alone or answered with no direction, and until
+// when a configuration the [canary] found refused is left alone — see [Pass].
+// And, beside them, what it has embedded of each text a pass began and did not
+// finish ([PassProgress]), which is a fact about the same provider for the
+// same reason.
 //
 // THIS NODE'S ALONE, and in memory: a cache of what one provider told one
 // caller, whose loss costs one more isolation of each input it held, and one
@@ -736,9 +813,15 @@ type refusal struct {
 	// suspect.
 	alone time.Time
 
+	// unusable is when an accepted answer for it last had no direction,
+	// zero if none ever had. Cleared by a refusal alone, which is the
+	// later fact, and by an answer that had one, which forgets the input.
+	unusable time.Time
+
 	// begun is what passes embedded of it, for a text a pass began and did
-	// not finish, or nil. Kept when the input is refused, so its retry
-	// resumes at the piece that was refused rather than at the first.
+	// not finish, or nil. Kept when the input is refused, or a piece of it
+	// is answered with no direction, so its retry resumes at that piece
+	// rather than at the first.
 	begun *pooling
 
 	// seen is when a pass last met it, for [Refusals.expire].
@@ -756,14 +839,31 @@ const (
 	// only in calls of at most its limit.
 	refusalSuspect
 
-	// refusalHeld is an input refused alone inside the last
-	// [RefusalRetry]: not sent.
+	// refusalHeld is an input refused alone, or answered with no
+	// direction, inside the last [RefusalRetry]: not sent.
 	refusalHeld
 
 	// refusalDue is an input refused alone longer ago than that: offered
 	// again, alone.
 	refusalDue
 )
+
+// known is what the memory says about one input when a pass meets it.
+type known struct {
+	standing refusalStanding
+
+	// limit is a suspect's largest call.
+	limit int
+
+	// begun is a copy of what was embedded of it, if a pass began it.
+	begun *pooling
+
+	// unusable says an answer for it had no direction before. Due — past
+	// [RefusalRetry] — it is offered again with its neighbours: an answer
+	// with no direction was ACCEPTED, so nothing about it puts the inputs
+	// sent beside it at risk, as a refused input's neighbours are.
+	unusable bool
+}
 
 // NewRefusals is an empty memory, for one provider.
 func NewRefusals() *Refusals { return &Refusals{at: map[refusalKey]*refusal{}} }
@@ -775,30 +875,31 @@ func (r *Refusals) Len() int {
 	return len(r.at)
 }
 
-// standingOf answers what the memory says about k at now, the limit of a
-// suspect, and a copy of what was embedded of it if a pass began it — and
-// records that a pass met it.
-func (r *Refusals) standingOf(k refusalKey, now time.Time) (refusalStanding, int, *pooling) {
+// standingOf answers what the memory says about k at now, and records that a
+// pass met it.
+func (r *Refusals) standingOf(k refusalKey, now time.Time) known {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.at[k]
 	if !ok {
-		return refusalNone, 0, nil
+		return known{standing: refusalNone}
 	}
 	entry.seen = now
-	var begun *pooling
+	out := known{standing: refusalNone, unusable: !entry.unusable.IsZero()}
 	if entry.begun != nil {
-		begun = entry.begun.clone()
+		out.begun = entry.begun.clone()
 	}
 	switch {
 	case !entry.alone.IsZero() && now.Sub(entry.alone) < RefusalRetry:
-		return refusalHeld, 1, begun
+		out.standing, out.limit = refusalHeld, 1
 	case !entry.alone.IsZero():
-		return refusalDue, 1, begun
+		out.standing, out.limit = refusalDue, 1
+	case out.unusable && now.Sub(entry.unusable) < RefusalRetry:
+		out.standing = refusalHeld
 	case entry.limit > 0:
-		return refusalSuspect, entry.limit, begun
+		out.standing, out.limit = refusalSuspect, entry.limit
 	}
-	return refusalNone, 0, begun
+	return out
 }
 
 // split records that a call holding these inputs was refused: each may be sent
@@ -821,7 +922,25 @@ func (r *Refusals) refuseAlone(k refusalKey, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry := r.entry(k)
-	entry.limit, entry.alone, entry.seen = 1, now, now
+	entry.limit, entry.alone, entry.unusable, entry.seen = 1, now, time.Time{}, now
+}
+
+// noDirection records that an accepted answer for k had no direction at now:
+// it is held back for [RefusalRetry] and then offered again with its
+// neighbours. begun is what was summed of it before the piece that had none,
+// kept so the retry resumes at that piece, or nil to begin again.
+//
+// ACCEPTED, so it is no suspect of any refusal: the size a refused call left it
+// and the refusal alone it may have been the retry of are both over.
+func (r *Refusals) noDirection(k refusalKey, begun *pooling, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.entry(k)
+	entry.limit, entry.alone, entry.unusable, entry.seen = 0, time.Time{}, now, now
+	entry.begun = nil
+	if begun != nil && begun.pieces > 0 {
+		entry.begun = begun.clone()
+	}
 }
 
 // keep records what passes have embedded of k so far, a copy of sum, for the
@@ -851,9 +970,8 @@ func (r *Refusals) conclude(now time.Time) {
 	r.pausedUntil = now.Add(RefusalRetry)
 }
 
-// forget lets go of everything the memory held about k — the provider embedded
-// it after all, or answered it with nothing that could be pooled, which is not
-// a refusal and is sent again whole.
+// forget lets go of everything the memory held about k: the provider embedded
+// it after all.
 func (r *Refusals) forget(k refusalKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

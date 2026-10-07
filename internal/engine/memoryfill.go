@@ -58,8 +58,11 @@ import (
 // full batch into the same answer, every minute — and a refusal is split until
 // the input it refuses is alone, then held back for the hour
 // ([embeddings.RefusalRetry]) by a memory kept across ticks for as long as the
-// provider is configured the same ([embedConfiguration]). The pass is bounded
-// in what it SENDS, refused requests included, never in what came of it.
+// provider is configured the same ([embedConfiguration]). A row the provider
+// accepts and answers with a vector that has no direction is held back the
+// same way: it can keep no vector, and sent again every tick it was paid for
+// every tick. The pass is bounded in what it SENDS, refused requests included,
+// never in what came of it.
 //
 // AND A LONG ROW IS SENT A REQUEST AT A TIME. An episode's ask is stored whole
 // and bounded only by the event that carried it, so one row's text can need
@@ -449,12 +452,17 @@ func (r fillReport) lines(provider embeddings.BatchEmbedder) []fillLine {
 				"embedded so far are kept on this node, and the next tick sends the "+
 				"rest, from where this one stopped")
 	}
-	if pass.Unusable > 0 {
-		add(slog.LevelWarn, "memory_fill_vector_unusable", "model", model,
-			"rows", pass.Unusable,
-			"detail", "the provider answered these rows' requests with vectors that "+
-				"have no direction to keep; each stays unfilled and is sent again "+
-				"next tick, and its neighbours were filled")
+	for _, unusable := range pass.Unusable {
+		add(slog.LevelWarn, "memory_fill_vector_unusable", "scope", unusable.Input.Scope,
+			"id", unusable.Input.ID, "model", model, "bytes", unusable.Bytes,
+			"retry", unusable.Retry, "retry_in", embeddings.RefusalRetry.String(),
+			"error", unusable.Err,
+			"detail", "the provider accepted this row's request and answered its text "+
+				"with a vector that has no direction to keep — all zeros or not "+
+				"finite, for the text or one piece of it; the row keeps no vector of "+
+				"this model and is held back, costing no request, until the retry is "+
+				"due, when it is offered again from the piece that had none, and its "+
+				"neighbours were filled")
 	}
 	total := 0
 	for _, n := range r.filled {

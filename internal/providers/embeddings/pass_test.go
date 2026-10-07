@@ -759,3 +759,200 @@ func TestALongInputRefusedPartWayRetriesFromTheRefusal(t *testing.T) {
 		t.Fatal("the input finished on its retry is not the pool EmbedWhole gives it")
 	}
 }
+
+// A LONG INPUT ANSWERED WITH NO DIRECTION PART WAY IS HELD BACK, AND ITS RETRY
+// BEGINS AT THAT PIECE. The provider accepted the request, so what it embedded
+// before the piece is still the input's: kept, the passes after it neither
+// begin the input again at its first piece nor send it at all inside the hour,
+// and the retry costs the request that piece is in. Forgotten, as it was, the
+// input began again at piece 0 on the next pass and met the same piece on the
+// one after — a text longer than a pass paid its every request before that
+// piece again each time round, for ever, and took each pass from everything
+// behind it.
+func TestALongInputAnsweredWithNoDirectionIsHeldAndResumedAtThatPiece(t *testing.T) {
+	t.Parallel()
+	input, pieces := longInput(t, 400)
+	fake := longFake()
+	stop := 4 * longLimits.BatchInputs // the piece the fifth request begins with
+	fake.AnswerZero(strings.Fields(pieces[stop])[0])
+	memory := embeddings.NewRefusals()
+	got := vectorsOf{}
+	const perPass = 3
+	pass := func(at time.Time, provider *embeddings.Fake) *embeddings.Pass {
+		t.Helper()
+		p := embeddings.NewPass(memory, at, perPass, 1<<20)
+		if err := p.Embed(t.Context(), provider, []embeddings.PassInput{input}, got.store); err != nil {
+			t.Fatal(err)
+		}
+		if p.Err() != nil {
+			t.Fatalf("an answer with no direction ended the pass: %v", p.Err())
+		}
+		return p
+	}
+	first := pass(passAt, fake)
+	if len(first.Unfinished) != 1 || first.Unfinished[0].Embedded != perPass*longLimits.BatchInputs {
+		t.Fatalf("the first pass left %+v, want the input with its first %d pieces in",
+			first.Unfinished, perPass*longLimits.BatchInputs)
+	}
+	met := passAt.Add(time.Minute)
+	second := pass(met, fake)
+	whole := 0
+	for _, piece := range pieces {
+		whole += len(piece)
+	}
+	if len(second.Unusable) != 1 || second.Unusable[0].Input.ID != "long" ||
+		second.Unusable[0].Bytes != whole || second.Unusable[0].Retry ||
+		second.Requests != 2 || len(second.Unfinished) != 0 {
+		t.Fatalf("the second pass sent %d requests and reported unusable %+v, unfinished "+
+			"%+v — want the two that reach the piece, and the input named once, fresh, "+
+			"with its %d bytes", second.Requests, second.Unusable, second.Unfinished, whole)
+	}
+	if v, handed := got["long"]; !handed || v != nil {
+		t.Fatalf("the input was handed over as %v, want it settled with no vector", v)
+	}
+	delete(got, "long")
+
+	// INSIDE THE HOUR it costs nothing, however often a pass meets it.
+	for minute := 2; minute < 10; minute++ {
+		before := len(fake.Requests())
+		held := pass(passAt.Add(time.Duration(minute)*time.Minute), fake)
+		if sent := len(fake.Requests()) - before; sent != 0 || held.Held != 1 {
+			t.Fatalf("minute %d: the held input cost %d requests (held %d)", minute, sent, held.Held)
+		}
+	}
+
+	// DUE, IT RESUMES AT THE PIECE THAT HAD NONE, and answered so again it is
+	// a retry held for another hour.
+	before := len(fake.Requests())
+	due := pass(met.Add(embeddings.RefusalRetry), fake)
+	if resumed := fake.Requests()[before]; resumed[0] != pieces[stop] {
+		t.Fatalf("the due retry began at %q, want the piece that had no direction (%q)",
+			resumed[0], pieces[stop])
+	}
+	if len(due.Unusable) != 1 || !due.Unusable[0].Retry || due.Requests != 1 {
+		t.Fatalf("the due retry sent %d requests and reported %+v, want one request and "+
+			"the input named as a retry", due.Requests, due.Unusable)
+	}
+	for _, request := range fake.Requests()[perPass:] {
+		if request[0] == pieces[0] {
+			t.Fatal("a pass after the first began the input again at its first piece")
+		}
+	}
+
+	// A PROVIDER THAT ANSWERS IT finishes it from there, as the vector of the
+	// whole text, and the memory lets it go.
+	fixed := longFake()
+	for minute := time.Duration(0); got["long"] == nil; minute++ {
+		if minute > time.Duration(len(pieces)) {
+			t.Fatal("the fixed provider never finished the input")
+		}
+		pass(met.Add(2*embeddings.RefusalRetry+minute*time.Minute), fixed)
+	}
+	if first := fixed.Requests()[0]; first[0] != pieces[stop] {
+		t.Fatalf("the retry that was answered began at %q, want %q", first[0], pieces[stop])
+	}
+	if !slices.Equal(got["long"], wholeOf(t, input.Text)) {
+		t.Fatal("the input finished on its retry is not the pool EmbedWhole gives it")
+	}
+	if memory.Len() != 0 {
+		t.Fatalf("the memory still holds %d inputs once the input was embedded", memory.Len())
+	}
+}
+
+// A SHORT INPUT ANSWERED WITH NO DIRECTION COSTS ONLY ITSELF, AND IS HELD BACK.
+// Its neighbours in the request keep their vectors, it is handed over with
+// none — a vector of zeros is one no cosine can compare, and stored it would
+// read as a row that has its vector — and the passes inside the hour pass over
+// it. Due, it is offered again WITH its neighbours: the request was accepted,
+// so nothing about it endangers them as a refused input's would.
+func TestAShortInputAnsweredWithNoDirectionIsHeldAndItsNeighboursKept(t *testing.T) {
+	t.Parallel()
+	fake := embeddings.NewFake(16)
+	fake.AnswerZero("hollow")
+	memory := embeddings.NewRefusals()
+	inputs := passInputs(6, -1)
+	inputs[2].Text = "a hollow note " + inputs[2].Text
+	got := vectorsOf{}
+	first := embeddings.NewPass(memory, passAt, 16, 1<<20)
+	if err := first.Embed(t.Context(), fake, inputs, got.store); err != nil {
+		t.Fatal(err)
+	}
+	if first.Err() != nil || first.Requests != 1 || first.Accepted != 5 ||
+		len(first.Unusable) != 1 || first.Unusable[0].Input.ID != "n002" {
+		t.Fatalf("the pass ended %v after %d requests, %d accepted, unusable %+v — want "+
+			"one request, every neighbour embedded and the hollow note named",
+			first.Err(), first.Requests, first.Accepted, first.Unusable)
+	}
+	if v, handed := got["n002"]; !handed || v != nil {
+		t.Fatalf("the hollow note was handed over as %v, want no vector", v)
+	}
+	if want := len(embeddings.Prepare(inputs[2].Text)); first.Unusable[0].Bytes != want {
+		t.Fatalf("the hollow note was named with %d bytes, want its %d",
+			first.Unusable[0].Bytes, want)
+	}
+
+	before := len(fake.Requests())
+	held := embeddings.NewPass(memory, passAt.Add(time.Minute), 16, 1<<20)
+	if err := held.Embed(t.Context(), fake, inputs[2:3], got.store); err != nil {
+		t.Fatal(err)
+	}
+	if sent := len(fake.Requests()) - before; sent != 0 || held.Held != 1 {
+		t.Fatalf("inside its retry the hollow note cost %d requests (held %d)", sent, held.Held)
+	}
+
+	others := passInputs(3, -1)
+	for i := range others {
+		others[i].ID = fmt.Sprintf("m%03d", i)
+	}
+	due := embeddings.NewPass(memory, passAt.Add(embeddings.RefusalRetry), 16, 1<<20)
+	if err := due.Embed(t.Context(), fake, append(others, inputs[2]), got.store); err != nil {
+		t.Fatal(err)
+	}
+	requests := fake.Requests()[before:]
+	if len(requests) != 1 || len(requests[0]) != 4 {
+		t.Fatalf("the due retry went as %q, want one request with its neighbours", requests)
+	}
+	if len(due.Unusable) != 1 || !due.Unusable[0].Retry {
+		t.Fatalf("the due retry reported %+v, want the hollow note again, as a retry", due.Unusable)
+	}
+}
+
+// AN ANSWER OF ANOTHER WIDTH ENDS THE PASS AND HOLDS NOTHING BACK. A provider
+// answering a width the store was not sized for answers every input so — the
+// configuration's fault, never an input's — so the pass ends with it as with
+// any failure that is not about an input. Judged one input at a time, a pool
+// refusing the piece would have held every input back for an hour.
+func TestAnAnswerOfAnotherWidthEndsThePassAndHoldsNothing(t *testing.T) {
+	t.Parallel()
+	long, _ := longInput(t, 400)
+	for name, inputs := range map[string][]embeddings.PassInput{
+		"short inputs": passInputs(4, -1),
+		"a long input": {long},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			memory := embeddings.NewRefusals()
+			pass := embeddings.NewPass(memory, passAt, 16, 1<<20)
+			if err := pass.Embed(t.Context(), wider{longFake()}, inputs,
+				func([]embeddings.PassInput, [][]float32) error {
+					t.Error("an answer of another width was handed to the store")
+					return nil
+				}); err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(pass.Err(), embeddings.ErrConfiguration) || pass.Requests != 1 {
+				t.Fatalf("the pass ended with %v after %d requests, want the configuration's "+
+					"fault at the first", pass.Err(), pass.Requests)
+			}
+			if memory.Len() != 0 || len(pass.Unusable) != 0 {
+				t.Fatalf("the memory holds %d inputs and the pass named %d unusable, want "+
+					"nothing held against an input", memory.Len(), len(pass.Unusable))
+			}
+		})
+	}
+}
+
+// wider is a provider that reports one width more than it answers.
+type wider struct{ *embeddings.Fake }
+
+func (w wider) Width() int { return w.Fake.Width() + 1 }

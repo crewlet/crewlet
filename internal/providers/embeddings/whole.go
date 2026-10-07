@@ -166,10 +166,9 @@ func (p *pooling) add(vector []float32, weight int) error {
 		return fmt.Errorf("embeddings: piece %d has weight %d — every "+
 			"piece carries some of the text", at, weight)
 	}
-	norm := magnitude(vector)
-	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
-		return fmt.Errorf("embeddings: piece %d's vector has no "+
-			"direction (magnitude %v)", at, norm)
+	norm, err := directionOf(vector)
+	if err != nil {
+		return fmt.Errorf("embeddings: piece %d's vector %w", at, err)
 	}
 	scale := float64(weight) / norm
 	for j, v := range vector {
@@ -205,6 +204,22 @@ func (p *pooling) vector() ([]float32, error) {
 // and the memory it keeps progress in is never written by two holders.
 func (p *pooling) clone() *pooling {
 	return &pooling{width: p.width, sum: append([]float64(nil), p.sum...), pieces: p.pieces}
+}
+
+// errNoDirection is a vector with no direction: all zeros, or a component that
+// is not finite. It is the one rule a pool weighs a piece by and a [Pass]
+// judges a single input's answer by, so the two can never disagree about what
+// an answer must carry.
+var errNoDirection = errors.New("has no direction")
+
+// directionOf is a vector's magnitude, or [errNoDirection] for one with none —
+// which no pool can weigh and no cosine can compare.
+func directionOf(vector []float32) (float64, error) {
+	norm := magnitude(vector)
+	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		return 0, fmt.Errorf("%w (magnitude %v)", errNoDirection, norm)
+	}
+	return norm, nil
 }
 
 // magnitude is a vector's Euclidean length, in float64 so a wide vector of

@@ -46,7 +46,9 @@ import (
 // [Fake.FailConfiguration] the next few an [ErrConfiguration]. So a caller
 // that isolates a poison input, retries a transient one or stops on a refused
 // credential can be tested failing, which a twin that only ever succeeded
-// could not.
+// could not. And it answers what a provider answers that is no failure at all
+// and still nothing a caller can keep: [Fake.AnswerZero] makes a marked
+// input's vector all zeros, in an accepted request.
 type Fake struct {
 	width int
 
@@ -54,6 +56,7 @@ type Fake struct {
 	model         string
 	limits        Limits
 	refused       []string
+	zeroed        []string
 	failing       map[string]int
 	misconfigured map[string]int
 	requests      [][]string
@@ -121,6 +124,18 @@ func (f *Fake) Refuse(marker string) {
 	f.refused = append(f.refused, marker)
 }
 
+// AnswerZero makes every input whose prepared text contains marker answered
+// with a vector of zeros, in a request the fake accepts — every time, as a
+// server that has no representation of a text answers it the same way each
+// time it is sent. Such a vector has no direction: no cosine can compare it
+// and no pool can weigh it, and the real provider passes it through as the
+// fake does, since the answer is a well-formed one of the right width.
+func (f *Fake) AnswerZero(marker string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.zeroed = append(f.zeroed, marker)
+}
+
 // FailTransiently makes the next times requests carrying an input whose
 // prepared text contains marker fail as [ErrTransient], and the ones after
 // them succeed.
@@ -172,7 +187,7 @@ func (f *Fake) Embed(ctx context.Context, text string) ([]float32, error) {
 	if err := f.send(ctx, []string{prepared}); err != nil {
 		return nil, err
 	}
-	return f.vector(prepared), nil
+	return f.answer(prepared), nil
 }
 
 // EmbedBatch implements [BatchEmbedder].
@@ -208,7 +223,7 @@ func (f *Fake) EmbedBatch(ctx context.Context, texts []string) ([][]float32, err
 			return nil, err
 		}
 		for _, at := range group {
-			out[at] = f.vector(prepared[at])
+			out[at] = f.answer(prepared[at])
 		}
 	}
 	return out, nil
@@ -260,6 +275,19 @@ func carries(input []string, marker string) bool {
 		}
 	}
 	return false
+}
+
+// answer is what the fake answers prepared, non-empty text with: its
+// [Fake.vector], or zeros for a text [Fake.AnswerZero] marked.
+func (f *Fake) answer(prepared string) []float32 {
+	f.mu.Lock()
+	zero := slices.ContainsFunc(f.zeroed,
+		func(marker string) bool { return strings.Contains(prepared, marker) })
+	f.mu.Unlock()
+	if zero {
+		return make([]float32, f.width)
+	}
+	return f.vector(prepared)
 }
 
 // vector is the bag-of-words embedding of prepared, non-empty text.
