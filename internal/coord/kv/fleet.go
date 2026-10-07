@@ -655,17 +655,11 @@ type FleetStore struct {
 	freshness  time.Duration
 
 	// maxClaim is the longest claim [FleetStore.Claim] accepts: the claims
-	// bucket's age IN FORCE once [raiseAge] has had its say, never this
-	// node's config — a peer may have created the bucket older, and that
-	// age is what the bucket honours. Zero is a bucket with no age, which
-	// reaps nothing and so caps nothing.
+	// bucket's age IN FORCE, never this node's config — the bucket is
+	// adopted as it stands, and its age is what it honours. Zero is a bucket
+	// with no age, which reaps nothing and so caps nothing.
 	maxClaim time.Duration
 }
-
-// claimsDescription is the claims bucket's, written once because the bucket
-// is both opened and, when an earlier build made it younger, raised.
-const claimsDescription = "Crewlet inbound-delivery claims; each record carries its own " +
-	"deadline, and the bucket age is only ever raised to cover the longest claim"
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
@@ -729,7 +723,10 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
 			cfg.RateWindow * rateBucketFactor},
-		{&store.claims, claimsSuffix, claimsDescription, cfg.MaxClaimTTL},
+		{&store.claims, claimsSuffix,
+			"Crewlet inbound-delivery claims; each record carries its own deadline, and the " +
+				"bucket age is the longest claim's",
+			cfg.MaxClaimTTL},
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
 			cfg.LedgerRetention},
@@ -783,18 +780,11 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 
 	// THE CLAIMS BUCKET'S AGE IS A CEILING, NOT A PREFERENCE: every claim
 	// carries its own deadline and the age only reaps what has lapsed, so a
-	// bucket an earlier build created younger than the longest claim reaps
-	// a live one early — and a Mattermost post a reconnecting seat replays
-	// is then delivered twice. Raised, never lowered; see [raiseAge].
-	claims, err := raiseAge(ctx, js, cfg.Clustered, store.claims, jetstream.KeyValueConfig{
-		Bucket: cfg.BucketPrefix + claimsSuffix, Description: claimsDescription,
-		TTL: cfg.MaxClaimTTL, Replicas: cfg.Replicas,
-	}, "delivery claim")
-	if err != nil {
-		return nil, err
-	}
-	store.claims = claims
-	facts, err := readBucket(ctx, claims)
+	// claim longer than the age IN FORCE would be reaped live — and a
+	// Mattermost post a reconnecting seat replays delivered twice. So Claim
+	// refuses one ([coord.ErrTTLTooLong]) rather than take it on a promise
+	// the bucket cannot keep.
+	facts, err := readBucket(ctx, store.claims)
 	if err != nil {
 		return nil, err
 	}
@@ -963,18 +953,13 @@ func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, n
 		case err != nil:
 			return false, unavailable("read the delivery claim", err)
 		}
-		held, dated := decodeClaim(entry.Value())
-		if !dated {
-			// A value this build cannot read is a claim it cannot date,
-			// and EXISTENCE was the whole rule of any build that wrote
-			// one: held, until the bucket reaps it.
+		if decodeClaim(entry.Value()).Until.After(now) {
 			return false, nil
 		}
-		if held.Until.After(now) {
-			return false, nil
-		}
-		// LAPSED: take it over at the revision just read, so two callers
-		// finding the same lapsed claim cannot both win it.
+		// LAPSED — or a value that names no deadline, which no claim this
+		// store writes is, and which is taken over as the claim the
+		// contract fails open to: take it over at the revision just read, so
+		// two callers finding the same lapsed claim cannot both win it.
 		_, err = f.claims.Update(ctx, encoded, value, entry.Revision())
 		switch {
 		case err == nil:
@@ -1002,14 +987,14 @@ type claimRecord struct {
 	Until time.Time `json:"until"`
 }
 
-// decodeClaim reads a claim record, reporting false for a value that names no
-// deadline — an earlier build's bare timestamp, or bytes nothing wrote.
-func decodeClaim(raw []byte) (claimRecord, bool) {
+// decodeClaim reads a claim record: the zero record, which has lapsed, for a
+// value that names no deadline.
+func decodeClaim(raw []byte) claimRecord {
 	var record claimRecord
-	if json.Unmarshal(raw, &record) != nil || record.Until.IsZero() {
-		return claimRecord{}, false
+	if json.Unmarshal(raw, &record) != nil {
+		return claimRecord{}
 	}
-	return record, true
+	return record
 }
 
 func mustEncodeClaim(record claimRecord) []byte {

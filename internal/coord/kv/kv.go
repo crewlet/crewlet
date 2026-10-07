@@ -617,8 +617,7 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 //
 // # The one value this store applies to a bucket that exists
 //
-// Adoption is the rule everywhere else — bar the delivery claims, whose bucket
-// is raised by the same [raiseAge] for the same reason — because every other difference is a
+// Adoption is the rule everywhere else because every other difference is a
 // PREFERENCE, and the node that booted last does not get to redefine one. This
 // bucket's age is not a preference: it is the CEILING on the TTLs the bucket
 // can honour, so a bucket created by a build with a shorter ceiling reaps a
@@ -644,13 +643,11 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 
 // raiseAge raises a bucket's age to want.TTL when it is younger, and never
 // lowers it — the ONE value this store applies to a bucket that already
-// exists, and only to the buckets whose records each carry a deadline of their
-// own (the duty leases, the delivery claims). On those the age is not a
-// preference but the CEILING on the deadlines the bucket can honour, so a
-// bucket an earlier build created younger reaps a live record early; and an
-// age longer than any one record's deadline costs nothing, because no record
-// is judged by the age. `holds` names what the bucket keeps, for the error and
-// the log.
+// exists, and only to the duty leases, whose records each carry a deadline of
+// their own: the age is not a preference there but the CEILING on the
+// deadlines the bucket can honour (see [openDuties]), and an age longer than
+// any one record's deadline costs nothing, because no record is judged by the
+// age. `holds` names what the bucket keeps, for the error and the log.
 func raiseAge(ctx context.Context, js jetstream.JetStream, clustered bool,
 	bucket jetstream.KeyValue, want jetstream.KeyValueConfig, holds string) (jetstream.KeyValue, error) {
 
