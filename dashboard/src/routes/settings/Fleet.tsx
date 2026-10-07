@@ -473,9 +473,9 @@ function FleetScreen() {
                     header: "Since",
                     align: "right",
                     shrink: true,
-                    // OLDEST FIRST WHEN ASCENDING, and an unrecorded tenure
-                    // sorts as unknown rather than as the epoch of time.
-                    sortValue: (s) => s.acquired_at,
+                    // OLDEST FIRST WHEN ASCENDING, by the instant rather than
+                    // its spelling, whose fractional seconds vary in length.
+                    sortValue: (s) => Date.parse(s.acquired_at),
                     cell: (s) => <HeldSince lease={s} now={now} />,
                   },
                   {
@@ -1035,7 +1035,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               header: "Since",
               align: "right",
               shrink: true,
-              sortValue: (s) => s.acquired_at,
+              sortValue: (s) => Date.parse(s.acquired_at),
               cell: (s) => <HeldSince lease={s} now={now} />,
             },
             {
