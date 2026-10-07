@@ -1607,7 +1607,7 @@ is the operator-only [`fleet`](#get-fleet) answer, and what each alarm measured 
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
-| `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it), and on a node older than the field; never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
+| `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it); never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
 | `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, and `worst`, the one that has been firing **longest** (absent when `count` is 0) — the table asserts no severity of its own, and the condition that has gone unanswered longest is the one a health card names. From the **same** evaluation the `crewlet.alarm.active` gauge and the `alarm_raised` / `alarm_cleared` log lines come from, which runs every ten seconds on every node. **Absent** before that evaluation first runs and on a node running no state log: neither has looked, and `{count: 0}` would read as healthy. |
 | `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed, the live spend window and each seat's last turn that every screen starts from — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those screens a node short, and this is where that stays visible after the log line has scrolled away. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
@@ -3924,9 +3924,9 @@ answer would then be partial, it opens a new trust edge, and it duplicates
 the mechanism the lease table already is.
 
 
-**Absent is not zero.** A node that publishes no status (one running a build
-older than the field) omits those fields entirely, and the dashboard draws an
-em dash. A confident `0` would render an idle row for a process that is
+**Absent is not zero.** A node whose status read overran its share of the
+heartbeat (`seat.StatusBudgetRatio`) publishes no status on that beat and
+omits those fields entirely, and the dashboard draws an em dash. A confident `0` would render an idle row for a process that is
 simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
