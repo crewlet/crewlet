@@ -378,9 +378,11 @@ type holding struct {
 // narrows held at each point where the delivery stops being answerable for an
 // event.
 func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.Event, held *holding) queue.Result {
-	// AN ANSWER BY TURN FIRST, before the screening can park it behind a
-	// held seat or the ledger can read it: it is addressed to a run, never
-	// to the seat, and whatever it becomes it is not a turn.
+	// AN ANSWER BY TURN FIRST, before the screening can offer it to a parked
+	// question or the ledger can read it: it is addressed to a run, never to
+	// the seat, and whatever it becomes it is not a turn. What the screening
+	// says about the seat and the node still stops it — a paused seat, or a
+	// seat busy coding — see [Dispatcher.routeAnswers].
 	//
 	// ONE READING OF THE CONDITIONS for both, taken once at the top as the
 	// screening's own contract asks: read twice, the answer stage could see
@@ -1174,22 +1176,27 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 // routeAnswers settles every answer BY TURN in a delivery, and returns what is
 // left for the ordinary route.
 //
-// # Before the screening, and why that is safe
+// # Before the screening, and what still stops it
 //
-// The screening's park is the one thing an answer must not be subjected to: a
-// seat held by one coding job requeues its mail until the job is done, and an
-// answer to ANOTHER of its runs — one parked on a question, holding nothing —
-// would wait behind a job it has nothing to do with. The chat route's reply is
-// offered from inside that park for the same reason.
+// First because the answer is addressed to a run, never to the seat: the
+// screening's decisions about what a seat does with its mail — offer it to a
+// parked question, run it as a turn — are not this delivery's.
 //
-// What the screening decides about the NODE still applies, and is left to it:
-// a node that does not hold the seat, has no turn engine, or is refusing new
-// work under a stale company runs no resume either, so on any of those the
-// whole delivery goes to the screening untouched, which defers or parks it —
-// and an answer that comes back is routed here again. A seat parked on its
-// budget waits the same way: a resume charges tokens exactly as a turn does.
-// And a PAUSED seat takes nothing off its inbox at all, this included, which is
-// what "an answer waits behind a pause" means.
+// What the screening decides about the SEAT AND THE NODE still applies, and is
+// left to it: a node that does not hold the seat, has no turn engine, or is
+// refusing new work under a stale company runs no resume either, so on any of
+// those the whole delivery goes to the screening untouched, which defers or
+// parks it — and an answer that comes back is routed here again. A seat parked
+// on its budget waits the same way: a resume charges tokens exactly as a turn
+// does. A PAUSED seat takes nothing off its inbox at all, this included, which
+// is what "an answer waits behind a pause" means. And A SEAT BUSY CODING takes
+// no other work until that run settles or parks, a person's answer to another
+// of its runs included: the agent is in the middle of one job, and resuming a
+// second beside it would put two of its turns in flight at once. Its inbox is
+// held for exactly that long (sandbox.SeatHold), so an answer reaches here on
+// a held seat only by racing the hold; it goes to the screening, which defers
+// it under the hold, and it is offered first when the run stops holding the
+// seat — as the chat route's reply is.
 //
 // # Never a turn
 //
@@ -1218,7 +1225,8 @@ func (d *Dispatcher) routeAnswers(ctx context.Context, handle string, c inbox.Co
 	if len(answers) == 0 {
 		return evs, queue.Result{}, false
 	}
-	if !c.Owned || !c.TurnEngineReady || !c.AdmitsTriggers || c.Paused || c.PauseUnknown {
+	if !c.Owned || !c.TurnEngineReady || !c.AdmitsTriggers || c.Paused || c.PauseUnknown ||
+		c.SeatHeldBySandbox {
 		return evs, queue.Result{}, false
 	}
 	if result, parked := d.parkOnBudget(ctx, handle); parked {

@@ -42,21 +42,26 @@ import "context"
 // the head of the inbox at the cost of one of its deliveries, once per hold
 // rather than once per lap.
 //
-// # What it costs
+// # The rule: a seat busy coding takes no other work
 //
 // A HELD SEAT RECEIVES NOTHING, a person's answer to ANOTHER of its runs
-// included. The answer was offered on a held seat before, beside the park, so
-// a seat driving one job could resume a second that a person had just
-// answered. Keeping that would have meant consuming the held seat's mail to
-// look for the answer, and a consumed message that is not the answer has
-// nowhere to go but back onto the inbox — the loop this replaces. So the
-// answer waits on the inbox with everything else and is the first thing the
-// seat is offered when its job settles or parks: a seat runs one coding job at
-// a time, and a person who answers a second question while the first job is
-// still going is answered when it is done. Nothing is lost: the reply keeps its
-// place, the question keeps its anchor, and a box that outlives
+// included, until the run holding it settles or parks on its own question.
+// That is the rule rather than a price paid for the hold: an agent in the
+// middle of a coding job is busy with that job, and it takes up the next one —
+// a new task, a colleague's message, the answer that resumes its other run —
+// when this one is done, exactly as a person would. Resuming a second run
+// beside the first would put two of its turns in flight at once, each acting
+// for the seat with no view of the other.
+//
+// So the answer waits on the inbox with everything else and is the first thing
+// the seat is offered when the job stops holding it. Nothing is lost: the reply
+// keeps its place, the question keeps its anchor, and a box that outlives
 // `pause_ttl_seconds` meanwhile re-seeds from its branch when the answer
-// arrives.
+// arrives. An answer BY TURN waits the same way: one that raced the hold is
+// deferred under it rather than resumed beside the job. The answer used to be
+// offered on a held seat, beside the park the hold replaced, and that meant
+// consuming the held seat's mail to look for it — and a consumed message that
+// is not the answer has nowhere to go but back onto the inbox, in a loop.
 //
 // WHO HAS TO AGREE ON IT: this node alone. The hold lives in this process's
 // queue client, keyed on the subscription, and is derived from this node's

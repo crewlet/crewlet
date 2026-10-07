@@ -2812,9 +2812,11 @@ func answerGiven(turnID string) *events.Event {
 // AN ANSWER BY TURN IS NEVER RUN AS A TURN, whatever it became. It is
 // addressed to a parked run and not to the seat: resumed, found not waiting or
 // found gone, it is spent where it was routed, and only an answer the run is
-// still owed comes back — as a NAK, the spaced return. A seat HELD by another
-// coding job does not park it either, because the run it answers holds
-// nothing; a node that does not hold the seat routes nothing at all.
+// still owed comes back — as a NAK, the spaced return. A seat BUSY CODING takes
+// no other work until that run settles or parks, an answer to another of its
+// runs included, so an answer that raced the seat's hold is deferred under it
+// and resumes nothing beside the job; a node that does not hold the seat
+// routes nothing at all.
 func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
 	t.Parallel()
 	free := inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
@@ -2831,7 +2833,7 @@ func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
 		"not waiting or gone":              {free, sandbox.AnswerNotMine, false, queue.OutcomeAck, true},
 		"an answer this build cannot read": {free, sandbox.AnswerDisposition(""), false, queue.OutcomeAck, true},
 		"still owed":                       {free, sandbox.AnswerDeferred, false, queue.OutcomeNak, true},
-		"a seat another job holds":         {held, sandbox.AnswerConsumed, false, queue.OutcomeAck, true},
+		"a seat another job holds":         {held, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
 		"a node with no coordinator":       {free, "", true, queue.OutcomeNak, false},
 		"a node that does not hold the seat": {
 			inbox.Conditions{}, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
