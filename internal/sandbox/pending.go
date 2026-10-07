@@ -181,10 +181,14 @@ type Release struct {
 //
 // A LICENSE, NOT A FILTER. It is what this ending is entitled to end, and a run
 // that has moved off it — to a newer lease, another status, another job — is
-// somebody else's to end. An ending that has already reclaimed the run's box
-// takes the widest one there is, because whatever the row says now the run is
-// over; the narrow one belongs to the ending whose decision is made without
-// having read the row — a claim's own ([Coordinator.endClaim]).
+// somebody else's to end. An ending decided on a row its caller has READ takes
+// the widest statuses and jobs there are, because the caller has seen the run
+// is over ([Coordinator.finish]); the narrow one belongs to the ending whose
+// decision is made without having read the row — a claim's own
+// ([Coordinator.endClaim]). Every one of them keeps its fence, which the store
+// checks against the row as it stands — and since the box is reclaimed only
+// after the decision ([Decision.Reclaim]), that check guards the kill as well
+// as the delete.
 type License struct {
 	// Fence is the lease the ending is made under; a newer one owns the
 	// run.
@@ -252,9 +256,10 @@ type Decision struct {
 	Reason, Detail string
 
 	// Reclaim is whether the box the row names is reclaimed by the attempt
-	// that finishes the ending, before the row is deleted — the ending whose
-	// decision is made without having read the row ([Coordinator.endClaim])
-	// has not touched the box when it is decided.
+	// that finishes the ending, before the row is deleted: every ending that
+	// has not reclaimed a box of its own, because a box killed before the
+	// decision is killed on the caller's snapshot, which a newer lease may
+	// have overtaken ([Coordinator.finish]).
 	Reclaim bool
 }
 

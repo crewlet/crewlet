@@ -313,7 +313,9 @@ func TestAReuseOfAVanishedBoxFallsBackToAFreshOne(t *testing.T) {
 }
 
 // A box that nothing names is billed for until its TTL and collected by
-// nobody.
+// nobody. The launch kills its own box and the ending reclaims the box the row
+// names, which here are one box — killed by both, which a provider answers as
+// the reclaim it wanted — and nothing else is killed.
 func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	rig := newWaiterRig(t)
 	rig.runner.StartErr = errors.New("the coding CLI is not installed")
@@ -321,7 +323,7 @@ func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err == nil {
 		t.Fatal("a launch whose job never started reported success")
 	}
-	if killed := rig.provider.KilledIDs(); len(killed) != 1 {
+	if killed := slices.Compact(rig.provider.KilledIDs()); len(killed) != 1 {
 		t.Fatalf("killed %v, want the unreferenced box reclaimed", killed)
 	}
 	rig.finished("t1")

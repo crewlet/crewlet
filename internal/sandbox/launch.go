@@ -382,11 +382,22 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
 	}
-	// Every live status and every job, like every other settle that has
-	// already reclaimed the box: this launch is abandoned whatever the row
-	// reached.
+	// Every live status and every job: this launch is abandoned whatever the
+	// row reached. TWO BOXES CAN BE OWED A RECLAIM, and each is reclaimed by
+	// the one party that can name it. The launch's own is killed above,
+	// because the launch may never have attached it to the row. The box the
+	// ROW names is reclaimed by the ending, after its decision: a relaunch
+	// that never got a box of its own leaves the row naming the previous
+	// job's paused one, and the ending deletes the only record of it — so a
+	// box left to the turn's own settle was named by nothing once the turn
+	// came back, and was killed only off that settle's stale snapshot, which
+	// a settle may no longer act on ([Coordinator.finish]). Where the two are
+	// one box — the attach landed — it is killed twice, which every provider
+	// answers as the reclaim it wanted: a kill of a box already gone succeeds.
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
-	if _, err := c.endRecord(ctx, run, ending{fence: fence, whileIn: Active, launch: EveryLaunch}); err != nil {
+	if _, err := c.endRecord(ctx, run, ending{
+		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true,
+	}); err != nil {
 		log.WarnContext(ctx, "sandbox_launch_finish_kept",
 			"turn_id", req.Turn.TurnID, "error", err.Error(),
 			"detail", "the abandoned launch's record is not deleted yet; this node finishes "+

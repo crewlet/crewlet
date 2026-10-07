@@ -542,6 +542,13 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		return
 	}
 	c.settleOwed(ctx, claimed.AgentHandle, claimed.TurnID)
+	if errors.Is(err, errRunMovedOn) {
+		// NOT THIS NODE'S TO SAY: the run moved on to another holder
+		// before this attempt could end it, and that holder announces
+		// what becomes of the answer — resumed, as a revived claim's is.
+		// Said here, it would be told as gone first.
+		return
+	}
 	outcome := answeredAs(disposition)
 	if outcome == types.AnswerGone && answer.Via == types.AnswerViaOperator && len(answer.Events) > 0 {
 		// ITS COPY SAYS SO. The run ended before any turn took the answer,
@@ -669,7 +676,8 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// that cannot be finished even now is kept again, by
 		// [Coordinator.endRecord] itself.
 		c.endingDone(turnID)
-		ended, err := c.endRecord(ctx, run, *kept)
+		decided, err := c.endRecord(ctx, run, *kept)
+		ended := decided != nil
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_finish_kept", "turn_id", turnID, "error", err.Error(),
 				"detail", "the run's ending is kept again; this node tries it on the hand-back's "+
