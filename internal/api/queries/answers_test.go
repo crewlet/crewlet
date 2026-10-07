@@ -215,6 +215,40 @@ func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 	}
 }
 
+// THE ANSWER CARRIES THE SEAT'S CALL SEQUENCE, a null call included: it is what
+// the tab orders the answer by against the `agents` pushes for the same seat,
+// since the answer is computed on its own goroutine and can reach the tab after
+// a push generated later ([livestate.Overlay.LiveCallSeq]). An answer for a
+// cleared call that carried no sequence could not be told from one read before
+// the call it cleared began.
+//
+// Mutation: answer `live_call_seq` only beside a call, or not at all, and this
+// fails.
+func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
+	t.Parallel()
+	state := livestate.New()
+	call := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0)}
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z", Category: "task", Payload: call,
+	})
+	r := registryOver(t, queries.Sources{State: state})
+
+	running := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	seq := state.AgentOverlay("Lead").LiveCallSeq
+	if running["live_call"] == nil || seq == 0 || running["live_call_seq"] != seq {
+		t.Fatalf("answer = %+v; want the running call at the overlay's sequence %d", running, seq)
+	}
+
+	state.Apply(&livestate.Envelope{
+		ID: "e2", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:05Z", Category: "task", Payload: call,
+	})
+	cleared := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	after := state.AgentOverlay("Lead").LiveCallSeq
+	if cleared["live_call"] != nil || after <= seq || cleared["live_call_seq"] != after {
+		t.Errorf("answer = %+v; want a null call at the clear's sequence %d, past %d", cleared, after, seq)
+	}
+}
+
 func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()

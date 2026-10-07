@@ -489,6 +489,191 @@ describe("a live call's heavy fields", () => {
   });
 });
 
+describe("a live_call answer the socket delivers late", () => {
+  // A running call on one seat, and the clear and the new call that follow it,
+  // each stamped with the overlay sequence the engine reads when the seat's
+  // call changes. `seq` is absent on a running row only where a case does not
+  // need it; present where ordering is the point.
+  const running = (seq: number, phase = "execute"): Overlay & { role: string } => ({
+    role: "PM",
+    live_call_seq: seq,
+    live_call: {
+      turn_id: "t1",
+      phase,
+      iteration: 0,
+      in_progress: true,
+      versions: { prompt: 1, response: 1, narration: 1, executions: 1, rounds: 1 },
+    } as never,
+  });
+  // The same running call at `seq`, its narration at version `narration`,
+  // carrying only the fields in `carried` — a lean push, or an answer whole.
+  const call = (
+    seq: number,
+    narration: number,
+    carried: object,
+    over: object = {},
+  ): Overlay & { role: string } => ({
+    role: "PM",
+    live_call_seq: seq,
+    live_call: {
+      ...running(seq).live_call,
+      versions: { prompt: 1, response: 1, narration, executions: 1, rounds: 1 },
+      ...carried,
+      ...over,
+    } as never,
+  });
+  // Every heavy field of the call, `n` rounds narrated: what an opening push or
+  // an answer carries.
+  const whole = (n: number) => ({
+    prompt: "fix it",
+    prompt_messages: [],
+    response: "",
+    tool_executions: [],
+    rounds: [],
+    round_narration: Array.from({ length: n }, (_, i) => ({ round: i + 1, content: `r${i + 1}` })),
+  });
+
+  // THE ANSWER CANNOT PUT A CLEARED CALL BACK ON SCREEN. A slow tab drops a
+  // push, the next push marks the seat stale and the socket asks for the call
+  // whole; while that query is out the phase completes and the engine pushes
+  // the seat with live_call null, delivered before the answer. The answer
+  // carries the running call at an OLDER sequence and is dropped, so the seat
+  // stays cleared — not a phase rendering as running on a seat that stopped.
+  //
+  // Mutation: drop the live_call_seq gate in applyLiveCall, and the cleared
+  // seat shows the old running call again.
+  test("a clear is not undone by an answer read before it", () => {
+    const store = new Store();
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    store.applyAgents([running(10)]);
+    // The completion push clears the call at a newer sequence.
+    store.applyAgents([{ role: "PM", activity: "idle", live_call: null, live_call_seq: 12 }]);
+    expect(store.state.agents[0]?.live_call).toBeNull();
+
+    // The overtaken answer — the running call read a moment before the clear.
+    store.applyLiveCall({
+      role: "PM",
+      live_call: running(10).live_call ?? null,
+      live_call_seq: 10,
+    });
+    expect(store.state.agents[0]?.live_call).toBeNull();
+    expect(store.state.agents[0]?.live_call_seq).toBe(12);
+  });
+
+  // NOR A NEWER CALL. The push that overtook the answer began a new phase
+  // rather than clearing; the older answer must not replace it.
+  test("a new call is not replaced by an answer for the one before it", () => {
+    const store = new Store();
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    store.applyAgents([running(10, "execute")]);
+    store.applyAgents([running(12, "review")]);
+    store.applyLiveCall({
+      role: "PM",
+      live_call: running(10, "execute").live_call ?? null,
+      live_call_seq: 10,
+    });
+    expect(store.state.agents[0]?.live_call?.phase).toBe("review");
+  });
+
+  // BUT AN ANSWER FOR THE SAME CALL STILL BRINGS WHAT THE TAB MISSED. The fetch
+  // goes out while rounds stream, so the commonest push to overtake its answer
+  // is a lean one for the very call it asked about, still naming a version the
+  // tab lacks. The answer is behind that push's sequence and older in its light
+  // fields, but its heavy fields are the newest copies the tab can get, and
+  // they are what it asked for. Dropped whole, the tab kept the old narration
+  // until the seat's next push, which a frozen call never sends.
+  //
+  // Mutation: drop an answer behind the applied sequence whole, as the gate
+  // first did, and the narration stays at one round.
+  test("an answer the same call's pushes overtook still brings its newer fields", () => {
+    const store = new Store();
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    store.applyAgents([call(5, 1, whole(1))]);
+    // The push carrying narration 9 was dropped: this one names 9 and carries
+    // nothing, so the socket asks for the call whole.
+    expect(store.applyAgents([call(10, 9, {})])).toEqual(["PM"]);
+    // While that ask is out a later round lands, still naming 9.
+    expect(store.applyAgents([call(12, 9, {}, { model: "later" })])).toEqual(["PM"]);
+
+    // The answer was read at 10: behind the applied 12, the same call.
+    const current = store.applyLiveCall({
+      role: "PM",
+      live_call_seq: 10,
+      live_call: call(10, 9, whole(9), { model: "earlier" }).live_call ?? null,
+    });
+    const held = store.state.agents[0]?.live_call;
+    expect(current).toBe(false);
+    expect(held?.round_narration).toHaveLength(9);
+    expect(held?.versions?.narration).toBe(9);
+    // The light fields stay the newer push's, and so does the sequence.
+    expect(held?.model).toBe("later");
+    expect(store.state.agents[0]?.live_call_seq).toBe(12);
+    // And the tab no longer reads itself behind.
+    expect(store.applyAgents([call(13, 9, {})])).toEqual([]);
+  });
+
+  // THE SOCKET ASKS AGAIN WHEN A PUSH FOUND THE CALL BEHIND WHILE ITS ASK WAS
+  // OUT and the answer lands behind that push: the answer was read before the
+  // change the push named, so even with every field it has newer taken, the
+  // tab is still missing one. One ask per seat stays in flight; the push that
+  // arrived meanwhile is remembered rather than read as the same thing said
+  // twice, and nothing waits on a next push that a frozen call never sends. An
+  // answer at or past those pushes holds everything they named, and ends it.
+  //
+  // Mutation: forget a push that found the call behind while an ask was out,
+  // and the second ask is never made.
+  test("the socket asks again for a call a push found behind while its ask was out", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const ask = vi.spyOn(socket, "query");
+    const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
+    const answer = (id: number, row: Overlay & { role: string }) =>
+      socket.onMessage(JSON.stringify({ kind: "result", id, data: row }));
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    frame([call(5, 1, whole(1))]);
+    frame([call(10, 3, {})]);
+    frame([call(12, 4, {})]);
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    // Read at 10: narration 3 is taken, and 4 is still missing.
+    answer(1, call(10, 3, whole(3)));
+    await vi.waitFor(() => expect(ask).toHaveBeenCalledTimes(2));
+    expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(3);
+
+    answer(2, call(12, 4, whole(4)));
+    await vi.waitFor(() =>
+      expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(4),
+    );
+    expect(store.state.agents[0]?.live_call_seq).toBe(12);
+
+    // An answer at the applied sequence ends it, a push meanwhile or not.
+    frame([call(14, 6, {})]);
+    frame([call(15, 6, {})]);
+    expect(ask).toHaveBeenCalledTimes(3);
+    answer(3, call(15, 6, whole(6)));
+    await vi.waitFor(() =>
+      expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(6),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ask).toHaveBeenCalledTimes(3);
+  });
+
+  // AND A GENUINELY NEWER ANSWER STILL LANDS: an answer at or past the applied
+  // sequence is the repair the fetch exists for.
+  test("an answer at a newer sequence is applied", () => {
+    const store = new Store();
+    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    store.applyAgents([{ role: "PM", activity: "idle", live_call: null, live_call_seq: 8 }]);
+    store.applyLiveCall({
+      role: "PM",
+      live_call: running(14).live_call ?? null,
+      live_call_seq: 14,
+    });
+    expect(store.state.agents[0]?.live_call?.phase).toBe("execute");
+    expect(store.state.agents[0]?.live_call_seq).toBe(14);
+  });
+});
+
 describe("partial pushes", () => {
   test("a rollup with no totals is refused", () => {
     // applySnapshot requires `totals`; a bare list of records passes neither

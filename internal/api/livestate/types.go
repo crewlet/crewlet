@@ -293,6 +293,20 @@ type Overlay struct {
 	CurrentIteration int       `json:"current_iteration"`
 	LiveCall         *LiveCall `json:"live_call"`
 
+	// LiveCallSeq orders the live_call slot ACROSS calls and across a
+	// clear: this projection's own monotonic sequence ([CallVersions])
+	// read at the instant the seat's call last changed — set, folded,
+	// frozen or cleared to null. Every surface that carries the call
+	// carries it, null calls included, so a tab can drop a `live_call`
+	// answer that a clearing or newer-call push overtook on the wire
+	// (the answer runs on its own goroutine and can be delivered after a
+	// push that was generated later), and take from one the pushes of the
+	// same call overtook only the heavy fields it holds at a newer
+	// version. A tab resets it from each snapshot.
+	// Comparable only within one node's projection, which is the only one
+	// a tab's socket reads between snapshots — [CallVersions] says why.
+	LiveCallSeq int `json:"live_call_seq"`
+
 	// LastError is nil once the seat does real work again. It says WHY a
 	// seat stopped, rather than leaving a call on screen that never
 	// answers.

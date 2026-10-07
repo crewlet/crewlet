@@ -403,6 +403,13 @@ export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
 export interface LiveCallAnswer {
   role: string;
   live_call: LiveCall | null;
+  /** The overlay sequence this call is at — see `Overlay.live_call_seq`, and
+   *  present beside a null call too. The answer can reach the tab after a push
+   *  that was generated later, so one behind what the store has applied is
+   *  dropped when the slot has since been cleared or taken by another call,
+   *  and otherwise brings only the heavy fields it holds at a newer version
+   *  (`Store.applyLiveCall`). */
+  live_call_seq?: number;
 }
 
 /** One calendar window of one scope's token counter — the day, the ISO week or
@@ -452,6 +459,17 @@ export interface Overlay {
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
+  /** Orders the `live_call` slot across calls and across a clear: the engine's
+   *  own monotonic sequence read when the seat's call last changed — set,
+   *  folded, frozen or cleared to null — carried on every surface the call is,
+   *  a null call included. A tab records the newest it has applied per seat,
+   *  and a push or an answer whose sequence is behind it changes the slot only
+   *  where the slot is still that same call — and then only by a heavy field
+   *  at a newer version — so a `live_call` answer that a clearing or newer-call
+   *  push overtook on the wire cannot put an older call back on screen. Reset
+   *  from each snapshot; comparable only within one node's projection, the
+   *  only one a socket reads between snapshots. */
+  live_call_seq?: number;
   last_error?: ErrorInfo | null;
   budget?: BudgetMeter | null;
   /** The turn the seat is on, or null when it is on none. Always present, for

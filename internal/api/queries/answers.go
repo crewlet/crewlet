@@ -757,9 +757,17 @@ func (s Sources) liveCall(_ context.Context, p Params) (any, error) {
 	if role == "" {
 		return nil, fmt.Errorf("%w: live_call needs a role or a handle", ErrBadParams)
 	}
-	answer := map[string]any{"role": role, "live_call": nil}
-	if overlay := s.State.AgentOverlay(role); overlay != nil && overlay.LiveCall != nil {
-		answer["live_call"] = overlay.LiveCall
+	// live_call_seq orders this answer against the `agents` pushes for the
+	// same seat: the answer runs on its own goroutine and can be delivered
+	// after a push generated later (a clear, a new call), so the tab drops
+	// an answer whose sequence is behind what it has applied. Always carried,
+	// a null call included — see [livestate.Overlay.LiveCallSeq].
+	answer := map[string]any{"role": role, "live_call": nil, "live_call_seq": 0}
+	if overlay := s.State.AgentOverlay(role); overlay != nil {
+		answer["live_call_seq"] = overlay.LiveCallSeq
+		if overlay.LiveCall != nil {
+			answer["live_call"] = overlay.LiveCall
+		}
 	}
 	return answer, nil
 }

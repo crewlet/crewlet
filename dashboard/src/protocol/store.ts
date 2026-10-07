@@ -96,11 +96,7 @@ export function mergeLiveCall(
   next: LiveCall | null | undefined,
 ): { call: LiveCall | null; stale: boolean } {
   if (!next) return { call: null, stale: false };
-  const same =
-    !!held &&
-    held.turn_id === next.turn_id &&
-    held.phase === next.phase &&
-    held.iteration === next.iteration;
+  const same = !!held && sameCall(held, next);
   const merged: Record<string, unknown> = { ...next };
   const versions: Partial<CallVersions> = {};
   let stale = false;
@@ -123,6 +119,41 @@ export function mergeLiveCall(
   }
   merged.versions = versions;
   return { call: merged as unknown as LiveCall, stale };
+}
+
+/** Whether two copies are of one call: one turn, one phase, one iteration. */
+function sameCall(a: LiveCall, b: LiveCall): boolean {
+  return a.turn_id === b.turn_id && a.phase === b.phase && a.iteration === b.iteration;
+}
+
+/**
+ * The heavy fields of `older` — a copy of the call `held` is, read BEFORE the
+ * pushes that brought `held` — whose versions are newer than `held`'s, laid onto
+ * `held`; or null when it brings none, or is not a copy of the same call.
+ *
+ * A version is never handed out twice and only grows, so a newer one is newer
+ * content whenever it was read: the pushes after `older` left those fields out
+ * because the tab was meant to hold them already, and their copy is what the
+ * tab missed. Everything else — the light fields, and every heavy field the tab
+ * holds at a version as new — stays `held`'s, which the later pushes wrote.
+ */
+function newerDetail(held: LiveCall, older: LiveCall): LiveCall | null {
+  if (!sameCall(held, older)) return null;
+  let merged: Record<string, unknown> | null = null;
+  const versions: Partial<CallVersions> = { ...held.versions };
+  for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL) as [
+    keyof CallVersions,
+    readonly string[],
+  ][]) {
+    const version = older.versions?.[detail] ?? 0;
+    if (version <= (held.versions?.[detail] ?? 0) || !fields.every((f) => f in older)) continue;
+    merged ??= { ...held };
+    for (const f of fields) merged[f] = (older as unknown as Record<string, unknown>)[f];
+    versions[detail] = version;
+  }
+  if (!merged) return null;
+  merged.versions = versions;
+  return merged as unknown as LiveCall;
 }
 
 export interface StoreState {
@@ -309,9 +340,19 @@ export class Store {
       patch: Overlay & { role: string },
     ): Overlay & { role: string } => {
       if (!("live_call" in patch)) return patch;
+      const heldSeq = held?.live_call_seq ?? 0;
+      const patchSeq = patch.live_call_seq;
+      if (patchSeq !== undefined && patchSeq < heldSeq) {
+        // This push's live_call is BEHIND one a `live_call` answer already
+        // applied for the seat (the answer jumped the sequence ahead of a
+        // push generated earlier). Keep the held call and its sequence; the
+        // push's other fields — status, turn — are ordered on the wire and
+        // still apply.
+        return { ...patch, live_call: held?.live_call ?? null, live_call_seq: heldSeq };
+      }
       const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
       if (behind) stale.push(patch.role);
-      return { ...patch, live_call: call };
+      return { ...patch, live_call: call, live_call_seq: patchSeq ?? heldSeq };
     };
     const byRole = new Map<string, Overlay & { role: string }>(
       (rows as (Overlay & { role: string })[]).map((r) => [r.role, r]),
@@ -333,18 +374,53 @@ export class Store {
 
   /**
    * One seat's live call, fetched WHOLE because a push said this tab had
-   * missed a change to it. Merged like a push that carries everything, so an
-   * answer overtaken by a later push cannot take a field back to an older copy.
+   * missed a change to it — and whether the answer was CURRENT: at or past the
+   * sequence the seat has applied, so that nothing a push has said since is
+   * missing from it.
+   *
+   * ORDERED BY `live_call_seq`, because this answer runs on its own goroutine
+   * and the socket can deliver it AFTER pushes the engine generated later. A
+   * current answer is merged like a push that carries everything. One BEHIND
+   * the applied sequence describes the slot as it was before those pushes, and
+   * the sequence decides only what it can order:
+   *
+   * - when they cleared the call or began another, the answer is DROPPED, so a
+   *   cleared seat or a newer call is never overwritten by a running call read
+   *   a moment before it — a per-field version cannot say this, since a cleared
+   *   null carries none and two calls' fields are never compared;
+   * - when they are the same call, the answer still brings every heavy field
+   *   whose version is newer than the copy held (`newerDetail`), because those
+   *   are exactly what the tab asked for — the pushes since left them out —
+   *   while the light fields stay the newer pushes'. Dropping it whole lost
+   *   that repair, and nothing asked again until the seat's next push.
+   *
+   * A behind answer is the caller's cue to ask again if a push said the call
+   * was behind while this answer was out (`LiveSocket.fetchCalls`).
    */
-  applyLiveCall(answer: LiveCallAnswer | null | undefined): void {
-    if (!answer || typeof answer.role !== "string") return;
+  applyLiveCall(answer: LiveCallAnswer | null | undefined): boolean {
+    if (!answer || typeof answer.role !== "string") return true;
     let moved = false;
+    let current = true;
     this.state.agents = this.state.agents.map((a) => {
       if (a.role !== answer.role) return a;
+      const heldSeq = a.live_call_seq ?? 0;
+      const seq = answer.live_call_seq;
+      if (seq === undefined || seq >= heldSeq) {
+        moved = true;
+        return {
+          ...a,
+          live_call: mergeLiveCall(a.live_call, answer.live_call).call,
+          live_call_seq: seq ?? heldSeq,
+        };
+      }
+      current = false;
+      const fresher = a.live_call && answer.live_call && newerDetail(a.live_call, answer.live_call);
+      if (!fresher) return a;
       moved = true;
-      return { ...a, live_call: mergeLiveCall(a.live_call, answer.live_call).call };
+      return { ...a, live_call: fresher };
     });
     if (moved) this.emit("agents");
+    return current;
   }
 
   /**

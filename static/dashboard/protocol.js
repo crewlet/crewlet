@@ -64,7 +64,7 @@ function mergeLiveCall(held, next) {
 		call: null,
 		stale: false
 	};
-	const same = !!held && held.turn_id === next.turn_id && held.phase === next.phase && held.iteration === next.iteration;
+	const same = !!held && sameCall(held, next);
 	const merged = { ...next };
 	const versions = {};
 	let stale = false;
@@ -85,6 +85,36 @@ function mergeLiveCall(held, next) {
 		call: merged,
 		stale
 	};
+}
+/** Whether two copies are of one call: one turn, one phase, one iteration. */
+function sameCall(a, b) {
+	return a.turn_id === b.turn_id && a.phase === b.phase && a.iteration === b.iteration;
+}
+/**
+* The heavy fields of `older` — a copy of the call `held` is, read BEFORE the
+* pushes that brought `held` — whose versions are newer than `held`'s, laid onto
+* `held`; or null when it brings none, or is not a copy of the same call.
+*
+* A version is never handed out twice and only grows, so a newer one is newer
+* content whenever it was read: the pushes after `older` left those fields out
+* because the tab was meant to hold them already, and their copy is what the
+* tab missed. Everything else — the light fields, and every heavy field the tab
+* holds at a version as new — stays `held`'s, which the later pushes wrote.
+*/
+function newerDetail(held, older) {
+	if (!sameCall(held, older)) return null;
+	let merged = null;
+	const versions = { ...held.versions };
+	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		const version = older.versions?.[detail] ?? 0;
+		if (version <= (held.versions?.[detail] ?? 0) || !fields.every((f) => f in older)) continue;
+		merged ??= { ...held };
+		for (const f of fields) merged[f] = older[f];
+		versions[detail] = version;
+	}
+	if (!merged) return null;
+	merged.versions = versions;
+	return merged;
 }
 var ALL_DATA_SLICES = [
 	"agents",
@@ -189,11 +219,19 @@ var Store = class {
 		const stale = [];
 		const merge = (held, patch) => {
 			if (!("live_call" in patch)) return patch;
+			const heldSeq = held?.live_call_seq ?? 0;
+			const patchSeq = patch.live_call_seq;
+			if (patchSeq !== void 0 && patchSeq < heldSeq) return {
+				...patch,
+				live_call: held?.live_call ?? null,
+				live_call_seq: heldSeq
+			};
 			const { call, stale: behind } = mergeLiveCall(held?.live_call, patch.live_call);
 			if (behind) stale.push(patch.role);
 			return {
 				...patch,
-				live_call: call
+				live_call: call,
+				live_call_seq: patchSeq ?? heldSeq
 			};
 		};
 		const byRole = new Map(rows.map((r) => [r.role, r]));
@@ -215,21 +253,56 @@ var Store = class {
 	}
 	/**
 	* One seat's live call, fetched WHOLE because a push said this tab had
-	* missed a change to it. Merged like a push that carries everything, so an
-	* answer overtaken by a later push cannot take a field back to an older copy.
+	* missed a change to it — and whether the answer was CURRENT: at or past the
+	* sequence the seat has applied, so that nothing a push has said since is
+	* missing from it.
+	*
+	* ORDERED BY `live_call_seq`, because this answer runs on its own goroutine
+	* and the socket can deliver it AFTER pushes the engine generated later. A
+	* current answer is merged like a push that carries everything. One BEHIND
+	* the applied sequence describes the slot as it was before those pushes, and
+	* the sequence decides only what it can order:
+	*
+	* - when they cleared the call or began another, the answer is DROPPED, so a
+	*   cleared seat or a newer call is never overwritten by a running call read
+	*   a moment before it — a per-field version cannot say this, since a cleared
+	*   null carries none and two calls' fields are never compared;
+	* - when they are the same call, the answer still brings every heavy field
+	*   whose version is newer than the copy held (`newerDetail`), because those
+	*   are exactly what the tab asked for — the pushes since left them out —
+	*   while the light fields stay the newer pushes'. Dropping it whole lost
+	*   that repair, and nothing asked again until the seat's next push.
+	*
+	* A behind answer is the caller's cue to ask again if a push said the call
+	* was behind while this answer was out (`LiveSocket.fetchCalls`).
 	*/
 	applyLiveCall(answer) {
-		if (!answer || typeof answer.role !== "string") return;
+		if (!answer || typeof answer.role !== "string") return true;
 		let moved = false;
+		let current = true;
 		this.state.agents = this.state.agents.map((a) => {
 			if (a.role !== answer.role) return a;
+			const heldSeq = a.live_call_seq ?? 0;
+			const seq = answer.live_call_seq;
+			if (seq === void 0 || seq >= heldSeq) {
+				moved = true;
+				return {
+					...a,
+					live_call: mergeLiveCall(a.live_call, answer.live_call).call,
+					live_call_seq: seq ?? heldSeq
+				};
+			}
+			current = false;
+			const fresher = a.live_call && answer.live_call && newerDetail(a.live_call, answer.live_call);
+			if (!fresher) return a;
 			moved = true;
 			return {
 				...a,
-				live_call: mergeLiveCall(a.live_call, answer.live_call).call
+				live_call: fresher
 			};
 		});
 		if (moved) this.emit("agents");
+		return current;
 	}
 	/**
 	* The complete seat list, replacing what is on screen.
@@ -584,8 +657,9 @@ var LiveSocket = class {
 	isClosed = false;
 	nextQueryId = 1;
 	inflight = /* @__PURE__ */ new Map();
-	/** Seats whose live call is being fetched whole — see `fetchCalls`. */
-	fetchingCalls = /* @__PURE__ */ new Set();
+	/** Seats whose live call is being fetched whole, each with whether a push
+	*  found the call behind again while the fetch was out — see `fetchCalls`. */
+	fetchingCalls = /* @__PURE__ */ new Map();
 	token = "";
 	/** Whether the shell has already been asked to collect a token. */
 	askedForToken = false;
@@ -842,15 +916,29 @@ var LiveSocket = class {
 	/**
 	* Fetch, whole, each seat's live call this tab holds behind what a push
 	* described — the push that moved one of its heavy fields was dropped by the
-	* server's queue (`mergeLiveCall`). One ask per seat in flight: the pushes
-	* that arrive meanwhile say the same thing, and a failed ask is made again by
-	* the next push that still finds the call behind.
+	* server's queue (`mergeLiveCall`).
+	*
+	* ONE ASK PER SEAT IN FLIGHT, but a push that finds the call behind while it
+	* is out is NOT the same thing said twice: the answer may have been read
+	* before that push's change, and the store then drops it or takes only the
+	* fields it has newer (`Store.applyLiveCall`). So such a push is remembered,
+	* and once the answer lands BEHIND the pushes applied since — or the ask
+	* fails — the call is asked for again, once, rather than left behind until
+	* the seat's next push, which a frozen failed call or a long round never
+	* sends. An answer at or past them holds everything they named, and ends it.
 	*/
 	fetchCalls(roles) {
 		for (const role of roles) {
-			if (this.fetchingCalls.has(role)) continue;
-			this.fetchingCalls.add(role);
-			this.query("live_call", { role }).then((answer) => this.store.applyLiveCall(answer), () => {}).finally(() => this.fetchingCalls.delete(role));
+			if (this.fetchingCalls.has(role)) {
+				this.fetchingCalls.set(role, true);
+				continue;
+			}
+			this.fetchingCalls.set(role, false);
+			this.query("live_call", { role }).then((answer) => this.store.applyLiveCall(answer), () => false).then((current) => {
+				const again = this.fetchingCalls.get(role) ?? false;
+				this.fetchingCalls.delete(role);
+				if (again && !current) this.fetchCalls([role]);
+			});
 		}
 	}
 	settle(id, error, data, retryAfterSeconds = null, detail = null) {

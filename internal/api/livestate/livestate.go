@@ -184,7 +184,12 @@ type agentLive struct {
 
 	lastError *ErrorInfo
 	liveCall  *LiveCall
-	budget    *BudgetMeter
+	// liveCallSeq is the projection sequence at which liveCall last
+	// changed — set, folded, frozen or cleared — carried on the overlay so
+	// a tab can order a live_call slot across keys and across a clear. See
+	// [Overlay.LiveCallSeq].
+	liveCallSeq int
+	budget      *BudgetMeter
 
 	// stateTS is the instant of the last state-affecting event applied —
 	// the reorder guard. Internal bookkeeping, never re-emitted.
@@ -217,6 +222,7 @@ func (a *agentLive) overlay() Overlay {
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
 		LiveCall:         a.liveCall.clone(),
+		LiveCallSeq:      a.liveCallSeq,
 		LastError:        a.lastError.clone(),
 		Budget:           a.budget.clone(),
 		Turn:             a.turn.clone(),
@@ -706,7 +712,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 			agent.terminated = false
 			agent.failure = ""
 			agent.lastError = nil
-			agent.liveCall = nil
+			s.clearCall(agent)
 		}
 		// AND THE CALL OF A TURN THE SPAWN ENDED. The turn itself was
 		// taken off the seat above (applyTurnEvent) when the spawn is
@@ -715,7 +721,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// drawn on a seat that is idle. A spawn OLDER than the turn is one
 		// that lost a race to it, and the turn and its call stand.
 		if agent.turn == nil {
-			agent.liveCall = nil
+			s.clearCall(agent)
 		}
 
 	case env.Type == "agent_phase_started":
@@ -736,6 +742,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 			str(payload, "phase"), num(payload, "iteration")) {
 			agent.liveCall = beginCall(env, payload)
 			agent.liveCall.Versions = s.restamp(nil, agent.liveCall)
+			agent.liveCallSeq = s.versions
 		}
 
 	case env.Type == "agent_phase_completed":
@@ -746,11 +753,11 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		s.finishLiveCall(agent, env, payload)
 
 	case env.Type == "agent_turn_completed" || env.Type == "reflection_completed":
-		endTurn(agent, str(payload, "turn_id"))
+		s.endTurn(agent, str(payload, "turn_id"))
 
 	case env.Type == "agent_terminated":
 		agent.terminated = true
-		agent.liveCall = nil
+		s.clearCall(agent)
 
 	default:
 		if _, ok := failureEvents[env.Type]; !ok {
@@ -762,7 +769,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// run, the error. The failure event that follows a failed phase would
 		// otherwise wipe it a moment later.
 		if agent.liveCall == nil || !agent.liveCall.Failed {
-			agent.liveCall = nil
+			s.clearCall(agent)
 		}
 		kind := str(payload, "last_error_kind", "kind")
 		if kind == "" {
@@ -796,7 +803,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 // deliberately never advances stateTS, so a seat whose only events since the
 // last phase boundary are progress rounds still carries the older stamp and
 // lets a late completion through.
-func endTurn(agent *agentLive, turnID string) {
+func (s *LiveState) endTurn(agent *agentLive, turnID string) {
 	// A live call for ANOTHER turn is the seat having moved on. Neither the
 	// row nor the state belongs to the turn ending here.
 	if agent.liveCall != nil && turnID != "" && agent.liveCall.TurnID != turnID {
@@ -819,7 +826,7 @@ func endTurn(agent *agentLive, turnID string) {
 		return
 	}
 	agent.terminated = false
-	agent.liveCall = nil
+	s.clearCall(agent)
 }
 
 // ensureAgent returns the live entry for a role, creating an empty one.

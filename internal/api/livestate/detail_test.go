@@ -218,6 +218,80 @@ func TestAFailureMovesTheVersionsOfWhatItWrote(t *testing.T) {
 	}
 }
 
+// THE SEAT'S CALL SEQUENCE MOVES WITH EVERY CHANGE TO ITS CALL — a call
+// beginning, a round folded into it, its freezing as failed, and its clearing
+// by every path that clears one — and with nothing else. It is what a tab
+// orders the `live_call` slot by across calls and across a clear, because a
+// `live_call` answer can reach the tab after a push the engine generated later
+// ([livestate.Overlay.LiveCallSeq]): a clear that left the sequence where it
+// was is undone by any answer read a moment before it. The row a push carries
+// holds it beside a null call too, or the clearing push would carry nothing to
+// order by. A clear with nothing to clear moves nothing.
+//
+// Mutation: clear a call at any one of these paths without advancing the
+// sequence (`agent.liveCall = nil`), or leave the sequence off the row, and
+// this fails at that step.
+func TestTheCallSequenceMovesWithEveryChangeToTheCall(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	last := 0
+	clock := 0
+	next := func(etype string, payload map[string]any) *livestate.Envelope {
+		clock++
+		return &livestate.Envelope{
+			ID: fmt.Sprintf("e%d", clock), Type: etype, Category: "task",
+			Timestamp: fmt.Sprintf("2026-10-06T09:00:%02dZ", clock), Payload: payload,
+		}
+	}
+	call := func(turn string, more map[string]any) map[string]any {
+		payload := map[string]any{"role": "Lead", "turn_id": turn, "phase": "execute", "iteration": float64(0)}
+		maps.Copy(payload, more)
+		return payload
+	}
+	step := func(name string, e *livestate.Envelope, held bool) {
+		t.Helper()
+		s.Apply(e)
+		o := s.AgentOverlay("Lead")
+		if o == nil {
+			t.Fatalf("%s: no live entry", name)
+		}
+		if (o.LiveCall != nil) != held {
+			t.Fatalf("%s: live call = %+v; want held %v", name, o.LiveCall, held)
+		}
+		if o.LiveCallSeq <= last {
+			t.Errorf("%s: the call sequence is %d; want it past %d", name, o.LiveCallSeq, last)
+		}
+		last = o.LiveCallSeq
+		if rows := s.OverlayRows([]string{"Lead"}); len(rows) != 1 || rows[0]["live_call_seq"] != last {
+			t.Errorf("%s: the pushed row carries %v; want live_call_seq %d", name, rows, last)
+		}
+	}
+
+	step("a phase starting", next("agent_phase_started", call("t1", nil)), true)
+	step("a round folded in", next("agent_turn_progress", call("t1", map[string]any{
+		"round_num": float64(0), "response": "looking"})), true)
+	step("the phase completing", next("agent_phase_completed", call("t1", nil)), false)
+
+	s.Apply(next("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "t1"}))
+	if o := s.AgentOverlay("Lead"); o.LiveCallSeq != last {
+		t.Errorf("a turn ending with no call held moved the sequence from %d to %d", last, o.LiveCallSeq)
+	}
+
+	step("the next turn's phase starting", next("agent_phase_started", call("t2", nil)), true)
+	step("the phase failing, its call frozen", next("agent_phase_completed", call("t2", map[string]any{
+		"failed": true, "error": "the provider died"})), true)
+	step("a spawn ending the instance the call froze on", next("agent_spawned", map[string]any{"role": "Lead"}), false)
+
+	step("a phase starting", next("agent_phase_started", call("t3", nil)), true)
+	step("the instance terminating", next("agent_terminated", map[string]any{"role": "Lead"}), false)
+
+	step("a phase starting", next("agent_phase_started", call("t4", nil)), true)
+	step("its turn completing", next("agent_turn_completed", map[string]any{"role": "Lead", "turn_id": "t4"}), false)
+
+	step("a phase starting", next("agent_phase_started", call("t5", nil)), true)
+	step("the provider becoming unreachable", next("llm_unavailable", map[string]any{"role": "Lead", "turn_id": "t5"}), false)
+}
+
 // A PUSH LEAVES OUT EXACTLY THE FIELDS WHOSE VERSION IS HELD, and carries the
 // rest as they are: with nothing held it is the whole call, field for field,
 // and with everything held it is the whole call less exactly the fields
