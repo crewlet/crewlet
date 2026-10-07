@@ -137,6 +137,14 @@ func (r *waiterRig) launch(turnID string) PendingRun {
 // re-enters. Nothing may poll or claim a run here.
 func (r *waiterRig) launching(turnID string) PendingRun {
 	r.t.Helper()
+	return r.launchingUnder(turnID, rigLease)
+}
+
+// launchingUnder is [waiterRig.launching] under a lease of the case's choosing —
+// the zero one for a run a node that held no lease launched, or an older build
+// did, which a row stays at until something re-stamps it.
+func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
+	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
 	if err != nil {
@@ -159,13 +167,13 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
-	if err := r.pending.BeginLaunch(ctx, run, rigLease); err != nil {
+	if err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1",
 		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
-	}, rigLease); err != nil {
+	}, lease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
 	return r.get(turnID)
@@ -208,7 +216,14 @@ func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
 
 func (r *waiterRig) get(turnID string) PendingRun {
 	r.t.Helper()
-	run, ok, err := r.pending.Get(r.t.Context(), turnID)
+	return r.getIn(r.t.Context(), turnID)
+}
+
+// getIn is get from inside a call the coordinator made, under that call's
+// context.
+func (r *waiterRig) getIn(ctx context.Context, turnID string) PendingRun {
+	r.t.Helper()
+	run, ok, err := r.pending.Get(ctx, turnID)
 	if err != nil || !ok {
 		r.t.Fatalf("Get %s = %v, %v", turnID, ok, err)
 	}
@@ -691,7 +706,7 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 	rig.park("t1")
 
 	// The answer arrives between the reaper's snapshot and its flip.
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(rig.get("t1").LaunchID)); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(rig.get("t1").LaunchID), Fence{}); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)

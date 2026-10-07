@@ -290,7 +290,7 @@ var placements = map[string]func(t *testing.T, rig *coordRig){
 		// cannot actually take.
 		run := rig.get("t1")
 		if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1",
-			CompletionTail(run.LaunchID)); err != nil || !won {
+			CompletionTail(run.LaunchID), Fence{}); err != nil || !won {
 			t.Fatalf("ClaimForResume = %v, %v", won, err)
 		}
 	},
@@ -673,11 +673,12 @@ func (s *refusingStore) Get(ctx context.Context, turnID string) (PendingRun, boo
 	return s.inner.Get(ctx, turnID)
 }
 
-func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error) {
+func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
 	if s.called("ClaimForResume") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.ClaimForResume(ctx, turnID, tail)
+	return s.inner.ClaimForResume(ctx, turnID, tail, fence)
 }
 
 func (s *refusingStore) ReleaseClaim(ctx context.Context, turnID string, r Release) (bool, error) {
@@ -708,12 +709,12 @@ func (s *refusingStore) SetStatus(ctx context.Context, turnID, status string, fe
 	return s.inner.SetStatus(ctx, turnID, status, fence)
 }
 
-func (s *refusingStore) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+func (s *refusingStore) Finish(ctx context.Context, turnID string, license License,
 ) (PendingRun, bool, error) {
 	if s.called("Finish") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.Finish(ctx, turnID, fence, whileIn)
+	return s.inner.Finish(ctx, turnID, license)
 }
 
 func (s *refusingStore) ExpirePause(ctx context.Context, turnID string) (bool, error) {
@@ -790,13 +791,12 @@ func (s *refusingStore) DeclineAnswer(ctx context.Context, turnID, launch string
 	return s.inner.DeclineAnswer(ctx, turnID, launch, answer, handBack, fence)
 }
 
-func (s *refusingStore) OweHandBack(ctx context.Context, turnID, launch string,
-	answer []string, handBack []HandedBack, fence Fence,
+func (s *refusingStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo,
 ) (PendingRun, bool, error) {
 	if s.called("OweHandBack") {
 		return PendingRun{}, false, errRefusedCall
 	}
-	return s.inner.OweHandBack(ctx, turnID, launch, answer, handBack, fence)
+	return s.inner.OweHandBack(ctx, turnID, letGo)
 }
 
 func (s *refusingStore) TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {

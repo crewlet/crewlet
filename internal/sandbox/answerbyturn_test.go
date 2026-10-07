@@ -180,7 +180,7 @@ func TestAnAnswerByTurnToARunAlreadyAnsweredIsNotMine(t *testing.T) {
 	launchScheduled(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	run := rig.get("t1")
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(run.LaunchID)); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(run.LaunchID), Fence{}); err != nil || !won {
 		t.Fatalf("the first answer's claim = %v, %v", won, err)
 	}
 	// READ BEFORE THE OTHER ANSWER CLAIMED IT, which is the race the claim

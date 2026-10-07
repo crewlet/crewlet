@@ -382,17 +382,21 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 				"sandbox_id", sandboxID, "error", err.Error())
 		}
 	}
-	// Every live status, like every other settle that has already reclaimed
-	// the box: this launch is abandoned whatever the row reached.
+	// Every live status and every job, like every other settle that has
+	// already reclaimed the box: this launch is abandoned whatever the row
+	// reached.
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
-	if _, _, err := c.endRecord(ctx, run, ending{fence: fence, whileIn: Active}); err != nil {
-		log.WarnContext(ctx, "sandbox_launch_finish_failed",
-			"turn_id", req.Turn.TurnID, "error", err.Error())
+	if _, err := c.endRecord(ctx, run, ending{fence: fence, whileIn: Active, launch: EveryLaunch}); err != nil {
+		log.WarnContext(ctx, "sandbox_launch_finish_kept",
+			"turn_id", req.Turn.TurnID, "error", err.Error(),
+			"detail", "the abandoned launch's record is not deleted yet; this node finishes "+
+				"the ending, and the seat's next recovery pass reaps the row if the seat "+
+				"moves first")
 	}
 	// AND THE SEAT GOES BACK whether or not the record could be deleted:
 	// the launch is over and its box reclaimed, so nothing is driving a job
 	// the seat's mail must wait behind. A record that survived the delete is
-	// a launching row the seat's next recovery pass reaps.
+	// a launching row whose ending this node keeps and retries.
 	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
 }
 

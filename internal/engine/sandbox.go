@@ -654,13 +654,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	}
 	// THE SEGMENT IS NOW CERTAIN TO RUN, and the coordinator records that
 	// before any of it does — for a person's recorded answer, that THIS TURN
-	// TOOK IT ([sandbox.ResumeRequest.Begin]). The row is all the seat's next
-	// holder can read if this process stops from here on, and it is what
-	// tells a reply a turn has used from one nobody ever got to, which goes
-	// back to the seat. A commit that cannot be made is a RETRY like every
-	// return above: nothing has run, and a turn run without it would be read
-	// after a crash as one that never got the answer — and the reply handed
-	// back to the seat a second time.
+	// TOOK IT, and that the delivery which carried it is worked
+	// ([sandbox.ResumeRequest.Begin]). The row is all the seat's next holder
+	// can read if this process stops from here on, and it is what tells a
+	// reply a turn has used from one nobody ever got to, which goes back to
+	// the seat; the completion ledger is what drops the delivery if it comes
+	// round to that holder unacknowledged. A commit that cannot be made is a
+	// RETRY like every return above: nothing has run, and a turn run without
+	// it would be read after a crash as one that never got the answer — and
+	// the reply handed back to the seat a second time.
 	if in.Begin != nil {
 		if beginErr := in.Begin(ctx); beginErr != nil {
 			return beginErr
@@ -1483,12 +1485,12 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
 		Hold:  seatHold{engine: e},
 		Admit: e.mayResumeAnswer,
-		// A recorded answer that leaves its run by a route that does not
-		// hold its delivery — handed back, or taken by a retried resume's
-		// turn — is recorded as worked in the same completion ledger the
-		// dispatcher records a consumed answer in, so the original
-		// delivery coming round afterwards is dropped rather than run as a
-		// second message. See [sandbox.CoordinatorOptions.Spent].
+		// A recorded answer that leaves its run — taken by a turn, on the
+		// inline attempt as on a retry, or handed back — is recorded as
+		// worked in the same completion ledger the dispatcher records a
+		// consumed answer in, at that moment, so the original delivery
+		// coming round afterwards is dropped rather than run as a second
+		// message. See [sandbox.CoordinatorOptions.Spent].
 		Spent: e.spendAnswer,
 		// Every launch is stamped with the seat lease this node runs the
 		// seat under, so the seat's next holder can fence this node off

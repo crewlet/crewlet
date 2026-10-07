@@ -181,18 +181,24 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 //
 // The at-most-once tail guard, and the reason the version matters: two nodes
 // can be handed the same completion (a redelivery, a zombie finishing between
-// fence checks) and exactly one must run the tail. The launch, the status and
-// the write are one compare-and-swap, so the loser sees `resumed` on its
-// re-read, or a job that is no longer its own, and reports false.
-func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error) {
+// fence checks) and exactly one must run the tail. The launch, the status, the
+// lease and the write are one compare-and-swap, so the loser sees `resumed` on
+// its re-read, or a job that is no longer its own, or a newer lease, and
+// reports false. A fenced claim stamps its lease on the row — see the contract
+// on [PendingStore].
+func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
 	var before string
 	run, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.LaunchID != tail.Launch || !slices.Contains(tail.From, run.Status) ||
-			!slices.Contains(Claimable, run.Status) {
+			!slices.Contains(Claimable, run.Status) || outranked(*run, fence) {
 			return false
 		}
 		before = run.Status
 		run.Status = StatusResumed
+		if fence.Fenced() {
+			run.Owner, run.OwnerEpoch = fence.Owner, fence.Epoch
+		}
 		return true
 	})
 	if err != nil || !won {
@@ -214,6 +220,12 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 	}
 	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
+			return false
+		}
+		if release.To == StatusAnswered && run.Answer == nil {
+			// AN ENDING LET THE ANSWER GO under the claim: there is no
+			// answer left to be owed a resume, and the row is that
+			// ending's to finish.
 			return false
 		}
 		run.Status = release.To
@@ -321,11 +333,15 @@ func (s *CoordStore) DeclineAnswer(ctx context.Context, turnID, launch string, a
 
 // TakeAnswer records that a claimed run's turn took its recorded answer. See
 // the contract on [PendingStore].
+//
+// SUPERSEDED, NOT OUTRANKED: the fence must be the row's own lease or a newer
+// one, a zero fence included — the one write here a zero fence does not
+// exempt. See the contract for why.
 func (s *CoordStore) TakeAnswer(ctx context.Context, turnID, launch string, fence Fence) (bool, error) {
 	taken := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusResumed || run.LaunchID != launch || run.Answer == nil ||
-			outranked(*run, fence) {
+			run.OwnerEpoch > fence.Epoch {
 			return false
 		}
 		if taken = run.Answer.Taken(); taken {
@@ -339,35 +355,49 @@ func (s *CoordStore) TakeAnswer(ctx context.Context, turnID, launch string, fenc
 	return won || (err == nil && taken), err
 }
 
-// OweHandBack lets go of the recorded answer a claimed run is ending without,
-// owing its copies to the seat in the same write. See the contract on
-// [PendingStore].
-func (s *CoordStore) OweHandBack(ctx context.Context, turnID, launch string, answer []string,
-	handBack []HandedBack, fence Fence,
-) (PendingRun, bool, error) {
-	if len(answer) == 0 || len(handBack) == 0 {
+// OweHandBack lets go of the recorded answer a run is ending without, owing its
+// copies to the seat in the same write. See the contract on [PendingStore].
+func (s *CoordStore) OweHandBack(ctx context.Context, turnID string, letGo LetGo) (PendingRun, bool, error) {
+	if len(letGo.Answer) == 0 {
 		return PendingRun{}, false, fmt.Errorf("sandbox: letting go of an answer to run %s that "+
-			"names no delivery or owes no copy", turnID)
+			"names no delivery", turnID)
 	}
 	var owing PendingRun
-	owed := false
+	taken, owed := false, false
 	written, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.Status != StatusResumed || run.LaunchID != launch || run.Answer == nil ||
-			outranked(*run, fence) || !slices.Equal(run.Answer.EventIDs, answer) {
+		if (run.Status != StatusResumed && run.Status != StatusAnswered) ||
+			!slices.Contains(letGo.WhileIn, run.Status) ||
+			run.LaunchID != letGo.Launch || run.Answer == nil ||
+			outranked(*run, letGo.Fence) || !slices.Equal(run.Answer.EventIDs, letGo.Answer) {
+			return false
+		}
+		if taken = run.Answer.Taken() && !letGo.Taken; taken {
+			owing = *run
 			return false
 		}
 		if owed = len(run.HandBack) > 0; owed {
 			owing = *run
 			return false
 		}
+		// THE CLAIM GOES WITH THE LET-GO: an answered run carries its
+		// answer, and this row is the ending's now.
+		run.Status = StatusResumed
 		run.Answer = nil
-		run.HandBack = slices.Clone(handBack)
+		run.HandBack = nil
+		if len(letGo.HandBack) > 0 {
+			run.HandBack = slices.Clone(letGo.HandBack)
+		}
 		return true
 	})
-	if err == nil && owed {
+	switch {
+	case err != nil:
+		return PendingRun{}, false, err
+	case taken:
+		return owing, false, fmt.Errorf("sandbox: letting go of run %s's answer: %w", turnID, ErrAnswerTaken)
+	case owed:
 		return owing, false, fmt.Errorf("sandbox: letting go of run %s's answer: %w", turnID, ErrHandBackOwed)
 	}
-	return written, won, err
+	return written, won, nil
 }
 
 // ClearHandBack removes published copies from a run's hand-back. See the
@@ -603,22 +633,28 @@ func (s *CoordStore) ListActiveForSeat(ctx context.Context, handle string) ([]Pe
 // [PendingStore].
 //
 // A read-decide-delete under the record's version, like every flip here: the
-// fence AND the status license are evaluated against what the store holds, and
-// a lost race re-reads, so a claim that moved the lease — or a relaunch that
-// moved the status — in between is seen rather than deleted over. That is what
-// lets a caller that could not read the row hand the decision here instead.
-func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+// whole license, and what the row still owes the seat, are evaluated against
+// what the store holds, and a lost race re-reads, so a claim that moved the
+// lease — or a relaunch that moved the status or the job, or a release that
+// put an answer back — in between is seen rather than deleted over. That is
+// what lets a caller that could not read the row hand the decision here
+// instead.
+func (s *CoordStore) Finish(ctx context.Context, turnID string, license License,
 ) (PendingRun, bool, error) {
 	for range casRetries {
 		run, version, found, err := s.read(ctx, turnID)
 		if err != nil {
 			return PendingRun{}, false, err
 		}
-		if !found || outranked(run, fence) || !slices.Contains(whileIn, run.Status) {
+		if !found || outranked(run, license.Fence) || !slices.Contains(license.WhileIn, run.Status) ||
+			(license.Launch != EveryLaunch && run.LaunchID != license.Launch) {
 			return PendingRun{}, false, nil
 		}
 		if len(run.HandBack) > 0 {
 			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrHandBackOwed)
+		}
+		if run.Answer != nil && (!run.Answer.Taken() || license.Unused) {
+			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrAnswerOwed)
 		}
 		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
 		if err != nil {

@@ -90,6 +90,11 @@ type resumeSpy struct {
 	// [ResumeRequest.Begin]: the window between a claim and its turn, which
 	// a stalled process can be caught in while the seat moves.
 	beforeBegin func(ctx context.Context)
+
+	// failsInTurn makes an ordinary error one the turn returned AFTER it
+	// began — it took the answer, then gave its claim back as a retry — rather
+	// than one that stopped the re-entry before its turn.
+	failsInTurn bool
 }
 
 // Resume is a re-entry as the engine makes one: a turn that runs — one that
@@ -99,7 +104,8 @@ type resumeSpy struct {
 func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
 	err, during, beforeBegin := s.err, s.during, s.beforeBegin
-	runs := err == nil || (errors.Is(err, ErrResumeAbandoned) && !s.beforeTurn)
+	acts := err == nil || (errors.Is(err, ErrResumeAbandoned) && !s.beforeTurn)
+	runs := acts || (err != nil && s.failsInTurn)
 	s.mu.Unlock()
 	if runs && beforeBegin != nil {
 		beforeBegin(ctx)
@@ -112,6 +118,8 @@ func (s *resumeSpy) Resume(ctx context.Context, req ResumeRequest) error {
 	s.mu.Lock()
 	if runs {
 		s.begun++
+	}
+	if acts {
 		s.owned++
 	}
 	if err == nil {
@@ -1572,12 +1580,12 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 // before this caller does.
 type endedFirst struct{ PendingStore }
 
-func (s endedFirst) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+func (s endedFirst) Finish(ctx context.Context, turnID string, license License,
 ) (PendingRun, bool, error) {
-	if _, _, err := s.PendingStore.Finish(ctx, turnID, fence, whileIn); err != nil {
+	if _, _, err := s.PendingStore.Finish(ctx, turnID, license); err != nil {
 		return PendingRun{}, false, err
 	}
-	return s.PendingStore.Finish(ctx, turnID, fence, whileIn)
+	return s.PendingStore.Finish(ctx, turnID, license)
 }
 
 // ---------------------------------------------------------------------
@@ -2812,7 +2820,7 @@ func TestAnAnswerAnotherInboundAlreadyClaimedIsSpent(t *testing.T) {
 // lookup still matches: the race the at-most-once gate exists for.
 type lostClaimStore struct{ PendingStore }
 
-func (lostClaimStore) ClaimForResume(context.Context, string, Tail) (PendingRun, bool, error) {
+func (lostClaimStore) ClaimForResume(context.Context, string, Tail, Fence) (PendingRun, bool, error) {
 	return PendingRun{}, false, nil
 }
 
@@ -2874,14 +2882,18 @@ func TestAClaimTheStoreCouldNotWriteIsRetriedByTheCoordinator(t *testing.T) {
 	}
 }
 
-// A RUN THAT IS TERMINALLY GONE LETS ITS ANSWER BE AN ORDINARY MESSAGE.
+// A RUN THAT IS TERMINALLY GONE HANDS ITS ANSWER BACK THROUGH ITS ROW, even on
+// the inline attempt that still holds the delivery.
 //
 // The other half of the classification, and the half a requeue would turn into
 // a loop with no end: these runs have been settled, announced and deleted, so
-// nothing is coming back for the delivery and nothing is owed it. Acking it
-// would be worse still — the person's message would be swallowed on behalf of
-// a turn that no longer exists.
-func TestAnAnswerForATerminallyGoneRunBecomesAnOrdinaryMessage(t *testing.T) {
+// nothing is coming back for the delivery. The reply is not swallowed with
+// them: the ending lets it go before it deletes the row, and its copy reaches
+// the seat as the ordinary message it is, once. The delivery itself is spent —
+// it used to be handed on as the ordinary message instead, which needed the
+// store to delete a row still holding the reply on the caller's word, and an
+// ending that could not land left the reply both on the row and handed on.
+func TestAnAnswerForATerminallyGoneRunGoesBackThroughItsRow(t *testing.T) {
 	for name, arrange := range map[string]func(*coordRig){
 		// The claim was taken and could NOT be given back, so the run was
 		// settled in its place rather than stranded in the claim.
@@ -2899,22 +2911,31 @@ func TestAnAnswerForATerminallyGoneRunBecomesAnOrdinaryMessage(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rig := newCoordRig(t)
+			holds := rig.withHold()
 			parkOnAQuestion(t, rig)
 			arrange(rig)
 
+			reply := answerFrom("use main")
 			disposition, err := rig.coordinator.TryResumeFromAnswer(
-				t.Context(), "swe", chatReply(answerOnTheDM, "use main", answerFrom("use main")))
-			if err != nil {
-				t.Fatalf("TryResumeFromAnswer = %v, want no error: there is "+
-					"nothing left to come back to", err)
+				t.Context(), "swe", chatReply(answerOnTheDM, "use main", reply))
+			if err != nil || disposition != AnswerConsumed {
+				t.Fatalf("TryResumeFromAnswer = %q, %v, want %q: the answer is the run's, "+
+					"and its ending carries the reply back", disposition, err, AnswerConsumed)
 			}
-			if disposition != AnswerNotMine {
-				t.Fatalf("disposition = %q, want %q: the run has been ended and "+
-					"announced, so this is an ordinary message now",
-					disposition, AnswerNotMine)
+			if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(reply.ID).String()}) {
+				t.Fatalf("handed back %v, want the reply's copy exactly once", got)
 			}
-			if failed := rig.failures(); len(failed) != 1 {
-				t.Fatalf("announced %+v, want the one lost turn", failed)
+			rig.finished("t1")
+			if failed := rig.failures(); len(failed) != 1 ||
+				!strings.Contains(failed[0].Detail, "goes back to the seat") {
+				t.Fatalf("announced %+v, want the one lost turn, saying its reply went back", failed)
+			}
+			if spent := rig.spentDeliveries(); len(spent) != 1 || spent[0].id != reply.ID.String() ||
+				spent[0].publishedBefore != 0 {
+				t.Fatalf("spent %+v, want the reply's own delivery spent before its copy went out", spent)
+			}
+			if holds.holding("swe") {
+				t.Fatalf("the seat's inbox is held after the reply went back: %v", holds.log)
 			}
 		})
 	}
@@ -2925,8 +2946,9 @@ func TestAnAnswerForATerminallyGoneRunBecomesAnOrdinaryMessage(t *testing.T) {
 // to this build.
 type statelessStore struct{ PendingStore }
 
-func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error) {
-	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail)
+func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
 	run.ExecuteState = nil
 	return run, won, err
 }
@@ -3478,7 +3500,7 @@ func TestClaimingASeatReParksItsRunningJobs(t *testing.T) {
 func TestClaimingASeatReapsATailTheDeadOwnerAbandoned(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID)); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID), Fence{}); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 
@@ -3591,7 +3613,7 @@ func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	rig.coordinator.settleFailed(ctx, run, types.SandboxFailureCollect,
-		"the box could not be read back", false)
+		"the box could not be read back")
 
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v, want the failed run's box %q: it will run to its "+
@@ -3691,7 +3713,7 @@ func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
 	}
 	claimed := rig.launch("claimed")
 	if _, won, err := rig.pending.ClaimForResume(t.Context(), "claimed",
-		CompletionTail(claimed.LaunchID)); err != nil || !won {
+		CompletionTail(claimed.LaunchID), Fence{}); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.launch("reseed")
@@ -3868,11 +3890,11 @@ type finishWitness struct {
 	finished, killedFirst bool
 }
 
-func (w *finishWitness) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+func (w *finishWitness) Finish(ctx context.Context, turnID string, license License,
 ) (PendingRun, bool, error) {
 	w.finished = true
 	w.killedFirst = slices.Contains(w.provider.KilledIDs(), w.box)
-	return w.PendingStore.Finish(ctx, turnID, fence, whileIn)
+	return w.PendingStore.Finish(ctx, turnID, license)
 }
 
 // EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK, and a run parked before

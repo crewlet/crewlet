@@ -75,10 +75,10 @@ type finishFences struct {
 	fences []Fence
 }
 
-func (s *finishFences) Finish(ctx context.Context, turnID string, fence Fence, whileIn []string,
+func (s *finishFences) Finish(ctx context.Context, turnID string, license License,
 ) (PendingRun, bool, error) {
-	s.fences = append(s.fences, fence)
-	return s.PendingStore.Finish(ctx, turnID, fence, whileIn)
+	s.fences = append(s.fences, license.Fence)
+	return s.PendingStore.Finish(ctx, turnID, license)
 }
 
 func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {

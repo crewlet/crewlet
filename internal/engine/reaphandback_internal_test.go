@@ -76,6 +76,44 @@ func TestTheEngineSpendsTheReplyItsReapHandsBack(t *testing.T) {
 	})
 }
 
+// A REPLY A TURN TOOK IS SPENT BY THE ENGINE'S REAP, for a node that stopped
+// between its take and the spend that goes with it. The turn took the person's
+// reply — it may already have answered them — and its node stopped mid-turn,
+// with the reply's delivery unacknowledged if it was taken inline. The seat's
+// next holder reaps the claim and hands nothing back: the reply is used. What
+// it does write is the delivery's completion record, through the dispatcher the
+// engine builds, so the original coming round to it is dropped by the ledger
+// rather than run as a second turn — nothing on the reaped run recognises it.
+func TestTheEngineSpendsAReplyATurnTookBeforeItsNodeStopped(t *testing.T) {
+	t.Parallel()
+	e := sandboxNode(t, nil)
+	reply := events.New(types.ExternalNotification{
+		NotificationSource: "slack", SourceEventType: "message",
+		Sender: "ana", Body: "use main",
+	}, events.TraceContext{})
+	seedClaimedAnswer(t, e, "t-taken", reply)
+	store := sandbox.NewCoordStore(e.backends.Fleet)
+	run, found, err := store.Get(t.Context(), "t-taken")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	if ok, err := store.TakeAnswer(t.Context(), "t-taken", run.LaunchID,
+		sandbox.Fence{Owner: run.Owner, Epoch: run.OwnerEpoch}); err != nil || !ok {
+		t.Fatalf("TakeAnswer = %v, %v", ok, err)
+	}
+
+	applyOK(t, e, sandboxDoc(""))
+	waitHeld(t, e, "swe")
+	key := workkey.Derive([]string{reply.ID.String()})
+	eventually(t, "the taken reply to be spent in the completion ledger", func() bool {
+		return e.dispatch.Completions.Worked(t.Context(), "swe", []string{key})[key]
+	})
+	eventually(t, "the reaped run to be ended", func() bool {
+		_, found, err := e.sandbox.Load().pending.Get(t.Context(), "t-taken")
+		return err == nil && !found
+	})
+}
+
 // seedClaimedAnswer records a run on the swe seat that parked on a question,
 // was answered with reply, and was CLAIMED for the answer's resume by a node
 // that stopped before its turn took the answer.
@@ -104,7 +142,8 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 	}); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
-	if _, ok, err := store.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(run.LaunchID)); err != nil || !ok {
+	if _, ok, err := store.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(run.LaunchID),
+		sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
 	}
 }

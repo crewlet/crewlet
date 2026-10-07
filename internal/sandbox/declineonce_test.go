@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -68,14 +69,22 @@ func successorOf(t *testing.T, rig *coordRig, store PendingStore) *coordRig {
 	return next
 }
 
-// A DECLINE SPENDS THE REPLY'S OWN DELIVERY BEFORE IT LETS THE REPLY GO: the
-// copy is the reply from then on, and the original coming round afterwards — a
-// node that recorded the answer and stopped before acknowledging it — must be
-// dropped by the completion ledger rather than worked beside the copy.
-func TestADeclineSpendsTheReplyBeforeLettingItGo(t *testing.T) {
+// A DECLINE SPENDS THE REPLY'S OWN DELIVERY BEFORE THE WRITE THAT LETS THE REPLY
+// GO: the copy is the reply from then on, and the original coming round
+// afterwards — a node that recorded the answer and stopped before acknowledging
+// it — must be dropped by the completion ledger rather than worked beside the
+// copy. Before the WRITE and not merely before the publish, because the write
+// takes the answer off the row: a node that stops between a write that landed
+// and a spend that had not leaves nobody anything to spend.
+func TestADeclineSpendsTheReplyBeforeItsWrite(t *testing.T) {
 	rig := newCoordRig(t)
+	witness := &spentAtWrite{PendingStore: rig.pending, spent: func() int { return len(rig.spentDeliveries()) }}
+	rig.coordinator.pending = witness
 	r1 := owedAnAnswerItCannotResume(t, rig)
 	rig.fireRetries() // the last attempt fails, and the answer is let go of
+	if !slices.Equal(witness.declines, []int{1}) {
+		t.Fatalf("deliveries spent when the decline was written: %v, want R1's already spent", witness.declines)
+	}
 	spent := rig.spentDeliveries()
 	if len(spent) != 1 || spent[0].id != r1.ID.String() || spent[0].publishedBefore != 0 {
 		t.Fatalf("spent %+v, want R1's own delivery recorded as worked before its copy went out", spent)
@@ -92,13 +101,18 @@ func TestADeclineStoppedBeforeItsWriteHandsNothingBack(t *testing.T) {
 	rig := newCoordRig(t)
 	store := &refusingStore{inner: rig.pending}
 	rig.coordinator.pending = store
-	owedAnAnswerItCannotResume(t, rig)
+	r1 := owedAnAnswerItCannotResume(t, rig)
 	store.refuse = []string{"DeclineAnswer"}
 	rig.fireRetries() // the last attempt fails, and the decline's write is refused
 
 	if got := rig.handedBack(); len(got) != 0 {
 		t.Fatalf("handed back %v before the decline was written: a crash here delivers the "+
 			"reply twice — as this copy and as the answer the next holder resumes with", got)
+	}
+	// SPENT ALTHOUGH THE WRITE NEVER LANDED: the spend comes first, and a
+	// reply spent and still on its row is resumed or let go of from the row.
+	if spent := rig.spentDeliveries(); len(spent) != 1 || spent[0].id != r1.ID.String() {
+		t.Fatalf("spent %+v, want R1's delivery recorded as worked before the decline's write", spent)
 	}
 	if got := rig.get("t1"); got.Status != StatusAnswered || got.Answer == nil {
 		t.Fatalf("run = %q answer %+v, want the answer still recorded", got.Status, got.Answer)
@@ -284,4 +298,26 @@ func TestARunThatEndsHandsBackWhatItStillOwes(t *testing.T) {
 	if got := rig.handedBack(); !slices.Equal(got, []string{copyID}) {
 		t.Fatalf("handed back %v after the retry, want R1's copy once", got)
 	}
+}
+
+// spentAtWrite records how many deliveries had been recorded as worked at each
+// decline's write and each ending's let-go, for a case asserting the spend came
+// FIRST.
+type spentAtWrite struct {
+	PendingStore
+	spent    func() int
+	declines []int
+	letGos   []int
+}
+
+func (s *spentAtWrite) OweHandBack(ctx context.Context, turnID string, letGo LetGo) (PendingRun, bool, error) {
+	s.letGos = append(s.letGos, s.spent())
+	return s.PendingStore.OweHandBack(ctx, turnID, letGo)
+}
+
+func (s *spentAtWrite) DeclineAnswer(ctx context.Context, turnID, launch string, answer []string,
+	handBack []HandedBack, fence Fence,
+) (PendingRun, bool, error) {
+	s.declines = append(s.declines, s.spent())
+	return s.PendingStore.DeclineAnswer(ctx, turnID, launch, answer, handBack, fence)
 }

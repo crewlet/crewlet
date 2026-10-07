@@ -66,9 +66,13 @@ const (
 
 	// AnswerNotMine — nothing here is owed this delivery: no run was
 	// awaiting the conversation, the lookup failed and this seat has no
-	// awaiting run for one to have matched, or the run it matched is
-	// terminally gone — settled, deleted, unresumable for good. It is an
-	// ordinary message and is handled as one.
+	// awaiting run for one to have matched, or — for an answer BY TURN,
+	// which nothing records on a run — the run it named is terminally gone:
+	// settled, deleted, unresumable for good. It is an ordinary message and
+	// is handled as one. A chat reply RECORDED on a run is never this,
+	// whatever becomes of the run: an ending that reaches it before any turn
+	// took the reply hands the reply back through the run's row
+	// ([PendingStore.OweHandBack]), and the delivery is spent.
 	AnswerNotMine AnswerDisposition = "not_mine"
 )
 

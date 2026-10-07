@@ -34,9 +34,18 @@
 // ([PendingRun.HandBack]): after its attempts are spent, by an ending no turn
 // reached, or by the seat's next holder reaping a claim whose node stopped
 // before its turn took it ([Coordinator.RecoverSeat]). The two are exclusive
-// by the row's own compare-and-set, and the reap fences the row to its lease
-// before it decides, which holds because every run is stamped with the lease
-// that launched it ([CoordinatorOptions.Lease]).
+// in the store's own compare-and-set, IN BOTH DIRECTIONS: the let-go takes the
+// answer off the row, so no turn takes it afterwards, and it refuses an answer
+// a turn already took ([ErrAnswerTaken]) — whichever lands first wins,
+// whatever any lease says. And no ending deletes a row still holding a reply
+// no turn took ([ErrAnswerOwed]), so a run that moved under an ending's
+// snapshot cannot take the reply with it. The reply's delivery is recorded as
+// worked when the reply leaves the run, either way ([CoordinatorOptions.Spent]).
+//
+// The reap fences the row to its lease before it lets anything go, and a take
+// under an older lease — or under none — is refused, which holds because every
+// claim stamps the CLAIMANT's lease on the row ([PendingStore.ClaimForResume])
+// and every launch the lease that launched it ([CoordinatorOptions.Lease]).
 //
 // See docs/concepts/code-sandbox.md.
 package sandbox
