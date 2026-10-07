@@ -26,6 +26,20 @@
 // length). Every call site states it, and a gate in this package's suite holds
 // that each one names a purpose constant.
 //
+// # A turn's calls are charged through the turn's own meter
+//
+// A turn-stage [Use] carries the TURN'S BUDGET METER ([Budget]) beside its
+// tally, and the seam charges the call through it rather than through the seat's
+// bare counter. An auxiliary call is post-charged — its size is known only from
+// its answer, and by then there is nothing left for a verdict to stop — but the
+// turn's next model call does have something to stop, and it asks the turn's
+// meter first whether a refusal is certain. A meter that heard only its own
+// rounds' answers never learned of the window an auxiliary call filled, so that
+// round was sent, billed by the vendor and then refused. And the seam asks the
+// meter before an in-turn auxiliary call too ([Budget.Held]), because it is a
+// model call of the turn like any other: once the window is full every later
+// round is held, so a rewrite made for one is bought for nothing.
+//
 // # One record per key per flush
 //
 // A [Ledger] holds a bucket per (stage, seat or person, turn, purpose, model,
@@ -53,9 +67,11 @@
 package auxspend
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 )
@@ -86,6 +102,34 @@ type Use struct {
 	// to the item would make a task's cost depend on how much its seat had
 	// to remember.
 	Tally *Tally
+
+	// Budget is the turn's own budget meter ([Budget]), which the seam
+	// charges the call through and asks before making it: set by a turn on
+	// its in-turn calls, beside Tally, and refused on any other stage for
+	// Tally's reason — reflection and a background pass are the seat's
+	// learning, judged by their own gate before they start, and a turn's
+	// meter has no say over spend made once the turn is over.
+	Budget Budget
+}
+
+// Budget is a TURN'S BUDGET METER as the turn's auxiliary calls reach it: the
+// one its rounds are charged through, so a window either kind of call fills is
+// one every later call of the turn is held on (see the package doc).
+//
+// Declared here, beside the field that carries it; the engine's meter is the
+// one implementation. It only ever learns of windows that are full, so within
+// a window it can only refuse more as a turn goes on, never less.
+type Budget interface {
+	// Held is the refusal every further charge of the turn is certain to
+	// meet, or nil. Asked before a call is made, and on an error none is:
+	// the call would be billed, and every later round of the turn refused.
+	Held() error
+
+	// Record adds tokens a call has ALREADY spent to the turn's counters,
+	// in the windows current at the instant given, refusing nothing — and
+	// keeps every window the counters' answer shows full, so Held reports
+	// it before the turn's next call.
+	Record(ctx context.Context, tokens int, at time.Time) error
 }
 
 // For is this attribution with one call's purpose — the shape a caller holding
@@ -109,6 +153,9 @@ func (u Use) Validate() error {
 	case u.Tally != nil && u.Stage != types.AuxStageTurn:
 		return fmt.Errorf("%w: a %s call carries a turn's tally, which only the turn "+
 			"stage is charged to the work item through (ADR-0022)", ErrUnattributed, u.Stage)
+	case u.Budget != nil && u.Stage != types.AuxStageTurn:
+		return fmt.Errorf("%w: a %s call carries a turn's budget meter, which only the "+
+			"turn stage is charged through", ErrUnattributed, u.Stage)
 	}
 	return nil
 }

@@ -50,6 +50,11 @@ import (
 // delegated worker's rounds through that same meter, and a coding run when its
 // spend is collected — each of which reaches its event as a phase record.
 //
+// A CALL A TURN MAKES IS CHARGED THROUGH THAT SAME METER, which its
+// attribution carries ([auxspend.Use.Budget]): the counters are the seat's and
+// the company's either way, but only the turn's meter remembers what their
+// answer said, and the turn's next call asks it. See [recordedProvider].
+//
 // # The record does not wait on the counter
 //
 // The counter exists only where a coordination store does, so a call with no
@@ -119,7 +124,14 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 		return member, err
 	}
 	var meter spendRecorder
-	if s.charge != nil {
+	switch {
+	case use.Budget != nil:
+		// THE TURN'S OWN METER, for a call the turn makes: the same
+		// counters the seat's bare recorder would reach, through the one
+		// frame that remembers what their answer said — see
+		// [auxspend.Budget].
+		meter = use.Budget
+	case s.charge != nil:
 		meter = s.charge(role, use.Stage)
 	}
 	member.Provider = recordedProvider{
@@ -151,14 +163,23 @@ func (s auxiliarySeam) seatOf(role *org.Role, stage types.AuxStage) auxspend.Sea
 // recordedProvider charges and records every completion after it returns.
 //
 // AFTER, as every charge in this engine is: a completion's size is known only
-// from its answer. And a RECORD, NEVER THE GATE: the pre-flight gates are the
-// callers' ([Engine.learningBudget] for reflection, the answer's own for a
-// person's question), and spend that has happened is recorded whole, past a
-// ceiling included, which is what makes those gates read "no room" afterwards.
-// It used to go through the turn loop's Charge, which refused a completion that
-// did not fit and so recorded nothing: the counter stayed under the ceiling,
-// the gate still read room, and a company at its ceiling paid for every pass
-// after it with its counter hearing about none of them.
+// from its answer. And a RECORD, NEVER A VERDICT: spend that has happened is
+// recorded whole, past a ceiling included, which is what makes every gate read
+// "no room" afterwards. It used to go through the turn loop's Charge, which
+// refused a completion that did not fit and so recorded nothing: the counter
+// stayed under the ceiling, the gate still read room, and a company at its
+// ceiling paid for every pass after it with its counter hearing about none of
+// them.
+//
+// THE GATE IS ASKED BEFORE THE CALL, and is the caller's: [Engine.learningBudget]
+// for reflection, the answer's own for a person's question — and for a call a
+// TURN makes, the turn's own meter ([auxspend.Use.Budget]), asked here because
+// this is the one frame every in-turn call passes. That meter holds every
+// window the turn has seen full, its own auxiliary calls' included, so a call
+// it holds is one whose turn's next round is refused before it is sent: the
+// rewrite would be bought for a prompt nobody sends. Such a call is not made,
+// so nothing is charged or recorded, and its caller takes the error as it
+// takes any rewrite it cannot have.
 type recordedProvider struct {
 	inner  llm.Provider
 	key    string
@@ -173,6 +194,11 @@ type recordedProvider struct {
 func (p recordedProvider) Model() string { return p.inner.Model() }
 
 func (p recordedProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if p.use.Budget != nil {
+		if held := p.use.Budget.Held(); held != nil {
+			return nil, fmt.Errorf("engine: auxiliary %s call not made: %w", p.use.Purpose, held)
+		}
+	}
 	started := p.now()
 	completion, err := p.inner.Complete(ctx, req)
 	ended := p.now()
@@ -262,8 +288,8 @@ func (s orgSpend) Record(ctx context.Context, tokens int, at time.Time) error {
 // the epoch does not name as an agent seat. The same scope and clock as the
 // seat's turns, so a pass and a round are counted in one window.
 func (e *Engine) spendFor(c *Company, handle string) spendRecorder {
-	m, ok := e.meterFor(c, handle).(*meter)
-	if !ok || m == nil {
+	m := e.meterFor(c, handle)
+	if m == nil {
 		return nil
 	}
 	return seatSpend{budgets: e.backends.Fleet, agentScope: m.agentScope, zone: m.basis.zone}

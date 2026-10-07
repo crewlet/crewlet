@@ -125,8 +125,8 @@ func (p *budgetParks) arm(d time.Duration, f func()) alarm {
 // the hold that could not be taken, which the dispatcher NAKs.
 func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, error) {
 	c := e.Company()
-	m, ok := e.meterFor(c, handle).(*meter)
-	if !ok || m == nil || !m.basis.capped() {
+	m := e.meterFor(c, handle)
+	if m == nil || !m.basis.capped() {
 		// No counter, or nothing to refuse with.
 		return "", false, nil
 	}

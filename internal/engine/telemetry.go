@@ -144,13 +144,22 @@ type turnTelemetry struct {
 	// and fresh for each segment, since each segment is charged what IT
 	// spent (turnspend.go).
 	auxSpent *auxspend.Tally
+
+	// budget is the meter this segment is charged through — its rounds, its
+	// judge, its workers and, through [turnTelemetry.aux], every in-turn
+	// auxiliary call — or nil where there is no counter. Set by the frame
+	// that builds the segment's runner, BEFORE the first auxiliary call it
+	// makes: the context assembly is one, and a meter built after it would
+	// never hear of a window the assembly filled.
+	budget *meter
 }
 
 // aux is the attribution this segment's in-turn auxiliary calls state: the one
 // its tools read off the turn context, derived by the turn context's own rule
 // so the engine's calls and the tools' cannot be filed differently.
 func (t turnTelemetry) aux() auxspend.Use {
-	return (&turnctx.Turn{RunID: t.runID, WorkKey: t.workKey, AuxSpend: t.auxSpent}).Aux()
+	return (&turnctx.Turn{RunID: t.runID, WorkKey: t.workKey, AuxSpend: t.auxSpent,
+		Budget: t.budget.auxiliary()}).Aux()
 }
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
@@ -331,8 +340,10 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			WorkItemBasis: t.workItemBasis,
 			Written:       t.written,
 			// AND THE SEGMENT'S AUXILIARY TALLY, which every in-turn
-			// auxiliary call adds to through the turn's attribution.
+			// auxiliary call adds to through the turn's attribution, and
+			// the meter every one of them is charged through and asks.
 			AuxSpend: t.auxSpent,
+			Budget:   t.budget.auxiliary(),
 		},
 	}
 }

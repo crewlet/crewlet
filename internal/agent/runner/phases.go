@@ -366,7 +366,9 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		// stopped by its own loop before its first call; this one makes
 		// its calls in a box, post-charged when the run is collected, so
 		// it is asked here — or a run would be paid for whole on a window
-		// already past its ceiling.
+		// already past its ceiling — and again once its brief is built,
+		// since building it can be what fills the window
+		// ([Runner.executeAsAgentRun]).
 		if err := toolloop.Refusal(r.cfg.Budget); err != nil {
 			return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 		}
@@ -1159,7 +1161,7 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 				"iteration", iteration, "tokens", 0, "error", refused.Error(),
 				"detail", "the budget had already refused this turn, so the judge was not called")
 			span.SetAttributes(attribute.Bool("crewlet.judge_called", false))
-			return 0, extension.Rescue("budget_exhausted")
+			return 0, extension.Rescue(extension.ReasonBudgetExhausted)
 		}
 	}
 

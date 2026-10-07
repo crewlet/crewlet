@@ -499,9 +499,10 @@ for where each stage's spend is drawn:
 | Path | Calls | Gate before it starts |
 |---|---|---|
 | Turn loop | every executor and reviewer round | the round's own meter |
-| Round-cap extension judge | one call per exhausted phase | charged on the turn's meter after it answers |
+| Round-cap extension judge | one call per exhausted phase | the turn's meter, asked before the judge is consulted and again once its evidence is condensed; the call is charged on it after it answers |
 | Coding sandbox | the box's whole run | the seat's headroom, read before the run launches; the spend is recorded when the run is collected |
-| Turn-start prefetch | memory filter, knowledge query, episode summary | the [budget park](agent-runtime.md#the-budget-park): a seat with no room has its delivery parked, so no prefetch runs |
+| Turn-start prefetch | memory filter, knowledge query, episode summary | the [budget park](agent-runtime.md#the-budget-park): a seat with no room has its delivery parked, so no prefetch runs — and then the turn's meter, as for every in-turn call below |
+| In-turn rewrites | the conversation block's condensation, and every rewrite the turn's ledgers, judge, tools and workers need | the turn's meter: every in-turn auxiliary call is charged through it, so a window one fills is held before the turn's next round is sent, and none is made while it holds a full window — except the task card's, written after the last round as the turn's record |
 | Reflection pass | persist decider, profiler, refiner, single-turn induction | the pass's [no-budget skip](#7-reflector-the-orchestrator) |
 | Background learning | episode compaction, clustered synthesis, skill promotion | none: each call is recorded, but these passes do not read the room left before they start |
 

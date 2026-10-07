@@ -16,8 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -495,6 +497,48 @@ func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
 	if len(recs) != 1 || recs[0].Stage != types.AuxStageTurn || recs[0].TurnID != "run-1" ||
 		recs[0].Purpose != types.AuxCondense(string(compact.KindOutcome)) {
 		t.Fatalf("the rewrite was recorded as %+v, want the turn's condense_outcome", recs)
+	}
+}
+
+// A TURN THE BUDGET ENDED STILL GETS ITS CARD.
+//
+// The turn's meter holds every call of the turn once a window is full, its
+// auxiliary calls included, because what they would buy feeds a round that is
+// never sent. The card is not such a call: it is written after the segment's
+// last round, as the task's record of the turn — and the turn a budget ended
+// is the one a person most needs the card of. So the card's rewrite is not
+// asked of the meter, and a long account is condensed for it as on any turn.
+func TestATurnTheBudgetEndedStillGetsItsCard(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Dev", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, seat)
+	rewriter := &cardRewriter{answer: "Fixed the flaky test; ran out of budget.", in: 90, out: 10}
+	registry, err := phase.NewRegistry([]phase.Entry{{Key: "cheap", Provider: rewriter}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = registry
+	e := &Engine{auxSpend: auxspend.NewLedger(&capturedEvents{})}
+	e.epoch.current.Store(c)
+
+	// The segment's meter, holding the seat's day its last call filled.
+	fleet := coordmem.NewFleet()
+	m := &meter{budgets: fleet, agentScope: scopeOf(t, c, seat), basis: basisOf(c, seat), now: time.Now}
+	if err := m.Record(t.Context(), 150, time.Now()); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if m.Held() == nil {
+		t.Fatal("the meter holds nothing; this case asserts nothing")
+	}
+	tel := dispatchTel(&nativeItem)
+	tel.handle, tel.budget = seat.Handle(), m
+	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Failed}, nil,
+		time.Unix(1_700_000_060, 0).UTC())
+	charge.record.Summary = strings.Repeat("The turn investigated the flaky test and ", 40) + "stopped."
+
+	charge = e.withCards(t.Context(), charge)
+	if charge.record.Summary != condensedCard+"Fixed the flaky test; ran out of budget." {
+		t.Fatalf("the card of a turn the budget ended was not condensed: %q", charge.record.Summary)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -32,6 +33,10 @@ func (c counters) Used(_ context.Context, scope string, w coord.Windows) (coord.
 }
 
 func (c counters) Charge(context.Context, coord.ChargeRequest) (coord.Spend, error) {
+	return coord.Spend{}, errors.New("not used by these cases")
+}
+
+func (c counters) PostCharge(context.Context, string, int, coord.Windows) (coord.Spend, error) {
 	return coord.Spend{}, errors.New("not used by these cases")
 }
 
@@ -397,6 +402,88 @@ func TestAnAdmittedRoundThatFillsAWindowIsHeld(t *testing.T) {
 	}
 }
 
+// AN AUXILIARY CALL'S POST-CHARGE THAT FILLS A WINDOW IS HELD, as a round's
+// answer is.
+//
+// The turn's auxiliary calls reach the same counters as its rounds, by a
+// post-charge that refuses nothing. Charged beside the meter, a window one of
+// them took past its ceiling was one the meter had never seen, so the turn's
+// next round was sent, billed and then refused. Charged through it, the answer
+// is kept: the next round, and the next auxiliary call, are held before they
+// are made. The spend itself is counted whole on both scopes, past the ceiling
+// included.
+func TestAnAuxiliaryPostChargeThatFillsAWindowIsHeld(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{Month: ceiling(10_000)}, lead)
+	clock := time.Date(2026, time.March, 14, 15, 0, 0, 0, time.UTC)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if err := m.Record(ctx, 40, clock); err != nil {
+		t.Fatalf("Record(40): %v", err)
+	}
+	if got, held := m.Refused(); held {
+		t.Fatalf("a post-charge that left room is held as %+v", got)
+	}
+	if err := m.Held(); err != nil {
+		t.Fatalf("Held after a post-charge that left room = %v", err)
+	}
+
+	if err := m.Record(ctx, 90, clock); err != nil {
+		t.Fatalf("Record(90): %v", err)
+	}
+	got, held := m.Refused()
+	if !held || got.Scope != "agent" || got.Period != period.Day || got.Used != 130 || got.Limit != 100 {
+		t.Fatalf("Refused = (%+v, %v), want the seat's day the post-charge took to 130 of 100", got, held)
+	}
+	if err := m.Held(); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Errorf("Held = %v, want the refusal the turn's next call is certain to meet", err)
+	}
+	windows := coord.WindowsAt(clock, time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, lead)} {
+		u, err := fleet.Used(ctx, scope, windows)
+		if err != nil || u.In(period.Day).Used != 130 {
+			t.Errorf("%s day = (%+v, %v), want the 130 both calls spent, whole", scope,
+				u.In(period.Day), err)
+		}
+	}
+	// And the counter agrees: the next round is refused, so the hold saved
+	// a call rather than invented a refusal.
+	if next, err := m.Spend(ctx, 1); err != nil || next.OK {
+		t.Errorf("Spend(1) after the hold = (%+v, %v), want it refused", next, err)
+	}
+}
+
+// AN AUXILIARY CALL IS COUNTED IN THE WINDOWS OF THE INSTANT IT RETURNED, on
+// the turn's pinned clock — the instant the seam read once for the counter and
+// the record alike — not in whichever window the meter's clock reads when the
+// charge is written.
+func TestAnAuxiliaryPostChargeIsCountedWhenItsCallReturned(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	returned := time.Date(2026, time.March, 14, 23, 59, 59, 0, time.UTC)
+	clock := returned.Add(time.Minute)
+	m := clockedMeter(t, fleet, c, lead, &clock)
+
+	if err := m.Record(ctx, 150, returned); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	u, err := fleet.Used(ctx, scopeOf(t, c, lead), coord.WindowsAt(returned, time.UTC))
+	if err != nil || u.In(period.Day).Used != 150 || u.In(period.Day).Window.Label != "2026-03-14" {
+		t.Fatalf("the 14th = (%+v, %v), want the 150 spent before its midnight", u.In(period.Day), err)
+	}
+	// The window it filled has turned over on the meter's clock, so the
+	// turn's next call is judged on the 15th, which has room.
+	if got, held := m.Refused(); held {
+		t.Errorf("Refused = %+v, want nothing held on a day that has turned over", got)
+	}
+}
+
 // A HELD REFUSAL IS NAMED AS THE COUNTER WOULD NAME IT NOW: the company before
 // the seat, because the company is judged first; and once the company's window
 // turns over, the seat's that still stands.
@@ -615,6 +702,13 @@ func (d deadContextRefused) Charge(ctx context.Context, req coord.ChargeRequest)
 		return coord.Spend{}, err
 	}
 	return d.budgets.Charge(ctx, req)
+}
+
+func (d deadContextRefused) PostCharge(ctx context.Context, seat string, tokens int, w coord.Windows) (coord.Spend, error) {
+	if err := ctx.Err(); err != nil {
+		return coord.Spend{}, err
+	}
+	return d.budgets.PostCharge(ctx, seat, tokens, w)
 }
 
 func (d deadContextRefused) Used(ctx context.Context, scope string, w coord.Windows) (coord.Usage, error) {

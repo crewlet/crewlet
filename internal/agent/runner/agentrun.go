@@ -124,6 +124,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	surface = built
 
 	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
+	// AND ASKED AGAIN once the brief exists, before anything is on the
+	// record: assembling it rewrites the prior rounds' payloads past their
+	// budgets with the seat's auxiliary model, charged to the same counters,
+	// and the rewrite can be what fills the window. Asked only at the top of
+	// the phase, that run was launched and paid for whole past the ceiling.
+	if err := toolloop.Refusal(r.cfg.Budget); err != nil {
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+	}
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
 	// will: a native pass publishes it from inside runPhase, which agent
 	// mode does not enter, and the resume's own record deliberately carries

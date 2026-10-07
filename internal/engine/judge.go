@@ -29,7 +29,10 @@ import (
 //
 // use is the turn's attribution, which the judge's evidence rewrites are filed
 // under: the judgement is the turn's, so condensing what it reads is too. The
-// judge's own call is a phase of the turn, metered by the turn's meter.
+// judge's own call is a phase of the turn, metered by the turn's meter — the
+// one use carries ([auxspend.Use.Budget]), which the judge asks once its
+// evidence is rendered, since a rewrite of that evidence can be what fills
+// the window its call would be refused in ([extension.LLMJudge.WithHold]).
 func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension.Judge {
 	if c == nil || c.Org == nil || c.Models == nil {
 		return nil
@@ -55,6 +58,9 @@ func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension
 	// the judge rather than cut or carried whole.
 	judge := extension.NewLLMJudge(member.Provider, member.Key).
 		WithCompactor(e.seatCompactor(c, handle, use))
+	if use.Budget != nil {
+		judge = judge.WithHold(use.Budget)
+	}
 	if judge == nil {
 		return nil
 	}

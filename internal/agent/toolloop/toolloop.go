@@ -450,9 +450,12 @@ type BudgetMeter interface {
 	// from — so every later charge in that window is refused, whatever its
 	// size. It stops answering true when that window turns over
 	// ([SpendOutcome.ResetsAt]); a window with no calendar, a worker's own
-	// slice, never turns over. What a meter has not seen — another seat
-	// spending the company's last room since this one last charged — is
-	// left to the next charge, which is the gate.
+	// slice, never turns over. A meter is told of EVERY charge its turn
+	// makes — its rounds, its judge, its workers and the turn's auxiliary
+	// calls, which the engine post-charges through it — so what it has not
+	// seen is spend outside the turn: another seat spending the company's
+	// last room, a background pass on this seat's own counter. That is left
+	// to the next charge, which is the gate.
 	//
 	// Certain ON THE CALENDAR THE METER JUDGES BY, which is the one edge: a
 	// counter shared with peers can start counting the next window before
@@ -476,8 +479,9 @@ type BudgetMeter interface {
 //
 // It is the question the loop asks before every round, exported because the
 // loop is not the only frame that calls a model on a turn's meter: the
-// round-cap judge and an agent-mode executor's launch ask it too, so every
-// call in a turn is stopped by the same answer.
+// round-cap judge, an agent-mode executor's launch and the engine's auxiliary
+// seam before each of the turn's auxiliary calls ask it too, so every call in
+// a turn is stopped by the same answer.
 func Refusal(meter BudgetMeter) error {
 	if meter == nil {
 		return nil

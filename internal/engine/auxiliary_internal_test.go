@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -301,6 +302,92 @@ func TestATurnsTallyHearsItsOwnCalls(t *testing.T) {
 	}
 	if got := tally.Total(); got != (auxspend.Spent{Calls: 2, Input: 60, Output: 24, CacheRead: 20}) {
 		t.Fatalf("tally = %+v, want the two calls made with it", got)
+	}
+}
+
+// turnBudget is a turn's meter as the seam reaches it: what it was asked to
+// record, and the refusal it holds, if any.
+type turnBudget struct {
+	countingMeter
+	held  error
+	asked int
+}
+
+func (b *turnBudget) Held() error {
+	b.asked++
+	return b.held
+}
+
+// A TURN'S CALL IS CHARGED THROUGH THE TURN'S OWN METER, never beside it.
+//
+// The counters are the seat's and the company's either way; what differs is
+// which frame hears their answer. Charged through the seat's bare recorder, a
+// window the call filled was one the turn's meter never learned of, so the
+// turn's next round was sent, billed and refused. A call that carries no meter
+// — a turn-stage call made between two segments, a reflection — is charged as
+// it always was.
+func TestATurnsCallIsChargedThroughItsOwnMeter(t *testing.T) {
+	t.Parallel()
+	seat := &countingMeter{}
+	r := newSeamRig(&answeringProvider{in: 700, out: 300}, seat)
+	budget := &turnBudget{}
+	use := turnUse
+	use.Budget = budget
+	if _, err := r.complete(t, dev, use); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if budget.spent != 1000 || budget.calls != 1 {
+		t.Errorf("the turn's meter recorded %d tokens over %d calls, want the call's 1000 once",
+			budget.spent, budget.calls)
+	}
+	if seat.calls != 0 {
+		t.Errorf("the seat's bare recorder was charged %d times beside the turn's meter, "+
+			"which counts the call twice", seat.calls)
+	}
+	if budget.asked != 1 {
+		t.Errorf("the turn's meter was asked %d times before the call, want once", budget.asked)
+	}
+
+	if _, err := r.complete(t, dev, turnUse); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if seat.spent != 1000 {
+		t.Errorf("a call with no turn meter charged the seat %d, want its 1000", seat.spent)
+	}
+}
+
+// A CALL THE TURN'S METER ALREADY REFUSES IS NOT MADE.
+//
+// The turn has seen a window full, so its next round is refused before it is
+// sent; a rewrite made now would feed a prompt nobody sends. Nothing was
+// spent, so nothing is charged, recorded or tallied — and the caller is told
+// the budget refused it, which it takes as it takes any rewrite it cannot have.
+func TestACallTheTurnsMeterRefusesIsNotMade(t *testing.T) {
+	t.Parallel()
+	provider := &answeringProvider{in: 700, out: 300}
+	seat := &countingMeter{}
+	r := newSeamRig(provider, seat)
+	budget := &turnBudget{held: &toolloop.BudgetError{
+		Scope: "agent", Used: 1600, Limit: 1000, Period: period.Day, Window: "2026-09-23",
+	}}
+	use := turnUse
+	use.Budget, use.Tally = budget, auxspend.NewTally()
+
+	_, err := r.complete(t, dev, use)
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Fatalf("Complete = %v, want the turn's refusal", err)
+	}
+	if provider.calls != 0 {
+		t.Errorf("the provider was called %d times past a refusal the turn already held", provider.calls)
+	}
+	if budget.calls != 0 || seat.calls != 0 {
+		t.Errorf("a call never made was charged (turn meter %d, seat %d)", budget.calls, seat.calls)
+	}
+	if got := use.Tally.Total(); got != (auxspend.Spent{}) {
+		t.Errorf("a call never made was tallied: %+v", got)
+	}
+	if recs := r.flushed(t); len(recs) != 0 {
+		t.Errorf("a call never made was recorded: %+v", recs)
 	}
 }
 

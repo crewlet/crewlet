@@ -1,9 +1,11 @@
 package auxspend_test
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -23,19 +25,33 @@ func TestAnUnattributedCallIsRefused(t *testing.T) {
 		// seat's learning — to the turn's work item (ADR-0022).
 		"a reflection carrying a tally": {Stage: types.AuxStageReflection,
 			Purpose: types.AuxPersistDecider, Tally: auxspend.NewTally()},
+		// A TURN'S METER OFF THE TURN STAGE would hold a reflection — run
+		// after the turn, behind its own gate — on a turn that is over,
+		// and charge it through a meter nothing asks again.
+		"a reflection carrying a turn's meter": {Stage: types.AuxStageReflection,
+			Purpose: types.AuxPersistDecider, Budget: openBudget{}},
+		"a background pass carrying a turn's meter": {Stage: types.AuxStageBackground,
+			Purpose: types.AuxEpisodeCompaction, Budget: openBudget{}},
 	} {
 		if err := use.Validate(); !errors.Is(err, auxspend.ErrUnattributed) {
 			t.Errorf("%s: Validate = %v, want ErrUnattributed", name, err)
 		}
 	}
-	ok := auxspend.Use{Stage: types.AuxStageTurn, TurnID: "t-1", Tally: auxspend.NewTally()}
+	ok := auxspend.Use{Stage: types.AuxStageTurn, TurnID: "t-1", Tally: auxspend.NewTally(),
+		Budget: openBudget{}}
 	if err := ok.For(types.AuxMemoryFilter).Validate(); err != nil {
-		t.Errorf("a turn's call with its tally: %v", err)
+		t.Errorf("a turn's call with its tally and its meter: %v", err)
 	}
 	if ok.Purpose != "" {
 		t.Error("For changed the attribution it was called on")
 	}
 }
+
+// openBudget is a turn's meter that holds nothing and records nothing.
+type openBudget struct{}
+
+func (openBudget) Held() error                                  { return nil }
+func (openBudget) Record(context.Context, int, time.Time) error { return nil }
 
 // A TALLY SUMS WHAT IT IS GIVEN, from every goroutine a turn hands it to, and
 // a nil one counts nothing.

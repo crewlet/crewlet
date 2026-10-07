@@ -61,9 +61,11 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion. The three things it POINTS AT that change
+// decision downstream a suggestion. The four things it POINTS AT that change
 // are [Turn.Written], [Turn.Calls] and [Turn.AuxSpend], each of which only
-// ever grows and authorizes nothing.
+// ever grows and authorizes nothing, and [Turn.Budget], which only ever learns
+// that a window is full — so the one thing it can decide is to refuse a call,
+// and a tool holding it can make it refuse sooner, never later.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -265,17 +267,30 @@ type Turn struct {
 	// (ADR-0022). Every call reaches it through [Turn.Aux], the attribution
 	// the auxiliary seam files the call under.
 	//
-	// The last part of a turn that changes, and like the other two only by
+	// A part of a turn that changes, and like the other two only by
 	// growing: the seam adds what a call cost after it returned, and nothing
 	// reads it to decide anything but the charge. Nil outside a turn, which
 	// tallies nothing.
 	AuxSpend *auxspend.Tally
+
+	// Budget is the meter this turn segment's rounds are charged through,
+	// which every in-turn auxiliary call is charged through too and asks
+	// before it is made ([auxspend.Budget]): a window an auxiliary call
+	// fills is then one the segment's next round is held on rather than
+	// sent, billed and refused, and a call made once a window is full is
+	// not made at all. Every call reaches it through [Turn.Aux].
+	//
+	// The last part of a turn that changes, and only toward refusing: it
+	// learns of full windows and forgets one only when the window turns
+	// over. Nil outside a turn, and wherever there is no counter to charge
+	// — the seat's spend is then charged, or not, as before.
+	Budget auxspend.Budget
 }
 
 // Aux is the attribution an auxiliary call made for this turn states: the
 // TURN stage — part of the turn's cost and charged to its work item — this
-// run, its unit of work and the segment's tally, with the call's own purpose
-// added by the caller ([auxspend.Use.For]).
+// run, its unit of work, the segment's tally and its budget meter, with the
+// call's own purpose added by the caller ([auxspend.Use.For]).
 //
 // AN ARGUMENT, never the context, for this package's own reason: a rewrite
 // started by a goroutine that outlives the turn would otherwise be charged to
@@ -287,7 +302,7 @@ func (t *Turn) Aux() auxspend.Use {
 		return auxspend.Use{Stage: types.AuxStageTurn}
 	}
 	return auxspend.Use{Stage: types.AuxStageTurn, TurnID: t.RunID, WorkKey: t.WorkKey,
-		Tally: t.AuxSpend}
+		Tally: t.AuxSpend, Budget: t.Budget}
 }
 
 // InPhase derives the Turn a phase session's tools see: this one, naming the
@@ -317,6 +332,11 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 // launched it has ended and charged what it spent. Tallied on that segment's
 // tally, every one of those calls was added to a number nothing read again.
 // A copy, for [Turn.InPhase]'s reason; nil in, nil out.
+//
+// [Turn.Budget] is KEPT: the counters are the seat's and the company's
+// whichever segment pays, and the workers the CLI delegates to already charge
+// the launching segment's meter, so its auxiliary calls are judged by the same
+// meter rather than by none.
 func (t *Turn) WithAuxSpend(spend *auxspend.Tally) *Turn {
 	if t == nil {
 		return nil

@@ -137,8 +137,16 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		own.Turns = 1
 	}
 	total := addUncharged(own, t.uncharged)
+	// THE CARD'S ATTRIBUTION: the turn's, with neither its tally — summed
+	// above, so a rewrite added there would reach no charge
+	// ([Engine.withCards] tallies its own) — nor its METER. The card is
+	// rewritten after the segment's last call, as a record of the turn
+	// rather than an input to a round, so the meter has no call left to
+	// hold for it; asked, it would refuse the card of every turn the budget
+	// ended, which is the turn a person most needs the card of. Charged to
+	// the seat's counters like any call the meter does not carry.
 	cardUse := t.aux()
-	cardUse.Tally = nil
+	cardUse.Tally, cardUse.Budget = nil, nil
 	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed),
 		aux: cardUse, ended: ended}
 	if item == nil {

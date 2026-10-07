@@ -52,7 +52,13 @@ judge, the seat's other workers and an agent-mode coding run are refused without
 being made, rather than each billed and then refused. The refused round itself
 is the one a turn pays for past its ceiling — and a turn running alongside it,
 on the same company, can still pay for one round of its own before the counter
-tells it. "Certain" is on the turn's own clock: a turn that began before the
+tells it. A turn's own [auxiliary calls](#auxiliary-spend) are charged through
+the same meter as its rounds: a context assembly or a rewrite that takes a
+window to its ceiling has its round refused before it is sent too, and the
+turn makes no further auxiliary call while that window is full — its rewrite
+would only feed a round that is never sent. The one exception is the task
+card's rewrite, made after the turn's last round as its record, so a turn the
+budget ended still has a readable card. "Certain" is on the turn's own clock: a turn that began before the
 company's `timezone` moved east can stop on a day the other nodes have already
 turned over. Its message then runs again, because the park finds nothing
 refusing — unless the turn had already written outside the engine, in which
@@ -159,7 +165,9 @@ to remember, what to search for, how to fit a long text into a prompt. Every
 such call goes through one seam that charges the [budget
 counter](#budget-windows) and records the call as an `auxiliary_spend` event,
 which every spend figure folds — the live window, the named windows, a turn's
-page, the turn list and a task's spend.
+page, the turn list and a task's spend. A call a turn makes is charged through
+that turn's own meter, the one its rounds are charged through, so the turn
+knows of a window the call filled before its next round is sent.
 
 Each call states its **stage** — whose cost it is — and its **purpose**:
 

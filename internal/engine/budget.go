@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
@@ -38,12 +39,16 @@ import (
 
 // budgetCounter is the slice of the fleet's counters a meter calls.
 //
-// Declared here, by the consumer: a turn's meter charges and reads, and a
-// meter that could reach the whole of [coord.Budgets] would one day be given
-// a reason to post-charge. It needs none: Charge counts the round it refuses,
-// so a refused round is on the counter without a second write.
+// Declared here, by the consumer: a turn's meter charges its rounds, reads the
+// counters, and post-charges the turn's AUXILIARY calls ([meter.Record]) —
+// never a round, because Charge counts the round it refuses, so a refused
+// round is on the counter without a second write. An auxiliary call has no
+// verdict to wait on (its size is known only from its answer, and nothing is
+// left to stop by then), and is post-charged through the meter rather than
+// beside it so the window it fills is one the turn's next round is held on.
 type budgetCounter interface {
 	Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error)
+	PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
 	Used(ctx context.Context, scope string, windows coord.Windows) (coord.Usage, error)
 }
 
@@ -89,11 +94,21 @@ func (b budgetBasis) capped() bool { return len(b.org) > 0 || len(b.seat) > 0 }
 // windows current when it is charged.
 //
 // ONE METER SERVES THE WHOLE TURN — every phase, the round-cap judge and every
-// worker the turn delegates to charge it — which is what lets it answer
-// [toolloop.BudgetMeter.Refused] for all of them: a window it has seen full
-// stays full for the rest of the turn, because the ceilings are pinned and
+// worker the turn delegates to charge it, and every auxiliary call the turn
+// makes is post-charged through it ([meter.Record]) — which is what lets it
+// answer [toolloop.BudgetMeter.Refused] for all of them: a window it has seen
+// full stays full for the rest of the turn, because the ceilings are pinned and
 // nothing takes spend back off a counter, until the window turns over on the
 // turn's pinned clock ([meter.Refused] names the one edge of that).
+//
+// THE TURN'S AUXILIARY CALLS ARE TWO OF ITS INPUTS. The context assembly, the
+// conversation block's condensation, every rewrite the ledgers, the judge's
+// evidence and the tools ask for: each reaches the same counters, by
+// post-charge, and the meter used to learn only from its own charges' answers
+// — so a window one of them filled was one the turn's next round was sent
+// into, billed, and refused. Charged here, its answer is kept like a round's
+// ([meter.keepFilled]), and every call after it, a round or another auxiliary
+// call ([meter.Held]), is held instead of made.
 type meter struct {
 	budgets    budgetCounter
 	agentScope string
@@ -108,7 +123,10 @@ type meter struct {
 	full []toolloop.SpendOutcome
 }
 
-var _ toolloop.BudgetMeter = (*meter)(nil)
+var (
+	_ toolloop.BudgetMeter = (*meter)(nil)
+	_ auxspend.Budget      = (*meter)(nil)
+)
 
 // windows is the day, week and month this instant falls in on the pinned
 // clock.
@@ -167,6 +185,34 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 	}
 	return outcome, nil
 }
+
+// Record post-charges an AUXILIARY call of the turn — tokens it has already
+// spent, in the windows current at the instant it returned, on the turn's
+// pinned clock — refusing nothing, and keeps every capped window the answer
+// shows with no room left, exactly as a round's answer is kept. See
+// [auxspend.Budget.Record].
+//
+// RECORDED WHOLE, past a ceiling included: the call happened, and a refusal
+// here would leave the counter under its ceiling with the money gone, which
+// is the leak the auxiliary seam exists to close. What the call changes is the
+// turn's NEXT call, which [meter.Refused] and [meter.Held] now hold.
+//
+// A partial write ([coord.SeatUncountedError]: the company counted it and the
+// seat did not) answers no counters, so nothing is kept from it, and the next
+// round's charge is the gate as it is after any answer the meter cannot read.
+func (m *meter) Record(ctx context.Context, tokens int, at time.Time) error {
+	got, err := m.budgets.PostCharge(ctx, m.agentScope, tokens, coord.WindowsAt(at, m.basis.zone))
+	if err != nil {
+		return fmt.Errorf("engine: record auxiliary spend: %w", err)
+	}
+	m.keepFilled(got)
+	return nil
+}
+
+// Held is [meter.Refused] as the turn's auxiliary calls ask it: the error the
+// turn's loop would stop on ([toolloop.Refusal]), or nil. See
+// [auxspend.Budget.Held].
+func (m *meter) Held() error { return toolloop.Refusal(m) }
 
 // Refused reports the refusal every further charge of this turn is certain to
 // meet, if this meter has seen one. See [toolloop.BudgetMeter.Refused].
@@ -452,8 +498,8 @@ func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 // the sandbox's floor both test the reader against nil to mean "uncapped", and
 // a typed nil passes that test and panics on its first read.
 func (e *Engine) remainingFor(c *Company, handle string) runner.Remaining {
-	m, ok := e.meterFor(c, handle).(*meter)
-	if !ok || m == nil || !m.basis.capped() {
+	m := e.meterFor(c, handle)
+	if m == nil || !m.basis.capped() {
 		return nil
 	}
 	return m
@@ -462,12 +508,30 @@ func (e *Engine) remainingFor(c *Company, handle string) runner.Remaining {
 // resumeMeterFor is the meter for a RESUMED segment of a seat's turn:
 // [Engine.meterFor]'s, having read the counters once ([meter.observe]), since
 // a resume is the one segment the budget park does not ask before it runs.
-func (e *Engine) resumeMeterFor(ctx context.Context, c *Company, handle string) toolloop.BudgetMeter {
-	budget := e.meterFor(c, handle)
-	if m, ok := budget.(*meter); ok && m != nil {
+func (e *Engine) resumeMeterFor(ctx context.Context, c *Company, handle string) *meter {
+	m := e.meterFor(c, handle)
+	if m != nil {
 		m.observe(ctx)
 	}
-	return budget
+	return m
+}
+
+// budget is m as a turn's runner is handed it, and auxiliary as the turn's
+// auxiliary calls are: each a NIL INTERFACE where there is no meter, never an
+// interface holding a nil *meter, which every reader tests against nil to mean
+// "nothing to charge" and would otherwise call into and panic on.
+func (m *meter) budget() toolloop.BudgetMeter {
+	if m == nil {
+		return nil
+	}
+	return m
+}
+
+func (m *meter) auxiliary() auxspend.Budget {
+	if m == nil {
+		return nil
+	}
+	return m
 }
 
 // meterFor builds the meter for one seat's turn, or nil.
@@ -489,7 +553,11 @@ func (e *Engine) resumeMeterFor(ctx context.Context, c *Company, handle string) 
 //
 // The basis — the company's ceilings, the seat's own and the clock the windows
 // are cut on — is the epoch's c, which is the one the turn was PINNED to.
-func (e *Engine) meterFor(c *Company, handle string) toolloop.BudgetMeter {
+//
+// The concrete *meter, so a caller that needs its headroom or its windows has
+// them without an assertion; [meter.budget] and [meter.auxiliary] are how it
+// becomes an interface, nil where it is nil.
+func (e *Engine) meterFor(c *Company, handle string) *meter {
 	if e.backends == nil || e.backends.Fleet == nil || c == nil || c.Org == nil {
 		return nil
 	}

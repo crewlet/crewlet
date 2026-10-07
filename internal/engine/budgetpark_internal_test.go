@@ -410,8 +410,8 @@ func TestTheParkWaitsOutTheWindowThatEndsLast(t *testing.T) {
 func TestARaisedCeilingReleasesASeatParkedOnARefusedRound(t *testing.T) {
 	t.Parallel()
 	r := newParkRig(t, "100")
-	m, ok := r.e.meterFor(r.e.Company(), "lead").(*meter)
-	if !ok {
+	m := r.e.meterFor(r.e.Company(), "lead")
+	if m == nil {
 		t.Fatal("the Lead has no meter")
 	}
 	m.now = r.clock
@@ -472,6 +472,10 @@ func (u usageReader) Used(_ context.Context, scope string, w coord.Windows) (coo
 }
 
 func (usageReader) Charge(context.Context, coord.ChargeRequest) (coord.Spend, error) {
+	return coord.Spend{}, errors.New("not used by these cases")
+}
+
+func (usageReader) PostCharge(context.Context, string, int, coord.Windows) (coord.Spend, error) {
 	return coord.Spend{}, errors.New("not used by these cases")
 }
 

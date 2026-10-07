@@ -2015,6 +2015,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// else said this run existed. Every path out of this frame that returns
 	// closes it — see [Engine.publishTurnStarted].
 	e.publishTurnStarted(ctx, tel, req.Depth, req.DelegationChain, false)
+	// THE TURN'S METER, BEFORE ITS FIRST MODEL CALL — and the prefetch below
+	// makes several, on the seat's auxiliary chain, as the conversation
+	// block's condensation does after it. Every one is charged through this
+	// meter ([turnTelemetry.aux]), so a window they fill is held before the
+	// executor's first round rather than learned from that round's refusal
+	// once the vendor has billed it. Read off the PINNED epoch, so a revision
+	// that raises a ceiling mid-turn cannot move the limit a round is judged
+	// against.
+	tel.budget = e.meterFor(company, req.Handle)
 	// THE ASK, not the partition: a coalesced conversation reaches the model
 	// as ONE merged digest rather than as its constituents concatenated —
 	// see [Request.Trigger] and internal/engine/coalesce.go.
@@ -2056,9 +2065,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Steer:        box,
 		Markers:      e.markers(),
 		Latch:        e.onboarded,
-		// Read off the PINNED epoch, so a revision that raises a ceiling
-		// mid-turn cannot move the limit a round is judged against.
-		Budget: e.meterFor(company, req.Handle),
+		// The meter the context assembly was charged through — see above.
+		Budget: tel.budget.budget(),
 		// The round-cap extension judge, from the same pinned epoch. It
 		// was never supplied, so every exhaustion rescued with "no_judge"
 		// and the extension mechanism was inert.

@@ -1517,13 +1517,17 @@ the room left *before* it starts:
   seat's behalf. A pass does not start for a seat or company with no room
   left, and each completion it makes is recorded in full on the seat's counter
   and the company's, past the ceiling included.
-- **A turn's context assembly** — the memory filter, the knowledge query and
+- **A turn's own auxiliary calls** — the memory filter, the knowledge query and
   the episode summary the [turn-start prefetch](../concepts/agent-learning.md)
-  asks the seat's auxiliary model for before the first phase opens. Its gate is
-  the turn's own: a delivery to a seat whose window has no room left is
+  asks the seat's auxiliary model for before the first phase opens, and every
+  rewrite the turn's conversation block, ledgers, judge and tools need. Their
+  gate is the turn's own: a delivery to a seat whose window has no room left is
   [parked](../concepts/agent-runtime.md#the-budget-park) before it runs, so no
-  prefetch starts for it, and each completion it does make is recorded on the
-  seat's counter and the company's like an auxiliary pass.
+  prefetch starts for it; each completion the turn does make is recorded on the
+  seat's counter and the company's through the turn's own meter, which then
+  holds any window the completion filled; and the turn makes no further call,
+  auxiliary or not, while that window is full — except its task card's
+  rewrite, the turn's record, made after its last round.
 - **A person's knowledge answer** — the dashboard's ⌘K answer
   ([`answer_knowledge`](../reference/api-endpoints.md#answering-a-question-from-the-companys-knowledge)).
   A person has no seat budget, so it is gated on the **company's** windows
@@ -1531,7 +1535,10 @@ the room left *before* it starts:
   has no room — and recorded on the company's counter alone.
 
 In each case the next round the seat or the company attempts is refused
-against the recorded figure.
+against the recorded figure — and for a turn's own auxiliary calls, and for a
+coding run its resumed turn collects, that round is refused before it is sent:
+the turn's meter holds what the post-charge answered, or reads it once before
+the resumed turn's first call.
 
 ### Structured Logging
 

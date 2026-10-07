@@ -111,12 +111,27 @@ type LLMJudge struct {
 
 	// fit rewrites evidence past its budget — see [LLMJudge.WithCompactor].
 	fit Fitter
+
+	// hold is the turn's budget, asked once the evidence is rendered — see
+	// [LLMJudge.WithHold].
+	hold Hold
 }
 
 // Fitter rewrites a text that will not fit its budget: the seat's compactor.
 type Fitter interface {
 	Fit(ctx context.Context, kind compact.Kind, text string, budget int) (compact.Result, error)
 }
+
+// Hold is the turn's budget as the judge asks it: the refusal its call is
+// certain to meet, or nil.
+type Hold interface {
+	Held() error
+}
+
+// ErrHeld is a judge that did not call its model because the turn's budget
+// already refuses the call: it would be billed, and its charge refused. Not a
+// failed judge — [Consider] rescues it as the budget it is.
+var ErrHeld = errors.New("extension: the turn's budget refuses the judge's call")
 
 // NewLLMJudge builds a judge over one model. A nil model yields a nil judge,
 // which [Consider] already handles as "no judge" — the alternative, a judge
@@ -142,18 +157,46 @@ func (j *LLMJudge) WithCompactor(fit Fitter) *LLMJudge {
 	return j
 }
 
+// WithHold makes the judge ask the turn's budget before it calls its model,
+// and call nothing on a refusal ([ErrHeld]). Nil-safe, like WithCompactor.
+//
+// ASKED AFTER THE EVIDENCE IS RENDERED, never only before the judge is
+// consulted: rendering can rewrite the task, the phase's last words or a
+// call's arguments with the seat's auxiliary model, and each rewrite is
+// charged to the same counters the judge's call is. A rewrite that fills a
+// window leaves the judge's call certain to be refused, and asked only
+// beforehand, that call was made, billed, and then refused.
+func (j *LLMJudge) WithHold(hold Hold) *LLMJudge {
+	if j != nil {
+		j.hold = hold
+	}
+	return j
+}
+
 // Decide asks the model and reads its verdict.
 func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	if j == nil || j.model == nil {
 		return Decision{}, ErrNoVerdict
 	}
+	evidence := j.render(ctx, req)
+	if j.hold != nil {
+		if held := j.hold.Held(); held != nil {
+			// NOT ASKED: no call was made, so there is nothing to report
+			// or to charge — see [WithHold].
+			return Decision{}, fmt.Errorf("%w: %w", ErrHeld, held)
+		}
+	}
+	// THE CALL'S OWN CLOCK, started once the evidence is in hand: rendering
+	// can wait on rewrites, each under its own deadline, and a timer started
+	// before it handed the one call [JudgeTimeout] bounds whatever the
+	// rewrites left of it — none at all after a slow one.
 	call, cancel := context.WithTimeout(ctx, JudgeTimeout)
 	defer cancel()
 
 	completion, err := j.model.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: judgeSystemPrompt},
-			{Role: llm.RoleUser, Content: j.render(ctx, req)},
+			{Role: llm.RoleUser, Content: evidence},
 		},
 		// NO TOOLS: the answer is two lines of text, and a tool on the
 		// surface invites a model to call it and answer nothing.
