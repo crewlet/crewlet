@@ -27,6 +27,7 @@ import type {
   OrgProjection,
   ScheduleRow,
 } from "~/protocol/index.ts";
+import { emptyDay } from "~/test/myWork.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -196,6 +197,7 @@ const DEFAULTS: Record<string, unknown> = {
   turns: { turns: [], next: null },
   agent: { llm_history: [], next: "" },
   work_inbox: { handle: "", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  work_my_work: emptyDay("swe"),
   tokens: {
     since: "2026-09-15T00:00:00Z",
     until: "2026-09-22T00:00:00Z",

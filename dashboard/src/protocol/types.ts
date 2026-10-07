@@ -3901,7 +3901,7 @@ export interface WorkMyWork {
   /** Every block counted in FULL, by the predicate that drew its page and in
    *  the same transaction. A block is a page of at most twenty rows; its total
    *  is the claim — so a count is drawn from here, never from a length. */
-  totals?: WorkMyWorkTotals;
+  totals: WorkMyWorkTotals;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;

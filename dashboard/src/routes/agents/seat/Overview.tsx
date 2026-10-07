@@ -964,7 +964,7 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
     { handle: seat.handle },
     { enabled: mayRead && seat.handle !== "", pollMs: 60_000 },
   );
-  const priorities = mine.data?.totals?.priorities;
+  const priorities = mine.data?.totals.priorities;
   const who = self ? "you" : "them";
   return (
     <div className="prof-overview">

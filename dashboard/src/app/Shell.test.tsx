@@ -26,6 +26,7 @@ import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
 import { Project } from "~/routes/work/Project.tsx";
 import { healthFrame } from "~/test/health.ts";
+import { emptyDay } from "~/test/myWork.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -182,6 +183,7 @@ const EMPTY: Record<string, unknown> = {
   work_views: { complete: true, views: [] },
   work_saved_views: { complete: true, views: [] },
   work_projects: { projects: [] },
+  work_my_work: emptyDay("ada"),
   fleet: { nodes: [], seats: [], duties: [], target_epoch: 0 },
   retention: { domains: [], nodes: [], snapshots: [], alarms: [], register_readable: true },
   integrations: { integrations: [], tools: [], traffic_known: true, traffic_since: null },

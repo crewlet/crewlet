@@ -474,7 +474,7 @@ export function MyWork({ section }: { section: MeSection }) {
                     whose={whose}
                     they={they}
                     theirs={ownDay ? undefined : whoseName}
-                    total={mine.totals?.priorities.total}
+                    total={mine.totals.priorities.total}
                     now={now}
                     chrome={chrome}
                     hrefOf={workHref}
@@ -495,7 +495,7 @@ export function MyWork({ section }: { section: MeSection }) {
               {tab === "unblocked" && (
                 <Block
                   rows={mine.unblocked_recent}
-                  total={mine.totals?.unblocked_recent}
+                  total={mine.totals.unblocked_recent}
                   now={now}
                   chrome={chrome}
                   hint="Work whose blockers have all finished — the one section about a change rather than a state."
@@ -505,7 +505,7 @@ export function MyWork({ section }: { section: MeSection }) {
               {tab === "collaborating" && (
                 <Block
                   rows={mine.collaborating}
-                  total={mine.totals?.collaborating}
+                  total={mine.totals.collaborating}
                   now={now}
                   chrome={chrome}
                   hint="Brought on without owning."
@@ -515,7 +515,7 @@ export function MyWork({ section }: { section: MeSection }) {
               {tab === "watching" && (
                 <Block
                   rows={mine.watching_recent}
-                  total={mine.totals?.watching_recent}
+                  total={mine.totals.watching_recent}
                   now={now}
                   chrome={chrome}
                   hint="Followed, and changed recently."
@@ -537,7 +537,7 @@ export function MyWork({ section }: { section: MeSection }) {
                     />
                     <PageFoot
                       shown={mine.checklist_items.length}
-                      claim={mine.totals?.checklist_items}
+                      claim={mine.totals.checklist_items}
                       order="by-task"
                     />
                   </>
@@ -782,18 +782,15 @@ function countFor(
   mine: WorkMyWork,
   listed: { assigned?: WorkClaimTotal; askedBy?: WorkClaimTotal },
 ): string {
-  // `totals` is optional on the wire: a node from before the engine counted
-  // the blocks answers without it, and a tab with no count is honest where a
-  // page length would be a ceiling read as a total.
   const totals = mine.totals;
   const claim: WorkClaimTotal | undefined = {
     assigned: listed.assigned,
     "asked-by-me": listed.askedBy,
-    "asked-of-me": totals?.asked_of_me,
-    unblocked: totals?.unblocked_recent,
-    collaborating: totals?.collaborating,
-    watching: totals?.watching_recent,
-    checklist: totals?.checklist_items,
+    "asked-of-me": totals.asked_of_me,
+    unblocked: totals.unblocked_recent,
+    collaborating: totals.collaborating,
+    watching: totals.watching_recent,
+    checklist: totals.checklist_items,
   }[tab];
   if (claim === undefined) return "";
   return pageCount(claim.total, claim.capped === true);
@@ -920,7 +917,7 @@ function AskedOfMe({
       />
     );
   }
-  const claim = mine.totals?.asked_of_me;
+  const claim = mine.totals.asked_of_me;
   return (
     <div className="col gap-2">
       {/* WHY THE ANSWERS DO NOT PRESS, said once above them — each button
