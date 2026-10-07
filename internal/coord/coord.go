@@ -160,8 +160,8 @@ import (
 // deploy converges because that is what a rolling deploy does.
 //
 // Two consequences worth stating plainly. Schema evolution here is
-// additive-only: a field the vN build does not know is invisible to it, one
-// it requires is a crash. And a downgrade across a bump needs a full drain,
+// additive-only: a field the lower-protocol build does not know is invisible
+// to it, one it requires is a crash. And a downgrade across a bump needs a full drain,
 // because the gate only ever refuses a HIGHER-protocol claim beside a lower
 // lease, so a lower-protocol build takes over a higher node's expired leases
 // unchecked.

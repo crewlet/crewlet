@@ -38,10 +38,10 @@ func delivered(ns *server.Server) int64 {
 
 // A GATED CLAIM COSTS THE SAME WITH TWO THOUSAND LEASES HELD AS WITH TEN.
 //
-// The gates judged every lease in the fleet by LISTING both buckets, on every
-// gated claim twice, on every duty claim and in every FleetProtocolFloor —
-// so a claim's cost grew with the leases already held, and a fleet claiming
-// its seats from cold grew with their square (gate.go has the measurements).
+// The gate judged every lease in the fleet by LISTING both buckets, on every
+// gated claim twice and in every FleetProtocolFloor — so a claim's cost grew
+// with the leases already held, and a fleet claiming its seats from cold grew
+// with their square (gate.go has the measurements).
 // What a listing costs is its records, delivered to the claimant one by one,
 // and the broker counts every message it delivers: so the case holds a number
 // of seats, claims more gated, and compares what a claim was delivered at the
