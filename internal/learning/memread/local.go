@@ -233,13 +233,21 @@ type EpisodeCompaction struct {
 // row carries: the opening a listing draws on one line, the rest one read away
 // ([Reader.Episode]).
 //
-// SIX HUNDRED, the figure a prompt is shown of a past turn's own words before
-// they are condensed (learning.EpisodeAccountBytes), and for its reason: a chat
-// message or two, or a review's account of what landed, is whole, so a text a
-// seat is shown whole is whole on the screen too. It is what bounds the page —
-// fifty rows of two openings are sixty kilobytes, where whole they were bounded
-// only by fifty events.
-const ListedTextBytes = 600
+// THE PROMPT'S OWN FIGURE, [learning.EpisodeAccountBytes] — how much of a past
+// turn's own words a seat is shown before they are condensed, sized to a chat
+// message or two and a review's account of what landed — taken by reference
+// rather than written again, because the rule it keeps holds only while the two
+// are one number: a text the screen lists whole is one a seat was shown whole.
+// (Not quite the converse: a prompt measures a text drawn on one line, its runs
+// of whitespace collapsed, so a text the screen opens may still have been whole
+// there.) Written twice, a change to the prompt's figure left the screen
+// cutting what seats read whole, or showing whole what they never saw.
+//
+// It is also what bounds the page: fifty rows of two openings, sixty kilobytes
+// at six hundred bytes, where whole they were bounded only by fifty events —
+// and the prompt, which re-sends three such turns every round, keeps the
+// figure far inside the transport's bound (queue.MaxPayloadBytes).
+const ListedTextBytes = learning.EpisodeAccountBytes
 
 // EpisodeDetail is one episode read whole, as the `agent_episode` answer sends
 // it: its ask and its account complete.

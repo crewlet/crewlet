@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -824,6 +825,52 @@ func TestAListedEpisodeCarriesItsOpeningsAndOneReadHasItWhole(t *testing.T) {
 		if absent, err := reader.Episode(t.Context(), "swe", id); err != nil || absent.Episode != nil {
 			t.Errorf("reading %q of swe = %+v, %v; want no episode and no failure", id, absent, err)
 		}
+	}
+}
+
+// WHAT A SEAT IS SHOWN WHOLE IS LISTED WHOLE. The screen's opening is the
+// prompt's own figure (learning.EpisodeAccountBytes): an ask exactly that long
+// is one a recalled turn shows a seat whole — no rewrite asked for — and the
+// listing carries it whole too; a byte longer, the prompt condenses it and the
+// listing opens it. Two figures, they drift: a screen cutting what every seat
+// reads whole, or listing whole what no seat was ever shown.
+func TestWhatASeatIsShownWholeIsListedWhole(t *testing.T) {
+	t.Parallel()
+	n := newNode(t, "solo:1")
+	at := learning.EpisodeAccountBytes
+	shown := strings.Repeat("x", at)
+	turns := []learning.Episode{{
+		ID: "shown", Handle: "swe", TurnID: "turn-1", WorkKey: "wk-shown", Kind: learning.KindRaw,
+		TaskSummary: "a message", Ask: shown, StartedAt: pinned, EndedAt: pinned.Add(time.Minute),
+	}, {
+		ID: "condensed", Handle: "swe", TurnID: "turn-2", WorkKey: "wk-condensed", Kind: learning.KindRaw,
+		TaskSummary: "a message", Ask: shown + "y", StartedAt: pinned, EndedAt: pinned.Add(2 * time.Minute),
+	}}
+	for _, ep := range turns {
+		if _, err := n.stores.Episodes.Append(t.Context(), ep); err != nil {
+			t.Fatalf("episode %s: %v", ep.ID, err)
+		}
+	}
+	// The zero binding can rewrite nothing: a text the prompt asks it to
+	// condense would fail, and one shown whole never reaches it.
+	if prompt := learning.PastTurns(t.Context(), turns[:1], compact.Bound{}, at); prompt[0].Ask != shown {
+		t.Fatalf("the prompt showed a %d-byte ask as %q, want it whole", at, prompt[0].Ask)
+	}
+	reader := &memread.Reader{Owner: n.owner, Local: n.stores}
+	got, err := reader.Memory(t.Context(), "swe", 0)
+	if err != nil || len(got.Episodes) != 2 {
+		t.Fatalf("Memory = %d episodes, %v", len(got.Episodes), err)
+	}
+	listed := map[string]memread.EpisodeRow{}
+	for _, row := range got.Episodes {
+		listed[row.ID] = row
+	}
+	if row := listed["shown"]; row.Ask != shown || row.AskBytes != at {
+		t.Fatalf("the ask a seat is shown whole was listed as %d of %d bytes", len(row.Ask), row.AskBytes)
+	}
+	if row := listed["condensed"]; len(row.Ask) >= row.AskBytes || row.AskBytes != at+1 {
+		t.Fatalf("an ask the prompt condenses was listed as %d of %d bytes, want its opening",
+			len(row.Ask), row.AskBytes)
 	}
 }
 

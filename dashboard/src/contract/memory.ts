@@ -64,7 +64,10 @@ interface Episode {
   task_summary: string;
   /** What the turn was asked: "" for a turn recorded before the ask was
    *  stored, and on every compacted row. On a LISTED row this is its opening
-   *  — at most 600 bytes — and `agent_episode` reads it whole. */
+   *  — at most 600 bytes, the engine's `learning.EpisodeAccountBytes`: what a
+   *  seat is shown of a past turn's words before they are condensed, so a text
+   *  listed whole is one a seat was shown whole — and `agent_episode` reads it
+   *  whole. */
   ask: string;
   /** The size of the whole ask in bytes: the ask above is all of it exactly
    *  when this is its length. Zero from a holder on a build that sends no
