@@ -597,6 +597,7 @@ describe("the screens", () => {
         turn: {
           turn_id: "t-1",
           truncated: false,
+          nodes: [],
           events: [
             pricedPhase("2026-09-13T10:01:30Z"),
             // THE TURN'S OWN RECORD CARRIES NO PRICE, because the engine
