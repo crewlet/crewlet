@@ -626,10 +626,11 @@ type FleetStore struct {
 	// a domain's published floor, a capacity operation, a node's admission,
 	// its maintenance acknowledgement and a seat pause. They are together
 	// because none of them may ever expire — each is read to decide what
-	// somebody ELSE may delete, publish or run — and every listing over the bucket filters by
-	// class, which is the load-bearing half of sharing it. The document
-	// families that once had buckets beside this one left with the last
-	// projector; only their key grammar outlived them, in coord/keys.go.
+	// somebody ELSE may delete, publish or run — and every listing over the
+	// bucket filters by class, which is the load-bearing half of sharing it.
+	// The document families that once had buckets beside this one left with
+	// the last projector; only their key grammar outlived them, in
+	// coord/keys.go.
 	positions jetstream.KeyValue
 
 	// js is the JetStream context, held for what a bucket's own KeyValue
