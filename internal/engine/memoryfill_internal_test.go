@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -387,6 +388,109 @@ func TestTheFillReachesASeatsEpisodesFromWhatTheyStore(t *testing.T) {
 	}
 	if n, err := episodes.Unsearchable(t.Context(), "a", fake.Model()); err != nil || n != 0 {
 		t.Fatalf("after the fill %d episodes are unsearchable, %v", n, err)
+	}
+}
+
+// slowProvider is the fake behind a provider that answers only so many
+// requests in a tick before the tick's minute is gone: a call needing more than
+// are left fails as a deadline does, with every request it was answered, and
+// its requests count against the tick either way.
+type slowProvider struct {
+	*embeddings.Fake
+	perTick, left int
+}
+
+func (s *slowProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	groups, err := s.Limits().Requests(texts)
+	if err != nil {
+		return nil, err
+	}
+	if len(groups) > s.left {
+		s.left = 0
+		return nil, &embeddings.Error{Model: s.Model(), Class: embeddings.ErrTransient,
+			Err: context.DeadlineExceeded}
+	}
+	s.left -= len(groups)
+	return s.Fake.EmbedBatch(ctx, texts)
+}
+
+// A ROW LONGER THAN A TICK DOES NOT STOP THE FILL. An episode's ask is stored
+// whole, so one row can need more requests than a tick has time for; sent as
+// one call it failed with the deadline every tick, threw away what it had been
+// answered, and — newest first, so the first row again — stopped every row and
+// every seat after it for good. Sent a request at a time with what each
+// embedded kept, it is finished across ticks, as the vector of its whole text,
+// and the seats behind it are filled.
+func TestARowLongerThanATickDoesNotStopTheFill(t *testing.T) {
+	t.Parallel()
+	limits := embeddings.Limits{InputBytes: 64, BatchInputs: 4, BatchBytes: 4096}
+	db, diary := diaryFixture(t, map[string][]string{"id-b": facts(3, "b")})
+	words := make([]string, 600)
+	for i := range words {
+		words[i] = fmt.Sprintf("w%04dz", i)
+	}
+	ask := strings.Join(words, " ")
+	at := time.Now().UTC().Add(-time.Hour)
+	episodes := learning.NewEpisodes(db)
+	if _, err := episodes.Append(t.Context(), learning.Episode{
+		ID: "e1", Handle: "a", Role: "Engineer", TurnID: "t1", StartedAt: at, EndedAt: at,
+		TaskSummary: "Message from Ana: Slack message", Ask: ask,
+		PlanSummary: "read the log and filed the regression", ReviewOutcome: "done",
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	text := "Message from Ana: Slack message\n\n" + ask + "\n\nread the log and filed the regression"
+	pieces := embeddings.Chunks(text, limits.InputBytes)
+	requests := (len(pieces) + limits.BatchInputs - 1) / limits.BatchInputs
+	slow := &slowProvider{Fake: embeddings.NewFake(64), perTick: 8}
+	slow.SetLimits(limits)
+	if requests <= slow.perTick || requests > 4*slow.perTick {
+		t.Fatalf("the row needs %d requests, want more than a tick's %d and a few ticks' worth",
+			requests, slow.perTick)
+	}
+	seats := allEstablished("a", "b")
+	ids := func(h string) string { return "id-" + h }
+	memory := embeddings.NewRefusals()
+	resume := ""
+	for minute := 0; ; minute++ {
+		if minute > 2*requests {
+			t.Fatalf("after %d ticks the row is still unfilled and seat b has %d notes left",
+				minute, unfilled(t, diary, "id-b", slow.Model()))
+		}
+		slow.left = slow.perTick
+		report := tick(t, db, seats, ids, slow, memory, fillAt.Add(time.Duration(minute)*time.Minute),
+			memoryFillRequestsPerTick, memoryFillBytesPerTick, resume)
+		resume = report.resume
+		if minute == 0 {
+			// A TICK THAT FILLED NOTHING BUT MOVED THE ROW ON SAYS SO.
+			named := false
+			for _, line := range report.lines(slow) {
+				named = named || (line.msg == "memory_fill_input_continued" &&
+					slices.Contains(line.args, any("e1")))
+			}
+			if !named {
+				t.Fatalf("the first tick sent %d requests of the row and reported %v, "+
+					"want the row named as continued", report.pass.Requests, report.lines(slow))
+			}
+		}
+		if n, err := episodes.Unsearchable(t.Context(), "a", slow.Model()); err != nil {
+			t.Fatal(err)
+		} else if n == 0 && unfilled(t, diary, "id-b", slow.Model()) == 0 {
+			break
+		}
+	}
+	whole, err := embeddings.EmbedWhole(t.Context(), func() *embeddings.Fake {
+		f := embeddings.NewFake(64)
+		f.SetLimits(limits)
+		return f
+	}(), text)
+	if err != nil {
+		t.Fatalf("EmbedWhole: %v", err)
+	}
+	hits, err := episodes.Recall(t.Context(), learning.RecallQuery{Handle: "a", Embedding: whole,
+		Model: slow.Model()})
+	if err != nil || len(hits) != 1 || hits[0].Episode.ID != "e1" || hits[0].Similarity < 0.9999 {
+		t.Fatalf("recall by the whole text's vector = %+v, %v; want the row, as that vector", hits, err)
 	}
 }
 

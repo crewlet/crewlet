@@ -459,8 +459,8 @@ func TestAPassEmbedsEachInputWholeAsEmbedWholeWould(t *testing.T) {
 }
 
 // A PASS IS BOUNDED BY WHAT IT SENDS, refusals included: a pass whose bytes are
-// spent sends no further call, and the first call of a pass is always sent so
-// an input larger than a whole pass still gets one.
+// spent sends no further call, and the first call of a pass always carries one
+// piece, so an input larger than a whole pass still moves.
 func TestAPassIsBoundedByWhatItSends(t *testing.T) {
 	t.Parallel()
 	fake := embeddings.NewFake(16)
@@ -495,5 +495,267 @@ func TestAPassIsBoundedByWhatItSends(t *testing.T) {
 	}
 	if spent.Requests != 2 || spent.Open() {
 		t.Fatalf("refused requests were not charged: %d sent, open %v", spent.Requests, spent.Open())
+	}
+}
+
+// longLimits is a small model's limits — four pieces of at most 64 bytes a
+// request — so a text of a few kilobytes needs many requests.
+var longLimits = embeddings.Limits{InputBytes: 64, BatchInputs: 4, BatchBytes: 4096}
+
+// longInput is an input of distinct words — so every piece embeds to its own
+// vector and a word names the piece it is in — and its pieces under
+// longLimits.
+func longInput(t *testing.T, words int) (embeddings.PassInput, []string) {
+	t.Helper()
+	parts := make([]string, words)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("w%04dz", i)
+	}
+	text := strings.Join(parts, " ")
+	pieces := embeddings.Chunks(text, longLimits.InputBytes)
+	if len(pieces) < 4*longLimits.BatchInputs {
+		t.Fatalf("the fixture is %d pieces, want enough for several requests", len(pieces))
+	}
+	return embeddings.PassInput{Scope: "episodes/a", ID: "long", Text: text}, pieces
+}
+
+// longFake is a fake at longLimits.
+func longFake() *embeddings.Fake {
+	f := embeddings.NewFake(16)
+	f.SetLimits(longLimits)
+	return f
+}
+
+// wholeOf is the vector EmbedWhole gives text under longLimits.
+func wholeOf(t *testing.T, text string) []float32 {
+	t.Helper()
+	whole, err := embeddings.EmbedWhole(t.Context(), longFake(), text)
+	if err != nil {
+		t.Fatalf("EmbedWhole: %v", err)
+	}
+	return whole
+}
+
+// vectorsOf collects what a pass hands its store, by input.
+type vectorsOf map[string][]float32
+
+func (v vectorsOf) store(inputs []embeddings.PassInput, vectors [][]float32) error {
+	for i, in := range inputs {
+		v[in.ID] = vectors[i]
+	}
+	return nil
+}
+
+// AN INPUT TOO LONG FOR ONE REQUEST IS SENT A REQUEST AT A TIME, AND POOLED
+// EXACTLY: each call is one request of its next pieces, no request is sent
+// twice, and the vector is the pool EmbedWhole gives the text, to the bit —
+// where the whole input went as one call of every request at once, which a
+// pass could not bound.
+func TestALongInputIsSentARequestAtATimeAndPooledExactly(t *testing.T) {
+	t.Parallel()
+	input, pieces := longInput(t, 400)
+	fake := longFake()
+	got := vectorsOf{}
+	pass := embeddings.NewPass(embeddings.NewRefusals(), passAt, 64, 1<<20)
+	if err := pass.Embed(t.Context(), fake, []embeddings.PassInput{input}, got.store); err != nil {
+		t.Fatal(err)
+	}
+	want := (len(pieces) + longLimits.BatchInputs - 1) / longLimits.BatchInputs
+	if pass.Requests != want || len(fake.Requests()) != want {
+		t.Fatalf("the input went in %d requests (%d recorded), want the %d its %d pieces need",
+			pass.Requests, len(fake.Requests()), want, len(pieces))
+	}
+	var sent []string
+	for _, request := range fake.Requests() {
+		sent = append(sent, request...)
+	}
+	if !slices.Equal(sent, pieces) {
+		t.Fatalf("the requests carried %d pieces, want each of the %d once and in order",
+			len(sent), len(pieces))
+	}
+	if !slices.Equal(got["long"], wholeOf(t, input.Text)) || pass.Accepted != 1 {
+		t.Fatalf("the vector is not the pool EmbedWhole gives the text (%d accepted)", pass.Accepted)
+	}
+	if len(pass.Unfinished) != 0 {
+		t.Fatalf("a finished input was reported unfinished: %+v", pass.Unfinished)
+	}
+}
+
+// AN INPUT LONGER THAN A PASS IS FINISHED BY THE PASSES AFTER IT, WHERE THE
+// LAST STOPPED: a pass never sends more requests than it was given, what it
+// embedded is kept, and the next pass begins at the next piece — so a text
+// longer than any one pass is still embedded, whole, and pays for each piece
+// once. Sent as one call it broke the pass's bound by however long it was.
+func TestAnInputLongerThanAPassIsFinishedByThePassesAfterIt(t *testing.T) {
+	t.Parallel()
+	input, pieces := longInput(t, 400)
+	fake := longFake()
+	memory := embeddings.NewRefusals()
+	got := vectorsOf{}
+	const perPass = 3
+	embedded := 0
+	for i := 0; ; i++ {
+		if i > len(pieces) {
+			t.Fatal("the passes never finished the input")
+		}
+		before := len(fake.Requests())
+		pass := embeddings.NewPass(memory, passAt.Add(time.Duration(i)*time.Minute), perPass, 1<<20)
+		if err := pass.Embed(t.Context(), fake, []embeddings.PassInput{input}, got.store); err != nil {
+			t.Fatal(err)
+		}
+		if pass.Requests > perPass {
+			t.Fatalf("pass %d sent %d requests, past its %d", i, pass.Requests, perPass)
+		}
+		if first := fake.Requests()[before]; first[0] != pieces[embedded] {
+			t.Fatalf("pass %d began at %q, want the piece the last stopped before (%q)",
+				i, first[0], pieces[embedded])
+		}
+		if _, done := got["long"]; done {
+			break
+		}
+		if len(pass.Unfinished) != 1 || pass.Unfinished[0].Input.ID != "long" ||
+			pass.Unfinished[0].Pieces != len(pieces) ||
+			pass.Unfinished[0].Embedded != embedded+perPass*longLimits.BatchInputs {
+			t.Fatalf("pass %d reported %+v unfinished, want the input with %d of %d pieces",
+				i, pass.Unfinished, embedded+perPass*longLimits.BatchInputs, len(pieces))
+		}
+		embedded = pass.Unfinished[0].Embedded
+	}
+	var sent []string
+	for _, request := range fake.Requests() {
+		sent = append(sent, request...)
+	}
+	if !slices.Equal(sent, pieces) {
+		t.Fatalf("the passes sent %d pieces between them, want each of the %d once",
+			len(sent), len(pieces))
+	}
+	if !slices.Equal(got["long"], wholeOf(t, input.Text)) {
+		t.Fatal("the input finished across passes is not the pool EmbedWhole gives it")
+	}
+	if memory.Len() != 0 {
+		t.Fatalf("the memory still holds %d inputs after the input was finished", memory.Len())
+	}
+}
+
+// A FAILURE PART WAY THROUGH A LONG INPUT COSTS THE REQUEST IT MET, NOT THE
+// INPUT: the pass ends, as any failure that is not about an input ends it, and
+// the next pass sends that request again and goes on from there. Sent as one
+// call, a failure part way threw away every request already answered, and the
+// next pass began with the same input — so one that always ran out of time or
+// met a rate limit stopped the walk for good.
+func TestAFailurePartWayThroughALongInputCostsOnlyTheRequestItMet(t *testing.T) {
+	t.Parallel()
+	input, pieces := longInput(t, 400)
+	fake := longFake()
+	stop := 5 * longLimits.BatchInputs // the piece the sixth request begins with
+	fake.FailTransiently(strings.Fields(pieces[stop])[0], 1)
+	memory := embeddings.NewRefusals()
+	got := vectorsOf{}
+	first := embeddings.NewPass(memory, passAt, 64, 1<<20)
+	if err := first.Embed(t.Context(), fake, []embeddings.PassInput{input}, got.store); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(first.Err(), embeddings.ErrTransient) || first.Requests != 6 {
+		t.Fatalf("the first pass ended with %v after %d requests, want the failure the "+
+			"sixth met", first.Err(), first.Requests)
+	}
+	if len(first.Unfinished) != 1 || first.Unfinished[0].Embedded != stop {
+		t.Fatalf("the first pass left %+v unfinished, want the %d pieces before the failure",
+			first.Unfinished, stop)
+	}
+	before := len(fake.Requests())
+	next := embeddings.NewPass(memory, passAt.Add(time.Minute), 64, 1<<20)
+	if err := next.Embed(t.Context(), fake, []embeddings.PassInput{input}, got.store); err != nil {
+		t.Fatal(err)
+	}
+	if resumed := fake.Requests()[before]; resumed[0] != pieces[stop] {
+		t.Fatalf("the next pass began at %q, want the request the failure met (%q)",
+			resumed[0], pieces[stop])
+	}
+	if !slices.Equal(got["long"], wholeOf(t, input.Text)) {
+		t.Fatal("the input finished after a failure is not the pool EmbedWhole gives it")
+	}
+}
+
+// A PASS'S BYTES BOUND A LONG INPUT TOO: a pass sends what its bytes cover and
+// no more — by one piece at most, on its first call, where its whole allowance
+// is smaller than one — so the text of one input cannot take more of an
+// account's minute than the pass was given.
+func TestAPassSendsALongInputOnlyAsFarAsItsBytes(t *testing.T) {
+	t.Parallel()
+	input, pieces := longInput(t, 400)
+	piece := len(pieces[0])
+	for _, tc := range []struct {
+		name         string
+		bytes, sends int
+	}{
+		{"two pieces' worth", 2*piece + 1, 2},
+		{"less than a piece", piece / 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fake := longFake()
+			pass := embeddings.NewPass(embeddings.NewRefusals(), passAt, 64, tc.bytes)
+			if err := pass.Embed(t.Context(), fake, []embeddings.PassInput{input},
+				vectorsOf{}.store); err != nil {
+				t.Fatal(err)
+			}
+			if pass.Requests != 1 || len(fake.Requests()[0]) != tc.sends {
+				t.Fatalf("a pass of %d bytes sent %d requests, the first of %d pieces — want "+
+					"one of %d", tc.bytes, pass.Requests, len(fake.Requests()[0]), tc.sends)
+			}
+			if over := pass.Bytes - tc.bytes; over > 0 && over > piece {
+				t.Fatalf("a pass of %d bytes sent %d, more than one piece past them",
+					tc.bytes, pass.Bytes)
+			}
+			if pass.Open() {
+				t.Error("a pass whose bytes are spent is still open")
+			}
+		})
+	}
+}
+
+// A LONG INPUT REFUSED PART WAY IS HELD BACK, AND ITS RETRY BEGINS WHERE THE
+// REFUSAL WAS: the pieces the provider took are kept, so the due retry costs
+// the refused request rather than the input's every request again.
+func TestALongInputRefusedPartWayRetriesFromTheRefusal(t *testing.T) {
+	t.Parallel()
+	input, pieces := longInput(t, 400)
+	refusing := longFake()
+	stop := 3 * longLimits.BatchInputs
+	refusing.Refuse(strings.Fields(pieces[stop])[0])
+	memory := embeddings.NewRefusals()
+	got := vectorsOf{}
+	first := embeddings.NewPass(memory, passAt, 64, 1<<20)
+	if err := first.Embed(t.Context(), refusing, []embeddings.PassInput{input}, got.store); err != nil {
+		t.Fatal(err)
+	}
+	whole := 0
+	for _, piece := range pieces {
+		whole += len(piece)
+	}
+	if len(first.RefusedAlone) != 1 || first.RefusedAlone[0].Input.ID != "long" ||
+		first.RefusedAlone[0].Bytes != whole {
+		t.Fatalf("refused alone: %d input(s), want the input, named with what its %d "+
+			"pieces carry (%d bytes)", len(first.RefusedAlone), len(pieces), whole)
+	}
+	held := embeddings.NewPass(memory, passAt.Add(time.Minute), 64, 1<<20)
+	if err := held.Embed(t.Context(), refusing, []embeddings.PassInput{input}, got.store); err != nil {
+		t.Fatal(err)
+	}
+	if held.Held != 1 || held.Requests != 0 {
+		t.Fatalf("inside its retry the input was held %d time(s) and cost %d request(s)",
+			held.Held, held.Requests)
+	}
+	fixed := longFake()
+	due := embeddings.NewPass(memory, passAt.Add(embeddings.RefusalRetry), 64, 1<<20)
+	if err := due.Embed(t.Context(), fixed, []embeddings.PassInput{input}, got.store); err != nil {
+		t.Fatal(err)
+	}
+	if retried := fixed.Requests()[0]; retried[0] != pieces[stop] {
+		t.Fatalf("the due retry began at %q, want the refused request (%q)", retried[0], pieces[stop])
+	}
+	if !slices.Equal(got["long"], wholeOf(t, input.Text)) {
+		t.Fatal("the input finished on its retry is not the pool EmbedWhole gives it")
 	}
 }

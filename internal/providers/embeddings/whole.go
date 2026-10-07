@@ -125,28 +125,68 @@ func Pool(vectors [][]float32, weights []int, width int) ([]float32, error) {
 	if len(weights) != len(vectors) {
 		return nil, fmt.Errorf("embeddings: %d weights for %d vectors", len(weights), len(vectors))
 	}
-	sum := make([]float64, width)
+	sum := newPooling(width)
 	for i, vector := range vectors {
-		if len(vector) != width {
-			return nil, fmt.Errorf("%w: piece %d's vector is %d wide, not the "+
-				"configured %d", ErrConfiguration, i, len(vector), width)
-		}
-		if weights[i] <= 0 {
-			return nil, fmt.Errorf("embeddings: piece %d has weight %d — every "+
-				"piece carries some of the text", i, weights[i])
-		}
-		norm := magnitude(vector)
-		if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
-			return nil, fmt.Errorf("embeddings: piece %d's vector has no "+
-				"direction (magnitude %v)", i, norm)
-		}
-		scale := float64(weights[i]) / norm
-		for j, v := range vector {
-			sum[j] += float64(v) * scale
+		if err := sum.add(vector, weights[i]); err != nil {
+			return nil, err
 		}
 	}
+	return sum.vector()
+}
+
+// pooling is a [Pool] kept open: the pieces' weighted unit vectors summed one
+// piece at a time, in order, so a text whose pieces are sent across several
+// calls — a [Pass] sends a long one a request at a time, and across passes — is
+// pooled to the bit as one sent in one call is. [Pool] is this, run over every
+// piece at once, which is what holds the two to one arithmetic rather than to
+// two copies of it that agree.
+type pooling struct {
+	width int
+	sum   []float64
+
+	// pieces is how many pieces are summed.
+	pieces int
+}
+
+// newPooling is a sum of nothing yet, width wide.
+func newPooling(width int) *pooling {
+	return &pooling{width: width, sum: make([]float64, width)}
+}
+
+// add sums the next piece's vector, weighted by its length in bytes. A vector
+// of the wrong width, a weight that is not positive and a vector with no
+// direction are refused before anything is summed, naming the piece.
+func (p *pooling) add(vector []float32, weight int) error {
+	at := p.pieces
+	if len(vector) != p.width {
+		return fmt.Errorf("%w: piece %d's vector is %d wide, not the "+
+			"configured %d", ErrConfiguration, at, len(vector), p.width)
+	}
+	if weight <= 0 {
+		return fmt.Errorf("embeddings: piece %d has weight %d — every "+
+			"piece carries some of the text", at, weight)
+	}
+	norm := magnitude(vector)
+	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		return fmt.Errorf("embeddings: piece %d's vector has no "+
+			"direction (magnitude %v)", at, norm)
+	}
+	scale := float64(weight) / norm
+	for j, v := range vector {
+		p.sum[j] += float64(v) * scale
+	}
+	p.pieces++
+	return nil
+}
+
+// vector is the pooled vector of every piece summed: their weighted mean,
+// normalised to unit length.
+func (p *pooling) vector() ([]float32, error) {
+	if p.pieces == 0 {
+		return nil, errors.New("embeddings: no vectors to pool")
+	}
 	var squares float64
-	for _, v := range sum {
+	for _, v := range p.sum {
 		squares += v * v
 	}
 	norm := math.Sqrt(squares)
@@ -154,11 +194,17 @@ func Pool(vectors [][]float32, weights []int, width int) ([]float32, error) {
 		return nil, errors.New("embeddings: the pieces' vectors cancel — their " +
 			"weighted mean has no direction")
 	}
-	out := make([]float32, width)
-	for j, v := range sum {
+	out := make([]float32, p.width)
+	for j, v := range p.sum {
 		out[j] = float32(v / norm)
 	}
 	return out, nil
+}
+
+// clone is a copy that shares nothing with p, so a sum handed between a pass
+// and the memory it keeps progress in is never written by two holders.
+func (p *pooling) clone() *pooling {
+	return &pooling{width: p.width, sum: append([]float64(nil), p.sum...), pieces: p.pieces}
 }
 
 // magnitude is a vector's Euclidean length, in float64 so a wide vector of

@@ -61,6 +61,17 @@ import (
 // provider is configured the same ([embedConfiguration]). The pass is bounded
 // in what it SENDS, refused requests included, never in what came of it.
 //
+// AND A LONG ROW IS SENT A REQUEST AT A TIME. An episode's ask is stored whole
+// and bounded only by the event that carried it, so one row's text can need
+// more requests than a tick sends, more bytes than its share of the account's
+// minute, or longer than the tick to embed. Sent as one call it went out
+// whatever it cost, and a call that ran past the tick or met a rate limit part
+// way kept nothing: the next tick began with the same row, newest first, and
+// the node's fill stopped there for good — every seat after it included. So
+// the pass sends such a row as many requests as the tick has left, keeps what
+// each embedded of it in the memory, and the next tick sends the rest
+// ([embeddings.Pass]); the row's vector is still of its whole text.
+//
 // # Its own loop, beside the memory sync rather than inside it
 //
 // The memory sync's cycle is the crash window for everything a seat learns,
@@ -429,6 +440,14 @@ func (r fillReport) lines(provider embeddings.BatchEmbedder) []fillLine {
 				"limits are declared wider than the endpoint enforces "+
 				"(providers.embeddings.max_input_tokens), or that the endpoint "+
 				"refuses this text for what it says")
+	}
+	for _, left := range pass.Unfinished {
+		add(slog.LevelInfo, "memory_fill_input_continued", "scope", left.Input.Scope,
+			"id", left.Input.ID, "model", model, "pieces_embedded", left.Embedded,
+			"pieces", left.Pieces, "bytes", left.Bytes,
+			"detail", "this row's text is longer than what one tick sends; the pieces "+
+				"embedded so far are kept on this node, and the next tick sends the "+
+				"rest, from where this one stopped")
 	}
 	if pass.Unusable > 0 {
 		add(slog.LevelWarn, "memory_fill_vector_unusable", "model", model,
