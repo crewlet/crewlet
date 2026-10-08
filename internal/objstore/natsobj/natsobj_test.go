@@ -28,15 +28,19 @@ import (
 )
 
 // suite is what the broker's object store promises the suite: messages of
-// [natsobj.MessageBytes], a digest it keeps, and a listing read slowly for
-// longer than the library's ordered consumer takes to call itself inactive —
-// two of its five-second heartbeats — so a listing that restarted under a
-// slow reader would show it.
+// [natsobj.MessageBytes] and a digest it keeps.
+//
+// THE SLOW LISTING IS THE SUITE'S OWN SECOND. It used to be twelve, to outlast
+// two of the ordered consumer's five-second heartbeats — but the vendored
+// client arms no heartbeat between the reads of a listing at all, so twelve
+// seconds of a slow visitor tripped nothing and proved nothing about the one
+// thing it was for: a listing whose consumer is lost part way. That is staged
+// directly instead, by deleting the consumer under it
+// ([TestAListingWhoseConsumerIsLostFinishesOnItsReplacement]).
 var suite = objstoretest.Options{
-	Piece:       natsobj.MessageBytes,
-	Digest:      true,
-	SlowListing: 12 * time.Second,
-	Unfinished:  unfinished,
+	Piece:      natsobj.MessageBytes,
+	Digest:     true,
+	Unfinished: unfinished,
 }
 
 // clients is the client each backend a case opened was opened on, so the
@@ -150,27 +154,40 @@ func (c *cancelAfter) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// A DOWNLOAD READ SLOWLY OUTLASTS THE LIBRARY'S OWN TIMEOUTS: its five-second
-// default, which a get under a deadline does not take, and the two heartbeats
-// after which its ordered consumer calls itself inactive and starts again.
-func TestASlowReadOutlastsTheLibrarysTimeouts(t *testing.T) {
+// A DOWNLOAD WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
+// byte for byte.
+//
+// A get is an ordered consumer of the object's messages, and the broker can
+// take that consumer away under a reader — reaped while the reader was slow,
+// dropped in a leader change. The client then makes a new one from the last
+// message the reader took, which is the path every one of those failures goes
+// down, and the one this case stages: the consumer is deleted a few messages
+// into a 4 MiB read, past what the read held in hand, so the rest can only
+// come from a replacement. This replaced a read paced over twelve seconds to
+// outlast two of the consumer's heartbeats; the vendored client arms none
+// between reads, so that read tripped nothing and never asserted that a
+// replacement was made.
+func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	t.Parallel()
-	b := open(t, memberClient(t))
-	data := bytes.Repeat([]byte("read slowly "), 4<<20/12)
-	if err := b.Put(t.Context(), "slow", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+	client := memberClient(t)
+	b := open(t, client)
+	// THE REPLACEMENT WAITS FOR THE OUTSTANDING PULL TO EXPIRE, so the
+	// expiry is the client's floor of a second rather than the production
+	// ten: what is held is that the rest of the read comes from a new
+	// consumer, not how long that takes ([TestTheTimeALostReaderCostsIsBounded]).
+	natsobj.ShortenPulls(b, time.Second)
+	data := bytes.Repeat([]byte("read across a lost consumer "), 4<<20/28)
+	if err := b.Put(t.Context(), "lost", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-	defer cancel()
-	r, err := b.Get(ctx, "slow", 0, -1)
+	r, err := b.Get(deadline(t), "lost", 0, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	const reads = 64
-	start := time.Now()
 	var got bytes.Buffer
-	buf := make([]byte, len(data)/reads+1)
+	buf := make([]byte, natsobj.MessageBytes/2)
+	var deleted []string
 	for {
 		n, err := r.Read(buf)
 		got.Write(buf[:n])
@@ -178,16 +195,16 @@ func TestASlowReadOutlastsTheLibrarysTimeouts(t *testing.T) {
 			break
 		}
 		if err != nil {
-			t.Fatalf("a slow read failed %v in, at %d bytes: %v", time.Since(start), got.Len(), err)
+			t.Fatalf("a read whose consumer was deleted failed at %d bytes: %v", got.Len(), err)
 		}
-		time.Sleep(12 * time.Second / reads)
+		if deleted == nil && got.Len() >= 3*natsobj.MessageBytes {
+			deleted = dropConsumers(t, client)
+		}
 	}
 	if !bytes.Equal(got.Bytes(), data) {
-		t.Fatalf("a slow read answered %d bytes, want %d", got.Len(), len(data))
+		t.Fatalf("a read across a lost consumer answered %d bytes, want %d exactly", got.Len(), len(data))
 	}
-	if took := time.Since(start); took < 11*time.Second {
-		t.Fatalf("the read took %v; it was meant to outlast two heartbeats", took)
-	}
+	replacedBy(t, client, deleted)
 }
 
 // A LISTING ENDS EVEN WHEN THE NEWEST METADATA CANNOT BE READ. The library's
@@ -497,6 +514,153 @@ func TestAnObjectWhosePiecesAreGoneReadsEmpty(t *testing.T) {
 	if _, err := b.Get(deadline(t), "hollow", 0, -1); !errors.Is(err, objstore.ErrNotFound) {
 		t.Fatalf("Get of a deleted object = %v, want ErrNotFound", err)
 	}
+}
+
+// A LISTING WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
+// visiting every name exactly once.
+//
+// The listing is an ordered consumer over the metadata, holding
+// [natsobj.WalkAhead] messages at a time, so the bucket holds more names than
+// that: the consumer is deleted under the tenth, and everything past what the
+// listing already held can only come from the replacement the client makes
+// from the last name visited. A name visited twice or not at all is the
+// collector deleting or keeping the wrong object. Read slowly instead, as this
+// suite used to read it for twelve seconds, nothing was lost: the vendored
+// client arms no heartbeat between a listing's reads.
+//
+// THE NAMES ARE METADATA ALONE, published straight to the bucket's subjects: a
+// listing reads nothing else, and five hundred uploads would cost seconds to
+// stage what five hundred messages stage in a fraction of one.
+func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	natsobj.ShortenPulls(b, time.Second) // for the read case's reason
+	const extra = 50
+	names := natsobj.WalkAhead + extra
+	for i := range names {
+		name := fmt.Sprintf("files/listed-%04d", i)
+		info, err := json.Marshal(jetstream.ObjectInfo{ObjectMeta: jetstream.ObjectMeta{Name: name},
+			Bucket: natsobj.Bucket, NUID: fmt.Sprintf("NUID%04d", i), Size: 1, Chunks: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Publish(t.Context(), "$O."+natsobj.Bucket+".M."+
+			base64.URLEncoding.EncodeToString([]byte(name)), info); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]int{}
+	var deleted, last []string
+	if err := b.List(t.Context(), func(info objstore.Info) error {
+		seen[info.Name]++
+		switch len(seen) {
+		case 10:
+			deleted = dropConsumers(t, client)
+		case names:
+			last = consumerNames(t, client)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("a listing whose consumer was deleted: %v", err)
+	}
+	if len(seen) != names {
+		t.Fatalf("the listing visited %d names of %d", len(seen), names)
+	}
+	for name, n := range seen {
+		if n != 1 {
+			t.Errorf("the listing visited %s %d times", name, n)
+		}
+	}
+	replaced := false
+	for _, name := range last {
+		replaced = replaced || !slices.Contains(deleted, name)
+	}
+	if !replaced {
+		t.Fatalf("the listing's last names came from %v, and its consumer %v was deleted "+
+			"under the tenth: nothing stages the replacement this case is for", last, deleted)
+	}
+	if got := consumers(t, client); got != 0 {
+		t.Fatalf("a listing that replaced its consumer left %d behind", got)
+	}
+}
+
+// THE TIME A LOST READER COSTS IS BOUNDED, and by a number that keeps the
+// client's own heartbeat.
+//
+// A get or a listing whose consumer the broker loses is silent until its
+// outstanding pull expires — that is when the client makes the replacement the
+// two cases above stage — so the expiry IS the stall, and the client's default
+// made it thirty seconds. Below ten, the client halves its five-second
+// heartbeat for an ordered consumer, and missed heartbeats replace the
+// consumer too, with a metadata request each, on a broker already too slow to
+// send them. And it stays well inside the minute a read that hears nothing is
+// ended at.
+func TestTheTimeALostReaderCostsIsBounded(t *testing.T) {
+	t.Parallel()
+	if natsobj.PullExpiry < 10*time.Second {
+		t.Errorf("a pull expires after %v; below ten seconds the client halves the "+
+			"heartbeat its ordered consumers are replaced on", natsobj.PullExpiry)
+	}
+	if natsobj.PullExpiry > objstore.ReadStall/4 {
+		t.Errorf("a lost reader stays silent for %v, too close to the %v a read is "+
+			"ended at for hearing nothing", natsobj.PullExpiry, objstore.ReadStall)
+	}
+}
+
+// dropConsumers deletes every consumer on the bucket's stream — the get's or
+// the listing's own, the only one there is — and names what it deleted.
+func dropConsumers(t *testing.T, client jetstream.JetStream) []string {
+	t.Helper()
+	names := consumerNames(t, client)
+	if len(names) != 1 {
+		t.Fatalf("the stream holds consumers %v, want the one being read", names)
+	}
+	stream, err := client.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if err := stream.DeleteConsumer(t.Context(), name); err != nil {
+			t.Fatalf("delete the consumer under the read: %v", err)
+		}
+	}
+	return names
+}
+
+// consumerNames names the consumers on the bucket's stream.
+func consumerNames(t *testing.T, client jetstream.JetStream) []string {
+	t.Helper()
+	stream, err := client.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lister := stream.ConsumerNames(t.Context())
+	var names []string
+	for name := range lister.Name() {
+		names = append(names, name)
+	}
+	if err := lister.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
+// replacedBy fails the case unless the stream now holds a consumer that is not
+// one of deleted — the replacement a read's remainder came from.
+func replacedBy(t *testing.T, client jetstream.JetStream, deleted []string) {
+	t.Helper()
+	if deleted == nil {
+		t.Fatal("the read ended before its consumer was deleted, so nothing was staged")
+	}
+	now := consumerNames(t, client)
+	for _, name := range now {
+		if !slices.Contains(deleted, name) {
+			return
+		}
+	}
+	t.Fatalf("the stream holds %v after %v was deleted under the read: the rest came "+
+		"from no replacement", now, deleted)
 }
 
 // consumers is how many consumers the bucket's stream has.

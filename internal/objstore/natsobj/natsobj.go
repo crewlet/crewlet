@@ -140,6 +140,10 @@ type Backend struct {
 	stream jetstream.Stream
 	// leader reads one object's metadata from the stream's leader.
 	leader *jsapi.Leader
+	// expiry is how long each pull a get or a walk sends waits; zero is
+	// [pullExpiry]. Set by this package's own tests alone, through
+	// export_test.go.
+	expiry time.Duration
 }
 
 // Open creates the bucket if it is not there and binds to it.
@@ -297,6 +301,57 @@ func (b *Backend) live(ctx context.Context, name string) (jetstream.ObjectInfo, 
 // sixty-four mebibytes a download.
 const readAhead = 8
 
+// walkAhead is how many messages a WALK holds in hand — a listing over the
+// bucket's metadata, or a ranged get's walk over an object's message headers.
+//
+// FIVE HUNDRED, the client's own default, stated rather than inherited: what a
+// walk holds is a name's metadata or a message's headers, a few hundred bytes
+// each, so a full hand is a hundred-odd kibibytes however large the objects —
+// where [readAhead] has to be small because each of ITS messages is a whole
+// [MessageBytes]. Stated because it is also where a walk's consumer can be
+// lost unnoticed: everything already in hand is read without asking the broker
+// again, so a consumer reaped while a slow visitor held the listing is found
+// only at the next pull, and the replacement it takes is what
+// [TestAListingWhoseConsumerIsLostFinishesOnItsReplacement] stages past this
+// many names.
+const walkAhead = 500
+
+// pullExpiry is how long one pull a get or a walk sends waits for messages
+// before the broker answers it as expired and the client asks again.
+//
+// # It is the time a LOST READER costs
+//
+// A pull for messages the stream holds is answered in a round trip, so the
+// expiry only ever runs out on a pull nobody is serving any more — and that
+// is what a get or a listing meets when the broker takes its consumer away
+// under it: reaped while a slow reader held it, or lost in a leader change.
+// The client makes a replacement from the last message read only once the
+// outstanding pull has expired, so the download or the listing sat silent for
+// the whole client default of thirty seconds — measured, a 4 MiB read whose
+// consumer was deleted part way took 30.9 s, and 2.5 s at a two-second
+// expiry.
+//
+// # TEN SECONDS, and not shorter
+//
+// Ten is the shortest expiry at which the client keeps its own five-second
+// heartbeat for an ordered consumer: below it the heartbeat is half the
+// expiry, and two missed heartbeats while a reader waits ALSO replace the
+// consumer — a metadata request apiece, every few seconds, against a broker
+// slow enough to miss them, which is the broker least able to take them. So
+// the wait for a lost reader is the wait for a silent one, and both stay far
+// inside the minute [objstore.ReadStall] ends a read that hears nothing in.
+const pullExpiry = 10 * time.Second
+
+// pulls is what every get and walk asks its consumer for: up to batch
+// messages in hand, under this backend's pull expiry.
+func (b *Backend) pulls(batch int) []jetstream.PullMessagesOpt {
+	expiry := b.expiry
+	if expiry == 0 {
+		expiry = pullExpiry
+	}
+	return []jetstream.PullMessagesOpt{jetstream.PullMaxMessages(batch), jetstream.PullExpiry(expiry)}
+}
+
 // Get implements [objstore.Backend].
 //
 // AN ORDERED CONSUMER OF THE OBJECT'S OWN MESSAGES, never the library's get —
@@ -347,7 +402,7 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 		b.drop(ctx, cons)
 		return b.gone(ctx, name)
 	}
-	msgs, err := cons.Messages(jetstream.PullMaxMessages(readAhead))
+	msgs, err := cons.Messages(b.pulls(readAhead)...)
 	if err != nil {
 		b.drop(ctx, cons)
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
@@ -387,7 +442,7 @@ func (b *Backend) seek(ctx context.Context, subject string, off int64) (uint64, 
 	if info := cons.CachedInfo(); info == nil || info.NumPending == 0 {
 		return 0, 0, false, nil
 	}
-	msgs, err := cons.Messages()
+	msgs, err := cons.Messages(b.pulls(walkAhead)...)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -620,7 +675,7 @@ func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo
 	if info := cons.CachedInfo(); info == nil || info.NumPending == 0 {
 		return nil
 	}
-	msgs, err := cons.Messages()
+	msgs, err := cons.Messages(b.pulls(walkAhead)...)
 	if err != nil {
 		return fmt.Errorf("natsobj: list the bucket: %w", err)
 	}
