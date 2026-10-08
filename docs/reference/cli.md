@@ -625,11 +625,13 @@ address to give the `nats` CLI. The one process that can reach both is the
 engine, and this asks it to.
 
 The report names what it captured, per estate. Every node holds its own store
-whatever its `node.roles`, a data node the replicated estate beside it, and on
-the embedded topology its own broker too; a node that dialled an external NATS
-cluster copies its store files alone and says so,
-naming the cluster as where the stream half is backed up, rather than
-presenting a partial copy as a backup.
+whatever its `node.roles`, and a data node the replicated estate beside it. On
+the embedded topology the fleet's streams come too: a member snapshots them
+from its own broker, and a leaf, whose broker keeps no stream, snapshots the
+same streams from the members across its leaf link. A node that dialled an
+external NATS cluster copies its store files alone and says so, naming the
+cluster as where the stream half is backed up, rather than presenting a
+partial copy as a backup.
 
 **The company's files come too**, as an `objects` line. On the default `nats`
 object store their objects are in the `OBJ_crewlet_files` stream the backup
