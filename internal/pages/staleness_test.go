@@ -91,6 +91,9 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	page := r.write(author("jane"), pages.NewPage{Title: "Deploy Runbook", Body: "first body"})
+	// A NODE BEHIND ITS OWN LOG from here on: the save lands on the log and
+	// this node does not apply it, which is the state the floor is for.
+	r.holdApplier()
 	saved, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
 		pages.Save{BaseVersion: 1, Body: ptr("second body")})
 	if err != nil {

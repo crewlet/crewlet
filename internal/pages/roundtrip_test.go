@@ -164,11 +164,16 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
-	return &roundTrip{
+	r := &roundTrip{
 		t: t, db: db, log: log, store: kb,
 		applier: pages.NewApplier(nodeID, nil, nil),
 		reader:  reader, waiter: waiter,
 	}
+	// THIS NODE'S APPLIER RUNS WHILE A WRITE WAITS, as a running node's
+	// does — see [testWaiter]. A case about a node that is behind says so
+	// with [roundTrip.holdApplier].
+	waiter.advance = r.drain
+	return r
 }
 
 // drain consumes every record the broker holds beyond what this node has
@@ -290,29 +295,53 @@ func (r *roundTrip) get(ref string) pages.Detail {
 	return detail
 }
 
-// Voided voids nothing: this harness applies by hand and never re-anchors.
+// Voided voids nothing: this harness never re-anchors, so no generation is
+// ever abandoned.
 func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
-// testWaiter is this node's own applier as the publisher sees it.
+// testWaiter is this node's own applier as the publisher and the reader see
+// it.
+//
+// # It applies while a write waits, because a running node's applier does
+//
+// A write appends its record and then waits — out to the publisher's
+// [statelog.Deps.ResolveBudget] — for this node to apply it, which is what
+// lets the operation ledger answer `applied`. A node's applier consumes the log
+// the whole time, so that wait ends in milliseconds; a harness whose applier
+// ran only when a case called [roundTrip.drain] could only let it expire, and
+// every write here sat out the full two seconds and answered `pending`. That
+// was most of this package's time and none of what it asserts, and it took
+// every write down the arm production almost never takes. So the wait runs
+// [roundTrip.drain], on the writing goroutine — the publisher holds no
+// transaction while it waits, its decision's snapshot already closed — and a
+// case's own drain afterwards finds nothing left.
+//
+// # And a node that is behind says so, at once
+//
+// [roundTrip.holdApplier] takes the applier out of the wait: a write then
+// resolves `pending` and a floored read refuses `behind`, which is a node whose
+// applier has not reached the position. The wait answers what an expired budget
+// answers, without spending it — nothing can move the position while the
+// caller blocks here, so waiting would only arrive at the same answer later.
 type testWaiter struct {
 	mu sync.Mutex
 	at statelog.Position
 
-	// advance, when set, is this node's applier run from inside a write's
-	// own wait — see [roundTrip.applyWhileWriting].
+	// advance is this node's applier, run from inside a wait; nil is a
+	// node holding its applier back — see [roundTrip.holdApplier].
 	advance func()
 }
 
-// applyWhileWriting makes this node's applier run from inside a write's own
-// wait, which is what it does in production and what this harness otherwise
-// cannot express: a write that lost the broker's arbitration to a peer's
-// record waits for this node to apply that record before it decides again,
-// and in a harness where nothing consumes the log during a call that wait can
-// only expire.
-func (r *roundTrip) applyWhileWriting() {
+// holdApplier keeps this node's applier out of every wait from here on: a
+// write resolves `pending` and a read floored past what this node has applied
+// refuses `behind`, until the case drains by hand. It is the state of a node
+// whose applier is behind its own log — the one a case about a write that has
+// not landed here, or about a read that must not be served from before it,
+// needs to hold.
+func (r *roundTrip) holdApplier() {
 	r.waiter.mu.Lock()
 	defer r.waiter.mu.Unlock()
-	r.waiter.advance = r.drain
+	r.waiter.advance = nil
 }
 
 func (w *testWaiter) reach(p statelog.Position) {
@@ -342,9 +371,25 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 		w.mu.Lock()
 		advance := w.advance
 		w.mu.Unlock()
-		if advance != nil {
-			advance()
+		if advance == nil {
+			// HELD: nothing moves the position while the caller blocks
+			// here, so answer what the budget's expiry would. THE
+			// CALLER'S OWN ERROR FIRST: a context already cancelled is
+			// a cancellation, and reporting it as a deadline would send
+			// the publisher down the pending path after an explicit
+			// cancel.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return context.DeadlineExceeded
 		}
+		advance()
+		if w.Committed().Packed() >= p.Packed() {
+			return nil
+		}
+		// A POSITION PAST THE LOG'S END is not one this wait can reach
+		// by applying; it can only be reached by a write that has not
+		// happened yet, so the wait is the caller's budget.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

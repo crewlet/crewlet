@@ -69,8 +69,8 @@ func TestAKeyedWriteDerivesItsOperationFromTheKey(t *testing.T) {
 	}
 	writes := []string{"create", "comment", "save", "rename", "comment edit"}
 
-	// EACH PAIR ON ITS OWN, in parallel: every write waits out the resolve
-	// budget in this harness, and a sequence of runs would be minutes.
+	// EACH PAIR ON ITS OWN two nodes, in parallel: a pair is two runs, each
+	// standing up its own broker and estate.
 	for name, pair := range map[string]struct {
 		a, b pages.CallKey
 		same bool

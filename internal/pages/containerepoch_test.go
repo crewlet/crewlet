@@ -160,14 +160,15 @@ func TestTwoNodesEnsuringOneContainerWriteOnce(t *testing.T) {
 	t.Parallel()
 	a := newRoundTrip(t)
 	b := newRoundTripOn(t, a.log, openNodeStore(t, "node-b.db"), "node-b")
-	b.applyWhileWriting()
 
 	if _, changed, err := a.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", ""); err != nil || !changed {
 		t.Fatalf("node a's write = (%v, %v), want a create", changed, err)
 	}
 	end := a.logEnd()
-	// NODE B HAS NOT APPLIED NODE A'S RECORD.
+	// NODE B HAS NOT APPLIED NODE A'S RECORD: its applier runs only inside
+	// its own writes' waits, so its first decision is taken on rows from
+	// before it, and the wait after the lost round is what applies it.
 	_, changed, err := b.store.EnsureContainer(t.Context(), activation(0),
 		"ENG", "Engineering", "")
 	if err != nil {
