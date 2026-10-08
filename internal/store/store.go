@@ -66,7 +66,8 @@
 // It also collapses a whole idiom. The Postgres migrator took an advisory lock
 // because `crewlet run`, `crewlet run api` and `crewlet config import` could
 // each race the DDL from a different OS process. One process means one
-// in-process mutex, and the lock protocol simply disappears.
+// in-process mutex per file — held on the claim every handle on that path
+// shares, see [DB.migrate] — and the lock protocol simply disappears.
 //
 // # One writer, and the begin that makes it safe
 //

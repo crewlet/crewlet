@@ -105,6 +105,12 @@ type fileLock struct {
 	// driver-level write lock, so they have to share one line for it.
 	// See writequeue.go.
 	writes writeQueue
+
+	// migrating is held for the whole of a migration run on this file,
+	// by whichever of those handles is running it. Here for the reason
+	// writes is: the handles that can race one file's migration are
+	// exactly the handles that share this claim. See [DB.migrate].
+	migrating sync.Mutex
 }
 
 // queue is the write queue a handle on this path takes its place in.
@@ -117,6 +123,18 @@ func (l *fileLock) queue() *writeQueue {
 		return &writeQueue{}
 	}
 	return &l.writes
+}
+
+// migrations is the lock a migration run on this path holds.
+//
+// A nil claim is an in-memory database, which no other handle can reach, so it
+// gets a lock of its own for the reason [fileLock.queue] gives a queue of its
+// own: that is exactly the scope of what it excludes.
+func (l *fileLock) migrations() *sync.Mutex {
+	if l == nil {
+		return &sync.Mutex{}
+	}
+	return &l.migrating
 }
 
 // locksHeld is this process's claims, one per database path.
