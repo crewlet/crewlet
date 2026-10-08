@@ -545,6 +545,34 @@ func TestACheckpointThatNamesNoRecordIsComparedWithNothing(t *testing.T) {
 			t.Fatalf("the loop once the log reached the checkpoint: %v", err)
 		}
 	})
+
+	// A REDELIVERY AT THE CHECKPOINT NAMES NOTHING: a record arriving at the
+	// reanchor's own sequence is what a broker restored from a copy that
+	// held one there redelivers, whichever history that is — and naming the
+	// checkpoint by it would adopt that history's record as the one this
+	// node consumed, so every comparison after it would read settled.
+	t.Run("a redelivery at its sequence names nothing", func(t *testing.T) {
+		t.Parallel()
+		h := reanchored(t)
+		e := env(5, "edit", "5", "op-5", 1)
+		e.Gen = at.Generation
+		h.fetch.offerStored(5, otherHistory, e)
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		errs := make(chan error, 1)
+		go func() { errs <- h.runner.Run(ctx) }()
+		for h.fetch.ackCount(5) < 1 && ctx.Err() == nil {
+			time.Sleep(2 * time.Millisecond)
+		}
+		cancel()
+		<-errs
+		if h.fetch.ackCount(5) < 1 {
+			t.Fatal("the redelivery was never consumed")
+		}
+		if got := storedAtOf(t, h.estate); !got.IsZero() {
+			t.Fatalf("a redelivery named the checkpoint by the log's record, %s — what a "+
+				"restored consumer redelivers is whichever history the log holds", got)
+		}
+	})
 }
 
 // A PEER'S TRUNCATION IS THE RUNNER'S WRITE FENCE, NOT ITS IDENTITY.
