@@ -245,6 +245,10 @@ func TestASeatTakenBackAttachesItsControlTopicAgain(t *testing.T) {
 	if e.sandboxSeatAttached("swe") {
 		t.Error("a released seat still reads as attached, so taking it back attaches nothing")
 	}
+	// TAKEN BACK BY A PASS RUN HERE rather than the sweep's next tick: the
+	// release changed no seat set, so nothing asks for one, and what is
+	// under test is the acquisition, not the sweep's cadence.
+	e.node.Host().Sweep(t.Context())
 	waitHeld(t, e, "swe")
 	if !e.sandboxSeatAttached("swe") {
 		t.Error("a seat taken back has no control topic")

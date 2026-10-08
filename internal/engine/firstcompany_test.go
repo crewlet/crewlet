@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -105,6 +106,41 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 			t.Errorf("the sweep runs %v, which does not include %s", jobs, job)
 		}
 	}
+}
+
+// A NODE'S FIRST COMPANY IS CLAIMED AT ONCE, NOT AT THE SWEEP'S NEXT TICK.
+//
+// An apply is the one thing that changes the seat set and the one that knows
+// it has, and nothing passed that on: a node started with no company, then
+// handed one, ran none of its seats until placement's next tick noticed them,
+// up to [seat.SweepInterval] later — every time a company was created from the
+// dashboard. The apply runs inside the interval's first second here, so the
+// next tick is seconds away and only the apply's own ask can claim in time.
+func TestAFirstCompanysSeatsAreClaimedWithoutWaitingForTheSweep(t *testing.T) {
+	t.Parallel()
+	e := unconfiguredEngine(t)
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	started := time.Now()
+	if status, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc),
+		time.Now()); err != nil || status != configplane.StatusOK {
+		t.Fatalf("Apply = (%s, %v)", status, err)
+	}
+	want := len(e.Company().Seats())
+	if want == 0 {
+		t.Fatal("the premise: the company has seats to claim")
+	}
+	// A SECOND SHORT OF THE TICK: claimed by then, the pass was the apply's.
+	deadline := started.Add(seat.SweepInterval - time.Second)
+	for time.Now().Before(deadline) {
+		if len(e.Node().Host().Held()) >= want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("held %v of %d seats %v after the apply began — its seats waited "+
+		"for the sweep's tick", e.Node().Host().Held(), want, time.Since(started))
 }
 
 // unconfiguredEngineOn is an engine with no company over a bootstrap the case
