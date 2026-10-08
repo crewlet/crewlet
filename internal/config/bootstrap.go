@@ -2146,6 +2146,43 @@ type APIAuth struct {
 	// needs no entry. The previous default was "*", which let any site a
 	// logged-in operator visited read every unauthenticated endpoint.
 	AllowedOrigins []string `yaml:"allowed_origins,omitempty" json:"allowed_origins,omitempty" desc:"CORS origins. Empty = same-origin only."`
+
+	// CompanyWriters, when set, are the token ids that may CHANGE the
+	// company document, and no other credential may. Empty (the default)
+	// is every token, which is the posture of a company edited by people.
+	//
+	// It exists for a document something ELSE is the source of: a GitOps
+	// pipeline, or a Kubernetes operator rendering it from custom
+	// resources. Such a system overwrites the active revision with its own
+	// at every reconcile, so an edit a person made here survives only until
+	// then — and nothing told them. Listing the system's token turns that
+	// silent loss into a refusal at the moment of the edit, naming who
+	// manages the document. Reads are untouched.
+	//
+	// A TOKEN ID LIST, NOT A ROLE OR A FLAG: the token id is already what
+	// every revision records as its author, so "who may write" and "who
+	// wrote" are the same vocabulary. [APIAuth.MayWriteCompany] is the one
+	// reading of it; see ADR-0030 for what counts as changing the document.
+	CompanyWriters []string `yaml:"company_writers,omitempty" json:"company_writers,omitempty" desc:"Token ids that alone may change the company document. Empty = every token."`
+}
+
+// CompanyManaged reports whether the company document is managed: some
+// token ids are named as its only writers.
+func (a *APIAuth) CompanyManaged() bool { return len(a.CompanyWriters) > 0 }
+
+// MayWriteCompany reports whether the credential with this id may change the
+// company document.
+//
+// THE ONE READING of [APIAuth.CompanyWriters], for every surface that asks:
+// the config write path that enforces it and the viewer answer that tells the
+// dashboard whether to offer an edit. Exact comparison, because a token id is
+// lowercase by validation and recorded exactly as written on every revision.
+// The disabled guard's caller, [org.ReservedOperatorID], is never listed —
+// validation refuses it — so with the guard off a managed document is written
+// by nobody through the API, which is the managed posture rather than an
+// exception to it.
+func (a *APIAuth) MayWriteCompany(operatorID string) bool {
+	return !a.CompanyManaged() || slices.Contains(a.CompanyWriters, operatorID)
 }
 
 // APIToken is one bearer token gating writes and /config.
@@ -2215,6 +2252,36 @@ func (a *APIAuth) validate(path Path) error {
 			org.ReservedOperatorID)
 	}
 
+	for i, origin := range a.AllowedOrigins {
+		p.wrap(checkOrigin(idx(at(path, "allowed_origins"), i), origin))
+	}
+
+	// A WRITER IS A TOKEN ID, and held to the rules a token id is: an entry
+	// no id could ever equal is not a stricter list, it is a typo that
+	// locks out the system it was meant to name. Whether it names a token
+	// THIS file configures is a warning instead (see [Bootstrap.Warnings]):
+	// a list naming none is a frozen document, which is a posture.
+	writers := make(map[string]struct{}, len(a.CompanyWriters))
+	for i, id := range a.CompanyWriters {
+		wp := idx(at(path, "company_writers"), i)
+		switch lower := strings.ToLower(id); {
+		case strings.TrimSpace(id) == "":
+			p.add(wp, ErrMissing, "an empty writer names no token: remove the "+
+				"entry, or write the id of the token the managing system holds")
+		case lower != id:
+			p.add(wp, ErrShape, "writer %q must be lowercase, as every token id "+
+				"is, or it can never equal one. Write %q", id, lower)
+		case id == org.ReservedOperatorID:
+			p.add(wp, ErrConflict, "writer %q is reserved: it is the caller "+
+				"recorded when api.auth.disabled is true, a caller nobody "+
+				"authenticated. Name the managing system's own token", id)
+		}
+		if _, dup := writers[id]; dup && id != "" {
+			p.add(wp, ErrConflict, "writer %q is listed twice", id)
+		}
+		writers[id] = struct{}{}
+	}
+
 	// The pairing that leaves nothing reachable. No tokens means no
 	// candidate can ever match, and with reads closed too every route is
 	// guarded by a credential that does not exist — a process that starts
@@ -2224,10 +2291,6 @@ func (a *APIAuth) validate(path Path) error {
 	// Checked HERE rather than at API startup, so `crewlet validate`
 	// catches it on a laptop rather than a deployment catching it at
 	// bind time.
-	for i, origin := range a.AllowedOrigins {
-		p.wrap(checkOrigin(idx(at(path, "allowed_origins"), i), origin))
-	}
-
 	if len(a.Tokens) == 0 && !a.AllowAnonymousRead {
 		p.add(at(path, "tokens"), ErrMissing,
 			"allow_anonymous_read is false and no tokens are configured, so "+

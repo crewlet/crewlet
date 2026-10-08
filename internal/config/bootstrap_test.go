@@ -126,6 +126,14 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"origin with a path", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com/dashboard']\n", "api.auth.allowed_origins[0]", ErrShape},
 		{"empty origin", "api:\n  auth:\n    allowed_origins: ['']\n", "api.auth.allowed_origins[0]", ErrMissing},
 
+		// A COMPANY WRITER IS A TOKEN ID, held to what a token id is: an
+		// entry no id can ever equal locks the managing system out rather
+		// than restricting anybody else.
+		{"empty company writer", "api:\n  auth:\n    company_writers: ['']\n", "api.auth.company_writers[0]", ErrMissing},
+		{"mixed-case company writer", "api:\n  auth:\n    company_writers: [Operator]\n", "api.auth.company_writers[0]", ErrShape},
+		{"reserved company writer", "api:\n  auth:\n    company_writers: [anonymous]\n", "api.auth.company_writers[0]", ErrConflict},
+		{"company writer listed twice", "api:\n  auth:\n    company_writers: [operator, operator]\n", "api.auth.company_writers[1]", ErrConflict},
+
 		{"active key names nothing", "secrets:\n  active_key_id: nope\n  keys:\n    - {id: k1, material: bWF0}\n", "secrets.active_key_id", ErrUnknownValue},
 		{"keys with no active id", "secrets:\n  keys:\n    - {id: k1, material: bWF0}\n", "secrets.active_key_id", ErrMissing},
 		{"key id with a colon", "secrets:\n  active_key_id: \"a:b\"\n  keys:\n    - {id: \"a:b\", material: bWF0}\n", "secrets.keys[0].id", ErrUnknownValue},

@@ -698,6 +698,8 @@ func (b *Bootstrap) Warnings() []Warning {
 		}
 	}
 
+	out = append(out, b.API.Auth.writerWarnings(field("api.auth"))...)
+
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
 	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
 	// population, but those are still DEBUG records and every destination
@@ -820,4 +822,56 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 			company.TrackerBackendFor(), company.KnowledgeBackendFor())
 	}
 	return p.err()
+}
+
+// writerWarnings are the company_writers settings that are valid and almost
+// certainly not what their author meant.
+//
+// WARNINGS RATHER THAN REFUSALS, because each is a posture somebody can
+// choose: a list naming no configured token is a document nobody may change
+// through the API — frozen, until Tier A changes — and a token may be listed
+// here before it is issued, on a node whose file is rolled out ahead of the
+// credential. What makes them worth saying is that the commonest way to reach
+// either is a typo, and the symptom is a 403 on the one system that was
+// supposed to be able to write.
+func (a *APIAuth) writerWarnings(path Path) []Warning {
+	if !a.CompanyManaged() {
+		return nil
+	}
+	var out []Warning
+	writers := at(path, "company_writers")
+	if a.Disabled {
+		// THE GUARD IS OFF, so every caller is the reserved anonymous id
+		// and no list can name it: nothing at all may change the document
+		// through the API, the managing system included.
+		out = append(out, advisory(writers,
+			"api.auth.disabled is true, so every request is the unauthenticated "+
+				"caller, which no writer can name: nothing may change the company "+
+				"document through the API, the managing system included. Enable "+
+				"api.auth with the managing system's token"))
+		return out
+	}
+	configured := make(map[string]struct{}, len(a.Tokens))
+	for _, t := range a.Tokens {
+		configured[t.ID] = struct{}{}
+	}
+	named := 0
+	for i, id := range a.CompanyWriters {
+		if _, ok := configured[id]; ok {
+			named++
+			continue
+		}
+		out = append(out, advisory(idx(writers, i), fmt.Sprintf(
+			"%q names no token in api.auth.tokens, so it lets nobody write: "+
+				"add the token, or correct the id to the one the managing "+
+				"system presents", id)))
+	}
+	if named == 0 {
+		out = append(out, advisory(writers,
+			"no writer names a configured token, so nothing may change the "+
+				"company document through the API: every PUT, PATCH, entity "+
+				"write, revert and /setup connect is refused. That freezes the "+
+				"document; if a system was meant to manage it, list its token id"))
+	}
+	return out
 }
