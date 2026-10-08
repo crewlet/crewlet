@@ -15,13 +15,13 @@ import (
 // # Two stages, and the first one is now an index — ADR-0028
 //
 // There is no approximate-nearest-neighbour index on this driver — `caps.go`
-// probes for one on every open and it is absent at the pin — so the honest
-// choices were a full exact scan, an embedded search library with its own
-// index format, file and backup story, or two-stage retrieval. Two-stage is
-// what every production vector engine does anyway (DiskANN's rerank, pgvector's
-// documented rerank subquery): a narrow table of sign codes is ranked first and
-// the survivors are reranked EXACTLY against the vectors they came from, by
-// primary key.
+// measures for one once per process and reports it on every open, and it is
+// absent at the pin — so the honest choices were a full exact scan, an
+// embedded search library with its own index format, file and backup story,
+// or two-stage retrieval. Two-stage is what every production vector engine
+// does anyway (DiskANN's rerank, pgvector's documented rerank subquery): a
+// narrow table of sign codes is ranked first and the survivors are reranked
+// EXACTLY against the vectors they came from, by primary key.
 //
 // For its first years the first stage read every row, and this doc argued —
 // correctly, at the sizes it measured — that it needed no index. What changed
