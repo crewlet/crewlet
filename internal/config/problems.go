@@ -577,15 +577,22 @@ func (b *Bootstrap) Warnings() []Warning {
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
 	//
-	// ONLY WHERE THE TRIM RUNS, which is a node holding the estate: the trim
-	// reads the estate's own eviction rows, so only a `data` node arms it,
-	// and every other reader of `stream.tracker_retention` — the snapshot
-	// cadence, the retention report, the API's backup surface — is a data
-	// node's too. On a stateless node the block is read by nothing, so a
-	// warning about what it does to the trim described the members' trim
-	// from a value they never see. (`retention.backup_owner`, below, is not
-	// gated: who owns the deployment's backups is a question every node's
-	// operator answers.)
+	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
+	// readers decide which backups count under it, and both are armed with
+	// the state log, so only on a `data` node: the trim itself, a fleet
+	// singleton that only a data node with `workers` may claim, and the
+	// `backup_age` alarm, evaluated on EVERY data node whether or not it
+	// ever holds the trim — so a [data, seats] node still reads the floor
+	// for the alarm it raises. That is why the gate is
+	// [placement.NodeProfile.HoldsData] and not
+	// [placement.NodeProfile.RunsWorkers]: tightening it would drop the
+	// warning on a node whose alarm still depends on the value. Every other
+	// reader of `stream.tracker_retention` — the snapshot cadence, the
+	// retention report, the API's backup surface — is a data node's too. On
+	// a stateless node the block is read by nothing, so a warning about what
+	// it does to the trim described the members' trim from a value they
+	// never see. (`retention.backup_owner`, below, is not gated: who owns
+	// the deployment's backups is a question every node's operator answers.)
 	if b.Profile("").HoldsData() &&
 		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
@@ -652,9 +659,9 @@ func (b *Bootstrap) Warnings() []Warning {
 	// deployments the rule leaves standing.
 	if inMemory && b.Stream.StoreMaxBytes > 0 {
 		out = append(out, advisory(field("stream.store_max_bytes"),
-			"this embedded stream has no `store_dir`, so its streams are held in "+
-				"memory and this limit bounds none of them: what bounds them is the "+
-				"broker's memory allowance. Name a `store_dir`, or drop the limit"))
+			"this node's broker has no `store_dir`, so the streams it holds are "+
+				"kept in memory and this limit bounds none of them: what bounds them "+
+				"is the broker's memory allowance. Name a `store_dir`, or drop the limit"))
 	}
 
 	// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is not counted as one by any
