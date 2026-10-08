@@ -14,8 +14,13 @@ func Bounded(r *Runner, failure, line int) *Runner {
 	return r
 }
 
-// Bounds is the failure and line bounds r reads to.
-func Bounds(r *Runner) (failure, line int) { return r.failureBound, r.lineBound }
+// RedactContext is how much more than it keeps a read from the error stream's
+// end takes, so a credential that began before what is kept is still redacted.
+const RedactContext = redactContext
+
+// UnreadNote is the line standing where the error stream's first unread bytes
+// were left out of what was shown.
+func UnreadNote(unread int64) string { return unreadNote(unread, false) }
 
 // MaxLineBytes is the line bound every runner New builds reads to.
 const MaxLineBytes = maxLineBytes

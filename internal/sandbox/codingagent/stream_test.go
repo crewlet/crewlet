@@ -1,10 +1,13 @@
 package codingagent_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -197,8 +200,18 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 // the failure's detail, so its unread start is marked rather than silent; and
 // its end — the line naming what broke — is always there.
 //
+// The read itself is held to the bound too, not only what is shown from it:
+// the box is asked for the bound plus the redaction's context and no more, and
+// a run that parsed no transcript of its own carries at most the bound of the
+// stream as one, behind a note naming the size of what it left out. A read to
+// the engine's own ceiling shows the same failure, so the failure alone could
+// not tell that it read and redacted the whole stream.
+//
 // At a failure bound of [testFailureBound], with an error stream two and a
 // half times it, as the five mebibytes this was are of the real one.
+//
+// Mutation: read the error stream's end, or keep it, to
+// [sandbox.MaxFailureBytes] rather than to the runner's bound, and this fails.
 func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.Bounded(codingagent.NewClaudeCode(), testFailureBound, codingagent.MaxLineBytes)
@@ -208,9 +221,25 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	reads := &tailReads{Sandbox: b}
+	res, err := runner.Collect(t.Context(), reads, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
+	}
+	if got, want := reads.asked(p.Err()), []int{testFailureBound + codingagent.RedactContext}; !slices.Equal(got, want) {
+		t.Errorf("the error stream's end was read as %v bytes; want %v, the runner's bound and the "+
+			"redaction's context", got, want)
+	}
+	note, shown, _ := strings.Cut(res.Transcript, "\n")
+	switch {
+	case len(shown) > testFailureBound:
+		t.Errorf("the transcript carries %d bytes of the error stream, past the %d its runner holds it to",
+			len(shown), testFailureBound)
+	case !strings.HasSuffix(stderr, shown) || !strings.HasSuffix(shown, "FATAL: migrations/0007.sql is missing"):
+		t.Errorf("the transcript is not the error stream's end: …%q", tailOf(res.Transcript, 120))
+	case note != codingagent.UnreadNote(int64(len(stderr)-len(shown))):
+		t.Errorf("the transcript opens with %q; want the note naming the %d bytes it left out",
+			note, len(stderr)-len(shown))
 	}
 	if !strings.HasSuffix(res.Error, "FATAL: migrations/0007.sql is missing") {
 		t.Errorf("the failure lost the error stream's last line: …%q", tailOf(res.Error, 120))
@@ -411,6 +440,32 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 }
 
 func tailOf(s string, n int) string { return s[max(0, len(s)-n):] }
+
+// tailReads is a box that records how much of a file's end each ReadTail asked
+// for: a read past its bound shows what a bounded one does and costs the whole
+// file, so only the request says which one was made.
+type tailReads struct {
+	sandbox.Sandbox
+	mu   sync.Mutex
+	asks map[string][]int
+}
+
+func (b *tailReads) ReadTail(ctx context.Context, path string, n int) (sandbox.FileTail, error) {
+	b.mu.Lock()
+	if b.asks == nil {
+		b.asks = map[string][]int{}
+	}
+	b.asks[path] = append(b.asks[path], n)
+	b.mu.Unlock()
+	return b.Sandbox.ReadTail(ctx, path, n)
+}
+
+// asked is every n a ReadTail of path asked for, in order.
+func (b *tailReads) asked(path string) []int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.asks[path])
+}
 
 // testFailureBound and testLineBound are the bounds the cases that go past
 // one run their runner at ([codingagent.Bounded]): 64 KiB each, room for every
