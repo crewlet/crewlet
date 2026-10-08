@@ -71,11 +71,14 @@
 // the pass rather than after it, so that on a network their round trips
 // overlap the pass's own; and one leader read for each key the pass lost or
 // delivered as a marker. The lost keys are zero without concurrent writes and
-// bounded by the keys written while the listing ran. The markers are bounded
-// by the ESTATE: a bucket the broker never ages keeps a record's marker until
-// [FleetStore.SweepMarkers] removes it, [coord.MarkerRetention] after it was
-// written, so a listing re-reads the records removed in the last few hours
-// and never every record ever removed. It is never a read per key. Measured
+// bounded by the keys written while the listing ran — or, for a pass that went
+// [passIdle] without a delivery and was ended there ([watchWalk] says why it
+// is), by the keys the index named that it had not reached. The markers are
+// bounded by the ESTATE: a bucket the broker never ages keeps a record's
+// marker until [FleetStore.SweepMarkers] removes it, [coord.MarkerRetention]
+// after it was written, so a listing re-reads the records removed in the last
+// few hours and never every record ever removed. It is never a read per key
+// unless the broker stopped delivering the pass for a whole [passIdle]. Measured
 // against the embedded broker, where the server's own work rather than the
 // network is the cost, a listing of twenty quiet keys took 0.95 ms certified
 // against 0.75 ms for the bare pass.
@@ -296,12 +299,14 @@ func listUnder(ctx context.Context, js jetstream.JetStream, read *leaderReader, 
 		}
 	}()
 
-	latest, err := watchWalk(ctx, kv, keys, what)
+	latest, index, joined, err := watchWalk(ctx, kv, keys, what, indexed)
 	if err != nil {
 		return err
 	}
-	index := <-indexed
-	joined = true
+	if !joined {
+		index = <-indexed
+		joined = true
+	}
 	if index.err != nil {
 		return unavailable("read "+what, fmt.Errorf("read its key index to certify the pass: %w", index.err))
 	}
@@ -326,10 +331,42 @@ type keyIndex struct {
 //
 // The only transport — the file doc says why the batched read is not one. It
 // carries the key AND the value together, so there is still no Get per name
-// here, and its honesty rule is the whole of it: the nil entry — and ONLY the
-// nil entry — ends the pass, and a CLOSED CHANNEL is a failure named as one.
-// The nil entry is where the pass ENDS, not proof that it saw every key; that
-// proof is [certify]'s.
+// here, and its honesty rule is the whole of it: a CLOSED CHANNEL is a failure
+// named as one, and the pass ENDS in exactly two ways — the nil entry, or
+// [passIdle] without a delivery once the key index has answered (from the
+// start, for a pass nothing certifies). Neither is proof that it saw every
+// key; that proof is [certify]'s, which is the only reason the second way is
+// allowed at all.
+//
+// # Why a pass that has gone quiet is ended rather than waited for
+//
+// Because the nil entry can NEVER come for it. The client sends that marker
+// on a delivery — once it has received as many messages as the consumer had
+// pending when it was made, or one reports nothing pending — so a pass whose
+// pending messages are all REMOVED before it reaches them receives nothing and
+// waits for ever. Every bucket here keeps one message per key under an age, a
+// purge or a delete marker's sweep, so that is an ordinary instant rather than
+// a corner: the last counters of a window ageing out between the consumer's
+// creation and its first delivery. Measured as a listing of an idle budget
+// bucket blocked inside this loop for nine minutes and forty-two seconds,
+// until the test binary's own timeout ended it; a caller whose context
+// carries no deadline — a duty loop's — would have waited for ever, holding a
+// server-side consumer the whole time.
+//
+// Ending it is SAFE because the certification already closes any hole a pass
+// leaves: every key the index named and the pass did not deliver is read from
+// the leader, whatever the reason it was not delivered, so a pass ended early
+// costs leader reads and never a key. That is also why the quiet is only
+// counted once the index HAS answered — before that there is nothing to
+// certify the pass against, and the pass is all there is to wait on.
+//
+// A pass NOTHING certifies — indexed nil, the marker sweep's — owes nobody a
+// complete answer (a marker it misses is swept on the next tick), so its quiet
+// counts from the start. It meets the same removals: a marker another sweep
+// purged between this one's consumer and its first delivery.
+//
+// It returns the index too when it received it, and says so, so the caller
+// reads the channel only when the pass did not.
 //
 // It also owns the watcher, so there is no early-return path that leaks one —
 // the abandoned-listing case the client's blocking 256-entry handoff could
@@ -337,8 +374,8 @@ type keyIndex struct {
 // stopped the moment the pass ends, before anything is certified, for the same
 // reason: every write landing after the end marker is pushed into that
 // handoff, and nothing here reads it any more.
-func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (
-	map[string]jetstream.KeyValueEntry, error) {
+func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string,
+	indexed <-chan keyIndex) (map[string]jetstream.KeyValueEntry, keyIndex, bool, error) {
 
 	// Watch rather than WatchAll, so this transport narrows server-side too.
 	//
@@ -348,27 +385,75 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (
 	// visitLive is where a tombstone stops.
 	w, err := kv.Watch(ctx, keys)
 	if err != nil {
-		return nil, unavailable("read "+what, err)
+		return nil, keyIndex{}, false, unavailable("read "+what, err)
 	}
 	defer func() { _ = w.Stop() }()
 
 	latest := map[string]jetstream.KeyValueEntry{}
+	var (
+		index    keyIndex
+		answered bool
+		// quiet is armed when the index answers — at the start, for a
+		// pass with no index — and re-armed by every delivery after it;
+		// nil until then, so it never ends a pass before there is
+		// something to certify it against.
+		quiet *time.Timer
+		idle  <-chan time.Time
+	)
+	if indexed == nil {
+		quiet = time.NewTimer(passIdle)
+		idle = quiet.C
+	}
+	defer func() {
+		if quiet != nil {
+			quiet.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, unavailable("read "+what, ctx.Err())
+			return nil, index, answered, unavailable("read "+what, ctx.Err())
+		case index = <-indexed:
+			// Read once: a nil channel is never ready again.
+			indexed, answered = nil, true
+			quiet = time.NewTimer(passIdle)
+			idle = quiet.C
+		case <-idle:
+			// QUIET for a whole passIdle: the pass is waiting on
+			// messages removed before it reached them, or on a consumer
+			// that has stopped delivering. certify reads what it lacks.
+			return latest, index, answered, nil
 		case kve, ok := <-w.Updates():
 			if !ok {
-				return nil, unavailable("read "+what, errors.New("listing ended early"))
+				return nil, index, answered, unavailable("read "+what, errors.New("listing ended early"))
 			}
 			// nil marks the end of the initial values.
 			if kve == nil {
-				return latest, nil
+				return latest, index, answered, nil
 			}
 			keep(latest, kve)
+			if quiet != nil {
+				quiet.Reset(passIdle)
+			}
 		}
 	}
 }
+
+// passIdle is how long a pass may go without a delivery, once the key index has
+// answered, before it is ended and [certify] reads what it lacks.
+//
+// FIVE SECONDS, which is the client's own idleness interval for exactly this
+// consumer: an ordered consumer asks the server for an idle heartbeat after
+// five seconds with nothing to deliver (nats.go js.go,
+// orderedHeartbeatsInterval), so this is the point at which the broker itself
+// would call the pass idle. A pass that is still delivering re-arms it on every
+// entry and never meets it, so it is reached only by a pass that will not end
+// on its own or by a server that paused a delivering pass for a whole idle
+// interval. Shorter, a busy server's pause turns the rest of a large pass into
+// one leader read per key; longer, a listing that met removed messages holds
+// its caller longer. It is a cost bound and never a correctness one — see
+// [watchWalk].
+const passIdle = 5 * time.Second
 
 // keep records kve unless the listing already holds a newer revision of its
 // key. A pass delivers in stream order, so its later delivery of a key IS the

@@ -1086,7 +1086,13 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 func TestAnUnchargedCounterAgesOut(t *testing.T) {
 	nc := embeddedNATS(t)
 	store := openFleetWithTTL(t, nc, 500*time.Millisecond)
-	ctx := t.Context()
+	// BOUNDED, so a listing that never ends fails this case by name rather
+	// than the package's timeout. This is the case that found one: a listing
+	// whose counters aged out between its consumer's creation and its first
+	// delivery waited for an end marker no delivery would bring, for nine
+	// minutes and forty-two seconds (see [watchWalk]).
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
 	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}

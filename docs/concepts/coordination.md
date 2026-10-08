@@ -102,6 +102,20 @@ key the index does *not* name needs no read: the leader held nothing on that
 key at an instant inside the listing, so the key was not live throughout, and
 absent is a correct answer for it.
 
+A pass can also **stop short and never end**, and the certification is what
+makes ending it safe. The client sends the marker that ends a pass on a
+delivery, so a pass whose pending messages are all removed before it reaches
+them — the last counters of a window ageing out, a marker another node's sweep
+purged — receives nothing and would wait for ever: measured as one listing of
+an idle budget bucket that held its caller for nine minutes. So once the
+index has answered, a pass that goes **five seconds** without a delivery is
+ended there (the broker's own idle interval for this kind of consumer), and
+every key the index named that it had not delivered is read from the leader
+like any other key it lost. Every delivery restarts the five seconds, so only
+a pass the broker has stopped feeding is ever ended this way. The marker
+sweep, which nothing certifies and which owes nobody a complete answer, ends a
+pass that goes quiet the same way and sweeps the rest on its next tick.
+
 A key live from before the listing began until after it ended is therefore in
 it, however often it was rewritten in between and whichever replica served the
 pass. A listing that fails at any step hands its caller nothing rather than the
@@ -117,7 +131,8 @@ ran. The markers are bounded by the [marker sweep](#removal-markers-are-swept):
 a bucket with no age would otherwise keep the marker of every record it ever
 removed, and every listing whose pass met one would read it again, so without
 the sweep a listing's cost grew with every record the company had ever
-removed. It is never a read per key.
+removed. It is never a read per key, unless the broker stopped delivering a
+pass for a whole five seconds and the rest of it had to be read key by key.
 
 Its one bound is the broker's page size for that index: **100,000 keys under
 one filter**. Past it the client reads the index in pages by offset into a list
