@@ -89,6 +89,9 @@ func IndexStateOf(ctx context.Context, e *Embedder, dim int) (IndexState, error)
 // ReassignStatement is [reassignStatement], over a range.
 var ReassignStatement = reassignStatement
 
+// RefileStatement is [refileStatement], the re-filing a reassign batch runs.
+const RefileStatement = refileStatement
+
 // The statements the plan gate explains, as the code runs them.
 var (
 	ExactTopsStatement     = exactTopsStatement
