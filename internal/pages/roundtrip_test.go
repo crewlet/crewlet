@@ -332,12 +332,13 @@ type testWaiter struct {
 	advance func()
 }
 
-// holdApplier keeps this node's applier out of every wait from here on: a
-// write resolves `pending` and a read floored past what this node has applied
-// refuses `behind`, until the case drains by hand. It is the state of a node
-// whose applier is behind its own log — the one a case about a write that has
-// not landed here, or about a read that must not be served from before it,
-// needs to hold.
+// holdApplier keeps this node's applier out of every wait for the rest of the
+// case: a write resolves `pending` and a read floored past what this node has
+// applied refuses `behind`. A drain by hand brings the node level once and
+// does NOT put the applier back in the wait, so the next write is `pending`
+// again. It is the state of a node whose applier is behind its own log — the
+// one a case about a write that has not landed here, or about a read that
+// must not be served from before it, needs to hold.
 func (r *roundTrip) holdApplier() {
 	r.waiter.mu.Lock()
 	defer r.waiter.mu.Unlock()
