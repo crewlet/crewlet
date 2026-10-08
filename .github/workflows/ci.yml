@@ -30,7 +30,7 @@ jobs:
           cache-dependency-path: go.sum
       - run: go build ./...
       # THE ONLY VET THE TEST PACKAGES GET. Both test targets run `go test
-      # -vet=off` (the Makefile's GOTEST says why): `go vet ./...` runs every
+      # -vet=off` (the Makefile's GOTESTRUN says why): `go vet ./...` runs every
       # analyzer `go test` would, and more, over the same packages and their
       # _test.go files. Drop this step and nothing in CI vets at all.
       - run: go vet ./...

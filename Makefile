@@ -106,7 +106,14 @@ TEST_TIMEOUT := 30m
 # the copy that used to mask the loss is gone too. What the duplicate cost was
 # a cold vet pass per test package in every test job — run SERIALLY in
 # `test-solo`, whose -p 1 serialises vet with everything else.
-GOTEST := $(GO) test -race -vet=off -count=1 -timeout $(TEST_TIMEOUT)
+#
+# GOTESTBUILD is every flag that changes what is COMPILED, held apart so the
+# solo half's prebuild (below) compiles exactly what its run then finds in the
+# build cache: a flag in one and not the other is a different action ID, and
+# the prebuild would compile a tree nothing reads.
+GOTESTBUILD := -race
+GOTESTRUN   := -vet=off -count=1 -timeout $(TEST_TIMEOUT)
+GOTEST      := $(GO) test $(GOTESTBUILD) $(GOTESTRUN)
 
 # THE SKIP GATE, on the end of both test pipelines.
 #
@@ -148,8 +155,8 @@ SKIPGATE := $(GO) run ./internal/skipgate
 # and in opposite directions: `:=` runs the partition while make is still
 # PARSING, so `make help`, `make build` and `make fmt` each pay ~0.6s for two
 # `go list` walks they never look at; plain `=` costs nothing until referenced
-# but then re-runs per reference, and each of these is referenced twice below
-# (a guard, then the recipe).
+# but then re-runs per reference, and each of these is referenced more than
+# once below (a guard, then the recipe).
 #
 # So each expands once and redefines itself as a simple variable — `$(eval)`
 # expands to nothing, and what is left is the value it just assigned. Every
@@ -452,8 +459,28 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 # -p=GOMAXPROCS, so handing it four packages that each stand up a multi-member
 # broker recreates precisely the contention this partition exists to remove.
 # The old target ran one package and did not need it.
+#
+# BUT -p 1 IS FOR THE RUNS, and the compile it serialised with them was a side
+# effect: cmd/go runs compile, link and test actions on ONE pool of -p workers,
+# so every package in the half's dependency tree compiled one at a time before
+# the first test started. On CI that was 266s of a 992s step running no test
+# at all. So the half is compiled FIRST at the default -p by SOLO_PREBUILD,
+# which starts no test binary and so forms no cluster, and the -p 1 run finds
+# every compile in the build cache. Measured from a cold cache (4 vCPUs, the
+# machine shared): 423s serial, against 144s for the prebuild plus 19s for a
+# -p 1 run left with seven links and the seven generated test mains, which is
+# all it compiles.
+#
+# `go list -export` rather than `go test -c -o /dev/null`, which leaves the run
+# exactly the same work but LINKS every binary in the prebuild too — and its
+# links are not even reusable, since -c keeps debug information the run's do
+# not. GOTESTBUILD is shared with the run so the two compile the same action
+# IDs; a flag in one and not the other would prebuild a tree nothing reads.
+SOLO_PREBUILD = $(GO) list -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
+
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "no package imports internal/solo" >&2; exit 1; }
+	$(call SOLO_PREBUILD,$(GOTESTBUILD))
 	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
@@ -472,12 +499,15 @@ test-solo: require-node ## the packages that need a runner to themselves (ci: en
 # sub-makes, each of which must succeed), which is exactly why it went
 # unnoticed here: the escape hatch is the one place a partial run reports as a
 # whole one.
+#
+# The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
+# the solo half, compiled without it.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
 	@status=0; \
 	echo "==> parallel partition"; \
-	$(GO) test -vet=off -count=1 -timeout $(TEST_TIMEOUT) $(PARALLEL_PKGS) || status=1; \
+	$(GO) test $(GOTESTRUN) $(PARALLEL_PKGS) || status=1; \
 	echo "==> solo partition"; \
-	$(GO) test -vet=off -count=1 -timeout $(TEST_TIMEOUT) -p 1 $(SOLO_PKGS) || status=1; \
+	{ $(call SOLO_PREBUILD,) && $(GO) test $(GOTESTRUN) -p 1 $(SOLO_PKGS); } || status=1; \
 	exit $$status
 
 # Every target reports in one run rather than stopping at the first failure —

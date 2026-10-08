@@ -283,7 +283,7 @@ Before committing, ALWAYS run and fix any issues from **`make check`**, which is
 - `golangci-lint run` — what CI's lint job runs
 - `go build ./...`
 - `make test` — every package that shares a runner, under the detector, as CI runs it
-- `make test-solo` — the packages that need a runner to themselves, at `-p 1`, which is its own CI job
+- `make test-solo` — the packages that need a runner to themselves, at `-p 1` (compiled first at full `-p`, since `-p 1` serialises compiling too), which is its own CI job
 - a cross-compile of every release target (linux and darwin × amd64 and arm64)
 - the three dashboard gates, because ci.yml's `dashboard` job runs all three and a local pass that skipped one is a pass CI does not give: `npm run format:check` (`dashboard-lint`), the rebuild-and-diff of the committed bundle (`dashboard-check`), and `npm run typecheck && npm test` (`dashboard-test`). `dashboard-lint` was the one `check` did not depend on, and five unformatted files reached a pull request through the gap
 

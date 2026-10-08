@@ -122,7 +122,10 @@ same cases pass.
 
 So those packages run in `make test-solo` and in CI's `end-to-end gates` job,
 and `make test` leaves them out. A contention split, not a coverage one —
-`make check` depends on both targets.
+`make check` depends on both targets. `make test-solo` runs its packages one
+binary at a time (`-p 1`) and compiles them first at full parallelism, since
+`-p 1` would otherwise compile the whole dependency tree one package at a time
+too.
 
 **Which packages those are is computed, not listed.** A package declares it by
 importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
