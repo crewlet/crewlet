@@ -3,6 +3,7 @@ package auxspend_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -230,11 +231,18 @@ func TestARefusedRecordIsPublishedAgainAsTheSameEvent(t *testing.T) {
 // THE BACKLOG IS BOUNDED, and what leaves it is the OLDEST: a broker that has
 // refused for an hour costs the rollups that hour's oldest records, never an
 // unbounded heap.
+//
+// At [backlogBound] rather than MaxPending: the trim and the seal-order merge
+// are the same branches at any bound, and reaching 4096 took a refused flush
+// per record, each copying the whole backlog — 32 s of the suite under -race.
+// ONE FLUSH PER ADD all the same, because the open buckets are a map: only a
+// flush between adds seals records in the order they were added, which is the
+// order the assertions read.
 func TestARefusedBacklogIsBoundedOldestFirst(t *testing.T) {
 	t.Parallel()
 	pub := &recorder{refuse: true}
-	l := auxspend.NewLedger(pub)
-	for i := range auxspend.MaxPending + 3 {
+	l := auxspend.NewLedgerBounded(pub, backlogBound, discard)
+	for i := range backlogBound + 3 {
 		c := call(types.AuxMemoryFilter, "t", time.Duration(i)*time.Second, i, 0)
 		c.Use.TurnID = "t-" + time.Duration(i).String()
 		l.Add(c)
@@ -245,9 +253,9 @@ func TestARefusedBacklogIsBoundedOldestFirst(t *testing.T) {
 	pub.mu.Unlock()
 	l.Flush(t.Context())
 	got := pub.records(t)
-	if len(got) != auxspend.MaxPending {
+	if len(got) != backlogBound {
 		t.Fatalf("published %d after the outage, want the %d the backlog holds",
-			len(got), auxspend.MaxPending)
+			len(got), backlogBound)
 	}
 	for _, r := range got {
 		if r.InputTokens < 3 {
@@ -268,8 +276,8 @@ func TestARefusedBacklogIsBoundedOldestFirst(t *testing.T) {
 func TestARefusedTurnFlushIsTheNewestInTheBacklog(t *testing.T) {
 	t.Parallel()
 	pub := &recorder{refuse: true}
-	l := auxspend.NewLedger(pub)
-	for i := range auxspend.MaxPending {
+	l := auxspend.NewLedgerBounded(pub, backlogBound, discard)
+	for i := range backlogBound {
 		c := call(types.AuxMemoryFilter, "t", time.Duration(i)*time.Second, i+1, 0)
 		c.Use.TurnID = "old-" + time.Duration(i).String()
 		l.Add(c)
@@ -286,9 +294,9 @@ func TestARefusedTurnFlushIsTheNewestInTheBacklog(t *testing.T) {
 	pub.mu.Unlock()
 	l.Flush(t.Context())
 	got := pub.records(t)
-	if len(got) != auxspend.MaxPending {
+	if len(got) != backlogBound {
 		t.Fatalf("published %d after the outage, want the %d the backlog holds",
-			len(got), auxspend.MaxPending)
+			len(got), backlogBound)
 	}
 	if got[0].InputTokens != 3 {
 		t.Errorf("the backlog's first record has %d input tokens, want 3 — the two oldest "+
@@ -304,6 +312,30 @@ func TestARefusedTurnFlushIsTheNewestInTheBacklog(t *testing.T) {
 			t.Fatalf("record %d (%d tokens) published after a newer one (%d tokens)",
 				i, got[i].InputTokens, got[i-1].InputTokens)
 		}
+	}
+}
+
+// backlogBound is the backlog cases' bound: past the three records the first
+// case overflows by and the two turns the second adds, so each trims from a
+// backlog that keeps a run of older records whose order can be checked.
+const backlogBound = 8
+
+// discard is the backlog cases' logger. Each refused flush warns once, and the
+// outage they stage is the point rather than news.
+var discard = slog.New(slog.DiscardHandler)
+
+// A RUNNING NODE KEEPS 4096 REFUSED RECORDS, the figure MaxPending argues for:
+// under three megabytes, most of an hour of a busy company's broker outage.
+// The backlog cases run at a bound of their own, so this is what ties the
+// figure they skip filling to the one every ledger NewLedger builds is held
+// to.
+func TestALedgerKeepsMaxPendingRefusedRecords(t *testing.T) {
+	t.Parallel()
+	if auxspend.MaxPending != 4096 {
+		t.Errorf("MaxPending = %d, want 4096", auxspend.MaxPending)
+	}
+	if got := auxspend.PendingBound(auxspend.NewLedger(&recorder{})); got != auxspend.MaxPending {
+		t.Errorf("NewLedger keeps %d refused records, want MaxPending (%d)", got, auxspend.MaxPending)
 	}
 }
 
