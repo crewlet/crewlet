@@ -84,11 +84,46 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 // keeping it afterwards is indistinguishable from an outage to every other
 // caller. See [schedule.HoldNamedDuty].
 func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
-	if e.backends == nil || e.node == nil {
+	// No lease store is [schedule.HoldNamedDuty]'s own nil branch, asked
+	// here because the store it is handed below is never nil.
+	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
 		return nil
 	}
-	return schedule.HoldNamedDuty(e.backends.Coord, name,
+	return schedule.HoldNamedDuty(holdLeases{Backend: e.backends.Coord, engine: e}, name,
 		e.node.Owner(), e.node.ID(), ttl)
+}
+
+// holdLeases is the lease store this node's holds are taken through: its own,
+// with every give-back made once its stop has begun drawn from the stop's one
+// allowance ([Engine.stopping]).
+//
+// A HOLD IS GIVEN BACK BY WHOEVER ENDS THE WORK IT GUARDS — the setup runner,
+// at the end of a pass the integration loop or an operator ran — on the context
+// the hold was TAKEN on with its cancellation removed ([schedule.HoldNamedDuty]),
+// so nothing of a stop reaches it. The teardown cancels the integration loop
+// and waits for the pass in flight, and that pass gave its lease back on a
+// context with no deadline at all: against a store that has gone away, one
+// client request timeout the stop sat out beside its allowance — measured at
+// five seconds past it — on a give-back whose fallback is the lapse on the TTL
+// every other step of the stop falls back to. Bounded HERE because this is the
+// one frame that holds both the store a hold is taken through and the stop that
+// can end it; the hold's own context was made before the stop existed.
+//
+// ONLY ONCE THE STOP HAS BEGUN. A pass ending on its own is not a step of
+// anybody's stop, and charging the allowance for it would spend, during an
+// ordinary day, the time the stop is owed. A give-back already in flight when
+// the stop begins keeps the bound it was made under, like every round trip in
+// flight at that moment.
+type holdLeases struct {
+	coord.Backend
+	engine *Engine
+}
+
+// Release is [coord.Backend.Release], one step of the stop once it has begun.
+func (l holdLeases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
+	ctx, done := seat.StopStep(seat.WithStopBudget(ctx, l.engine.stopBudget.Load()))
+	defer done()
+	return l.Backend.Release(ctx, resource, owner, epoch)
 }
 
 // refuseDuty is the answer for a node whose roles exclude worker duties.

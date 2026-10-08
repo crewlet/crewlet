@@ -8,8 +8,8 @@ import (
 
 // StopBudget is the one allowance a stopping node's coordination round trips
 // share: the stop's announcement, the presence and seat leases it gives back,
-// the seats' last lifecycle events, the admission it withdraws and the duties
-// it releases.
+// the seats' last lifecycle events, the admission it withdraws, the duties it
+// releases and the holds its loops give back as they are stopped.
 //
 // # Why one allowance rather than one per step
 //
@@ -45,7 +45,10 @@ import (
 // The steps live in three packages — the engine, the node that composes the
 // drain, and this one — and the drain passes between them as a context. A
 // value is what survives the [context.WithoutCancel] every teardown takes, so
-// the one allowance reaches every step without a parameter at each layer.
+// the one allowance reaches every step without a parameter at each layer. The
+// one step no stop's context reaches is a hold given back on the context it
+// was TAKEN on, made before the stop existed; the engine binds that one at the
+// lease store the hold is taken through, which asks whether a stop has begun.
 type StopBudget struct {
 	total time.Duration
 

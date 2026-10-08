@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +29,22 @@ import (
 // is past half a minute and one allowance is a second. (The stream stays up:
 // the native backends this company runs are reached through the broker's own
 // client, which a stand-in cannot be.)
+//
+// A RECONCILE PASS IS IN FLIGHT WHEN THE STOP BEGINS, under the hold on its
+// surface: the integration loop's first grant is held back until then. The
+// teardown waits for that pass, and the pass gives its hold back on the
+// context the hold was taken on — long before the stop — so that give-back
+// sat out a whole stalled round trip beside the allowance until the engine
+// bound it to the stop. Held rather than left to chance, because the loop's
+// first pass runs as it starts and is over by the stop on an idle machine, so
+// a case that waited for luck exercised the give-back only under load.
+//
+// THE STORE GOES AWAY AS THE STOP BEGINS — the moment its drain is decided
+// ([engine.Engine.ShuttingDown]) — rather than a moment before it, because the
+// subject is the round trips the STOP makes. One begun earlier ends on its own
+// client's bound like any round trip in flight when a stop begins, and a case
+// that took the store away first measured whether one of those happened to
+// start in between.
 func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -38,9 +56,14 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 		t.Fatalf("OpenBackends: %v", err)
 	}
 	t.Cleanup(func() { back.Close(context.Background()) })
-	var gone atomic.Bool
-	back.Coord = stallingLeases{coordBackend: back.Coord, gone: &gone}
-	back.Fleet = stallingFleet{fleet: back.Fleet, gone: &gone}
+	var stopped atomic.Pointer[engine.Engine]
+	gone := func() bool {
+		e := stopped.Load()
+		return e != nil && e.ShuttingDown()
+	}
+	pass := &heldPass{granted: make(chan struct{})}
+	back.Coord = stallingLeases{coordBackend: back.Coord, gone: gone, pass: pass}
+	back.Fleet = stallingFleet{fleet: back.Fleet, gone: gone}
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc), Backends: back,
@@ -48,14 +71,20 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
+	stopped.Store(e)
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	if len(e.Node().Host().Held()) == 0 {
 		t.Fatal("the premise: the node holds seats for its stop to give back")
 	}
+	select {
+	case <-pass.granted:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the premise: the integration loop never took a surface's hold, " +
+			"so no pass is in flight for the stop to wait on")
+	}
 
-	gone.Store(true)
 	started := time.Now()
 	e.Stop(context.Background())
 	took := time.Since(started)
@@ -86,36 +115,67 @@ func stall(ctx context.Context) error {
 
 type coordBackend = coord.Backend
 
-// stallingLeases is a lease store whose reads and releases stall once gone is
-// set.
+// stallingLeases is a lease store whose reads and releases stall once gone
+// answers true, and which holds back its first grant of an integration
+// surface's hold until then ([heldPass]).
 type stallingLeases struct {
 	coordBackend
-	gone *atomic.Bool
+	gone func() bool
+	pass *heldPass
+}
+
+// heldPass is the reconcile pass a stop begins in the middle of: granted is
+// closed when the first surface hold is taken, and that hold reaches its pass
+// only once the stop has begun.
+type heldPass struct {
+	once    sync.Once
+	granted chan struct{}
+}
+
+func (l stallingLeases) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+	lease, refusal, err := l.coordBackend.TryAcquire(ctx, resource, opts)
+	// EVERY SURFACE IS HELD UNDER `setup-provision-<kind>`, the one name a
+	// reconcile pass and an operator's pass both take.
+	if err != nil || lease == nil ||
+		!strings.HasPrefix(resource, coord.WorkerResource("setup-provision-")) {
+		return lease, refusal, err
+	}
+	first := false
+	l.pass.once.Do(func() { first = true; close(l.pass.granted) })
+	for first && !l.gone() {
+		select {
+		case <-ctx.Done():
+			return lease, refusal, err
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return lease, refusal, err
 }
 
 func (l stallingLeases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
-	if l.gone.Load() {
+	if l.gone() {
 		return false, stall(ctx)
 	}
 	return l.coordBackend.Release(ctx, resource, owner, epoch)
 }
 
 func (l stallingLeases) Get(ctx context.Context, resource string) (*coord.Lease, error) {
-	if l.gone.Load() {
+	if l.gone() {
 		return nil, stall(ctx)
 	}
 	return l.coordBackend.Get(ctx, resource)
 }
 
-// stallingFleet is a fleet store whose admission withdrawal stalls once gone
-// is set.
+// stallingFleet is a fleet store whose admission withdrawal stalls once
+// gone answers true.
 type stallingFleet struct {
 	fleet
-	gone *atomic.Bool
+	gone func() bool
 }
 
 func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
-	if f.gone.Load() {
+	if f.gone() {
 		return stall(ctx)
 	}
 	return f.fleet.ForgetAdmission(ctx, nodeID, incarnation)

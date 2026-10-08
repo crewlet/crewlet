@@ -184,7 +184,10 @@ type Engine struct {
 	// stopBudget is the allowance every coordination round trip of this
 	// node's stop shares ([seat.StopBudget]) — the drain's and the
 	// teardown's — built by whichever reaches it first ([Engine.stopping]).
-	stopBudget     *seat.StopBudget
+	// An ATOMIC POINTER because it is read where no stop's context reaches:
+	// a hold given back by a loop the teardown is waiting for asks it
+	// whether a stop has begun ([holdLeases]), and nil is "not yet".
+	stopBudget     atomic.Pointer[seat.StopBudget]
 	stopBudgetOnce sync.Once
 
 	// stopOnce does the same for the teardown [Engine.Stop] runs after the
@@ -1718,7 +1721,8 @@ func (e *Engine) Stop(ctx context.Context) {
 // stopping is the allowance this node's stop draws its coordination round
 // trips from — the stop's announcement, the presence and seat leases it gives
 // back, the seats' last lifecycle events, the admission it withdraws, the
-// duties it releases — built once, by the drain or by a failed boot's
+// duties it releases, and the holds its loops give back as the teardown ends
+// them ([holdLeases]) — built once, by the drain or by a failed boot's
 // teardown, whichever comes first. See [seat.StopBudget] for why one
 // allowance and not one per step, and [seat.StopAllowance] for its size: one
 // heartbeat interval of this node's own lease TTL.
@@ -1734,9 +1738,9 @@ func (e *Engine) stopping() *seat.StopBudget {
 			// shipped one, which is what a lease it took would carry.
 			ttl = seat.SeatLeaseTTL
 		}
-		e.stopBudget = seat.NewStopBudget(seat.StopAllowance(ttl))
+		e.stopBudget.Store(seat.NewStopBudget(seat.StopAllowance(ttl)))
 	})
-	return e.stopBudget
+	return e.stopBudget.Load()
 }
 
 // teardown stops everything a node started, in the one order that is correct.
