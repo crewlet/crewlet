@@ -195,6 +195,14 @@ type Capabilities struct {
 // [driverMeasurement]: a conservative answer is right for the one handle that
 // probed and wrong for every handle after it.
 //
+// A CONTEXT THAT ENDS needs no check of its own, after the last question or
+// anywhere else. [answered] admits only the parser's refusal, and an ended
+// context never arrives as one: database/sql and the pinned driver both hand
+// back the context's own error, the driver checking before every prepare and
+// every step. So a question the context cut short is already unanswered, and
+// one answered before the context ended was answered by the driver — which is
+// no less true for the context ending afterwards.
+//
 // The gated three are assigned rather than composed in the literal, because
 // each needs the value it is filling in: a gate they answer false at is a
 // reading about the DRIVER that belongs beside their own — see
@@ -208,12 +216,6 @@ func probeDriver(ctx context.Context, db *sql.DB) (Capabilities, error) {
 	caps.VectorIndex = p.vectorIndex(&caps)
 	caps.FullTextSearch = p.fullText(&caps)
 	caps.WithoutRowid = p.withoutRowid(&caps)
-	// A CONTEXT THAT ENDED is unanswered whatever the questions reported:
-	// a question asked under it may have been refused by the context rather
-	// than by the parser, through a path that wrapped the cause away.
-	if err := ctx.Err(); err != nil {
-		p.heard(err)
-	}
 	return caps, p.unanswered
 }
 
