@@ -389,7 +389,7 @@ func TestFromMetaOfARowThatDoesNotSayDoesEverything(t *testing.T) {
 
 // A peer's bad row must not take down the reader's sweep, and there is only
 // one safe reading of one.
-func TestFromMetaMalformedReadsAsTheOldBehaviourToo(t *testing.T) {
+func TestFromMetaOfAMalformedRowDoesEverythingToo(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -452,7 +452,7 @@ func TestFromLease(t *testing.T) {
 // ── the share ────────────────────────────────────────────────────────
 
 // The unconstrained fleet is the degenerate case, not a second path.
-func TestComputeWithNoPlacementIsTheOldArithmetic(t *testing.T) {
+func TestComputeWithNoPlacementIsTheCeilingShare(t *testing.T) {
 	t.Parallel()
 
 	seats := seatsWith(anywhere, "a", "b", "c", "d", "e")

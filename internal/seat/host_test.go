@@ -1312,15 +1312,16 @@ func TestASeatAPeerGivesBackIsTakenAtTheNextSweep(t *testing.T) {
 // A PEER THAT SAYS NOTHING ADDS NOTHING, so a fleet it holds seats in never
 // reads as full on its account.
 //
-// A build from before the count writes none, and the one thing its silence
-// must never do is make a free seat look held. It holds a seat here; the
-// others' counts do not cover the fleet, so a node with room goes on trying.
+// A row that carries no count readably reads as zero, and the one thing that
+// silence must never do is make a free seat look held. The silent peer holds a
+// seat here; the others' counts do not cover the fleet, so a node with room
+// goes on trying.
 func TestAPeerThatSaysNothingNeverMakesTheFleetFull(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	f.present("node-old", time.Hour, placement.NodeProfile{})
+	f.present("node-silent", time.Hour, placement.NodeProfile{})
 	if lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
-		Owner: "node-old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
+		Owner: "node-silent:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
 	}); err != nil || lease == nil {
 		t.Fatalf("stage the silent peer's seat: lease=%v err=%v", lease, err)
 	}
