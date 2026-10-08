@@ -78,8 +78,13 @@ there is nothing to replicate to. Expect a boot to pause the first time a
 cluster forms: a member waits for the metadata group to elect a leader before
 it provisions anything — measured at about eight seconds on a quiet
 three-member cluster, and given up to sixty — because creating a replicated
-stream against a leaderless group blocks rather than failing. If the other
-members have not arrived yet the stream cannot be placed, and the node says
+stream against a leaderless group blocks rather than failing. It waits until
+that leader **answers it**, not until the member merely believes itself caught
+up: a member that knows of no leader can still report itself current, and a
+create it sends to a group with no leader is dropped rather than refused, so
+it sat out a whole fifteen-second request term before anything asked again.
+If the other members have not arrived yet the stream cannot be placed, and
+the node says
 so (`jetstream_stream_awaiting_peers`) while it retries inside the per-create
 provisioning deadline — **two minutes** on a member with peers, against thirty
 seconds on a solo node, because the two creates are not the same call

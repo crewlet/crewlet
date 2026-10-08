@@ -398,7 +398,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// actually depends on it: doing it in StartServer instead would make
 	// the first member of a fresh cluster wait for a quorum that cannot
 	// exist until the peers it is blocking have started.
-	if err := embedded.awaitClusterReady(ctx, q.cfg.Replicas); err != nil {
+	if err := embedded.awaitClusterReady(ctx, q.js, q.cfg.Replicas); err != nil {
 		q.nc.Close()
 		return nil, err
 	}

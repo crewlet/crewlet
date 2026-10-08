@@ -709,21 +709,60 @@ func notReadyError(budget time.Duration, clustered bool,
 // is a seed set — it may name this member, it may name a subset, and neither
 // shape says how many members a stream needs.
 //
+// # And why "current" is not "answering"
+//
+// JetStreamIsCurrent is a LOCAL flag: it asks whether this member's copy of
+// the metadata log has commits and has applied them, and whether a leader it
+// KNOWS OF has spoken lately — and a member that knows of no leader at all,
+// mid-election or restarted with its log on disk, still reports itself current
+// (server/raft.go, isCurrent skips the leader-contact check when there is no
+// leader to have heard from). Provisioning that starts then is put to a group
+// with no leader, and a group with no leader does not refuse it: only the
+// leader takes a create, and every member but the leader returns WITHOUT
+// REPLYING to it (server/jetstream_api.go, jsStreamCreateRequest) until the
+// group is ten seconds old — so each create waits out one whole
+// [jsprovision.AskTerm], fifteen seconds, and the pause before it is asked
+// again.
+//
+// So the wait ends on an ANSWER: the fleet's JetStream account report, which
+// in a cluster only the metadata leader gives (jsAccountInfoRequest returns
+// silently on every other member), asked every [clusterReadyAsk] once the two
+// local halves hold. An answer is the leader, reachable from this member, which
+// is precisely what the provisioning that follows needs; a dropped request is
+// asked again a heartbeat later rather than waited on.
+//
+// js is the client the provisioning will use, so the question travels the
+// path the creates will.
+//
 // A no-op for a solo member and for an external URL: solo has no metadata
-// group to join, and an external cluster is somebody else's to have made
+// group to join, and an external cluster is its own operator's to have made
 // ready before pointing an engine at it.
-func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) error {
+func (e *embeddedServer) awaitClusterReady(ctx context.Context, js jetstream.JetStream, replicas int) error {
 	if e == nil || !e.clustered {
 		return nil
 	}
+	r := e.readiness()
 	// A member of a cluster still writes R=1 streams sometimes, and one
 	// replica needs no peer at all — so the floor is zero rather than a
 	// negative that would read as "wait for nobody" by accident.
 	wantPeers := max(replicas-1, 0)
-	ready := func() bool {
+	local := func() bool {
 		return e.ns.JetStreamIsCurrent() && len(e.routePeers()) >= wantPeers
 	}
-	deadline := time.Now().Add(clusterReadyTimeout)
+	// answered is the last answer to the metadata question, and
+	// errNotAsked until one is put: a wait that never got as far as asking
+	// must not report the leader as silent.
+	answered := errNotAsked
+	ready := func() bool {
+		if !local() {
+			return false
+		}
+		askCtx, cancel := context.WithTimeout(ctx, r.ask)
+		defer cancel()
+		_, answered = js.AccountInfo(askCtx)
+		return answered == nil
+	}
+	deadline := time.Now().Add(r.timeout)
 	for time.Now().Before(deadline) {
 		if ready() {
 			return nil
@@ -732,22 +771,30 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for jetstream cluster %q: %w",
 				e.ns.ClusterName(), ctx.Err())
-		case <-time.After(clusterReadyPoll):
+		case <-time.After(r.poll):
 		}
 	}
+	// ONE LAST LOOK, so a member that got there during the final poll is not
+	// failed for the timing of the loop around it.
 	if ready() {
 		return nil
 	}
-	// THE TWO HALVES ARE NAMED SEPARATELY, because they have different
+	// THE THREE HALVES ARE NAMED SEPARATELY, because they have different
 	// remedies: a member that never became current is one whose metadata
-	// group could not form, and a member that is current with too few
-	// peers is a routing problem — a firewall, a wrong advertise address,
-	// a peer that never started.
+	// group could not form; a member that is current with too few peers is
+	// a routing problem — a firewall, a wrong advertise address, a peer
+	// that never started; and one that is both but was never answered is
+	// a group with no leader it can reach.
 	return fmt.Errorf("embedded nats server %q is not ready to serve a "+
 		"%d-replica stream within %s: jetstream current=%t, routed to %v "+
-		"(want %d peers)", e.ns.Name(), replicas, clusterReadyTimeout,
-		e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers)
+		"(want %d peers), metadata leader answered: %v", e.ns.Name(), replicas,
+		r.timeout, e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers, answered)
 }
+
+// errNotAsked is the metadata question a readiness wait never got as far as
+// putting, because this member was never current and routed at once.
+var errNotAsked = errors.New("not asked: the member was never current with " +
+	"enough routed peers")
 
 // awaitLeafReady waits until a leaf's link is up and the fleet's JetStream
 // answers across it.
