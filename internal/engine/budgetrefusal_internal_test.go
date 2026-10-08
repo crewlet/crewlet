@@ -107,6 +107,16 @@ func TestEveryRefusalTheCounterAnswersReachesTheLatch(t *testing.T) {
 	if got := charge(1, caps); got.OK || woke(l) {
 		t.Fatalf("a second refusal in the window (%+v) woke the meters again", got)
 	}
+	// A CHARGE OF NOTHING is admitted without the counter looking and clears
+	// no stamp, so the refusal after it is still a repeat — not a first that
+	// wakes the meters once for every phase a provider reports no usage for.
+	if got := charge(0, caps); !got.OK || woke(l) {
+		t.Fatalf("a charge of nothing (%+v) was refused or woke the meters", got)
+	}
+	if got := charge(1, caps); got.OK || woke(l) {
+		t.Fatalf("a repeat refusal after a charge of nothing (%+v) woke the meters "+
+			"again: the latch forgot a window the counter still has stamped", got)
+	}
 	// A CEILING RAISED: the charge it admits clears the window's stamp, so
 	// the next refusal there is a first again.
 	raised := coord.Caps{period.Day: 1000}

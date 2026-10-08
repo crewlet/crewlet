@@ -98,7 +98,7 @@ type budgetCounter interface {
 // through, telling the live meters ([refusalLatch]) what each answer says
 // about refusals: a refused charge names the window it refused in, a
 // recorded refusal ([coord.Budgets.Refuse]) every window it stamped, and an
-// admitted charge clears the stamps of both scopes it charged.
+// admitted charge of any tokens clears the stamps of both scopes it charged.
 //
 // AT THE COUNTER'S ANSWER, which is the one point every refusal passes —
 // a turn's round, a call its meter holds, a parked delivery, a person's
@@ -116,7 +116,15 @@ func (n noticedCounter) Charge(ctx context.Context, req coord.ChargeRequest) (co
 		return got, err
 	}
 	if got.OK {
-		n.refusals.admitted(coord.OrgScope, req.Seat)
+		// ONLY A CHARGE OF SOMETHING. A charge of nothing is admitted
+		// without the counter looking and writes nothing
+		// ([coord.Budgets.Charge]), so it clears no stamp — and a latch
+		// that forgot the window anyway would hear the next refusal in it
+		// as a first and wake the meters again, once per phase whose
+		// provider reports no usage.
+		if req.Tokens > 0 {
+			n.refusals.admitted(coord.OrgScope, req.Seat)
+		}
 		return got, nil
 	}
 	scope := coord.OrgScope
