@@ -118,6 +118,7 @@ func TestEveryContractRowNamesAGateThatReadsIt(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
 	seen := map[string]bool{}
+	gates := gateDirs{}
 	for _, row := range clientsource.Contract() {
 		if seen[row.Name] {
 			t.Errorf("%s is in the contract twice — one declaration has one owning gate",
@@ -131,7 +132,7 @@ func TestEveryContractRowNamesAGateThatReadsIt(t *testing.T) {
 				row.Name, row.Gate)
 			continue
 		}
-		file, err := gateFile(filepath.Join(root, filepath.FromSlash(dir)), test)
+		file, err := gates.file(filepath.Join(root, filepath.FromSlash(dir)), test)
 		if err != nil {
 			t.Errorf("%s: %v", row.Name, err)
 			continue
@@ -147,13 +148,43 @@ func TestEveryContractRowNamesAGateThatReadsIt(t *testing.T) {
 	}
 }
 
-// gateFile parses the test file in `dir` that declares the test `name`.
-func gateFile(dir, name string) (*ast.File, error) {
+// gateDirs is every gate directory's test files, parsed once each: a
+// directory owns several rows, and parsing all its test files again for each
+// was most of what the test above cost.
+type gateDirs map[string]gateDir
+
+// gateDir is one directory's test files, keyed by the tests they declare, or
+// the error reading them.
+type gateDir struct {
+	declares map[string]*ast.File
+	err      error
+}
+
+// file is the test file in `dir` that declares the test `name`.
+func (g gateDirs) file(dir, name string) (*ast.File, error) {
+	parsed, ok := g[dir]
+	if !ok {
+		parsed = parseGateDir(dir)
+		g[dir] = parsed
+	}
+	if parsed.err != nil {
+		return nil, parsed.err
+	}
+	if file, ok := parsed.declares[name]; ok {
+		return file, nil
+	}
+	return nil, fmt.Errorf("no test file in %s declares %s", dir, name)
+}
+
+// parseGateDir parses every test file in dir, and indexes each by the test
+// functions it declares.
+func parseGateDir(dir string) gateDir {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return gateDir{err: err}
 	}
 	fset := token.NewFileSet()
+	out := gateDir{declares: map[string]*ast.File{}}
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
@@ -161,15 +192,17 @@ func gateFile(dir, name string) (*ast.File, error) {
 		file, err := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil,
 			parser.SkipObjectResolution)
 		if err != nil {
-			return nil, err
+			return gateDir{err: err}
 		}
 		for _, decl := range file.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name {
-				return file, nil
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+				if _, taken := out.declares[fn.Name.Name]; !taken {
+					out.declares[fn.Name.Name] = file
+				}
 			}
 		}
 	}
-	return nil, fmt.Errorf("no test file in %s declares %s", dir, name)
+	return out
 }
 
 func imports(file *ast.File, path string) bool {
