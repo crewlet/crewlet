@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE SUITE, on the in-memory twin. Its own package runs it on a three-member
@@ -51,10 +52,7 @@ type node struct {
 
 func newNode(t *testing.T, b *memory.Broker, id string) node {
 	t.Helper()
-	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), id+".db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open %s: %v", id, err)
-	}
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), id+".db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	n := node{id: id, q: client(t, b), log: db.Events()}
 	stop, err := eventfan.Serve(t.Context(), n.q, id, n.log)
