@@ -29,7 +29,8 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// Factory builds an empty backend for one case.
+// Factory builds an empty backend for one case. The cases run in parallel, so
+// it is called concurrently and builds each backend on nothing another holds.
 type Factory func(t *testing.T) objstore.Backend
 
 // Options tunes the suite to what a backend can promise.
@@ -91,7 +92,12 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"an_unfinished_upload_is_pending_until_abandoned", anUnfinishedUploadIsPendingUntilAbandoned},
 	}
 	for _, c := range cases {
+		// IN PARALLEL: each case is handed a backend of its own from the
+		// factory — a broker, a bucket server or a map nothing else holds —
+		// so no case sees another's objects, and one after another the
+		// suite cost the sum of its slowest cases.
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			c.run(t, newBackend(t), opts)
 		})
 	}
