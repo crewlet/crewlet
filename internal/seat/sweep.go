@@ -24,7 +24,7 @@ import (
 // the last one it honoured waits for the tick, which is the latency it would
 // have had without asking. Wall-clock, like the ticker, never the injected
 // clock the leases are judged by.
-func (h *Host) sweepLoop(ctx context.Context) {
+func (h *Host) sweepLoop(ctx context.Context, asks <-chan struct{}) {
 	ticker := time.NewTicker(h.sweepEvery)
 	defer ticker.Stop()
 	var asked time.Time
@@ -33,7 +33,7 @@ func (h *Host) sweepLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-		case <-h.resweep:
+		case <-asks:
 			if !asked.IsZero() && time.Since(asked) < h.sweepEvery {
 				continue
 			}
@@ -50,10 +50,20 @@ func (h *Host) sweepLoop(ctx context.Context) {
 // the next tick would otherwise be the first to see, up to [SweepInterval]
 // later with every new seat unclaimed and every removed one still held.
 //
-// A no-op on a host that is not running, and coalesced: an ask that finds one
+// DROPPED BY A HOST THAT IS NOT RUNNING, whose [Host.Start] begins with a pass
+// of its own over the seats as they are by then. Kept, an ask made before the
+// start — an apply while the engine around the host is still being built — was
+// taken straight after that first pass: a second pass with nothing new to see,
+// which spent the one ask an interval honours, so the first apply after the
+// boot waited for the tick. Coalesced while running: an ask that finds one
 // pending adds nothing, and one inside the interval of the last honoured waits
 // for the tick ([Host.sweepLoop]).
 func (h *Host) Resweep() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.resweep == nil {
+		return
+	}
 	select {
 	case h.resweep <- struct{}{}:
 	default:

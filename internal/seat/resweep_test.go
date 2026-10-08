@@ -73,6 +73,39 @@ func TestResweepClaimsANewSeatWithoutWaitingForTheTick(t *testing.T) {
 	waitHolds(t, h, "ceo")
 }
 
+// AN ASK MADE BEFORE THE HOST RUNS IS ANSWERED BY ITS FIRST PASS, NOT BY ONE
+// OF ITS OWN.
+//
+// An apply can reach the host while the engine around it is still being built,
+// before [Host.Start], whose first pass reads the seats as they are by then.
+// Kept for the loop, that ask was a second pass straight after the first with
+// nothing new to see — and it spent the one ask an interval honours, so the
+// first apply after the boot, the one that did change the seats, waited for
+// the tick.
+func TestAResweepBeforeTheHostRunsIsDropped(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	set := &changingSeats{}
+	h := f.newHost("node-a", Config{
+		Seats: set.seats, SweepInterval: time.Hour, HeartbeatInterval: time.Hour,
+	})
+	set.add("ceo")
+	h.Resweep()
+	h.Start(f.ctx)
+	t.Cleanup(func() { h.Stop(f.ctx) })
+	wantHeld(t, h, "ceo")
+	// The loop is given time to misbehave, as above.
+	before := set.reads.Load()
+	time.Sleep(300 * time.Millisecond)
+	if got := set.reads.Load(); got != before {
+		t.Fatalf("an ask made before the host ran swept %d more time(s) once "+
+			"it started, after the first pass had answered it", got-before)
+	}
+	set.add("eng")
+	h.Resweep()
+	waitHolds(t, h, "eng")
+}
+
 // AN ASK INSIDE THE INTERVAL OF THE LAST ONE HONOURED WAITS FOR THE TICK.
 //
 // The per-sweep claim limit bounds the rate a node spawns seats' MCP children

@@ -223,11 +223,6 @@ type Host struct {
 	releaseLimit   int
 	acquireBackoff time.Duration
 
-	// resweep asks the sweep loop for a pass before its next tick
-	// ([Host.Resweep]). Buffered by one: a request that finds one already
-	// pending adds nothing to it.
-	resweep chan struct{}
-
 	// sweepMu and beatMu serialise the two passes against themselves. A
 	// single-threaded scheduler gives this for free; here the loops are
 	// goroutines and a caller may drive either pass directly, so two
@@ -279,6 +274,13 @@ type Host struct {
 	// advertises counts only its leases on these ([Host.placedCount]).
 	placeable map[string]struct{}
 
+	// resweep is the running sweep loop's ask for a pass before its next
+	// tick ([Host.Resweep]), buffered by one so an ask that finds one
+	// pending adds nothing to it. MADE BY EACH [Host.Start] and nil while
+	// the host is not running, so an ask made then is dropped rather than
+	// kept for a loop that does not exist yet.
+	resweep chan struct{}
+
 	// lastBeat is when the heartbeat goroutine last proved it was turning.
 	// It is what the watchdog reads; see [Host.Beat].
 	lastBeat time.Time
@@ -319,7 +321,6 @@ func New(cfg Config) (*Host, error) {
 		ttl:          ttl,
 		heartbeat:    orDuration(cfg.HeartbeatInterval, ttl/HeartbeatRatio),
 		sweepEvery:   orDuration(cfg.SweepInterval, SweepInterval),
-		resweep:      make(chan struct{}, 1),
 		claimLimit:   orInt(cfg.ClaimLimit, ClaimLimitPerSweep),
 		releaseLimit: orInt(cfg.ReleaseLimit, ReleaseLimitPerSweep),
 		// One TTL — THIS host's, not the shipped constant. Tying the two
@@ -653,13 +654,15 @@ func (h *Host) Start(ctx context.Context) {
 	h.lastBeat = h.now()
 	loopCtx, cancel := context.WithCancel(ctx)
 	h.cancel = cancel
+	asks := make(chan struct{}, 1)
+	h.resweep = asks
 	h.mu.Unlock()
 
 	h.renewNodePresence(ctx)
 	h.Sweep(ctx)
 
 	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
-	h.wg.Go(func() { h.sweepLoop(loopCtx) })
+	h.wg.Go(func() { h.sweepLoop(loopCtx, asks) })
 
 	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
 }
@@ -735,6 +738,7 @@ func (h *Host) Stop(ctx context.Context) {
 		return
 	}
 	h.running = false
+	h.resweep = nil
 	cancel := h.cancel
 	h.cancel = nil
 	h.mu.Unlock()
