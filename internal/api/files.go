@@ -98,15 +98,20 @@ type pacedBody struct {
 	rc   *http.ResponseController
 	pace time.Duration
 
+	// now is the clock the time spent inside a Read is measured on, and
+	// each read deadline is set from — the app's pace clock
+	// ([Options.PaceClock]).
+	now func() time.Time
+
 	// left is how many bytes of the current mebibyte are still to arrive,
 	// and budget how much of its pace is left to spend on them.
 	left   int64
 	budget time.Duration
 }
 
-// newPacedBody paces r at [filePace] a mebibyte.
-func newPacedBody(r io.Reader, rc *http.ResponseController) *pacedBody {
-	return &pacedBody{r: r, rc: rc, pace: filePace}
+// newPacedBody paces r at [filePace] a mebibyte, measured on now.
+func newPacedBody(r io.Reader, rc *http.ResponseController, now func() time.Time) *pacedBody {
+	return &pacedBody{r: r, rc: rc, pace: filePace, now: now}
 }
 
 // Read reads the body, inside what is left of the current mebibyte's budget.
@@ -137,13 +142,13 @@ func (b *pacedBody) Read(p []byte) (int, error) {
 		return 0, fmt.Errorf("%w: a mebibyte of it took more than %v to arrive",
 			errFileBody, b.pace)
 	}
-	start := time.Now()
+	start := b.now()
 	if err := b.rc.SetReadDeadline(start.Add(b.budget)); err != nil &&
 		!errors.Is(err, http.ErrNotSupported) {
 		return 0, fmt.Errorf("%w: %w", errFileBody, err)
 	}
 	n, err := b.r.Read(p)
-	b.budget -= time.Since(start)
+	b.budget -= b.now().Sub(start)
 	b.left -= int64(n)
 	if b.left <= 0 {
 		// A READ THAT CROSSED INTO THE NEXT MEBIBYTE has paid for this
@@ -265,7 +270,7 @@ func (a *App) sendFile(w http.ResponseWriter, f tracker.File, src io.Reader) {
 	w.Header().Set("Content-Disposition",
 		mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(f.Path)}))
 	w.WriteHeader(http.StatusOK)
-	if err := sendPaced(w, src); err != nil {
+	if err := sendPaced(w, src, a.pace); err != nil {
 		// THE STATUS IS SENT, so the one honest signal left is a body
 		// shorter than its Content-Length: aborting the handler closes
 		// the connection rather than ending the response cleanly. The
@@ -282,13 +287,13 @@ func (a *App) sendFile(w http.ResponseWriter, f tracker.File, src io.Reader) {
 const sendUnit = objstore.MiB
 
 // sendPaced writes src to the client [sendUnit] at a time, each under its own
-// [filePace] write deadline, set once the unit is in hand — so the time spent
-// waiting on the store for it is never the client's.
+// [filePace] write deadline, set from now once the unit is in hand — so the
+// time spent waiting on the store for it is never the client's.
 //
 // Done only where src answers io.EOF itself ([objstore.Fill]): a source cut
 // short is a failure, which the caller turns into a cut response rather than
 // one ended as if it were whole.
-func sendPaced(w http.ResponseWriter, src io.Reader) error {
+func sendPaced(w http.ResponseWriter, src io.Reader, now func() time.Time) error {
 	rc := http.NewResponseController(w)
 	buf := make([]byte, sendUnit)
 	for {
@@ -297,7 +302,7 @@ func sendPaced(w http.ResponseWriter, src io.Reader) error {
 			return err
 		}
 		if n > 0 {
-			if derr := rc.SetWriteDeadline(time.Now().Add(filePace)); derr != nil &&
+			if derr := rc.SetWriteDeadline(now().Add(filePace)); derr != nil &&
 				!errors.Is(derr, http.ErrNotSupported) {
 				return derr
 			}
@@ -396,7 +401,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 		contentType = mime.TypeByExtension(path.Ext(filePath))
 	}
 	// THE BYTES FIRST — see the file's head — paced as they arrive.
-	object, err := a.files.Put(r.Context(), newPacedBody(r.Body, http.NewResponseController(w)),
+	object, err := a.files.Put(r.Context(), newPacedBody(r.Body, http.NewResponseController(w), a.pace),
 		tracker.MaxFileBytes, objstore.PutMeta{ContentType: contentType})
 	if err != nil {
 		fileRefusal(w, err)

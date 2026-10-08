@@ -44,6 +44,10 @@ type App struct {
 	// window and a health tick cannot disagree about what time it is.
 	now func() time.Time
 
+	// pace is the clock a file transfer's pace is measured on and its
+	// deadlines set from. See [Options.PaceClock].
+	pace func() time.Time
+
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
 
@@ -186,6 +190,21 @@ type Options struct {
 	// Now is injectable so a test can pin the timestamps.
 	Now func() time.Time
 
+	// PaceClock is the clock a file upload's and download's pace is
+	// measured on, and every read and write deadline it sets is taken
+	// from ([filePace]). Nil takes time.Now.
+	//
+	// NOT [Options.Now], which stamps answers and which a test pins to one
+	// instant: the pace is a DURATION, the time spent inside a body's
+	// reads, and a clock that never moves would measure every read as
+	// taking none — the pace charged nothing, whatever it was meant to
+	// charge. Injectable so a suite can move it by exactly the time a fake
+	// client or store took, rather than sleep that long. And time.Now
+	// itself rather than one converted to UTC, since a converted time
+	// drops the monotonic reading, and a pace on the wall reading alone
+	// moves with every step the system clock takes.
+	PaceClock func() time.Time
+
 	// HealthInterval overrides the shared tick's cadence.
 	HealthInterval time.Duration
 
@@ -293,6 +312,10 @@ func New(opts Options) (*App, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	pace := opts.PaceClock
+	if pace == nil {
+		pace = time.Now
+	}
 	state := opts.State
 	if state == nil {
 		state = livestate.New()
@@ -305,6 +328,7 @@ func New(opts Options) (*App, error) {
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
 		now:          now,
+		pace:         pace,
 		// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a
 		// second field an embedder could set inconsistently with it:
 		// Sources.Company reads the CURRENT epoch, and "is there one" is

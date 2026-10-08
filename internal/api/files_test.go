@@ -31,13 +31,44 @@ import (
 // one to fire, for the reason internal/api/httpjson's own deadline test gives:
 // net/http already guarantees a deadline fires, and what is this package's
 // own is that one is set at all, how far out, and when.
+//
+// And on a CLOCK OF THE SUITE'S OWN ([api.Options.PaceClock]), moved by
+// exactly the time a fake store's work takes, never slept through — so every
+// deadline is measured exactly. The clock starts years from the wall clock,
+// which is what keeps that honest: a route that read the wall clock instead of
+// its pace clock would set deadlines decades from where this one stands.
+
+// paceClock is a clock that moves only when a case says time passed.
+type paceClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func newPaceClock() *paceClock {
+	return &paceClock{at: time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)}
+}
+
+func (c *paceClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *paceClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
 
 // paceLog is the order things happened in, shared by the fake store and the
 // capturing writer.
 type paceLog struct {
+	clock *paceClock
+
 	mu     sync.Mutex
 	events []string
-	// out is how far past the moment it was set each deadline was.
+	// out is how far past the moment it was set each deadline was, on the
+	// pace clock.
 	out []time.Duration
 }
 
@@ -48,10 +79,11 @@ func (l *paceLog) add(event string) {
 }
 
 func (l *paceLog) deadline(kind string, at time.Time) {
+	now := l.clock.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.events = append(l.events, kind)
-	l.out = append(l.out, time.Until(at))
+	l.out = append(l.out, at.Sub(now))
 }
 
 func (l *paceLog) all() []string {
@@ -88,6 +120,9 @@ type fakeFiles struct {
 	store   *objstore.Store
 	backend *memobj.Backend
 
+	// clock is the app's pace clock, which the store's work moves.
+	clock *paceClock
+
 	// work is the store's own time between two reads of an upload's body
 	// — a broker's acknowledgements, a bucket's part — which no client
 	// may be charged for.
@@ -108,8 +143,11 @@ func newFakeFiles(t *testing.T) *fakeFiles {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fakeFiles{store: s, backend: backend}
+	return &fakeFiles{store: s, backend: backend, clock: newPaceClock()}
 }
+
+// paceLog is a log of the pace this fake's app keeps.
+func (f *fakeFiles) paceLog() *paceLog { return &paceLog{clock: f.clock} }
 
 // holding stores content as the file at reports/q3.bin, and answers its row.
 func (f *fakeFiles) holding(t *testing.T, content []byte) tracker.File {
@@ -151,7 +189,7 @@ func (f *fakeFiles) Put(ctx context.Context, r io.Reader, limit int64,
 	f.mu.Lock()
 	f.objects++
 	f.mu.Unlock()
-	return f.store.Put(ctx, working{r: r, work: f.work}, limit, m)
+	return f.store.Put(ctx, working{r: r, work: f.work, clock: f.clock}, limit, m)
 }
 
 func (f *fakeFiles) PutFileAs(_ context.Context, _, _ string, put tracker.FilePut) (tracker.WriteResult, error) {
@@ -169,24 +207,27 @@ func (f *fakeFiles) RemoveFileAs(context.Context, string, string, string, string
 }
 
 // working is the store's side of an upload: it does its own work before it
-// asks the body for more.
+// asks the body for more — on the pace clock, which the work moves by its
+// length.
 type working struct {
-	r    io.Reader
-	work time.Duration
+	r     io.Reader
+	work  time.Duration
+	clock *paceClock
 }
 
 func (w working) Read(p []byte) (int, error) {
-	time.Sleep(w.work)
+	w.clock.advance(w.work)
 	// A PIECE AT A TIME, as a broker's messages or a bucket's reads are,
 	// so a mebibyte takes many reads and the work between them adds up.
 	return w.r.Read(p[:min(len(p), 256<<10)])
 }
 
-// filesApp is an authenticated node serving fake's files.
-func filesApp(t *testing.T, fake api.ProjectFiles) *api.App {
+// filesApp is an authenticated node serving fake's files, keeping their pace
+// on fake's clock.
+func filesApp(t *testing.T, fake *fakeFiles) *api.App {
 	t.Helper()
 	b := closedPosture()
-	return newApp(t, api.Options{Bootstrap: &b, Files: fake})
+	return newApp(t, api.Options{Bootstrap: &b, Files: fake, PaceClock: fake.clock.Now})
 }
 
 // content is n bytes of no repeating shape.
@@ -225,8 +266,8 @@ func answerOf(t *testing.T, rec *httptest.ResponseRecorder) map[string]string {
 // which for a client that answers at once is all of it.
 func TestAnUploadIsChargedOnlyWhileTheClientIsWaitedOn(t *testing.T) {
 	t.Parallel()
-	log := &paceLog{}
 	fake := newFakeFiles(t)
+	log := fake.paceLog()
 	fake.work = time.Second
 	a := filesApp(t, fake)
 
@@ -243,17 +284,17 @@ func TestAnUploadIsChargedOnlyWhileTheClientIsWaitedOn(t *testing.T) {
 	}
 	// THE STORE WORKED A SECOND BEFORE EVERY READ — three seconds into the
 	// first mebibyte by its fourth read, which a wall-clock charge would
-	// have taken out of the client's budget. Two seconds of slack is for
-	// a loaded machine's scheduling, which lands inside a read too.
-	var spent time.Duration
+	// have taken out of the client's budget — and the client, a reader in
+	// memory, took no time at all. So every deadline is the WHOLE pace,
+	// exactly: one charged from the mebibyte's first read would be a
+	// second short for every read before it.
 	for i, d := range log.out {
-		if d < objstore.MiBPace-2*time.Second || d > objstore.MiBPace+time.Second {
+		if d != objstore.MiBPace {
 			t.Errorf("read deadline %d was set %v out, want the whole %v — the store's "+
 				"own work was charged to the client", i, d, objstore.MiBPace)
 		}
-		spent += fake.work
 	}
-	if spent < 4*time.Second {
+	if spent := time.Duration(len(log.out)) * fake.work; spent < 4*time.Second {
 		t.Fatalf("the store worked for %v in all, too little for a deadline charged "+
 			"by the wall clock to show", spent)
 	}
@@ -440,8 +481,8 @@ func TestADownloadOfALiveFileNamingNoObjectIsAFault(t *testing.T) {
 // client's window on the store.
 func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 	t.Parallel()
-	log := &paceLog{}
 	fake := newFakeFiles(t)
+	log := fake.paceLog()
 	data := content(2*objstore.MiB + 100)
 	fake.holding(t, data)
 	a := filesApp(t, fake)
@@ -474,7 +515,7 @@ func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	for i, d := range log.out {
-		if d < objstore.MiBPace-time.Second || d > objstore.MiBPace+time.Second {
+		if d != objstore.MiBPace {
 			t.Errorf("deadline %d was set %v out, want %v", i, d, objstore.MiBPace)
 		}
 	}
