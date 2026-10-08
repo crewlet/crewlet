@@ -51,6 +51,8 @@ const JANE: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 let sent: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];

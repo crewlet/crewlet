@@ -50,6 +50,8 @@ const JANE: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 const ANONYMOUS: ViewerState = {

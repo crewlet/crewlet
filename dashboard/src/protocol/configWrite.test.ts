@@ -219,6 +219,13 @@ describe("one reading of a /config refusal", () => {
   test.each([
     [401, { error: "invalid_token" }, { kind: "guarded" }],
     [403, {}, { kind: "guarded" }],
+    // A MANAGED DOCUMENT ACCEPTED THE TOKEN, so it is not `guarded`: the
+    // remedy is where the company is written, not which token is held.
+    [
+      403,
+      { error: "config_managed", managed_by: ["gitops"], detail: "managed", hint: "there" },
+      { kind: "managed", managedBy: ["gitops"] },
+    ],
     [
       409,
       { error: "revision_advanced", current_revision_id: "r9" },

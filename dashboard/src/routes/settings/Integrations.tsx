@@ -50,6 +50,7 @@ import {
   PlusGlyph,
   RotateCwGlyph,
   SettingsGlyph,
+  ShieldGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
@@ -72,6 +73,7 @@ import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
@@ -1206,12 +1208,19 @@ export function SeatStep({
   app,
   toolKey,
   seat,
+  managed = null,
 }: {
   /** The tool in the reader's own words, from the catalogue. */
   app: string;
   /** The engine surface this roster belongs to: what the route is keyed on. */
   toolKey: string;
   seat: SetupSeatState;
+  /**
+   * Why the company document cannot be changed from here — another system
+   * manages it (ADR-0030) — or null. An app is recorded on the seat, so a
+   * managed document holds its creation BEFORE the host makes one.
+   */
+  managed?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState("");
@@ -1261,7 +1270,15 @@ export function SeatStep({
 
   return (
     <>
-      <Button size="small" variant="primary" disabled={busy} onClick={() => void create()}>
+      <Button
+        size="small"
+        variant="primary"
+        disabled={busy}
+        disabledReason={managed ?? undefined}
+        onClick={() => {
+          if (!managed) void create();
+        }}
+      >
         {busy ? `Opening ${app}` : `Create app on ${app}`}
       </Button>
       {refused && (
@@ -1337,12 +1354,21 @@ export function ActionButton({
   entry,
   action,
   blocked,
+  managed = null,
   onOpen,
 }: {
   entry: Entry;
   action: TileAction;
   /** From [formBlocked]: why the form cannot open, for the three that open it. */
   blocked?: string;
+  /**
+   * Why the company document cannot be changed from here (ADR-0030), or
+   * null. It holds Connect and Continue, which write the document, and NOT
+   * Rotate token: a rotation seals a value the document already names and
+   * changes nothing in it, which is the break-glass a managed deployment
+   * keeps for a person.
+   */
+  managed?: string | null;
   onOpen: () => void;
 }) {
   switch (action.kind) {
@@ -1369,23 +1395,25 @@ export function ActionButton({
           Learn more
         </ButtonLink>
       );
-    default:
+    default: {
+      const held = blocked ?? (action.kind === "rotate" ? undefined : (managed ?? undefined));
       return (
         <Button
           size="small"
           variant={action.kind === "rotate" ? "primary" : "secondary"}
-          disabledReason={blocked}
+          disabledReason={held}
           // NAMED FOR THE TOOL, with the visible label at its start (the
           // label is in the name, WCAG 2.5.3): a grid of tiles is a column of
           // "Connect" buttons in a screen reader's list of controls.
           aria-label={ACTION_NAMES[action.kind](entry.name)}
           onClick={() => {
-            if (!blocked) onOpen();
+            if (!held) onOpen();
           }}
         >
           {action.label}
         </Button>
       );
+    }
   }
 }
 
@@ -1450,6 +1478,7 @@ export function IntegrationTile({
   sections,
   trafficKnown,
   guarded,
+  managed = null,
   onOpen,
 }: {
   entry: Entry;
@@ -1458,6 +1487,8 @@ export function IntegrationTile({
   sections: { name: string; tool: SetupToolState; seat?: string }[];
   trafficKnown: boolean;
   guarded: boolean;
+  /** Why the company document cannot be changed from here, or null; see [ActionButton]. */
+  managed?: string | null;
   /** Open the settings form for this tool, for the action the tile carries. */
   onOpen: (action: TileAction, reason: string) => void;
 }) {
@@ -1499,6 +1530,7 @@ export function IntegrationTile({
           entry={entry}
           action={action}
           blocked={formBlocked(sections, guarded)}
+          managed={managed}
           onOpen={() => onOpen(action, reason)}
         />
       </div>
@@ -1526,6 +1558,7 @@ export function EntryRow({
   sections,
   publicBase,
   guarded = false,
+  managed = null,
   onOpen,
   onDisconnect,
 }: {
@@ -1542,6 +1575,13 @@ export function EntryRow({
   sections?: { name: string; tool: SetupToolState; seat?: string }[];
   /** Whether the setup listing was refused, for [formBlocked]. */
   guarded?: boolean;
+  /**
+   * Why the company document cannot be changed from here — another system
+   * manages it (ADR-0030) — or null. It holds what writes the document
+   * (Connect, Continue, Disconnect, an agent's app) and leaves the settings
+   * form and Rotate token, through which a credential is rotated.
+   */
+  managed?: string | null;
   /**
    * Open the settings form — for the action named, or for the settings square
    * when none is. Absent where nothing may open it.
@@ -1586,11 +1626,19 @@ export function EntryRow({
           entry={entry}
           action={owed}
           blocked={blocked}
+          managed={managed}
           onOpen={() => onOpen(owed, asSentence(state.reason ?? ""))}
         />
       )}
       {!absent && onDisconnect && (
-        <Button size="small" variant="ghost" onClick={onDisconnect}>
+        <Button
+          size="small"
+          variant="ghost"
+          disabledReason={managed ?? undefined}
+          onClick={() => {
+            if (!managed) onDisconnect();
+          }}
+        >
           Disconnect
         </Button>
       )}
@@ -1788,7 +1836,9 @@ export function EntryRow({
                 </div>
                 {/* THE STEP'S OWN CONTROL, outside the badges so a refusal can
                     take the full width of the row the way a finding does. */}
-                {roster && <SeatStep app={entry.name} toolKey={roster.key} seat={seat} />}
+                {roster && (
+                  <SeatStep app={entry.name} toolKey={roster.key} seat={seat} managed={managed} />
+                )}
               </li>
             ))}
           </ul>
@@ -2958,6 +3008,9 @@ export function IntegrationPeek({ kind }: { kind: string }) {
 type Show = "all" | "connected" | "available";
 
 export function Integrations({ kind }: { kind?: string }) {
+  // A MANAGED DOCUMENT (ADR-0030): what writes it is held on every card, with
+  // who manages it; a credential's rotation stays open.
+  const managed = useManagedConfig();
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   //
@@ -3164,6 +3217,11 @@ export function Integrations({ kind }: { kind?: string }) {
           </span>
         </Callout>
       )}
+      {managed !== null && (
+        <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
+          {managed}
+        </Callout>
+      )}
       {setup.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
           <span>
@@ -3302,6 +3360,7 @@ export function Integrations({ kind }: { kind?: string }) {
                 sections={sectionsFor(entry, setup.byKey)}
                 trafficKnown={data?.traffic_known ?? false}
                 guarded={setup.guarded}
+                managed={managed}
                 onOpen={(action, reason) => openForm(entry, action, reason)}
               />
             ))}
@@ -3340,6 +3399,7 @@ export function Integrations({ kind }: { kind?: string }) {
             sections={sectionsFor(focus, setup.byKey)}
             publicBase={setup.base?.value}
             guarded={setup.guarded}
+            managed={managed}
             onOpen={(action, reason) => openForm(focus, action, reason)}
             onDisconnect={() =>
               setDropping({

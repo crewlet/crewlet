@@ -37,6 +37,8 @@ vi.mock("~/lib/viewer.ts", () => ({
     anonymous: true,
     loading: false,
     asking: false,
+    configWriter: true,
+    configManagedBy: [],
   }),
 }));
 vi.mock("~/lib/store-hooks.ts", async () => {

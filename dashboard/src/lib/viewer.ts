@@ -70,6 +70,14 @@ export interface ViewerState {
    * failed, which `loading` alone cannot tell it apart from.
    */
   asking: boolean;
+  /**
+   * Whether this caller may change the company DOCUMENT — the engine's own
+   * answer, false for every credential a managed document does not list
+   * as a writer (ADR-0030). Read by `lib/useWriteAccess.ts`.
+   */
+  configWriter: boolean;
+  /** Who manages the company document, or empty when nothing does. */
+  configManagedBy: readonly string[];
 }
 
 /**
@@ -107,6 +115,8 @@ function useViewerRead(): ViewerState {
     anonymous: !unknown && operatorID === "",
     loading: unknown,
     asking: loading && data === null && error === null,
+    configWriter: data?.config_writer ?? false,
+    configManagedBy: data?.config_managed_by ?? [],
   };
 }
 

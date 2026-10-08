@@ -9,6 +9,7 @@ import {
   CONFIG_WRITE_REASONS,
   WRITE_REASONS,
   configWriteAccess,
+  managedReason,
   writeAccess,
 } from "./useWriteAccess.ts";
 import type { ViewerState } from "./viewer.ts";
@@ -25,6 +26,8 @@ const BOUND: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  configWriter: true,
+  configManagedBy: [],
 };
 
 test.each([
@@ -95,6 +98,8 @@ describe("changing the company's configuration", () => {
     anonymous: false,
     loading: false,
     asking: false,
+    configWriter: true,
+    configManagedBy: [],
     ...over,
   });
 
@@ -123,6 +128,31 @@ describe("changing the company's configuration", () => {
       can: false,
       block: "held",
       reason: "these are Rui's",
+    });
+  });
+
+  // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every operator but
+  // its writers is held, with the sentence naming who manages it — after the
+  // reasons a person can clear here, and before a hold no screen releases.
+  test("a managed document holds every operator but its writers", () => {
+    const managed = viewer({ configWriter: false, configManagedBy: ["gitops"] });
+    expect(configWriteAccess(managed, true)).toEqual({
+      can: false,
+      block: "managed",
+      reason: managedReason(["gitops"]),
+    });
+    expect(managedReason(["gitops"])).toContain("managed by gitops");
+    expect(configWriteAccess(managed, true, "these are Rui's")).toMatchObject({
+      block: "managed",
+    });
+    expect(configWriteAccess({ ...managed, operator: false }, true)).toMatchObject({
+      block: "not_operator",
+    });
+    expect(
+      configWriteAccess(viewer({ configWriter: true, configManagedBy: ["gitops"] }), true),
+    ).toEqual({ can: true });
+    expect(configWriteAccess(viewer({ configWriter: true, configManagedBy: [] }), true)).toEqual({
+      can: true,
     });
   });
 });

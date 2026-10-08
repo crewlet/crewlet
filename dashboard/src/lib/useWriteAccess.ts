@@ -35,6 +35,7 @@ import { createContext, createElement, useContext, type ReactNode } from "react"
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
+import { managedSentence } from "~/protocol/configAnswer.ts";
 
 /** Why a control cannot act, as a value a test can name. */
 export type WriteBlock = "offline" | "loading" | "anonymous" | "unbound" | "not_served" | "held";
@@ -139,13 +140,19 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
  * the engine does not take as an operator's may not. `viewer.operator` is the
  * engine's own answer to exactly that question.
  */
-export type ConfigWriteBlock = "offline" | "loading" | "anonymous" | "not_operator" | "held";
+export type ConfigWriteBlock =
+  "offline" | "loading" | "anonymous" | "not_operator" | "managed" | "held";
 
 export type ConfigWriteAccess =
   { can: true } | { can: false; block: ConfigWriteBlock; reason: string };
 
-/** The sentence each block is shown as — every block but a [HoldWrites]'. */
-export const CONFIG_WRITE_REASONS: Readonly<Record<Exclude<ConfigWriteBlock, "held">, string>> = {
+/**
+ * The sentence each block is shown as — every block but a [HoldWrites]' and
+ * `managed`, whose sentence names who manages the document ([managedReason]).
+ */
+export const CONFIG_WRITE_REASONS: Readonly<
+  Record<Exclude<ConfigWriteBlock, "held" | "managed">, string>
+> = {
   offline: WRITE_REASONS.offline,
   loading: WRITE_REASONS.loading,
   anonymous: "Set an operator's API token to change the company's configuration.",
@@ -153,13 +160,49 @@ export const CONFIG_WRITE_REASONS: Readonly<Record<Exclude<ConfigWriteBlock, "he
     "This browser's token cannot change the company's configuration — the engine does not take it as an operator's.",
 };
 
+/**
+ * Why a managed company document cannot be changed here, naming who manages
+ * it (ADR-0030).
+ *
+ * MANAGED IS NOT A PERMISSION THIS PERSON LACKS, it is where the company is
+ * written: another system — a GitOps pipeline, a Kubernetes operator —
+ * renders it and writes it with its own token, and replaces any revision made
+ * here at its next reconcile. So the sentence says where to change it, and
+ * what stays possible: rotating a credential.
+ */
+export function managedReason(managedBy: readonly string[]): string {
+  return managedSentence(managedBy);
+}
+
+/**
+ * Why THIS caller may not change a managed company document, or null — when
+ * the document is managed by nobody, or by this caller's own credential.
+ *
+ * The engine's own answer decides (`viewer.config_writer`), and only a
+ * document somebody manages is managed: a reader the engine named no writers
+ * to (an anonymous one) is not told the document is managed here, because
+ * the gate in front of this one already says what they lack.
+ */
+export function managedBlock(viewer: ViewerState): string | null {
+  if (viewer.configManagedBy.length === 0 || viewer.configWriter) return null;
+  return managedReason(viewer.configManagedBy);
+}
+
+/**
+ * [managedBlock] for the screen this browser is on: the sentence a managed
+ * document's editing controls are disabled with, or null.
+ */
+export function useManagedConfig(): string | null {
+  return managedBlock(useViewer());
+}
+
 /** The decision over values — what the hook reads, and what a test pins. */
 export function configWriteAccess(
   viewer: ViewerState,
   connected: boolean,
   held: string | null = null,
 ): ConfigWriteAccess {
-  const blocked = (block: Exclude<ConfigWriteBlock, "held">): ConfigWriteAccess => ({
+  const blocked = (block: Exclude<ConfigWriteBlock, "held" | "managed">): ConfigWriteAccess => ({
     can: false,
     block,
     reason: CONFIG_WRITE_REASONS[block],
@@ -168,6 +211,12 @@ export function configWriteAccess(
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
   if (!viewer.operator) return blocked("not_operator");
+  // AFTER THE OPERATOR CHECK, because a reader who could not write anyway
+  // is told the thing they can clear; and BEFORE A HOLD, because no screen
+  // can release it. The engine's own answer decides — `config_writer` — and
+  // only a document somebody manages is managed.
+  const managed = managedBlock(viewer);
+  if (managed !== null) return { can: false, block: "managed", reason: managed };
   if (held) return { can: false, block: "held", reason: held };
   return { can: true };
 }

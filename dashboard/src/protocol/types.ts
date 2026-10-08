@@ -4247,6 +4247,14 @@ export interface Viewer {
    *  engine's own default for their seat, which `create_work_item` applies.
    *  "" when their team and every team above it owns none. */
   project: string;
+  /** Whether this caller's credential may CHANGE the company document.
+   *  False for an anonymous caller, and for every credential a managed
+   *  document's `api.auth.company_writers` does not list (ADR-0030). */
+  config_writer: boolean;
+  /** The token ids that alone may change a managed company document — who
+   *  manages it — and EMPTY when it is not managed. Named to an operator
+   *  only; an anonymous caller is told none. */
+  config_managed_by: string[];
 }
 
 /** One seat a name could mean, and why. */
