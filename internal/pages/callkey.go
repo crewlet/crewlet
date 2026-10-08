@@ -32,12 +32,12 @@ import (
 //
 // # Why it carries an instant
 //
-// Every operation id carries the instant it was minted
-// ([statelog.DeriveOpID]), and that instant is what the state log reads to
-// decide whether this node's operation ledger can vouch for a retry: a ledger
-// that lost the first attempt's row to its retention sweep answers an
-// operation minted before the loss `unknown` rather than deciding it again on rows that already hold
-// it. So [CallKey.Since] is the UNIT OF WORK's instant, reproduced by every
+// Every operation id carries the instant it was minted ([statelog.DeriveOpID]),
+// and that instant is what the state log reads to decide whether this node's
+// operation ledger can vouch for a retry: a ledger that lost the first
+// attempt's row to its retention sweep answers an operation minted before the
+// loss `unknown` rather than deciding it again on rows that already hold it. So
+// [CallKey.Since] is the UNIT OF WORK's instant, reproduced by every
 // repetition, and never the call's: a re-run's clock is after the loss by
 // construction, and an id carrying it would be decided and published twice.
 //

@@ -371,8 +371,8 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 // # Why it is not "not made"
 //
 // The operation was minted before the ledger may have lost rows — a seat
-// re-running a turn whose trigger was queued before its node adopted a
-// snapshot, a caller finishing a month-old `unknown` — so its first run may
+// re-running a turn whose trigger predates the ledger's thirty-day sweep, a
+// caller finishing a month-old `unknown` — so its first run may
 // well have filed the task, on this node or another. An unknown counter was
 // turned into ErrUnavailable, which every caller read as "the change was NOT
 // made": the seat then rephrased and filed a duplicate under a new operation,

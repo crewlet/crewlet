@@ -452,7 +452,8 @@ type PendingRun struct {
 	// key carries this instant as its mint time, so a resumed turn that
 	// could not reproduce it would derive DIFFERENT ids for the same
 	// writes, and the state log reads it to refuse deciding again an
-	// operation minted before its node adopted a donated snapshot.
+	// operation minted before its node's operation ledger may have lost
+	// rows to the ledger's sweep.
 	//
 	// THE START, NOT NECESSARILY WHERE THE RESUMED HALF MINTS: a resume so
 	// long after this instant that the operation ledger may have swept it

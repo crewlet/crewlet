@@ -287,8 +287,9 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 //
 // The walk names an unheld record with the ledger's watermark exactly when the
 // record's operation was minted before it — the one case in which its row may
-// have been swept, and the rows may hold the record after all. An operation id that carries no instant
-// reads as minted before every loss, as the publisher reads it.
+// have been swept, and the rows may hold the record after all. An operation id
+// that carries no instant reads as minted before every loss, as the publisher
+// reads it.
 func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 	t.Parallel()
 	minted := otherHistory.Add(-24 * time.Hour).Truncate(time.Millisecond)

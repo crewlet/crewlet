@@ -14,13 +14,14 @@ import (
 // TIME.
 //
 // A ledger that LOST ROWS to its retention sweep holds none for an operation
-// minted before the loss, so a retry of one — a turn re-run, a caller repeating an
-// `unknown` under the same id — finds no row, takes a snapshot whose rows
-// already hold the first application, and decides again on top of it. The broker has no reason to refuse that: the expectation is current, and
-// the duplicate window is two minutes wide. So the refusal has to come from
-// here, before the append, and it has to read the instant the operation was
-// MINTED — which is the id's own, because every retry reuses the id and a
-// retry's own clock is always after the loss.
+// minted before the loss, so a retry of one — a turn re-run, a caller repeating
+// an `unknown` under the same id — finds no row, takes a snapshot whose rows
+// already hold the first application, and decides again on top of it. The
+// broker has no reason to refuse that: the expectation is current, and the
+// duplicate window is two minutes wide. So the refusal has to come from here,
+// before the append, and it has to read the instant the operation was MINTED —
+// which is the id's own, because every retry reuses the id and a retry's own
+// clock is always after the loss.
 func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 	t.Parallel()
 

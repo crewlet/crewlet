@@ -20,12 +20,12 @@ import (
 // publishes a decision, and when it resolves an append whose answer was lost —
 // and both times the question is the same: can this node's operation ledger
 // vouch for it? It cannot for an operation minted before the ledger's own
-// watermark — the instant before which it may have lost rows to its
-// retention sweep ([Rows.LostBefore]) — see [Publisher.vouches]. An operation
-// id is minted ONCE and reused by every retry of the operation, including retries in another call,
-// another run of the same turn and another process on another node. So "when
-// was this minted" is a property of the ID, and anything that states it
-// separately states something the retry cannot reproduce.
+// watermark — the instant before which it may have lost rows to its retention
+// sweep ([Rows.LostBefore]) — see [Publisher.vouches]. An operation id is
+// minted ONCE and reused by every retry of the operation, including retries in
+// another call, another run of the same turn and another process on another
+// node. So "when was this minted" is a property of the ID, and anything that
+// states it separately states something the retry cannot reproduce.
 //
 // It was stated separately: a request carried a MintedAt beside its op id, and
 // every writer filled it with its own clock at the call. A turn re-run after
@@ -82,15 +82,15 @@ import (
 // The instant is read off the clock of whichever node minted the id, and the
 // watermark off the clock of the node whose sweep lost the rows — this node's,
 // or a donor's whose watermark travelled with its ledger — so a retry that
-// crosses nodes compares two clocks. The comparison errs
-// safely in one direction only. A minting clock BEHIND the other makes an
-// operation look older, and answers `unknown` where the ledger could have
-// vouched. A minting clock AHEAD of it by δ can make an operation whose row
-// was lost up to δ before the watermark look minted after it, and that one is
-// re-decided. So the fleet's wall clocks are assumed to agree to within the
-// margin the sweep leaves, which is its whole thirty days. It is the same kind of assumption
-// the trim's age term already rests on (see the package doc), and it is
-// stated here because this is where it is spent.
+// crosses nodes compares two clocks. The comparison errs safely in one
+// direction only. A minting clock BEHIND the other makes an operation look
+// older, and answers `unknown` where the ledger could have vouched. A minting
+// clock AHEAD of it by δ can make an operation whose row was lost up to δ
+// before the watermark look minted after it, and that one is re-decided. So the
+// fleet's wall clocks are assumed to agree to within the margin the sweep
+// leaves, which is its whole thirty days. It is the same kind of assumption the
+// trim's age term already rests on (see the package doc), and it is stated here
+// because this is where it is spent.
 
 // opIDLength is the length of the UUID an operation id starts with.
 const opIDLength = 36
@@ -226,10 +226,10 @@ func OpMintedAt(opID string) (time.Time, bool) {
 // ([OpMintedAt]). One with no instant is read as older than every loss the
 // ledger has had — a retention sweep that deleted anything, which every
 // deployment older than the ledger's retention has had — and such a write is
-// answered `unknown` without being published, on the first attempt as on
-// every retry: an operation that can never run and never says why. A client that mints its
-// own — the command line, the dashboard — mints through this grammar's layout,
-// and is held to it here like any other.
+// answered `unknown` without being published, on the first attempt as on every
+// retry: an operation that can never run and never says why. A client that
+// mints its own — the command line, the dashboard — mints through this
+// grammar's layout, and is held to it here like any other.
 //
 // VISIBLE ASCII WITH NO SPACE, because only the id's first thirty-six bytes
 // are the minted uuid and this check reads nothing after them — though a

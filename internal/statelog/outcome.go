@@ -102,10 +102,10 @@ type Result struct {
 	// took is on the log, and the one this call would have taken is not.
 	Collapsed bool
 
-	// Unvouched says an `unknown` was answered because THIS NODE'S
-	// operation ledger cannot vouch for the operation — it was minted
-	// before the instant the ledger may have lost rows from (its retention
-	// sweep) and the ledger holds no row for it — rather than because an acknowledgement was lost.
+	// Unvouched says an `unknown` was answered because THIS NODE'S operation
+	// ledger cannot vouch for the operation — it was minted before the instant
+	// the ledger may have lost rows from (its retention sweep) and the ledger
+	// holds no row for it — rather than because an acknowledgement was lost.
 	//
 	// # Why a caller has to be able to tell the two apart
 	//

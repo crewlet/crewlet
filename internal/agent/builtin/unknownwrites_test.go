@@ -188,9 +188,9 @@ var restatingTools = map[string]bool{
 //
 // Only the create and the page tools held the rule. A comment the engine
 // answered `unknown` without publishing — its operation minted before this
-// node's ledger lost rows, a seat on a backlog turn just after its node adopted
-// a snapshot — came back as a comment_id with its mentions and its ask, and the
-// seat told whoever asked that it had answered. An update handed back a
+// node's ledger lost rows, a seat re-running a turn whose trigger predates the
+// ledger's sweep — came back as a comment_id with its mentions and its ask, and
+// the seat told whoever asked that it had answered. An update handed back a
 // `version` a model passes as `if_match`, naming a version the item may never
 // have had, and a saved view an id for a view that may not exist.
 func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T) {

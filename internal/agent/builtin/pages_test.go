@@ -797,9 +797,9 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 // A PAGE WRITE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS DONE.
 //
 // Every page tool answered with an id and a revision whatever the write's
-// outcome was. A comment the engine answered `unknown` WITHOUT publishing —
-// its operation minted before this node's ledger lost rows, which a seat woken
-// by a backlog trigger after a node adopted a snapshot is — came back as a
+// outcome was. A comment the engine answered `unknown` WITHOUT publishing — its
+// operation minted before this node's ledger lost rows, which a seat re-running
+// a turn whose trigger predates the ledger's sweep is — came back as a
 // comment_id and revision 0, the seat said it had commented, and nobody ever
 // saw the remark.
 func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {

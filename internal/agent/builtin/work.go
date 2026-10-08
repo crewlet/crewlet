@@ -1876,7 +1876,7 @@ func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
 // "unknown" is read as the item's key, and the seat reports the work filed —
 // under a number that is a gap if the task step never landed. And where this
 // node's operation ledger cannot vouch for the operation (a seat re-running a
-// turn queued before its node adopted a snapshot), the create used to be
+// turn whose trigger predates the ledger's sweep), the create used to be
 // refused outright, which the default failure text renders as "the change was
 // NOT made": the seat then reworded the call and filed a duplicate of the item
 // its first run had filed.
@@ -1905,7 +1905,7 @@ func createUnknown(actor Actor, opID string, got tracker.WriteResult) string {
 // version, and the seat reports the change made — when nothing may have been
 // published at all: an operation this node's ledger cannot vouch for is
 // answered `unknown` WITHOUT publishing, which is exactly the answer a seat
-// woken by a backlog trigger just after its node adopted a snapshot gets.
+// re-running a turn whose trigger predates the ledger's sweep gets.
 //
 // # Which operation it names
 //
