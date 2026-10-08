@@ -482,8 +482,14 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 	// ONE timer for the whole service. What it keeps honest is the same
 	// answer for every tab, so a timer per client would multiply identical
 	// work by however many people happened to be watching.
+	//
+	// On an injected interval, as Options.HealthInterval exists for: a case
+	// waiting out the production five seconds measures nothing more, and
+	// that the default IS the production value is
+	// TestAnUnsetIntervalTicksAtTheProductionCadence's.
 	s := buildService(t, stream.Options{
-		Health: func() any { return health{Status: "ok", InFlight: 3} },
+		Health:         func() any { return health{Status: "ok", InFlight: 3} },
+		HealthInterval: 20 * time.Millisecond,
 	})
 
 	a, b := stream.NewClient(), stream.NewClient()
@@ -503,7 +509,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 			if !ok || got.InFlight != 3 {
 				t.Errorf("%s health = %#v", name, env.Data)
 			}
-		case <-time.After(3 * stream.HealthInterval):
+		case <-time.After(2 * time.Second): // a hundred ticks
 			t.Fatalf("%s never received a health tick", name)
 		}
 	}
