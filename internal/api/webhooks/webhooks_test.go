@@ -151,9 +151,24 @@ type edge struct {
 // the calls were made in the order the test expected.
 func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 	t.Helper()
+	return newEdgeOn(t, edgeStore(t), opts...)
+}
+
+// edgeStore is a node's own store for an edge to write to, opened from the
+// binary's migrated image.
+func edgeStore(t *testing.T) *store.DB {
+	t.Helper()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "w.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
 
+// newEdgeOn is newEdge over a store the caller opened, for a case that builds
+// many receivers whose renders it compares and whose rows it never reads: the
+// landing pages publish nothing and read nothing from the store, so one store
+// under all of them changes none of what they serve.
+func newEdgeOn(t *testing.T, db *store.DB, opts ...func(*webhooks.Options)) *edge {
+	t.Helper()
 	secrets := &webhooks.Secrets{
 		GitHub: "gh-secret", GitLab: gitlabSecret,
 		Jira: "jira-secret", Confluence: "conf-secret", ConfluenceToken: "EXAMPLECONFLUENCETOKEN0000", ForgeAppID: "app-123",
