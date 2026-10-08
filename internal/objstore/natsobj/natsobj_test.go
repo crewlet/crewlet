@@ -710,8 +710,9 @@ func TestNoJetStreamIsRefused(t *testing.T) {
 	}
 }
 
-// bucketJS records every request that writes a stream's configuration, and
-// can hide the bucket from a lookup or leave a lookup unanswered; everything
+// bucketJS records every request that writes a stream's configuration and the
+// time every read was given to answer in, and can hide the bucket from a
+// lookup, leave a lookup unanswered or refuse the first creates; everything
 // else is the broker underneath.
 type bucketJS struct {
 	jetstream.JetStream
@@ -724,6 +725,13 @@ type bucketJS struct {
 	// silent leaves every lookup unanswered, and asks counts them.
 	silent bool
 	asks   int
+	// refusals is how many creates are answered with refusal — before
+	// the broker is asked at all — and then the broker answers.
+	refusals int
+	refusal  error
+	// left is what each read's context gave it to answer in, by the read
+	// — or a negative duration for one handed no deadline at all.
+	left map[string][]time.Duration
 }
 
 func (b *bucketJS) wrote(verb string) {
@@ -738,7 +746,33 @@ func (b *bucketJS) sent() []string {
 	return slices.Clone(b.writes)
 }
 
+// read records what ctx gave the read named call to answer in.
+func (b *bucketJS) read(ctx context.Context, call string) {
+	left := time.Duration(-1)
+	if deadline, ok := ctx.Deadline(); ok {
+		left = time.Until(deadline)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.left == nil {
+		b.left = map[string][]time.Duration{}
+	}
+	b.left[call] = append(b.left[call], left)
+}
+
+// lefts is every read's recorded time to answer, by the read.
+func (b *bucketJS) lefts() map[string][]time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string][]time.Duration, len(b.left))
+	for call, l := range b.left {
+		out[call] = slices.Clone(l)
+	}
+	return out
+}
+
 func (b *bucketJS) ObjectStore(ctx context.Context, bucket string) (jetstream.ObjectStore, error) {
+	b.read(ctx, "bucket "+bucket)
 	b.mu.Lock()
 	silent, hide := b.silent, b.hidden > 0
 	if silent {
@@ -756,8 +790,22 @@ func (b *bucketJS) ObjectStore(ctx context.Context, bucket string) (jetstream.Ob
 	return b.JetStream.ObjectStore(ctx, bucket)
 }
 
+func (b *bucketJS) Stream(ctx context.Context, name string) (jetstream.Stream, error) {
+	b.read(ctx, "stream "+name)
+	return b.JetStream.Stream(ctx, name)
+}
+
 func (b *bucketJS) CreateObjectStore(ctx context.Context, cfg jetstream.ObjectStoreConfig) (jetstream.ObjectStore, error) {
 	b.wrote("create")
+	b.mu.Lock()
+	refuse := b.refusals > 0
+	if refuse {
+		b.refusals--
+	}
+	b.mu.Unlock()
+	if refuse {
+		return nil, b.refusal
+	}
 	return b.JetStream.CreateObjectStore(ctx, cfg)
 }
 
@@ -887,6 +935,123 @@ func TestALookupNobodyAnswersFallsThroughToTheCreate(t *testing.T) {
 	}
 }
 
+// A BUCKET CREATE THE CLUSTER CANNOT ANSWER YET IS ASKED AGAIN, whichever of
+// the two ways it goes unanswered — through [jsprovision.Timing.Place], as
+// every replicated create at boot is.
+//
+// The lookup IS answered here — the bucket is not there — so the create is the
+// one request left to decide, and on a fleet booting together it is sent into
+// a metadata group that is still forming. That group either refuses to place
+// it ("no suitable peers", until enough members have joined) or drops it
+// unanswered (no leader yet), and both clear by asking again. Sent once, the
+// first is final to [jsprovision.Refused] and the second is read back into a
+// bucket nobody made: either way a node fails its boot over a fleet that is
+// merely starting. The lookup in front of the create absorbs neither, since it
+// was answered; [TestOpeningOnALeafWaitsOutItsLink] holds the case where it
+// is the lookup that goes unanswered.
+//
+// At a clustered timing with its two cadences scaled to milliseconds, because
+// the production ones ask again after a quarter of a second and a second.
+func TestABucketCreateTheClusterCannotAnswerYetIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	for name, refusal := range map[string]error{
+		"not placed yet": &jetstream.APIError{Code: 400, ErrorCode: 10005,
+			Description: "no suitable peers for placement"},
+		"not answered": nats.ErrNoResponders,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := memberClient(t)
+			timing := jsprovision.Clustered(true).Timing()
+			timing.ReAsk, timing.PlacementRetry = 20*time.Millisecond, 5*time.Millisecond
+
+			const refused = 2
+			w := &bucketJS{JetStream: c, refusals: refused, refusal: refusal}
+			if _, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{Replicas: 1, Clustered: true}, timing); err != nil {
+				t.Fatalf("the bucket did not open once the create was answered: %v — "+
+					"a create the forming cluster had not answered yet was taken "+
+					"as the answer", err)
+			}
+			want := slices.Repeat([]string{"create"}, refused+1)
+			if sent := w.sent(); !slices.Equal(sent, want) {
+				t.Errorf("the node sent %v, want %v: each create the cluster did not "+
+					"answer asked again, and nothing else written", sent, want)
+			}
+			if _, err := c.Stream(t.Context(), natsobj.Stream); err != nil {
+				t.Errorf("the bucket is not there after the open: %v", err)
+			}
+		})
+	}
+}
+
+// EVERY READ OPEN MAKES IS ASKED AT THE READ TERM, never at a write's.
+//
+// The bucket's lookup, the read-back after a create whose name was taken, and
+// the stream behind the bucket are all metadata READS, which the broker
+// answers when it processes them or never ([jsprovision.ReadTerm]). On a fleet
+// booting together a bucket another node has just asked for is in flight, and
+// every member but the one preferred to lead it drops a read of it without a
+// word: a read held for a write's term waits on a reply that does not exist,
+// and that was measured costing a fleet's boot sixteen idle seconds a lookup.
+// So each request carries the read term as its deadline — a second, against a
+// write's fifteen clustered and thirty solo — and a read asked as a write is
+// told apart by the deadline it carried.
+//
+// At each topology's PRODUCTION timing, since what is held is which of its
+// terms each call is handed. Two opens: one that loses the create race as
+// [TestANodeThatLosesTheCreateRaceBindsItsPeersBucket] stages it — the lookup
+// told the bucket is not there, and the create told its name is taken by a
+// peer's — so the read-back runs, and one that finds the bucket.
+func TestEveryReadOpenMakesIsAskedAtTheReadTerm(t *testing.T) {
+	t.Parallel()
+	for _, clustered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("clustered=%v", clustered), func(t *testing.T) {
+			t.Parallel()
+			c := memberClient(t)
+			if _, err := c.CreateObjectStore(t.Context(), jetstream.ObjectStoreConfig{
+				Bucket: natsobj.Bucket, Description: "a peer's build",
+				Storage: jetstream.FileStorage, Replicas: 1}); err != nil {
+				t.Fatalf("the peer's create: %v", err)
+			}
+			w := &bucketJS{JetStream: c, hidden: 1}
+			cfg := natsobj.Config{Replicas: 1, Clustered: clustered}
+			for _, open := range []string{"losing the create race", "finding the bucket"} {
+				if _, err := natsobj.Open(t.Context(), w, cfg); err != nil {
+					t.Fatalf("open the bucket, %s: %v", open, err)
+				}
+			}
+
+			lefts := w.lefts()
+			// THE LOOKUP OF EACH OPEN, AND THE RACE'S READ-BACK: three
+			// reads of the bucket. Fewer, and one of the three was not
+			// measured at all.
+			if n := len(lefts["bucket "+natsobj.Bucket]); n < 3 {
+				t.Errorf("the bucket was read %d time(s), want each open's lookup "+
+					"and the lost race's read-back", n)
+			}
+			if n := len(lefts["stream "+natsobj.Stream]); n < 2 {
+				t.Errorf("the stream was read %d time(s), want one bind per open", n)
+			}
+			read := jsprovision.Clustered(clustered).Timing().ReadTerm
+			for call, ls := range lefts {
+				for _, left := range ls {
+					switch {
+					case left < 0:
+						t.Errorf("%s was given no deadline at all, want at "+
+							"most the %v read term — a dropped read with none "+
+							"waits on a reply nobody will send until the boot "+
+							"gives up", call, read)
+					case left > read:
+						t.Errorf("%s was given %v to answer, want at most the %v "+
+							"read term — a dropped read held that long waits on a "+
+							"reply nobody will send", call, left, read)
+					}
+				}
+			}
+		})
+	}
+}
+
 // A BUCKET REPLICATED BELOW THIS NODE IS REFUSED, BY THE SETTING, as the queue
 // refuses such a stream: an upload acknowledged there would prove fewer copies
 // than stream.replicas promises, and nothing here rewrites a bucket that
@@ -981,10 +1146,16 @@ func awaitLink(t *testing.T, c jetstream.JetStream) {
 // A BUCKET OPENED ON A LEAF WHOSE LINK IS NOT UP YET OPENS ONCE IT IS.
 //
 // A leaf's JetStream is across its link, and until the link forms nobody
-// answers: the create comes back "no responders" at once. Open asks again
-// rather than failing ([jsprovision.Place]), and that is the whole of what
-// this case holds — the leaf is started with no member at all, Open is left
-// asking, and only then does the member come up.
+// answers: every request comes back "no responders" at once. The first one is
+// the bucket's LOOKUP, a read asked again for as long as nobody answers
+// ([jsprovision.Timing.Read], under [jsprovision.LookupBudget]) — so on a link
+// that forms inside that ceiling it is the lookup that waits it out, and the
+// create is sent once the link is up. A create that goes unanswered itself is
+// asked again as well, through [jsprovision.Timing.Place], and
+// [TestABucketCreateTheClusterCannotAnswerYetIsAskedAgain] holds that half.
+// What this case holds is the whole of it from the caller's side: the leaf is
+// started with no member at all, Open is left asking, and only then does the
+// member come up.
 func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	t.Parallel()
 	port := unusedPort(t)
