@@ -42,6 +42,78 @@ const Marker = "[REDACTED:"
 type rule struct {
 	pattern *regexp.Regexp
 	with    string
+
+	// at, for a pattern with no literal to skip ahead on, is that pattern
+	// held to begin where it is tried; the rule then runs only at the places
+	// [passwordKey] names rather than over every byte. See [passwordAt].
+	at *regexp.Regexp
+}
+
+// in reports whether the rule matches anywhere in text, allocating nothing.
+func (r rule) in(text string) bool {
+	if r.at == nil {
+		return r.pattern.MatchString(text)
+	}
+	for from := 0; ; {
+		i := passwordKey(text, from)
+		if i < 0 {
+			return false
+		}
+		if r.at.MatchString(text[i:]) {
+			return true
+		}
+		from = i + 1
+	}
+}
+
+// apply is text with every match of the rule replaced, or text itself —
+// the same string, nothing copied — when there is none.
+//
+// MATCH BEFORE REPLACING, because ReplaceAllString allocates even when it
+// changes nothing: with no match it still copies the whole input into a fresh
+// buffer and then converts that buffer to a string. Ten rules over a clean
+// transcript would be twenty full copies of it — and a clean transcript is
+// the overwhelming case, since this runs on every sandbox result and every
+// coding-run transcript whether or not a credential is in it.
+func (r rule) apply(text string) string {
+	if r.at == nil {
+		if !r.pattern.MatchString(text) {
+			return text
+		}
+		return r.pattern.ReplaceAllString(text, r.with)
+	}
+	start, end, found := r.next(text, 0)
+	if !found {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	done := 0
+	for found {
+		b.WriteString(text[done:start])
+		b.WriteString(r.with)
+		done = end
+		start, end, found = r.next(text, end)
+	}
+	b.WriteString(text[done:])
+	return b.String()
+}
+
+// next is the first match of an [rule.at] rule beginning at or after from:
+// leftmost first, as the unanchored pattern's own scan finds it, so matches
+// taken one after another from each one's end are exactly the
+// non-overlapping matches ReplaceAllString replaces.
+func (r rule) next(text string, from int) (start, end int, found bool) {
+	for {
+		i := passwordKey(text, from)
+		if i < 0 {
+			return 0, 0, false
+		}
+		if loc := r.at.FindStringIndex(text[i:]); loc != nil {
+			return i, i + loc[1], true
+		}
+		from = i + 1
+	}
 }
 
 // rules are applied in order, and order matters where one shape is a prefix of
@@ -57,16 +129,16 @@ type rule struct {
 // [keyBlocks] — before every rule below, so a token shape that happens to occur
 // inside a key's body is taken with the block rather than leaving it split.
 var rules = []rule{
-	{regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`), Marker + "api-key]"},
-	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`), Marker + "api-key]"},
-	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`), Marker + "api-key]"},
-	{regexp.MustCompile(`xox[bpsare]-[A-Za-z0-9-]{20,}`), Marker + "slack-token]"},
-	{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), Marker + "aws-key]"},
-	{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`), Marker + "github-token]"},
-	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{50,}`), Marker + "github-token]"},
-	{regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]"},
-	{regexp.MustCompile(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]"},
-	{passwordRule, Marker + "password]"},
+	{regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
+	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
+	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
+	{regexp.MustCompile(`xox[bpsare]-[A-Za-z0-9-]{20,}`), Marker + "slack-token]", nil},
+	{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), Marker + "aws-key]", nil},
+	{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`), Marker + "github-token]", nil},
+	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{50,}`), Marker + "github-token]", nil},
+	{regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
+	{regexp.MustCompile(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
+	{pattern: passwordRule, with: Marker + "password]", at: passwordAt},
 }
 
 // passwordRule is the one rule besides a private key whose match can cross a
@@ -78,6 +150,106 @@ var passwordRule = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+`
 // but whitespace or its separator after it: the start of a [passwordRule]
 // match whose value has not been written yet.
 var pendingPassword = regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*(?:[:=]\s*)?\z`)
+
+// passwordAt and pendingPasswordAt are [passwordRule] and [pendingPassword]
+// held to begin where they are tried — what runs at each place
+// [passwordKey] names.
+//
+// THE ONE RULE RE2 CANNOT SKIP AHEAD ON. Every other rule opens with a literal
+// — `sk-`, `AKIA`, `xox` — which Go's regexp finds with a byte scan at
+// gigabytes a second, starting its machine only where one is. A
+// case-insensitive alternation has no literal, so the machine stepped through
+// every byte of every text this package was handed: over two mebibytes of a
+// coding run's transcript, 42 ms of a 45 ms pass (measured, [BenchmarkSecrets]),
+// and 0.7 s of it under the race detector — at every one of the places a run's
+// transcript and failure are redacted, and on every read of a live view
+// through [Settled].
+//
+// So the keys are found by hand and the pattern is run only where one is: a
+// match begins with password, passwd or pwd, in any case, and those letters
+// fold only to their ASCII pair except s, which ſ folds to as well
+// ([foldedTo]). Where the scan finds a key, the anchored pattern decides
+// exactly what the unanchored one would have from there, so the matches are
+// the pattern's own — leftmost, non-overlapping — found in what a byte scan
+// costs, and text with no key in it runs no pattern at all.
+var (
+	passwordAt        = regexp.MustCompile(`^(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+`)
+	pendingPasswordAt = regexp.MustCompile(`^(?i)(?:password|passwd|pwd)\s*(?:[:=]\s*)?\z`)
+)
+
+// passwordKey is the first place at or after from where one of
+// [passwordRule]'s keys begins — password, passwd or pwd in any case — or -1.
+func passwordKey(text string, from int) int {
+	for from < len(text) {
+		i := strings.IndexAny(text[from:], "pP")
+		if i < 0 {
+			return -1
+		}
+		i += from
+		if keyAfterP(text, i+1) {
+			return i
+		}
+		from = i + 1
+	}
+	return -1
+}
+
+// keyAfterP reports whether what follows a p at i spells the rest of a key:
+// wd, assword or asswd.
+func keyAfterP(text string, i int) bool {
+	if n := foldedTo(text, i, 'w'); n > 0 {
+		return foldedTo(text, i+n, 'd') > 0
+	}
+	for _, letter := range []byte("assw") {
+		n := foldedTo(text, i, letter)
+		if n == 0 {
+			return false
+		}
+		i += n
+	}
+	if foldedTo(text, i, 'd') > 0 {
+		return true
+	}
+	for _, letter := range []byte("ord") {
+		n := foldedTo(text, i, letter)
+		if n == 0 {
+			return false
+		}
+		i += n
+	}
+	return true
+}
+
+// foldedTo is the width of the character at i when (?i) reads it as letter —
+// the letter, its capital, or ſ for an s, the one fold of a key's letters
+// outside ASCII — and 0 when it is anything else.
+func foldedTo(text string, i int, letter byte) int {
+	switch {
+	case i >= len(text):
+		return 0
+	case text[i]|0x20 == letter:
+		return 1
+	case letter == 's' && strings.HasPrefix(text[i:], "ſ"):
+		return len("ſ")
+	}
+	return 0
+}
+
+// pendingPasswordIndex is where [pendingPassword] matches in text, or -1: the
+// start of a password key at the very end of text, found where one could
+// begin rather than by stepping the pattern through every byte.
+func pendingPasswordIndex(text string) int {
+	for from := 0; ; {
+		i := passwordKey(text, from)
+		if i < 0 {
+			return -1
+		}
+		if pendingPasswordAt.MatchString(text[i:]) {
+			return i
+		}
+		from = i + 1
+	}
+}
 
 // The private-key armour lines. ENCRYPTED is PKCS#8's encrypted form, which is
 // still the key — under a passphrase that may sit in the same environment. And
@@ -148,18 +320,7 @@ func Secrets(text string) string {
 		text = b.String()
 	}
 	for _, r := range rules {
-		// MATCH BEFORE REPLACING, because ReplaceAllString allocates even
-		// when it changes nothing: with no match it still copies the
-		// whole input into a fresh buffer and then converts that buffer
-		// to a string. Ten rules over a clean transcript is therefore
-		// twenty full copies of it — and a clean transcript is the
-		// overwhelming case, since this runs on every sandbox result and
-		// every coding-run transcript whether or not a credential is
-		// in it.
-		// MatchString allocates nothing.
-		if r.pattern.MatchString(text) {
-			text = r.pattern.ReplaceAllString(text, r.with)
-		}
+		text = r.apply(text)
 	}
 	return text
 }
@@ -179,7 +340,7 @@ func Contains(text string) bool {
 		return true
 	}
 	for _, r := range rules {
-		if r.pattern.MatchString(text) {
+		if r.in(text) {
 			return true
 		}
 	}
@@ -1220,8 +1381,8 @@ func Settled(text string) int {
 				settled, moved = lineStart(whole, s[0]), true
 			}
 		}
-		if loc := pendingPassword.FindStringIndex(whole[:settled]); loc != nil {
-			settled, moved = lineStart(whole, loc[0]), true
+		if at := pendingPasswordIndex(whole[:settled]); at >= 0 {
+			settled, moved = lineStart(whole, at), true
 		}
 		if !moved {
 			return settled
