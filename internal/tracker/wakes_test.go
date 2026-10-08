@@ -244,6 +244,7 @@ func TestTheRoutableSetIsExactlyTheTwoKinds(t *testing.T) {
 // WRITING SOMEBODY ELSE'S PRIORITIES WAKES THEM, and it is ADDRESSED: being
 // told what to do next by somebody above you is an instruction.
 func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("The urgent thing")
 
@@ -292,6 +293,7 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 // and no seat can ask why. Attribution is the audit trail's question and stays
 // the credential; who DECIDED the order is the queue's, and it is a person.
 func TestAReorderThroughABoundTokenNamesThePersonNotTheToken(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("The thing to do first")
 
@@ -332,6 +334,7 @@ func TestAReorderThroughABoundTokenNamesThePersonNotTheToken(t *testing.T) {
 // anybody, least of all to you — the one tracker write that vetoes its own
 // delivery per call.
 func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("My own thing")
 
@@ -394,6 +397,7 @@ func candidateHandles(wake *tracker.Notify) []string {
 // refused every cross-person write, and omitting the handle silently wrote a
 // person record for the token instead.
 func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("The thing")
 

@@ -14,6 +14,7 @@ import (
 // declarations decide how everybody's work in it is filed, which is not a call
 // one seat makes for the team.
 func TestProjectPolicyIsTheLeads(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
@@ -44,6 +45,7 @@ func TestProjectPolicyIsTheLeads(t *testing.T) {
 // separately because a lead who hits it DOES have authority over the other
 // three facets — "no" would send them looking in the wrong place.
 func TestArchivingAProjectTakesAPerson(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	archived := true
 	edit := tracker.ProjectEdit{Archived: &archived}
@@ -76,6 +78,7 @@ func TestArchivingAProjectTakesAPerson(t *testing.T) {
 // so a default assignee — which nothing is checked against — must not move it,
 // and a field declaration must.
 func TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	who := "alice"
 	if _, err := r.writer.WriteProject(t.Context(), "op-assignee", "ENG",
@@ -114,6 +117,7 @@ func TestPolicyVersionMovesOnlyForWhatATaskIsValidatedAgainst(t *testing.T) {
 // two scopes looks like and a reader that silently picked one would report
 // whichever it read second.
 func TestAProjectsOwnFieldsReachItsReaders(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteFields(t.Context(), "op-workspace",
 		[]tracker.FieldDef{{
@@ -236,6 +240,7 @@ func (r *roundTrip) strings(query string, args ...any) []string {
 // level down: a field that came back with its old id would silently re-admit
 // values validated against a definition nobody has seen for a year.
 func TestAProjectFieldArchiveIsOneWay(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	field := tracker.FieldDef{
 		ID: "f-sev", Slug: "severity", Name: "Severity", Type: tracker.FieldText,
@@ -264,6 +269,7 @@ func TestAProjectFieldArchiveIsOneWay(t *testing.T) {
 // TestARepeatedProjectEditWritesNothing keeps a form that submits every
 // control from publishing a record per submit.
 func TestARepeatedProjectEditWritesNothing(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
@@ -289,6 +295,7 @@ func TestARepeatedProjectEditWritesNothing(t *testing.T) {
 // TestProjectEditRefusesAnEmptyGesture, and names where the chart-owned fields
 // actually come from — which is the thing a caller reaching for them needs.
 func TestProjectEditRefusesAnEmptyGesture(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	_, err := r.writer.WriteProject(t.Context(), "op-empty", "ENG",
 		tracker.ProjectEdit{}, tracker.ProjectAuthority{Lead: true})
@@ -305,6 +312,7 @@ func TestProjectEditRefusesAnEmptyGesture(t *testing.T) {
 // derived from the chart, and creating it on demand is exactly the shape that
 // produces two counters and two ENG-1s.
 func TestProjectEditNamesAnUnknownProject(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	who := "alice"
 	_, err := r.writer.WriteProject(t.Context(), "op-nope", "NOPE",
@@ -330,6 +338,7 @@ func TestProjectEditNamesAnUnknownProject(t *testing.T) {
 // could take a project out of circulation and could not say how its work was
 // filed.
 func TestAPersonsOwnCredentialIsAuthorityOverAProjectsPolicy(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	who := "alice"
 	edit := tracker.ProjectEdit{DefaultAssignee: &who}
@@ -360,6 +369,7 @@ func TestAPersonsOwnCredentialIsAuthorityOverAProjectsPolicy(t *testing.T) {
 // AND THE SAME FOR A TAG, which is the same gate one object over: renaming or
 // archiving a tag changes the word on every task already filed under it.
 func TestAPersonsOwnCredentialMayRenameATag(t *testing.T) {
+	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteTags(t.Context(), "op-add", "ENG",
 		tracker.TagEdit{Add: []tracker.Tag{{Slug: "api", Label: "API"}}},
