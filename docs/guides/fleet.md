@@ -447,10 +447,23 @@ five claimable by nobody — stranded, while every node reported a healthy
 sweep. Each group's share is `ceil(group size / nodes eligible for it)`,
 and a node's capacity is the sum over the groups it belongs to.
 
+**Each share is spent on its own group only.** A node holds at most its
+share *of each group*: room it has in one group is never room in another.
+A satellite labelled for one pinned seat also matches the unpinned seats,
+so with two cores beside it its capacity is 2 — one for its pinned seat,
+one for its third of three unpinned ones. Were that a single number, a
+satellite that swept first could fill it with two unpinned seats and
+never claim the pinned one, which no other node may run; per group, it
+takes one of each. A node over its share of a group gives the surplus
+back even when its total is within capacity, and the groups with the
+fewest eligible nodes are claimed first.
+
 **A seat no live node matches is not served.** The engine will not widen
 a selector to place a seat — widening it is exactly what the operator
 asked it not to do — so it logs `seats_unplaceable` with the handles and
-leaves them. Expect this after a pinned node dies: the pin is a
+leaves them. It is the only seat the shares leave out: every group some
+live seat-running node matches is covered by those nodes' shares, and the
+warning is computed from the same shares the claims are bounded by. Expect this after a pinned node dies: the pin is a
 constraint, and a constraint has a cost.
 
 **A seat that stops matching is handed back.** Narrow a selector under a

@@ -294,12 +294,15 @@ agent is down, and the fleet says so (`seats_unplaceable`) rather than
 quietly running it somewhere it does not belong. If that is not
 acceptable, run **two** satellites carrying the same label: the seat
 moves between them, and the fair share is computed per placement group,
-so the pinned seat does not eat into anything else's capacity.
+so the pinned seat does not eat into anything else's capacity — and
+nothing else eats into the pinned seat's: a satellite's share of the
+unpinned seats is a separate bound from its share of its own, so it
+always keeps room for the seat it exists for, and claims it first.
 
 **A satellite is eligible for unpinned seats too.** It runs seats, so it
-takes its share of the ones nobody pinned — which is a real property to
-be deliberate about, because those seats' MCP servers may not work in a
-restricted network. There is no "only take pinned seats" switch. To keep
+takes its share of the ones nobody pinned — on top of its pinned seat,
+never instead of it — which is a real property to be deliberate about,
+because those seats' MCP servers may not work in a restricted network. There is no "only take pinned seats" switch. To keep
 general work off it, pin the general work to the core, which is one
 label and a YAML anchor rather than a block per role:
 

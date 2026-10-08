@@ -131,7 +131,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	}
 
 	if !draining {
-		released = append(released, h.shedToCapacity(ctx, plan.Capacity)...)
+		released = append(released, h.shedToCapacity(ctx, plan)...)
 	}
 
 	var claimed []string
@@ -144,9 +144,16 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	withheld := !draining && (unfit || !h.admits(ctx))
 	if !draining && !withheld {
 		h.mu.Lock()
-		// Undead seats count against capacity: this process may still be
-		// serving them, so taking on more work would over-subscribe a node
-		// that is already in trouble.
+		// TWO BOUNDS, and a claim must fit both. Each group's room is its
+		// share less what this node holds of it: room in one group is
+		// never room in another, or a node matching a pinned seat's group
+		// and the unpinned one fills up on unpinned seats and strands the
+		// pinned one (see the placement package doc). The total bounds the
+		// whole holding, because undead seats count against capacity —
+		// this process may still be serving them, so taking on more work
+		// would over-subscribe a node already in trouble — including one
+		// whose role this node may no longer run and so sits in no group.
+		groupRoom := plan.Room(h.holdsLocked)
 		room := plan.Capacity - len(h.held) - len(h.undead)
 		h.mu.Unlock()
 		if room > h.claimLimit {
@@ -154,13 +161,16 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		}
 		switch {
 		case room <= 0:
+			// Every group being full is covered here too: the total is
+			// the groups' room less any holding outside them, so it is
+			// never above what they have left.
 		case h.fleetHoldsEverySeat(seats, plan, peers):
 			// NOTHING IS FREE, and the fleet's own counts say so: see
 			// [Host.fleetHoldsEverySeat]. Trying every seat to learn it
 			// is the standing cost this skips.
 			fleetFull = true
 		default:
-			claimed, blocked = h.claimUpTo(ctx, plan.Eligible, room)
+			claimed, blocked = h.claimUpTo(ctx, plan.Groups, groupRoom, room)
 		}
 	}
 
@@ -276,38 +286,43 @@ func (h *Host) pruneSeatLocks(seats map[string]placement.Seat) {
 // new node computes a share it cannot reach, and the incumbent keeps serving
 // seats it has already been told are not its own.
 //
+// PER GROUP, like claiming. A node over its share of one group gives back
+// seats of THAT group, whatever room it has in another: room is not
+// fungible across groups (see the placement package doc), and a node that
+// let an over-full group ride on another's spare share would hold seats an
+// eligible peer is waiting for — the same strand a fungible claim makes, from
+// the other side. A node that held its total on unpinned seats under a
+// build that pooled the shares sheds the surplus here and claims its pinned
+// seat with the room that frees.
+//
+// THEN THE TOTAL, for the one holding no group accounts for: an undead seat
+// of a role this node may no longer run. It still counts against capacity —
+// this process may still be serving it — so once it outgrows the room the
+// groups leave unused, seats of the least constrained groups go first; a
+// pinned seat has the fewest other homes.
+//
 // VOLUNTARY, so the seat is quiesced and its in-flight turn finishes before
 // the consumer detaches. A rebalance costs at most one turn boundary of
 // latency on each seat that moves; nothing is abandoned and nothing goes
 // dark, because the seat is served continuously — first here, then there.
 //
-// CONVERGENT, NOT OSCILLATING, and the ceiling is what guarantees it: shares
-// are ceil(seats/nodes), so they sum to at least the seat count, and a node
-// that has shed down to its share has no room to immediately re-claim what
-// it just gave up. The excess moves once and stops.
-func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
+// CONVERGENT, NOT OSCILLATING, and the ceiling is what guarantees it: a
+// group's shares are ceil(group size / eligible nodes), so they sum to at
+// least its size, and a node that has shed a group down to its share has no
+// room in it to immediately re-claim what it just gave up. The excess moves
+// once and stops.
+func (h *Host) shedToCapacity(ctx context.Context, plan placement.Plan) []string {
 	h.mu.Lock()
-	over := len(h.held) + len(h.undead) - capacity
+	candidates := h.overCapacityLocked(plan)
 	h.mu.Unlock()
-	if over <= 0 {
-		return nil
-	}
 
-	// Sorted, and NOT ordered by the preferred hint the way claiming is.
-	// The hint records the last node to claim a seat, which for every seat
-	// this node holds is this node — so it cannot discriminate among them,
-	// and ordering by it would only look like it was doing something. A
-	// stable order is what matters: it makes a shed reproducible, and two
-	// nodes rebalancing at once hold disjoint sets, so they cannot collide.
-	candidates := h.Held()
-	limit := min(over, h.releaseLimit, len(candidates))
-
+	limit := min(h.releaseLimit, len(candidates))
 	var shed []string
 	for _, handle := range candidates[:limit] {
 		h.mu.Lock()
 		held := len(h.held)
 		h.mu.Unlock()
-		log.InfoContext(ctx, "seat_released_over_capacity", "seat", handle, "held", held, "capacity", capacity)
+		log.InfoContext(ctx, "seat_released_over_capacity", "seat", handle, "held", held, "capacity", plan.Capacity)
 		h.Release(ctx, handle, ReasonDrain)
 
 		// A release whose teardown could not be proven keeps the lease —
@@ -326,8 +341,65 @@ func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
 	return shed
 }
 
-// claimUpTo takes at most room seats, and reports the fleet's protocol floor
-// when the mixed-version gate stopped it.
+// overCapacityLocked is every running seat this node holds beyond its
+// shares, in the order they are given back: each over-full group's surplus
+// (groups most constrained first), then whatever the total still exceeds
+// capacity by, least constrained groups first. The caller holds h.mu.
+//
+// Sorted within a group, and NOT ordered by the preferred hint the way
+// claiming is. The hint records the last node to claim a seat, which for
+// every seat this node holds is this node — so it cannot discriminate among
+// them, and ordering by it would only look like it was doing something. A
+// stable order is what matters: it makes a shed reproducible, and two nodes
+// rebalancing at once hold disjoint sets, so they cannot collide.
+func (h *Host) overCapacityLocked(plan placement.Plan) []string {
+	running := make([][]string, len(plan.Groups))
+	for i, g := range plan.Groups {
+		for _, handle := range g.Handles {
+			if _, ok := h.held[handle]; ok {
+				running[i] = append(running[i], handle)
+			}
+		}
+		slices.Sort(running[i])
+	}
+
+	var out []string
+	for i, room := range plan.Room(h.holdsLocked) {
+		// An undead seat of the group counts toward its share and cannot
+		// itself be given back again, so the surplus comes out of the
+		// running ones — as much of it as they cover.
+		take := min(max(-room, 0), len(running[i]))
+		out = append(out, running[i][:take]...)
+		running[i] = running[i][take:]
+	}
+
+	over := len(h.held) + len(h.undead) - len(out) - plan.Capacity
+	for i := len(running) - 1; i >= 0 && over > 0; i-- {
+		take := min(over, len(running[i]))
+		out = append(out, running[i][:take]...)
+		over -= take
+	}
+	return out
+}
+
+// holdsLocked reports whether this node holds handle's lease: a seat it runs,
+// or an undead one it is still renewing. The caller holds h.mu.
+func (h *Host) holdsLocked(handle string) bool {
+	if _, ok := h.held[handle]; ok {
+		return true
+	}
+	_, ok := h.undead[handle]
+	return ok
+}
+
+// claimUpTo takes at most room seats in all and at most groupRoom[i] of
+// groups[i], and reports the fleet's protocol floor when the mixed-version
+// gate stopped it.
+//
+// A SEAT IS TAKEN ONLY AGAINST ITS OWN GROUP'S ROOM. A seat whose group is
+// full is skipped, never paid for out of another group's spare share: that
+// is what keeps a node matching a pinned seat's group and the unpinned one
+// from filling up on unpinned seats and stranding the pinned one.
 //
 // THE FLOOR IS ASKED ONLY WHEN THE GATE REFUSED A CLAIM, never because a pass
 // took nothing. A pass that took nothing because its peers hold every seat
@@ -344,15 +416,21 @@ func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
 // A GATE REFUSAL ENDS THE PASS: the gate is fleet-wide, so every other claim
 // this pass could make would be refused the same way, and each of them would
 // judge the gate again to learn it.
-func (h *Host) claimUpTo(ctx context.Context, eligible []string, room int) ([]string, int) {
+func (h *Host) claimUpTo(ctx context.Context, groups []placement.Group, groupRoom []int,
+	room int) ([]string, int) {
+
 	var claimed []string
-	for _, handle := range h.claimOrder(ctx, eligible) {
+	for _, c := range h.claimOrder(ctx, groups, groupRoom) {
 		if len(claimed) >= room {
 			break
 		}
-		took, refused, stop := h.tryClaim(ctx, handle)
+		if groupRoom[c.group] <= 0 {
+			continue
+		}
+		took, refused, stop := h.tryClaim(ctx, c.handle)
 		if took {
-			claimed = append(claimed, handle)
+			claimed = append(claimed, c.handle)
+			groupRoom[c.group]--
 		}
 		if refused == coord.RefusedProtocol {
 			// "An older-protocol node is live and this build refuses to
@@ -449,12 +527,26 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 	return true, "", false
 }
 
-// claimOrder is the unheld seats this node may run, its preferred ones
-// first.
+// candidate is a seat a pass may try, and the index of its group in the
+// plan — the room it is claimed against.
+type candidate struct {
+	handle string
+	group  int
+}
+
+// claimOrder is the unheld seats this node may run, in the groups it has room
+// in, most constrained group first and its preferred ones first within each.
 //
-// The caller passes the ELIGIBLE handles, already filtered by placement —
+// The caller passes the plan's groups, already filtered by placement —
 // eligibility is not a preference to be sorted, it is the difference between
-// a seat this node may hold and one it may not.
+// a seat this node may hold and one it may not. A group with no room left
+// contributes nothing: trying a seat this node may not take costs a lease
+// read for a claim it would have to give straight back.
+//
+// GROUPS BEFORE HINTS. The groups come in the plan's order, fewest eligible
+// nodes first, so when the claim limit cuts a pass short it is the seats
+// with the fewest other homes that were taken. The hint then orders seats
+// WITHIN a group.
 //
 // Stickiness, and only stickiness: a seat whose hint names this node is
 // TRIED first so a restart or a rolling deploy tends to land it back where
@@ -470,7 +562,7 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took bool, refused 
 // Seats this node recently failed to acquire are skipped until their backoff
 // expires — negative stickiness, the mirror of the positive kind. Peers are
 // unaffected.
-func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
+func (h *Host) claimOrder(ctx context.Context, groups []placement.Group, groupRoom []int) []candidate {
 	now := h.now()
 	h.mu.Lock()
 	for handle, until := range h.acquireBackoffs {
@@ -478,21 +570,28 @@ func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 			delete(h.acquireBackoffs, handle)
 		}
 	}
-	candidates := make([]string, 0, len(seats))
-	for _, handle := range seats {
-		if _, skip := h.held[handle]; skip {
+	perGroup := make([][]string, len(groups))
+	total := 0
+	for i, g := range groups {
+		if groupRoom[i] <= 0 {
 			continue
 		}
-		if _, skip := h.undead[handle]; skip {
-			continue
+		for _, handle := range g.Handles {
+			if _, skip := h.held[handle]; skip {
+				continue
+			}
+			if _, skip := h.undead[handle]; skip {
+				continue
+			}
+			if _, skip := h.acquireBackoffs[handle]; skip {
+				continue
+			}
+			perGroup[i] = append(perGroup[i], handle)
 		}
-		if _, skip := h.acquireBackoffs[handle]; skip {
-			continue
-		}
-		candidates = append(candidates, handle)
+		slices.Sort(perGroup[i])
+		total += len(perGroup[i])
 	}
 	h.mu.Unlock()
-	slices.Sort(candidates)
 
 	// NOTHING TO ORDER, so nothing to read. Fewer than two candidates has
 	// exactly one ordering, and the hint read below is a walk of the epochs
@@ -503,24 +602,28 @@ func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 	// capacity, or one whose every remaining candidate is in acquire
 	// backoff. The second is the case the backoff exists to calm, so
 	// spending a full-bucket read there works directly against it.
-	if len(candidates) < 2 {
-		return candidates
+	var hinted map[string]struct{}
+	if total >= 2 {
+		got, err := h.backend.PreferredResources(ctx, coord.ClassSeat, h.nodeID)
+		if err == nil {
+			hinted = got
+		}
 	}
 
-	hinted, err := h.backend.PreferredResources(ctx, coord.ClassSeat, h.nodeID)
-	if err != nil || len(hinted) == 0 {
-		return candidates
-	}
-	mine := make([]string, 0, len(candidates))
-	rest := make([]string, 0, len(candidates))
-	for _, handle := range candidates {
-		if _, ok := hinted[coord.SeatResource(handle)]; ok {
-			mine = append(mine, handle)
-			continue
+	out := make([]candidate, 0, total)
+	for i, handles := range perGroup {
+		var rest []candidate
+		for _, handle := range handles {
+			c := candidate{handle: handle, group: i}
+			if _, ok := hinted[coord.SeatResource(handle)]; ok {
+				out = append(out, c)
+				continue
+			}
+			rest = append(rest, c)
 		}
-		rest = append(rest, handle)
+		out = append(out, rest...)
 	}
-	return append(mine, rest...)
+	return out
 }
 
 // protocolBlock reports the fleet's protocol floor once the mixed-version gate

@@ -16,8 +16,11 @@
 //     computes the same number from the same table and stops there. Two nodes
 //     racing for the last seat is resolved by the lease, not by the
 //     arithmetic. With role placement in play the share is computed per
-//     placement GROUP and summed, because one fleet-wide ratio strands pinned
-//     seats; see [placement.Compute].
+//     placement GROUP, because one fleet-wide ratio strands pinned seats,
+//     and it bounds that group alone: a node holds at most its share OF EACH
+//     group it matches, claiming and shedding against each separately,
+//     because a total it could spend on any of them lets unpinned seats
+//     crowd out a pinned one. See [placement.Compute] and [placement.Plan.Room].
 //   - Converge in BOTH directions. Claiming alone only converges for a fleet
 //     that SHRINKS: a node that booted alone holds every seat, and a peer
 //     joining later computes a share it can never reach because the seats it
@@ -447,8 +450,10 @@ type SweepResult struct {
 	// the undead by design — nothing new starts on a seat whose teardown
 	// was never proven.
 	Held int
-	// Capacity is this node's fair share, summed over the placement groups
-	// it is eligible for.
+	// Capacity is this node's fair share: the sum of its shares of the
+	// placement groups it is eligible for. Each share bounds only its own
+	// group, so this is how many seats the node may hold in all, never how
+	// many of any one group.
 	Capacity int
 	// LiveNodes is how many live nodes run seats at all — the denominator.
 	LiveNodes int
@@ -462,10 +467,13 @@ type SweepResult struct {
 	// seats and then lost a third reported only the third.
 	Lost []string
 	// Unplaceable are the seats whose placement matches no live
-	// seat-running node. Nothing this node can act on — a pin to a node
-	// that is down, a label nobody carries — but it is the one placement
-	// failure that is otherwise invisible: the seat is simply not served,
-	// and every node in the fleet reports a perfectly healthy sweep.
+	// seat-running node, read off the same per-group shares the claims are
+	// bounded by, so it cannot disagree with how much of each group the
+	// fleet's claims may take. Nothing this node can act on — a
+	// pin to a node that is down, a label nobody carries — but it is the
+	// one placement failure that is otherwise invisible: the seat is
+	// simply not served, and every node in the fleet reports a perfectly
+	// healthy sweep.
 	Unplaceable []string
 	// BlockedByProtocol is the fleet's protocol floor when an
 	// older-protocol peer holds a presence or seat lease and this node is

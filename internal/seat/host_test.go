@@ -737,6 +737,225 @@ func TestAnIngressOnlyNodeClaimsNothingButIsStillPresent(t *testing.T) {
 	wantHeld(t, worker, "ceo", "eng")
 }
 
+// satellite is a seats-only node labelled for exactly one pinned seat — the
+// shape a one-agent satellite (or a pod per seat) runs.
+func satellite(label string) placement.NodeProfile {
+	return placement.NodeProfile{
+		Roles:  placement.Roles(placement.RoleSeats),
+		Labels: map[string]string{"seat": label},
+	}
+}
+
+// pinnedTo is the placement satellite(label) is the only match for.
+func pinnedTo(label string) placement.SeatPlacement {
+	return placement.SeatPlacement{Labels: map[string]string{"seat": label}}
+}
+
+// A SHARE BOUNDS ITS OWN GROUP. The satellite matches its pinned seat's group
+// AND the unpinned one, so its capacity is 1 + 1 = 2. When that was one
+// number it could spend on either, a satellite sweeping first took two
+// unpinned seats — they sort first — and sat at capacity with the pinned seat
+// unclaimed: no other node may run it, and no node reported it unplaceable,
+// because every node's arithmetic said the fleet had room for it.
+func TestAPinnedSeatIsNeverCrowdedOutByUnpinnedOnes(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	seats := placed(map[string]placement.SeatPlacement{"zed": pinnedTo("zed")}, "aaron", "bob", "carl", "zed")
+
+	sat := f.newHost("sat-zed", Config{Seats: seats, Profile: satellite("zed")})
+	core1 := f.newHost("core-1", Config{Seats: seats})
+	core2 := f.newHost("core-2", Config{Seats: seats})
+	hosts := []*Host{sat, core1, core2}
+	for _, h := range hosts {
+		h.renewNodePresence(f.ctx)
+	}
+
+	// The satellite sweeps first — a race any boot order can produce.
+	for range 3 {
+		for _, h := range hosts {
+			if result := h.Sweep(f.ctx); len(result.Unplaceable) > 0 {
+				t.Fatalf("%s reports %v unplaceable, but a live node matches every seat",
+					h.nodeID, result.Unplaceable)
+			}
+		}
+	}
+
+	if !slicesContains(sat.Held(), "zed") {
+		t.Fatalf("the pinned seat is held by nobody: sat-zed holds %v, core-1 %v, core-2 %v",
+			sat.Held(), core1.Held(), core2.Held())
+	}
+	wantServedOnce(t, []string{"aaron", "bob", "carl", "zed"}, hosts...)
+}
+
+// One pod per seat, every seat pinned to its own pod, and a core that runs no
+// seats at all: each pod holds exactly its own seat and nothing else.
+func TestEveryPodHoldsExactlyItsOwnPinnedSeat(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	handles := []string{"ana", "bob", "cy"}
+	pins := map[string]placement.SeatPlacement{}
+	for _, handle := range handles {
+		pins[handle] = pinnedTo(handle)
+	}
+	seats := placed(pins, handles...)
+
+	var hosts []*Host
+	for _, handle := range handles {
+		pod := f.newHost("pod-"+handle, Config{Seats: seats, Profile: satellite(handle)})
+		pod.renewNodePresence(f.ctx)
+		hosts = append(hosts, pod)
+	}
+	core := f.newHost("core", Config{Seats: seats, Profile: placement.NodeProfile{
+		Roles: placement.Roles(placement.RoleData, placement.RoleIngress, placement.RoleWorkers),
+	}})
+	core.renewNodePresence(f.ctx)
+
+	for range 2 {
+		for _, h := range append(slices.Clone(hosts), core) {
+			h.Sweep(f.ctx)
+		}
+	}
+	for i, pod := range hosts {
+		wantHeld(t, pod, handles[i])
+	}
+	wantHeld(t, core)
+}
+
+// A NODE OVER ITS SHARE OF ONE GROUP GIVES THAT GROUP BACK, even when its
+// total is within capacity. It is also how a fleet already stranded by a
+// pooled capacity heals: the satellite holds two unpinned seats — its whole
+// capacity of 2 — so a shed that looked only at the total saw nothing to do,
+// and its pinned seat waited for room that never came.
+func TestAGroupHeldPastItsShareIsShedEvenWhenTheTotalFits(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	seats := placed(map[string]placement.SeatPlacement{"zed": pinnedTo("zed")}, "aaron", "bob", "zed")
+	// The pinned seat's first takeover fails, so the satellite — alone, and
+	// backing off it — fills up on the unpinned seats.
+	failed := false
+	hooks := &hookLog{acquireErr: func(handle string, _ int) error {
+		if handle == "zed" && !failed {
+			failed = true
+			return errors.New("the seat's MCP server is not up yet")
+		}
+		return nil
+	}}
+	sat := f.newHost("sat-zed", Config{
+		Seats: seats, Profile: satellite("zed"), Hooks: hooks, AcquireBackoff: time.Second,
+	})
+	sat.renewNodePresence(f.ctx)
+	sat.Sweep(f.ctx)
+	wantHeld(t, sat, "aaron", "bob")
+
+	// A core joins: the unpinned share drops to 1 and the pinned one stays
+	// 1, so the satellite may hold 2 — and holds 2, both unpinned.
+	f.present("core-1", time.Hour, placement.NodeProfile{})
+	f.clock.Advance(2 * time.Second)
+	sat.renewNodePresence(f.ctx)
+	result := sat.Sweep(f.ctx)
+	wantInt(t, result.Capacity, 2, "capacity")
+	wantStrings(t, result.Lost, []string{"aaron"}, "shed from the over-full group")
+	wantStrings(t, result.Claimed, []string{"zed"}, "claimed with the room that made")
+	wantHeld(t, sat, "bob", "zed")
+}
+
+// The seats with the fewest possible holders are taken first, so a pass the
+// claim limit cuts short has spent itself on the seats nobody else can run.
+// The pinned seat sorts last here; a plain sorted walk would take an unpinned
+// one — on a satellite alone as much as on one beside a core.
+func TestTheMostConstrainedSeatIsClaimedFirst(t *testing.T) {
+	t.Parallel()
+	for _, peers := range [][]string{nil, {"core-1"}} {
+		t.Run(fmt.Sprintf("peers=%v", peers), func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			seats := placed(map[string]placement.SeatPlacement{"zed": pinnedTo("zed")}, "aaron", "bob", "zed")
+			for _, peer := range peers {
+				f.present(peer, time.Hour, placement.NodeProfile{})
+			}
+			sat := f.newHost("sat-zed", Config{Seats: seats, Profile: satellite("zed"), ClaimLimit: 1})
+			sat.renewNodePresence(f.ctx)
+			wantStrings(t, sat.Sweep(f.ctx).Claimed, []string{"zed"}, "first claim")
+		})
+	}
+}
+
+// A PASS NEVER TAKES MORE OF A GROUP THAN ITS SHARE, even with room left in
+// its total. The eu group comes first (two eligible nodes against three), and
+// a pass that spent its total room on it would take both eu seats and none of
+// the unpinned ones — leaving the other eu node nothing to take, and this
+// node's share of the unpinned group unspent.
+func TestAPassNeverTakesMoreOfAGroupThanItsShare(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	eu := placement.SeatPlacement{Labels: map[string]string{"zone": "eu"}}
+	seats := placed(map[string]placement.SeatPlacement{"eu0": eu, "eu1": eu}, "eu0", "eu1", "f0", "f1", "f2")
+	f.present("node-b", time.Hour, placement.NodeProfile{Labels: map[string]string{"zone": "eu"}})
+	f.present("node-c", time.Hour, placement.NodeProfile{})
+
+	a := f.newHost("node-a", Config{Seats: seats, Profile: placement.NodeProfile{
+		Labels: map[string]string{"zone": "eu"},
+	}})
+	a.renewNodePresence(f.ctx)
+	result := a.Sweep(f.ctx)
+	wantInt(t, result.Capacity, 2, "capacity")
+	wantStrings(t, result.Claimed, []string{"eu0", "f0"}, "claimed")
+}
+
+// An undead seat whose role this node may no longer run sits in no group —
+// and still counts against capacity, because this process may still be
+// serving it. With the shares per group it would otherwise count against
+// nothing, and the node would take on a full share beside a seat it cannot
+// put down.
+func TestAnUndeadSeatOutsideEveryGroupStillCountsAgainstCapacity(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	var pin atomic.Value
+	pin.Store(placement.SeatPlacement{})
+	hooks := &hookLog{releaseErr: func(handle string, _ ReleaseReason, _ int) error {
+		if handle == "s3" {
+			return errors.New("still consuming")
+		}
+		return nil
+	}}
+	h := f.newHost("node-a", Config{Hooks: hooks, Seats: func() []placement.Seat {
+		return []placement.Seat{
+			{Handle: "s0"}, {Handle: "s1"}, {Handle: "s2"},
+			{Handle: "s3", Placement: pin.Load().(placement.SeatPlacement)},
+		}
+	}})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantHeld(t, h, "s0", "s1", "s2", "s3")
+
+	pin.Store(placement.SeatPlacement{Node: "node-b"})
+	result := h.Sweep(f.ctx)
+	wantStrings(t, h.Unproven(), []string{"s3"}, "unproven")
+	wantInt(t, result.Capacity, 3, "capacity")
+	wantStrings(t, result.Lost, []string{"s0"}, "shed to make room for the undead seat")
+	wantHeld(t, h, "s1", "s2")
+
+	// Settled: the room the undead seat takes is not claimed back.
+	wantStrings(t, h.Sweep(f.ctx).Claimed, nil, "claimed beside the undead seat")
+	wantHeld(t, h, "s1", "s2")
+}
+
+// wantServedOnce asserts every handle is held by exactly one of hosts.
+func wantServedOnce(t *testing.T, handles []string, hosts ...*Host) {
+	t.Helper()
+	holders := map[string][]string{}
+	for _, h := range hosts {
+		for _, handle := range h.Held() {
+			holders[handle] = append(holders[handle], h.nodeID)
+		}
+	}
+	for _, handle := range handles {
+		if len(holders[handle]) != 1 {
+			t.Errorf("seat %q is held by %v, want exactly one node", handle, holders[handle])
+		}
+	}
+}
+
 // --- the mixed-version gate ------------------------------------------------
 
 func TestAnOlderProtocolPeerIsReportedNotJustSilent(t *testing.T) {

@@ -5,14 +5,17 @@
 // group — and the test that proves it is
 // TestComputePinnedMajorityIsNotStrandedByAFleetWideRatio: under the naive
 // ratio every node reports a healthy sweep while five seats are served by
-// nobody.
+// nobody. Nor is a share a number a node may spend on any group it matches:
+// TestGreedyClaimsBoundedPerGroupPlaceEveryPlaceableSeat is why.
 package placement
 
 import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"math/rand/v2"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -651,13 +654,15 @@ func TestComputeEligibilityFollowsPinsAndSelectors(t *testing.T) {
 	}
 }
 
-// What makes the give-back settle instead of oscillating: a ceiling per
-// group means a node that has shed down to its share has no room to
-// immediately re-claim what it let go.
-//
-// The invariant is fleet-wide — the shares must cover every placeable seat,
+// EVERY GROUP IS COVERED BY ITS OWN NODES' SHARES. A group's eligible nodes
+// may each hold Share of it and nothing outside the group can occupy that
+// room, so the shares of the nodes it matches must sum to at least its size,
 // or a seat is stranded with every sweep reporting healthy.
-func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
+//
+// Summing over the whole fleet instead — the check this replaced — passes the
+// satellite shape below while it strands the pinned seat: the satellite's
+// total covers it, and then spends itself on unpinned seats.
+func TestEveryGroupIsCoveredByItsOwnNodesShares(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -682,6 +687,18 @@ func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
 				Seat{Handle: "free", Placement: anywhere},
 			),
 			fleet: []NodeProfile{{ID: "big"}, {ID: "n2"}, {ID: "n3"}},
+		},
+		{
+			name: "a satellite for one pinned seat beside two cores",
+			seats: append(
+				seatsWith(anywhere, "aaron", "bob", "carl"),
+				Seat{Handle: "zed", Placement: SeatPlacement{Labels: map[string]string{"seat": "zed"}}},
+			),
+			fleet: []NodeProfile{
+				{ID: "sat-zed", Roles: Roles(RoleSeats), Labels: map[string]string{"seat": "zed"}},
+				{ID: "core-1"},
+				{ID: "core-2"},
+			},
 		},
 		{
 			name: "overlapping selectors",
@@ -710,11 +727,22 @@ func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			total := 0
+			reach := map[string]int{}
+			size := map[string]int{}
+			for _, s := range tc.seats {
+				size[s.Placement.Key()]++
+			}
 			var unplaceable []string
 			for i, me := range tc.fleet {
 				plan := Compute(tc.seats, me, tc.fleet)
-				total += plan.Capacity
+				total := 0
+				for _, g := range plan.Groups {
+					reach[g.Placement.Key()] += g.Share
+					total += g.Share
+				}
+				if total != plan.Capacity {
+					t.Fatalf("%s: capacity %d is not the sum of its group shares %d", me.ID, plan.Capacity, total)
+				}
 
 				// Every node must reach the same verdict about the company
 				// from the same membership read; two nodes disagreeing about
@@ -726,12 +754,206 @@ func TestComputeSharesCoverEveryPlaceableSeat(t *testing.T) {
 				assertHandles(t, "unplaceable", plan.Unplaceable, unplaceable)
 			}
 
-			placeable := len(tc.seats) - len(unplaceable)
-			if total < placeable {
-				t.Fatalf("shares sum to %d, below the %d placeable seats — seats are stranded", total, placeable)
+			for _, s := range tc.seats {
+				key := s.Placement.Key()
+				if slices.Contains(unplaceable, s.Handle) {
+					if reach[key] != 0 {
+						t.Fatalf("%s is reported unplaceable, but its group's shares reach %d", s.Handle, reach[key])
+					}
+					continue
+				}
+				if reach[key] < size[key] {
+					t.Fatalf("group %s: its nodes' shares reach %d of its %d seats — %s is stranded "+
+						"with nothing reported", s.Placement, reach[key], size[key], s.Handle)
+				}
 			}
 		})
 	}
+}
+
+// GREEDY CLAIMS BOUNDED PER GROUP PLACE EVERY PLACEABLE SEAT, in any order,
+// and the seats left over are exactly the ones reported unplaceable.
+//
+// This is the host's policy run against the plan alone: each node, in a
+// shuffled order, walks its groups in a shuffled order and takes free seats
+// while [Plan.Room] says it has room in that seat's group — the order a
+// claim loop happens to use must not be what decides whether a seat is
+// served. Random fleets over a fixed seed, so a failure reproduces.
+func TestGreedyClaimsBoundedPerGroupPlaceEveryPlaceableSeat(t *testing.T) {
+	t.Parallel()
+
+	rng := rand.New(rand.NewPCG(1, 2))
+	for run := range 500 {
+		seats, fleet := randomCompany(rng)
+
+		plans := make([]Plan, len(fleet))
+		for i, me := range fleet {
+			plans[i] = Compute(seats, me, fleet)
+		}
+		held := simulateClaims(rng, fleet, plans)
+
+		unplaceable := plans[0].Unplaceable
+		for _, s := range seats {
+			_, isHeld := held[s.Handle]
+			if isHeld == slices.Contains(unplaceable, s.Handle) {
+				t.Fatalf("run %d: seat %s (%s) held=%v but unplaceable=%v\nseats=%v\nfleet=%v\nheld=%v",
+					run, s.Handle, s.Placement, isHeld, unplaceable, seats, fleet, held)
+			}
+		}
+		for i, plan := range plans {
+			id := fleet[i].ID
+			for gi, room := range plan.Room(func(h string) bool { return held[h] == id }) {
+				if room < 0 {
+					t.Fatalf("run %d: %s holds more than its share of %s", run, id, plan.Groups[gi].Placement)
+				}
+			}
+		}
+	}
+}
+
+// simulateClaims runs greedy, per-group-bounded claims to a fixed point and
+// returns who holds what.
+func simulateClaims(rng *rand.Rand, fleet []NodeProfile, plans []Plan) map[string]string {
+	held := map[string]string{}
+	for progress := true; progress; {
+		progress = false
+		for _, i := range rng.Perm(len(fleet)) {
+			id, plan := fleet[i].ID, plans[i]
+			room := plan.Room(func(h string) bool { return held[h] == id })
+			for _, gi := range rng.Perm(len(plan.Groups)) {
+				handles := plan.Groups[gi].Handles
+				for _, hi := range rng.Perm(len(handles)) {
+					if room[gi] <= 0 {
+						break
+					}
+					if _, taken := held[handles[hi]]; taken {
+						continue
+					}
+					held[handles[hi]] = id
+					room[gi]--
+					progress = true
+				}
+			}
+		}
+	}
+	return held
+}
+
+// randomCompany is a fleet of one to six nodes — some running no seats, each
+// carrying some of a small label vocabulary — and up to sixteen seats placed
+// anywhere, on a label, on a node id that may not be live, or on both.
+func randomCompany(rng *rand.Rand) ([]Seat, []NodeProfile) {
+	zones := []string{"eu", "us", "ap"}
+	fleet := make([]NodeProfile, 1+rng.IntN(6))
+	for i := range fleet {
+		node := NodeProfile{ID: "n" + strconv.Itoa(i), Labels: map[string]string{}}
+		if rng.IntN(4) == 0 {
+			node.Roles = Roles(RoleIngress, RoleWorkers)
+		}
+		if rng.IntN(2) == 0 {
+			node.Labels["zone"] = zones[rng.IntN(len(zones))]
+		}
+		if rng.IntN(3) == 0 {
+			node.Labels["gpu"] = "true"
+		}
+		fleet[i] = node
+	}
+
+	seats := make([]Seat, rng.IntN(17))
+	for i := range seats {
+		var p SeatPlacement
+		switch rng.IntN(5) {
+		case 0:
+			p.Labels = map[string]string{"zone": zones[rng.IntN(len(zones))]}
+		case 1:
+			p.Labels = map[string]string{"gpu": "true"}
+		case 2:
+			p.Node = "n" + strconv.Itoa(rng.IntN(len(fleet)+1))
+		case 3:
+			p.Node = "n" + strconv.Itoa(rng.IntN(len(fleet)))
+			p.Labels = map[string]string{"zone": zones[rng.IntN(len(zones))]}
+		}
+		seats[i] = Seat{Handle: "s" + strconv.Itoa(i), Placement: p}
+	}
+	return seats, fleet
+}
+
+// Room is per group: what this node holds of one group never uses up another,
+// and a group held past its share reads negative by exactly the surplus.
+func TestRoomIsCountedPerGroup(t *testing.T) {
+	t.Parallel()
+
+	zed := SeatPlacement{Labels: map[string]string{"seat": "zed"}}
+	seats := append(seatsWith(anywhere, "aaron", "bob", "carl"), Seat{Handle: "zed", Placement: zed})
+	sat := NodeProfile{ID: "sat-zed", Roles: Roles(RoleSeats), Labels: map[string]string{"seat": "zed"}}
+	fleet := []NodeProfile{sat, {ID: "core-1"}, {ID: "core-2"}}
+
+	plan := Compute(seats, sat, fleet)
+	if plan.Capacity != 2 {
+		t.Fatalf("capacity = %d, want 2 (1 pinned + a third of 3 unpinned)", plan.Capacity)
+	}
+	if len(plan.Groups) != 2 || plan.Groups[0].Placement.Key() != zed.Key() {
+		t.Fatalf("groups = %+v, want the pinned group first", plan.Groups)
+	}
+
+	holding := func(handles ...string) func(string) bool {
+		return func(h string) bool { return slices.Contains(handles, h) }
+	}
+	tests := []struct {
+		name string
+		held []string
+		want []int // pinned group, unpinned group
+	}{
+		{"nothing held", nil, []int{1, 1}},
+		// The stranding: two unpinned seats fill the capacity of 2, and a
+		// pooled room would read zero everywhere. Per group, the pinned
+		// group still has its room and the unpinned one is over by one.
+		{"two unpinned seats", []string{"aaron", "bob"}, []int{1, -1}},
+		{"its own seats", []string{"zed", "carl"}, []int{0, 0}},
+		{"a seat outside every group", []string{"elsewhere"}, []int{1, 1}},
+	}
+	for _, tc := range tests {
+		got := plan.Room(holding(tc.held...))
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: room = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Most constrained first: fewest eligible nodes, and a placement before
+// "anywhere" when the count ties, so a claim-limited pass spends itself on
+// the seats with the fewest other homes. Beyond that, the org's order.
+func TestGroupsAreOrderedMostConstrainedFirst(t *testing.T) {
+	t.Parallel()
+
+	eu := SeatPlacement{Labels: map[string]string{"zone": "eu"}}
+	pinned := SeatPlacement{Node: "n1"}
+	gpu := SeatPlacement{Labels: map[string]string{"gpu": "true"}}
+	seats := []Seat{
+		{Handle: "free", Placement: anywhere},
+		{Handle: "eu", Placement: eu},
+		{Handle: "gpu", Placement: gpu},
+		{Handle: "pinned", Placement: pinned},
+	}
+	me := NodeProfile{ID: "n1", Labels: map[string]string{"zone": "eu", "gpu": "true"}}
+	fleet := []NodeProfile{me, {ID: "n2", Labels: map[string]string{"zone": "eu"}}, {ID: "n3"}}
+
+	plan := Compute(seats, me, fleet)
+	var got []string
+	for _, g := range plan.Groups {
+		got = append(got, g.Handles...)
+	}
+	// gpu and pinned each have one node, in the org's order; eu has two;
+	// free has three.
+	assertHandles(t, "group order", got, []string{"gpu", "pinned", "eu", "free"})
+
+	// Alone, every group has one node, and the placed ones still go first.
+	alone := Compute(seats, me, nil)
+	got = nil
+	for _, g := range alone.Groups {
+		got = append(got, g.Handles...)
+	}
+	assertHandles(t, "group order alone", got, []string{"eu", "gpu", "pinned", "free"})
 }
 
 // Eligibility is not a preference to be sorted: the host claims in the order
