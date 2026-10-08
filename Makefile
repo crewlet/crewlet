@@ -9,9 +9,9 @@
 #
 # For the TEST jobs that is now true by construction rather than by care:
 # every shard of ci.yml's `test (race)` and `end-to-end gates` runs `make test`
-# or `make test-solo` with SHARD, TEST_WEIGHTS and TEST_REPORT set (below), so
-# there is one command and no copy to keep in step. Every other job still
-# inlines its own, and NOTHING asserts those agree --
+# or `make test-solo` with TEST_SHARD, TEST_WEIGHTS and TEST_REPORT set
+# (below), so there is one command and no copy to keep in step. Every other job
+# still inlines its own, and NOTHING asserts those agree --
 # internal/version/makefile_test.go used to and was dropped -- so for the rest,
 # change a target and its ci.yml step in the same commit, and read both.
 #
@@ -166,10 +166,10 @@ SKIPGATE = $(GO) run ./internal/skipgate$(if $(TEST_REPORT), -report $(TEST_REPO
 # expands to nothing, and what is left is the value it just assigned. Every
 # later reference is a plain lookup.
 #
-# SHARD, TEST_WEIGHTS AND TEST_REPORT are how ci.yml runs each half on more
-# than one runner, and their defaults leave a local run exactly as it was:
+# TEST_SHARD, TEST_WEIGHTS AND TEST_REPORT are how ci.yml runs each half on
+# more than one runner, and their defaults leave a local run exactly as it was:
 #
-#   SHARD=I/N         run shard I of N of the half. 1/1 is the whole half.
+#   TEST_SHARD=I/N    run shard I of N of the half. 1/1 is the whole half.
 #   TEST_WEIGHTS=FILE the measured seconds per package (a skipgate timings.tsv)
 #                     the partition starts the longest first by and deals the
 #                     shards by. Unset, the half runs in go list's order.
@@ -180,12 +180,19 @@ SKIPGATE = $(GO) run ./internal/skipgate$(if $(TEST_REPORT), -report $(TEST_REPO
 # Membership never depends on any of them: `go doc ./internal/solo/partition`
 # says why weights can move a package between runners and never drop one, and
 # what it asserts before printing a shard.
-SHARD        ?= 1/1
+#
+# The TEST_ prefix is the family the other test knobs already share
+# (TEST_TIMEOUT), and it is also what keeps a variable this file takes from the
+# ENVIRONMENT — which is what `?=` does — from answering to a name as generic
+# as SHARD, which another tool may well export: a stray value there would run
+# one slice of a half and report it as the half. `check` states the whole half
+# outright for the same reason (below).
+TEST_SHARD   ?= 1/1
 TEST_WEIGHTS ?=
 TEST_REPORT  ?=
 
 PARTITION       = $(GO) run ./internal/solo/partition
-PARTITION_FLAGS = -shard $(SHARD)$(if $(TEST_WEIGHTS), -weights $(TEST_WEIGHTS))
+PARTITION_FLAGS = -shard $(TEST_SHARD)$(if $(TEST_WEIGHTS), -weights $(TEST_WEIGHTS))
 PARALLEL_PKGS   = $(eval PARALLEL_PKGS := $(shell $(PARTITION) $(PARTITION_FLAGS) parallel))$(PARALLEL_PKGS)
 SOLO_PKGS       = $(eval SOLO_PKGS := $(shell $(PARTITION) $(PARTITION_FLAGS) solo))$(SOLO_PKGS)
 
@@ -373,9 +380,17 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # test-cross` running beside it failed internal/e2e's
 # TestEveryNodeMintsIntoOneKeySpace with `ensure stream
 # CREWLET_NOTIFICATIONS: context deadline exceeded`, and passed alone.
+#
+# EACH HALF WHOLE, stated rather than defaulted. TEST_SHARD's `?=` takes a
+# value from the environment, and a sub-make inherits the variables its
+# parent was given on the command line, so `make check TEST_SHARD=2/2` — or a
+# TEST_SHARD left exported in the shell — would run one slice of each half and
+# still print that every gate passed. A variable on the sub-make's own command
+# line beats both (GNU Make 4.3, checked), so these two lines cannot run a
+# slice.
 check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
-	@$(MAKE) test
-	@$(MAKE) test-solo
+	@$(MAKE) test TEST_SHARD=1/1
+	@$(MAKE) test-solo TEST_SHARD=1/1
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"
@@ -482,7 +497,7 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # no node and passes — and a Makefile stricter than CI is the same lie as one
 # looser than it, just in the direction nobody notices.
 test: ## the suite, minus the packages that run alone (ci: test (race), one job per shard)
-	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a SHARD or TEST_WEIGHTS it refused, or go list failing)" >&2; exit 1; }
+	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_SHARD or TEST_WEIGHTS it refused, or go list failing)" >&2; exit 1; }
 	$(call REPORT_HALF,parallel)
 	$(call SKIPGATE,parallel) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
@@ -526,7 +541,7 @@ test: ## the suite, minus the packages that run alone (ci: test (race), one job 
 SOLO_PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(SOLO_PKGS) > /dev/null
 
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates, one job per shard)
-	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a SHARD or TEST_WEIGHTS it refused, go list failing, or no package importing internal/solo)" >&2; exit 1; }
+	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (a TEST_SHARD or TEST_WEIGHTS it refused, go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call REPORT_HALF,solo)
 	$(call SOLO_PREBUILD,$(GOTESTBUILD))
 	$(call SKIPGATE,solo) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)

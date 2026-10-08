@@ -137,7 +137,7 @@ a time too.
 variables set, and you can run exactly what one CI job ran:
 
 ```bash
-make test SHARD=2/2 TEST_WEIGHTS=test-weights.tsv TEST_REPORT=report
+make test TEST_SHARD=2/2 TEST_WEIGHTS=test-weights.tsv TEST_REPORT=report
 ```
 
 `TEST_WEIGHTS` is the seconds each package took on the last run on `main` —
@@ -147,7 +147,8 @@ deal the shards evenly; `TEST_REPORT` writes what the shard ran and how
 long each package took. Neither changes which packages are in a half, and the
 partition refuses to print a shard unless the shards cover the half exactly
 once. Left unset — the default — `make test` is the whole half in `go list`
-order, as it always was. The `tests` job in CI checks the shards' reports
+order, as it always was, and `make check` runs each half whole whatever
+`TEST_SHARD` is set to. The `tests` job in CI checks the shards' reports
 against each other, so a package that no shard ran fails the build, and it is
 the one check `main`'s protection rule must require for the suite (see
 [A bump merges itself](#a-bump-merges-itself)).

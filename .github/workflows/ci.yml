@@ -447,8 +447,8 @@ jobs:
       # same command CI runs, or it is a lie" was therefore held by hand —
       # by nothing, since internal/version/makefile_test.go was dropped. The
       # test jobs call `make` so that for them it is true by construction:
-      # SHARD, TEST_WEIGHTS and TEST_REPORT are the Makefile's own knobs, and
-      # their defaults are what `make test` runs on a laptop.
+      # TEST_SHARD, TEST_WEIGHTS and TEST_REPORT are the Makefile's own knobs,
+      # and their defaults are what `make test` runs on a laptop.
       #
       # The race detector is not optional: the engine's concurrency model is
       # real parallelism, so every "atomic because single-threaded" assumption
@@ -473,8 +473,8 @@ jobs:
       # checkout, which the suite's own gates read as this repository's tree.
       - name: one shard of the suite, minus the packages that run alone
         env:
-          SHARD: ${{ matrix.shard }}
-        run: make test SHARD="$SHARD" TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_REPORT="$RUNNER_TEMP/report"
+          TEST_SHARD: ${{ matrix.shard }}
+        run: make test TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_REPORT="$RUNNER_TEMP/report"
       # What this shard ran, for the `tests` job to hold against the half.
       # Uploaded after a failure too, so a red shard's report says how far it
       # got; overwrite, because a re-run of a failed shard uploads it again.
@@ -529,8 +529,8 @@ jobs:
           node-version: latest
       - name: one shard of the packages that run alone
         env:
-          SHARD: ${{ matrix.shard }}
-        run: make test-solo SHARD="$SHARD" TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_REPORT="$RUNNER_TEMP/report"
+          TEST_SHARD: ${{ matrix.shard }}
+        run: make test-solo TEST_SHARD="$TEST_SHARD" TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_REPORT="$RUNNER_TEMP/report"
       - *test-report
       - *gobuild-prune
       - *gobuild-save
