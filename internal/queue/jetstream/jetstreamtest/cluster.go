@@ -269,7 +269,8 @@ const ClusterStartBudget = 3 * time.Minute
 // before any of them runs.
 //
 // Measured on this repository's own CI, which is what makes this a fix rather
-// than a tidy: `TestAFleetAgreesAboutOneCompany` failed after 181.05s with
+// than a tidy: `TestAFleetOfThree/AFleetAgreesAboutOneCompany`, then a test
+// standing up a fleet of its own, failed after 181.05s with
 // "no cluster came up within 3m0s (1 OF 4 ATTEMPTS)". Member 0's broker spent
 // the entire ceiling retrying a route to a port where nothing was listening
 // ("Error trying to connect to route (attempt 178): connection refused"), and
