@@ -145,6 +145,7 @@ func (r *coordRig) withHold() *holdSpy {
 // which on the shipped broker returns it BEHIND R2, and the positional match
 // gave R2 the question.
 func TestTheFirstQualifyingReplyIsTheAnswerWhateverTheResumeDoes(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	parkOnAQuestion(t, rig)
@@ -206,6 +207,7 @@ func TestTheFirstQualifyingReplyIsTheAnswerWhateverTheResumeDoes(t *testing.T) {
 // the moment the job parked it was the "next inbound on the conversation" —
 // the answer to a question that did not exist when it was written.
 func TestAReplyPostedBeforeTheQuestionDoesNotAnswerIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	asked := rig.get("t1").AskedAt
@@ -239,6 +241,7 @@ func TestAReplyPostedBeforeTheQuestionDoesNotAnswerIt(t *testing.T) {
 // spliced into the run as an answer it may never have been. Neither is
 // presumed to qualify.
 func TestAReplyThatCannotShowItCameAfterTheQuestionDoesNotAnswerIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	run := rig.get("t1")
@@ -262,6 +265,7 @@ func TestAReplyThatCannotShowItCameAfterTheQuestionDoesNotAnswerIt(t *testing.T)
 // after that — a redelivery whose acknowledgement was lost — was written
 // before the second question was asked, so it is not its answer.
 func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	asked := rig.get("t1").AskedAt
@@ -314,6 +318,7 @@ func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
 // while the run still owes its resume: it is spent as the answer it is —
 // never matched again, never a turn.
 func TestACopyOfARecordedAnswerIsSpentAsThatAnswer(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	asked := rig.get("t1").AskedAt
@@ -339,6 +344,7 @@ func TestACopyOfARecordedAnswerIsSpentAsThatAnswer(t *testing.T) {
 // the ordinary message it is (under a new id, because the original is spent),
 // the run waits on its question again, and that reply never answers it again.
 func TestAnAnswerThatCannotBeResumedIsHandedBackAfterItsAttempts(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	parkOnAQuestion(t, rig)
@@ -402,6 +408,7 @@ func TestAnAnswerThatCannotBeResumedIsHandedBackAfterItsAttempts(t *testing.T) {
 // the run answered and owing its resume, and drives it — with the seat's
 // inbox held behind it — rather than waiting for the person to answer twice.
 func TestAnAnswerARecoveredSeatOwesIsResumedByItsNewHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	asked := rig.get("t1").AskedAt

@@ -47,6 +47,7 @@ func owedAnAnswerWhoseRunEnds(t *testing.T, rig *coordRig, alsoRefuse ...string)
 
 // THE ORDINARY CASE: the reply is handed back once, and the run is ended.
 func TestARetryWhoseRunEndsHandsTheReplyBackOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1, _ := owedAnAnswerWhoseRunEnds(t, rig)
 	if rig.fireRetries() != 1 {
@@ -67,6 +68,7 @@ func TestARetryWhoseRunEndsHandsTheReplyBackOnce(t *testing.T) {
 // for the reply it owes — the row survives the ending with the copy on it —
 // and the seat's next holder publishes it, once, as it reaps the row.
 func TestARetryWhoseRunEndsStoppedBeforeThePublishIsFinishedByTheNextHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	r1, _ := owedAnAnswerWhoseRunEnds(t, rig)
@@ -95,6 +97,7 @@ func TestARetryWhoseRunEndsStoppedBeforeThePublishIsFinishedByTheNextHolder(t *t
 // AND THIS NODE FINISHES IT ITSELF when it keeps the seat: the ending it kept
 // is retried, the copy published, and the row ended.
 func TestARetryWhoseRunEndsFinishesItsEndingOnceThePublishLands(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	r1, _ := owedAnAnswerWhoseRunEnds(t, rig)
@@ -118,6 +121,7 @@ func TestARetryWhoseRunEndsFinishesItsEndingOnceThePublishLands(t *testing.T) {
 // not over and over, and the next holder publishes it again under THE SAME ID
 // — one message to the inbox's same-id dedupe and the completion ledger.
 func TestARetryWhoseRunEndsStoppedBeforeTheClearRepublishesTheSameMessage(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1, _ := owedAnAnswerWhoseRunEnds(t, rig, "ClearHandBack")
 	rig.fireRetries()
@@ -137,6 +141,7 @@ func TestARetryWhoseRunEndsStoppedBeforeTheClearRepublishesTheSameMessage(t *tes
 // STOPPED AFTER THE CLEAR, BEFORE THE DELETE: the row owes nothing, and the next
 // holder ends it without handing anything back again.
 func TestARetryWhoseRunEndsStoppedBeforeTheDeleteHandsNothingBackTwice(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1, store := owedAnAnswerWhoseRunEnds(t, rig)
 	// THE FIRST FINISH IS THE DELETE: the ending lets the reply go and
@@ -166,6 +171,7 @@ func TestARetryWhoseRunEndsStoppedBeforeTheDeleteHandsNothingBackTwice(t *testin
 // to be published straight off the refusal instead — and lost, with the row
 // deleted under it, when the broker refused that publish too.
 func TestARetryWhoseRunEndsKeepsItsEndingUntilTheReplyIsRecorded(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	r1, store := owedAnAnswerWhoseRunEnds(t, rig, "OweHandBack")
@@ -239,6 +245,7 @@ func (s releaseLandsThenFails) ReleaseClaim(ctx context.Context, turnID string, 
 // and, refusing to let R1 go from a run that no longer read as the claim,
 // delete the run with R1 on it.
 func TestARetryWhoseReleaseLandedAndFailedIsResumedWithItsReply(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	parkOnAQuestion(t, rig)
@@ -299,6 +306,7 @@ func TestARetryWhoseReleaseLandedAndFailedIsResumedWithItsReply(t *testing.T) {
 // answered run waited — its seat's inbox held behind it — for a resume
 // nothing would ever start.
 func TestAKeptEndingWhoseClaimWasHandedBackResumesTheRun(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	parkOnAQuestion(t, rig)
@@ -364,6 +372,7 @@ func TestAKeptEndingWhoseClaimWasHandedBackResumesTheRun(t *testing.T) {
 // as it was, the kept ending deleted the only record of a paused box and left
 // it billed, named by nothing, until its provider's TTL.
 func TestAKeptClaimEndingReclaimsItsBoxWhenItIsFinished(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	store := &refusingStore{inner: rig.pending}
 	rig.coordinator.pending = store
@@ -413,6 +422,7 @@ func TestAKeptClaimEndingReclaimsItsBoxWhenItIsFinished(t *testing.T) {
 // until it did. The ending is kept and retried instead, and the seat is free
 // the moment the delete lands.
 func TestAnEndingWhoseDeleteTheStoreRefusedIsFinishedByThisNode(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
@@ -450,6 +460,7 @@ func TestAnEndingWhoseDeleteTheStoreRefusedIsFinishedByThisNode(t *testing.T) {
 // reply went with the run; the claim's own ending lets it go back however it
 // was taken.
 func TestARetryWhoseTurnGaveItsClaimBackHandsTheReplyBackWhenTheClaimCannotGoBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1, _ := owedAnAnswerWhoseRunEnds(t, rig)
 	rig.resumer.failsInTurn = true

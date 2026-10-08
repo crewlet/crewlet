@@ -74,6 +74,7 @@ const conditionPaused Condition = "paused"
 // for another seat, wakes nothing. The resume runs only when the pause's own
 // signal says it may have cleared, at once, and charges nothing for the wait.
 func TestARefusedRetryWaitsForItsSignalAndNothingRunsMeanwhile(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	conditions := answeredAndOwed(t, rig)
 	conditions.refuse(Refusal{Condition: conditionPaused, Reason: "a person paused this seat"})
@@ -119,6 +120,7 @@ func TestARefusedRetryWaitsForItsSignalAndNothingRunsMeanwhile(t *testing.T) {
 // over at an instant the refusal names, so the retry waits until exactly then
 // — and never past the backstop.
 func TestARefusalTheClockLiftsIsRecheckedWhenItLifts(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	conditions := answeredAndOwed(t, rig)
 	conditions.refuse(Refusal{Condition: "budget", Reason: "budget: day window resets soon",
@@ -143,6 +145,7 @@ func TestARefusalTheClockLiftsIsRecheckedWhenItLifts(t *testing.T) {
 // the signal found nothing waiting, and the wait that followed slept to the
 // clock — a heartbeat — or the backstop.
 func TestASignalThatRacesTheRefusalIsNotSleptThrough(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndOwed(t, rig)
 	signalled := false
@@ -176,6 +179,7 @@ const conditionOwnership Condition = "ownership"
 // so; the backstop re-checks, finds it clear, and the answer is resumed rather
 // than stranded on a seat that could take it.
 func TestAMissedSignalIsRecoveredByTheBackstop(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	conditions := answeredAndOwed(t, rig)
 	conditions.refuse(Refusal{Condition: conditionPaused})
@@ -194,6 +198,7 @@ func TestAMissedSignalIsRecoveredByTheBackstop(t *testing.T) {
 // attempts that exist for a resume that FAILS are all still there when they
 // clear: a resume failing afterwards is retried, not let go.
 func TestAWaitChargesNoAttempts(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	conditions := answeredAndOwed(t, rig)
 	conditions.refuse(Refusal{Condition: conditionPaused})

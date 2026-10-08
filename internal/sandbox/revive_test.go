@@ -35,6 +35,7 @@ func revivalRefused(rig *coordRig) *refusingStore {
 // and resumes the run once. The refused revival is not counted: no claim of the
 // answer died in it.
 func TestARevivalStoppedBeforeItLandedIsRevivedByTheNextHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	var holds *holdSpy
@@ -69,6 +70,7 @@ func TestARevivalStoppedBeforeItLandedIsRevivedByTheNextHolder(t *testing.T) {
 // handed to the seat as an ordinary message — over a store that did not answer
 // once.
 func TestARevivalTheStoreRefusedIsRetriedByItsHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	store := revivalRefused(rig)
@@ -117,6 +119,7 @@ func (s reviveLandsThenFails) ReviveAnswer(ctx context.Context, turnID string, r
 // answered rather than a claim, and goes on as its owed resume rather than
 // reviving or reaping anything.
 func TestARevivalThatLandedUnseenIsResumedOnItsRetry(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	holder := reaper(t.Context(), t, rig, reviveLandsThenFails{rig.pending}, 2, nil)
@@ -132,6 +135,7 @@ func TestARevivalThatLandedUnseenIsResumedOnItsRetry(t *testing.T) {
 // run like any other, so the holder after it resumes it once — and counts no
 // second lost claim, because no claim died.
 func TestARevivedRunWhoseHolderStoppedBeforeItsClaimIsResumedNotRevived(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	first := reaper(t.Context(), t, rig, rig.pending, 2, nil)
@@ -159,6 +163,7 @@ func dieOnTheWayToTheTurn(t *testing.T, rig, holder *coordRig) {
 // A REVIVED RUN WHOSE CLAIM DIES AGAIN IS REVIVED AGAIN, the second lost claim
 // counted on the same answer from the same first instant, and resumed once.
 func TestARevivedRunWhoseClaimDiesAgainIsRevivedAgain(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	first := reaper(t.Context(), t, rig, rig.pending, 2, nil)
@@ -181,6 +186,7 @@ func TestARevivedRunWhoseClaimDiesAgainIsRevivedAgain(t *testing.T) {
 // goes back to the seat once, the run is announced lost once, saying why it was
 // not resumed again, and no holder ever resumed it.
 func TestTheRevivalsOfOneAnswerAreBounded(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, false)
 	var holders []*coordRig
@@ -216,6 +222,7 @@ func TestTheRevivalsOfOneAnswerAreBounded(t *testing.T) {
 // past the tolerance the run itself declared for a reply, a resume that keeps
 // dying with its node is not a transient worth waiting out.
 func TestARevivalPastTheRunsWindowHandsTheReplyBack(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, false)
 	window := answerWindow(rig.get("t1"))
@@ -252,6 +259,7 @@ func TestARevivalPastTheRunsWindowHandsTheReplyBack(t *testing.T) {
 // believes it holds. The retry finds the ending on the row and finishes it on
 // the terms recorded: the reply handed back once, the loss announced once.
 func TestAnEndingDecidedWhileARevivalWaitsIsFinishedByIt(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, false)
 	store := revivalRefused(rig)
@@ -282,6 +290,7 @@ func TestAnEndingDecidedWhileARevivalWaitsIsFinishedByIt(t *testing.T) {
 // later judged against runs from one clock — the row's — whichever holder
 // revived it and whichever reads it.
 func TestARevivalIsDatedWhenItLanded(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	rig.now = rig.now.Add(7 * time.Minute)
@@ -333,6 +342,7 @@ func (s *raceTheRevival) ReviveAnswer(ctx context.Context, turnID string, reviva
 // which would leave that claim — if its node stops too — to nothing but the
 // seat's next move.
 func TestAClaimTakenAgainUnderARetriedRevivalIsRevivedOnTheNextRetry(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	holder := reaper(t.Context(), t, rig, &raceTheRevival{PendingStore: rig.pending}, 2, nil)
@@ -386,6 +396,7 @@ func (s *movesUnreadably) Get(ctx context.Context, turnID string) (PendingRun, b
 // run, given back by its holder — and resumes it once, the seat's mail held
 // until then.
 func TestAClaimThatMovedUnreadablyUnderItsRevivalIsRetried(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	var holds *holdSpy
@@ -431,6 +442,7 @@ func (s *claimLandsThenFails) ClaimForResume(ctx context.Context, turnID string,
 // run sat in a claim nothing drives, the person's answer with it, until the
 // seat changed hands.
 func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.coordinator.lease = leased(rigLease)
@@ -461,6 +473,7 @@ func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
 // lost claims, the fourth ended the run as an abandoned tail, announced as a node
 // that had stopped, on a node that never did.
 func TestAHealthyNodesUnconfirmedClaimsAreNotLostClaims(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.coordinator.lease = leased(rigLease)
@@ -557,6 +570,7 @@ func declinedOnceAfterTheClaim(t *testing.T, rig *coordRig, holds *holdSpy, r1 *
 // refusal: the run left in a claim nothing drove, the person's answer untaken
 // on it, nothing handed back — and the seat held behind it on its next recount.
 func TestAClaimThatLandedUnseenOnTheLastAttemptIsGivenBackBeforeTheDecline(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds, r1 := suspectOnTheLastAttempt(t, rig, func() {
 		for i := range MaxAnswerAttempts - 2 {
@@ -573,6 +587,7 @@ func TestAClaimThatLandedUnseenOnTheLastAttemptIsGivenBackBeforeTheDecline(t *te
 // behind a pause — is the series' last just the same, and its claim is given
 // back before the decline.
 func TestAClaimThatLandedUnseenAsTheWindowLapsedIsGivenBackBeforeTheDecline(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds, r1 := suspectOnTheLastAttempt(t, rig, func() {}, func() {
 		window := answerWindow(rig.get("t1"))
@@ -590,6 +605,7 @@ func TestAClaimThatLandedUnseenAsTheWindowLapsedIsGivenBackBeforeTheDecline(t *t
 // seat's mail stays behind it: nothing but the series ever looks at that claim,
 // and a series dropped on such a refusal left the run in it, undriven.
 func TestASuspectedClaimKeepsItsSeries(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	holds := rig.withHold()
 	parkOnAQuestion(t, rig)

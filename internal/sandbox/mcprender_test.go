@@ -19,6 +19,7 @@ func servers() []MCPServer {
 // inside a box reaches whatever it is given with no per-tool control left, so
 // what it is given IS the decision.
 func TestOnlyTheScopedServersReachTheBox(t *testing.T) {
+	t.Parallel()
 	got := RenderMCP(servers(), []string{"files"}, nil)
 	if len(got) != 1 {
 		t.Fatalf("rendered %d servers, want just the scoped one: %v", len(got), got)
@@ -29,6 +30,7 @@ func TestOnlyTheScopedServersReachTheBox(t *testing.T) {
 }
 
 func TestNothingScopedRendersNoConfigAtAll(t *testing.T) {
+	t.Parallel()
 	if got := RenderMCP(servers(), nil, nil); got != nil {
 		t.Fatalf("RenderMCP with nothing scoped = %v, want nil", got)
 	}
@@ -37,6 +39,7 @@ func TestNothingScopedRendersNoConfigAtAll(t *testing.T) {
 // The agent must never be shown a server the engine does not know: it would
 // spend a round discovering that it cannot connect.
 func TestAScopedServerTheEngineDoesNotKnowIsSkipped(t *testing.T) {
+	t.Parallel()
 	got := RenderMCP(servers(), []string{"files", "typo-in-the-name"}, nil)
 	if len(got) != 1 {
 		t.Fatalf("rendered %v, want only the server that exists", got)
@@ -44,6 +47,7 @@ func TestAScopedServerTheEngineDoesNotKnowIsSkipped(t *testing.T) {
 }
 
 func TestAStdioServerKeepsItsCommandAndArguments(t *testing.T) {
+	t.Parallel()
 	got := RenderMCP(servers(), []string{"files"}, nil)["files"]
 	if got.Command != "mcp-files" {
 		t.Fatalf("command = %q", got.Command)
@@ -61,6 +65,7 @@ func TestAStdioServerKeepsItsCommandAndArguments(t *testing.T) {
 }
 
 func TestAnHttpServerKeepsItsUrlAndHeaders(t *testing.T) {
+	t.Parallel()
 	got := RenderMCP(servers(), []string{"linear"}, nil)["linear"]
 	if got.Transport != TransportHTTP || got.URL != "https://example.com/mcp" {
 		t.Fatalf("server = %+v", got)
@@ -77,6 +82,7 @@ func TestAnHttpServerKeepsItsUrlAndHeaders(t *testing.T) {
 // supplies a token is saying something more specific than the company-wide
 // default it replaces.
 func TestTheSeatsOwnCredentialsWinOverTheServersDefaults(t *testing.T) {
+	t.Parallel()
 	creds := map[string]map[string]string{
 		"files":  {"MODE": "read-only", "TOKEN": "seat-token"},
 		"linear": {"Authorization": "Bearer seat-token"},
@@ -98,6 +104,7 @@ func TestTheSeatsOwnCredentialsWinOverTheServersDefaults(t *testing.T) {
 
 // One seat's credentials must never reach another server's spec.
 func TestOneServersCredentialsDoNotReachAnother(t *testing.T) {
+	t.Parallel()
 	creds := map[string]map[string]string{"files": {"TOKEN": "for-files-only"}}
 	rendered := RenderMCP(servers(), []string{"files", "linear"}, creds)
 	if _, leaked := rendered["linear"].Headers["TOKEN"]; leaked {
@@ -108,6 +115,7 @@ func TestOneServersCredentialsDoNotReachAnother(t *testing.T) {
 
 // The rendered args must not alias the configuration a later apply replaces.
 func TestTheRenderedServerDoesNotAliasTheConfiguration(t *testing.T) {
+	t.Parallel()
 	source := servers()
 	rendered := RenderMCP(source, []string{"files"}, nil)
 	rendered["files"].Args[0] = "--mutated"
@@ -125,6 +133,7 @@ func TestTheRenderedServerDoesNotAliasTheConfiguration(t *testing.T) {
 // to launch it, and nothing anywhere says why. Skipping is what an unknown
 // NAME already did, and this is the same class of mistake.
 func TestAServerWithAnUnrecognisedTransportIsSkipped(t *testing.T) {
+	t.Parallel()
 	source := append(servers(), MCPServer{
 		Name: "mistyped", Transport: "htp", URL: "https://example.com/mcp",
 	})
@@ -143,6 +152,7 @@ func TestAServerWithAnUnrecognisedTransportIsSkipped(t *testing.T) {
 // Refusing it would drop every server that did not name a transport — which
 // is most of them.
 func TestTheTransportSetIsClosedAndEmptyMeansStdio(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		transport Transport
 		valid     bool

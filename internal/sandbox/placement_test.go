@@ -249,6 +249,7 @@ func TestASpecNamingNoCellTakesTheDefault(t *testing.T) {
 // a remote box, reports a box that has vanished and abandons a job that is
 // still going.
 func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
+	t.Parallel()
 	rig := newWaiterRig(t)
 	remote := NewFakeProvider()
 	manager, err := catalogue(t, ManagerOptions{

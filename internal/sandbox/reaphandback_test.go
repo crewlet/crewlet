@@ -176,6 +176,7 @@ func reapLogged(t *testing.T, logs *syncBuffer, handedBack bool) {
 // seat and nothing is announced lost: the run the person answered is resumed
 // with their answer, which is what the dead claim was doing.
 func TestAClaimThatDiedBeforeItsTurnIsRevivedWithItsAnswer(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, false)
 	var holds *holdSpy
@@ -207,6 +208,8 @@ func TestAClaimThatDiedBeforeItsTurnIsRevivedWithItsAnswer(t *testing.T) {
 // PAST ITS REVIVALS, the next holder hands the reply back, once — spent first,
 // so the original delivery coming round after it is not a second message —
 // ends the run and announces it, saying why it was not resumed again.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAClaimPastItsRevivalsHandsTheReplyBackOnce(t *testing.T) {
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
@@ -255,6 +258,8 @@ func TestAClaimPastItsRevivalsHandsTheReplyBackOnce(t *testing.T) {
 // and records its delivery as worked, for a node that stopped between its take
 // and the spend that goes with it: the original comes round to this holder
 // unacknowledged, and nothing on the reaped run would recognise it.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAClaimWhoseTurnTookTheAnswerHandsNothingBack(t *testing.T) {
 	rig := newCoordRig(t)
 	r1 := answeredAndClaimed(t, rig, true)
@@ -280,6 +285,7 @@ func TestAClaimWhoseTurnTookTheAnswerHandsNothingBack(t *testing.T) {
 // the row — the answer still on it — and announces nothing yet; the holder
 // after it hands the reply back once and announces the loss once.
 func TestAReapStoppedBeforeItsLetGoIsFinishedByTheNextHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
 	first := reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"OweHandBack"}}, 2, nil)
@@ -315,6 +321,7 @@ func TestAReapStoppedBeforeItsLetGoIsFinishedByTheNextHolder(t *testing.T) {
 // the answer is off it, so the next holder publishes the copy once and lets go
 // of nothing a second time.
 func TestAReapStoppedBeforeItsPublishIsFinishedByTheNextHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
 	rig.failPublishes(errors.New("the broker is unreachable"))
@@ -344,6 +351,7 @@ func TestAReapStoppedBeforeItsPublishIsFinishedByTheNextHolder(t *testing.T) {
 // ending publishes the copy once the broker answers, ends the run and makes the
 // announcement it held back.
 func TestAReapWhosePublishFailedFinishesOnItsRetry(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
 	rig.failPublishes(errors.New("the broker is unreachable"))
@@ -363,6 +371,7 @@ func TestAReapWhosePublishFailedFinishesOnItsRetry(t *testing.T) {
 // again under THE SAME ID — one message to the inbox's same-id dedupe and the
 // completion ledger — and the loss is announced once.
 func TestAReapStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
 	first := reaper(t.Context(), t, rig, &refusingStore{inner: rig.pending, refuse: []string{"ClearHandBack"}}, 2, nil)
@@ -383,6 +392,7 @@ func TestAReapStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
 // STOPPED AFTER THE CLEAR, BEFORE THE DELETE: the row owes nothing and carries
 // no answer, so the next holder ends it without handing anything back again.
 func TestAReapStoppedBeforeItsDeleteHandsNothingBackTwice(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
 	// THE FIRST FINISH IS THE DELETE: the reap lets the reply go and
@@ -408,6 +418,7 @@ func TestAReapStoppedBeforeItsDeleteHandsNothingBackTwice(t *testing.T) {
 // turn took the answer is then unknowable to the reap, and a reply handed back
 // twice is a duplicate where one read as spent is lost.
 func TestAReapThatCannotFenceTheClaimStillRevivesOrHandsBack(t *testing.T) {
+	t.Parallel()
 	t.Run("revived", func(t *testing.T) {
 		rig := newCoordRig(t)
 		answeredAndClaimed(t, rig, false)
@@ -437,6 +448,7 @@ func TestAReapThatCannotFenceTheClaimStillRevivesOrHandsBack(t *testing.T) {
 // runs, and the person is answered once: by the successor's resume of the run
 // they answered.
 func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorRevived(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
@@ -474,6 +486,7 @@ func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorRevived(t *testing.T
 // ordinary message, and not also as the answer of a turn on a node that no
 // longer holds the seat.
 func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorReturns(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
@@ -518,6 +531,7 @@ func TestANodeThatLostTheSeatCannotTakeTheAnswerItsSuccessorReturns(t *testing.T
 // release reached the row first, so it is owed its resume again, and the next
 // holder resumes it with the answer rather than reaping it.
 func TestAClaimGivenBackUnderTheReapIsResumedNotReaped(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	run := rig.get("t1")
@@ -564,6 +578,7 @@ func (s *releasesFirst) ClaimOwnership(ctx context.Context, turnID, owner string
 // holds the delivery, hands that on instead; and an answer by turn is reported
 // as reaching a run that is gone, not as having resumed it.
 func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
+	t.Parallel()
 	t.Run("a retry hands the reply back through the row", func(t *testing.T) {
 		rig := newCoordRig(t)
 		parkOnAQuestion(t, rig)
@@ -630,6 +645,7 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 // stopped — is not run again as an ordinary message once the run is gone. An
 // inline attempt that failed before its turn took nothing, and spent nothing.
 func TestATurnThatTookARetriedAnswerSpendsItsDelivery(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
@@ -674,6 +690,7 @@ func TestATurnThatTookARetriedAnswerSpendsItsDelivery(t *testing.T) {
 // instead of going round publishing the same copy until it gives up. The holder
 // after it finds the store answering and hands R2 back.
 func TestAReapWaitsOnAnEarlierCopyItCannotClear(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	store := &refusingStore{inner: rig.pending}
 	rig.coordinator.pending = store
@@ -734,6 +751,7 @@ func count(ids []string, id string) int {
 // it finds: one copy, the run ended, the loss announced once — past the
 // answer's revivals, that is; within them the run is resumed, as below.
 func TestAnUnfencedReapThatRacesTheOldHoldersReleaseHandsTheReplyBackOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	r1 := claimedPastRevival(t, rig, false)
 	run := rig.get("t1")
@@ -766,6 +784,7 @@ func TestAnUnfencedReapThatRacesTheOldHoldersReleaseHandsTheReplyBackOnce(t *tes
 // no longer the claim — and the reap reads it again and takes it over as what it
 // is: an answered run owed its resume, which it resumes with the reply.
 func TestAnUnfencedReapThatRacesTheOldHoldersReleaseResumesTheRunOnce(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	answeredAndClaimed(t, rig, false)
 	run := rig.get("t1")
@@ -807,6 +826,7 @@ func (s *fencedByNobody) ClaimOwnership(ctx context.Context, _, _ string, _ int6
 // the reply reaches the run, or the seat, rather than being stranded on a fenced
 // claim nothing would reap again.
 func TestAReapThatCannotReadTheFencedClaimStillRevivesOrHandsBack(t *testing.T) {
+	t.Parallel()
 	t.Run("revived", func(t *testing.T) {
 		rig := newCoordRig(t)
 		answeredAndClaimed(t, rig, false)
@@ -894,6 +914,7 @@ func (s *takeBeforeReap) ClaimOwnership(ctx context.Context, turnID, owner strin
 // so it is refused, and the person is answered once — by the run's resume on
 // the successor, or, past the answer's revivals, by the copy.
 func TestAStalledTakeUnderNoLeaseLosesToTheReapThatFencedTheRow(t *testing.T) {
+	t.Parallel()
 	for _, past := range []bool{false, true} {
 		t.Run(map[bool]string{false: "revived", true: "past its revivals"}[past], func(t *testing.T) {
 			rig := newCoordRig(t)
@@ -952,6 +973,7 @@ func TestAStalledTakeUnderNoLeaseLosesToTheReapThatFencedTheRow(t *testing.T) {
 // and call the duplicate the cost of a case that was genuinely unclear; the
 // store's own writes decide it.
 func TestAReapWhoseFenceFailedLosesToATakeThatLanded(t *testing.T) {
+	t.Parallel()
 	for _, past := range []bool{false, true} {
 		t.Run(map[bool]string{false: "within its revivals", true: "past its revivals"}[past], func(t *testing.T) {
 			rig := newCoordRig(t)
@@ -996,6 +1018,7 @@ func TestAReapWhoseFenceFailedLosesToATakeThatLanded(t *testing.T) {
 // twice. It is recorded as worked the moment the turn takes it, and the reap
 // records it again for a node that stopped between the two writes.
 func TestATurnThatTookTheAnswerInlineSpendsItsDeliveryBeforeItRuns(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
@@ -1036,6 +1059,7 @@ func TestATurnThatTookTheAnswerInlineSpendsItsDeliveryBeforeItRuns(t *testing.T)
 // nothing on the run could recognise the delivery that carried the reply; a
 // node that stops there must already have recorded it as worked.
 func TestAReplyATurnTookIsSpentBeforeItsRelaunchClearsTheRow(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	r1 := replyAt("use main", rig.get("t1").AskedAt.Add(time.Minute))
@@ -1073,6 +1097,7 @@ func TestAReplyATurnTookIsSpentBeforeItsRelaunchClearsTheRow(t *testing.T) {
 // arrives for it. Recovery stamps the new holder's lease on it, and the old
 // holder's claim is refused.
 func TestRecoveryFencesAParkedRunToTheSeatsNewHolder(t *testing.T) {
+	t.Parallel()
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	launch := rig.get("t1").LaunchID
@@ -1093,6 +1118,7 @@ func TestRecoveryFencesAParkedRunToTheSeatsNewHolder(t *testing.T) {
 // whatever the row said before. Carried off the row instead, a claim on a run
 // stamped by nobody fenced out nobody.
 func TestAClaimCarriesTheClaimantsLease(t *testing.T) {
+	t.Parallel()
 	held := Fence{Owner: "node-b:1", Epoch: 7}
 	for name, tc := range map[string]struct {
 		setup func(t *testing.T, rig *coordRig)
