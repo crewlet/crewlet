@@ -537,18 +537,26 @@ func TestAPeerThatCannotSpeakTheVersionIsNamed(t *testing.T) {
 }
 
 // A HISTOGRAM'S FAILED SPLIT IS EVERY NODE'S, summed bar by bar.
+//
+// THE CUT IS PINNED and the events sit inside its own hour — halfway between
+// the hour's start and the cut — because the case asserts the CURRENT bar:
+// placed a minute before a cut the fan read off the clock, they fell in the
+// previous hour's bar whenever the suite ran in an hour's first minute, and
+// the case failed at 11:00:50 having passed at every other time of day.
 func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
-	at := time.Now().UTC().Add(-time.Minute)
+	cut := time.Now().UTC()
+	hour := cut.Truncate(time.Hour)
+	at := hour.Add(cut.Sub(hour) / 2)
 	appendTo(t, a, store.EventRecord{ID: "a-fail", Type: "x", Category: "task", Time: at,
 		Tags: map[string]string{"failed": "true"}})
 	appendTo(t, b, store.EventRecord{ID: "b-fail", Type: "budget_exhausted", Category: "task", Time: at})
 	appendTo(t, b, store.EventRecord{ID: "b-ok", Type: "x", Category: "task", Time: at})
 
 	got, coverage, err := fanFrom(a, "node-a", "node-b").Histogram(t.Context(),
-		store.HistogramQuery{Bucket: store.BucketHour})
+		store.HistogramQuery{Bucket: store.BucketHour, At: cut})
 	if err != nil {
 		t.Fatal(err)
 	}
