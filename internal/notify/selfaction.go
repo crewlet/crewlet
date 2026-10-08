@@ -86,16 +86,16 @@ func WakesActor(prompts Prompts, source, eventType string) bool {
 // The reason is returned rather than logged here because the caller records
 // it on the skip — an operator looking at a seat that did not answer needs
 // to see "self-action" rather than an absence.
-func Deliverable(prompts Prompts, r *Registry, n Inbound, recipient Party) (bool, string) {
+func Deliverable(prompts Prompts, r *Registry, n Inbound, recipient Party) (bool, SkipReason) {
 	if recipient.Human {
 		// A human seat is addressable but never woken: a person reads
 		// the surface the event arrived on. Delivering would mean
 		// spawning a turn for somebody who is not an agent.
-		return false, "human seat"
+		return false, ReasonHumanSeat
 	}
 	actor := ActorOf(n.Metadata)
 	if SelfAction(r, n.Source, actor, recipient) && !WakesActor(prompts, n.Source, n.EventType) {
-		return false, "self-action: the recipient caused this event"
+		return false, ReasonSelfAction
 	}
 	return true, ""
 }

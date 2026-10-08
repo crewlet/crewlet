@@ -500,11 +500,30 @@ func TestAnUnparsedSourceIsRecorded(t *testing.T) {
 		t.Fatalf("Handle = %+v, want an ack — a redelivery finds no parser either", got)
 	}
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "parser") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonUnparsed {
 		t.Fatalf("skips = %+v", skips)
 	}
 	if skips[0].NotificationSource != "mystery" {
 		t.Fatalf("the skip names source %q", skips[0].NotificationSource)
+	}
+}
+
+// A delivery from a surface this company DISCONNECTED is a webhook still
+// registered at the third-party app, and its record says so rather than
+// reading as an integration nothing ever parsed — the two send an operator to
+// opposite places.
+func TestADisconnectedSourceIsRecordedAsDisconnected(t *testing.T) {
+	h := newService(t, nil)
+	if !h.svc.Unregister("tracker") {
+		t.Fatal("the tracker's parser was not registered to take away")
+	}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack — a redelivery finds the source gone too", got)
+	}
+	skips := h.skips(t)
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonRetired {
+		t.Fatalf("skips = %+v, want one %q", skips, notify.ReasonRetired)
 	}
 }
 
@@ -516,7 +535,7 @@ func TestARecipientNobodyMatchesIsRecorded(t *testing.T) {
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "no seat") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonNoSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -590,7 +609,7 @@ func TestTheServiceRefusesToWakeASeatForItsOwnAction(t *testing.T) {
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	h.quiet(t, topics.AgentInbox("engineering-lead"))
 	skips := h.skips(t)
-	if len(skips) != 1 || !strings.Contains(skips[0].Reason, "self-action") {
+	if len(skips) != 1 || notify.SkipReason(skips[0].Reason) != notify.ReasonSelfAction {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -603,7 +622,8 @@ func TestAHumanRecipientIsNotWoken(t *testing.T) {
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	h.quiet(t, topics.AgentInbox("dana-founder"))
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "human") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -635,7 +655,8 @@ func TestARateLimitedSeatIsNotWoken(t *testing.T) {
 		t.Fatalf("the valve was consulted %d times", h.valve.seen())
 	}
 	h.quiet(t, topics.AgentInbox("engineering-lead"))
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "rate limit") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonRateLimited {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -691,7 +712,8 @@ func TestAnUnreadablePayloadIsNotRetried(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), ev); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "unreadable") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonUnreadable {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -705,7 +727,10 @@ func TestAParseFailureIsRecordedAndNotRetried(t *testing.T) {
 	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("Handle = %+v, want an ack", got)
 	}
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "parse failed") {
+	// The parser's own words follow the reason: which payload it could not
+	// read is the whole of what an operator needs to fix it.
+	want := string(notify.ReasonParseFailed) + ": no issue in the payload"
+	if skips := h.skips(t); len(skips) != 1 || skips[0].Reason != want {
 		t.Fatalf("skips = %+v", skips)
 	}
 }
@@ -788,7 +813,8 @@ func TestOneFailedWakeAmongSeveralStillRetries(t *testing.T) {
 		t.Fatalf("Handle = %+v", got)
 	}
 	// The human seat was decided, not attempted, so its skip still lands.
-	if skips := h.skips(t); len(skips) != 1 || !strings.Contains(skips[0].Reason, "human") {
+	if skips := h.skips(t); len(skips) != 1 ||
+		notify.SkipReason(skips[0].Reason) != notify.ReasonHumanSeat {
 		t.Fatalf("skips = %+v", skips)
 	}
 }

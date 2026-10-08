@@ -409,7 +409,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		// delivery burns the redelivery budget and dead-letters it
 		// anyway, just later and noisier.
 		log.ErrorContext(ctx, "inbound_payload_unreadable", "source", ev.Source, "event", ev.ID)
-		s.skip(ctx, ev.Source, "", "unreadable delivery payload")
+		s.skip(ctx, ev.Source, "", ReasonUnreadable, nil)
 		return queue.Ack()
 	}
 
@@ -436,11 +436,11 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 				"detail", "this company no longer enables "+ev.Source+
 					", so the delivery reaches no seat: remove the webhook "+
 					"still registered at "+ev.Source)
-			s.skip(ctx, ev.Source, "", "this source was disconnected")
+			s.skip(ctx, ev.Source, "", ReasonRetired, nil)
 			return queue.Ack()
 		}
 		log.WarnContext(ctx, "inbound_source_unparsed", "source", ev.Source, "event", ev.ID)
-		s.skip(ctx, ev.Source, "", "no parser for this source")
+		s.skip(ctx, ev.Source, "", ReasonUnparsed, nil)
 		return queue.Ack()
 	}
 
@@ -449,7 +449,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	if err != nil {
 		log.ErrorContext(ctx, "inbound_parse_failed", "source", ev.Source,
 			"event", ev.ID, "error", err.Error())
-		s.skip(ctx, ev.Source, "", "parse failed: "+err.Error())
+		s.skip(ctx, ev.Source, "", ReasonParseFailed, err)
 		return queue.Ack()
 	}
 	if len(routed) == 0 {
@@ -481,13 +481,13 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	if !ok {
 		log.WarnContext(ctx, "notification_undeliverable", "source", r.Source,
 			"handle", r.To.Handle, "email", r.To.Email)
-		s.skip(ctx, r.Source, r.To.Handle, "no seat matches this recipient")
+		s.skip(ctx, r.Source, r.To.Handle, ReasonNoSeat, nil)
 		return nil
 	}
 	if deliverable, why := Deliverable(prompts, reg, r.Inbound, party); !deliverable {
 		log.InfoContext(ctx, "notification_skipped", "source", r.Source,
-			"handle", party.Handle, "reason", why)
-		s.skip(ctx, r.Source, party.Handle, why)
+			"handle", party.Handle, "reason", string(why))
+		s.skip(ctx, r.Source, party.Handle, why, nil)
 		return nil
 	}
 	// THREE ANSWERS, NOT TWO. "Under the cap", "over the cap" and "the
@@ -511,7 +511,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 			"error", err.Error())
 	case !allowed:
 		log.WarnContext(ctx, "notification_rate_limited", "source", r.Source, "handle", party.Handle)
-		s.skip(ctx, r.Source, party.Handle, "rate limit exceeded")
+		s.skip(ctx, r.Source, party.Handle, ReasonRateLimited, nil)
 		return nil
 	}
 
@@ -670,18 +670,64 @@ func (s *Service) allow(ctx context.Context, party Party) (bool, error) {
 	return ok, err
 }
 
-// skip records why a delivery did not wake anybody.
+// SkipReason is why a delivery woke nobody, in the words its
+// notification_skipped record carries.
+//
+// DECLARED ONCE, HERE, because the words are how every reader tells WHICH
+// gate dropped a delivery — an operator reading the event log, and the suites
+// that hold a delivery to the gate it should meet. Spelled again at each
+// reader, a reworded reason leaves every copy asserting the old words, and the
+// end-to-end suite kept such a copy until these were declared. The record's
+// field stays a string, since [types.NotificationSkipped] cannot import this
+// package, so a reader compares it as SkipReason(record.Reason).
+type SkipReason string
+
+// The reasons a delivery is skipped for, in the order the service meets them.
+const (
+	// ReasonUnreadable: the delivery's payload is not a webhook this node
+	// can read, and a redelivery will not make it one.
+	ReasonUnreadable SkipReason = "unreadable delivery payload"
+	// ReasonRetired: the delivery is from an integration this company has
+	// disconnected — a webhook still registered at the third-party app.
+	ReasonRetired SkipReason = "this source was disconnected"
+	// ReasonUnparsed: nothing parses this source — an integration wired at
+	// the edge and nowhere else.
+	ReasonUnparsed SkipReason = "no parser for this source"
+	// ReasonParseFailed: the source's parser refused the payload. The one
+	// reason recorded with detail after it — `parse failed: <the parser's
+	// error>` — because which payload a parser cannot read is the whole of
+	// what an operator needs to fix it.
+	ReasonParseFailed SkipReason = "parse failed"
+	// ReasonNoSeat: the parser named a recipient no seat answers to.
+	ReasonNoSeat SkipReason = "no seat matches this recipient"
+	// ReasonHumanSeat: the recipient is a person, who reads the surface the
+	// event arrived on rather than being woken ([Deliverable]).
+	ReasonHumanSeat SkipReason = "human seat"
+	// ReasonSelfAction: the recipient caused the event, and it is not an
+	// outcome they need to hear about ([Deliverable]).
+	ReasonSelfAction SkipReason = "self-action: the recipient caused this event"
+	// ReasonRateLimited: the company's notification rate limit refused the
+	// recipient another wake.
+	ReasonRateLimited SkipReason = "rate limit exceeded"
+)
+
+// skip records why a delivery did not wake anybody: reason, followed by
+// cause's text when there is one ([ReasonParseFailed]).
 //
 // Best effort and never fatal: the delivery has already been decided, and
 // failing it because the bookkeeping could not be published would turn a
 // recorded non-event into a redelivered one.
-func (s *Service) skip(ctx context.Context, source, handle, reason string) {
+func (s *Service) skip(ctx context.Context, source, handle string, reason SkipReason, cause error) {
+	text := string(reason)
+	if cause != nil {
+		text += ": " + cause.Error()
+	}
 	ev := events.New(types.NotificationSkipped{
-		Handle: handle, Reason: reason, NotificationSource: source,
+		Handle: handle, Reason: text, NotificationSource: source,
 	}, tracing.TraceOf(ctx))
 	ev.Source = "notify." + source
 	if err := s.queue.Publish(ctx, topics.Event(types.NotificationSkipped{}.EventType()), ev); err != nil {
 		log.WarnContext(ctx, "notification_skip_unrecorded", "source", source,
-			"handle", handle, "reason", reason, "error", err.Error())
+			"handle", handle, "reason", text, "error", err.Error())
 	}
 }
