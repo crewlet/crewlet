@@ -79,27 +79,6 @@ func dialer(sockets ...*fakeSocket) (mattermost.Connector, *atomic.Int32) {
 	}, &dials
 }
 
-// drained waits until a socket has handed out every frame it was scripted
-// with, then a moment longer for the last one to be delivered.
-func drained(t *testing.T, sockets ...*fakeSocket) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		empty := true
-		for _, s := range sockets {
-			if len(s.frames) > 0 {
-				empty = false
-			}
-		}
-		if empty {
-			time.Sleep(50 * time.Millisecond)
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("a socket never handed out its frames")
-}
-
 // TWO NODES READING ONE SEAT'S SOCKET DELIVER EACH POST ONCE.
 //
 // Every node opens every seat's socket, so every post arrives once per node.
@@ -130,7 +109,7 @@ func TestTwoNodesDeliverEachPostOnce(t *testing.T) {
 		defer f.Stop()
 		recs, sockets = append(recs, rec), append(sockets, sock)
 	}
-	drained(t, sockets...)
+	waitIdle(t, sockets...)
 
 	var ids []string
 	var records int
@@ -174,18 +153,19 @@ func TestAPostAPeerClaimedIsNotReplayedAgain(t *testing.T) {
 			storedPost("g2", postAt.Add(2*time.Second))}
 	})
 	rec := &recorder{}
-	first := newSocket(frame("p1", "before the drop", nil))
-	connect, _ := dialer(first, newSocket())
+	first, second := newSocket(frame("p1", "before the drop", nil)), newSocket()
+	connect, _ := dialer(first, second)
 	f, _ := mattermost.NewFleet(mattermost.FleetOptions{
 		Publisher: rec, Claims: claims, Backoff: fastBackoff, Connect: connect,
 	})
 	f.Add(t.Context(), seat, client(t, s))
 	defer f.Stop()
 
-	waitFor(t, 1, func() int { return len(rec.posts()) })
+	waitIdle(t, first)
 	first.Close()
-	waitFor(t, 2, func() int { return len(rec.posts()) })
-	time.Sleep(50 * time.Millisecond)
+	// The second socket is read only once the reconnect's replay has run
+	// to its end, so its pump coming back is the replay's last word.
+	waitIdle(t, second)
 	if got := strings.Join(rec.ids(), ","); got != "p1,g2" {
 		t.Fatalf("published %q, want p1 and g2 — g1 is the peer's to deliver", got)
 	}
@@ -304,16 +284,17 @@ func TestAReplaySixMinutesLaterIsStillDeduplicated(t *testing.T) {
 	firstB := newSocket(frame("x0", "before the drop", func(body map[string]any) {
 		body["post"].(map[string]any)["create_at"] = float64(postAt.Add(-2 * time.Second).UnixMilli())
 	}))
-	connectB, _ := dialer(firstB, newSocket())
+	secondB := newSocket()
+	connectB, _ := dialer(firstB, secondB)
 	b, _ := mattermost.NewFleet(mattermost.FleetOptions{
 		Publisher: recB, Claims: claims, Backoff: fastBackoff, Connect: connectB,
 		Now: func() time.Time { return t0.Add(6 * time.Minute) },
 	})
 	b.Add(t.Context(), seat, client(t, s))
 	defer b.Stop()
-	waitFor(t, 1, func() int { return len(recB.posts()) })
+	waitIdle(t, firstB)
 	firstB.Close()
-	time.Sleep(200 * time.Millisecond)
+	waitIdle(t, secondB) // the replay of the gap, p1 in it, has run to its end
 
 	if got := strings.Join(recB.ids(), ","); got != "x0" {
 		t.Fatalf("node B published %q six minutes on, want only x0 — p1 is node A's", got)

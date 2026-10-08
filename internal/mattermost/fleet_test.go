@@ -100,6 +100,12 @@ type fakeSocket struct {
 	closed chan struct{}
 	once   sync.Once
 
+	// idle is closed the first time Read is entered with no scripted frame
+	// left: the pump is back for the frame after the script, so it has
+	// handled every one in it ([waitIdle]).
+	idle     chan struct{}
+	idleOnce sync.Once
+
 	// pingErr, when set, makes every heartbeat fail — the L7 half-open a
 	// TCP-level check cannot see.
 	pingErr error
@@ -107,7 +113,11 @@ type fakeSocket struct {
 }
 
 func newSocket(frames ...map[string]any) *fakeSocket {
-	s := &fakeSocket{frames: make(chan map[string]any, len(frames)+8), closed: make(chan struct{})}
+	s := &fakeSocket{
+		frames: make(chan map[string]any, len(frames)),
+		closed: make(chan struct{}),
+		idle:   make(chan struct{}),
+	}
 	for _, f := range frames {
 		s.frames <- f
 	}
@@ -115,6 +125,12 @@ func newSocket(frames ...map[string]any) *fakeSocket {
 }
 
 func (s *fakeSocket) Read(ctx context.Context) (map[string]any, error) {
+	// The script is written whole before the socket is handed out, so an
+	// empty one stays empty: the first read that finds it so is the one
+	// after the last frame.
+	if len(s.frames) == 0 {
+		s.idleOnce.Do(func() { close(s.idle) })
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -175,6 +191,33 @@ func waitFor(t *testing.T, want int, got func() int) {
 	}
 	if n := got(); n < want {
 		t.Fatalf("saw %d of an expected %d", n, want)
+	}
+}
+
+// waitIdle returns once every socket's pump has handled the whole of its
+// script — and, for a socket a reconnect dialled, the replay before it — so
+// what the fleet published is everything it ever will for them, and an
+// absence read afterwards is one.
+//
+// THE PUMP'S OWN WORD rather than a pause. A seat's pump reads its socket
+// again only once it has delivered the frame before, and the replay runs to
+// its end before a reconnected socket is read at all, so a read that finds
+// the script empty comes after every publish either of them makes. A fixed
+// sleep read the absence at an arbitrary moment instead: a duplicate
+// published a moment later passed, and the margin shrank with the runner's
+// load. [TestThePumpReadsOnOnlyOnceItHasDeliveredTheFrameBefore] holds the
+// premise.
+func waitIdle(t *testing.T, sockets ...*fakeSocket) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for i, s := range sockets {
+		select {
+		case <-s.idle:
+		case <-deadline:
+			t.Fatalf("socket %d of %d: the pump never came back for the frame after "+
+				"its script, so it is still handling one, or never read it at all",
+				i+1, len(sockets))
+		}
 	}
 }
 
@@ -240,8 +283,7 @@ func TestNonPostFramesAreIgnored(t *testing.T) {
 	f.Add(t.Context(), seat, client(t, s))
 	defer f.Stop()
 
-	waitFor(t, 1, func() int { return len(rec.posts()) })
-	time.Sleep(30 * time.Millisecond)
+	waitIdle(t, sock)
 	if got := rec.ids(); len(got) != 1 || got[0] != "p1" {
 		t.Fatalf("republished %v", got)
 	}
@@ -359,11 +401,117 @@ func TestADuplicatePostIsPublishedOnce(t *testing.T) {
 	f.Add(t.Context(), seat, client(t, s))
 	defer f.Stop()
 
-	waitFor(t, 2, func() int { return len(rec.posts()) })
-	time.Sleep(30 * time.Millisecond)
+	waitIdle(t, sock)
 	if got := strings.Join(rec.ids(), ","); got != "p1,p2" {
 		t.Fatalf("republished %q", got)
 	}
+}
+
+// heldPublisher holds the publish of one post until released, and passes
+// every publish on to a recorder.
+type heldPublisher struct {
+	*recorder
+	post        string
+	entered     chan struct{}
+	enteredOnce sync.Once
+	release     chan struct{}
+}
+
+func held(post string) *heldPublisher {
+	return &heldPublisher{
+		recorder: &recorder{}, post: post,
+		entered: make(chan struct{}), release: make(chan struct{}),
+	}
+}
+
+func (p *heldPublisher) Publish(ctx context.Context, topic string, ev *events.Event) error {
+	if w, ok := events.DataAs[*types.RawWebhook](ev); ok {
+		if post, _ := w.Body["post"].(map[string]any); str(post, "id") == p.post {
+			p.enteredOnce.Do(func() { close(p.entered) })
+			select {
+			case <-p.release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return p.recorder.Publish(ctx, topic, ev)
+}
+
+// THE PUMP READS ON ONLY ONCE IT HAS DELIVERED THE FRAME BEFORE, AND A
+// RECONNECTED SOCKET ONLY ONCE THE REPLAY HAS — the premise every [waitIdle]
+// rests on. A pump that handed frames to goroutines and read on at once, or a
+// replay run beside the read rather than ahead of it, would come back for the
+// next frame while a publish was still in flight, and every absence asserted
+// after waitIdle would hold vacuously.
+//
+// holdFirst is how long the pump must stay away while the post ahead of it is
+// held in its publish. A pump that reads on regardless is back within
+// microseconds, so the bound is generous rather than tight, and it is the only
+// time this case spends waiting for something not to happen.
+//
+// Mutations: deliver on a goroutine in Fleet.pump, and the live socket is read
+// again while its post is held; replay on a goroutine in Fleet.run, and the
+// reconnected socket is read while the replayed post is.
+func TestThePumpReadsOnOnlyOnceItHasDeliveredTheFrameBefore(t *testing.T) {
+	const holdFirst = 200 * time.Millisecond
+	// heldOff holds that sock is not read while pub's post is held, then
+	// releases it and waits for the pump to come back.
+	heldOff := func(t *testing.T, pub *heldPublisher, sock *fakeSocket) {
+		t.Helper()
+		select {
+		case <-pub.entered:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s was never published", pub.post)
+		}
+		select {
+		case <-sock.idle:
+			t.Fatalf("the pump came back for the next frame while %s, ahead of it, "+
+				"was still being published", pub.post)
+		case <-time.After(holdFirst):
+		}
+		close(pub.release)
+		waitIdle(t, sock)
+	}
+
+	t.Run("live", func(t *testing.T) {
+		t.Parallel()
+		pub := held("p1")
+		sock := newSocket(frame("p1", "hello", nil))
+		connect, _ := dialer(sock)
+		f, _ := mattermost.NewFleet(mattermost.FleetOptions{
+			Publisher: pub, Claims: coordmemory.NewFleet(), Backoff: fastBackoff, Connect: connect,
+		})
+		f.Add(t.Context(), seat, client(t, newServer(t)))
+		defer f.Stop()
+
+		heldOff(t, pub, sock)
+		if got := strings.Join(pub.ids(), ","); got != "p1" {
+			t.Fatalf("republished %q, want p1 once it was released", got)
+		}
+	})
+
+	t.Run("replay", func(t *testing.T) {
+		t.Parallel()
+		s := replayServer(t, postAt.Add(-time.Minute), func() []map[string]any {
+			return []map[string]any{storedPost("g1", postAt.Add(time.Second))}
+		})
+		pub := held("g1")
+		first, second := newSocket(frame("p1", "before the drop", nil)), newSocket()
+		connect, _ := dialer(first, second)
+		f, _ := mattermost.NewFleet(mattermost.FleetOptions{
+			Publisher: pub, Claims: coordmemory.NewFleet(), Backoff: fastBackoff, Connect: connect,
+		})
+		f.Add(t.Context(), seat, client(t, s))
+		defer f.Stop()
+
+		waitIdle(t, first)
+		first.Close()
+		heldOff(t, pub, second)
+		if got := strings.Join(pub.ids(), ","); got != "p1,g1" {
+			t.Fatalf("republished %q, want p1 and then the replayed g1", got)
+		}
+	})
 }
 
 // Mattermost replays nothing on reconnect, so a seat re-reads the gap
