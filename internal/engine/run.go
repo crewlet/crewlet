@@ -528,6 +528,12 @@ type Engine struct {
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
 
+	// refusals is how this node's gates tell that loop a window has started
+	// refusing ([refusalLatch]). Built with the engine rather than with the
+	// loop, because the gates charge through it from the first apply and
+	// the loop starts and stops beside them.
+	refusals *refusalLatch
+
 	// embedding is the vector domain's one writer: the fleet singleton
 	// that turns sources whose text has moved into vector records. On the
 	// ENGINE for the reason the trim is — it is a loop this process runs,
@@ -853,8 +859,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
-		boot:    opts.Bootstrap,
-		environ: environ,
+		boot:     opts.Bootstrap,
+		environ:  environ,
+		refusals: newRefusalLatch(),
 		// SET HERE, BEFORE ANYTHING READS IT, and once: the admission
 		// handshake below asks it whether this node publishes and whether
 		// its broker is a member, and the node is handed this exact value

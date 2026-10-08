@@ -94,6 +94,60 @@ type budgetCounter interface {
 	Used(ctx context.Context, scope string, windows coord.Windows) (coord.Usage, error)
 }
 
+// noticedCounter is the counter every gate on this node charges and refuses
+// through, telling the live meters ([refusalLatch]) what each answer says
+// about refusals: a refused charge names the window it refused in, a
+// recorded refusal ([coord.Budgets.Refuse]) every window it stamped, and an
+// admitted charge clears the stamps of both scopes it charged.
+//
+// AT THE COUNTER'S ANSWER, which is the one point every refusal passes —
+// a turn's round, a call its meter holds, a parked delivery, a person's
+// question, a reflection declined — so no gate can refuse without the
+// header hearing of it, and none has to remember to say so.
+type noticedCounter struct {
+	budgetCounter
+	refusals *refusalLatch
+}
+
+// Charge is [coord.Budgets.Charge], noticed.
+func (n noticedCounter) Charge(ctx context.Context, req coord.ChargeRequest) (coord.Spend, error) {
+	got, err := n.budgetCounter.Charge(ctx, req)
+	if err != nil {
+		return got, err
+	}
+	if got.OK {
+		n.refusals.admitted(coord.OrgScope, req.Seat)
+		return got, nil
+	}
+	scope := coord.OrgScope
+	if got.RefusedScope != coord.OrgScope {
+		scope = req.Seat
+	}
+	n.refusals.refused(scope, got.RefusedPeriod, got.RefusedWindow.Label)
+	return got, nil
+}
+
+// Refuse is [coord.Budgets.Refuse], noticed.
+func (n noticedCounter) Refuse(ctx context.Context, scope string, caps coord.Caps,
+	windows coord.Windows) (coord.Usage, error) {
+	got, err := n.budgetCounter.Refuse(ctx, scope, caps, windows)
+	if err != nil {
+		return got, err
+	}
+	for p := range caps {
+		if slot := got.In(p); !slot.RefusedAt.IsZero() {
+			n.refusals.refused(scope, p, slot.Window.Label)
+		}
+	}
+	return got, nil
+}
+
+// budgets is the counter this node's gates charge through — see
+// [noticedCounter].
+func (e *Engine) budgets() budgetCounter {
+	return noticedCounter{budgetCounter: e.backends.Fleet, refusals: e.refusals}
+}
+
 // budgetBasis is what one epoch says a seat's spend is judged by: the
 // company's ceilings, the seat's own, and the clock their windows are cut on.
 type budgetBasis struct {
@@ -801,7 +855,7 @@ func (e *Engine) meterFor(c *Company, handle string) *meter {
 		return nil
 	}
 	return &meter{
-		budgets: e.backends.Fleet, agentScope: coord.AgentScope(agentID.String()),
+		budgets: e.budgets(), agentScope: coord.AgentScope(agentID.String()),
 		basis: basisOf(c, seat), now: e.now,
 	}
 }

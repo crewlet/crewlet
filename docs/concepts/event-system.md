@@ -426,7 +426,8 @@ all.
 live-only per-round signal whose durable record is `agent_phase_completed`),
 `budget_meters` (a snapshot of the fleet's shared token counters, every capped
 calendar window with its engine-computed state, published by every node on a
-fixed tick, which the next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its edge publishes beside it), and the two
+fixed tick and at once when a window first turns work away on it, which the
+next report supersedes; the live projection reads it), `raw_webhook` (the delivery is already a row, as the `inbound_delivery` its edge publishes beside it), and the two
 A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`). See the
 exclusions table in the Deployment page above.
