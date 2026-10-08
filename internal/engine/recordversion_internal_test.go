@@ -14,8 +14,7 @@ import (
 // place a node says which records it reads, and [reportedPositions] the only
 // road from the register to the counted set a writer asks — so a heartbeat
 // that leaves it out, or a read that drops it, is a fleet where every node
-// reads as a build that predates the question and a new kind is never
-// published.
+// reads as advertising nothing and a new kind is never published.
 func TestEveryHeartbeatAdvertisesTheRecordsItsBuildReads(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)

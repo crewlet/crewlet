@@ -212,8 +212,9 @@ func engineWithFleetSecrets(t *testing.T) (*Engine, *store.SecretValues, *fleets
 
 // THE FLEET'S VALUE WINS OVER A SURVIVING LOCAL ROW.
 //
-// A node upgraded into the fleet store still has its own rows until the boot
-// migration clears them, and a rotation since then has landed on the fleet.
+// A value set with `crewlet secrets set` while this node's engine was stopped
+// is a local row until the boot migration clears it, and a rotation since then
+// may have landed on the fleet.
 // If the stale local copy shadowed it, the rotation would appear to work on
 // every node but this one.
 func TestTheFleetsSecretBeatsASurvivingLocalRow(t *testing.T) {
