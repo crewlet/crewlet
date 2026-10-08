@@ -454,8 +454,9 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	// exceeded` with nothing logged before it.
 	//
 	// TWO VERBS, because there are two hazards and one tool does not cover
-	// both. [jsprovision.Ask] re-issues a request the group never answered,
-	// under [jsprovision.LookupBudget] as its ceiling; [jsprovision.Settle]
+	// both. [jsprovision.Timing.Read] re-issues a request the group never
+	// answered, under [jsprovision.LookupBudget] as its ceiling;
+	// [jsprovision.Settle]
 	// waits out the propagation window, and this read is inside one BY
 	// CONSTRUCTION — EnsureSubscription above has just created the
 	// consumer, so the member that made it can still be told it is not
@@ -470,7 +471,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 				"on a fleet that is a metadata group that has not settled")
 	})
 	var cons jetstream.Consumer
-	err = q.provisioning().Ask(lookupCtx,
+	err = q.provisioning().Read(lookupCtx,
 		func(ctx context.Context) error {
 			var e error
 			cons, e = q.js.Consumer(ctx, stream, name)

@@ -678,10 +678,12 @@ func (q *Queue) createOrObserveStream(
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	// THROUGH [jsprovision.Ask], so a request the group never answered is
-	// re-issued inside the ceiling above rather than being the whole of it.
+	// THROUGH [jsprovision.Timing.Read], so a request the group never
+	// answered is re-issued inside the ceiling above rather than being the
+	// whole of it — a second after it was sent, because a read is answered
+	// when the server processes it or never ([jsprovision.ReadTerm]).
 	var info jetstream.Stream
-	err := q.provisioning().Ask(lookupCtx,
+	err := q.provisioning().Read(lookupCtx,
 		func(ctx context.Context) error {
 			var e error
 			info, e = q.js.Stream(ctx, spec.name)
@@ -1138,7 +1140,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	getErr := q.provisioning().Ask(lookupCtx,
+	getErr := q.provisioning().Read(lookupCtx,
 		func(ctx context.Context) error {
 			_, e := q.js.Consumer(ctx, stream, name)
 			return e

@@ -913,7 +913,7 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 }
 
 // askRead runs one metadata READ on a domain consumer's open: under the
-// lookup ceiling of [Queue.provisioning], re-issued by [jsprovision.Timing.Ask]
+// lookup ceiling of [Queue.provisioning], re-issued by [jsprovision.Timing.Read]
 // while nobody answers.
 //
 // # Why a read on this path is not sized like the writes beside it
@@ -933,7 +933,7 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 func (q *Queue) askRead(ctx context.Context, read func(context.Context) error) error {
 	readCtx, cancel := context.WithTimeout(ctx, q.provisioning().Lookup)
 	defer cancel()
-	return q.provisioning().Ask(readCtx, read, nil)
+	return q.provisioning().Read(readCtx, read, nil)
 }
 
 // domainConsumerName is what this node's reader is called on the broker.

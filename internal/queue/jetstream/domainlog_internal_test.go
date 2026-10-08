@@ -856,6 +856,10 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 			if left := time.Until(js.until[i]); left > ceiling {
 				t.Errorf("ask %d was given %v, past the %v lookup ceiling — it "+
 					"is bounded as a write", i+1, left, ceiling)
+			} else if left > timing.ReadTerm {
+				t.Errorf("ask %d was given %v, past the %v read term — a "+
+					"read the server dropped is held for a write's term "+
+					"rather than asked again", i+1, left, timing.ReadTerm)
 			}
 		}
 		if js.deletes != 0 {
