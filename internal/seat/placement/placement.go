@@ -56,6 +56,14 @@
 // leases that cannot be given back are charged first, and what capacity is
 // left is handed to the groups most constrained first, each up to its share
 // — one number per group, which both the claim and the give-back read.
+//
+// # Who counts
+//
+// The nodes a share divides by are the live nodes PLACING seats: they run
+// seats, and have not withdrawn ([NodeProfile.Withdrawn]). A node that holds
+// none and claims none while it stays live is a share nobody takes up — its
+// peers leave it free for a node that will never claim it, and every one of
+// them reports a healthy sweep.
 package placement
 
 import (
@@ -330,6 +338,21 @@ type NodeProfile struct {
 	// a peer's row, [BrokerUnknown] means the row did not say — see
 	// [BrokerKind] for why that is never read as a leaf.
 	Broker BrokerKind
+
+	// Withdrawn says the node runs seats but has stepped out of placement
+	// for now: it cannot serve its seats' work at all, so it gives back
+	// every seat it holds and claims none until that clears. It is not
+	// counted among the nodes a group's share divides by ([Compute]), so
+	// its peers take up the share it would otherwise leave free, and a
+	// group only it matches is reported unplaceable — which, while it is
+	// withdrawn, is exactly what that group is. Written by the seat host
+	// beside the profile (see [WithdrawnKey]); a row that does not say
+	// reads as not withdrawn, the reading every build before it gave.
+	//
+	// NOT a node that is merely not ready to claim yet. That one keeps
+	// serving every seat it holds, so its share is not free: counting it
+	// out would have its peers report a group it is serving as unplaceable.
+	Withdrawn bool
 }
 
 // HeldKey is where a presence row carries [NodeProfile.Held].
@@ -343,9 +366,17 @@ type NodeProfile struct {
 // it, because it is live state and the profile is configuration.
 const HeldKey = "seats_held"
 
-// RunsSeats reports whether this node claims seats at all. It is the
-// denominator test.
+// WithdrawnKey is where a presence row carries [NodeProfile.Withdrawn]:
+// present, and true, only while the node is withdrawn. Live state written by
+// the seat host beside the profile, for the reason [HeldKey] is.
+const WithdrawnKey = "seats_withdrawn"
+
+// RunsSeats reports whether this node is configured to run seats at all.
 func (n NodeProfile) RunsSeats() bool { return n.Roles.Has(RoleSeats) }
+
+// PlacesSeats reports whether this node takes part in seat placement now: it
+// runs seats and has not withdrawn. It is the denominator test.
+func (n NodeProfile) PlacesSeats() bool { return n.RunsSeats() && !n.Withdrawn }
 
 // RunsWorkers reports whether this node runs the company-wide singleton
 // duties.
@@ -406,6 +437,10 @@ func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 		Labels: labelsFromMeta(meta["labels"]),
 		Held:   heldFromMeta(meta[HeldKey]),
 		Broker: brokerFromMeta(meta["broker"]),
+		// Only a real true. Anything else — absent, a string, a number — is
+		// the reading a build that never wrote the key gives: the node is
+		// counted, and the worst that costs is the share it leaves free.
+		Withdrawn: meta[WithdrawnKey] == true,
 	}
 }
 
@@ -508,8 +543,8 @@ type Group struct {
 	// Handles are the group's seats, in the order the seats were given.
 	Handles []string
 
-	// Nodes is how many live seat-running nodes match the placement, this
-	// one included.
+	// Nodes is how many live nodes placing seats ([NodeProfile.PlacesSeats])
+	// match the placement, this one included.
 	Nodes int
 
 	// Share is how many of THIS GROUP's seats this node may hold:
@@ -524,7 +559,7 @@ type Plan struct {
 	// Capacity is the sum of this node's per-group shares — how many seats
 	// it may hold in all, leases it cannot give back included. Never room
 	// to spend on any one group: [Plan.Room] hands it out group by group.
-	// Zero for a node that does not run seats.
+	// Zero for a node that is not placing seats.
 	Capacity int
 
 	// Groups are the placement groups this node may claim from, MOST
@@ -546,16 +581,16 @@ type Plan struct {
 
 	// Unplaceable are the seats the fleet's claim bounds cannot reach: a
 	// group whose eligible nodes' shares sum to less than its size, which —
-	// shares being ceilings — is exactly a group no live seat-running node
-	// matches, such as a pin to a node that is down or a label nobody
-	// carries. Not something the engine can fix, since widening the
+	// shares being ceilings — is exactly a group no live node placing seats
+	// matches, such as a pin to a node that is down or withdrawn, or a label
+	// nobody carries. Not something the engine can fix, since widening the
 	// selector is exactly what the operator asked it not to do, but it must
 	// be reported rather than dropped: the seat is simply not being served,
 	// and every node's sweep otherwise looks perfectly healthy. The host
 	// logs seats_unplaceable from this.
 	Unplaceable []string
 
-	// SeatNodes is how many live nodes run seats at all — the denominator
+	// SeatNodes is how many live nodes are placing seats — the denominator
 	// that used to be "every live node".
 	SeatNodes int
 }
@@ -613,9 +648,9 @@ func (p Plan) Room(running func(handle string) bool, stuck []string) []int {
 //
 // me is always counted as live whether or not the presence read returned it:
 // before the first successful renew there is no row yet, and a store blip
-// must not make a node invisible to itself. A node missing from its own
-// fleet finds zero eligible nodes for every group, claims nothing, and
-// reports every seat unplaceable.
+// must not make a node invisible to itself. A node that does not place seats
+// itself — it runs none, or it has withdrawn — is eligible for nothing and
+// counts in no group, the same arithmetic its peers run on it.
 //
 // me also WINS over any profile for the same id in live. Its own presence
 // row may have been written by its previous incarnation and can describe
@@ -674,7 +709,7 @@ func Compute(seats []Seat, me NodeProfile, live []NodeProfile) Plan {
 			}
 			continue
 		}
-		if !me.RunsSeats() || !g.Placement.Matches(me.ID, me.Labels) {
+		if !me.PlacesSeats() || !g.Placement.Matches(me.ID, me.Labels) {
 			continue
 		}
 
@@ -729,7 +764,7 @@ func share(seats, nodes int) int {
 
 // seatRunners resolves the fleet this node divides the seats by: live peers
 // plus me, deduplicated by id with me authoritative about itself, then
-// filtered to the nodes that run seats at all.
+// filtered to the nodes placing seats ([NodeProfile.PlacesSeats]).
 func seatRunners(me NodeProfile, live []NodeProfile) []NodeProfile {
 	index := make(map[string]int, len(live)+1)
 	fleet := make([]NodeProfile, 0, len(live)+1)
@@ -755,7 +790,7 @@ func seatRunners(me NodeProfile, live []NodeProfile) []NodeProfile {
 
 	runners := make([]NodeProfile, 0, len(fleet))
 	for _, node := range fleet {
-		if node.RunsSeats() {
+		if node.PlacesSeats() {
 			runners = append(runners, node)
 		}
 	}

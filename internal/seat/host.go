@@ -258,6 +258,10 @@ type Host struct {
 	running   bool
 	draining  bool
 
+	// withdrawn is whether this node has stepped out of placement because it
+	// cannot serve its seats (see [Host.setWithdrawn]), as of the last sweep.
+	withdrawn bool
+
 	// placeable are the seats some live node may run, as of the last sweep:
 	// the company's seats less the unplaceable ones. The count this node
 	// advertises counts only its leases on these ([Host.placedCount]).

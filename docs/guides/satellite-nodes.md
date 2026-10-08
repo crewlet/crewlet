@@ -236,8 +236,10 @@ inbox_attached  seat=eu-support epoch=3 elapsed_ms=5.1
 
 Two failures to know by sight:
 
-- **`seats_unplaceable`** — no live node matches the selector. Usually a
-  typo (`zone: EU` does not match `zone: eu`; comparison is exact) or a
+- **`seats_unplaceable`** — no live node matches the selector, or the
+  only one that does cannot serve its seats right now and has withdrawn
+  (`seats_shed_unserviceable` on that node says why). Usually a typo
+  (`zone: EU` does not match `zone: eu`; comparison is exact) or a
   satellite that has not started. The seat is not being served, and
   every other node's sweep looks perfectly healthy, which is why this is
   logged rather than left to be noticed.

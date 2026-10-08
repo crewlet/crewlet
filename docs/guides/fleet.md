@@ -466,6 +466,13 @@ first, and what is left goes to the node's groups most constrained first,
 so the cost comes out of its unpinned seats — which go to a peer — before
 the pinned seat only it may run.
 
+**A node that cannot serve its seats steps out.** A node whose seats'
+calls cannot reach the estate gives every seat back
+(`seats_shed_unserviceable`) and says so on its presence row. Its peers
+stop counting it in any share until it recovers, so they take up the
+seats it gave back, and a seat only it matches is reported unplaceable
+rather than left waiting for it.
+
 **A seat no live node matches is not served.** The engine will not widen
 a selector to place a seat — widening it is exactly what the operator
 asked it not to do — so it logs `seats_unplaceable` with the handles and
@@ -473,14 +480,12 @@ leaves them. Expect this after a pinned node dies: the pin is a
 constraint, and a constraint has a cost. The warning is computed from
 the same shares the claims are bounded by, so for nodes that are
 claiming it is the only seat the shares leave out: every group some live
-seat-running node matches is covered by those nodes' shares. Three
-states leave a share unclaimed for a while without it. A node that is not
+node placing seats matches is covered by those nodes' shares. Two states
+leave a share unclaimed for a while without it. A node that is not
 ready yet (catching up, `seat_claims_withheld`) still counts, because it
 keeps serving what it holds and takes its share once it is level. A node
 whose teardown keeps failing holds its share down by the stuck seats, and
-re-raises that alarm until the teardown succeeds or it is restarted. A
-node that cannot serve its seats at all gives them back and logs
-`seats_shed_unserviceable`, but still counts, so its share waits for it.
+re-raises that alarm until the teardown succeeds or it is restarted.
 
 **A seat that stops matching is handed back.** Narrow a selector under a
 node that holds the seat, or change that node's labels, and it releases
@@ -588,8 +593,9 @@ The consequences worth stating plainly:
 ## Watching a fleet
 
 - **`fleet_role_unmanned`** — a job nobody is doing. Fix the roles.
-- **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
-  start a node that matches.
+- **`seats_unplaceable`** — a seat nobody may run. Fix the selector,
+  start a node that matches, or clear what made the only matching node
+  withdraw (`seats_shed_unserviceable` on that node).
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
 - **`objects_missing`** — the object store's collector audited the company's
   files and found some whose bytes the store does not hold, or holds at the

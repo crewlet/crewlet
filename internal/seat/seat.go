@@ -11,8 +11,9 @@
 // A cleverer one is a standing temptation, so the reasons are worth stating:
 //
 //   - Greedy claim up to a fair share. Capacity is ceil(seats / live nodes),
-//     live nodes being the node:* presence leases of nodes that actually run
-//     seats. No membership service, no gossip, no coordinator — every node
+//     live nodes being the node:* presence leases of nodes that run seats
+//     and have not withdrawn from placement because they cannot serve them.
+//     No membership service, no gossip, no coordinator — every node
 //     computes the same number from the same table and stops there. Two nodes
 //     racing for the last seat is resolved by the lease, not by the
 //     arithmetic. With role placement in play the share is computed per
@@ -456,9 +457,10 @@ type SweepResult struct {
 	// Capacity is this node's fair share: the sum of its shares of the
 	// placement groups it is eligible for. Each share bounds only its own
 	// group, so this is how many seats the node may hold in all, never how
-	// many of any one group.
+	// many of any one group. Zero while it is withdrawn.
 	Capacity int
-	// LiveNodes is how many live nodes run seats at all — the denominator.
+	// LiveNodes is how many live nodes are placing seats — running seats,
+	// and not withdrawn — the denominator.
 	LiveNodes int
 	// Claimed are the seats this pass newly established. A seat is counted
 	// only once its acquire hook succeeded.
@@ -469,10 +471,10 @@ type SweepResult struct {
 	// erased whatever the pass had shed, so a node that gave back two
 	// seats and then lost a third reported only the third.
 	Lost []string
-	// Unplaceable are the seats whose placement matches no live
-	// seat-running node, read off the same per-group shares the claims are
+	// Unplaceable are the seats whose placement matches no live node
+	// placing seats, read off the same per-group shares the claims are
 	// bounded by. Nothing this node can act on — a pin to a node that is
-	// down, a label nobody carries — but it is the one
+	// down or withdrawn, a label nobody carries — but it is the one
 	// placement failure that is otherwise invisible: the seat is simply
 	// not served, and every node in the fleet reports a perfectly healthy
 	// sweep.

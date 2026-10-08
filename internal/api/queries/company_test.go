@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -803,6 +804,35 @@ func TestASeatOnAnIngressOnlyNodeIsStillUnplaceable(t *testing.T) {
 	if len(unplaceable) != 2 {
 		t.Fatalf("unplaceable = %v, want both seats — the only node that matches "+
 			"the label does not run seats", unplaceable)
+	}
+}
+
+func TestASeatOnlyAWithdrawnNodeMatchesIsUnplaceable(t *testing.T) {
+	t.Parallel()
+	// A node that cannot serve its seats gives them all back and says so on
+	// its presence row; its lease stays live. Every seat host stops counting
+	// it as a home, and this view must reach the same verdict, or the seat
+	// the hosts report unserved reads here as a moment rather than a fault.
+	backend := coordmemory.New()
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{
+			"roles": []any{"seats"}, "labels": map[string]any{"zone": "eu"},
+			placement.WithdrawnKey: true,
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := company(t)
+	cfg.Roles[1].Placement = &config.RolePlacement{Labels: map[string]string{"zone": "eu"}}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+		Company: func() *config.Company { return cfg },
+	}, "fleet", nil))
+
+	unplaceable, _ := body["unplaceable"].([]any)
+	if len(unplaceable) != 2 {
+		t.Fatalf("unplaceable = %v, want both seats — the only node that matches "+
+			"has withdrawn from placement", unplaceable)
 	}
 }
 

@@ -50,7 +50,28 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		last, _ := h.LastSweep()
 		return last
 	}
-	plan, liveNodes, peers := h.plan(ctx, seats)
+
+	draining := h.Draining()
+
+	// WHETHER THIS NODE CAN SERVE ITS SEATS AT ALL, asked BEFORE the plan,
+	// because the answer changes the plan: a node that cannot serve its
+	// seats' work gives every one of them back and claims none, so it is not
+	// placing seats, and it says so to its peers ([placement.NodeProfile.Withdrawn])
+	// rather than leaving them to keep its share free for it.
+	//
+	// It is a separate question from the readiness gate lower down because
+	// the two have opposite directions: readiness withholds CLAIMS and
+	// deliberately keeps what is held, and this gives back what is held
+	// whether or not anything is claimable. See [Config.Serviceable]. Not
+	// asked while draining, which gives everything back anyway.
+	var unfit bool
+	var unfitReason string
+	if !draining {
+		unfit, unfitReason = h.unserviceable(ctx)
+	}
+	h.setWithdrawn(ctx, unfit)
+
+	plan, liveNodes, peers := h.plan(ctx, seats, unfit)
 
 	byHandle := make(map[string]placement.Seat, len(seats))
 	placeable := make(map[string]struct{}, len(seats))
@@ -86,6 +107,12 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			}
 			continue
 		}
+		if unfit {
+			// Eligible for nothing while withdrawn, which is not a
+			// placement change: the unserviceable shed below gives it back
+			// under its own reason.
+			continue
+		}
 		if _, may := eligible[handle]; !may {
 			// Still a seat, no longer OURS to run: the placement selector
 			// changed under a live apply, or this node's labels or roles
@@ -101,41 +128,25 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		}
 	}
 
-	draining := h.Draining()
-
 	// THE UNSERVICEABLE SHED, BEFORE the capacity one. A node that cannot
 	// serve its seats' work gives back EVERY seat, so there is no share
 	// left to converge on and the capacity pass below has nothing to
 	// divide.
-	//
-	// It is a separate question from the readiness gate lower down because
-	// the two have opposite directions: readiness withholds CLAIMS and
-	// deliberately keeps what is held, and this gives back what is held
-	// whether or not anything is claimable. See [Config.Serviceable].
-	// THE TWO ARE SCOPED DIFFERENTLY ON PURPOSE. `unfit` outlives this
-	// block — the readiness gate below reads it — so it needs a zero value
-	// on the draining path, where nothing evaluates it. The REASON is only
-	// ever the text of the line logged here, so declaring it out there gave
-	// it an empty initialiser nothing could read.
-	var unfit bool
-	if !draining {
-		var unfitReason string
-		if unfit, unfitReason = h.unserviceable(ctx); unfit {
-			for _, handle := range h.Held() {
-				if h.Release(ctx, handle, ReasonUnserviceable) {
-					released = append(released, handle)
-				}
+	if unfit {
+		for _, handle := range h.Held() {
+			if h.Release(ctx, handle, ReasonUnserviceable) {
+				released = append(released, handle)
 			}
-			// EVERY PASS while it holds, at WARN: this is a node running
-			// no work at all, and an operator looking at an idle node
-			// needs the reason on the node rather than in a fleet-wide
-			// alarm they have to go and correlate.
-			log.WarnContext(ctx, "seats_shed_unserviceable", "node", h.nodeID,
-				"reason", unfitReason, "released", len(released),
-				"hint", "this node cannot serve its seats' work at all, so its "+
-					"seats move to a peer that can; it reclaims them when this "+
-					"clears")
 		}
+		// EVERY PASS while it holds, at WARN: this is a node running no
+		// work at all, and an operator looking at an idle node needs the
+		// reason on the node rather than in a fleet-wide alarm they have to
+		// go and correlate.
+		log.WarnContext(ctx, "seats_shed_unserviceable", "node", h.nodeID,
+			"reason", unfitReason, "released", len(released),
+			"hint", "this node cannot serve its seats' work at all, so its "+
+				"seats move to a peer that can; it reclaims them when this "+
+				"clears")
 	}
 
 	if !draining {
@@ -209,8 +220,9 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 
 	if len(plan.Unplaceable) > 0 {
 		log.WarnContext(ctx, "seats_unplaceable", "node", h.nodeID, "seats", plan.Unplaceable,
-			"hint", "no live node that runs seats matches these seats' placement, so nothing "+
-				"is serving them. Start a node that matches, or widen the selector.")
+			"hint", "no live node placing seats matches these seats' placement, so nothing "+
+				"is serving them. Start a node that matches (or bring back the one that "+
+				"matches and has withdrawn), or widen the selector.")
 	}
 
 	h.pruneSeatLocks(byHandle)
@@ -239,6 +251,26 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			"blocked_by_protocol", blocked)
 	}
 	return result
+}
+
+// setWithdrawn records whether this node is placing seats, and tells its peers
+// the moment that changes rather than at the next heartbeat.
+//
+// THE PEERS ARE WHO NEED IT. A node that cannot serve its seats gives them all
+// back and claims none, but its presence lease stays live — it is still a
+// member of the fleet — and a peer that went on counting it would leave its
+// share of every group free for it: those seats would sit unclaimed with no
+// node reporting anything, and a seat only it matches would never be called
+// unplaceable. Advertised, its peers divide by the nodes actually placing
+// seats and take the seats up, and a group only it matches is reported.
+func (h *Host) setWithdrawn(ctx context.Context, withdrawn bool) {
+	h.mu.Lock()
+	changed := h.withdrawn != withdrawn
+	h.withdrawn = withdrawn
+	h.mu.Unlock()
+	if changed {
+		h.renewNodePresence(ctx)
+	}
 }
 
 // currentSeats reads the org, converting a panicking provider into a pass
@@ -675,7 +707,9 @@ func (h *Host) protocolBlock(ctx context.Context) int {
 // The third result is the PEERS AS READ BY THIS PASS, and nil when the read
 // failed: a stale roster is good enough to size a share by, and not good
 // enough to conclude from that nothing is free ([Host.fleetHoldsEverySeat]).
-func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan, int, []placement.NodeProfile) {
+func (h *Host) plan(ctx context.Context, seats []placement.Seat,
+	withdrawn bool) (placement.Plan, int, []placement.NodeProfile) {
+
 	var live, peers []placement.NodeProfile
 
 	leases, err := h.backend.ListLive(ctx, coord.ClassNode)
@@ -698,8 +732,10 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 		peers = live
 	}
 
-	plan := placement.Compute(seats, h.profile, live)
-	h.checkFleetRoles(append(slices.Clone(live), h.profile))
+	me := h.profile
+	me.Withdrawn = withdrawn
+	plan := placement.Compute(seats, me, live)
+	h.checkFleetRoles(append(slices.Clone(live), me))
 	return plan, plan.SeatNodes, peers
 }
 
@@ -853,6 +889,14 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	// written unconditionally: it is the host's own fact, with no hook to
 	// overrun.
 	meta[placement.HeldKey] = h.placedCount()
+	// WITHDRAWN, only while it is: see [Host.setWithdrawn]. Absent is the
+	// reading every peer gives a node that is placing seats.
+	h.mu.Lock()
+	withdrawn := h.withdrawn
+	h.mu.Unlock()
+	if withdrawn {
+		meta[placement.WithdrawnKey] = true
+	}
 	if h.status == nil {
 		return meta
 	}

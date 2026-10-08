@@ -572,6 +572,34 @@ func TestComputeGivesANonSeatNodeNothing(t *testing.T) {
 	assertHandles(t, "unplaceable", plan.Unplaceable, nil)
 }
 
+// A WITHDRAWN NODE IS NOT A HOME. It runs seats and its presence lease is
+// live, but it holds none and claims none, so a share computed over it is one
+// nobody takes up: its peers would keep half the seats free for it, and a seat
+// pinned to it would read as served. Counted out, the peer's share is the
+// whole group and the pinned seat is reported — by the withdrawn node too,
+// which reaches the same verdict and holds nothing.
+func TestComputeLeavesAWithdrawnNodeOutOfEveryShare(t *testing.T) {
+	t.Parallel()
+
+	pinned := SeatPlacement{Node: "n1"}
+	seats := append(seatsWith(anywhere, "a", "b", "c", "d"), Seat{Handle: "pin", Placement: pinned})
+	out := NodeProfile{ID: "n1", Withdrawn: true}
+	live := []NodeProfile{out, {ID: "n2"}}
+
+	peer := Compute(seats, live[1], live)
+	if peer.SeatNodes != 1 || peer.Capacity != 4 {
+		t.Fatalf("peer: seat nodes = %d, capacity = %d; want 1 and 4", peer.SeatNodes, peer.Capacity)
+	}
+	assertHandles(t, "peer unplaceable", peer.Unplaceable, []string{"pin"})
+
+	self := Compute(seats, out, live)
+	if self.Capacity != 0 || len(self.Groups) != 0 {
+		t.Fatalf("withdrawn node: capacity = %d, groups = %+v; want nothing", self.Capacity, self.Groups)
+	}
+	assertHandles(t, "withdrawn node eligible", self.Eligible, nil)
+	assertHandles(t, "withdrawn node unplaceable", self.Unplaceable, []string{"pin"})
+}
+
 // First sweep of the first node, and every store blip after. A node that is
 // invisible to itself computes a share out of a fleet it is not in — zero
 // eligible nodes for every group, so it claims nothing and reports every
@@ -717,6 +745,14 @@ func TestEveryGroupIsCoveredByItsOwnNodesShares(t *testing.T) {
 			},
 		},
 		{
+			name: "a seat only a withdrawn node matches",
+			seats: append(
+				seatsWith(anywhere, "a", "b", "c"),
+				Seat{Handle: "pin", Placement: SeatPlacement{Node: "out"}},
+			),
+			fleet: []NodeProfile{{ID: "out", Withdrawn: true}, {ID: "n1"}, {ID: "n2"}},
+		},
+		{
 			name:  "a seat nobody matches",
 			seats: append(seatsWith(anywhere, "a", "b"), Seat{Handle: "gpu", Placement: SeatPlacement{Labels: map[string]string{"gpu": "true"}}}),
 			fleet: []NodeProfile{{ID: "n1"}, {ID: "n2"}},
@@ -839,9 +875,10 @@ func simulateClaims(rng *rand.Rand, fleet []NodeProfile, plans []Plan) map[strin
 	return held
 }
 
-// randomCompany is a fleet of one to six nodes — some running no seats, each
-// carrying some of a small label vocabulary — and up to sixteen seats placed
-// anywhere, on a label, on a node id that may not be live, or on both.
+// randomCompany is a fleet of one to six nodes — some running no seats, some
+// withdrawn, each carrying some of a small label vocabulary — and up to
+// sixteen seats placed anywhere, on a label, on a node id that may not be
+// live, or on both.
 func randomCompany(rng *rand.Rand) ([]Seat, []NodeProfile) {
 	zones := []string{"eu", "us", "ap"}
 	fleet := make([]NodeProfile, 1+rng.IntN(6))
@@ -856,6 +893,7 @@ func randomCompany(rng *rand.Rand) ([]Seat, []NodeProfile) {
 		if rng.IntN(3) == 0 {
 			node.Labels["gpu"] = "true"
 		}
+		node.Withdrawn = rng.IntN(5) == 0
 		fleet[i] = node
 	}
 
@@ -1064,6 +1102,40 @@ func TestPresenceCarriesNoObjectShare(t *testing.T) {
 		if key != "roles" && key != "labels" {
 			t.Errorf("presence carries %q: a node's profile is its roles and labels", key)
 		}
+	}
+}
+
+// WITHDRAWN READS OFF ITS ROW ONLY AS A REAL TRUE. Anything else is the
+// reading a build that never wrote the key gives — the node is counted —
+// because a value this build cannot read must not take a node that is
+// placing seats out of every share.
+func TestWithdrawnReadsOffTheRowOnlyAsTrue(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		raw  any
+		want bool
+	}{
+		"written here": {raw: true, want: true},
+		"false, said":  {raw: false, want: false},
+		"absent":       {raw: nil, want: false},
+		"a string":     {raw: "true", want: false},
+		"a number":     {raw: float64(1), want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			meta := map[string]any{}
+			if tc.raw != nil {
+				meta[WithdrawnKey] = tc.raw
+			}
+			got := FromMeta("node-a", meta)
+			if got.Withdrawn != tc.want {
+				t.Fatalf("Withdrawn = %v, want %v", got.Withdrawn, tc.want)
+			}
+			if got.RunsSeats() != true || got.PlacesSeats() == tc.want {
+				t.Fatalf("RunsSeats = %v, PlacesSeats = %v for withdrawn = %v",
+					got.RunsSeats(), got.PlacesSeats(), tc.want)
+			}
+		})
 	}
 }
 

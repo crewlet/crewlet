@@ -106,7 +106,7 @@ func TestAnUnclaimedFleetStillCountsItsNodes(t *testing.T) {
 	a.renewNodePresence(f.ctx)
 	f.present("node-b", time.Minute, placement.NodeProfile{})
 
-	plan, live, _ := a.plan(f.ctx, a.seats())
+	plan, live, _ := a.plan(f.ctx, a.seats(), false)
 	wantInt(t, live, 2, "live seat-running nodes")
 	wantInt(t, plan.Capacity, 2, "capacity with nothing claimed anywhere")
 }
@@ -159,12 +159,12 @@ func TestAMembershipReadFailureReusesTheLastKnownFleet(t *testing.T) {
 	a.renewNodePresence(f.ctx)
 	f.present("node-b", time.Minute, placement.NodeProfile{})
 
-	plan, live, _ := a.plan(f.ctx, a.seats())
+	plan, live, _ := a.plan(f.ctx, a.seats(), false)
 	wantInt(t, plan.Capacity, 2, "capacity while the store answers")
 	wantInt(t, live, 2, "live nodes while the store answers")
 
 	faulty.Break(nil)
-	plan, live, _ = a.plan(f.ctx, a.seats())
+	plan, live, _ = a.plan(f.ctx, a.seats(), false)
 	wantInt(t, plan.Capacity, 2, "capacity during a blip")
 	wantInt(t, live, 2, "live nodes during a blip")
 }
@@ -179,7 +179,7 @@ func TestBeforeAnyReadTheHonestAssumptionIsAFleetOfOne(t *testing.T) {
 	faulty.Break(nil)
 	a := f.newHost("node-a", Config{Backend: faulty})
 
-	plan, live, _ := a.plan(f.ctx, a.seats())
+	plan, live, _ := a.plan(f.ctx, a.seats(), false)
 	wantInt(t, plan.Capacity, 3, "capacity with no membership at all")
 	wantInt(t, live, 1, "live nodes with no membership at all")
 	wantInt(t, len(plan.Unplaceable), 0, "unplaceable seats")
@@ -1063,6 +1063,70 @@ func TestAGroupHeldPastItsShareByAnUndeadSeatShedsItsRunningOne(t *testing.T) {
 	wantInt(t, result.Capacity, 2, "capacity")
 	wantStrings(t, result.Lost, []string{"a0", "z1"}, "given back")
 	wantHeld(t, sat, "a1")
+}
+
+// A NODE THAT CANNOT SERVE ITS SEATS STEPS OUT OF PLACEMENT, and says so. It
+// gives every seat back, and while its presence lease stays live a peer that
+// went on counting it left its share free: those seats sat unclaimed and no
+// node reported anything, and a seat pinned to it was never called
+// unplaceable. Advertised, its peer takes the share up and reports the pinned
+// seat; recovered, it is counted again and the share comes back to it.
+func TestAWithdrawnNodesShareIsTakenUpByItsPeers(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	seats := placed(map[string]placement.SeatPlacement{"pin": {Node: "node-a"}}, "s0", "s1", "s2", "s3", "pin")
+	var fit atomic.Bool
+	fit.Store(true)
+	a := f.newHost("node-a", Config{Seats: seats, Serviceable: func() (bool, string) {
+		return fit.Load(), "estate unreachable"
+	}})
+	b := f.newHost("node-b", Config{Seats: seats})
+	for _, h := range []*Host{a, b} {
+		h.renewNodePresence(f.ctx)
+	}
+	sweepBoth := func() {
+		for _, h := range []*Host{a, b} {
+			h.Sweep(f.ctx)
+		}
+	}
+	sweepBoth()
+	wantHeld(t, a, "pin", "s0", "s1")
+	wantHeld(t, b, "s2", "s3")
+
+	fit.Store(false)
+	sweepBoth()
+	wantHeld(t, a)
+	result := b.Sweep(f.ctx)
+	wantInt(t, result.LiveNodes, 1, "nodes node-b divides by")
+	wantStrings(t, result.Unplaceable, []string{"pin"}, "unplaceable while node-a is withdrawn")
+	wantHeld(t, b, "s0", "s1", "s2", "s3")
+
+	fit.Store(true)
+	for range 3 {
+		sweepBoth()
+	}
+	wantHeld(t, a, "pin", "s0", "s1")
+	wantHeld(t, b, "s2", "s3")
+}
+
+// A NODE THAT WITHDRAWS HOLDING NOTHING SAYS SO AT ONCE. No release
+// advertises it then, so a peer would go on counting it until its next
+// heartbeat and leave its share free that long — every sweep of it.
+func TestAWithdrawnNodeSaysSoAtOnceEvenHoldingNothing(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	seats := seatsNamed("ceo", "eng")
+	a := f.newHost("node-a", Config{Seats: seats, Serviceable: func() (bool, string) {
+		return false, "estate unreachable"
+	}})
+	b := f.newHost("node-b", Config{Seats: seats})
+	a.renewNodePresence(f.ctx)
+	b.renewNodePresence(f.ctx)
+
+	wantStrings(t, a.Sweep(f.ctx).Lost, nil, "given back by a node holding nothing")
+	result := b.Sweep(f.ctx)
+	wantInt(t, result.LiveNodes, 1, "nodes node-b divides by")
+	wantHeld(t, b, "ceo", "eng")
 }
 
 // wantServedOnce asserts every handle is held by exactly one of hosts.
