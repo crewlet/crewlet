@@ -95,12 +95,12 @@ func substrates() []substrate {
 				}
 				t.Cleanup(func() { _ = admin.Stop(context.WithoutCancel(t.Context())) })
 
-				// CLUSTERED, because the broker under this case is: without
-				// it the buckets are provisioned on the SOLO budget against a
-				// three-member metadata group, which is the flake this whole
-				// change removes — reintroduced in the suite that covers it.
+				// SOLO, because the broker under this substrate is: one
+				// server with no peers, provisioned exactly as the engine
+				// provisions a single node (clusteredStream is false there).
+				// The cluster substrate below is the one that says Clustered.
 				backend, err := coordkv.Open(t.Context(), admin.JetStream(),
-					coordkv.Config{TTL: fleetTTL, Clustered: true})
+					coordkv.Config{TTL: fleetTTL})
 				if err != nil {
 					t.Fatalf("coord kv: %v", err)
 				}
@@ -134,6 +134,9 @@ func substrates() []substrate {
 					AckWait:    2 * time.Second,
 				})
 				admin := c.Client(t, 0)
+				// CLUSTERED, because the broker under this substrate is:
+				// without it the buckets are provisioned on the SOLO budget
+				// against a three-member metadata group.
 				backend, err := coordkv.Open(t.Context(), admin.JetStream(), coordkv.Config{
 					TTL: fleetTTL, Replicas: len(c.Servers), Clustered: true,
 				})
