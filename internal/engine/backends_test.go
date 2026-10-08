@@ -740,7 +740,7 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 // which the reader can match neither of. Zero is "no declared width", and
 // EncodeVector checks nothing against it, so nothing would report this.
 func TestTheEmbeddingWidthIsLearnedOnceAndHeld(t *testing.T) {
-	// Not parallel: t.Setenv resolves the ${K} these documents reference.
+	t.Parallel()
 	const noVectors = `
 name: Acme
 providers:
@@ -775,8 +775,8 @@ roles:
 	narrow := strings.Replace(wide, "dimensions: 3072", "dimensions: 1536", 1)
 	narrow = strings.Replace(narrow, "text-embedding-3-large", "text-embedding-3-small", 1)
 
-	t.Setenv("K", "test-key")
-	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors)})
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors),
+		Environment: config.MapSource{"K": "test-key"}})
 	if got := e.Backends().Store.EmbeddingDim(); got != 0 {
 		t.Fatalf("booted at width %d, want 0 for a company with no embeddings", got)
 	}

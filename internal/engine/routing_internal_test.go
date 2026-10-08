@@ -160,7 +160,9 @@ func TestOnlyTheSurfacesThatLookUpAnAccountReportRouting(t *testing.T) {
 // instance at url.
 func routingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	t.Helper()
-	e := &Engine{}
+	// AN EMPTY ENVIRONMENT, so ${JIRA_ORG_TOKEN} answers nothing whatever
+	// the runner exports.
+	e := &Engine{environ: config.MapSource{}}
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -255,10 +257,15 @@ func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
 		{"a value the vendor could not have produced", "not-a-whsec-value"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
+			t.Parallel()
+			// THE CASE'S OWN ENVIRONMENT: a reference nothing answers is
+			// one this environment does not hold, whatever the runner's
+			// does.
+			env := config.MapSource{}
 			if bad.value != "" {
-				t.Setenv("GITLAB_SIGNING_FOR_THIS_CASE", bad.value)
+				env["GITLAB_SIGNING_FOR_THIS_CASE"] = bad.value
 			}
-			e := &Engine{}
+			e := &Engine{environ: env}
 			cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
