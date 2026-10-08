@@ -106,28 +106,18 @@ func loud(line string) bool {
 		strings.Contains(line, `"level":"ERROR"`)
 }
 
-// traceOf is the trace id a rendered line carries, or "".
-func traceOf(line string) string {
-	const key = `"trace_id":"`
-	at := strings.Index(line, key)
-	if at < 0 {
-		return ""
-	}
-	rest := line[at+len(key):]
-	if end := strings.IndexByte(rest, '"'); end >= 0 {
-		return rest[:end]
-	}
-	return ""
-}
+// traceKey is how a rendered line carries a trace id: the attribute
+// logging.FormatJSON writes for the trace a line's context is in.
+const traceKey = `"trace_id":"`
 
 func (r *traceRecorder) Write(p []byte) (int, error) {
 	line := string(p)
-	trace := traceOf(line)
+	traced := strings.Contains(line, traceKey)
 	isLoud := loud(line)
-	if trace != "" || isLoud {
+	if traced || isLoud {
 		r.mu.Lock()
-		if kept, watched := r.traces[trace]; watched && len(kept) < traceKept {
-			r.traces[trace] = append(kept, line)
+		if traced {
+			r.keepTraced(line)
 		}
 		if isLoud {
 			if len(r.loud) < loudKept {
@@ -144,6 +134,22 @@ func (r *traceRecorder) Write(p []byte) (int, error) {
 		_, _ = r.through.Write(p)
 	}
 	return len(p), nil
+}
+
+// keepTraced files a line under EVERY watched trace it carries, with r.mu held.
+//
+// NOT ONLY THE FIRST IT NAMES. The logger appends the context's trace after
+// the record's own attributes (internal/logging), so a line that also logs a
+// trace id of its own — the OTLP receiver's, the scheduler's — carries two, and
+// filing it under the first lost it to the trace whose context wrote it. The
+// closing quote is part of the match, so a watched id is never matched inside a
+// longer one.
+func (r *traceRecorder) keepTraced(line string) {
+	for id, kept := range r.traces {
+		if len(kept) < traceKept && strings.Contains(line, traceKey+id+`"`) {
+			r.traces[id] = append(kept, line)
+		}
+	}
 }
 
 // watch starts keeping the lines that carry traceID, for as long as t runs.
@@ -235,3 +241,40 @@ func (r *traceRecorder) loudSince(from int) (lines []string, lost int) {
 }
 
 var _ io.Writer = (*traceRecorder)(nil)
+
+// A LINE IS KEPT UNDER EVERY WATCHED TRACE IT CARRIES, and under no trace it
+// does not.
+//
+// The one case reading lines back asserts that a turn's lines carry its
+// trigger's trace, so a line the recorder files under the wrong trace, or under
+// none, reads as an engine that ran without correlation. A line that logs a
+// trace id of its own carries the context's after it, which is the shape filing
+// by the first id lost; and a watched id inside a longer one is a different
+// trace, which a match without its closing quote would take.
+func TestALineIsKeptUnderEveryWatchedTraceItCarries(t *testing.T) {
+	t.Parallel()
+	const (
+		ctxTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
+		ownTrace = "0af7651916cd43dd8448eb211c80319c"
+		stranger = "ffffffffffffffffffffffffffffffff"
+	)
+	r := &traceRecorder{}
+	r.watch(t, ctxTrace)
+	r.watch(t, ownTrace)
+
+	both := `{"level":"INFO","msg":"spans_received","trace_id":"` + ownTrace +
+		`","trace_id":"` + ctxTrace + `"}` + "\n"
+	longer := `{"level":"INFO","msg":"elsewhere","trace_id":"` + ctxTrace + `ff"}` + "\n"
+	unwatched := `{"level":"INFO","msg":"elsewhere","trace_id":"` + stranger + `"}` + "\n"
+	for _, line := range []string{both, longer, unwatched} {
+		if _, err := r.Write([]byte(line)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	for _, id := range []string{ctxTrace, ownTrace} {
+		if got := r.linesFor(id); len(got) != 1 || got[0] != both {
+			t.Errorf("trace %s kept %q, want only the line carrying it", id, got)
+		}
+	}
+}
