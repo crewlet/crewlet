@@ -740,6 +740,13 @@ type Options struct {
 	// test can watch a LIVE loop publish what arrives after boot without
 	// waiting out fifteen seconds of it.
 	usageEvery time.Duration
+
+	// sweepEvery is the seat host's placement cadence
+	// ([node.Config.SweepInterval]), zero for [seat.SweepInterval].
+	// UNEXPORTED for the reason usageEvery is: the cadence is the seat
+	// host's decision, and the knob exists only so a case can put the next
+	// tick out of reach and see what claims a seat without one.
+	sweepEvery time.Duration
 }
 
 // New assembles an engine.
@@ -1234,8 +1241,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// moving it here does not deliver the mail it is holding: the
 		// release on the node it left dropped that node's hold with the
 		// attachment. See seatpause.go.
-		AttachHolds: e.attachHolds,
-		LeaseTTL:    e.leaseTTL,
+		AttachHolds:   e.attachHolds,
+		LeaseTTL:      e.leaseTTL,
+		SweepInterval: opts.sweepEvery,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
 		// N times this. Passed through unresolved: zero is the shape of an
 		// absent key and node.New is what turns it into the default, so

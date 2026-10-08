@@ -26,6 +26,15 @@ func WithUsageFlushEvery(opts Options, every time.Duration) Options {
 	return opts
 }
 
+// WithSweepEvery is opts with this node's seat host sweeping placement every
+// every rather than every [seat.SweepInterval], for a test outside the package
+// that must tell a claim the sweep's tick made from one something else asked
+// for.
+func WithSweepEvery(opts Options, every time.Duration) Options {
+	opts.sweepEvery = every
+	return opts
+}
+
 // SeedStore writes the migrated store image ([storetest.Seed]) where b's store
 // opens, for a case booting a node on a path of its own: the node's file
 // unless the store is scratch — discarded at open, so a seed would only be

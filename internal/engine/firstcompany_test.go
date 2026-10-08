@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -114,33 +114,49 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 // it has, and nothing passed that on: a node started with no company, then
 // handed one, ran none of its seats until placement's next tick noticed them,
 // up to [seat.SweepInterval] later — every time a company was created from the
-// dashboard. The apply runs inside the interval's first second here, so the
-// next tick is seconds away and only the apply's own ask can claim in time.
+// dashboard.
+//
+// THE SWEEP'S NEXT TICK IS AN HOUR AWAY here, so nothing but the apply's own
+// ask can claim, and the bound below is only how long a claim takes once the
+// apply has returned. A deadline raced against the shipped five-second tick
+// measured the APPLY instead: a node's first apply brings up the state log and
+// the native backends, which takes most of five seconds on a loaded runner,
+// and the case failed with the ask working exactly as it should.
 func TestAFirstCompanysSeatsAreClaimedWithoutWaitingForTheSweep(t *testing.T) {
 	t.Parallel()
-	e := unconfiguredEngine(t)
+	e, err := engine.New(t.Context(), engine.WithSweepEvery(engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		}),
+	}, time.Hour))
+	if err != nil {
+		t.Fatalf("an engine with no company was refused: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	started := time.Now()
 	if status, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc),
 		time.Now()); err != nil || status != configplane.StatusOK {
 		t.Fatalf("Apply = (%s, %v)", status, err)
 	}
+	applied := time.Now()
 	want := len(e.Company().Seats())
 	if want == 0 {
 		t.Fatal("the premise: the company has seats to claim")
 	}
-	// A SECOND SHORT OF THE TICK: claimed by then, the pass was the apply's.
-	deadline := started.Add(seat.SweepInterval - time.Second)
+	// GENEROUS, because a claim attaches a mailbox and prepares the seat:
+	// whatever it takes on a loaded machine, it is nowhere near the hour.
+	deadline := applied.Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(e.Node().Host().Held()) >= want {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("held %v of %d seats %v after the apply began — its seats waited "+
-		"for the sweep's tick", e.Node().Host().Held(), want, time.Since(started))
+	t.Fatalf("held %v of %d seats %v after the apply returned, with the sweep's "+
+		"next tick an hour away — nothing claimed the seats the apply added",
+		e.Node().Host().Held(), want, time.Since(applied))
 }
 
 // unconfiguredEngineOn is an engine with no company over a bootstrap the case
