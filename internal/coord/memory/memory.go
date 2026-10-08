@@ -75,6 +75,12 @@ type record struct {
 
 func (r *record) live(now time.Time) bool { return r.expiresAt.After(now) }
 
+// gated reports whether the record is one the protocol gate judges: live, and
+// of a class the gate counts (coord.ProtocolGateCounts).
+func (r *record) gated(now time.Time) bool {
+	return r.live(now) && coord.ProtocolGateCounts(r.resource)
+}
+
 func (r *record) lease() coord.Lease {
 	return coord.Lease{
 		Resource:   r.resource,
@@ -153,14 +159,15 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Le
 		return nil, coord.RefusedHeld
 	}
 
-	// The mixed-version gate. Refuse while ANY live lease is held at a
-	// lower protocol — the disagreement is about what holding a lease
-	// MEANS, so it is not scoped to the resource being claimed. Asymmetric
-	// by construction: it only ever looks for a LOWER protocol, so a
-	// lower-protocol node is never blocked.
+	// The mixed-version gate. Refuse while any live lease the gate counts
+	// — presence and seats, never a duty (coord.ProtocolGateCounts) — is
+	// held at a lower protocol. The disagreement is about what holding a
+	// seat MEANS, so it is not scoped to the resource being claimed.
+	// Asymmetric by construction: it only ever looks for a LOWER protocol,
+	// so a lower-protocol node is never blocked.
 	if !opts.Ungated {
 		for _, r := range b.rows {
-			if r.live(now) && r.protocol < protocol {
+			if r.gated(now) && r.protocol < protocol {
 				return nil, coord.RefusedProtocol
 			}
 		}
@@ -373,11 +380,12 @@ func (b *Backend) PreferredResources(ctx context.Context, class coord.Class, nod
 	return out, nil
 }
 
-// FleetProtocolFloor returns the lowest protocol among live leases, and
-// whether there were any. It is the observability half of the gate: a claim
-// refused [coord.RefusedProtocol] says a lease at a lower protocol stopped it,
-// and this names that protocol. It is asked after such a refusal and never
-// otherwise.
+// FleetProtocolFloor returns the lowest protocol among the live leases the
+// gate counts (coord.ProtocolGateCounts), and whether there were any. It is
+// the observability half of the gate: a claim refused [coord.RefusedProtocol]
+// says a lease at a lower protocol stopped it, and this names that protocol —
+// so it counts what the gate counts and nothing else. It is asked after such
+// a refusal and never otherwise.
 func (b *Backend) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	if err := unavailable(ctx); err != nil {
 		return 0, false, err
@@ -387,7 +395,7 @@ func (b *Backend) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	now := b.now()
 	floor, found := 0, false
 	for _, r := range b.rows {
-		if !r.live(now) {
+		if !r.gated(now) {
 			continue
 		}
 		if !found || r.protocol < floor {

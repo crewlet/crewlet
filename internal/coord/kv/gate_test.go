@@ -45,8 +45,8 @@ func delivered(ns *server.Server) int64 {
 // What a listing costs is its records, delivered to the claimant one by one,
 // and the broker counts every message it delivers: so the case holds a number
 // of seats, claims more gated, and compares what a claim was delivered at the
-// two sizes. The view's watch is started, and its load of the buckets paid,
-// by one claim BEFORE the ones counted — that load is the view's cost once
+// two sizes. The view's watch is started, and its load of the seat lease
+// bucket paid, by one claim BEFORE the ones counted — that load is the view's cost once
 // per run, not a claim's.
 func TestAGatedClaimCostsTheSameWhateverIsHeld(t *testing.T) {
 	t.Parallel()
@@ -202,8 +202,8 @@ func BenchmarkAGatedClaim(b *testing.B) {
 			}
 			b.Cleanup(s.Close)
 			holdSeats(b, s, held)
-			// One claim first: the view's load of the buckets is paid once
-			// per run of it, not per claim.
+			// One claim first: the view's load of the seat lease bucket is
+			// paid once per run of it, not per claim.
 			if lease, _, err := s.TryAcquire(context.Background(), coord.ClassSeat.Resource("warm"),
 				coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL}); err != nil || lease == nil {
 				b.Fatalf("warm the view: (%v, %v)", lease, err)

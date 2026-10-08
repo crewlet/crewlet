@@ -75,8 +75,10 @@ func DutyTTL(tick time.Duration) time.Duration {
 // so a fleet singleton keeps running through a rolling upgrade rather than
 // stalling until the last lower-protocol lease lapses. Ungated skips the
 // check, never the stamp: the claim carries this build's protocol (an omitted
-// [coord.AcquireOptions.Protocol] is this build's), so the record never holds
-// the fleet's floor below its own version.
+// [coord.AcquireOptions.Protocol] is this build's). The stamp is a fact for a
+// reader of the lease and holds no claim back — the gate counts presence and
+// seats, never a duty ([coord.ProtocolGateCounts]) — so a duty an older node
+// crashed holding cannot keep a newer fleet from placing seats for its TTL.
 //
 // TryAcquire doubles as a renew for the current owner and keeps its epoch, so
 // the per-tick claim is one store round trip and the holder stays the holder

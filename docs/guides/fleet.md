@@ -523,9 +523,9 @@ describes, and the broker re-places its copies of every stream — the files'
 included — on the members that remain, where there are enough of them. On `s3` it held no object. See
 [Taking a data node away](../concepts/object-store.md#taking-a-data-node-away).
 
-**Upgrade one node at a time, and let each one finish.** Seat leases
+**Upgrade one node at a time, and let each one finish.** Leases
 carry a protocol version, and a node refuses to claim seats while any
-live lease is held at a lower one. The rule is asymmetric on purpose:
+live presence or seat lease is held at a lower one. The rule is asymmetric on purpose:
 lower-protocol nodes keep working, higher ones wait — visibly, with
 `seat_claims_blocked_by_older_protocol` — until the last lower lease lapses
 or is released. A rolling deploy converges because that is what a rolling
@@ -535,6 +535,10 @@ The consequences worth stating plainly:
 
 - **A stalled rollout stalls placement.** If you leave one old node
   running, the new ones hold nothing. The log line says so; watch for it.
+- **An old node that crashes holds nothing up for long.** Its presence
+  and seat leases lapse within a lease TTL, and the duties it held do
+  not count, though they stay live for up to three hours. See
+  [Mixed-version fleets](../concepts/seat-ownership.md#mixed-version-fleets).
 - **Rolling *back* across a protocol bump needs a full stop.** The check
   only ever looks down, so a lower-protocol build is never refused and
   takes over a higher node's expired leases unchecked. Nothing in the table

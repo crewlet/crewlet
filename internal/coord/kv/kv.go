@@ -125,11 +125,14 @@
 // changes from silent mixed-protocol operation to a claim we immediately give
 // back. Combined with the gate's existing asymmetry — only higher-protocol
 // nodes wait, lower ones are never gated — that is a faithful degradation and a
-// deliberate difference, not an oversight. The gate judges both lease buckets,
-// because the contract counts every live lease — through a view of them kept
-// by a watch and made exact by a sequence barrier, never a listing per claim:
-// gate.go is where that is argued, with the three cheaper shapes that break
-// it.
+// deliberate difference, not an oversight. The gate judges the seat lease
+// bucket alone, because the contract counts presence and seat leases and
+// nothing else (coord.ProtocolGateCounts) — a duty lease outlives a crashed
+// holder by up to coord.MaxDutyTTL, and counted, it kept a fleet from placing
+// a seat for that long after the last older node died mid-upgrade. It judges
+// it through a view kept by a watch and made exact by a sequence barrier,
+// never a listing per claim: gate.go is where that is argued, with the three
+// cheaper shapes that break it.
 //
 // # Every listing is ONE CERTIFIED PASS, and never the client's ListKeys
 //
@@ -409,7 +412,7 @@ type Store struct {
 
 	ttl time.Duration
 
-	// gate is the protocol gate's view of both lease buckets (gate.go),
+	// gate is the protocol gate's view of the seat lease bucket (gate.go),
 	// which is what every gated claim and FleetProtocolFloor judge instead
 	// of listing the fleet's leases.
 	gate *gateView
@@ -785,9 +788,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			// seats its peers hold from starting the gate view at all.
 			return nil, coord.RefusedHeld, nil
 		}
-		// The gate, fleet-wide: refuse while ANY live lease is held at a
-		// lower protocol. The disagreement is about what HOLDING A LEASE
-		// means, so it is not scoped to the resource being claimed.
+		// The gate, fleet-wide: refuse while any live presence or seat
+		// lease (coord.ProtocolGateCounts) is held at a lower protocol.
+		// The disagreement is about what HOLDING A SEAT means, so it is
+		// not scoped to the resource being claimed.
 		// Asymmetric by construction — it only ever looks for a LOWER
 		// protocol, so a lower-protocol node is never blocked.
 		if !opts.Ungated {
@@ -1405,18 +1409,20 @@ func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeI
 	return out, nil
 }
 
-// FleetProtocolFloor returns the lowest protocol among live leases, and
-// whether there were any. It is the observability half of the gate: a claim
+// FleetProtocolFloor returns the lowest protocol among the live leases the
+// gate counts (presence and seats, coord.ProtocolGateCounts), and whether
+// there were any. It is the observability half of the gate: a claim
 // refused [coord.RefusedProtocol] says a lease at a lower protocol stopped it,
 // and this names that protocol. It is asked after such a refusal and never
 // otherwise — a sweep whose seats were merely held learns that from the
 // refusal ([coord.RefusedHeld]) and judges no gate.
 //
-// It counts what the GATE counts (held records in both lease buckets,
-// including one still in the claiming state) rather than what Get returns.
+// It counts what the GATE counts (held presence and seat records, including
+// one still in the claiming state) rather than what Get or a listing returns.
 // The two questions differ, and this one exists to explain a refusal: a floor
 // that omitted the very record that caused one would send an operator looking
-// for a peer that is not there.
+// for a peer that is not there, and one that counted a duty the gate passes
+// over would name an older build nothing is being refused for.
 //
 // Judged by the gate's view (gate.go), so it costs what a gate costs rather
 // than a listing of the fleet's leases.

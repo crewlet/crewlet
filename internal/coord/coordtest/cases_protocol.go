@@ -179,15 +179,76 @@ var protocolCases = []testCase{
 	}},
 
 	{"the_gate_reads_presence_leases_too", func(h *harness) {
-		// The predicate is over every live lease, presence included: an
-		// old node that has registered itself is an old node, whether or
-		// not it has taken a seat yet.
+		// The predicate is over presence as well as seats: an old node
+		// that has registered itself is an old node, whether or not it
+		// has taken a seat yet.
 		h.claim(coord.NodeResource("old"), coord.AcquireOptions{
 			Owner: "old:1", TTL: LongTTL, Protocol: 1, Ungated: true,
 		})
 		h.refused(coord.SeatResource("ceo"), coord.AcquireOptions{
 			Owner: "new:1", TTL: LongTTL, Protocol: 2,
 		}, coord.RefusedProtocol)
+	}},
+
+	{"an_older_duty_lease_does_not_hold_a_newer_claim_back", func(h *harness) {
+		// THE CRASH MID-UPGRADE. The last node of the older build holds
+		// its presence, a seat and a duty — the learning duty's TTL runs
+		// to hours — and dies. Its presence and its seat lapse within a
+		// seat lease TTL; its duty stays live for the rest of its own.
+		// Counted, that duty refused every newer node's seat claim for
+		// all of it: a fleet that could not place a seat for hours after
+		// a crash, over a lease that says nothing the older node's
+		// presence did not already say while it lived. So the gate
+		// counts presence and seats and never a duty — and each of the
+		// two still refuses on its own, a duty beside it or not.
+		duty := h.claim(coord.WorkerResource("learning"), coord.AcquireOptions{
+			Owner: "old:1", TTL: LongTTL, Protocol: 1, Ungated: true,
+		})
+		// Nor any other class a claim takes: a tracker walk's claim
+		// follows the walk's length and is not the seat-host protocol.
+		// (On the KV store it shares the seat lease bucket, so this is
+		// what holds the gate's view to the classes rather than to the
+		// bucket.)
+		h.claim("move:task-1", coord.AcquireOptions{
+			Owner: "old:1", TTL: LongTTL, Protocol: 1,
+		})
+		presence := h.claim(coord.NodeResource("old"), coord.AcquireOptions{
+			Owner: "old:1", TTL: LongTTL, Protocol: 1, Ungated: true,
+		})
+		newer := coord.AcquireOptions{Owner: "new:1", TTL: LongTTL, Protocol: 2}
+
+		// Alive and holding no seat yet: its PRESENCE refuses.
+		h.refused(coord.SeatResource("engineer"), newer, coord.RefusedProtocol)
+
+		// Draining — presence given up at the first step, the seat still
+		// served until it is handed over: its SEAT refuses.
+		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+			Owner: "old:1", TTL: LongTTL, Protocol: 1,
+		})
+		if !h.release(coord.NodeResource("old"), "old:1", presence.Epoch) {
+			h.t.Fatal("release of the older node's presence reported failure")
+		}
+		h.refused(coord.SeatResource("engineer"), newer, coord.RefusedProtocol)
+
+		// It crashes: the seat lapses, and the duty and the walk claim
+		// are all it left.
+		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{
+			Owner: "old:1", TTL: ShortTTL, Protocol: 1,
+		})
+		h.lapse()
+		if still := h.mustHold(coord.WorkerResource("learning"), "old:1"); still.Epoch != duty.Epoch {
+			h.t.Fatalf("the older duty moved from epoch %d to %d", duty.Epoch, still.Epoch)
+		}
+		if lease := h.claim(coord.SeatResource("engineer"), newer); lease.Protocol != 2 {
+			h.t.Fatalf("the newer claim recorded protocol %d, want 2", lease.Protocol)
+		}
+
+		// And the floor names what the gate counts: the newer seat, not
+		// the older leases no claim is refused over.
+		if floor, any := h.floor(); !any || floor != 2 {
+			h.t.Fatalf("FleetProtocolFloor = (%d, %v) with only an older duty and walk claim live beside "+
+				"a newer seat, want (2, true): it must count what the gate counts", floor, any)
+		}
 	}},
 
 	{"ungated_claims_skip_the_gate", func(h *harness) {
@@ -208,9 +269,10 @@ var protocolCases = []testCase{
 
 	{"an_ungated_claim_still_records_its_own_protocol", func(h *harness) {
 		// Ungated skips the CHECK, never the stamp: the lease carries
-		// the claiming build's protocol like any other, so it holds a
-		// newer claim back only while a build at that protocol holds it,
-		// and never holds a claim at its own protocol back.
+		// the claiming build's protocol like any other. A duty's stamp
+		// holds no claim back at all (see
+		// an_older_duty_lease_does_not_hold_a_newer_claim_back), and no
+		// lease holds a claim at its own protocol back.
 		duty := h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Protocol: 3, Ungated: true,
 		})

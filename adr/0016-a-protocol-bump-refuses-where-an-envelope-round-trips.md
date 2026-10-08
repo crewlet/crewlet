@@ -19,7 +19,9 @@ through an older node untouched.
 
 **On a lease, an unknown thing REFUSES.** `coord.ProtocolVersion` is the
 seat-host protocol a build speaks, and a node will not claim anything while a
-live lease is held at a LOWER protocol. The rule is asymmetric on purpose: the
+live presence or seat lease is held at a LOWER protocol — the leases that say a
+node of that build is alive or still running seats, and never a duty, which
+outlives a crashed holder by hours. The rule is asymmetric on purpose: the
 check only ever looks down, so lower-protocol nodes keep working; higher ones
 wait, visibly, until the last lower lease lapses.
 

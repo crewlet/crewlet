@@ -154,10 +154,12 @@ import (
 // and jointly wrong.
 //
 // So the rule is asymmetric, deliberately: a node refuses to claim anything
-// while a live lease is held at a LOWER protocol. The check only ever looks
-// down, so the lower-protocol nodes keep working and are never refused; the
-// higher ones wait, visibly, until the last lower lease lapses. A rolling
-// deploy converges because that is what a rolling deploy does.
+// while a live PRESENCE OR SEAT lease is held at a LOWER protocol — the two
+// classes that say a node of that build is alive or still running seats
+// ([ProtocolGateCounts], which says why a duty is not one). The check only
+// ever looks down, so the lower-protocol nodes keep working and are never
+// refused; the higher ones wait, visibly, until the last lower lease lapses.
+// A rolling deploy converges because that is what a rolling deploy does.
 //
 // Two consequences worth stating plainly. Schema evolution here is
 // additive-only: a field the lower-protocol build does not know is invisible
@@ -176,6 +178,34 @@ import (
 // spend, and every cap would bind late — by as much as the other build had
 // spent.
 const ProtocolVersion = 4
+
+// ProtocolGateCounts reports whether a lease on resource is one the protocol
+// gate judges — and so one [Backend.FleetProtocolFloor] counts. Every backend
+// asks this one function, so the twin and the store cannot disagree about it.
+//
+// PRESENCE AND SEATS, AND NOTHING ELSE, because the gate's question is "is a
+// node of a lower protocol live, or still running seats", and those two
+// classes are the whole answer. A `node:` lease is what says a node is alive:
+// it lapses one seat lease TTL after the node stops. A `seat:` lease is the
+// thing whose MEANING [ProtocolVersion] versions, and it is held past
+// presence — a drain gives presence up at its first step and keeps serving
+// its seats until each is handed over — so presence alone would let a newer
+// node claim beside a draining older one.
+//
+// A DUTY (`worker:`) IS NOT COUNTED, and counting it was a fleet-wide stall:
+// a duty is claimed ungated (see [AcquireOptions.Ungated]) and outlives its
+// holder by its TTL, which runs to [MaxDutyTTL]. When the last node of the
+// older build crashed mid-upgrade, its presence and seats lapsed in under a
+// minute while its duty leases stayed live for up to three hours, and every
+// newer node's seat claim was refused for all of it — a fleet that could not
+// place a seat for hours after a crash, over a lease that says nothing
+// presence does not already say while its holder lives. The same holds for
+// every other class a claim takes — the tracker's walk claims, whose TTL
+// follows the walk — none of which is the seat-host protocol and each of
+// which is held by a node whose presence or seats already speak for it.
+func ProtocolGateCounts(resource string) bool {
+	return ClassNode.Holds(resource) || ClassSeat.Holds(resource)
+}
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
 // wrap their transport failures in it. Callers should not switch on it —
@@ -374,10 +404,14 @@ type AcquireOptions struct {
 	// Singleton duties: the protocol is the SEAT-host protocol, and a duty
 	// is not a seat. A fleet singleton keeps running through a rolling
 	// upgrade on whichever build takes it rather than stalling until the
-	// last lower-protocol lease lapses. Ungated skips the check, never the
-	// stamp: the lease carries the claiming build's protocol like any
-	// other, so it holds a newer claim back only while a build at that
-	// protocol holds it.
+	// last lower-protocol lease lapses — and for the same reason a duty
+	// lease holds no claim back ([ProtocolGateCounts]).
+	//
+	// Ungated skips the check, never the stamp: the lease carries the
+	// claiming build's protocol like any other. On presence the stamp is
+	// what the gate reads, so a presence lease holds a newer claim back
+	// while a build at that protocol holds it; on a duty it is a fact for a
+	// reader of the lease and holds nothing back.
 	Ungated bool
 }
 
@@ -454,8 +488,9 @@ type Backend interface {
 	// Refuses [RefusedHeld] while another owner holds a live lease on the
 	// resource, WHATEVER THE GATE WOULD SAY: a claim that cannot write
 	// judges no gate. Otherwise refuses [RefusedProtocol] while any live
-	// lease is held at a lower protocol, unless Ungated. See [Refusal] for
-	// why the reason is part of the answer.
+	// lease the gate counts ([ProtocolGateCounts]: presence and seats) is
+	// held at a lower protocol, unless Ungated. See [Refusal] for why the
+	// reason is part of the answer.
 	//
 	// A duty (a `worker:` resource) is honoured at any TTL up to
 	// [MaxDutyTTL] whatever TTL the backend's seat leases run on, and
@@ -490,9 +525,13 @@ type Backend interface {
 	// purpose is to bring a restarted node's own seats back to it.
 	PreferredResources(ctx context.Context, class Class, nodeID string) (map[string]struct{}, error)
 
-	// FleetProtocolFloor returns the lowest protocol among live leases,
-	// and whether there were any. The observability half of the gate: a
-	// claim refused [RefusedProtocol] asks it for the floor to name.
+	// FleetProtocolFloor returns the lowest protocol among the live leases
+	// the gate counts ([ProtocolGateCounts]), and whether there were any.
+	// The observability half of the gate: a claim refused [RefusedProtocol]
+	// asks it for the floor to name, so it counts EXACTLY what the gate
+	// counts — a duty left out of one and counted in the other would name a
+	// protocol nothing is being refused over, and send an operator looking
+	// for an older node that is not there.
 	FleetProtocolFloor(ctx context.Context) (int, bool, error)
 }
 
@@ -503,14 +542,15 @@ type Backend interface {
 // It was not: every refusal was the same (nil, nil), and a caller that needed
 // to tell "a peer holds it" from "the mixed-version gate stopped me" was told
 // to ask [Backend.FleetProtocolFloor] once per claim sweep. That read looks
-// cheap and is not — a gate is a question about EVERY live lease, which a
-// backend answers from a standing view of the fleet's lease writes (the KV
-// backend's gate view) — so a node with room to claim whose every candidate
-// was held by a peer asked it on every five-second sweep, and its view took in
-// every lease write the fleet made for as long as the node stayed below its
-// share: at ten thousand seats, about 670 messages a second on each such node,
-// for a question whose answer the claims already knew. The backend knows at
-// the moment it refuses which rule refused, at no cost, so it says so.
+// cheap and is not — a gate is a question about EVERY live presence and seat
+// lease, which a backend answers from a standing view of the fleet's lease
+// writes (the KV backend's gate view) — so a node with room to claim whose
+// every candidate was held by a peer asked it on every five-second sweep, and
+// its view took in every lease write the fleet made for as long as the node
+// stayed below its share: at ten thousand seats, about 670 messages a second
+// on each such node, for a question whose answer the claims already knew. The
+// backend knows at the moment it refuses which rule refused, at no cost, so it
+// says so.
 //
 // The zero value is "not refused": a granted claim, or an unknown one.
 type Refusal string
@@ -521,10 +561,10 @@ const (
 	// claim that cannot write has nothing for a gate to stop — and because
 	// it is what lets a claim on a held resource judge no gate at all.
 	RefusedHeld Refusal = "held"
-	// RefusedProtocol is the refusal of a claim while a live lease is held
-	// at a lower protocol than the claim's (ADR-0016). Every gated claim
-	// this node makes is refused the same way until that lease goes, which
-	// is what a caller reports.
+	// RefusedProtocol is the refusal of a claim while a live presence or
+	// seat lease ([ProtocolGateCounts]) is held at a lower protocol than the
+	// claim's (ADR-0016). Every gated claim this node makes is refused the
+	// same way until that lease goes, which is what a caller reports.
 	RefusedProtocol Refusal = "protocol"
 )
 

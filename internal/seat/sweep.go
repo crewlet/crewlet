@@ -531,7 +531,7 @@ func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 // has just judged the same view, so the floor is read from a view that is
 // already running rather than one started to answer it.
 func (h *Host) protocolBlock(ctx context.Context) int {
-	const hint = "an older-protocol node still holds leases; this node will claim nothing " +
+	const hint = "an older-protocol node is still live or still holds seats; this node will claim nothing " +
 		"until it drains. Finish the rolling upgrade — do NOT roll back across a protocol " +
 		"bump without stopping the fleet first."
 	floor, found, err := h.backend.FleetProtocolFloor(ctx)

@@ -326,6 +326,7 @@ So `duties` holds every `worker:` lease, and the rules are these:
 - **A duty may ask for any TTL up to three hours** (`coord.MaxDutyTTL`), on every backend, whatever the seat lease TTL is. One that asks for more is refused with an error naming the ceiling, on the in-memory backend as well, so a duty too long for a fleet fails in a single-node test rather than only in production.
 - **The ceiling is the longest duty's TTL**, and an engine test holds the two equal, so neither can move without the other.
 - **Changing `coordination.lease_ttl_seconds` changes seats and presence only.** A duty's TTL comes from its own cadence.
+- **A duty never holds a newer build back.** The [mixed-version gate](seat-ownership.md#mixed-version-fleets) counts presence and seat leases only, so it never reads this bucket. A duty is claimed ungated and can outlive a crashed holder by up to three hours. Counted, it would keep a fleet from placing seats for that long after the last older node died mid-upgrade.
 
 ---
 

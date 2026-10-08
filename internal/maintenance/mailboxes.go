@@ -649,8 +649,8 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 			"the claim retried on the next tick"
 		if refused != coord.RefusedHeld {
 			detail = "the seat is absent from the active revision but its lease could not be " +
-				"claimed because a node of an older build holds a lease in this fleet; the " +
-				"mailbox is kept until the rolling upgrade finishes"
+				"claimed because a node of an older build holds a presence or seat lease in " +
+				"this fleet; the mailbox is kept until the rolling upgrade finishes"
 		}
 		log.WarnContext(ctx, "seat_mailbox_retirement_held", "handle", handle,
 			"absent_since", rec.AbsentSince, "refused", string(refused), "detail", detail)
