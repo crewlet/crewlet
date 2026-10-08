@@ -57,6 +57,41 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 		t.Fatalf("the installed index records the measurement %+v", state.Head.Measurement)
 	}
 
+	// AND ITS ROLLOUT IS CUT AT THE DUTY'S OWN BATCH, which is what bounds
+	// the rows one reassign apply re-files: every range but a source's last
+	// held search.IVFReassignBatch of the ids the index was trained on, so of
+	// the ids the corpus holds now it holds at least that many and at most
+	// that many more than were embedded since.
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		ranges, ids := installedRollout(t, tx), embeddedIDs(t, tx)
+		since, closed := state.Sources-state.Head.TrainedOn, 0
+		for _, r := range ranges {
+			if r.To == "" {
+				continue
+			}
+			closed++
+			held := 0
+			for _, id := range ids[r.Source] {
+				if r.Holds(r.Source, id) {
+					held++
+				}
+			}
+			if held < search.IVFReassignBatch || held > search.IVFReassignBatch+since {
+				return fmt.Errorf("the rollout range %+v holds %d ids, and a cut "+
+					"every %d of the %d trained on holds %d to %d of the %d now",
+					r, held, search.IVFReassignBatch, state.Head.TrainedOn,
+					search.IVFReassignBatch, search.IVFReassignBatch+since, state.Sources)
+			}
+		}
+		if closed == 0 {
+			return fmt.Errorf("the rollout of an index trained on %d ids is %d "+
+				"open ranges — no cut at all", state.Head.TrainedOn, len(ranges))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	// AND THE INDEX IS WHAT A SEARCH PROBES.
 	query, err := embedder.Embed(t.Context(), "a query about something")
 	if err != nil {
@@ -264,6 +299,53 @@ func runToRestBy(t *testing.T, h *embedHarness, duty *search.Embedder, dim int, 
 		}
 	}
 	return state, rollouts
+}
+
+// installedRollout is the installed index's rollout, batch by batch.
+func installedRollout(t *testing.T, tx *sql.Tx) []search.RolloutRange {
+	t.Helper()
+	rows, err := tx.QueryContext(t.Context(),
+		`SELECT source, from_id, to_id FROM kb_ivf_rollout ORDER BY batch`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []search.RolloutRange
+	for rows.Next() {
+		var r search.RolloutRange
+		var source string
+		if err := rows.Scan(&source, &r.From, &r.To); err != nil {
+			t.Fatal(err)
+		}
+		r.Source = search.Source(source)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// embeddedIDs is every id with a vector, by source.
+func embeddedIDs(t *testing.T, tx *sql.Tx) map[search.Source][]string {
+	t.Helper()
+	rows, err := tx.QueryContext(t.Context(), `SELECT source, source_id FROM kb_vectors`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[search.Source][]string{}
+	for rows.Next() {
+		var source, id string
+		if err := rows.Scan(&source, &id); err != nil {
+			t.Fatal(err)
+		}
+		out[search.Source(source)] = append(out[search.Source(source)], id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func taskBodies(n int) map[string]string {

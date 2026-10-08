@@ -143,7 +143,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	}
 	// AND MID-ROLLOUT: a second index installed and not yet rolled out, so
 	// the probe reads the unfiled rows beside its lists.
-	second := trainedIndex(t, db, model, dim)
+	second := trainedIndex(t, db, model, dim, search.IVFReassignBatch)
 	second.Index.Seed++
 	applyAt(t, db, second, 1<<30)
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {

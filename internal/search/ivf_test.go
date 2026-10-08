@@ -253,7 +253,7 @@ func TestEveryHolderBuildsTheSameIndex(t *testing.T) {
 	train := func() int64 {
 		t.Helper()
 		catchUp()
-		index := trainedIndex(t, live, model, dim)
+		index := trainedIndex(t, live, model, dim, search.IVFReassignBatch)
 		add(index)
 		catchUp()
 		generation := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
@@ -407,11 +407,11 @@ func TestAPartialRepublicationStillFilesEveryRow(t *testing.T) {
 	}
 	live := openReplicated(t)
 	applyAll(t, live, log)
-	older := trainedIndex(t, live, model, dim)
+	older := trainedIndex(t, live, model, dim, search.IVFReassignBatch)
 	add(older)
 	olderGeneration := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
 	applyAll(t, live, log[len(log)-1:])
-	index := trainedIndex(t, live, model, dim)
+	index := trainedIndex(t, live, model, dim, search.IVFReassignBatch)
 	index.Index.Seed++ // another training, so another index
 	add(index)
 	generation := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
@@ -560,7 +560,7 @@ func TestARowTheRolloutHasNotReachedIsStillFound(t *testing.T) {
 	db, _ := indexedStore(t, model, dim, 1600)
 
 	// A SECOND INDEX, installed and not rolled out: every row is stale.
-	rec := trainedIndex(t, db, model, dim)
+	rec := trainedIndex(t, db, model, dim, search.IVFReassignBatch)
 	rec.Index.Seed++ // a different training, so a different index
 	applyAt(t, db, rec, 1_000_000)
 
@@ -614,7 +614,7 @@ func TestAnOlderIndexNeverReplacesANewerOne(t *testing.T) {
 	const dim, model = 32, "order-embed"
 	db, generation := indexedStore(t, model, dim, 1100)
 	newer := indexOf(t, db)
-	older := trainedIndex(t, db, model, dim)
+	older := trainedIndex(t, db, model, dim, search.IVFReassignBatch)
 	older.Index.Seed++
 	applyAt(t, db, older, 5) // far below the installed generation
 	if got := indexOf(t, db); got.generation != generation ||
@@ -948,7 +948,7 @@ func TestARolloutCoversEveryKey(t *testing.T) {
 	for i := range 2*search.IVFReassignBatch + 17 {
 		ids[search.SourcePage] = append(ids[search.SourcePage], fmt.Sprintf("p%06d", i))
 	}
-	ranges := search.RolloutRanges(ids)
+	ranges := search.RolloutRanges(ids, search.IVFReassignBatch)
 	// Three page batches and one open task batch.
 	if len(ranges) != 4 {
 		t.Fatalf("%d batches for %d page ids and no task ids", len(ranges),
@@ -998,6 +998,17 @@ func TestARolloutCoversEveryKey(t *testing.T) {
 			t.Errorf("a rollout with %s encoded", name)
 		}
 	}
+
+	// AND A CUT EVERY NO IDS AT ALL IS REFUSED, where the loop cutting it
+	// would never advance.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("a rollout cut every 0 ids was cut")
+			}
+		}()
+		search.RolloutRanges(ids, 0)
+	}()
 }
 
 // ---- helpers --------------------------------------------------------- //
@@ -1230,8 +1241,9 @@ func readingOf(t testing.TB, db *store.DB, model string, dim int) search.Trainin
 
 // trainedIndex trains db's index exactly as the duty does and returns its
 // centroids record — INSTALLED whatever the training's verdict, because these
-// tests are about what an installed index does.
-func trainedIndex(t testing.TB, db *store.DB, model string, dim int) search.VectorRecord {
+// tests are about what an installed index does — its rollout cut every batch
+// ids.
+func trainedIndex(t testing.TB, db *store.DB, model string, dim, batch int) search.VectorRecord {
 	t.Helper()
 	reading := readingOf(t, db, model, dim)
 	codes := reading.Corpus.Codes
@@ -1260,7 +1272,7 @@ func trainedIndex(t testing.TB, db *store.DB, model string, dim int) search.Vect
 			Log: "S", Seed: seed, Lists: lists, Probes: choice.Probes,
 			TrainedOn: codes.Len(), Largest: search.LargestList(byList),
 			Measurement: &measurement, Centroids: index.Bytes(),
-			Rollout: search.RolloutRanges(reading.IDs),
+			Rollout: search.RolloutRanges(reading.IDs, batch),
 		},
 	}
 }
@@ -1304,7 +1316,7 @@ func indexedStore(t *testing.T, model string, dim, n int) (*store.DB, int64) {
 		t.Fatal(err)
 	}
 	seq++
-	index := trainedIndex(t, db, model, dim)
+	index := trainedIndex(t, db, model, dim, search.IVFReassignBatch)
 	applyAt(t, db, index, seq)
 	generation := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
 	for n := range index.Index.Rollout {

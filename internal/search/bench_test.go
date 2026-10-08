@@ -414,7 +414,7 @@ func newIndexedCorpus(b *testing.B, n int) *indexedCorpus {
 
 	// THE DUTY'S OWN TRAINING, on the store's own rows and held-out
 	// documents, then installed and rolled out through the applier.
-	index := trainedIndex(b, c.db, c.model, search.FixtureWidth)
+	index := trainedIndex(b, c.db, c.model, search.FixtureWidth, search.IVFReassignBatch)
 	c.lists, c.probes = index.Index.Lists, index.Index.Probes
 	c.installed = index.Index.Measurement.Passed() &&
 		c.probes*search.IVFProbeCeiling <= c.lists
