@@ -168,7 +168,7 @@ Free text — a person, a team, a scheduler's name. The engine does not run your
 backups and cannot; `crewlet backup` is a node-client command because the
 coordination broker binds no socket. Ownership is still a person. What this
 field changes is that the fleet can name which one, in four places: `crewlet
-validate` warns when it is unset under `backup_floor: engine`, `crewlet
+validate` warns whenever it is unset (under either `backup_floor`), `crewlet
 retention status` names it in the backup term's remedy, the retention answer
 renders it, and **`crewlet backup`'s manifest records it** — which is where it
 stops being configuration and becomes durable evidence.
