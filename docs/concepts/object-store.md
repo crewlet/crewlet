@@ -111,7 +111,9 @@ logs survive, on the same members:
   than this node's `stream.replicas` stops the node from starting, naming the
   setting, rather than taking uploads it would prove fewer copies of. Every
   node used to write the bucket's configuration on every boot, and on a fleet
-  booting together that write was never answered for fifteen seconds.
+  booting together that write was never answered for fifteen seconds. A
+  lookup and create still running after ten seconds says so, once, as
+  `natsobj_bucket_slow` — see [Deployment](../guides/deployment.md#a-clustered-node-is-given-longer-to-create-them).
 - **A read the broker loses its reader under carries on.** A download, a
   listing and a page's walk each read through a consumer the broker keeps for
   them, and a broker that loses it part way — reaped under a slow reader, or
