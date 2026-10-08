@@ -54,6 +54,7 @@ func capacityFixture(t *testing.T, id string, mode statelog.MaintenanceMode) (
 // refuses — and must be withdrawn again before the refusal returns, or a node
 // that correctly declined to start would block every later operation for ever.
 func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeNormal)
 
@@ -108,6 +109,7 @@ func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
 // publishing into a fleet mid-window on the one failure that most plausibly
 // accompanies one.
 func TestAnUnreadableOperationIsNotAnAbsentOne(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeNormal)
 	e.backends.Fleet = &blindFleet{fleetStore: fleet, readErr: errors.New("store unreachable")}
@@ -130,6 +132,7 @@ func TestAnUnreadableOperationIsNotAnAbsentOne(t *testing.T) {
 // TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges: the two halves
 // are exclusive, and each is the other's evidence.
 func TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	streams := []string{"CREWLET_TRACKER_LOG"}
 
@@ -176,6 +179,7 @@ func TestOnlyANormalNodeAdmitsAndOnlyAMaintenanceNodeAcknowledges(t *testing.T) 
 // the request it is retiring. An ack that did not carry its mode would let a
 // maintenance-mode node's restart satisfy the barrier.
 func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeSeal)
 
@@ -222,6 +226,7 @@ func TestAnAcknowledgementCarriesTheModeItWasMadeIn(t *testing.T) {
 // them looks like a satisfied barrier from a distance and each would confirm
 // an operation whose request may still be outstanding.
 func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T) {
+	t.Parallel()
 	op := coord.MaintenanceOperation{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1", Attempt: 2,
 		Participants:      []string{"node-1", "node-2"},
@@ -289,6 +294,7 @@ func TestTheBarrierRefusesEveryWayAnAcknowledgementCanBeTheWrongOne(t *testing.T
 
 // TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement.
 func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testing.T) {
+	t.Parallel()
 	op := coord.MaintenanceOperation{
 		OperationID: "op-1", Attempt: 1,
 		Participants:      []string{"node-1", "node-2"},
@@ -316,6 +322,7 @@ func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testi
 // An empty baseline compares unequal to every later acknowledgement, so a
 // participant baselined at one satisfies the seal without ever restarting.
 func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	op := coord.MaintenanceOperation{
@@ -366,6 +373,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 // which is about whose position pins the trim. A node evicted from that is
 // still a machine that can run a publisher.
 func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-coordinator", statelog.ModeMaintenance)
 	backend := coordmem.New()
@@ -402,6 +410,7 @@ func TestEveryMachineThatCouldHoldARequestMustAcknowledge(t *testing.T) {
 // participant set read from a store that failed is a set with nodes silently
 // missing, and every one of them is a machine that may be publishing.
 func TestAnUnreadablePositionRegisterRefusesRatherThanShrinkingTheSet(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	e.backends.Fleet = &blindFleet{fleetStore: fleet, positionsErr: errors.New("store unreachable")}
@@ -426,6 +435,7 @@ func (b blindPresence) ListLive(ctx context.Context, class coord.Class) ([]coord
 // register's reason: every presence it could not read names a node that may be
 // publishing the estate's records, or a broker member holding a request.
 func TestAnUnreadablePresenceListingRefusesRatherThanShrinkingTheSet(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _ := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	e.backends.Coord = blindPresence{Backend: coordmem.New()}
@@ -439,6 +449,7 @@ func TestAnUnreadablePresenceListingRefusesRatherThanShrinkingTheSet(t *testing.
 // handshake: a node that slipped between the check and its own start left a
 // durable record, and that record is what a silence could never be.
 func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	if err := fleet.PutAdmission(ctx, coord.Admission{
@@ -470,6 +481,7 @@ func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
 // gesture (a log created larger than its budget allows is the common case), so
 // the line is drawn at the usage and nowhere else.
 func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	current := jetstream.LogStats{Bytes: 5 << 30, MaxBytes: 8 << 30}
@@ -514,6 +526,7 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 // reserve is still measured against its whole ceiling, and the target the
 // refusal names is exact: it opens, and a byte less does not.
 func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 15 << 30, MaxBytes: 32 << 30}
 	const target = 16 << 30 // a sixteenth of it is the reserve: 15 GiB left
@@ -567,6 +580,7 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 // reserve is sized against, so a smaller ceiling keeps too small a reserve for
 // the appends in flight it has to absorb.
 func TestATargetUnderTheFloorIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 1 << 20, MaxBytes: 4 << 30}
 	for _, domain := range registeredDomains() {
@@ -605,6 +619,7 @@ var unstatedRoom = jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUn
 // number the node could read before any of them. So the room is decided with
 // the usage, and only where it is stated.
 func TestARaiseTheBrokerCannotReserveIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 1 << 30, MaxBytes: 4 << 30}
 	room := jetstream.StorageBudget{Limit: 10 << 30, Committed: 8 << 30,
@@ -660,6 +675,7 @@ func TestARaiseTheBrokerCannotReserveIsRefused(t *testing.T) {
 // make a mismatch unreadable — nobody could tell an unapplied request from a
 // changed mind.
 func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
@@ -700,6 +716,7 @@ func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) 
 // SECOND window on a stream that may already have one — and the loser of that
 // race is an exclusion nobody can find.
 func TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	flaky := &blindFleet{fleetStore: fleet, openFailures: 2}
@@ -725,6 +742,7 @@ func TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow(t *te
 
 // TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow.
 func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	e.backends.Fleet = &blindFleet{fleetStore: fleet, openFailures: 99}
@@ -746,6 +764,7 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 // names them: if the two disagreed, a reanchor would refuse naming nobody, or
 // permit while naming someone.
 func TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream(t *testing.T) {
+	t.Parallel()
 	rows := []coord.NodePositions{
 		{NodeID: "self", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 4, AppliedThrough: 900},
@@ -895,6 +914,7 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 // is the same stream a target of zero would have produced, which this verb
 // already refuses by name, reached from the opposite-looking input.
 func TestACapacityTargetPastInt64IsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet, stream := capacityNode(t, budgetHost{room: unstatedRoom})
 
@@ -926,6 +946,7 @@ func TestACapacityTargetPastInt64IsRefused(t *testing.T) {
 // tell them anything more. The journal record stays `issued` either way, which
 // is why even this half says to abandon rather than to walk away.
 func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, _, stream := capacityNode(t, budgetHost{room: jetstream.StorageBudget{
 		Limit: 8 << 30, Committed: 7 << 30, Source: jetstream.BudgetServerStore}})
@@ -975,6 +996,7 @@ func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 // fleet has to seal to retire. An external broker whose account states no
 // limit is the same case — "the limit is -1" is not a sentence.
 func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, host := range map[string]budgetHost{
 		"a budget that cannot be read":  {err: errors.New("no responders")},
@@ -1005,6 +1027,7 @@ func TestARefusalWithNoReadableRoomIsStillARefusal(t *testing.T) {
 // member or a publisher could pass a seal it should hold. A leaf or a client
 // of an external cluster that holds no data does neither.
 func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, fleet := capacityFixture(t, "node-coordinator", statelog.ModeMaintenance)
 	backend := coordmem.New()
@@ -1079,6 +1102,7 @@ func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T)
 // seat — is the one record there is. Each node here boots that host exactly as
 // the engine does, behind the engine's own claim gate.
 func TestADatalessMemberMustAcknowledgeASeal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	coordinator, fleet := capacityFixture(t, "data-a", statelog.ModeSeal)
 	backend := coordmem.New()

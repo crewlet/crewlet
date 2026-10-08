@@ -360,6 +360,7 @@ func (w writingDetach) CallDetached(ctx context.Context, t *turnctx.Turn,
 // the resume re-enters — the other half of the case above, through the real
 // suspension path.
 func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
+	t.Parallel()
 	e, _ := indicatingWith(t, notify.StatusAlways, suspendingModel{})
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	// THE WORK'S OWN START, as every dispatch derives it from the inbox: a

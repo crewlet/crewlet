@@ -26,6 +26,7 @@ import (
 // and signing secret each seat holds are in this engine's own document. See
 // [slackTeardown].
 func TestEverySurfaceHasADisconnector(t *testing.T) {
+	t.Parallel()
 	got := (&Engine{}).disconnectors()
 	for _, kind := range integration.Kinds {
 		if _, ok := got[kind]; !ok {
@@ -68,6 +69,7 @@ func (noopWriter) Reload(context.Context, string, string) error { return nil }
 // attempt is counted, and the node that does hold the document finishes the
 // disconnect.
 func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) {
+	t.Parallel()
 	for _, kind := range integration.Kinds {
 		t.Run(string(kind), func(t *testing.T) {
 			e := &Engine{}
@@ -163,6 +165,7 @@ roles:
 // CREDENTIAL, and the credential had not changed — and reported a 401 as the
 // operator's problem, at a third-party app, for about thirty-five seconds.
 func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	sink, err := e.SetupSink("test-operator")
 	if err != nil {
@@ -207,6 +210,7 @@ func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 // A TEARDOWN THAT REMOVED NO ACCOUNT DELETES NOTHING, which is what keeps a
 // disconnect that only withdrew a webhook from touching the store at all.
 func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	sink, err := e.SetupSink("test-operator")
 	if err != nil {
@@ -273,6 +277,7 @@ func (p *removingPass) Teardown(context.Context, setup.TeardownInput) (provision
 // teardown reports it" and "the engine acts on it" are two facts and only the
 // second one ends the defect.
 func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
+	t.Parallel()
 	e, company := sealingEngine(t, "https://jira.example.com")
 	e.epoch.current.Store(company)
 	e.UseConfigWriter(noopWriter{})

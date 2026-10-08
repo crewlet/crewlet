@@ -32,6 +32,7 @@ import (
 // so the seat that answers is registered into the live registry and starts
 // receiving work immediately.
 func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
+	t.Parallel()
 	var refuse atomic.Bool
 	refuse.Store(true)
 
@@ -109,6 +110,7 @@ func TestASeatIdentityThatFailedIsRetriedOnTheNextPass(t *testing.T) {
 // Reporting it would put every human seat in the company on the card and bury
 // the one seat that is actually broken.
 func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nobody should ask", http.StatusForbidden)
 	}))
@@ -206,6 +208,7 @@ roles:
 // surface would report itself ready over a seat receiving nothing, the loop
 // would hold that answer for a settled interval, and nothing would ask again.
 func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not grantable yet", http.StatusForbidden)
 	}))
@@ -243,6 +246,7 @@ func TestTheLoopTickCarriesTheEnginesOwnRoutingFindings(t *testing.T) {
 // Both now go through one function; two copies of a guard is a hole rather
 // than a duplication.
 func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("the retry asked %s about a code host it cannot verify a "+
 			"delivery for", r.URL.Path)
@@ -317,6 +321,7 @@ roles:
 // and "a person must act at Atlassian" one line below it, about one agent,
 // over a condition that cleared itself in seventy seconds.
 func TestASeatTheSurfacesOwnPassReportedIsNotReportedTwice(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not grantable yet", http.StatusForbidden)
 	}))

@@ -53,6 +53,7 @@ func (p *probe) at(seq uint64) (time.Time, bool, error) {
 // got backwards — reading `min_age` as a ceiling on retention, which trims
 // exactly the records it was set to keep.
 func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	cutoff := base.Add(50 * time.Minute)
 
@@ -98,6 +99,7 @@ func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
 // records the term should have permitted — the trim then never advances past
 // the hole, which is a log that grows for ever with no term reporting a block.
 func TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	cutoff := base.Add(50 * time.Minute)
 
@@ -126,6 +128,7 @@ func TestTheAgeFloorReadsATrimmedHoleAsOldRatherThanAsMissing(t *testing.T) {
 // record older than the floor, and a term that answered zero would block the
 // trim on a log that has nothing to trim.
 func TestAnEmptyLogsAgeTermPermitsEverythingRatherThanBlocking(t *testing.T) {
+	t.Parallel()
 	got, err := ageFloorOf(0, 0, 0, time.Now(), func(uint64) (time.Time, bool, error) {
 		t.Fatal("an empty log was probed")
 		return time.Time{}, false, nil
@@ -142,6 +145,7 @@ func TestAnEmptyLogsAgeTermPermitsEverythingRatherThanBlocking(t *testing.T) {
 // broker that could not answer is not a log whose records are all young, and a
 // floor guessed from a failed probe is one the trim deletes against.
 func TestAnUnreadableProbeRefusesRatherThanGuessingAFloor(t *testing.T) {
+	t.Parallel()
 	want := errors.New("broker unreachable")
 	if _, err := ageFloorOf(1, 100, 100, time.Now(),
 		(&probe{fail: want}).at); !errors.Is(err, want) {
@@ -165,6 +169,7 @@ func floorFleet(t *testing.T) *retention {
 // something that reaches a person — would never be reached on a fleet whose
 // lease flapped even once a day.
 func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	blocked := statelog.TrimDecision{
@@ -213,6 +218,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 // instant left on an advancing domain ages into an alarm on a healthy fleet,
 // which is the alarm nobody believes the second time.
 func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	first := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -248,6 +254,7 @@ func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
 // [statelog.Trim] reports Blocked exactly when it permits removing up to zero,
 // so a blocked tick's TrimTo is always 0 and that state does not exist.
 func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	first := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -273,6 +280,7 @@ func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
 // restarting the clock on each rotation hides the longest outages behind the
 // noisiest ones.
 func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	r := floorFleet(t)
 	first := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -686,6 +694,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 // that a copy has. A build that counted them anyway would trim against a
 // backup the policy does not recognise.
 func TestTheBackupTermFollowsTheOperatorsOwnPolicy(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	points := []coord.BackupPoint{
 		{
@@ -724,6 +733,7 @@ func TestTheBackupTermFollowsTheOperatorsOwnPolicy(t *testing.T) {
 // a file that exists and was never opened is not a backup, and deleting the
 // log's only copy of a record against one is what the whole term prevents.
 func TestAnUnverifiedBackupSatisfiesNoPolicy(t *testing.T) {
+	t.Parallel()
 	r := &retention{}
 	_, _, _, have := r.backupTerm([]coord.BackupPoint{{
 		Owner: "node-a", At: time.Now(), Verified: false,
@@ -739,6 +749,7 @@ func TestAnUnverifiedBackupSatisfiesNoPolicy(t *testing.T) {
 // a fleet whose backup covers the tracker and not the vectors must BLOCK the
 // vector log's trim, not permit it up to sequence zero.
 func TestABackupThatDoesNotCoverALogIsNotABackupAtZero(t *testing.T) {
+	t.Parallel()
 	r := &retention{}
 	seq, _, _, have := r.backupTerm([]coord.BackupPoint{{
 		Owner: "node-a", At: time.Now(), Verified: true,

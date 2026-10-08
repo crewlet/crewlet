@@ -237,6 +237,7 @@ func (r *takingResumer) count() int {
 // comes round to that holder afterwards, and is acknowledged — the run it
 // answered was resumed with it, and is over.
 func TestAnAnswerByTurnRevivedAndResumedIsNotAnnouncedAgain(t *testing.T) {
+	t.Parallel()
 	w := newSpentWorld(t)
 	old := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, &takingResumer{})
 	run := w.parked(t, old)
@@ -262,6 +263,7 @@ func TestAnAnswerByTurnRevivedAndResumedIsNotAnnouncedAgain(t *testing.T) {
 // its spend. The original coming round is acknowledged, and the person is told
 // nothing about an answer whose turn ran.
 func TestAnAnswerByTurnATurnTookIsNotAnnouncedGone(t *testing.T) {
+	t.Parallel()
 	w := newSpentWorld(t)
 	old := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, &takingResumer{})
 	run := w.parked(t, old)
@@ -285,6 +287,7 @@ func TestAnAnswerByTurnATurnTookIsNotAnnouncedGone(t *testing.T) {
 // it acknowledged it — is acknowledged, rather than announced not_awaiting
 // about a run it resumed.
 func TestAnAnswerByTurnWhoseTurnRelaunchedIsNotAnnouncedNotAwaiting(t *testing.T) {
+	t.Parallel()
 	w := newSpentWorld(t)
 	resumer := &relaunchingResumer{manager: w.manager, store: w.store}
 	h := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, resumer)
@@ -317,6 +320,7 @@ func (failingResumer) Resume(context.Context, sandbox.ResumeRequest) error {
 // coming round again, its acknowledgement lost, says nothing a second time. The
 // original, spent before the let-go, is acknowledged without a word too.
 func TestALetGosCopyOfAnAnswerByTurnIsAnnouncedOnce(t *testing.T) {
+	t.Parallel()
 	w := newSpentWorld(t)
 	h := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, failingResumer{})
 	run := w.parked(t, h)

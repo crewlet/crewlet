@@ -46,6 +46,11 @@ import (
 // broker at the conformance suite's timings, and both must tell the same
 // story.
 func TestTheFirstReplyAnswersTheQuestionOnEveryBackend(t *testing.T) {
+	// NOT PARALLEL, and for the broker's sake rather than any shared state:
+	// at the conformance suite's two-second ack wait, a handler a contended
+	// runner slows past it is redelivered, and a redelivery reorders the
+	// very replies this case asserts the order of. Run in the parallel
+	// phase it would be measuring the runner's load.
 	for name, open := range map[string]func(t *testing.T) queue.EventQueue{
 		"memory_twin": func(t *testing.T) queue.EventQueue {
 			return memory.New()

@@ -119,6 +119,7 @@ roles:
 // token, the registry carries nothing, and no further gesture from the
 // operator is coming.
 func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
+	t.Parallel()
 	const token = "seat-token-minted-by-the-pass"
 	instance := jiraInstance(t, token, "agent-ceo")
 	e, company := sealingEngine(t, instance.URL)
@@ -213,6 +214,7 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 // actual Record and by nothing else, and that every reconciler is certified
 // against integrationtest's "a converged pass writes nothing".
 func TestAPassThatSealedNothingDoesNotReactivateTheRevision(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	w := &reloadingWriter{}
 	e.UseConfigWriter(w)
@@ -244,6 +246,7 @@ func TestAPassThatSealedNothingDoesNotReactivateTheRevision(t *testing.T) {
 // either way. Leaving them unpublished would be the field report again, with
 // an error log to explain it.
 func TestAFailedFlushStillRebuildsAndDoesNotRebuildTwice(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	w := &reloadingWriter{}
 	e.UseConfigWriter(w)
@@ -277,6 +280,7 @@ func TestAFailedFlushStillRebuildsAndDoesNotRebuildTwice(t *testing.T) {
 // Detached is not unbounded, though. A re-activation against an unreachable
 // control plane must end, or a pass leaks a goroutine per run.
 func TestTheRebuildSurvivesTheCancelledPassAndStaysBounded(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	w := &reloadingWriter{reload: func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
@@ -318,6 +322,7 @@ func TestTheRebuildSurvivesTheCancelledPassAndStaysBounded(t *testing.T) {
 // durable and the snapshot is refreshed; what is missing is the rebuild, and
 // the operator is told which gesture supplies it.
 func TestSealingOnANodeWithNoConfigSurfaceIsLoggedRatherThanFatal(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	if e.configWriterOrNil() != nil {
 		t.Fatal("precondition: this node must have no config surface")
@@ -472,6 +477,7 @@ func (*failingFlushSink) NextStep() string { return "nothing" }
 // [TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange] for the half
 // that was missing, and what it cost in production.
 func TestASealedCredentialIsVisibleWithoutAnApply(t *testing.T) {
+	t.Parallel()
 	e, _ := engineWithSecrets(t)
 	// THE FLEET'S STORE, which is where a sealed credential goes and where
 	// the resolver's snapshot is read from.
@@ -512,6 +518,7 @@ func TestASealedCredentialIsVisibleWithoutAnApply(t *testing.T) {
 // and report, and rebuilding on each of those would put the whole secret
 // store on the reconcile loop's tick.
 func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
+	t.Parallel()
 	e, sv := engineWithSecrets(t)
 	e.backends.Fleet = coordmem.NewFleet()
 	sink, err := e.SetupSink("test")
@@ -552,6 +559,7 @@ func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 // THE SINK'S `flushed` FLAG DOES NOT COVER THIS. That stops one sink
 // rebuilding twice; this is two sinks, which is what a burst is.
 func TestASecondPassSealingInTheSameBurstDoesNotRebuildAgain(t *testing.T) {
+	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
 	w := &reloadingWriter{}
 	e.UseConfigWriter(w)

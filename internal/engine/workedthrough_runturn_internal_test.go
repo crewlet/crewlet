@@ -36,6 +36,7 @@ import (
 // woken by M2 is shown M1 waiting, and reports it — and only it: not the
 // trigger, not the root, not anything up to the seat's own reply.
 func TestRunTurnReportsTheWaitingMessagesItsThreadShowedIt(t *testing.T) {
+	t.Parallel()
 	e := threadedEngine(t, []map[string]string{
 		{"user": "U0ANA", "ts": "1.0", "text": "the api test is flaking"},
 		{"user": "U0BOT", "ts": "1.05", "text": "looking at it now"},

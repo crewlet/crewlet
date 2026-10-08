@@ -35,6 +35,11 @@ import (
 // publish. When the run stops holding the seat — here, its completion resumes
 // the turn — the hold lifts and each message is worked exactly once.
 func TestABusySeatsMailWaitsWithoutCirclingOnEveryBackend(t *testing.T) {
+	// NOT PARALLEL, and for the broker's sake rather than any shared state:
+	// at the conformance suite's two-second ack wait, a handler a contended
+	// runner slows past it is redelivered — and a redelivery is exactly the
+	// circling this case counts. Run in the parallel phase it would report
+	// the runner's load as a seat that requeues its mail.
 	for name, open := range map[string]func(t *testing.T) queue.EventQueue{
 		"memory_twin": func(t *testing.T) queue.EventQueue {
 			return memory.New()
