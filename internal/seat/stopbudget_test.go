@@ -11,7 +11,7 @@ import (
 )
 
 // remaining is how long a step begun now on ctx may run.
-func remaining(t *testing.T, ctx context.Context) time.Duration {
+func remaining(ctx context.Context, t *testing.T) time.Duration {
 	t.Helper()
 	step, done := StopStep(ctx)
 	defer done()
@@ -39,7 +39,7 @@ func TestAStopsStepsShareOneAllowance(t *testing.T) {
 	defer done()
 	if next.Err() == nil {
 		t.Fatalf("a step begun after the allowance was spent may still run %v",
-			remaining(t, ctx))
+			remaining(ctx, t))
 	}
 }
 
@@ -55,7 +55,7 @@ func TestTheAllowanceIsChargedOnlyWhileAStepRuns(t *testing.T) {
 	_, quick := StopStep(ctx)
 	quick()
 	time.Sleep(300 * time.Millisecond) // the drain's wait, between steps
-	if left := remaining(t, ctx); left < total-200*time.Millisecond {
+	if left := remaining(ctx, t); left < total-200*time.Millisecond {
 		t.Fatalf("%v left after a step that took nothing and a wait between "+
 			"steps, want nearly all of %v: the wait was charged", left, total)
 	}
@@ -67,7 +67,7 @@ func TestTheAllowanceIsChargedOnlyWhileAStepRuns(t *testing.T) {
 	b()
 	// About 300ms charged for the overlap, never 600ms for two steps — and
 	// never less than the overlap itself, which a timer cannot shorten.
-	left := remaining(t, ctx)
+	left := remaining(ctx, t)
 	if left > total-300*time.Millisecond || left < total-550*time.Millisecond {
 		t.Fatalf("%v left after two steps overlapping for 300ms, want about %v: "+
 			"the overlap was charged once per step", left, total-300*time.Millisecond)
@@ -94,13 +94,13 @@ func TestWithinStopJoinsTheStopOrBeginsOneInsideTheLease(t *testing.T) {
 	t.Parallel()
 	const carried = 300 * time.Millisecond
 	joined := WithinStop(WithStopBudget(t.Context(), NewStopBudget(carried)), time.Hour)
-	if left := remaining(t, joined); left > carried {
+	if left := remaining(joined, t); left > carried {
 		t.Errorf("a step of a stop carrying %v may run %v: the layer began an "+
 			"allowance of its own beside the stop's", carried, left)
 	}
 
 	const ttl = 3 * time.Second
-	begun := remaining(t, WithinStop(t.Context(), ttl))
+	begun := remaining(WithinStop(t.Context(), ttl), t)
 	if want := StopAllowance(ttl); begun > want || begun < want-200*time.Millisecond {
 		t.Errorf("a stop begun at a %v lease allows %v, want one heartbeat "+
 			"interval (%v)", ttl, begun, want)
