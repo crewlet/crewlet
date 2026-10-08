@@ -40,11 +40,11 @@ import (
 //
 // Sizing decides what a MISSING stream is created with and nothing else. A
 // stream's configuration has one writer and a booting node is not it, and the
-// broker never re-checks a reservation it has already granted, so a log
-// created larger than today's arithmetic would make it (one created at an
-// explicit ceiling later unset, or one a capacity operation resized) boots as
-// it is and is reported rather than rewritten. Changing it is the capacity operation's, which runs where no
-// publisher can move the number it is decided against.
+// broker never re-checks a reservation it has already granted, so a log created
+// larger than today's arithmetic would make it (one created at an explicit
+// ceiling later unset, or one a capacity operation resized) boots as it is and
+// is reported rather than rewritten. Changing it is the capacity operation's,
+// which runs where no publisher can move the number it is decided against.
 //
 // And it COUNTS at that ceiling. What the budget promises is a bound on what
 // the logs reserve between them, and an existing log reserves what it holds,
@@ -293,11 +293,11 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 // the existing ones leave of the pool, whatever Tier A would give those today.
 //
 // The two numbers differ whenever a log was created at something other than
-// today's arithmetic: an explicit ceiling later unset, a log created while its volume had more
-// room, one a capacity operation resized. Dividing the pool by the ASKS
-// counted such a log at a reservation it does not have. Measured: a tracker
-// log holding 17179869184 bytes, created at an explicit ceiling later unset,
-// beside a pool of 8789273088, was counted at its ask, and the boot was
+// today's arithmetic: an explicit ceiling later unset, a log created while its
+// volume had more room, one a capacity operation resized. Dividing the pool by
+// the ASKS counted such a log at a reservation it does not have. Measured: a
+// tracker log holding 17179869184 bytes, created at an explicit ceiling later
+// unset, beside a pool of 8789273088, was counted at its ask, and the boot was
 // refused the vector changelog's reservation. On a 16 GiB volume that
 // arithmetic sizes the changelog at 3857765632 in bytes the tracker already
 // holds, and the logs ask for 22111376640 between them.

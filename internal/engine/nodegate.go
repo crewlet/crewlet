@@ -365,18 +365,18 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		return statelog.GateRemedy{Actions: []statelog.GateAction{action}, Detail: detail}
 	}
 	if d.Err == nil && d.Unvouched {
-		// UNKNOWN, AND NOT FOR THIS NODE TO SETTLE. The operation was
-		// minted before the point this node's ledger may have lost rows
-		// to — its sweep, or the donor's it inherited with a snapshot
-		// adopted since — so it published nothing, and the same gesture here answers `unknown`
-		// again every time: the row the answer needs is the one the loss
-		// took. Offered `retry_same_op`, every Finish and every -op-id
-		// rerun went round that loop for ever. A node whose ledger
-		// reaches back that far can answer it under the same id.
+		// UNKNOWN, AND NOT FOR THIS NODE TO SETTLE. The operation was minted
+		// before the point this node's ledger may have lost rows to — its
+		// sweep, or the donor's it inherited with a snapshot adopted since — so
+		// it published nothing, and the same gesture here answers `unknown`
+		// again every time: the row the answer needs is the one the loss took.
+		// Offered `retry_same_op`, every Finish and every -op-id rerun went
+		// round that loop for ever. A node whose ledger reaches back that far
+		// can answer it under the same id.
 		return only(statelog.GateOtherNode, "this node cannot tell whether "+
 			"the record landed: its operation ledger may have lost the record "+
-			"of this operation, which was minted before it adopted a snapshot "+
-			"or swept its ledger, so the same gesture here answers the same way "+
+			"of this operation, which was minted before the cutoff of the "+
+			"ledger's thirty-day sweep, so the same gesture here answers the same way "+
 			"every time. Run it through a node whose ledger reaches back that "+
 			"far, under the same operation id")
 	}
@@ -655,7 +655,8 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 // the gesture's mint instant: the ledger's vouching reads it off the id, and
 // one spelled here in a shape that grammar did not recognise would be read as
 // minted at the zero instant — answered `unknown` on any node whose ledger's
-// sweep ever lost a row. The sign is one step, and the log and the node together the last.
+// sweep ever lost a row. The sign is one step, and the log and the node
+// together the last.
 //
 // INJECTIVE, which a plain join of four steps is not: a gesture id may carry
 // a tail of its own and a node id may hold dots, so gesture `x` on node
