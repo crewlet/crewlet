@@ -641,16 +641,16 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	if lease == nil {
 		// WHICH of the two the refusal says, rather than both: an
 		// operator reading "a node still holds it" goes looking for a
-		// node serving a stale revision, and one reading "an older
-		// build" finishes a rolling upgrade — and only one of them is
-		// true.
+		// node serving a stale revision, and one reading "a node on a
+		// lower lease protocol" waits for that node to leave — and only
+		// one of them is true.
 		detail := "the seat is absent from the active revision but a node still holds its " +
 			"lease — one still serving a revision that has the seat; the mailbox is kept and " +
 			"the claim retried on the next tick"
 		if refused != coord.RefusedHeld {
 			detail = "the seat is absent from the active revision but its lease could not be " +
-				"claimed because a node of an older build holds a presence or seat lease in " +
-				"this fleet; the mailbox is kept until the rolling upgrade finishes"
+				"claimed because a node on a lower lease protocol holds a presence or seat " +
+				"lease in this fleet; the mailbox is kept until that node has left"
 		}
 		log.WarnContext(ctx, "seat_mailbox_retirement_held", "handle", handle,
 			"absent_since", rec.AbsentSince, "refused", string(refused), "detail", detail)
