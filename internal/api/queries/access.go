@@ -111,6 +111,12 @@ type AccessAuth struct {
 	Disabled       bool     `json:"disabled"`
 	AnonymousRead  bool     `json:"anonymous_read"`
 	AllowedOrigins []string `json:"allowed_origins"`
+	// CompanyWriters is `api.auth.company_writers` as Tier A orders it: the
+	// token ids that alone may change the company document (ADR-0030).
+	// ALWAYS A LIST, and empty is a real posture — every token may — so the
+	// screen that reads the deployment's auth says whether the document is
+	// managed, and by which credential, where the operator looks for it.
+	CompanyWriters []string `json:"company_writers"`
 }
 
 // AccessToken is one accepted credential: its label, what it reaches and the
@@ -187,6 +193,7 @@ func (s Sources) access(ctx context.Context, _ Params) (any, error) {
 			Disabled:       posture.Disabled,
 			AnonymousRead:  posture.AnonymousRead,
 			AllowedOrigins: append([]string{}, posture.AllowedOrigins...),
+			CompanyWriters: append([]string{}, posture.CompanyWriters...),
 		},
 		Tokens: make([]AccessToken, 0, len(posture.TokenIDs)),
 		People: []AccessPerson{},

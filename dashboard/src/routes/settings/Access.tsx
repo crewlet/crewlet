@@ -321,9 +321,16 @@ export function PeopleAndAccess() {
  *
  * THE KEY, NOT THE TONE'S OWN INFO MARK, as Secrets' strip does: this is about
  * where a credential lives and who can hold one.
+ *
+ * WHO MAY CHANGE THE COMPANY is part of that posture (ADR-0030): a managed
+ * document names its writers in Tier A beside the tokens, and this is the
+ * screen an operator reads the deployment's `api.auth` on — so it says which
+ * credentials write the company, and that the rest only read it. Said only
+ * when it is managed: "every token may" is the default nobody configured.
  */
 function TierACallout({ auth }: { auth: AccessAuth }) {
   const origins = auth.allowed_origins;
+  const writers = auth.company_writers;
   return (
     <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
       <span className="col" style={{ gap: 4 }}>
@@ -342,6 +349,20 @@ function TierACallout({ auth }: { auth: AccessAuth }) {
             ? `Browsers may also call from ${origins.join(", ")}.`
             : "Browsers may call from this origin only."}
         </span>
+        {writers.length > 0 && (
+          <span className="t-caption">
+            The company document is managed: only{" "}
+            {writers.length === 1 ? "the token" : "the tokens"}{" "}
+            {writers.map((id, i) => (
+              <span key={id}>
+                {i > 0 && ", "}
+                <InlineCode>{id}</InlineCode>
+              </span>
+            ))}{" "}
+            may change it (<InlineCode>api.auth.company_writers</InlineCode>); every other token
+            reads it, and can still rotate a credential it names.
+          </span>
+        )}
       </span>
     </Callout>
   );

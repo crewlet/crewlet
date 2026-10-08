@@ -101,7 +101,7 @@ node means nothing was done.
 | `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Operator-only** |
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Operator-only** |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
-| `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
+| `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture — including `company_writers`, the tokens that alone may change a managed company document. **Always needs a token** (see [below](#get-access)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Always needs a token** (see [below](#get-credential-pool)) |
 | `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Always needs a token** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Always needs a token** (see [below](#get-mcp-servers)) |
@@ -2209,7 +2209,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
-| `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
+| `access` | `{}` | `GET /access`: the token labels, the people and the posture (`auth.company_writers` included) the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
@@ -3925,9 +3925,16 @@ other identity fields, one per config key — is its `value` as written with
 variable's value. The binding is not among the contacts, because it is an
 attribution rather than an address.
 
+`auth.company_writers` is `api.auth.company_writers` in Tier A's order: the
+token ids that alone may change the company document when another system
+[manages it](../concepts/configuration.md#managed-configuration). It is always
+a list, and `[]` means every token may. The screen names the writers beside the
+tokens, so an operator reading the deployment's `api.auth` sees whether the
+document is managed and by which credential.
+
 ```json
 {
-  "auth": {"disabled": false, "anonymous_read": true, "allowed_origins": []},
+  "auth": {"disabled": false, "anonymous_read": true, "allowed_origins": [], "company_writers": []},
   "tokens": [
     {"id": "ci", "scope": "operator", "seat": null, "yours": false},
     {"id": "founder", "scope": "person", "seat": {"handle": "ana", "name": "Ana Diaz"}, "yours": true}

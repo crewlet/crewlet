@@ -183,6 +183,23 @@ func TestADisabledGuardBindsNobody(t *testing.T) {
 	}
 }
 
+// THE MANAGED POSTURE IS PART OF THE AUTH ANSWER (ADR-0030): the writers in
+// Tier A's order, and an empty list — never null — when every token may change
+// the company document, which is a posture too.
+func TestTheAuthAnswerNamesTheCompanyWriters(t *testing.T) {
+	t.Parallel()
+	managed := askAccess(t, accessSources(t, queries.AccessPosture{
+		TokenIDs: []string{"founder", "gitops", "ci"}, CompanyWriters: []string{"gitops", "ci"},
+	}))
+	if !slices.Equal(managed.Auth.CompanyWriters, []string{"gitops", "ci"}) {
+		t.Errorf("company_writers = %v, want [gitops ci] as Tier A orders them", managed.Auth.CompanyWriters)
+	}
+	open := askAccess(t, accessSources(t, queries.AccessPosture{TokenIDs: []string{"founder"}}))
+	if open.Auth.CompanyWriters == nil || len(open.Auth.CompanyWriters) != 0 {
+		t.Errorf("company_writers unset = %#v, want an empty list", open.Auth.CompanyWriters)
+	}
+}
+
 // ANONYMOUS IS REFUSED: the labels and who each one is are a map of which
 // credential to take.
 func TestAccessIsOperatorOnly(t *testing.T) {
@@ -207,7 +224,8 @@ func TestAccessIsOperatorOnly(t *testing.T) {
 func TestTheAccessScreenReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
 	posture := queries.AccessPosture{TokenIDs: []string{"founder", "ci"},
-		AnonymousRead: true, AllowedOrigins: []string{"https://example.com"}}
+		AnonymousRead: true, AllowedOrigins: []string{"https://example.com"},
+		CompanyWriters: []string{"ci"}}
 	r := queries.NewRegistry()
 	queries.Register(r, accessSources(t, posture))
 	raw, err := r.Answer(t.Context(), "access", nil, "founder")

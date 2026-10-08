@@ -5741,7 +5741,11 @@ change at a restart, so the screen edits nothing; **Edit people in org** leaves
 for the builder, where a contact and its binding are written. **It never holds
 a value** — not an answer's, and not the token this browser presents. A
 disabled guard is a red banner: every caller is `anonymous` and nobody acts as
-a person.
+a person. When the company document is
+[managed](../concepts/configuration.md#managed-configuration), the Tier A
+callout names its writers (`auth.company_writers`): only those tokens may
+change the company, and every other one reads it and can still rotate a
+credential it names. Nothing is said when every token may write.
 
 **Integrations** is a grid of **tiles, one per tool** — Slack, Mattermost,
 Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
