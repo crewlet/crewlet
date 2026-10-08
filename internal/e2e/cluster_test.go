@@ -19,6 +19,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -443,7 +445,11 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// projector — serves for the whole case. The test's own context is
 	// that lifetime exactly: longer than the attempt, and still ended when
 	// the case is over, which [context.WithoutCancel] would not be.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, nil) //nolint:contextcheck // see above
+	//
+	// AT THE PRODUCTION TICK, not the single-node cases' 25 ms — see
+	// [tickInterval] for what that costs a fleet.
+	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, //nolint:contextcheck // see above
+		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
 	stops = append(stops, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))

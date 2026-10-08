@@ -73,9 +73,19 @@ turn_engine:
   max_tool_rounds: 3
 `
 
-// tickInterval is the shared tick's cadence here. Short enough that the spend
-// rollup lands inside a test, long enough not to drown the capture in health
-// frames.
+// tickInterval is the shared tick's cadence on a single node here. Short enough
+// that the spend rollup lands inside a test, long enough not to drown the
+// capture in health frames.
+//
+// NOT A FLEET MEMBER'S, which runs the production cadence
+// ([stream.HealthInterval]; see [buildMember]). On a cluster every tick is
+// several certified coordination listings — the live nodes and their apply
+// status for the health envelope, the seat leases for placement — and each
+// listing creates and deletes an ordered consumer through the broker's
+// metadata group, which every member has to apply. Measured on a fleet that
+// only idled for thirty seconds: 113 cpu-s at 25 ms against 61 at five
+// seconds, close to two cores spent on ticks nobody reads — no fleet case
+// reads a push; every one reads REST or the engines.
 const tickInterval = 25 * time.Millisecond
 
 // harnessActivation is the instant this harness's company was "activated".
