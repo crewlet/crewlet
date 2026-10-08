@@ -154,10 +154,7 @@ func TestABackupCopiesWhatTheNodeHolds(t *testing.T) {
 	})
 	t.Run("a node holding none", func(t *testing.T) {
 		t.Parallel()
-		node, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-		if err != nil {
-			t.Fatalf("open: %v", err)
-		}
+		node := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
 		t.Cleanup(func() { _ = node.Close() })
 		manifest, err := service(node, backup.HoldsNodeOnly).Take(t.Context(), filepath.Join(t.TempDir(), "b"))
 		if err != nil {
