@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"unicode"
 
@@ -206,9 +207,29 @@ type corpus struct {
 	byRel map[string]*page
 }
 
+// load is the tree's markdown, read ONCE per test binary and shared by every
+// test here: the three gates each read and parsed the same four megabytes for
+// themselves, at the same moment. The pages are the build's, so no test can
+// see them change, and every test only reads the corpus.
 func load(t *testing.T) *corpus {
 	t.Helper()
-	root := sourcetree.Root(t)
+	c, err := loaded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+var loaded = sync.OnceValues(func() (*corpus, error) {
+	root, err := sourcetree.ModuleRoot()
+	if err != nil {
+		return nil, err
+	}
+	return read(root)
+})
+
+// read is every markdown page under root, with its links and anchors.
+func read(root string) (*corpus, error) {
 	c := &corpus{byAbs: map[string]*page{}, byRel: map[string]*page{}}
 	// sourcetree.Walk rather than a walk of this gate's own: VCS metadata, a
 	// nested checkout (.claude/worktrees/ holds full copies of this tree at
@@ -243,9 +264,9 @@ func load(t *testing.T) *corpus {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
+		return nil, fmt.Errorf("walk %s: %w", root, err)
 	}
-	return c
+	return c, nil
 }
 
 var (
@@ -258,26 +279,52 @@ var (
 	schemeRE     = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
 )
 
+// What each line-level pattern cannot match without (sourcetree.Required).
+// Every line of the tree's markdown passes through all of them, and under
+// the race detector a match attempt is an allocation the detector shadows,
+// so a line holding nothing a pattern needs is not handed to it — which
+// cannot change what it finds.
+var (
+	inlineLinkNeeds = sourcetree.Required(inlineLinkRE)
+	refDefNeeds     = sourcetree.Required(refDefRE)
+	codeSpanNeeds   = sourcetree.Required(codeSpanRE)
+	fenceNeeds      = sourcetree.Required(fenceRE)
+	headingNeeds    = sourcetree.Required(headingRE)
+	explicitNeeds   = sourcetree.Required(explicitRE)
+)
+
+// fence reports whether a line opens or closes a fenced block.
+func fence(line string) bool {
+	return fenceNeeds.AdmitsString(line) && fenceRE.MatchString(line)
+}
+
 // linksOf is every link a page renders, outside fenced blocks and code spans,
 // that names a file in this tree or an anchor.
 func linksOf(lines []string) []link {
 	var out []link
 	fenced := false
 	for i, line := range lines {
-		if fenceRE.MatchString(line) {
+		if fence(line) {
 			fenced = !fenced
 			continue
 		}
 		if fenced {
 			continue
 		}
-		prose := codeSpanRE.ReplaceAllString(line, "")
-		var targets []string
-		for _, m := range inlineLinkRE.FindAllStringSubmatch(prose, -1) {
-			targets = append(targets, m[1])
+		prose := line
+		if codeSpanNeeds.AdmitsString(prose) {
+			prose = codeSpanRE.ReplaceAllString(prose, "")
 		}
-		if m := refDefRE.FindStringSubmatch(prose); m != nil {
-			targets = append(targets, m[1])
+		var targets []string
+		if inlineLinkNeeds.AdmitsString(prose) {
+			for _, m := range inlineLinkRE.FindAllStringSubmatch(prose, -1) {
+				targets = append(targets, m[1])
+			}
+		}
+		if refDefNeeds.AdmitsString(prose) {
+			if m := refDefRE.FindStringSubmatch(prose); m != nil {
+				targets = append(targets, m[1])
+			}
 		}
 		for _, target := range targets {
 			if schemeRE.MatchString(target) || strings.HasPrefix(target, "//") {
@@ -301,15 +348,20 @@ func anchorsOf(lines []string) map[string]bool {
 	seen := map[string]int{}
 	fenced := false
 	for _, line := range lines {
-		if fenceRE.MatchString(line) {
+		if fence(line) {
 			fenced = !fenced
 			continue
 		}
 		if fenced {
 			continue
 		}
-		for _, m := range explicitRE.FindAllStringSubmatch(line, -1) {
-			out[m[1]] = true
+		if explicitNeeds.AdmitsString(line) {
+			for _, m := range explicitRE.FindAllStringSubmatch(line, -1) {
+				out[m[1]] = true
+			}
+		}
+		if !headingNeeds.AdmitsString(line) {
+			continue
 		}
 		m := headingRE.FindStringSubmatch(line)
 		if m == nil {
