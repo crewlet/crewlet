@@ -791,16 +791,21 @@ func CoversLog(prefix statelog.Prefix, end uint64) error {
 // RETAINED — cannot say whether a blinded row is among what it has not applied.
 // So (true, nil) is a blind held, (false, nil) is none on rows that hold the
 // whole log, and an error wrapping [ErrNotCurrent] is this node being unable to
-// say, which refuses the mint exactly as an unreadable store does.
+// say — wrapping [statelog.ErrUnavailable] too, since another node may vouch
+// and this one will once it catches up — which refuses the mint exactly as an
+// unreadable store does.
 func (r *Reader) HoldsBlinds(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
-		if err != nil {
-			return fmt.Errorf("iamdomain: read how much of the log these rows "+
-				"hold: %w", err)
-		}
-		if err := CoversLog(prefix, end); err != nil {
+		// THE SAME PROOF [Reader.AnyPerson] takes, and for the same reason:
+		// "no blind here" is an absence. Through it the refusal wraps
+		// [statelog.ErrUnavailable] as well as [ErrNotCurrent] — a node
+		// behind its own log clears on its own — where the bare [CoversLog]
+		// error it used to return reached every surface as a fault: the
+		// first invitation a fresh node issued just after the session that
+		// asked for it was opened answered 500, that session's own record
+		// being the one these rows had not applied yet.
+		if err := provedAbsent(ctx, tx, end, "a blinded row"); err != nil {
 			return err
 		}
 		var count int

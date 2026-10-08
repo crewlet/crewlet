@@ -366,10 +366,18 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)
 	}
-	if held, err := reader.HoldsBlinds(t.Context(), end); !errors.Is(err,
-		iamdomain.ErrNotCurrent) {
+	held, err := reader.HoldsBlinds(t.Context(), end)
+	if !errors.Is(err, iamdomain.ErrNotCurrent) {
 		t.Errorf("rows behind the log answered (%v, %v), want ErrNotCurrent — "+
 			"their \"none\" is the answer that mints over a deleted key", held, err)
+	}
+	// AND IT IS A CONDITION THAT CLEARS, never a fault: a node behind its own
+	// log answers it the moment it catches up and another node may answer it
+	// now, so a surface must offer a retry. Unclassified, it reached /iam as a
+	// 500 on the first invitation a fresh node issued.
+	if !errors.Is(err, statelog.ErrUnavailable) {
+		t.Errorf("rows behind the log answered %v, which does not wrap "+
+			"statelog.ErrUnavailable — every surface reads it as a fault", err)
 	}
 }
 
