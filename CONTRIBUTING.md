@@ -444,6 +444,31 @@ there and nowhere else, so it needs node too:
 make test-solo   # internal/e2e, and every other package that runs alone
 ```
 
+A case there is written to three rules, which `internal/e2e`'s package doc
+states with their reasons:
+
+- **A case that stands up one node — or a stateless node beside one data
+  node — runs in parallel.** Each has its own directories, its own scripted
+  model and its own broker, so the one thing such cases would share is the
+  process environment, and a node is *handed* its environment instead
+  (`nodeSpec.env`, which reaches the engine as `engine.Options.Environment`).
+  `t.Setenv` cannot run beside `t.Parallel`, and a case that read the
+  runner's environment held only on runners that happened to agree with it.
+- **A case that stands up a fleet runs alone, before the parallel ones, and
+  the fleet's claims share one fleet**: each is a subtest of
+  `TestAFleetOfThree`, in the order `fleetClaims` gives, rather than a test
+  paying a boot and a teardown of its own. A new fleet claim is a row there.
+  Only a claim that breaks its fleet on purpose — the partition case — keeps
+  a fleet to itself.
+- **An absence is waited on a recorded decision, never on a sleep.** A case
+  asserting that something did not happen waits for the record that says it
+  was decided — a delivery's `notification_skipped`, held against the reason
+  `notify.SkipReason` declares; a later delivery's record, behind it in the
+  order the inbound edge keeps; a Mattermost node's answer to a ping sent
+  behind a post — and each of those orders is held by a case of its own. An
+  absence read after a fixed sleep holds only for as long as the sleep
+  happened to be long enough.
+
 ## Project conventions
 
 - **Go 1.27+**, and the module pins its own toolchain — `GOTOOLCHAIN=auto`
