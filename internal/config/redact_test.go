@@ -435,6 +435,37 @@ func TestATagCoversEverythingBeneathIt(t *testing.T) {
 	}
 }
 
+// A FIXED-LENGTH LIST IS COVERED LIKE ANY OTHER. Redaction used to mask a
+// slice's members and copy a Go array verbatim, while [Company.UnresolvedMasks]
+// and the schema generator both treat an array's elements as covered by its
+// tag. No config field is an array today; the first tagged one would have
+// been published in clear.
+type pinned struct {
+	Keys [2]string `secret:"true"`
+	Open [1]string
+}
+
+func TestATaggedArrayIsMaskedAndRestored(t *testing.T) {
+	t.Parallel()
+	in := pinned{Keys: [2]string{"sk-one", "${KEY}"}, Open: [1]string{"visible"}}
+	out := reflect.New(reflect.TypeOf(in))
+	copyMasking(reflect.ValueOf(in), out.Elem(), false)
+	got, _ := out.Interface().(*pinned)
+
+	if want := [2]string{Redacted, "${KEY}"}; got.Keys != want {
+		t.Errorf("a tagged array = %q, want %q", got.Keys, want)
+	}
+	if got.Open != in.Open {
+		t.Errorf("an untagged array = %q, want it as stored", got.Open)
+	}
+
+	var r restorer
+	r.restore(out.Elem(), reflect.ValueOf(in), false)
+	if got.Keys != in.Keys {
+		t.Errorf("restored array = %q, want the prior's %q", got.Keys, in.Keys)
+	}
+}
+
 func TestAShortenedKeyListRefusesToGuess(t *testing.T) {
 	t.Parallel()
 	// Removing a key moves every later slot. Restoring by position would

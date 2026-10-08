@@ -116,6 +116,12 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 			copyMasking(src.Index(i), s.Index(i), secret)
 		}
 		dst.Set(s)
+	case reflect.Array:
+		// A fixed-length list is a value, not a reference, so dst is
+		// already its own storage and each element is masked in place.
+		for i := range src.Len() {
+			copyMasking(src.Index(i), dst.Index(i), secret)
+		}
 	case reflect.Map:
 		if src.IsNil() {
 			return
@@ -276,7 +282,7 @@ func (r *restorer) restore(target, prior reflect.Value, secret bool) {
 			}
 			r.restore(target.Field(i), previous, secret || field.Tag.Get(secretTag) == "true")
 		}
-	case reflect.Slice:
+	case reflect.Slice, reflect.Array:
 		r.restoreSlice(target, prior, secret)
 	case reflect.Map:
 		for _, key := range target.MapKeys() {
