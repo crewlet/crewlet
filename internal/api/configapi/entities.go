@@ -490,6 +490,9 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 // company's own (a warning, which only a check can show before the save).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.refusedManaged(w, r) {
+			return
+		}
 		id := r.PathValue("id")
 		dryRun, ok := dryRunOf(w, r)
 		if !ok {

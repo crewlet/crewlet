@@ -120,6 +120,42 @@ func TestAManagedDocumentRefusesEveryOtherCredential(t *testing.T) {
 	}
 }
 
+// THE REFUSAL COMES FIRST: it depends on the credential alone, so a
+// non-writer is answered it before the request is read — not told to fix a
+// body, add a summary or name a revision that exists, when no fix would let
+// the write through.
+func TestAManagedRefusalComesBeforeTheRequestIsRead(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]writePath{
+		"PUT /config with a body that is not a company": {
+			method: http.MethodPut, path: "/config", body: "{not json", headers: map[string]string{"X-Summary": "x"},
+		},
+		"PATCH /config with no summary": {
+			method: http.MethodPatch, path: "/config", body: `{"mission":"x"}`,
+		},
+		"PUT /config/roles/{id} with no summary": {
+			method: http.MethodPut, path: "/config/roles/cto", body: `{"name":"CTO"}`,
+		},
+		"revert to a revision that does not exist": {
+			method: http.MethodPost, path: "/config/revisions/no-such-revision/revert",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, _ := managedSurface(t, "operator")
+			res := s.as(t, "alice", tc.method, tc.path, tc.body, tc.headers)
+			if res.Code != http.StatusForbidden || !strings.Contains(res.Body.String(), `"config_managed"`) {
+				t.Fatalf("%s as alice = %d %s, want 403 config_managed", name, res.Code, res.Body)
+			}
+			// THE WRITER IS ANSWERED ON ITS REQUEST, so the refusal above is
+			// the credential's and not the request's.
+			if res := s.as(t, "operator", tc.method, tc.path, tc.body, tc.headers); res.Code == http.StatusForbidden {
+				t.Errorf("%s as the writer = 403: %s", name, res.Body)
+			}
+		})
+	}
+}
+
 // AND THE LISTED CREDENTIAL WRITES ON EVERY ONE OF THEM, while a deployment
 // that lists nobody lets every credential write exactly as before.
 func TestAListedWriterAndAnUnmanagedDocumentWrite(t *testing.T) {

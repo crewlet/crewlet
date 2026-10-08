@@ -264,11 +264,12 @@ type prepared struct {
 //   - The proposal, built by the draft.
 //   - Its rules, and what an answer reports about it.
 func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
-	// WHO MAY CHANGE THE DOCUMENT, before anything is read: a credential a
-	// managed deployment does not let write is refused the same whatever it
-	// sent, and a dry run is held to it too, because a check that answered
-	// "valid" for a write the save would refuse is the one thing a dry run
-	// must never do.
+	// WHO MAY CHANGE THE DOCUMENT, before this reads or stores anything: a
+	// credential a managed deployment does not let write is refused, and a
+	// dry run is held to it too, because a check that answered "valid" for a
+	// write the save would refuse is the one thing a dry run must never do.
+	// The HTTP routes have already asked, before they read the request
+	// ([Service.refusedManaged]); this is the rule for every other caller.
 	if !d.republishes {
 		if err := s.Authorize(d.author); err != nil {
 			return nil, err

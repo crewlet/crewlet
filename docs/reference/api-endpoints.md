@@ -256,7 +256,7 @@ manages the document and what to do:
   "error": "config_managed",
   "managed_by": ["gitops"],
   "detail": "the company document is managed by gitops, and the credential \"founder\" may read it but not change it",
-  "hint": "change the company where it is managed — the source gitops renders it from — and let that system write it here: an edit made directly would be overwritten at its next reconcile. A leaked credential can still be rotated: write the new value with /secrets and POST /config/reload. To take the document back, remove api.auth.company_writers from every node's Tier A and restart"
+  "hint": "change the company at its source, the system that writes it here with the token gitops: an edit made directly would be overwritten at its next reconcile. A leaked credential can still be rotated: write the new value with /secrets and POST /config/reload. To take the document back, remove api.auth.company_writers from every node's Tier A and restart"
 }
 ```
 

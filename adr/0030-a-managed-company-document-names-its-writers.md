@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/configapi`
-- **Enforced-by:** `internal/api/configapi.TestAManagedDocumentRefusesEveryOtherCredential`, `internal/api/configapi.TestTheProgrammaticWritesAreJudgedByTheirAuthor`, `internal/api/configapi.TestAReloadOfAManagedDocumentIsOpenToEveryCredential`, `internal/api/setupapi.TestAManagedDocumentRefusesAConnectBeforeSealing`, `internal/api/setupapi.TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked`, `cmd/crewlet.TestAManagedDocumentRefusesTheOfflineWrites`
+- **Enforced-by:** `internal/api/configapi.TestAManagedDocumentRefusesEveryOtherCredential`, `internal/api/configapi.TestTheProgrammaticWritesAreJudgedByTheirAuthor`, `internal/api/configapi.TestAReloadOfAManagedDocumentIsOpenToEveryCredential`, `internal/api/configapi.TestAManagedRefusalComesBeforeTheRequestIsRead`, `internal/api/setupapi.TestAManagedDocumentRefusesAConnectBeforeSealing`, `internal/api/setupapi.TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked`, `cmd/crewlet.TestAManagedDocumentRefusesTheOfflineWrites`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -14,7 +14,8 @@ Kubernetes operator rendering it from custom resources — is its source, and
 writes it with its own token.
 
 Every write onto the document reaches `configapi`'s prepare, which asks
-`Service.Authorize` before it reads anything, so one check covers PUT, PATCH,
+`Service.Authorize` before it reads anything — and each HTTP route asks it
+before it reads the request — so one check covers PUT, PATCH,
 the per-entity writes, a revert, every dry run of them, and `/setup` (which
 writes through `Apply` and `ApplyEntity`). A credential the list does not name
 is refused `403 config_managed`, naming the writers and what to do instead.

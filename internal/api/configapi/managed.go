@@ -23,10 +23,15 @@ import (
 // onto the document: every route on this surface, `/setup` (through
 // [Service.Apply] and [Service.ApplyEntity]), and the engine's own writes all
 // reach [Service.prepare], which asks [Service.Authorize] before it reads
-// anything. A surface that has a side effect BEFORE its write — `/setup`
-// seals a credential first, creates a GitHub App first, queues a teardown
-// first — asks Authorize itself, earlier, so the refusal comes before the side
-// effect rather than after it; the check in prepare stays the backstop.
+// anything. Each HTTP route that changes the document asks it FIRST, before
+// it reads the body, its summary or the revision it names
+// ([Service.refusedManaged]): the refusal depends on the credential alone, so
+// a non-writer is answered it whatever it sent rather than first being told
+// to fix a body no fix would let through. A surface that has a side effect
+// BEFORE its write — `/setup` seals a credential first, creates a GitHub App
+// first, queues a teardown first — asks Authorize itself, earlier, so the
+// refusal comes before the side effect rather than after it; the check in
+// prepare stays the backstop for every programmatic caller.
 //
 // WHAT COUNTS AS CHANGING THE DOCUMENT is every write that stores different
 // bytes or re-points the fleet at another revision: PUT, PATCH, an entity
@@ -60,14 +65,25 @@ func (e *ManagedError) Error() string {
 }
 
 // Hint is what to do instead, for every surface that answers the refusal.
+//
+// THE WRITERS ARE TOKEN IDS, not systems: the hint names them as the
+// credential the managing system writes with, never as the system itself.
 func (e *ManagedError) Hint() string {
-	return "change the company where it is managed — the source " +
-		strings.Join(e.Writers, ", ") + " renders it from — and let that " +
-		"system write it here: an edit made directly would be overwritten at " +
-		"its next reconcile. A leaked credential can still be rotated: write " +
-		"the new value with /secrets and POST /config/reload. To take the " +
-		"document back, remove api.auth.company_writers from every node's " +
-		"Tier A and restart"
+	return "change the company at its source, the system that writes it " +
+		"here with " + tokensPhrase(e.Writers) + ": an edit made directly " +
+		"would be overwritten at its next reconcile. A leaked credential can " +
+		"still be rotated: write the new value with /secrets and POST " +
+		"/config/reload. To take the document back, remove " +
+		"api.auth.company_writers from every node's Tier A and restart"
+}
+
+// tokensPhrase names token ids as tokens: "the token gitops", "one of the
+// tokens gitops, ci".
+func tokensPhrase(ids []string) string {
+	if len(ids) == 1 {
+		return "the token " + ids[0]
+	}
+	return "one of the tokens " + strings.Join(ids, ", ")
 }
 
 // Authorize reports whether author may change the company document, as a
@@ -78,6 +94,17 @@ func (e *ManagedError) Hint() string {
 // surface it came through — is judged by [config.APIAuth.MayWriteCompany],
 // the one reading of the list.
 func (s *Service) Authorize(author store.Author) error {
+	// THROUGH A TYPED POINTER, never returned as the error itself: a nil
+	// *ManagedError in an error interface is not nil.
+	if managed := s.managedRefusal(author); managed != nil {
+		return managed
+	}
+	return nil
+}
+
+// managedRefusal is [Service.Authorize]'s answer as the refusal itself, or
+// nil when author may change the company document.
+func (s *Service) managedRefusal(author store.Author) *ManagedError {
 	if author.Kind == store.AuthorNode {
 		return nil
 	}
@@ -86,6 +113,19 @@ func (s *Service) Authorize(author store.Author) error {
 		return nil
 	}
 	return &ManagedError{Operator: author.Name, Writers: slices.Clone(policy.CompanyWriters)}
+}
+
+// refusedManaged answers this request's credential the managed refusal when
+// it may not change the company document, and reports whether it did. Every
+// route that changes the document asks it before anything else; see the
+// package's note on where this is enforced.
+func (s *Service) refusedManaged(w http.ResponseWriter, r *http.Request) bool {
+	managed := s.managedRefusal(authorOf(r))
+	if managed == nil {
+		return false
+	}
+	RefuseManaged(w, managed)
+	return true
 }
 
 // RefuseManaged answers a [*ManagedError] for any surface: 403, the code, who

@@ -518,6 +518,9 @@ func dryRunOf(w http.ResponseWriter, r *http.Request) (dryRun, ok bool) {
 // With `dry_run=true` it is the same request, checked in the same order, that
 // stores and activates nothing: see [Service.prepare].
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	dryRun, ok := dryRunOf(w, r)
 	if !ok {
 		return
@@ -594,6 +597,9 @@ var errEmptyPatch = errors.New("the patch is empty")
 // nothing to merge onto, and building a company out of one section is not
 // what this route is for — `PUT /config` shows the whole thing.
 func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	dryRun, ok := dryRunOf(w, r)
 	if !ok {
 		return
@@ -790,6 +796,9 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 // can find later — and the epoch keeps advancing, which is what makes every
 // node reconcile onto it.
 func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
+	if s.refusedManaged(w, r) {
+		return
+	}
 	target, ok := s.lookup(w, r, r.PathValue("id"), "not_found")
 	if !ok {
 		return
