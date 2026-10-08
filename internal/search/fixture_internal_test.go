@@ -13,11 +13,14 @@ import (
 // Every recall figure this package's comments quote was measured on corpora
 // the one-document loop generated, so a composition that summed one float32
 // in another order would move every floor's margin while each gate still
-// passed — or failed for a reason nobody could find. The reference here is
-// that loop, written out: each direction in turn along its support, the mean
-// last, a zero coefficient adding nothing. The blocks hold coefficient sets
-// from both members of the family and sets whose zeros differ from their
-// neighbours', and the fixture is a size that leaves a partial last block.
+// passed — or failed for a reason nobody could find. The reference is that
+// loop, which is still [basis.vector] — every single document the fixture is
+// asked for, a query or a benchmark's stored vector, is composed by it — so
+// this holds the two paths a document can take to one answer: each direction
+// in turn along its support, the mean last, a zero coefficient adding
+// nothing. The blocks hold coefficient sets from both members of the family
+// and sets whose zeros differ from their neighbours', and the fixture is a
+// size that leaves a partial last block.
 func TestABlockComposesExactlyWhatOneDocumentAtATimeDoes(t *testing.T) {
 	t.Parallel()
 	b := newBasis()
@@ -49,7 +52,7 @@ func TestABlockComposesExactlyWhatOneDocumentAtATimeDoes(t *testing.T) {
 		}
 		b.composeInto(block, codes, vectors)
 		for j, c := range block {
-			want := composedOneAtATime(b, c)
+			want := b.vector(c)
 			for d := range want {
 				if math.Float32bits(vectors[j][d]) != math.Float32bits(want[d]) {
 					t.Fatalf("set %d, coordinate %d: a block composed %v and one "+
@@ -64,7 +67,8 @@ func TestABlockComposesExactlyWhatOneDocumentAtATimeDoes(t *testing.T) {
 	}
 
 	// AND THE FIXTURE ITSELF: drawn in document order from its own stream,
-	// each code that draw's — through a partial last block.
+	// each code that draw's — through a partial last block — and each
+	// document's vector, recomposed alone, the one its code was taken from.
 	const n, seed = 2*composeBlock + 3, 5
 	for _, f := range []*Fixture{NewFixture(n, seed), NewTopicalFixture(n, seed)} {
 		stream := rand.New(rand.NewPCG(seed, 0x5EEDC0DE))
@@ -79,32 +83,12 @@ func TestABlockComposesExactlyWhatOneDocumentAtATimeDoes(t *testing.T) {
 				t.Fatalf("document %d's coefficients are not the stream's draw "+
 					"for it in document order", i)
 			}
-			if !slices.Equal(f.Codes[i], Quantize(composedOneAtATime(f.basis, c))) {
+			if !slices.Equal(f.Codes[i], Quantize(f.Vector(i))) {
 				t.Fatalf("document %d's code is not the sign code of the vector "+
 					"one document at a time composes", i)
 			}
 		}
 	}
-}
-
-// composedOneAtATime is the composition every recall figure was measured on:
-// one document, each direction in turn along its support, the mean last.
-func composedOneAtATime(b *basis, coefficients []float32) []float32 {
-	vector := make([]float32, FixtureWidth)
-	for k, c := range coefficients[:len(b.support)] {
-		if c == 0 {
-			continue
-		}
-		for i, d := range b.support[k] {
-			vector[d] += c * b.values[k][i]
-		}
-	}
-	if mean := coefficients[len(b.support)]; mean != 0 {
-		for i, d := range b.meanSupport {
-			vector[d] += mean * b.meanValues[i]
-		}
-	}
-	return vector
 }
 
 // THE FIXTURE COMPOSES ON ITS OWN STACK.

@@ -341,7 +341,8 @@ const maxStackVarBytes = 128 << 10
 // composeInto composes each coefficient set in block — at most [composeBlock]
 // of them — into the full-width vector it produces, and writes that vector's
 // sign code to codes[j] and, where vectors is not nil, the vector itself to
-// vectors[j].
+// vectors[j]: what TestABlockComposesExactlyWhatOneDocumentAtATimeDoes holds
+// to [basis.vector]'s, to the bit.
 //
 // # Why the accumulators are local arrays, and what that buys
 //
@@ -368,12 +369,12 @@ const maxStackVarBytes = 128 << 10
 // # And why the codes are BIT-IDENTICAL to one document at a time
 //
 // Every coordinate of every document receives its contributions in the order
-// the one-document loop added them — direction by direction, each along its
-// support, the mean last — because the documents are the INNERMOST loop: a
-// block changes which document's coordinate is written next and never the
-// order of the float32 additions into any one of them.
+// the one-document loop, [basis.vector], adds them — direction by direction,
+// each along its support, the mean last — because the documents are the
+// INNERMOST loop: a block changes which document's coordinate is written next
+// and never the order of the float32 additions into any one of them.
 //
-// A ZERO COEFFICIENT, which that loop skipped, is added here as the zero
+// A ZERO COEFFICIENT, which that loop skips, is added here as the zero
 // product it is, and that cannot move a bit either: an accumulator starts at
 // +0 and is never −0, since a sum is −0 only when both of its terms are and
 // +0 + −0 is +0; and adding either zero to +0 or to any finite non-zero sum
@@ -438,10 +439,36 @@ func (b *basis) composeInto(block [][]float32, codes [][]uint64, vectors [][]flo
 	}
 }
 
-// vector is the full-width vector one coefficient set produces.
+// vector is the full-width vector one coefficient set produces: THE
+// ONE-DOCUMENT LOOP, which every recall figure this package's comments quote
+// was measured on — each direction in turn along its support, the mean last,
+// a zero coefficient skipped — and which [basis.composeInto] reproduces to the
+// bit for a block.
+//
+// ONE DOCUMENT IS NOT A BLOCK OF ONE. A block's accumulator is ten lanes and a
+// 120 KiB frame however few of them hold a document, so one document composed
+// as a block pays for ten: measured without the race detector, 236–256 µs a
+// call against 23–26 µs for this loop. Under the detector the block is the
+// cheaper, its sums uninstrumented — 0.56–0.60 ms against 0.81–0.96 ms — but
+// one document at a time is a query, composed a few hundred times a run,
+// where a benchmark writing a corpus's vectors into a store composes one for
+// every document it writes, and never under the detector.
 func (b *basis) vector(coefficients []float32) []float32 {
 	vector := make([]float32, FixtureWidth)
-	b.composeInto([][]float32{coefficients}, nil, [][]float32{vector})
+	for k, c := range coefficients[:len(b.support)] {
+		if c == 0 {
+			continue
+		}
+		values := b.values[k]
+		for i, d := range b.support[k] {
+			vector[d] += c * values[i]
+		}
+	}
+	if mean := coefficients[len(b.support)]; mean != 0 {
+		for i, d := range b.meanSupport {
+			vector[d] += mean * b.meanValues[i]
+		}
+	}
 	return vector
 }
 
